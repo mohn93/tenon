@@ -8,4 +8,4 @@ mod query;
 pub use camera::{Camera, Ray};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome};
 pub use document::{Document, MAX_COORDINATE};
-pub use query::{ChangeEvent, EdgeInfo, FaceInfo, Query, QueryResult, VertexInfo};
+pub use query::{ChangeEvent, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo};

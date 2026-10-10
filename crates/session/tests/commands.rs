@@ -130,7 +130,12 @@ fn set_camera_moves_camera_without_history() {
 fn query_results_round_trip_through_json() {
     let mut d = doc();
     draw_square(&mut d);
-    let r = d.query(&Query::Entities).unwrap();
+    let r = d
+        .query(&Query::Entities {
+            ids: vec![],
+            kinds: vec![],
+        })
+        .unwrap();
     let back: QueryResult = serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
     assert_eq!(back, r);
 }
@@ -166,4 +171,44 @@ fn revision_counts_model_changes_only() {
     run(&mut d, json!({"type": "undo"})).unwrap();
     run(&mut d, json!({"type": "redo"})).unwrap();
     assert_eq!(d.revision(), 3);
+}
+
+#[test]
+fn unknown_fields_are_rejected() {
+    let err = serde_json::from_value::<Command>(
+        json!({"type": "set_camera", "eye": [1, 0, 0], "target": [0, 0, 0], "fov": 90}),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("fov"), "{err}");
+    let err = serde_json::from_value::<Query>(json!({"type": "events", "since": 1, "extra": 1}))
+        .unwrap_err();
+    assert!(err.to_string().contains("extra"), "{err}");
+}
+
+#[test]
+fn entities_query_filters_by_kind_and_id() {
+    let mut d = doc();
+    draw_square(&mut d);
+    let faces = ask(&d, json!({"type": "entities", "kinds": ["face"]}));
+    assert_eq!(faces["faces"].as_array().unwrap().len(), 1);
+    assert!(faces["vertices"].as_array().unwrap().is_empty());
+    assert!(faces["edges"].as_array().unwrap().is_empty());
+    assert_eq!(faces["revision"], 4);
+
+    let some = ask(&d, json!({"type": "entities", "ids": ["v0", "e2", "v99"]}));
+    assert_eq!(some["vertices"].as_array().unwrap().len(), 1);
+    assert_eq!(some["vertices"][0]["id"], "v0");
+    assert_eq!(some["edges"].as_array().unwrap().len(), 1);
+    assert_eq!(some["edges"][0]["id"], "e2");
+    assert!(some["faces"].as_array().unwrap().is_empty());
+
+    let both = ask(
+        &d,
+        json!({"type": "entities", "ids": ["v0", "e2"], "kinds": ["edge"]}),
+    );
+    assert!(both["vertices"].as_array().unwrap().is_empty());
+    assert_eq!(both["edges"].as_array().unwrap().len(), 1);
+
+    let all = ask(&d, json!({"type": "entities"}));
+    assert_eq!(all["vertices"].as_array().unwrap().len(), 4);
 }

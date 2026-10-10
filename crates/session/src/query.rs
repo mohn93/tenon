@@ -4,10 +4,16 @@ use serde::{Deserialize, Serialize};
 
 /// Read-only questions about the document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
-    /// Every vertex, edge and face.
-    Entities,
+    /// Vertices, edges and faces. An entity is returned when `ids` is empty or lists it, and
+    /// `kinds` is empty or lists its kind; unknown ids are simply absent from the result.
+    Entities {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        kinds: Vec<EntityKind>,
+    },
     /// One entity by id ("v3", "e7", "f2").
     Entity {
         id: EntityId,
@@ -19,6 +25,15 @@ pub enum Query {
     Events {
         since: u64,
     },
+}
+
+/// The three kinds of entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    Vertex,
+    Edge,
+    Face,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +66,7 @@ pub enum QueryResult {
         vertices: Vec<VertexInfo>,
         edges: Vec<EdgeInfo>,
         faces: Vec<FaceInfo>,
+        revision: u64,
     },
     Vertex(VertexInfo),
     Edge(EdgeInfo),

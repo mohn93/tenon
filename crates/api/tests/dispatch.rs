@@ -165,3 +165,38 @@ fn render_view_does_not_move_the_document_camera() {
     );
     assert_eq!(h.doc.camera, before);
 }
+
+#[test]
+fn misspelled_params_are_invalid_params() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "render_view",
+        json!({"widht": 8, "width": 8, "height": 8}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS);
+    let r = call(
+        &mut h,
+        "render_view",
+        json!({"width": 8, "height": 8, "camera": {"eye": [10, 0, 5], "target": [0, 0, 0], "fov": 1}}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS);
+    let r = call(&mut h, "batch", json!({"commands": [], "atomik": true}));
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS);
+}
+
+#[test]
+fn ids_must_be_string_number_or_null() {
+    let mut h = HeadlessHost::new();
+    for bad in [json!({"a": 1}), json!([1]), json!(true)] {
+        let line = json!({"jsonrpc": "2.0", "id": bad, "method": "describe"}).to_string();
+        let r: Value = serde_json::from_str(&handle(&mut h, &line).unwrap()).unwrap();
+        assert_eq!(r["error"]["code"], codes::INVALID_REQUEST);
+        assert_eq!(r["id"], Value::Null);
+    }
+    for ok in [json!("abc"), json!(3), Value::Null] {
+        let line = json!({"jsonrpc": "2.0", "id": ok, "method": "describe"}).to_string();
+        let r: Value = serde_json::from_str(&handle(&mut h, &line).unwrap()).unwrap();
+        assert!(r.get("result").is_some());
+    }
+}

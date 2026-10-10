@@ -16,8 +16,9 @@ JSON object per line (UTF-8, `\n`-terminated).
 The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
 (created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
 readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
-socket file on a normal quit; killing the app with a signal leaves it behind, and the next start
-replaces it.
+socket file on a normal quit. The default name includes the process id, so a socket left behind
+by a killed app is never reused; agents that start the app should pass `--socket PATH` (a fixed
+path is replaced on the next start).
 
 ## Methods
 
@@ -28,13 +29,37 @@ all commands and results.
 |---|---|---|
 | `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
-| `query` | a Query, e.g. `{"type": "stats"}`, `{"type": "entities"}`, `{"type": "events", "since": 3}` | the QueryResult |
+| `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional) | `{width, height, png_base64}` |
-| `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `query` `entities` |
+| `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are) |
 | `describe` | none | the API description |
+
+Queries:
+
+| Query | Result |
+|---|---|
+| `{"type": "entities"}` | every vertex, edge and face, plus `revision` |
+| `{"type": "entities", "kinds": ["face"]}` | only the listed kinds (`vertex`, `edge`, `face`) |
+| `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error. `ids` and `kinds` combine (both must match); empty lists mean no filter |
+| `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
+| `{"type": "stats"}`, `{"type": "camera"}`, `{"type": "history"}` | counts and revision, camera, undo/redo depth |
+| `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
+
+Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
+of silently doing nothing).
 
 Commands: `add_edge`, `undo`, `redo`, `set_camera`. Units are meters, Z is up, angles in degrees,
 coordinates within +/-1,000,000 m. Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face).
+
+Behaviors worth knowing:
+
+- Replies come before the `changed` notifications they cause, and your own edits are notified too.
+- A request without an `id` runs but gets no reply. JSON-RPC batch arrays are rejected; use the
+  `batch` method.
+- `set_camera` returns empty changes and does not change the revision. `render_view`'s camera
+  accepts `fov_y_deg` and never moves the document camera.
+- A failed atomic batch is rolled back but still consumes entity ids, so later ids may skip numbers.
+- An `id` that is not a string, number or null is an invalid request (`-32600`, reply id null).
 
 ## Example
 

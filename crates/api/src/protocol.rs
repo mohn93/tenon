@@ -84,6 +84,12 @@ pub fn parse(line: &str) -> Result<Request, String> {
         return Err(invalid(&Value::Null, "expected a JSON object"));
     };
     let id = obj.get("id").cloned();
+    if matches!(
+        &id,
+        Some(Value::Bool(_) | Value::Array(_) | Value::Object(_))
+    ) {
+        return Err(invalid(&Value::Null, "id must be a string, number or null"));
+    }
     let reply_id = id.clone().unwrap_or(Value::Null);
     if obj.get("jsonrpc") != Some(&json!("2.0")) {
         return Err(invalid(&reply_id, "jsonrpc must be \"2.0\""));

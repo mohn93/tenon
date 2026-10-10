@@ -53,6 +53,7 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
         }
         "batch" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 commands: Vec<Command>,
                 #[serde(default)]
@@ -88,12 +89,14 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
 
 fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct View {
         eye: [f64; 3],
         target: [f64; 3],
         fov_y_deg: Option<f64>,
     }
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct Params {
         width: u32,
         height: u32,

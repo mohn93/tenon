@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     /// Draw a straight edge. Sticky-geometry rules apply (merging, splitting, auto faces).
     AddEdge {

@@ -5,7 +5,7 @@ use kernel::{ChangeSet, EdgeId, EntityId, FaceId, Model, VertexId};
 
 use crate::camera::Camera;
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome};
-use crate::query::{ChangeEvent, EdgeInfo, FaceInfo, Query, QueryResult, VertexInfo};
+use crate::query::{ChangeEvent, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo};
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -238,11 +238,30 @@ impl Document {
     pub fn query(&self, query: &Query) -> Result<QueryResult, CommandError> {
         let m = &self.model;
         Ok(match query {
-            Query::Entities => QueryResult::Entities {
-                vertices: m.vertices().map(|(id, _)| self.vertex_info(id)).collect(),
-                edges: m.edges().map(|(id, _)| self.edge_info(id)).collect(),
-                faces: m.faces().map(|(id, _)| self.face_info(id)).collect(),
-            },
+            Query::Entities { ids, kinds } => {
+                let wanted = |id: EntityId, kind: EntityKind| {
+                    (ids.is_empty() || ids.contains(&id))
+                        && (kinds.is_empty() || kinds.contains(&kind))
+                };
+                QueryResult::Entities {
+                    vertices: m
+                        .vertices()
+                        .filter(|(id, _)| wanted(EntityId::Vertex(*id), EntityKind::Vertex))
+                        .map(|(id, _)| self.vertex_info(id))
+                        .collect(),
+                    edges: m
+                        .edges()
+                        .filter(|(id, _)| wanted(EntityId::Edge(*id), EntityKind::Edge))
+                        .map(|(id, _)| self.edge_info(id))
+                        .collect(),
+                    faces: m
+                        .faces()
+                        .filter(|(id, _)| wanted(EntityId::Face(*id), EntityKind::Face))
+                        .map(|(id, _)| self.face_info(id))
+                        .collect(),
+                    revision: self.revision,
+                }
+            }
             Query::Entity { id } => {
                 let missing = || {
                     CommandError::new(ErrorKind::NotFound, format!("no entity {id}"))
