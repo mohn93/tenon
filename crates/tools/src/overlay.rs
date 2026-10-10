@@ -16,7 +16,7 @@ pub const MIDPOINT: Color = [0.10, 0.70, 0.80, 1.0];
 pub const ON_EDGE: Color = [0.85, 0.10, 0.10, 1.0];
 pub const ON_FACE: Color = [0.20, 0.25, 0.85, 1.0];
 
-/// Marker half-size in pixels.
+/// Marker half-size in logical pixels.
 const MARKER_PX: f64 = 5.0;
 
 /// A colored world-space segment.
@@ -28,8 +28,13 @@ pub struct Segment {
 }
 
 /// Preview segments (axis-colored when following an axis) plus a marker at the inference point
-/// sized to stay about the same on screen.
-pub fn overlay(preview: &[[DVec3; 2]], hit: Option<&Inference>, camera: &Camera) -> Vec<Segment> {
+/// sized to stay about the same on screen (`scale_factor` converts logical to physical pixels).
+pub fn overlay(
+    preview: &[[DVec3; 2]],
+    hit: Option<&Inference>,
+    camera: &Camera,
+    scale_factor: f64,
+) -> Vec<Segment> {
     let line_color = match hit.map(|h| h.kind) {
         Some(SnapKind::Axis(Axis::X)) => RED,
         Some(SnapKind::Axis(Axis::Y)) => GREEN,
@@ -54,7 +59,8 @@ pub fn overlay(preview: &[[DVec3; 2]], hit: Option<&Inference>, camera: &Camera)
         _ => return out,
     };
     let depth = (hit.point - camera.eye).dot(camera.forward()).max(1e-6);
-    let size = MARKER_PX * 2.0 * depth * (camera.fov_y * 0.5).tan() / camera.viewport.y;
+    let size =
+        MARKER_PX * scale_factor * 2.0 * depth * (camera.fov_y * 0.5).tan() / camera.viewport.y;
     let (r, u) = (camera.right() * size, camera.up() * size);
     let p = hit.point;
     let corners = [p - r - u, p + r - u, p + r + u, p - r + u];
@@ -83,7 +89,7 @@ mod tests {
             point: DVec3::new(0.0, 3.0, 0.0),
             kind: SnapKind::Axis(Axis::Y),
         };
-        let segs = overlay(&[[DVec3::ZERO, hit.point]], Some(&hit), &cam());
+        let segs = overlay(&[[DVec3::ZERO, hit.point]], Some(&hit), &cam(), 1.0);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].color, GREEN);
     }
@@ -96,7 +102,7 @@ mod tests {
                 point: p,
                 kind: SnapKind::Endpoint,
             };
-            let segs = overlay(&[], Some(&hit), &c);
+            let segs = overlay(&[], Some(&hit), &c, 1.0);
             assert_eq!(segs.len(), 4);
             assert!(segs.iter().all(|s| s.color == ENDPOINT));
             let side_px = c
@@ -111,11 +117,28 @@ mod tests {
     }
 
     #[test]
+    fn marker_scales_with_the_display() {
+        let c = cam();
+        let hit = Inference {
+            point: DVec3::new(1.0, 0.0, 0.0),
+            kind: SnapKind::Endpoint,
+        };
+        let side = |scale: f64| {
+            let segs = overlay(&[], Some(&hit), &c, scale);
+            c.project(segs[0].a)
+                .unwrap()
+                .distance(c.project(segs[0].b).unwrap())
+        };
+        assert!((side(2.0) - 2.0 * side(1.0)).abs() < 0.5);
+        assert!((side(2.0) - 4.0 * MARKER_PX).abs() < 0.5);
+    }
+
+    #[test]
     fn ground_hits_have_no_marker() {
         let hit = Inference {
             point: DVec3::ZERO,
             kind: SnapKind::Ground,
         };
-        assert!(overlay(&[], Some(&hit), &cam()).is_empty());
+        assert!(overlay(&[], Some(&hit), &cam(), 1.0).is_empty());
     }
 }

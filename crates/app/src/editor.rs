@@ -3,11 +3,14 @@
 
 use glam::{DVec2, DVec3};
 use render::grid::LineVertex;
-use session::{Command, Document};
+use session::{Command, Document, ErrorKind};
 use tools::overlay::overlay;
 use tools::{Inference, LineTool, ToolEvent, ToolOutput, infer};
 
 use crate::navigation::{Button, Navigation};
+
+/// Snap radius in logical pixels (scaled to physical pixels by the display scale factor).
+const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
 
 pub struct Editor {
     pub doc: Document,
@@ -16,12 +19,12 @@ pub struct Editor {
     cursor: DVec2,
     hit: Option<Inference>,
     preview: Vec<[DVec3; 2]>,
-    /// Snap radius in physical pixels.
-    pick_radius_px: f64,
+    /// Physical pixels per logical pixel.
+    scale_factor: f64,
 }
 
 impl Editor {
-    pub fn new(viewport: DVec2, pick_radius_px: f64) -> Self {
+    pub fn new(viewport: DVec2, scale_factor: f64) -> Self {
         Self {
             doc: Document::new(viewport),
             nav: Navigation::default(),
@@ -29,7 +32,7 @@ impl Editor {
             cursor: DVec2::ZERO,
             hit: None,
             preview: Vec::new(),
-            pick_radius_px,
+            scale_factor,
         }
     }
 
@@ -37,8 +40,8 @@ impl Editor {
         self.doc.camera.viewport = viewport;
     }
 
-    pub fn set_pick_radius(&mut self, px: f64) {
-        self.pick_radius_px = px;
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor;
     }
 
     pub fn set_modifiers(&mut self, shift: bool, alt: bool) {
@@ -88,12 +91,14 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.abandon_chain();
         self.run(Command::Undo);
         self.update_hover();
         true
     }
 
     pub fn redo(&mut self) -> bool {
+        self.abandon_chain();
         self.run(Command::Redo);
         self.update_hover();
         true
@@ -101,15 +106,20 @@ impl Editor {
 
     /// Line pairs for the renderer's overlay pass.
     pub fn overlay(&self) -> Vec<LineVertex> {
-        overlay(&self.preview, self.hit.as_ref(), &self.doc.camera)
-            .into_iter()
-            .flat_map(|s| {
-                [s.a, s.b].map(|p| LineVertex {
-                    pos: p.as_vec3().to_array(),
-                    color: s.color,
-                })
+        overlay(
+            &self.preview,
+            self.hit.as_ref(),
+            &self.doc.camera,
+            self.scale_factor,
+        )
+        .into_iter()
+        .flat_map(|s| {
+            [s.a, s.b].map(|p| LineVertex {
+                pos: p.as_vec3().to_array(),
+                color: s.color,
             })
-            .collect()
+        })
+        .collect()
     }
 
     fn apply(&mut self, out: ToolOutput) {
@@ -119,9 +129,17 @@ impl Editor {
         self.preview = out.preview;
     }
 
+    /// Drops the line being drawn so history changes can't leave it pointing at stale geometry.
+    fn abandon_chain(&mut self) {
+        self.tool.handle(ToolEvent::Cancel);
+        self.preview.clear();
+    }
+
     fn run(&mut self, command: Command) {
-        if let Err(e) = self.doc.execute(command) {
-            eprintln!("command failed: {e}");
+        match self.doc.execute(command) {
+            Ok(_) => {}
+            Err(e) if matches!(e.kind, ErrorKind::NothingToUndo | ErrorKind::NothingToRedo) => {}
+            Err(e) => eprintln!("command failed: {e}"),
         }
     }
 
@@ -132,7 +150,7 @@ impl Editor {
             &self.doc.camera,
             self.cursor,
             self.tool.anchor(),
-            self.pick_radius_px,
+            PICK_RADIUS_LOGICAL_PX * self.scale_factor,
         );
         let out = self.tool.handle(ToolEvent::Move(hit));
         let changed = self.hit != Some(hit) || self.preview != out.preview;
@@ -148,7 +166,7 @@ mod tests {
     use session::{Query, QueryResult};
 
     fn editor() -> Editor {
-        Editor::new(DVec2::new(800.0, 600.0), 10.0)
+        Editor::new(DVec2::new(800.0, 600.0), 1.25)
     }
 
     fn click_at(e: &mut Editor, p: DVec3) {
@@ -204,6 +222,17 @@ mod tests {
             "ground hover has no marker and no preview after cancel"
         );
         assert_eq!(stats(&e), (0, 0));
+    }
+
+    #[test]
+    fn undo_mid_chain_cancels_the_chain() {
+        let mut e = editor();
+        for (x, y) in [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0)] {
+            click_at(&mut e, DVec3::new(x, y, 0.0));
+        }
+        e.undo();
+        click_at(&mut e, DVec3::new(5.0, 5.0, 0.0));
+        assert_eq!(stats(&e).0, 1, "the click only starts a new chain");
     }
 
     #[test]

@@ -51,6 +51,9 @@ impl Navigation {
             }
             return false;
         }
+        if self.drag.is_some() {
+            return true;
+        }
         let navigates = button == Button::Middle || (button == Button::Left && self.alt);
         if !navigates {
             return false;
@@ -180,6 +183,20 @@ mod tests {
         let before = cam.clone();
         assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
         assert_ne!(cam, before);
+    }
+
+    #[test]
+    fn other_presses_during_a_drag_are_consumed() {
+        let (mut nav, mut cam) = setup();
+        nav.button(&cam, Button::Middle, true);
+        assert!(nav.button(&cam, Button::Left, true), "no stray tool click");
+        let before = cam.clone();
+        assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
+        assert_ne!(cam, before, "drag still orbits");
+        assert!(nav.button(&cam, Button::Middle, false));
+        let after = cam.clone();
+        assert!(!nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
+        assert_eq!(cam, after);
     }
 
     #[test]

@@ -25,7 +25,10 @@ impl Ray {
             return None;
         }
         let t = -self.origin.z / self.dir.z;
-        (t > 0.0).then(|| self.origin + self.dir * t)
+        (t > 0.0).then(|| {
+            let p = self.origin + self.dir * t;
+            DVec3::new(p.x, p.y, 0.0)
+        })
     }
 }
 
@@ -214,6 +217,18 @@ mod tests {
             dir: DVec3::Z,
         };
         assert!(up.hit_ground().is_none());
+    }
+
+    #[test]
+    fn ground_hit_has_exactly_zero_z() {
+        for i in 1..200 {
+            let oz = 0.37 * i as f64;
+            let r = Ray {
+                origin: DVec3::new(0.3, 0.7, oz),
+                dir: DVec3::new(0.3, 0.2, -0.1 - 0.013 * i as f64).normalize(),
+            };
+            assert_eq!(r.hit_ground().unwrap().z, 0.0, "origin z {oz}");
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::editor::Editor;
@@ -14,8 +14,6 @@ use crate::navigation::Button;
 
 /// Trackpad pixel deltas per zoom step.
 const PIXELS_PER_SCROLL_STEP: f64 = 50.0;
-/// Snap radius in logical pixels (scaled to physical pixels by the window's scale factor).
-const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
 
 struct State {
     window: Arc<Window>,
@@ -67,7 +65,7 @@ impl State {
         let renderer = Renderer::new(&device, &queue, config.format);
         let editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
-            PICK_RADIUS_LOGICAL_PX * window.scale_factor(),
+            window.scale_factor(),
         );
         Self {
             window,
@@ -161,8 +159,7 @@ impl ApplicationHandler for App {
                 true
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                s.editor
-                    .set_pick_radius(PICK_RADIUS_LOGICAL_PX * scale_factor);
+                s.editor.set_scale_factor(scale_factor);
                 false
             }
             WindowEvent::RedrawRequested => {
@@ -194,16 +191,18 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
-                match &event.logical_key {
-                    Key::Named(NamedKey::Escape) => s.editor.cancel(),
-                    Key::Character(c) if command_key && c.eq_ignore_ascii_case("z") => {
-                        if s.modifiers.shift_key() {
-                            s.editor.redo()
-                        } else {
-                            s.editor.undo()
-                        }
+                let is_z = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("z"))
+                    || event.physical_key == PhysicalKey::Code(KeyCode::KeyZ);
+                if event.logical_key == Key::Named(NamedKey::Escape) {
+                    s.editor.cancel()
+                } else if command_key && is_z {
+                    if s.modifiers.shift_key() {
+                        s.editor.redo()
+                    } else {
+                        s.editor.undo()
                     }
-                    _ => false,
+                } else {
+                    false
                 }
             }
             _ => false,
