@@ -74,9 +74,11 @@ impl Camera {
         look_at_mat4(self.eye, self.target, UP)
     }
 
+    /// Reversed-Z perspective with an infinite far plane: depth is 1 at the near plane and
+    /// approaches 0 with distance, so nothing far away is ever clipped.
     pub fn proj(&self) -> DMat4 {
-        let d = self.distance();
-        directx::perspective(self.fov_y, self.aspect(), (d * 1e-3).max(1e-4), d * 1e3)
+        let near = (self.distance() * 1e-3).max(1e-5);
+        directx::perspective_infinite_reverse(self.fov_y, self.aspect(), near)
     }
 
     pub fn view_proj_f32(&self) -> Mat4 {

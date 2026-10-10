@@ -97,8 +97,12 @@ impl State {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer
-            .render(&view, (self.config.width, self.config.height), &self.camera);
+        self.renderer.render(
+            &view,
+            (self.config.width, self.config.height),
+            &self.camera,
+            &[],
+        );
         self.window.pre_present_notify();
         self.queue.present(frame);
     }

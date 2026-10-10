@@ -1,5 +1,7 @@
 use glam::{DVec2, DVec3};
-use render::{Renderer, grid::BACKGROUND};
+use kernel::Model;
+use render::Renderer;
+use render::grid::{BACKGROUND, LineVertex};
 use session::Camera;
 
 const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
@@ -15,6 +17,10 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
 
 /// Renders one frame and returns tightly packed RGBA8 pixels, or None without a GPU.
 fn render(camera: &Camera) -> Option<Vec<u8>> {
+    render_scene(camera, &Model::new(), &[])
+}
+
+fn render_scene(camera: &Camera, model: &Model, overlay: &[LineVertex]) -> Option<Vec<u8>> {
     let Some((device, queue)) = gpu() else {
         eprintln!("no GPU adapter, skipping");
         return None;
@@ -36,7 +42,8 @@ fn render(camera: &Camera) -> Option<Vec<u8>> {
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = Renderer::new(&device, &queue, format);
-    renderer.render(&view, (W, H), camera);
+    renderer.set_model(model);
+    renderer.render(&view, (W, H), camera, overlay);
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
@@ -125,4 +132,114 @@ fn all_three_axes_are_visible() {
     assert!(any(&|p| dominant(p, 0)), "no red axis pixels");
     assert!(any(&|p| dominant(p, 1)), "no green axis pixels");
     assert!(any(&|p| dominant(p, 2)), "no blue axis pixels");
+}
+
+/// A 4 m square face on the ground, centered on the origin.
+fn ground_square() -> Model {
+    let mut m = Model::new();
+    let c = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+    for i in 0..4 {
+        let (a, b) = (c[i], c[(i + 1) % 4]);
+        m.add_edge(DVec3::new(a.0, a.1, 0.0), DVec3::new(b.0, b.1, 0.0))
+            .unwrap();
+    }
+    m
+}
+
+fn pixel_at(px: &[u8], cam: &Camera, p: DVec3) -> [u8; 4] {
+    let s = cam.project(p).unwrap();
+    pixel(px, s.x as u32, s.y as u32)
+}
+
+/// Whether any pixel within one pixel of the projection of `p` satisfies `f`.
+fn near(px: &[u8], cam: &Camera, p: DVec3, f: impl Fn([u8; 4]) -> bool) -> bool {
+    let s = cam.project(p).unwrap();
+    (-1..=1).any(|dy| {
+        (-1..=1).any(|dx| {
+            f(pixel(
+                px,
+                (s.x as i32 + dx) as u32,
+                (s.y as i32 + dy) as u32,
+            ))
+        })
+    })
+}
+
+fn grayish(p: [u8; 4]) -> bool {
+    let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+    (r - g).abs() < 12 && (g - b).abs() < 16
+}
+
+#[test]
+fn face_front_side_hides_the_grid() {
+    let cam = camera();
+    let Some(px) = render_scene(&cam, &ground_square(), &[]) else {
+        return;
+    };
+    // A point inside the face away from edges and grid lines.
+    let p = pixel_at(&px, &cam, DVec3::new(0.5, 0.5, 0.0));
+    assert!(grayish(p), "front color should be light gray, got {p:?}");
+    assert!(p[0] < 225 && p[0] > 120, "face shading out of range: {p:?}");
+    // The grid line x = 1 runs under the face and must not show through.
+    let under = pixel_at(&px, &cam, DVec3::new(1.0, 0.5, 0.0));
+    assert!(
+        (under[0] as i32 - p[0] as i32).abs() < 8,
+        "grid shows through the face: {under:?} vs {p:?}"
+    );
+}
+
+#[test]
+fn face_back_side_is_blue_gray() {
+    let mut cam = camera();
+    cam.eye = DVec3::new(-8.0, -12.0, -7.0);
+    let Some(px) = render_scene(&cam, &ground_square(), &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, DVec3::new(0.5, 0.5, 0.0));
+    assert!(
+        p[2] as i32 > p[0] as i32 + 15,
+        "back side should be blue-gray, got {p:?}"
+    );
+}
+
+#[test]
+fn edges_draw_over_their_face() {
+    let cam = camera();
+    let Some(px) = render_scene(&cam, &ground_square(), &[]) else {
+        return;
+    };
+    let dark = |p: [u8; 4]| p[0] < 110 && p[1] < 110 && p[2] < 110;
+    assert!(
+        near(&px, &cam, DVec3::new(2.0, 0.5, 0.0), dark),
+        "edge x = 2 not visible"
+    );
+    assert!(
+        near(&px, &cam, DVec3::new(0.5, -2.0, 0.0), dark),
+        "edge y = -2 not visible"
+    );
+}
+
+#[test]
+fn overlay_draws_on_top_of_faces() {
+    let cam = camera();
+    let magenta = [1.0, 0.0, 1.0, 1.0];
+    // A segment just below the face plane: depth-tested lines would be hidden.
+    let overlay = [
+        LineVertex {
+            pos: [-1.0, 0.5, -0.05],
+            color: magenta,
+        },
+        LineVertex {
+            pos: [1.5, 0.5, -0.05],
+            color: magenta,
+        },
+    ];
+    let Some(px) = render_scene(&cam, &ground_square(), &overlay) else {
+        return;
+    };
+    let is_magenta = |p: [u8; 4]| p[0] > 150 && p[2] > 150 && p[1] < 120;
+    assert!(
+        near(&px, &cam, DVec3::new(0.25, 0.5, -0.05), is_magenta),
+        "overlay hidden by face"
+    );
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 session = { path = "../session" }
+kernel = { path = "../kernel" }
 glam.workspace = true
 bytemuck.workspace = true
 wgpu.workspace = true
