@@ -572,3 +572,44 @@ fn corner_notch_and_full_width_step_leave_no_stray_edges() {
         assert_no_isolated_vertices(&m);
     }
 }
+
+#[test]
+fn cut_partly_covered_by_an_old_face_stays_closed() {
+    // A step at y < 1, then a recess beside it cut deeper (C1) or shallower and deeper (C5)
+    // than the step floor: only the part of the recess wall the old riser covered opens.
+    for step in [-1.0, -0.5] {
+        let (mut m, _) = box_4x4x2();
+        rect(&mut m, 0.0, 0.0, 4.0, 1.0, 2.0);
+        let strip = face_in(&m, 2.0, 0.0, 0.0, 4.0, 1.0);
+        m.push_pull(strip, step).unwrap();
+        m.validate().unwrap();
+        rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+        let sub = face_in(&m, 2.0, 1.0, 1.0, 2.0, 2.0);
+        push_pull_undoable(&mut m, sub, -1.5);
+        m.validate().unwrap();
+        assert_outward(&m, &all_faces(&m));
+        assert_closed(&m, &[]);
+    }
+}
+
+#[test]
+fn cut_keeps_user_lines_it_splits() {
+    let (mut m, _) = box_4x4x2();
+    let (s, e) = (p(1.5, 0.0, 1.5), p(2.5, 0.0, 1.5));
+    m.add_edge(s, e).unwrap();
+    m.validate().unwrap();
+    rect(&mut m, 1.0, 0.0, 2.0, 1.0, 2.0);
+    let sub = face_in(&m, 2.0, 1.0, 0.0, 2.0, 1.0);
+    push_pull_undoable(&mut m, sub, -1.0);
+    m.validate().unwrap();
+    assert_outward(&m, &all_faces(&m));
+    for q in [s, e] {
+        let v = m
+            .vertices()
+            .find(|(_, v)| v.pos.distance(q) < 1e-9)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| panic!("line end {q:?} is gone"));
+        assert!(!m.edges_at(v).is_empty(), "line end {q:?} has no edge");
+    }
+    assert_no_isolated_vertices(&m);
+}

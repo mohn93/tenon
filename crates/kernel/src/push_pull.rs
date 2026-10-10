@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::{DVec2, DVec3};
 
 use crate::edit::KernelError;
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
+use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
@@ -136,18 +136,20 @@ impl Model {
             })
             .collect();
         let before: BTreeSet<FaceId> = self.faces().map(|(f, _)| f).collect();
-        let edges_before: BTreeSet<EdgeId> = self.edges().map(|(e, _)| e).collect();
-        // A cut opens a side only where a face that existed before covered the side's swept
-        // region (a notch at a box edge): the middle of the swept rectangle lies inside it.
-        let opens: Vec<bool> = sides
+        let vertices_before: BTreeSet<VertexId> = self.vertices().map(|(v, _)| v).collect();
+        // A cut opens a piece of a side only where a face that existed before covered it (a
+        // notch at a box edge). The faces in each side's plane are recorded before the
+        // extrusion splits them.
+        let covering: Vec<Vec<Polygon>> = sides
             .iter()
             .map(|&(_, _, pa, pb)| {
-                let mid = (pa + pb) * 0.5 + offset * 0.5;
-                Plane::from_points(pa, pb, pa + offset).is_some_and(|sp| {
-                    self.faces()
-                        .filter(|(f, _)| *f != id)
-                        .any(|(_, g)| self.face_covers(g, &sp, mid))
-                })
+                let Some(sp) = Plane::from_points(pa, pb, pa + offset) else {
+                    return Vec::new();
+                };
+                self.faces()
+                    .filter(|(f, _)| *f != id)
+                    .filter_map(|(_, g)| self.polygon_in(g, &sp))
+                    .collect()
             })
             .collect();
 
@@ -204,7 +206,7 @@ impl Model {
             let Some(i) = side else {
                 continue;
             };
-            if cut && opens[i] {
+            if cut && covering[i].iter().any(|poly| poly.contains(inside)) {
                 // The cut reaches an existing face in this side's plane: leave it open.
                 self.remove_face(f);
                 continue;
@@ -214,19 +216,22 @@ impl Model {
             self.orient(f, if cut { -out } else { out });
         }
         if cut {
-            self.remove_strays(&edges_before, &sides);
+            self.remove_strays(&vertices_before, &sides, offset);
         }
         if !in_solid {
             self.orient(id, if distance > 0.0 { -n } else { n });
         }
     }
 
-    /// After a cut, removes the edges that border no face and were created by it or are loop
-    /// sides of the pushed face, then the pushed face's loop vertices no edge uses any more.
+    /// After a cut, removes the edges that border no face and lie on a swept vertical segment
+    /// (p to p + offset for a loop point p) or on a loop side of the pushed face. Then removes the
+    /// loop vertices, their offset copies and the vertices this push/pull created that no edge
+    /// uses any more. User lines the extrusion split lie on neither, so they stay.
     fn remove_strays(
         &mut self,
-        edges_before: &BTreeSet<EdgeId>,
+        vertices_before: &BTreeSet<VertexId>,
         sides: &[(VertexId, VertexId, DVec3, DVec3)],
+        offset: DVec3,
     ) {
         let mut bordered: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
         for (_, f) in self.faces() {
@@ -236,44 +241,66 @@ impl Model {
                 }
             }
         }
-        let loop_sides: BTreeSet<(VertexId, VertexId)> =
-            sides.iter().map(|&(a, b, _, _)| side(a, b)).collect();
+        let segments: Vec<(DVec3, DVec3)> = sides
+            .iter()
+            .flat_map(|&(_, _, pa, pb)| [(pa, pa + offset), (pa, pb)])
+            .collect();
+        let on_segment = |p: DVec3, (a, b): (DVec3, DVec3)| {
+            let (t, d) = project_on_segment(p, a, b);
+            let tol = LENGTH_TOL / (b - a).length();
+            d < LENGTH_TOL && t > -tol && t < 1.0 + tol
+        };
         let strays: Vec<EdgeId> = self
             .edges()
-            .filter(|(e, edge)| {
-                let s = side(edge.v[0], edge.v[1]);
-                (!edges_before.contains(e) || loop_sides.contains(&s)) && !bordered.contains(&s)
+            .filter(|(_, e)| {
+                let [a, b] = e.v;
+                let (pa, pb) = (self.pos(a), self.pos(b));
+                !bordered.contains(&side(a, b))
+                    && segments
+                        .iter()
+                        .any(|&seg| on_segment(pa, seg) && on_segment(pb, seg))
             })
             .map(|(e, _)| e)
             .collect();
         for e in strays {
             self.remove_edge(e);
         }
-        let loop_verts: BTreeSet<VertexId> = sides.iter().map(|&(a, _, _, _)| a).collect();
-        for v in loop_verts {
+        let mut candidates: BTreeSet<VertexId> = sides.iter().map(|&(a, _, _, _)| a).collect();
+        candidates.extend(
+            sides
+                .iter()
+                .filter_map(|&(_, _, pa, _)| self.find_vertex(pa + offset)),
+        );
+        candidates.extend(
+            self.vertices()
+                .map(|(v, _)| v)
+                .filter(|v| !vertices_before.contains(v)),
+        );
+        for v in candidates {
             if self.edges_at(v).is_empty() {
                 self.remove_vertex(v);
             }
         }
     }
 
-    /// True if face `g` lies in plane `plane` and `p` is inside it (inside its outer loop and
-    /// outside its holes).
-    fn face_covers(&self, g: &Face, plane: &Plane, p: DVec3) -> bool {
+    /// Face `g` as a polygon, if it lies in `plane`.
+    fn polygon_in(&self, g: &Face, plane: &Plane) -> Option<Polygon> {
         let o = self.pos(g.outer[0]);
         let own = Plane {
             normal: g.normal,
             d: g.normal.dot(o),
         };
         if !own.same_as(plane) {
-            return false;
+            return None;
         }
-        let poly = |l: &Vec<VertexId>| -> Vec<DVec2> {
+        let ring = |l: &Vec<VertexId>| -> Vec<DVec2> {
             l.iter().map(|v| own.project(self.pos(*v))).collect()
         };
-        let q = own.project(p);
-        point_in_polygon(q, &poly(&g.outer))
-            && !g.holes.iter().any(|h| point_in_polygon(q, &poly(h)))
+        Some(Polygon {
+            plane: own,
+            outer: ring(&g.outer),
+            holes: g.holes.iter().map(ring).collect(),
+        })
     }
 
     /// A point strictly inside face `id`: the centroid of its first triangle.
@@ -360,6 +387,21 @@ impl Model {
             }
         }
         false
+    }
+}
+
+/// A face's loops projected into its plane, recorded before an edit changes the face.
+struct Polygon {
+    plane: Plane,
+    outer: Vec<DVec2>,
+    holes: Vec<Vec<DVec2>>,
+}
+
+impl Polygon {
+    /// True if `p` (assumed in the plane) is inside the outer loop and outside every hole.
+    fn contains(&self, p: DVec3) -> bool {
+        let q = self.plane.project(p);
+        point_in_polygon(q, &self.outer) && !self.holes.iter().any(|h| point_in_polygon(q, h))
     }
 }
 
