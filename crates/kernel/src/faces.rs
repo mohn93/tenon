@@ -1,15 +1,17 @@
-//! Automatic face creation: after edges are added, every new closed coplanar loop becomes a face.
+//! Automatic face creation: after edges are added, the faces of every affected plane are rebuilt
+//! from the bounded regions of that plane's edge graph.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec2;
 
-use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, signed_area2};
+use crate::geom::{ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{Face, Model};
+use crate::regions::{PlaneGraph, Region};
 
 impl Model {
-    /// Creates faces for closed coplanar loops that use at least one of `new_edges`.
+    /// Updates the faces of every plane spanned by one of `new_edges` and an edge touching it.
     pub(crate) fn create_faces(&mut self, new_edges: &[EdgeId]) {
         let mut done: Vec<Plane> = Vec::new();
         for &e in new_edges {
@@ -18,7 +20,7 @@ impl Model {
                     continue;
                 }
                 done.push(plane);
-                self.fill_plane(&plane, new_edges);
+                self.rebuild_plane(plane, new_edges);
             }
         }
     }
@@ -43,232 +45,127 @@ impl Model {
         planes
     }
 
-    fn fill_plane(&mut self, plane: &Plane, new_edges: &[EdgeId]) {
-        let in_plane = |m: &Model, e: EdgeId| {
-            let v = m.edge(e).unwrap().v;
-            plane.contains(m.pos(v[0])) && plane.contains(m.pos(v[1]))
-        };
-        let seeds: BTreeSet<EdgeId> = new_edges
-            .iter()
-            .copied()
-            .filter(|&e| in_plane(self, e))
-            .collect();
-        let edges = self.connected_in_plane(&seeds, plane);
-        let cycles = self.bounded_cycles(&edges, plane);
-
-        let seed_sides: BTreeSet<(VertexId, VertexId)> = seeds
-            .iter()
-            .map(|e| {
-                let [a, b] = self.edge(*e).unwrap().v;
-                (a.min(b), a.max(b))
+    /// The plane's orientation taken from an existing face in it, so all its faces agree.
+    fn oriented(&self, plane: Plane) -> Plane {
+        self.faces()
+            .find(|(_, f)| self.face_in_plane(f, &plane))
+            .map(|(_, f)| Plane {
+                normal: f.normal,
+                d: f.normal.dot(self.pos(f.outer[0])),
             })
-            .collect();
-        let uses_seed = |c: &Vec<VertexId>| {
-            (0..c.len()).any(|i| {
-                let (a, b) = (c[i], c[(i + 1) % c.len()]);
-                seed_sides.contains(&(a.min(b), a.max(b)))
-            })
-        };
-        let new_cycles: Vec<Vec<VertexId>> = cycles
-            .into_iter()
-            .filter(|c| uses_seed(c) && !self.face_with_loop(c))
-            .collect();
-        if new_cycles.is_empty() {
-            return;
-        }
+            .unwrap_or(plane)
+    }
 
-        // Existing faces in this plane, and which one (if any) contains each new cycle.
-        let plane_faces: Vec<FaceId> = self
+    fn face_in_plane(&self, f: &Face, plane: &Plane) -> bool {
+        f.normal.cross(plane.normal).length() < ANGLE_TOL * 1e3
+            && plane.contains(self.pos(f.outer[0]))
+    }
+
+    /// Recomputes the regions of `plane` and makes the face set match them.
+    fn rebuild_plane(&mut self, plane: Plane, new_edges: &[EdgeId]) {
+        let plane = self.oriented(plane);
+        let old: Vec<(FaceId, Face)> = self
             .faces()
-            .filter(|(_, f)| {
-                f.normal.cross(plane.normal).length() < 1e-9 && plane.contains(self.pos(f.outer[0]))
-            })
-            .map(|(id, _)| id)
+            .filter(|(_, f)| self.face_in_plane(f, &plane))
+            .map(|(id, f)| (id, f.clone()))
             .collect();
-        let mut by_container: BTreeMap<Option<FaceId>, Vec<Vec<VertexId>>> = BTreeMap::new();
-        for c in new_cycles {
-            let inside = self.interior_point(&c, plane);
-            let container = plane_faces
-                .iter()
-                .copied()
-                .find(|&f| self.face_contains(f, inside, plane));
-            by_container.entry(container).or_default().push(c);
-        }
 
-        for (container, cycles) in by_container {
-            match container {
-                Some(f) if cycles.iter().any(|c| self.shares_side_with_outer(f, c)) => {
-                    // The new edges cut face f: replace it with the new pieces.
-                    let old = self.remove_face(f);
-                    for c in cycles {
-                        let poly = self.project_loop(&c, plane);
-                        let holes = old
-                            .holes
-                            .iter()
-                            .filter(|h| point_in_polygon(plane.project(self.pos(h[0])), &poly))
-                            .cloned()
-                            .collect();
-                        self.insert_face(Face {
-                            outer: c,
-                            holes,
-                            normal: plane.normal,
-                        });
-                    }
-                }
-                Some(f) => {
-                    // Loops floating inside face f: new faces that are also holes of f.
-                    let mut outer = self.face(f).unwrap().clone();
-                    for c in cycles {
-                        outer.holes.push(c.iter().rev().copied().collect());
-                        self.insert_face(Face {
-                            outer: c,
-                            holes: Vec::new(),
-                            normal: plane.normal,
-                        });
-                    }
-                    self.replace_face(f, outer);
-                }
-                None => {
-                    for c in cycles {
-                        // Existing faces enclosed by the new loop become its holes.
-                        let poly = self.project_loop(&c, plane);
-                        let holes = plane_faces
-                            .iter()
-                            .filter_map(|&f| self.face(f))
-                            .filter(|f| {
-                                !f.outer.iter().any(|v| c.contains(v))
-                                    && f.outer.iter().all(|v| {
-                                        point_in_polygon(plane.project(self.pos(*v)), &poly)
-                                    })
-                            })
-                            .map(|f| f.outer.iter().rev().copied().collect())
-                            .collect();
-                        self.insert_face(Face {
-                            outer: c,
-                            holes,
-                            normal: plane.normal,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    /// Edges lying in `plane` that are connected to the seeds through other in-plane edges.
-    fn connected_in_plane(&self, seeds: &BTreeSet<EdgeId>, plane: &Plane) -> BTreeSet<EdgeId> {
-        let mut found: BTreeSet<EdgeId> = seeds.clone();
-        let mut stack: Vec<VertexId> = seeds
+        let edges: Vec<[VertexId; 2]> = self
+            .edges()
+            .map(|(_, e)| e.v)
+            .filter(|v| plane.contains(self.pos(v[0])) && plane.contains(self.pos(v[1])))
+            .collect();
+        let pos: BTreeMap<VertexId, DVec2> = edges
             .iter()
-            .flat_map(|e| self.edge(*e).unwrap().v)
-            .collect();
-        let mut seen: BTreeSet<VertexId> = BTreeSet::new();
-        while let Some(v) = stack.pop() {
-            if !seen.insert(v) {
-                continue;
-            }
-            for e in self.edges_at(v) {
-                let [a, b] = self.edge(e).unwrap().v;
-                if plane.contains(self.pos(a)) && plane.contains(self.pos(b)) && found.insert(e) {
-                    stack.push(if a == v { b } else { a });
-                }
-            }
-        }
-        found
-    }
-
-    /// Simple counter-clockwise cycles (bounded regions) of the planar graph formed by `edges`.
-    /// Each cycle is listed once, wound counter-clockwise around `plane.normal`.
-    fn bounded_cycles(&self, edges: &BTreeSet<EdgeId>, plane: &Plane) -> Vec<Vec<VertexId>> {
-        // Neighbors of each vertex sorted counter-clockwise by angle.
-        let mut nbrs: BTreeMap<VertexId, Vec<VertexId>> = BTreeMap::new();
-        for e in edges {
-            let [a, b] = self.edge(*e).unwrap().v;
-            nbrs.entry(a).or_default().push(b);
-            nbrs.entry(b).or_default().push(a);
-        }
-        let p2: BTreeMap<VertexId, DVec2> = nbrs
-            .keys()
+            .flatten()
             .map(|v| (*v, plane.project(self.pos(*v))))
             .collect();
-        for (v, list) in nbrs.iter_mut() {
-            let o = p2[v];
-            list.sort_by(|x, y| {
-                let ax = (p2[x] - o).to_angle();
-                let ay = (p2[y] - o).to_angle();
-                ax.total_cmp(&ay)
-            });
-        }
+        let graph = PlaneGraph { pos, edges };
+        let project = |l: &[VertexId]| -> Vec<DVec2> {
+            l.iter().map(|v| plane.project(self.pos(*v))).collect()
+        };
+        let old_polys: Vec<(Vec<DVec2>, Vec<Vec<DVec2>>)> = old
+            .iter()
+            .map(|(_, f)| {
+                (
+                    project(&f.outer),
+                    f.holes.iter().map(|h| project(h)).collect(),
+                )
+            })
+            .collect();
+        let new_sides: BTreeSet<(VertexId, VertexId)> = new_edges
+            .iter()
+            .filter_map(|e| self.edge(*e))
+            .map(|e| side(e.v[0], e.v[1]))
+            .collect();
 
-        // Walk every directed side once; at each vertex turn as far left as possible.
-        let mut visited: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
-        let mut cycles = Vec::new();
-        for (&start, list) in &nbrs {
-            for &next in list {
-                if visited.contains(&(start, next)) {
-                    continue;
-                }
-                let mut cycle = Vec::new();
-                let (mut u, mut w) = (start, next);
-                loop {
-                    visited.insert((u, w));
-                    cycle.push(u);
-                    let around = &nbrs[&w];
-                    let i = around.iter().position(|x| *x == u).unwrap();
-                    let turn = around[(i + around.len() - 1) % around.len()];
-                    (u, w) = (w, turn);
-                    if (u, w) == (start, next) {
-                        break;
+        let wanted: Vec<Region> = graph
+            .regions()
+            .into_iter()
+            .filter(|r| {
+                let Some(p) = graph.interior_point(r) else {
+                    return false;
+                };
+                let in_old_face = old_polys.iter().any(|(o, hs)| {
+                    point_in_polygon(p, o) && !hs.iter().any(|h| point_in_polygon(p, h))
+                });
+                let in_old_hole = old_polys
+                    .iter()
+                    .any(|(_, hs)| hs.iter().any(|h| point_in_polygon(p, h)));
+                let uses_new = std::iter::once(&r.outer).chain(&r.holes).any(|l| {
+                    (0..l.len()).any(|i| new_sides.contains(&side(l[i], l[(i + 1) % l.len()])))
+                });
+                in_old_face || (uses_new && !in_old_hole)
+            })
+            .collect();
+
+        self.reconcile(&old, wanted, plane);
+    }
+
+    /// Keeps old faces that match a wanted region, updates their holes if needed, inserts the
+    /// rest, and removes old faces that match nothing. All through recorded primitives.
+    fn reconcile(&mut self, old: &[(FaceId, Face)], wanted: Vec<Region>, plane: Plane) {
+        let mut matched: BTreeSet<FaceId> = BTreeSet::new();
+        for r in wanted {
+            let outer: BTreeSet<VertexId> = r.outer.iter().copied().collect();
+            let same = old.iter().find(|(id, f)| {
+                !matched.contains(id)
+                    && f.normal.dot(plane.normal) > 0.0
+                    && f.outer.iter().copied().collect::<BTreeSet<_>>() == outer
+            });
+            match same {
+                Some((id, f)) => {
+                    matched.insert(*id);
+                    if loop_sets(&f.holes) != loop_sets(&r.holes) {
+                        let face = Face {
+                            outer: f.outer.clone(),
+                            holes: r.holes,
+                            normal: f.normal,
+                        };
+                        self.replace_face(*id, face);
                     }
                 }
-                let unique: BTreeSet<_> = cycle.iter().collect();
-                let poly: Vec<DVec2> = cycle.iter().map(|v| p2[v]).collect();
-                if unique.len() == cycle.len() && signed_area2(&poly) > LENGTH_TOL * LENGTH_TOL {
-                    cycles.push(cycle);
+                None => {
+                    self.insert_face(Face {
+                        outer: r.outer,
+                        holes: r.holes,
+                        normal: plane.normal,
+                    });
                 }
             }
         }
-        cycles
+        for (id, _) in old {
+            if !matched.contains(id) {
+                self.remove_face(*id);
+            }
+        }
     }
+}
 
-    fn face_with_loop(&self, c: &[VertexId]) -> bool {
-        let set: BTreeSet<_> = c.iter().collect();
-        self.faces().any(|(_, f)| {
-            f.outer.len() == c.len() && f.outer.iter().collect::<BTreeSet<_>>() == set
-        })
-    }
+fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {
+    (a.min(b), a.max(b))
+}
 
-    fn project_loop(&self, l: &[VertexId], plane: &Plane) -> Vec<DVec2> {
-        l.iter().map(|v| plane.project(self.pos(*v))).collect()
-    }
-
-    /// A point strictly inside a counter-clockwise cycle: just left of the middle of its first side.
-    fn interior_point(&self, c: &[VertexId], plane: &Plane) -> DVec2 {
-        let poly = self.project_loop(c, plane);
-        let (a, b) = (poly[0], poly[1]);
-        let side = b - a;
-        let left = side.perp().normalize();
-        (a + b) * 0.5 + left * (side.length() * 1e-4).max(LENGTH_TOL * 10.0)
-    }
-
-    fn face_contains(&self, f: FaceId, p: DVec2, plane: &Plane) -> bool {
-        let face = self.face(f).unwrap();
-        point_in_polygon(p, &self.project_loop(&face.outer, plane))
-            && !face
-                .holes
-                .iter()
-                .any(|h| point_in_polygon(p, &self.project_loop(h, plane)))
-    }
-
-    fn shares_side_with_outer(&self, f: FaceId, c: &[VertexId]) -> bool {
-        let outer = &self.face(f).unwrap().outer;
-        let sides = |l: &[VertexId]| -> BTreeSet<(VertexId, VertexId)> {
-            (0..l.len())
-                .map(|i| {
-                    let (a, b) = (l[i], l[(i + 1) % l.len()]);
-                    (a.min(b), a.max(b))
-                })
-                .collect()
-        };
-        !sides(outer).is_disjoint(&sides(c))
-    }
+fn loop_sets(loops: &[Vec<VertexId>]) -> BTreeSet<BTreeSet<VertexId>> {
+    loops.iter().map(|l| l.iter().copied().collect()).collect()
 }

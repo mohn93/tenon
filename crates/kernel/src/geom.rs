@@ -65,12 +65,15 @@ impl Plane {
     }
 }
 
-/// Flip a unit normal so its largest-magnitude component is positive.
+/// Flip a unit normal so its largest-magnitude component is positive. Components within 1e-9 of
+/// the largest count as tied, and ties go to x, then y, then z, so nearly equal normals computed
+/// from different points get the same orientation.
 fn canonical(n: DVec3) -> DVec3 {
     let a = n.abs();
-    let major = if a.x >= a.y && a.x >= a.z {
+    let top = a.max_element() - 1e-9;
+    let major = if a.x >= top {
         n.x
-    } else if a.y >= a.z {
+    } else if a.y >= top {
         n.y
     } else {
         n.z
@@ -112,6 +115,18 @@ pub fn segment_crossing(p: DVec3, q: DVec3, a: DVec3, b: DVec3) -> Option<DVec3>
     let x = (x1 + x2) * 0.5;
     let away = |e: DVec3| e.distance(x) >= LENGTH_TOL;
     (away(p) && away(q) && away(a) && away(b)).then_some(x)
+}
+
+/// Distance from p to the closed 2D segment a-b.
+pub fn segment_distance_2d(p: DVec2, a: DVec2, b: DVec2) -> f64 {
+    let ab = b - a;
+    let l2 = ab.length_squared();
+    let t = if l2 > 0.0 {
+        ((p - a).dot(ab) / l2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (a + ab * t).distance(p)
 }
 
 /// Twice the signed area of a 2D polygon (positive when counter-clockwise).
@@ -203,6 +218,42 @@ mod tests {
             d: p.d + 1.0,
         };
         assert!(!p.same_as(&offset));
+    }
+
+    #[test]
+    fn canonical_breaks_near_ties_by_axis_priority() {
+        let s = 0.5f64.sqrt();
+        let a = canonical(DVec3::new(-s, s + 1e-12, 0.0));
+        let b = canonical(DVec3::new(s, -s - 1e-12, 0.0));
+        assert!(a.x > 0.0 && b.x > 0.0);
+        let c = canonical(DVec3::new(0.0, -s, s + 1e-12));
+        assert!(c.y > 0.0);
+        // A clear winner still decides.
+        assert_eq!(
+            canonical(DVec3::new(0.6, -0.8, 0.0)),
+            DVec3::new(-0.6, 0.8, 0.0)
+        );
+    }
+
+    #[test]
+    fn planes_of_a_45_degree_wall_agree_on_orientation() {
+        let q = |s: f64, z: f64| DVec3::new(s, s + 0.3, z);
+        let p1 = Plane::from_points(q(0.0, 0.0), q(3.0, 0.0), q(3.0, 3.0)).unwrap();
+        let p2 = Plane::from_points(q(2.0, 2.0), q(1.0, 2.0), q(1.0, 1.0)).unwrap();
+        let p3 = Plane::from_points(q(1.0, 1.0), q(1.0, 2.0), q(2.0, 2.0)).unwrap();
+        for p in [p2, p3] {
+            assert!(p1.same_as(&p));
+            assert!(p1.normal.dot(p.normal) > 0.0);
+            assert!((p1.d - p.d).abs() < LENGTH_TOL);
+        }
+    }
+
+    #[test]
+    fn segment_distance_clamps_to_endpoints() {
+        let (a, b) = (DVec2::ZERO, DVec2::X);
+        assert_eq!(segment_distance_2d(DVec2::new(0.5, 2.0), a, b), 2.0);
+        assert_eq!(segment_distance_2d(DVec2::new(3.0, 0.0), a, b), 2.0);
+        assert_eq!(segment_distance_2d(DVec2::new(1.0, 1.0), a, a), 2f64.sqrt());
     }
 
     #[test]

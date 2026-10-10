@@ -6,6 +6,7 @@ mod faces;
 pub mod geom;
 mod ids;
 mod model;
+mod regions;
 
 pub use edit::KernelError;
 pub use ids::{EdgeId, EntityId, FaceId, VertexId};
