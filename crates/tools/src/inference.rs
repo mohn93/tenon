@@ -187,7 +187,7 @@ fn visible(model: &Model, eye: DVec3, p: DVec3) -> bool {
 
 /// Point on the line `origin + t * dir` closest to the ray; `t` is clamped to [0, 1] when
 /// `segment` is true (dir is then the segment vector).
-fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segment: bool) -> DVec3 {
+pub(crate) fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segment: bool) -> DVec3 {
     let w0 = origin - ray.origin;
     let a = dir.dot(dir);
     let b = dir.dot(ray.dir);

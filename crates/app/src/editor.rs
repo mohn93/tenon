@@ -411,6 +411,11 @@ mod tests {
         e.cursor_moved(px);
     }
 
+    fn click(e: &mut Editor) {
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+    }
+
     fn type_text(e: &mut Editor, text: &str) {
         for c in text.chars() {
             e.key(EditorKey::Char(c));
@@ -484,6 +489,73 @@ mod tests {
         let model = e.doc().model();
         let (face, _) = model.faces().next().unwrap();
         assert!((model.area(face).unwrap() - 6.0).abs() < 1e-9);
+    }
+
+    /// Draws a 2 m square on the ground with the Rectangle tool and selects Push/Pull.
+    fn square_then_push_pull(e: &mut Editor) {
+        e.key(EditorKey::Char('r'));
+        click_at(e, DVec3::new(0.0, 0.0, 0.0));
+        click_at(e, DVec3::new(2.0, 2.0, 0.0));
+        e.key(EditorKey::Char('p'));
+        assert!(e.status().starts_with("Push/Pull"), "{}", e.status());
+    }
+
+    #[test]
+    fn push_pull_turns_a_rectangle_into_a_box() {
+        let mut e = editor();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        move_to(&mut e, DVec3::new(1.0, 1.0, 1.5));
+        assert!(e.status().contains("Distance: 1.5 m"), "{}", e.status());
+        click(&mut e);
+        assert_eq!(stats(&e), (12, 6));
+        e.undo();
+        assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
+    fn typed_distance_finishes_a_push_pull() {
+        let mut e = editor();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        move_to(&mut e, DVec3::new(1.0, 1.0, 0.5));
+        type_text(&mut e, "750mm");
+        assert_eq!(stats(&e), (12, 6));
+        let top = e
+            .doc()
+            .model()
+            .vertices()
+            .map(|(_, v)| v.pos.z)
+            .fold(0.0, f64::max);
+        assert!((top - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn failed_tool_commands_show_why() {
+        let mut e = editor();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        type_text(&mut e, "1");
+        assert_eq!(stats(&e), (12, 6));
+        // Pushing the top 3 m down would turn the 1 m sides inside out.
+        click_at(&mut e, DVec3::new(1.0, 1.0, 1.0));
+        type_text(&mut e, "-3");
+        assert_eq!(stats(&e), (12, 6));
+        assert!(e.status().contains("collapse"), "{}", e.status());
+    }
+
+    #[test]
+    fn api_edit_ends_a_push_pull_in_progress() {
+        let mut e = editor();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert!(e.status().contains("Distance"), "{}", e.status());
+        e.execute(Command::AddEdge {
+            start: [5.0, 5.0, 0.0],
+            end: [6.0, 5.0, 0.0],
+        })
+        .unwrap();
+        assert!(e.status().contains("Click a face"), "{}", e.status());
     }
 
     #[test]

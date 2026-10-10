@@ -6,6 +6,7 @@ use session::{Camera, Command};
 
 use crate::inference::Inference;
 use crate::line::LineTool;
+use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 
 /// What a tool may look at while handling an event.
@@ -58,6 +59,7 @@ pub trait Tool {
 pub enum ToolKind {
     Line,
     Rectangle,
+    PushPull,
 }
 
 impl ToolKind {
@@ -65,6 +67,7 @@ impl ToolKind {
         match self {
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
+            ToolKind::PushPull => Box::new(PushPullTool::new()),
         }
     }
 
@@ -73,6 +76,7 @@ impl ToolKind {
         match c.to_ascii_lowercase() {
             'l' => Some(ToolKind::Line),
             'r' => Some(ToolKind::Rectangle),
+            'p' => Some(ToolKind::PushPull),
             _ => None,
         }
     }
