@@ -176,3 +176,34 @@ fn batch_error_serializes_for_clients() {
     assert_eq!(v["error"]["kind"], "invalid_input");
     assert_eq!(v["rolled_back"], true);
 }
+
+#[test]
+fn events_since_far_future_revision_is_empty_and_not_truncated() {
+    let mut d = doc();
+    d.execute(edge([0.0; 3], [1.0, 0.0, 0.0])).unwrap();
+    for since in [u64::MAX, 5] {
+        let r = ask(&d, json!({"type": "events", "since": since}));
+        assert_eq!(r["events"], json!([]), "since {since}");
+        assert_eq!(r["truncated"], false, "since {since}");
+    }
+}
+
+#[test]
+fn truncation_boundary_is_exact() {
+    let mut d = doc();
+    for i in 0..1024 {
+        let x = i as f64;
+        d.execute(edge([x, 0.0, 0.0], [x, 1.0, 0.0])).unwrap();
+    }
+    let r = ask(&d, json!({"type": "events", "since": 0}));
+    assert_eq!(r["events"].as_array().unwrap().len(), 1024);
+    assert_eq!(r["truncated"], false);
+
+    d.execute(edge([5000.0, 0.0, 0.0], [5000.0, 1.0, 0.0]))
+        .unwrap();
+    let r = ask(&d, json!({"type": "events", "since": 0}));
+    assert_eq!(r["truncated"], true);
+    let r = ask(&d, json!({"type": "events", "since": 1}));
+    assert_eq!(r["truncated"], false);
+    assert_eq!(r["events"].as_array().unwrap().len(), 1024);
+}

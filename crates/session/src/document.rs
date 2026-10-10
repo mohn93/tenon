@@ -50,7 +50,7 @@ impl Document {
         let truncated = self
             .events
             .front()
-            .is_some_and(|first| first.revision > since + 1);
+            .is_some_and(|first| first.revision > since.saturating_add(1));
         let events = self
             .events
             .iter()
@@ -133,6 +133,8 @@ impl Document {
     }
 
     /// Runs commands in order, stopping at the first error.
+    ///
+    /// A failed atomic batch still consumes entity ids: ids are never reused.
     ///
     /// Non-atomic: each command is its own undo step and earlier commands stay applied.
     /// Atomic: all modeling commands become one undo step, and on error everything (model and
