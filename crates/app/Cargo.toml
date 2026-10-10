@@ -6,3 +6,8 @@ edition.workspace = true
 [dependencies]
 render = { path = "../render" }
 glam.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+pollster.workspace = true
+log.workspace = true
+env_logger.workspace = true
