@@ -1,7 +1,16 @@
 use glam::dcamera::rh::{proj::directx, view::look_at_mat4};
-use glam::{DMat4, DVec2, DVec3, Mat4};
+use glam::{DMat4, DQuat, DVec2, DVec3, Mat4};
+use std::f64::consts::PI;
 
 pub const UP: DVec3 = DVec3::Z;
+/// Closest the view direction may get to straight up or down, in radians.
+pub const MIN_POLAR: f64 = 0.01;
+pub const ORBIT_RAD_PER_PX: f64 = 0.006;
+/// Distance multiplier per zoom step (one scroll notch).
+pub const ZOOM_STEP: f64 = 0.85;
+pub const MIN_ZOOM_DISTANCE: f64 = 0.01;
+/// Ground hits farther than distance() * this are ignored as anchors.
+pub const MAX_ANCHOR_FACTOR: f64 = 50.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
@@ -85,6 +94,44 @@ impl Camera {
         Ray { origin: self.eye, dir: dir.normalize() }
     }
 
+    pub fn orbit(&mut self, pivot: DVec3, delta_px: DVec2) {
+        let yaw = -delta_px.x * ORBIT_RAD_PER_PX;
+        // Rotating forward about right() by +a tilts it toward UP, reducing its polar angle by a.
+        let polar = self.forward().angle_between(UP).clamp(MIN_POLAR, PI - MIN_POLAR);
+        let pitch = (-delta_px.y * ORBIT_RAD_PER_PX)
+            .clamp(polar - (PI - MIN_POLAR), polar - MIN_POLAR);
+        let rot = DQuat::from_axis_angle(UP, yaw) * DQuat::from_axis_angle(self.right(), pitch);
+        self.eye = pivot + rot * (self.eye - pivot);
+        self.target = pivot + rot * (self.target - pivot);
+    }
+
+    pub fn pan(&mut self, anchor: DVec3, delta_px: DVec2) {
+        let depth = (anchor - self.eye).dot(self.forward()).max(1e-6);
+        let world_per_px = 2.0 * depth * (self.fov_y * 0.5).tan() / self.viewport.y;
+        let offset = (self.up() * delta_px.y - self.right() * delta_px.x) * world_per_px;
+        self.eye += offset;
+        self.target += offset;
+    }
+
+    pub fn zoom(&mut self, anchor: DVec3, steps: f64) {
+        let dist = (self.eye - anchor).length();
+        if dist <= 0.0 {
+            return;
+        }
+        let factor = (dist * ZOOM_STEP.powf(steps)).max(MIN_ZOOM_DISTANCE) / dist;
+        self.eye = anchor + (self.eye - anchor) * factor;
+        self.target = anchor + (self.target - anchor) * factor;
+    }
+
+    pub fn anchor_at(&self, px: DVec2) -> DVec3 {
+        let ray = self.ray(px);
+        let max = self.distance() * MAX_ANCHOR_FACTOR;
+        match ray.hit_ground() {
+            Some(p) if (p - ray.origin).length() <= max => p,
+            _ => ray.origin + ray.dir * self.distance(),
+        }
+    }
+
     /// Pixel position of a world point, or None if it is behind the camera.
     pub fn project(&self, p: DVec3) -> Option<DVec2> {
         let clip = self.proj() * self.view() * p.extend(1.0);
@@ -149,5 +196,93 @@ mod tests {
         assert!(r.hit_ground().unwrap().abs_diff_eq(DVec3::new(0.0, 7.5, 0.0), 1e-9));
         let up = Ray { origin: DVec3::new(0.0, 0.0, 10.0), dir: DVec3::Z };
         assert!(up.hit_ground().is_none());
+    }
+
+    #[test]
+    fn orbit_preserves_distance_to_pivot() {
+        let mut c = cam();
+        let pivot = DVec3::new(1.0, 2.0, 0.0);
+        let before = (c.eye - pivot).length();
+        c.orbit(pivot, DVec2::new(120.0, -40.0));
+        assert!(((c.eye - pivot).length() - before).abs() < 1e-9);
+    }
+
+    #[test]
+    fn horizontal_orbit_keeps_elevation() {
+        let mut c = cam();
+        let polar = c.forward().angle_between(UP);
+        c.orbit(c.target, DVec2::new(200.0, 0.0));
+        assert!((c.forward().angle_between(UP) - polar).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dragging_down_raises_camera() {
+        let mut c = cam();
+        let z = c.eye.z;
+        c.orbit(c.target, DVec2::new(0.0, 50.0));
+        assert!(c.eye.z > z);
+    }
+
+    #[test]
+    fn orbit_pitch_is_clamped_short_of_vertical() {
+        let mut c = cam();
+        for dy in [100_000.0, -100_000.0] {
+            c.orbit(c.target, DVec2::new(0.0, dy));
+            let polar = c.forward().angle_between(UP);
+            assert!(polar >= MIN_POLAR - 1e-9 && polar <= PI - MIN_POLAR + 1e-9);
+        }
+    }
+
+    #[test]
+    fn pan_moves_anchor_with_cursor() {
+        let mut c = cam();
+        let anchor = DVec3::new(2.0, 1.0, 0.0);
+        let before = c.project(anchor).unwrap();
+        let delta = DVec2::new(35.0, -20.0);
+        c.pan(anchor, delta);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(before + delta, 1e-6));
+    }
+
+    #[test]
+    fn zoom_keeps_anchor_on_screen_and_scales_distance() {
+        let mut c = cam();
+        let anchor = DVec3::new(-1.0, 3.0, 0.0);
+        let px = c.project(anchor).unwrap();
+        let d = (c.eye - anchor).length();
+        c.zoom(anchor, 2.0);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(px, 1e-6));
+        assert!(((c.eye - anchor).length() - d * ZOOM_STEP.powf(2.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zoom_out_moves_away() {
+        let mut c = cam();
+        let d = (c.eye - c.target).length();
+        c.zoom(c.target, -1.0);
+        assert!((c.eye - c.target).length() > d);
+    }
+
+    #[test]
+    fn zoom_never_reaches_anchor() {
+        let mut c = cam();
+        let anchor = c.target;
+        c.zoom(anchor, 1000.0);
+        assert!((c.eye - anchor).length() >= MIN_ZOOM_DISTANCE * (1.0 - 1e-9));
+    }
+
+    #[test]
+    fn anchor_is_ground_point_under_cursor() {
+        let c = cam();
+        assert!(c.anchor_at(DVec2::new(400.0, 300.0)).abs_diff_eq(DVec3::ZERO, 1e-9));
+    }
+
+    #[test]
+    fn anchor_falls_back_when_cursor_is_on_sky() {
+        let mut c = cam();
+        c.eye = DVec3::new(0.0, -10.0, 1.0);
+        c.target = DVec3::new(0.0, 0.0, 1.0);
+        let px = DVec2::new(400.0, 0.0);
+        let r = c.ray(px);
+        assert!(c.anchor_at(px).abs_diff_eq(r.origin + r.dir * c.distance(), 1e-9));
     }
 }
