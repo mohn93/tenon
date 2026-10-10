@@ -4,4 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+kernel = { path = "../kernel" }
 glam.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
