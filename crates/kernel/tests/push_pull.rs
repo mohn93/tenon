@@ -308,3 +308,137 @@ fn bad_push_pull_input_changes_nothing() {
     assert_eq!(m, before);
     assert!(m.take_changes().is_empty());
 }
+
+/// Faces whose vertices all satisfy `on`.
+fn faces_where(m: &Model, on: impl Fn(DVec3) -> bool) -> Vec<FaceId> {
+    m.faces()
+        .filter(|(_, f)| f.outer.iter().all(|v| on(m.position(*v).unwrap())))
+        .map(|(id, _)| id)
+        .collect()
+}
+
+#[test]
+fn rectangle_drawn_beside_a_box_pulls_up_into_a_closed_box() {
+    let mut m = Model::new();
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    m.push_pull(a, 1.0).unwrap();
+    let b = rect(&mut m, 2.0, 0.0, 4.0, 2.0, 0.0);
+    assert_eq!(
+        m.face(b).unwrap().normal,
+        DVec3::Z,
+        "a new rectangle faces up"
+    );
+    m.push_pull(b, 1.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(
+        m.face(b).unwrap().normal,
+        -DVec3::Z,
+        "b is kept as the floor"
+    );
+    let shared = faces_where(&m, |q| (q.x - 2.0).abs() < 1e-9);
+    let solid: Vec<FaceId> = all_faces(&m)
+        .into_iter()
+        .filter(|f| !shared.contains(f))
+        .collect();
+    assert_outward(&m, &solid);
+}
+
+#[test]
+fn splitting_a_flipped_base_keeps_it_facing_out() {
+    let mut m = Model::new();
+    let c = rect(&mut m, 10.0, 0.0, 12.0, 2.0, 0.0);
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    m.push_pull(a, 1.0).unwrap();
+    m.add_edge(p(1.0, 0.0, 0.0), p(1.0, 2.0, 0.0)).unwrap();
+    m.validate().unwrap();
+    let base: Vec<FaceId> = faces_where(&m, |q| q.z.abs() < 1e-9 && q.x < 5.0);
+    assert_eq!(base.len(), 2);
+    for f in &base {
+        assert_eq!(m.face(*f).unwrap().normal, -DVec3::Z, "base piece {f:?}");
+    }
+    let solid: Vec<FaceId> = all_faces(&m).into_iter().filter(|f| *f != c).collect();
+    assert_outward(&m, &solid);
+}
+
+#[test]
+fn notch_at_a_box_edge_leaves_an_open_step() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 0.0, 2.0, 1.0, 2.0);
+    m.push_pull(sub, -1.0).unwrap();
+    m.validate().unwrap();
+    assert_outward(&m, &all_faces(&m));
+    let front: f64 = faces_where(&m, |q| q.y.abs() < 1e-9)
+        .iter()
+        .map(|f| m.area(*f).unwrap())
+        .sum();
+    assert!((front - 7.0).abs() < 1e-9, "front area {front}");
+    // The edge across the open notch went with its side face.
+    let bordered = |a, b| {
+        m.faces().any(|(_, f)| {
+            std::iter::once(&f.outer).chain(&f.holes).any(|l| {
+                (0..l.len()).any(|i| {
+                    let s = (l[i], l[(i + 1) % l.len()]);
+                    s == (a, b) || s == (b, a)
+                })
+            })
+        })
+    };
+    assert!(m.edges().all(|(_, e)| bordered(e.v[0], e.v[1])));
+}
+
+#[test]
+fn pushing_through_a_solid_is_refused() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    m.take_changes();
+    let before = m.clone();
+    assert_eq!(m.push_pull(sub, -3.0), Err(KernelError::Obstructed));
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+
+    m.push_pull(sub, -1.0).unwrap();
+    let bottom = face_at_height(&m, 1.0);
+    let before = m.clone();
+    assert_eq!(m.push_pull(bottom, -2.0), Err(KernelError::Obstructed));
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+}
+
+#[test]
+fn collapse_when_a_moved_vertex_lands_on_another() {
+    let (mut m, top) = box_4x4x2();
+    // A loose edge whose end sits 1 m above a top corner; nothing joins it to the box.
+    m.add_edge(p(0.0, 0.0, 3.0), p(-1.0, -1.0, 3.0)).unwrap();
+    m.validate().unwrap();
+    let before = m.clone();
+    assert_eq!(m.push_pull(top, 1.0), Err(KernelError::Collapse));
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+    assert!(m.push_pull(top, 0.5).is_ok());
+}
+
+#[test]
+fn in_solid_face_with_a_hole_pulls_into_a_tube() {
+    let (mut m, _) = box_4x4x2();
+    let ring = rect(&mut m, 1.0, 1.0, 3.0, 3.0, 2.0);
+    let inner = rect(&mut m, 1.5, 1.5, 2.5, 2.5, 2.0);
+    assert_eq!(m.face(ring).unwrap().holes.len(), 1);
+    m.push_pull(ring, 1.0).unwrap();
+    m.validate().unwrap();
+    assert_outward(&m, &all_faces(&m));
+    let f = m.face(inner).expect("the inner face stays");
+    assert!(
+        f.outer
+            .iter()
+            .all(|v| (m.position(*v).unwrap().z - 2.0).abs() < 1e-9)
+    );
+}
+
+#[test]
+fn loop_drawn_beside_a_flipped_base_faces_up() {
+    let mut m = Model::new();
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    m.push_pull(a, 1.0).unwrap();
+    let b = rect(&mut m, 5.0, 5.0, 6.0, 6.0, 0.0);
+    assert_eq!(m.face(b).unwrap().normal, DVec3::Z);
+}

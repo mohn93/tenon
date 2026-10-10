@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::DVec3;
 
 use crate::edit::KernelError;
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL};
+use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane};
 use crate::ids::{FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
@@ -25,8 +25,9 @@ impl Model {
             return Err(KernelError::ZeroDistance);
         }
         if self.stretches_around(id, &face) {
-            self.move_face(&face, face.normal * distance)?;
+            self.move_face(id, &face, face.normal * distance)?;
         } else {
+            self.check_unobstructed(id, distance)?;
             self.extrude(id, &face, distance);
         }
         Ok(self.take_changes())
@@ -62,9 +63,9 @@ impl Model {
         stretching && along_normal
     }
 
-    /// Moves every vertex of the face by `offset`, after checking that no edge leaving the face
-    /// collapses or flips and no vertex lands on another.
-    fn move_face(&mut self, face: &Face, offset: DVec3) -> Result<(), KernelError> {
+    /// Moves every vertex of face `id` by `offset`, after checking that no edge leaving the face
+    /// collapses or flips, no vertex lands on another and the face passes through no other face.
+    fn move_face(&mut self, id: FaceId, face: &Face, offset: DVec3) -> Result<(), KernelError> {
         let moving = loop_vertices(face);
         for (_, e) in self.edges() {
             let [a, b] = e.v;
@@ -105,6 +106,7 @@ impl Model {
                 return Err(KernelError::Collapse);
             }
         }
+        self.check_unobstructed(id, offset.dot(n))?;
         for m in moving {
             let to = self.pos(m) + offset;
             self.move_vertex(m, to);
@@ -122,6 +124,28 @@ impl Model {
             .map(|l| l.iter().map(|v| self.pos(*v)).collect())
             .collect();
         let before: BTreeSet<FaceId> = self.faces().map(|(f, _)| f).collect();
+        // Planes of the faces each loop side already bordered, so a cut can tell which of its
+        // sides open onto an existing face (a notch at a box edge).
+        let bordered: Vec<Plane> = self
+            .faces()
+            .filter(|(f, _)| *f != id)
+            .filter_map(|(_, g)| {
+                let vs = loop_vertices(g);
+                loops
+                    .iter()
+                    .any(|l| {
+                        (0..l.len())
+                            .any(|i| vs.contains(&l[i]) && vs.contains(&l[(i + 1) % l.len()]))
+                    })
+                    .then(|| {
+                        let o = self.pos(g.outer[0]);
+                        Plane {
+                            normal: g.normal,
+                            d: g.normal.dot(o),
+                        }
+                    })
+            })
+            .collect();
 
         if in_solid {
             self.remove_face(id);
@@ -161,25 +185,70 @@ impl Model {
             }
             let in_cap = g.normal.cross(n).length() < PLANE_ANGLE_TOL
                 && (self.pos(g.outer[0]) - cap_origin).dot(n).abs() < LENGTH_TOL;
-            let want = if in_cap {
-                Some(cap_normal)
-            } else {
-                loops.iter().find_map(|l| {
-                    (0..l.len()).find_map(|i| {
-                        let (a, b) = (l[i], l[(i + 1) % l.len()]);
-                        (outer.contains(&a) && outer.contains(&b)).then(|| {
-                            let out = (self.pos(b) - self.pos(a)).cross(n).normalize();
-                            if cut { -out } else { out }
-                        })
-                    })
-                })
-            };
-            if let Some(want) = want {
-                self.orient(f, want);
+            if in_cap {
+                self.orient(f, cap_normal);
+                continue;
             }
+            // A side face holds a loop side of the pushed face as consecutive outer vertices.
+            let side_of = loops.iter().find_map(|l| {
+                (0..l.len()).find_map(|i| {
+                    let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                    has_side(&g.outer, a, b).then_some((a, b))
+                })
+            });
+            let Some((a, b)) = side_of else {
+                continue;
+            };
+            let (pa, pb) = (self.pos(a), self.pos(b));
+            if cut {
+                let opens = Plane::from_points(pa, pb, pa + offset)
+                    .is_some_and(|sp| bordered.iter().any(|q| q.same_as(&sp)));
+                if opens {
+                    // The cut reaches an existing face in this side's plane: leave it open.
+                    self.remove_face(f);
+                    let stray = self.edge_between(a, b).filter(|_| {
+                        !self.faces().any(|(_, h)| {
+                            std::iter::once(&h.outer)
+                                .chain(&h.holes)
+                                .any(|l| has_side(l, a, b))
+                        })
+                    });
+                    if let Some(e) = stray {
+                        self.remove_edge(e);
+                    }
+                    continue;
+                }
+            }
+            let out = (pb - pa).cross(n).normalize();
+            self.orient(f, if cut { -out } else { out });
         }
         if !in_solid {
             self.orient(id, if distance > 0.0 { -n } else { n });
+        }
+    }
+
+    /// Fails with `Obstructed` if face `id`, moved `distance` along its normal, would meet another
+    /// face: a ray from a point inside it hits one within that distance.
+    fn check_unobstructed(&self, id: FaceId, distance: f64) -> Result<(), KernelError> {
+        let Some(tris) = self.triangulate(id) else {
+            return Ok(());
+        };
+        let Some([a, b, c]) = tris.first().copied() else {
+            return Ok(());
+        };
+        let from = (a + b + c) / 3.0;
+        let dir = self.face(id).unwrap().normal * distance.signum();
+        let reach = distance.abs() + LENGTH_TOL;
+        let hit = self
+            .faces()
+            .filter(|(f, _)| *f != id)
+            .flat_map(|(f, _)| self.triangulate(f).unwrap_or_default())
+            .filter_map(|t| ray_hits_triangle(from, dir, t))
+            .any(|t| t > LENGTH_TOL && t <= reach);
+        if hit {
+            Err(KernelError::Obstructed)
+        } else {
+            Ok(())
         }
     }
 
@@ -245,6 +314,30 @@ fn loop_vertices(f: &Face) -> BTreeSet<VertexId> {
         .flatten()
         .copied()
         .collect()
+}
+
+/// True if `a` and `b` are consecutive in loop `l`, in either order (wrapping).
+fn has_side(l: &[VertexId], a: VertexId, b: VertexId) -> bool {
+    (0..l.len()).any(|i| {
+        let (x, y) = (l[i], l[(i + 1) % l.len()]);
+        (x, y) == (a, b) || (x, y) == (b, a)
+    })
+}
+
+/// Distance along unit `dir` from `from` to triangle `t`, if the ray meets it.
+fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
+    let (e1, e2) = (b - a, c - a);
+    let h = dir.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let s = from - a;
+    let u = s.dot(h) / det;
+    let q = s.cross(e1);
+    let v = dir.dot(q) / det;
+    let eps = 1e-12;
+    (u >= -eps && v >= -eps && u + v <= 1.0 + eps).then(|| e2.dot(q) / det)
 }
 
 fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {

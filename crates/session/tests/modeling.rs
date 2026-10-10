@@ -245,3 +245,17 @@ fn entities_within_bounds() {
     );
     assert_eq!(edge_on_boundary["edges"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn rectangle_after_a_box_faces_up() {
+    let mut d = doc();
+    let base = rectangle(&mut d, [0.0, 0.0, 0.0], [2.0, 2.0, 0.0]);
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": base, "distance": 1.0}),
+    )
+    .unwrap();
+    let face = rectangle(&mut d, [5.0, 0.0, 0.0], [6.0, 1.0, 0.0]);
+    let info = ask(&d, json!({"type": "entity", "id": face}));
+    assert_eq!(info["normal"], json!([0.0, 0.0, 1.0]));
+}

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::geom::{PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, VertexId};
@@ -55,25 +55,14 @@ impl Model {
         planes
     }
 
-    /// The plane's orientation taken from an existing face in it, so all its faces agree.
-    fn oriented(&self, plane: Plane) -> Plane {
-        self.faces()
-            .find(|(_, f)| self.face_in_plane(f, &plane))
-            .map(|(_, f)| Plane {
-                normal: f.normal,
-                d: f.normal.dot(self.pos(f.outer[0])),
-            })
-            .unwrap_or(plane)
-    }
-
     fn face_in_plane(&self, f: &Face, plane: &Plane) -> bool {
         f.normal.cross(plane.normal).length() < PLANE_ANGLE_TOL
             && plane.contains(self.pos(f.outer[0]))
     }
 
-    /// Recomputes the regions of `plane` and makes the face set match them.
+    /// Recomputes the regions of `plane` and makes the face set match them. `plane` is in
+    /// canonical orientation; regions are wound counter-clockwise around its normal.
     fn rebuild_plane(&mut self, plane: Plane, new_edges: &[EdgeId]) {
-        let plane = self.oriented(plane);
         let old: Vec<(FaceId, Face)> = self
             .faces()
             .filter(|(_, f)| self.face_in_plane(f, &plane))
@@ -114,16 +103,17 @@ impl Model {
             .flat_map(|(_, f)| std::iter::once(&f.outer).chain(&f.holes))
             .flat_map(|l| (0..l.len()).map(|i| side(l[i], l[(i + 1) % l.len()])))
             .collect();
-        let wanted: Vec<Region> = graph
+        // Each wanted region with the normal it gets if it is new: that of the old face it lies
+        // in, or the plane's own normal when it lies in none.
+        let wanted: Vec<(Region, DVec3)> = graph
             .regions()
             .into_iter()
-            .filter(|r| {
-                let Some(p) = graph.interior_point(r) else {
-                    return false;
-                };
-                let in_old_face = old_polys.iter().any(|(o, hs)| {
+            .filter_map(|r| {
+                let p = graph.interior_point(&r)?;
+                let container = old_polys.iter().position(|(o, hs)| {
                     point_in_polygon(p, o) && !hs.iter().any(|h| point_in_polygon(p, h))
                 });
+                let in_old_face = container.is_some();
                 let in_old_hole = old_polys
                     .iter()
                     .any(|(_, hs)| hs.iter().any(|h| point_in_polygon(p, h)));
@@ -135,7 +125,9 @@ impl Model {
                 let apart = (0..r.outer.len()).all(|i| {
                     !old_sides.contains(&side(r.outer[i], r.outer[(i + 1) % r.outer.len()]))
                 });
-                in_old_face || (uses_new && (!in_old_hole || apart))
+                let keep = in_old_face || (uses_new && (!in_old_hole || apart));
+                let normal = container.map_or(plane.normal, |i| old[i].1.normal);
+                keep.then_some((r, normal))
             })
             .collect();
 
@@ -144,9 +136,9 @@ impl Model {
 
     /// Keeps old faces that match a wanted region, updates their holes if needed, inserts the
     /// rest, and removes old faces that match nothing. All through recorded primitives.
-    fn reconcile(&mut self, old: &[(FaceId, Face)], wanted: Vec<Region>, plane: Plane) {
+    fn reconcile(&mut self, old: &[(FaceId, Face)], wanted: Vec<(Region, DVec3)>, plane: Plane) {
         let mut matched: BTreeSet<FaceId> = BTreeSet::new();
-        for r in wanted {
+        for (r, normal) in wanted {
             let outer: BTreeSet<VertexId> = r.outer.iter().copied().collect();
             // Faces in one plane may face opposite ways (push/pull flips a base face), so an
             // old face matches by vertex set and keeps its own orientation.
@@ -170,10 +162,18 @@ impl Model {
                     }
                 }
                 None => {
+                    let Region {
+                        mut outer,
+                        mut holes,
+                    } = r;
+                    if normal.dot(plane.normal) < 0.0 {
+                        outer.reverse();
+                        holes.iter_mut().for_each(|h| h.reverse());
+                    }
                     self.insert_face(Face {
-                        outer: r.outer,
-                        holes: r.holes,
-                        normal: plane.normal,
+                        outer,
+                        holes,
+                        normal,
                     });
                 }
             }
@@ -196,8 +196,6 @@ fn loop_sets(loops: &[Vec<VertexId>]) -> BTreeSet<BTreeSet<VertexId>> {
 
 #[cfg(test)]
 mod tests {
-    use glam::DVec3;
-
     use super::*;
 
     fn square(m: &mut Model, x0: f64, y0: f64, s: f64) {
@@ -228,7 +226,7 @@ mod tests {
     #[test]
     fn flipped_face_keeps_its_id_and_orientation_in_a_plane_with_both_orientations() {
         let mut m = Model::new();
-        // The first face in the plane is +Z, so oriented() picks +Z for the plane.
+        // The plane holds faces of both orientations.
         square(&mut m, 10.0, 0.0, 2.0);
         square(&mut m, 0.0, 0.0, 4.0);
         let (id, f) = m

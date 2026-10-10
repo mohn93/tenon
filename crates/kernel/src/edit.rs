@@ -14,6 +14,8 @@ pub enum KernelError {
     ZeroDistance,
     /// A push/pull would shrink a connected edge to nothing or turn it around.
     Collapse,
+    /// A push/pull would carry the face through other faces.
+    Obstructed,
 }
 
 impl fmt::Display for KernelError {
@@ -28,6 +30,9 @@ impl fmt::Display for KernelError {
                     f,
                     "distance would collapse or invert the edges joining the face"
                 )
+            }
+            KernelError::Obstructed => {
+                write!(f, "distance would push the face through other geometry")
             }
         }
     }
