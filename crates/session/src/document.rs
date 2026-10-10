@@ -6,6 +6,7 @@ use kernel::{ChangeSet, EdgeId, EntityId, FaceId, Model, VertexId};
 use crate::camera::Camera;
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome};
 use crate::query::{ChangeEvent, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo};
+use crate::rectangle::rectangle_corners;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -62,11 +63,10 @@ impl Document {
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        if let Some(changes) = self.edit(&command) {
+            return Ok(self.record(changes?));
+        }
         match command {
-            Command::AddEdge { start, end } => {
-                let changes = self.add_edge_changes(start, end)?;
-                Ok(self.record(changes))
-            }
             Command::Undo => {
                 let changes = self.undo.pop().ok_or_else(|| {
                     CommandError::new(ErrorKind::NothingToUndo, "nothing to undo")
@@ -93,7 +93,26 @@ impl Document {
                 self.camera = self.camera_for(eye, target, fov_y_deg)?;
                 Ok(Outcome::default())
             }
+            Command::AddEdge { .. } | Command::AddRectangle { .. } | Command::PushPull { .. } => {
+                unreachable!("edits are handled by Document::edit")
+            }
         }
+    }
+
+    /// Applies an editing command to the model and returns its changes, not yet recorded in
+    /// history. None for commands that are not edits (undo, redo, camera). Every editing
+    /// command goes through here, so `execute` and atomic batches stay in step.
+    fn edit(&mut self, command: &Command) -> Option<Result<ChangeSet, CommandError>> {
+        Some(match command {
+            Command::AddEdge { start, end } => self.add_edge_changes(*start, *end),
+            Command::AddRectangle {
+                corner,
+                opposite,
+                normal,
+            } => self.add_rectangle_changes(*corner, *opposite, *normal),
+            Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
+            Command::Undo | Command::Redo | Command::SetCamera { .. } => return None,
+        })
     }
 
     /// The current camera moved to `eye`/`target` (and `fov_y_deg` if given), after the same
@@ -165,17 +184,17 @@ impl Document {
         let camera_before = self.camera.clone();
         let mut applied: Vec<ChangeSet> = Vec::new();
         for (index, command) in commands.into_iter().enumerate() {
-            let result = match command {
-                Command::AddEdge { start, end } => self.add_edge_changes(start, end).map(|c| {
+            let result = match self.edit(&command) {
+                Some(changes) => changes.map(|c| {
                     let summary = c.summary();
                     applied.push(c);
                     Outcome { changes: summary }
                 }),
-                Command::Undo | Command::Redo => Err(CommandError::new(
+                None if matches!(command, Command::Undo | Command::Redo) => Err(CommandError::new(
                     ErrorKind::InvalidInput,
                     "undo and redo are not allowed in an atomic batch",
                 )),
-                camera @ Command::SetCamera { .. } => self.execute(camera),
+                None => self.execute(command),
             };
             match result {
                 Ok(o) => outcomes.push(o),
@@ -211,6 +230,58 @@ impl Document {
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
+    fn add_rectangle_changes(
+        &mut self,
+        corner: [f64; 3],
+        opposite: [f64; 3],
+        normal: Option<[f64; 3]>,
+    ) -> Result<ChangeSet, CommandError> {
+        check_coordinates(&[corner, opposite])?;
+        let corners = rectangle_corners(
+            DVec3::from(corner),
+            DVec3::from(opposite),
+            normal.map(DVec3::from),
+        )?;
+        check_coordinates(&corners.map(|c| c.to_array()))?;
+        self.model
+            .add_polygon(&corners)
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    fn push_pull_changes(
+        &mut self,
+        face: EntityId,
+        distance: f64,
+    ) -> Result<ChangeSet, CommandError> {
+        let EntityId::Face(id) = face else {
+            return Err(
+                CommandError::new(ErrorKind::InvalidInput, "push_pull needs a face id")
+                    .with_ids(vec![face]),
+            );
+        };
+        let Some(f) = self.model.face(id) else {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, format!("no entity {face}"))
+                    .with_ids(vec![face]),
+            );
+        };
+        if !distance.is_finite() || distance.abs() > MAX_COORDINATE {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("distance must be finite and within +/-{MAX_COORDINATE} m"),
+            ));
+        }
+        let moved: Vec<[f64; 3]> = std::iter::once(&f.outer)
+            .chain(&f.holes)
+            .flatten()
+            .map(|v| (self.model.position(*v).unwrap() + f.normal * distance).to_array())
+            .collect();
+        check_coordinates(&moved)?;
+        self.model.push_pull(id, distance).map_err(|e| {
+            CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(vec![face])
+        })
+    }
+
     fn record(&mut self, changes: ChangeSet) -> Outcome {
         if changes.is_empty() {
             return Outcome::default();
@@ -238,10 +309,11 @@ impl Document {
     pub fn query(&self, query: &Query) -> Result<QueryResult, CommandError> {
         let m = &self.model;
         Ok(match query {
-            Query::Entities { ids, kinds } => {
+            Query::Entities { ids, kinds, within } => {
                 let wanted = |id: EntityId, kind: EntityKind| {
                     (ids.is_empty() || ids.contains(&id))
                         && (kinds.is_empty() || kinds.contains(&kind))
+                        && within.is_none_or(|b| self.vertices_of(id).all(|p| b.contains(p)))
                 };
                 QueryResult::Entities {
                     vertices: m
@@ -306,6 +378,27 @@ impl Document {
                 }
             }
         })
+    }
+
+    /// Positions of the vertices an entity is made of.
+    fn vertices_of(&self, id: EntityId) -> impl Iterator<Item = [f64; 3]> + '_ {
+        let m = &self.model;
+        let ids: Vec<VertexId> = match id {
+            EntityId::Vertex(v) => vec![v],
+            EntityId::Edge(e) => m.edge(e).map(|e| e.v.to_vec()).unwrap_or_default(),
+            EntityId::Face(f) => m
+                .face(f)
+                .map(|f| {
+                    f.outer
+                        .iter()
+                        .chain(f.holes.iter().flatten())
+                        .copied()
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        ids.into_iter()
+            .filter_map(|v| m.position(v).map(|p| p.to_array()))
     }
 
     fn vertex_info(&self, id: VertexId) -> VertexInfo {

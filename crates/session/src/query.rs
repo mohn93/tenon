@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
-    /// Vertices, edges and faces. An entity is returned when `ids` is empty or lists it, and
-    /// `kinds` is empty or lists its kind; unknown ids are simply absent from the result.
+    /// Vertices, edges and faces. An entity is returned when `ids` is empty or lists it,
+    /// `kinds` is empty or lists its kind, and `within` is absent or contains all its vertices;
+    /// unknown ids are simply absent from the result.
     Entities {
         #[serde(default)]
         ids: Vec<EntityId>,
         #[serde(default)]
         kinds: Vec<EntityKind>,
+        #[serde(default)]
+        within: Option<Bounds>,
     },
     /// One entity by id ("v3", "e7", "f2").
     Entity {
@@ -25,6 +28,20 @@ pub enum Query {
     Events {
         since: u64,
     },
+}
+
+/// An axis-aligned box, bounds included.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Bounds {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
+
+impl Bounds {
+    pub fn contains(&self, p: [f64; 3]) -> bool {
+        (0..3).all(|i| self.min[i] <= p[i] && p[i] <= self.max[i])
+    }
 }
 
 /// The three kinds of entity.

@@ -14,6 +14,21 @@ pub enum Command {
         start: [f64; 3],
         end: [f64; 3],
     },
+    /// Draw a rectangle from one corner to the opposite one, as one undo step. Its sides follow
+    /// the world axes on axis planes. `normal` picks the plane; without it the corners must
+    /// differ in exactly two coordinates.
+    AddRectangle {
+        corner: [f64; 3],
+        opposite: [f64; 3],
+        #[serde(default)]
+        normal: Option<[f64; 3]>,
+    },
+    /// Move a face along its normal by `distance` meters (negative: against the normal),
+    /// extruding new sides or stretching the faces around it.
+    PushPull {
+        face: EntityId,
+        distance: f64,
+    },
     Undo,
     Redo,
     /// Place the camera. Not recorded in undo history.
@@ -22,6 +37,13 @@ pub enum Command {
         target: [f64; 3],
         fov_y_deg: Option<f64>,
     },
+}
+
+impl Command {
+    /// True for commands that can change the model (everything except camera moves).
+    pub fn changes_model(&self) -> bool {
+        !matches!(self, Command::SetCamera { .. })
+    }
 }
 
 /// What a successful command changed.

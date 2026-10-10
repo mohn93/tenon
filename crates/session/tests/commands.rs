@@ -134,6 +134,7 @@ fn query_results_round_trip_through_json() {
         .query(&Query::Entities {
             ids: vec![],
             kinds: vec![],
+            within: None,
         })
         .unwrap();
     let back: QueryResult = serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
