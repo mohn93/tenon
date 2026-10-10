@@ -245,7 +245,7 @@ mod tests {
         for dy in [100_000.0, -100_000.0] {
             c.orbit(c.target, DVec2::new(0.0, dy));
             let polar = c.forward().angle_between(UP);
-            assert!(polar >= MIN_POLAR - 1e-9 && polar <= PI - MIN_POLAR + 1e-9);
+            assert!((MIN_POLAR - 1e-9..=PI - MIN_POLAR + 1e-9).contains(&polar));
         }
     }
 
