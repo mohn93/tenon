@@ -5,6 +5,7 @@ mod edit;
 mod faces;
 pub mod geom;
 mod ids;
+mod mesh;
 mod model;
 mod regions;
 

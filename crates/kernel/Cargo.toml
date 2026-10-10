@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 glam = { workspace = true, features = ["serde"] }
 serde.workspace = true
+earcutr.workspace = true
