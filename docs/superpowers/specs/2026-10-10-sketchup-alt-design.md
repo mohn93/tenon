@@ -28,7 +28,7 @@ The app is fully controllable by agents: every action a user can take is a seria
 | Math | glam, f64 (`DVec3`) for model geometry, f32 on the GPU |
 | Robust predicates | `robust` |
 | Triangulation | `earcutr` (or `spade` if constrained triangulation is needed) |
-| Stable IDs | `slotmap` |
+| Stable IDs | monotonic `u64` ids in `BTreeMap`s (undo restores original ids) |
 | Picking acceleration | BVH (`bvh` crate or in-house) |
 | Serialization | `serde` + JSON/`bincode`, zip container |
 | Interop | `gltf`, OBJ/STL (in-house or small crates) |
@@ -51,13 +51,14 @@ Dependency direction: `app -> {api, tools, render} -> session -> kernel`. `tools
 
 ## 1. Kernel (`kernel`)
 
-### Data model: half-edge mesh
+### Data model: edges and vertex-loop faces
 
-- **Vertex**: `DVec3` position, one outgoing half-edge.
-- **HalfEdge**: twin, next, prev, origin vertex, face (optional).
-- **Edge**: pair of twin half-edges; flags: soft, smooth, hidden.
-- **Face**: outer loop + inner loops (holes); cached plane (normal, d); front/back material.
-- All elements stored in `slotmap`s with stable keys that survive edits.
+SketchUp geometry is non-manifold (an edge can border three or more faces; edges can dangle), so the kernel uses an edge list with faces as vertex loops rather than a strict half-edge mesh.
+
+- **Vertex**: `DVec3` position.
+- **Edge**: two vertex ids; flags (soft, smooth, hidden) added when needed.
+- **Face**: outer vertex loop (counter-clockwise around the normal) + hole loops (clockwise); unit normal; front/back material (added with materials, M5). Consecutive loop vertices are always joined by an edge.
+- Ids are monotonically increasing `u64`s, never reused, stored in `BTreeMap`s, so undo can restore entities under their original ids. Adjacency is found by scanning until model sizes require an index.
 
 ### Sticky geometry (kernel responsibility)
 
@@ -150,7 +151,7 @@ Design rule for every milestone: the interface is one client of the command laye
 - `session::Command` is a serde-serializable enum covering every state change: modeling (add edge, draw rectangle/circle, push/pull face by distance, move/copy/rotate entities, erase, make group/component), selection, camera (set, orbit, zoom extents, standard views), undo/redo, file (new, open, save, import, export).
 - Commands take explicit values (points, distances, entity IDs), never screen coordinates or cursor state.
 - `Document::execute(Command) -> Result<ChangeSet, CommandError>`. One command = one undo step. Errors are structured (kind + message + offending IDs), never panics.
-- Entity IDs are the kernel's stable slotmap keys, serialized as strings.
+- Entity IDs are the kernel's stable ids, serialized as strings (`"v12"`, `"e3"`, `"f7"`).
 
 ### Queries
 
