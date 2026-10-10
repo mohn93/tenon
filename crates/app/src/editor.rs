@@ -1,24 +1,37 @@
 //! Window-independent editing state: routes input to navigation or the active tool, runs the
-//! resulting commands on the document, and produces the overlay to draw.
+//! resulting commands on the document, and produces the overlay and status text to show.
 
 use glam::{DVec2, DVec3};
 use render::grid::LineVertex;
 use session::{BatchError, Command, CommandError, Document, ErrorKind, Outcome};
 use tools::overlay::overlay;
-use tools::{Inference, LineTool, ToolEvent, ToolOutput, infer};
+use tools::{Inference, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, infer};
 
 use crate::navigation::{Button, Navigation};
 
 /// Snap radius in logical pixels (scaled to physical pixels by the display scale factor).
 const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
 
+/// Keys the editor handles itself (navigation and undo shortcuts are handled elsewhere).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorKey {
+    Char(char),
+    Enter,
+    Backspace,
+    Escape,
+}
+
 pub struct Editor {
     doc: Document,
     nav: Navigation,
-    tool: LineTool,
+    tool: Box<dyn Tool>,
     cursor: DVec2,
     hit: Option<Inference>,
     preview: Vec<[DVec3; 2]>,
+    /// Text typed into the measurements box, not yet submitted.
+    typed: String,
+    /// Feedback from the last tool action or failed command.
+    message: Option<String>,
     /// Physical pixels per logical pixel.
     scale_factor: f64,
 }
@@ -28,10 +41,12 @@ impl Editor {
         Self {
             doc: Document::new(viewport),
             nav: Navigation::default(),
-            tool: LineTool::new(),
+            tool: ToolKind::Line.make(),
             cursor: DVec2::ZERO,
             hit: None,
             preview: Vec::new(),
+            typed: String::new(),
+            message: None,
             scale_factor,
         }
     }
@@ -40,11 +55,11 @@ impl Editor {
         &self.doc
     }
 
-    /// Runs a command from outside the UI (the agent API). A modeling command cancels the line
-    /// being drawn so the tool never continues from geometry that may have changed.
+    /// Runs a command from outside the UI (the agent API). A command that can change the model
+    /// ends the tool's operation in progress, which may refer to geometry that changed.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        if !matches!(command, Command::SetCamera { .. }) {
-            self.abandon_chain();
+        if command.changes_model() {
+            self.reset_tool();
         }
         let result = self.doc.execute(command);
         self.update_hover();
@@ -57,15 +72,21 @@ impl Editor {
         commands: Vec<Command>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
-        if commands
-            .iter()
-            .any(|c| !matches!(c, Command::SetCamera { .. }))
-        {
-            self.abandon_chain();
+        if commands.iter().any(Command::changes_model) {
+            self.reset_tool();
         }
         let result = self.doc.execute_batch(commands, atomic);
         self.update_hover();
         result
+    }
+
+    /// Switches to another tool, dropping the current tool's operation and any typed text.
+    pub fn select_tool(&mut self, kind: ToolKind) {
+        self.tool = kind.make();
+        self.preview.clear();
+        self.typed.clear();
+        self.message = None;
+        self.update_hover();
     }
 
     pub fn resize(&mut self, viewport: DVec2) {
@@ -91,6 +112,11 @@ impl Editor {
         self.update_hover() || camera_moved
     }
 
+    /// The cursor left the window: hide the inference marker.
+    pub fn cursor_left(&mut self) -> bool {
+        self.hit.take().is_some()
+    }
+
     pub fn button(&mut self, button: Button, pressed: bool) -> bool {
         if self.nav.button(&self.doc.camera, button, pressed) {
             return false;
@@ -100,9 +126,7 @@ impl Editor {
         }
         self.update_hover();
         let Some(hit) = self.hit else { return false };
-        let out = self.tool.handle(ToolEvent::Click(hit));
-        self.apply(out);
-        self.update_hover();
+        self.send(ToolEvent::Click(hit));
         true
     }
 
@@ -114,26 +138,71 @@ impl Editor {
         zoomed
     }
 
-    /// Escape: abandon the line being drawn.
-    pub fn cancel(&mut self) -> bool {
-        let out = self.tool.handle(ToolEvent::Cancel);
-        self.apply(out);
-        self.update_hover();
-        true
+    /// Typing goes to the measurements box once it starts with a digit, "." or "-"; other
+    /// letters are tool shortcuts. Enter submits the typed text to the tool. Escape clears the
+    /// typed text, or else cancels the tool's operation. Returns true if anything changed.
+    pub fn key(&mut self, key: EditorKey) -> bool {
+        match key {
+            EditorKey::Char(c) if self.typed.is_empty() => {
+                if c.is_ascii_digit() || c == '.' || c == '-' {
+                    self.typed.push(c);
+                    true
+                } else if let Some(kind) = ToolKind::from_shortcut(c) {
+                    self.select_tool(kind);
+                    true
+                } else {
+                    false
+                }
+            }
+            EditorKey::Char(c) => {
+                if !c.is_control() {
+                    self.typed.push(c);
+                }
+                true
+            }
+            EditorKey::Backspace => self.typed.pop().is_some(),
+            EditorKey::Enter if self.typed.is_empty() => false,
+            EditorKey::Enter => {
+                let text = std::mem::take(&mut self.typed);
+                self.send(ToolEvent::Value(text));
+                true
+            }
+            EditorKey::Escape if !self.typed.is_empty() => {
+                self.typed.clear();
+                true
+            }
+            EditorKey::Escape => {
+                self.send(ToolEvent::Cancel);
+                true
+            }
+        }
     }
 
     pub fn undo(&mut self) -> bool {
-        self.abandon_chain();
+        self.reset_tool();
         self.run(Command::Undo);
         self.update_hover();
         true
     }
 
     pub fn redo(&mut self) -> bool {
-        self.abandon_chain();
+        self.reset_tool();
         self.run(Command::Redo);
         self.update_hover();
         true
+    }
+
+    /// One line describing the tool, what to do next, the measurement and any feedback.
+    pub fn status(&self) -> String {
+        let (label, value) = self.tool.measurement();
+        let mut parts = vec![self.tool.name().to_string(), self.tool.prompt().to_string()];
+        if !self.typed.is_empty() {
+            parts.push(format!("{label}: {}_", self.typed));
+        } else if let Some(value) = value {
+            parts.push(format!("{label}: {value}"));
+        }
+        parts.extend(self.message.clone());
+        parts.join("  |  ")
     }
 
     /// Line pairs for the renderer's overlay pass.
@@ -154,6 +223,23 @@ impl Editor {
         .collect()
     }
 
+    /// Sends a click, typed value or cancel to the tool and runs what it asks for.
+    fn send(&mut self, event: ToolEvent) {
+        let out = self.handle(event);
+        self.message = out.message.clone();
+        self.apply(out);
+        self.update_hover();
+    }
+
+    fn handle(&mut self, event: ToolEvent) -> ToolOutput {
+        let ctx = ToolContext {
+            model: self.doc.model(),
+            camera: &self.doc.camera,
+            cursor: self.cursor,
+        };
+        self.tool.handle(event, &ctx)
+    }
+
     fn apply(&mut self, out: ToolOutput) {
         for command in out.commands {
             self.run(command);
@@ -161,9 +247,9 @@ impl Editor {
         self.preview = out.preview;
     }
 
-    /// Drops the line being drawn so history changes can't leave it pointing at stale geometry.
-    fn abandon_chain(&mut self) {
-        self.tool.handle(ToolEvent::Cancel);
+    /// Drops the tool's operation in progress so it can't refer to geometry that changed.
+    fn reset_tool(&mut self) {
+        self.tool.on_external_change();
         self.preview.clear();
     }
 
@@ -171,7 +257,7 @@ impl Editor {
         match self.doc.execute(command) {
             Ok(_) => {}
             Err(e) if matches!(e.kind, ErrorKind::NothingToUndo | ErrorKind::NothingToRedo) => {}
-            Err(e) => eprintln!("command failed: {e}"),
+            Err(e) => self.message = Some(e.message),
         }
     }
 
@@ -184,7 +270,7 @@ impl Editor {
             self.tool.anchor(),
             PICK_RADIUS_LOGICAL_PX * self.scale_factor,
         );
-        let out = self.tool.handle(ToolEvent::Move(hit));
+        let out = self.handle(ToolEvent::Move(hit));
         let changed = self.hit != Some(hit) || self.preview != out.preview;
         self.hit = Some(hit);
         self.preview = out.preview;
@@ -248,7 +334,7 @@ mod tests {
         let px = e.doc().camera.project(DVec3::new(-2.0, 4.0, 0.0)).unwrap();
         assert!(e.cursor_moved(px));
         assert!(!e.overlay().is_empty(), "preview line expected");
-        e.cancel();
+        e.key(EditorKey::Escape);
         assert!(
             e.overlay().is_empty(),
             "ground hover has no marker and no preview after cancel"
@@ -318,5 +404,72 @@ mod tests {
         .unwrap();
         click_at(&mut e, DVec3::new(3.0, 1.0, 0.0));
         assert_eq!(stats(&e), (1, 0), "the chain continued");
+    }
+
+    fn move_to(e: &mut Editor, p: DVec3) {
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+    }
+
+    fn type_text(e: &mut Editor, text: &str) {
+        for c in text.chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+    }
+
+    #[test]
+    fn typing_shows_in_the_status_and_escape_clears_it_first() {
+        let mut e = editor();
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        e.key(EditorKey::Char('2'));
+        e.key(EditorKey::Char('.'));
+        e.key(EditorKey::Char('5'));
+        e.key(EditorKey::Backspace);
+        assert!(e.status().contains("Length: 2._"), "{}", e.status());
+        e.key(EditorKey::Escape);
+        assert!(!e.status().contains('_'));
+        assert!(e.status().contains("Click the next point"), "chain kept");
+        e.key(EditorKey::Escape);
+        assert!(e.status().contains("Click to start a line"));
+    }
+
+    #[test]
+    fn typed_length_draws_the_next_edge() {
+        let mut e = editor();
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        move_to(&mut e, DVec3::new(4.0, 1.0, 0.0));
+        type_text(&mut e, "2");
+        assert_eq!(stats(&e), (1, 0));
+        let end = DVec3::new(3.0, 1.0, 0.0);
+        let model = e.doc().model();
+        assert!(model.vertices().any(|(_, v)| v.pos.abs_diff_eq(end, 1e-9)));
+    }
+
+    #[test]
+    fn letters_are_shortcuts_only_when_nothing_is_typed() {
+        let mut e = editor();
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        assert!(
+            e.key(EditorKey::Char('l')),
+            "selecting Line again restarts it"
+        );
+        assert!(e.status().contains("Click to start a line"));
+        assert!(!e.key(EditorKey::Char('z')));
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        e.key(EditorKey::Char('1'));
+        e.key(EditorKey::Char('m'));
+        assert!(e.status().contains("Length: 1m_"), "{}", e.status());
+    }
+
+    #[test]
+    fn leaving_the_window_hides_the_marker() {
+        let mut e = editor();
+        square(&mut e);
+        let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
+        e.cursor_moved(px);
+        assert!(!e.overlay().is_empty());
+        assert!(e.cursor_left());
+        assert!(e.overlay().is_empty());
     }
 }

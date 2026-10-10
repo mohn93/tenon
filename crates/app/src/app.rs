@@ -11,7 +11,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use crate::editor::Editor;
+use crate::editor::{Editor, EditorKey};
 use crate::host::WindowHost;
 use crate::navigation::Button;
 
@@ -34,6 +34,8 @@ struct State {
     /// Document revision the renderer's model buffers were built from.
     drawn_revision: Option<u64>,
     modifiers: ModifiersState,
+    /// The window title last set, which shows the editor status.
+    title: String,
 }
 
 impl State {
@@ -87,6 +89,16 @@ impl State {
             editor,
             drawn_revision: None,
             modifiers: ModifiersState::empty(),
+            title: String::new(),
+        }
+    }
+
+    /// Shows the editor status (tool, prompt, measurement) in the window title.
+    fn sync_title(&mut self) {
+        let title = format!("sketchup-alt  |  {}", self.editor.status());
+        if title != self.title {
+            self.window.set_title(&title);
+            self.title = title;
         }
     }
 
@@ -141,6 +153,7 @@ impl State {
             snapshotter: &mut self.snapshotter,
         };
         hub.process(&mut host);
+        self.sync_title();
         if (
             self.editor.doc().revision(),
             self.editor.doc().camera.clone(),
@@ -159,6 +172,53 @@ impl State {
         };
         hub.notify(&host);
     }
+}
+
+/// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
+/// the physical key so shortcuts and digits work on any layout.
+fn editor_key(logical: &Key, physical: PhysicalKey) -> Option<EditorKey> {
+    match logical {
+        Key::Named(NamedKey::Enter) => Some(EditorKey::Enter),
+        Key::Named(NamedKey::Backspace) => Some(EditorKey::Backspace),
+        Key::Named(NamedKey::Escape) => Some(EditorKey::Escape),
+        Key::Named(NamedKey::Space) => Some(EditorKey::Char(' ')),
+        Key::Character(text) => {
+            let c = text.chars().next()?;
+            if c.is_ascii() {
+                Some(EditorKey::Char(c))
+            } else {
+                physical_char(physical).map(EditorKey::Char)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The US-layout character of a physical key, for the keys the editor uses.
+fn physical_char(key: PhysicalKey) -> Option<char> {
+    let PhysicalKey::Code(code) = key else {
+        return None;
+    };
+    Some(match code {
+        KeyCode::Digit0 => '0',
+        KeyCode::Digit1 => '1',
+        KeyCode::Digit2 => '2',
+        KeyCode::Digit3 => '3',
+        KeyCode::Digit4 => '4',
+        KeyCode::Digit5 => '5',
+        KeyCode::Digit6 => '6',
+        KeyCode::Digit7 => '7',
+        KeyCode::Digit8 => '8',
+        KeyCode::Digit9 => '9',
+        KeyCode::Period => '.',
+        KeyCode::Minus => '-',
+        KeyCode::Comma => ',',
+        KeyCode::KeyL => 'l',
+        KeyCode::KeyR => 'r',
+        KeyCode::KeyP => 'p',
+        KeyCode::KeyM => 'm',
+        _ => return None,
+    })
 }
 
 fn map_button(button: MouseButton) -> Button {
@@ -226,6 +286,7 @@ impl ApplicationHandler<ApiWake> for App {
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let mut state = State::new(window);
+        state.sync_title();
         state.window.request_redraw();
         // Requests that arrived before the window existed.
         state.process_api(&mut self.hub);
@@ -264,6 +325,7 @@ impl ApplicationHandler<ApiWake> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 s.editor.cursor_moved(DVec2::new(position.x, position.y))
             }
+            WindowEvent::CursorLeft { .. } => s.editor.cursor_left(),
             WindowEvent::MouseInput { state, button, .. } => s
                 .editor
                 .button(map_button(button), state == ElementState::Pressed),
@@ -282,21 +344,23 @@ impl ApplicationHandler<ApiWake> for App {
                     Key::Character(c) if c.is_ascii() => c.eq_ignore_ascii_case("z"),
                     _ => event.physical_key == PhysicalKey::Code(KeyCode::KeyZ),
                 };
-                if event.logical_key == Key::Named(NamedKey::Escape) {
-                    s.editor.cancel()
-                } else if command_key && is_z {
+                if command_key && is_z {
                     if s.modifiers.shift_key() {
                         s.editor.redo()
                     } else {
                         s.editor.undo()
                     }
-                } else {
+                } else if command_key {
                     false
+                } else {
+                    editor_key(&event.logical_key, event.physical_key)
+                        .is_some_and(|k| s.editor.key(k))
                 }
             }
             _ => false,
         };
         if changed {
+            s.sync_title();
             s.window.request_redraw();
             s.notify_api(&mut self.hub);
         }
