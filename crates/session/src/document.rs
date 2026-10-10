@@ -7,7 +7,7 @@ use crate::query::{EdgeInfo, FaceInfo, Query, QueryResult, VertexInfo};
 
 /// The open model plus everything needed to edit it: camera and undo history.
 pub struct Document {
-    pub model: Model,
+    model: Model,
     pub camera: Camera,
     undo: Vec<ChangeSet>,
     redo: Vec<ChangeSet>,
@@ -21,6 +21,10 @@ impl Document {
             undo: Vec::new(),
             redo: Vec::new(),
         }
+    }
+
+    pub fn model(&self) -> &Model {
+        &self.model
     }
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
@@ -104,7 +108,10 @@ impl Document {
                 faces: m.faces().map(|(id, _)| self.face_info(id)).collect(),
             },
             Query::Entity { id } => {
-                let missing = || CommandError::new(ErrorKind::NotFound, format!("no entity {id}"));
+                let missing = || {
+                    CommandError::new(ErrorKind::NotFound, format!("no entity {id}"))
+                        .with_ids(vec![*id])
+                };
                 match *id {
                     EntityId::Vertex(v) => QueryResult::Vertex(
                         m.vertex(v)
@@ -139,7 +146,7 @@ impl Document {
     fn vertex_info(&self, id: VertexId) -> VertexInfo {
         VertexInfo {
             id: EntityId::Vertex(id),
-            position: self.model.pos(id).to_array(),
+            position: self.model.position(id).unwrap().to_array(),
         }
     }
 
@@ -148,8 +155,8 @@ impl Document {
         EdgeInfo {
             id: EntityId::Edge(id),
             vertices: [EntityId::Vertex(a), EntityId::Vertex(b)],
-            start: self.model.pos(a).to_array(),
-            end: self.model.pos(b).to_array(),
+            start: self.model.position(a).unwrap().to_array(),
+            end: self.model.position(b).unwrap().to_array(),
         }
     }
 
@@ -161,7 +168,7 @@ impl Document {
             outer: ids(&f.outer),
             holes: f.holes.iter().map(ids).collect(),
             normal: f.normal.to_array(),
-            area: self.model.face_area(id),
+            area: self.model.area(id).unwrap(),
         }
     }
 }

@@ -30,7 +30,7 @@ fn square(m: &mut Model, x0: f64, y0: f64, size: f64) -> Vec<ChangeSet> {
 }
 
 fn face_areas(m: &Model) -> Vec<f64> {
-    let mut a: Vec<f64> = m.faces().map(|(id, _)| m.face_area(id)).collect();
+    let mut a: Vec<f64> = m.faces().map(|(id, _)| m.area(id).unwrap()).collect();
     a.sort_by(f64::total_cmp);
     a
 }
@@ -81,7 +81,7 @@ fn tilted_triangle_gets_a_face_in_its_own_plane() {
     assert_eq!(m.faces().count(), 1);
     let (id, f) = m.faces().next().unwrap();
     assert!((f.normal.length() - 1.0).abs() < 1e-12);
-    assert!((m.face_area(id) - 6f64.sqrt()).abs() < 1e-9);
+    assert!((m.area(id).unwrap() - 6f64.sqrt()).abs() < 1e-9);
 }
 
 #[test]
@@ -433,4 +433,36 @@ fn random_edits_never_overlap_faces() {
         faces_seen += m.faces().count();
     }
     assert!(faces_seen > 0, "random edits never formed a face");
+}
+
+#[test]
+fn closing_edge_collinear_with_both_neighbors_creates_the_face() {
+    let mut m = Model::new();
+    for (a, b) in [
+        ((0.0, 0.0), (1.0, 0.0)),
+        ((2.0, 0.0), (3.0, 0.0)),
+        ((3.0, 0.0), (3.0, 2.0)),
+        ((3.0, 2.0), (0.0, 2.0)),
+        ((0.0, 2.0), (0.0, 0.0)),
+        ((1.0, 0.0), (2.0, 0.0)),
+    ] {
+        m.add_edge(p(a.0, a.1, 0.0), p(b.0, b.1, 0.0)).unwrap();
+        m.validate().unwrap();
+    }
+    assert_areas(&m, &[6.0]);
+    assert_no_overlap(&m);
+}
+
+#[test]
+fn cut_across_a_face_with_a_hole_splits_outer_and_hole_sides() {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 4.0);
+    square(&mut m, 1.0, 1.0, 1.0);
+    m.add_edge(p(0.0, 1.5, 0.0), p(4.0, 1.5, 0.0)).unwrap();
+    m.validate().unwrap();
+    assert_no_overlap(&m);
+    let total: f64 = face_areas(&m).iter().sum();
+    assert!((total - 16.0).abs() < 1e-9, "total area {total}");
+    // Outer sides x = 0 and x = 4 and the hole sides x = 1 and x = 2 are all split at y = 1.5.
+    assert_eq!(m.vertices().count(), 8 + 4);
 }

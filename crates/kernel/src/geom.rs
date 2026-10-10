@@ -6,6 +6,9 @@ use glam::{DVec2, DVec3};
 pub const LENGTH_TOL: f64 = 1e-6;
 /// Sine of the largest angle treated as zero (parallel or collinear).
 pub const ANGLE_TOL: f64 = 1e-9;
+/// Sine of the largest angle at which two plane normals count as parallel. Looser than
+/// `ANGLE_TOL` to absorb the error from normalizing cross products.
+pub const PLANE_ANGLE_TOL: f64 = 1e-6;
 
 /// Plane `normal . p = d` with a unit normal in canonical orientation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,7 +42,7 @@ impl Plane {
     }
 
     pub fn same_as(&self, other: &Plane) -> bool {
-        if self.normal.cross(other.normal).length() >= ANGLE_TOL * 1e3 {
+        if self.normal.cross(other.normal).length() >= PLANE_ANGLE_TOL {
             return false;
         }
         let dot = self.normal.dot(other.normal);
@@ -138,6 +141,9 @@ pub fn signed_area2(poly: &[DVec2]) -> f64 {
 
 /// Even-odd point-in-polygon test. Points on the boundary may go either way.
 pub fn point_in_polygon(p: DVec2, poly: &[DVec2]) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
     let mut inside = false;
     let mut j = poly.len() - 1;
     for i in 0..poly.len() {

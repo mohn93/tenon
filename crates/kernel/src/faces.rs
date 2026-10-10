@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec2;
 
-use crate::geom::{ANGLE_TOL, Plane, point_in_polygon};
+use crate::geom::{PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{Face, Model};
 use crate::regions::{PlaneGraph, Region};
@@ -25,20 +25,30 @@ impl Model {
         }
     }
 
-    /// Planes spanned by edge e and each non-collinear edge touching it.
+    /// Planes spanned by edge e and each non-collinear edge reachable from its endpoints,
+    /// walking through vertices whose edges continue along e's line.
     fn candidate_planes(&self, e: EdgeId) -> Vec<Plane> {
         let [a, b] = self.edge(e).unwrap().v;
         let (pa, pb) = (self.pos(a), self.pos(b));
         let mut planes = Vec::new();
-        for v in [a, b] {
-            for f in self.edges_at(v) {
-                if f == e {
-                    continue;
-                }
-                let fv = self.edge(f).unwrap().v;
-                let c = if fv[0] == v { fv[1] } else { fv[0] };
-                if let Some(p) = Plane::from_points(pa, pb, self.pos(c)) {
-                    planes.push(p);
+        for start in [a, b] {
+            let mut visited: BTreeSet<VertexId> = BTreeSet::from([a, b]);
+            let mut stack = vec![start];
+            while let Some(v) = stack.pop() {
+                for f in self.edges_at(v) {
+                    if f == e {
+                        continue;
+                    }
+                    let fv = self.edge(f).unwrap().v;
+                    let c = if fv[0] == v { fv[1] } else { fv[0] };
+                    match Plane::from_points(pa, pb, self.pos(c)) {
+                        Some(p) => planes.push(p),
+                        None => {
+                            if visited.insert(c) {
+                                stack.push(c);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -57,7 +67,7 @@ impl Model {
     }
 
     fn face_in_plane(&self, f: &Face, plane: &Plane) -> bool {
-        f.normal.cross(plane.normal).length() < ANGLE_TOL * 1e3
+        f.normal.cross(plane.normal).length() < PLANE_ANGLE_TOL
             && plane.contains(self.pos(f.outer[0]))
     }
 

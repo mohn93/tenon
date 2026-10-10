@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kernel::ChangeSummary;
+use kernel::{ChangeSummary, EntityId};
 use serde::{Deserialize, Serialize};
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
@@ -42,6 +42,9 @@ pub enum ErrorKind {
 pub struct CommandError {
     pub kind: ErrorKind,
     pub message: String,
+    /// Entities the error refers to, when there are any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<EntityId>,
 }
 
 impl CommandError {
@@ -49,7 +52,13 @@ impl CommandError {
         Self {
             kind,
             message: message.into(),
+            ids: Vec::new(),
         }
+    }
+
+    pub fn with_ids(mut self, ids: Vec<EntityId>) -> Self {
+        self.ids = ids;
+        self
     }
 }
 

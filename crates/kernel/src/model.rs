@@ -153,8 +153,13 @@ impl Model {
         self.faces.iter().map(|(k, v)| (*k, v))
     }
 
-    pub fn pos(&self, id: VertexId) -> DVec3 {
+    pub(crate) fn pos(&self, id: VertexId) -> DVec3 {
         self.vertices[&id].pos
+    }
+
+    /// Position of a vertex, or None if it does not exist.
+    pub fn position(&self, id: VertexId) -> Option<DVec3> {
+        self.vertices.get(&id).map(|v| v.pos)
     }
 
     pub fn edge_between(&self, a: VertexId, b: VertexId) -> Option<EdgeId> {
@@ -172,8 +177,12 @@ impl Model {
             .collect()
     }
 
-    /// Area of a face (outer area minus holes).
-    pub fn face_area(&self, id: FaceId) -> f64 {
+    /// Area of a face (outer area minus holes), or None if it does not exist.
+    pub fn area(&self, id: FaceId) -> Option<f64> {
+        self.faces.contains_key(&id).then(|| self.face_area(id))
+    }
+
+    pub(crate) fn face_area(&self, id: FaceId) -> f64 {
         let f = &self.faces[&id];
         let area = |l: &Vec<VertexId>| {
             vector_area(&l.iter().map(|v| self.pos(*v)).collect::<Vec<_>>()).dot(f.normal)

@@ -134,3 +134,21 @@ fn query_results_round_trip_through_json() {
     let back: QueryResult = serde_json::from_value(serde_json::to_value(&r).unwrap()).unwrap();
     assert_eq!(back, r);
 }
+
+#[test]
+fn not_found_error_serializes_requested_ids_and_other_errors_omit_them() {
+    let d = doc();
+    let q: Query = serde_json::from_value(json!({"type": "entity", "id": "f99"})).unwrap();
+    let err = d.query(&q).unwrap_err();
+    let v = serde_json::to_value(&err).unwrap();
+    assert_eq!(
+        v,
+        json!({"kind": "not_found", "message": err.message, "ids": ["f99"]})
+    );
+    let mut d = doc();
+    let err = d.execute(Command::Undo).unwrap_err();
+    let v = serde_json::to_value(&err).unwrap();
+    assert!(v.get("ids").is_none());
+    let back: session::CommandError = serde_json::from_value(v).unwrap();
+    assert!(back.ids.is_empty());
+}

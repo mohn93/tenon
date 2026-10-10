@@ -26,7 +26,8 @@ impl std::error::Error for KernelError {}
 impl Model {
     /// Adds the segment a-b with sticky-geometry rules: endpoints merge with nearby vertices,
     /// crossed edges are split, collinear overlaps merge, and closed coplanar loops become faces.
-    /// Returns the changes as one ChangeSet (empty if the edge already existed).
+    /// Returns the changes as one ChangeSet. It is empty only when nothing changed; it can be
+    /// non-empty without a new edge when an existing edge was only split.
     pub fn add_edge(&mut self, a: DVec3, b: DVec3) -> Result<ChangeSet, KernelError> {
         if !a.is_finite() || !b.is_finite() {
             return Err(KernelError::NotFinite);

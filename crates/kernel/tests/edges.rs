@@ -107,3 +107,26 @@ fn edits_undo_exactly() {
     m.validate().unwrap();
     assert_eq!(m.edges().count(), 4);
 }
+
+#[test]
+fn one_segment_crossing_three_parallel_edges_splits_each() {
+    let mut m = Model::new();
+    for x in [1.0, 2.0, 3.0] {
+        m.add_edge(p(x, -1.0, 0.0), p(x, 1.0, 0.0)).unwrap();
+    }
+    m.add_edge(p(0.0, 0.0, 0.0), p(4.0, 0.0, 0.0)).unwrap();
+    m.validate().unwrap();
+    // Three verticals split in two each, plus the new segment in four pieces.
+    assert_eq!(m.edges().count(), 6 + 4);
+    assert_eq!(m.vertices().count(), 6 + 2 + 3);
+}
+
+#[test]
+fn segment_through_an_existing_vertex_splits_there() {
+    let mut m = Model::new();
+    m.add_edge(p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)).unwrap();
+    m.add_edge(p(0.0, 0.0, 0.0), p(2.0, 0.0, 0.0)).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.edges().count(), 3);
+    assert_eq!(m.vertices().count(), 4);
+}
