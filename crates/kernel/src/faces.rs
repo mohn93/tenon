@@ -99,6 +99,11 @@ impl Model {
             .map(|e| side(e.v[0], e.v[1]))
             .collect();
 
+        let old_sides: BTreeSet<(VertexId, VertexId)> = old
+            .iter()
+            .flat_map(|(_, f)| std::iter::once(&f.outer).chain(&f.holes))
+            .flat_map(|l| (0..l.len()).map(|i| side(l[i], l[(i + 1) % l.len()])))
+            .collect();
         let wanted: Vec<Region> = graph
             .regions()
             .into_iter()
@@ -115,7 +120,12 @@ impl Model {
                 let uses_new = std::iter::once(&r.outer).chain(&r.holes).any(|l| {
                     (0..l.len()).any(|i| new_sides.contains(&side(l[i], l[(i + 1) % l.len()])))
                 });
-                in_old_face || (uses_new && !in_old_hole)
+                // Inside an opening, only a loop drawn apart from every old face's boundary
+                // gets a face; a line across the opening leaves its pieces open.
+                let apart = (0..r.outer.len()).all(|i| {
+                    !old_sides.contains(&side(r.outer[i], r.outer[(i + 1) % r.outer.len()]))
+                });
+                in_old_face || (uses_new && (!in_old_hole || apart))
             })
             .collect();
 
@@ -168,4 +178,56 @@ fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {
 
 fn loop_sets(loops: &[Vec<VertexId>]) -> BTreeSet<BTreeSet<VertexId>> {
     loops.iter().map(|l| l.iter().copied().collect()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::DVec3;
+
+    use super::*;
+
+    fn square(m: &mut Model, x0: f64, y0: f64, s: f64) {
+        let c = [(x0, y0), (x0 + s, y0), (x0 + s, y0 + s), (x0, y0 + s)];
+        for i in 0..4 {
+            let (a, b) = (c[i], c[(i + 1) % 4]);
+            m.add_edge(DVec3::new(a.0, a.1, 0.0), DVec3::new(b.0, b.1, 0.0))
+                .unwrap();
+            m.validate().unwrap();
+        }
+    }
+
+    /// A 4x4 face with a 2x2 opening whose inner face was removed. Returns the 4x4 face.
+    fn face_with_opening() -> (Model, FaceId, Face) {
+        let mut m = Model::new();
+        square(&mut m, 0.0, 0.0, 4.0);
+        square(&mut m, 1.0, 1.0, 2.0);
+        let inner = m.faces().find(|(_, f)| f.holes.is_empty()).unwrap().0;
+        m.remove_face(inner);
+        m.take_changes();
+        let (id, f) = m.faces().next().unwrap();
+        let f = f.clone();
+        assert_eq!(m.faces().count(), 1);
+        assert_eq!(m.face_area(id), 12.0);
+        (m, id, f)
+    }
+
+    #[test]
+    fn loop_drawn_inside_an_opening_is_filled() {
+        let (mut m, outer, before) = face_with_opening();
+        square(&mut m, 1.5, 1.5, 0.5);
+        assert_eq!(m.faces().count(), 2);
+        assert_eq!(m.face(outer), Some(&before));
+        let small = m.faces().find(|(id, _)| *id != outer).unwrap().0;
+        assert!((m.face_area(small) - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn line_across_an_opening_leaves_it_open() {
+        let (mut m, outer, _) = face_with_opening();
+        m.add_edge(DVec3::new(1.0, 1.5, 0.0), DVec3::new(3.0, 1.5, 0.0))
+            .unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.faces().count(), 1);
+        assert_eq!(m.face_area(outer), 12.0);
+    }
 }
