@@ -1,8 +1,9 @@
 use kernel::{ChangeSummary, EntityId};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Read-only questions about the document.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Query {
     /// Every vertex, edge and face.
@@ -20,13 +21,13 @@ pub enum Query {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VertexInfo {
     pub id: EntityId,
     pub position: [f64; 3],
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct EdgeInfo {
     pub id: EntityId,
     pub vertices: [EntityId; 2],
@@ -34,7 +35,7 @@ pub struct EdgeInfo {
     pub end: [f64; 3],
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FaceInfo {
     pub id: EntityId,
     pub outer: Vec<EntityId>,
@@ -43,7 +44,7 @@ pub struct FaceInfo {
     pub area: f64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QueryResult {
     Entities {
@@ -80,7 +81,7 @@ pub enum QueryResult {
 }
 
 /// One model change: the revision it produced and what it changed.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChangeEvent {
     pub revision: u64,
     pub changes: ChangeSummary,

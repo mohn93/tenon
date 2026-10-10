@@ -67,7 +67,7 @@ pub struct ChangeSet {
 }
 
 /// Net effect of a ChangeSet per entity.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ChangeSummary {
     pub created: Vec<EntityId>,
     pub deleted: Vec<EntityId>,

@@ -64,6 +64,21 @@ impl FromStr for EntityId {
     }
 }
 
+/// Ids appear in JSON as strings: "v12" (vertex), "e3" (edge), "f7" (face).
+impl schemars::JsonSchema for EntityId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EntityId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^[vef](0|[1-9][0-9]*)$",
+            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face"
+        })
+    }
+}
+
 impl From<EntityId> for String {
     fn from(id: EntityId) -> String {
         id.to_string()
