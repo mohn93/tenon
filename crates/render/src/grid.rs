@@ -66,11 +66,29 @@ pub fn axis_lines(length: f32) -> Vec<LineVertex> {
     out
 }
 
-/// Everything the M1 viewport draws.
-pub fn scene_lines() -> Vec<LineVertex> {
+/// Lines lying flat on z = 0: the ground grid and the X and Y axes.
+/// Drawn before faces, so faces always cover them even at grazing angles.
+pub fn flat_ground_lines() -> Vec<LineVertex> {
     let mut lines = grid_lines(100.0, 1.0);
-    lines.extend(axis_lines(1000.0));
+    // Axis segments come as (origin, end) pairs; keep the ones lying on z = 0.
+    lines.extend(
+        axis_lines(1000.0)
+            .chunks(2)
+            .filter(|seg| seg[1].pos[2] == 0.0)
+            .flatten()
+            .copied(),
+    );
     lines
+}
+
+/// The Z axis segments only, drawn with the depth bias that keeps them visible against faces.
+pub fn vertical_axis_lines() -> Vec<LineVertex> {
+    axis_lines(1000.0)
+        .chunks(2)
+        .filter(|seg| seg[1].pos[2] != 0.0)
+        .flatten()
+        .copied()
+        .collect()
 }
 
 #[cfg(test)]
@@ -101,6 +119,18 @@ mod tests {
             assert!(!(a[0] == 0.0 && b[0] == 0.0), "line on x = 0");
             assert!(!(a[1] == 0.0 && b[1] == 0.0), "line on y = 0");
         }
+    }
+
+    #[test]
+    fn flat_ground_is_on_z0_and_vertical_axis_is_only_z() {
+        let flat = flat_ground_lines();
+        assert!(flat.iter().all(|v| v.pos[2] == 0.0));
+        // grid plus the X and Y axes, each as a positive and a negative half (8 vertices)
+        assert_eq!(flat.len(), grid_lines(100.0, 1.0).len() + 8);
+
+        let vertical = vertical_axis_lines();
+        assert_eq!(vertical.len(), 4);
+        assert!(vertical.iter().all(|v| v.pos[0] == 0.0 && v.pos[1] == 0.0));
     }
 
     #[test]

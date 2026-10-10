@@ -156,11 +156,12 @@ fn near(px: &[u8], cam: &Camera, p: DVec3, f: impl Fn([u8; 4]) -> bool) -> bool 
     let s = cam.project(p).unwrap();
     (-1..=1).any(|dy| {
         (-1..=1).any(|dx| {
-            f(pixel(
-                px,
-                (s.x as i32 + dx) as u32,
-                (s.y as i32 + dy) as u32,
-            ))
+            let x = s.x as i32 + dx;
+            let y = s.y as i32 + dy;
+            if x < 0 || y < 0 || x >= W as i32 || y >= H as i32 {
+                return false;
+            }
+            f(pixel(px, x as u32, y as u32))
         })
     })
 }
@@ -241,5 +242,77 @@ fn overlay_draws_on_top_of_faces() {
     assert!(
         near(&px, &cam, DVec3::new(0.25, 0.5, -0.05), is_magenta),
         "overlay hidden by face"
+    );
+}
+
+#[test]
+fn interior_edge_draws_over_faces_on_both_sides() {
+    let cam = camera();
+    // The diagonal splits the square face into two faces that share it.
+    let mut model = ground_square();
+    model
+        .add_edge(DVec3::new(-2.0, -2.0, 0.0), DVec3::new(2.0, 2.0, 0.0))
+        .unwrap();
+    let Some(px) = render_scene(&cam, &model, &[]) else {
+        return;
+    };
+    let dark = |p: [u8; 4]| p[0] < 110 && p[1] < 110 && p[2] < 110;
+    assert!(
+        near(&px, &cam, DVec3::new(0.5, 0.5, 0.0), dark),
+        "interior edge not visible"
+    );
+}
+
+#[test]
+fn edge_well_behind_a_face_is_hidden() {
+    let cam = camera();
+    // A free edge half a meter below the face, under its middle.
+    let mut model = ground_square();
+    model
+        .add_edge(DVec3::new(-1.0, 0.5, -0.5), DVec3::new(1.0, 0.5, -0.5))
+        .unwrap();
+    let Some(px) = render_scene(&cam, &model, &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, DVec3::new(0.0, 0.5, -0.5));
+    assert!(p[0] > 120, "edge behind the face shows through: {p:?}");
+}
+
+#[test]
+fn grid_hidden_under_ground_face_at_grazing_angle() {
+    let mut cam = camera();
+    cam.eye = DVec3::new(0.0, -15.0, 1.6);
+    cam.target = DVec3::ZERO;
+    let mut model = Model::new();
+    let c = [
+        (-150.0, -150.0),
+        (150.0, -150.0),
+        (150.0, 150.0),
+        (-150.0, 150.0),
+    ];
+    for i in 0..4 {
+        let (a, b) = (c[i], c[(i + 1) % 4]);
+        model
+            .add_edge(DVec3::new(a.0, a.1, 0.0), DVec3::new(b.0, b.1, 0.0))
+            .unwrap();
+    }
+    let Some(px) = render_scene(&cam, &model, &[]) else {
+        return;
+    };
+    let x = W / 2;
+    let reds: Vec<i32> = (H / 2..H).map(|y| pixel(&px, x, y)[0] as i32).collect();
+    // Keep only rows that land on the face (not the sky or the far edge).
+    let face: Vec<i32> = reds.iter().copied().filter(|&r| r > 150).collect();
+    assert!(
+        face.len() > 50,
+        "face covers too few pixels: {}",
+        face.len()
+    );
+    // Headlight shading varies smoothly down the column (about 1 level per row), while a grid
+    // line would be a sharp step of more than 10 levels, so the largest neighbour step is the test.
+    let step = face.windows(2).map(|w| (w[1] - w[0]).abs()).max().unwrap();
+    assert!(
+        step < 4,
+        "grid stripes show through the face: largest step {step}"
     );
 }

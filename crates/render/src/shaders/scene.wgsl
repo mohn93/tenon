@@ -21,10 +21,11 @@ fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
     return out;
 }
 
-// Model edges: drawn over the faces they bound.
+// Model edges: pulled toward the camera by 0.05% of clip depth, enough to win against the faces
+// they bound at this depth precision without showing through faces in front of them.
 @vertex
 fn vs_edge(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
-    return line_vertex(pos, color, 1.002);
+    return line_vertex(pos, color, 1.0005);
 }
 
 // Grid and axes: drawn under faces lying on the ground.

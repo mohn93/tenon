@@ -2,7 +2,7 @@ use kernel::Model;
 use session::Camera;
 use wgpu::util::DeviceExt;
 
-use crate::grid::{BACKGROUND, LineVertex, scene_lines};
+use crate::grid::{BACKGROUND, LineVertex, flat_ground_lines, vertical_axis_lines};
 use crate::scene::{FaceVertex, model_geometry};
 
 pub const SAMPLE_COUNT: u32 = 4;
@@ -38,13 +38,15 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
+    flat_ground_pipeline: wgpu::RenderPipeline,
     ground_pipeline: wgpu::RenderPipeline,
     face_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    ground: Mesh,
+    flat_ground: Mesh,
+    vertical_axis: Mesh,
     faces: Option<Mesh>,
     edges: Option<Mesh>,
     targets: Option<Targets>,
@@ -137,6 +139,18 @@ impl Renderer {
             })
         };
         let lines = wgpu::PrimitiveTopology::LineList;
+        // Flat ground: no depth test at all, so the faces drawn after it always cover it.
+        let flat_ground_pipeline = pipeline(
+            "flat ground",
+            "vs_overlay",
+            "fs_line",
+            &line_layout,
+            lines,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Always,
+            },
+        );
         let ground_pipeline = pipeline(
             "ground",
             "vs_ground",
@@ -194,18 +208,23 @@ impl Renderer {
             }],
         });
 
-        let ground = mesh(device, "ground lines", &scene_lines()).expect("grid is never empty");
+        let flat_ground =
+            mesh(device, "flat ground lines", &flat_ground_lines()).expect("grid is never empty");
+        let vertical_axis =
+            mesh(device, "vertical axis", &vertical_axis_lines()).expect("z axis is never empty");
         Self {
             device: device.clone(),
             queue: queue.clone(),
             format,
+            flat_ground_pipeline,
             ground_pipeline,
             face_pipeline,
             edge_pipeline,
             overlay_pipeline,
             uniforms,
             bind_group,
-            ground,
+            flat_ground,
+            vertical_axis,
             faces: None,
             edges: None,
             targets: None,
@@ -271,7 +290,8 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
             let layers = [
-                (&self.ground_pipeline, Some(&self.ground)),
+                (&self.flat_ground_pipeline, Some(&self.flat_ground)),
+                (&self.ground_pipeline, Some(&self.vertical_axis)),
                 (&self.face_pipeline, self.faces.as_ref()),
                 (&self.edge_pipeline, self.edges.as_ref()),
                 (&self.overlay_pipeline, overlay.as_ref()),
