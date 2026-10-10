@@ -10,6 +10,10 @@ use crate::model::{ChangeSet, Model};
 pub enum KernelError {
     NotFinite,
     ZeroLength,
+    FaceNotFound,
+    ZeroDistance,
+    /// A push/pull would shrink a connected edge to nothing or turn it around.
+    Collapse,
 }
 
 impl fmt::Display for KernelError {
@@ -17,6 +21,14 @@ impl fmt::Display for KernelError {
         match self {
             KernelError::NotFinite => write!(f, "coordinates must be finite numbers"),
             KernelError::ZeroLength => write!(f, "edge endpoints coincide"),
+            KernelError::FaceNotFound => write!(f, "no such face"),
+            KernelError::ZeroDistance => write!(f, "distance is too small"),
+            KernelError::Collapse => {
+                write!(
+                    f,
+                    "distance would collapse or invert the edges joining the face"
+                )
+            }
         }
     }
 }

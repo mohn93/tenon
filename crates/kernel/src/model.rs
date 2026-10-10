@@ -34,6 +34,8 @@ pub enum Op {
     RemoveEdge(EdgeId, Edge),
     AddFace(FaceId, Face),
     RemoveFace(FaceId, Face),
+    /// A vertex moved from the first position to the second.
+    MoveVertex(VertexId, DVec3, DVec3),
 }
 
 impl Op {
@@ -45,17 +47,20 @@ impl Op {
             Op::RemoveEdge(id, e) => Op::AddEdge(id, e),
             Op::AddFace(id, f) => Op::RemoveFace(id, f),
             Op::RemoveFace(id, f) => Op::AddFace(id, f),
+            Op::MoveVertex(id, from, to) => Op::MoveVertex(id, to, from),
         }
     }
 
-    fn entity(&self) -> (EntityId, bool) {
+    /// The entity this op touches and whether it exists before and after the op.
+    fn entity(&self) -> (EntityId, bool, bool) {
         match self {
-            Op::AddVertex(id, _) => (EntityId::Vertex(*id), true),
-            Op::RemoveVertex(id, _) => (EntityId::Vertex(*id), false),
-            Op::AddEdge(id, _) => (EntityId::Edge(*id), true),
-            Op::RemoveEdge(id, _) => (EntityId::Edge(*id), false),
-            Op::AddFace(id, _) => (EntityId::Face(*id), true),
-            Op::RemoveFace(id, _) => (EntityId::Face(*id), false),
+            Op::AddVertex(id, _) => (EntityId::Vertex(*id), false, true),
+            Op::RemoveVertex(id, _) => (EntityId::Vertex(*id), true, false),
+            Op::MoveVertex(id, _, _) => (EntityId::Vertex(*id), true, true),
+            Op::AddEdge(id, _) => (EntityId::Edge(*id), false, true),
+            Op::RemoveEdge(id, _) => (EntityId::Edge(*id), true, false),
+            Op::AddFace(id, _) => (EntityId::Face(*id), false, true),
+            Op::RemoveFace(id, _) => (EntityId::Face(*id), true, false),
         }
     }
 }
@@ -66,7 +71,8 @@ pub struct ChangeSet {
     pub ops: Vec<Op>,
 }
 
-/// Net effect of a ChangeSet per entity.
+/// Net effect of a ChangeSet per entity. A moved vertex is `modified`; the edges and faces using
+/// it change shape without being listed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ChangeSummary {
     pub created: Vec<EntityId>,
@@ -89,8 +95,8 @@ impl ChangeSet {
         // entity -> (existed before, exists after)
         let mut state: BTreeMap<EntityId, (bool, bool)> = BTreeMap::new();
         for op in &self.ops {
-            let (id, added) = op.entity();
-            state.entry(id).or_insert((!added, added)).1 = added;
+            let (id, before, after) = op.entity();
+            state.entry(id).or_insert((before, after)).1 = after;
         }
         let mut s = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -229,6 +235,11 @@ impl Model {
             Op::RemoveFace(id, _) => {
                 self.faces.remove(&id);
             }
+            Op::MoveVertex(id, _, to) => {
+                if let Some(v) = self.vertices.get_mut(&id) {
+                    v.pos = to;
+                }
+            }
         }
     }
 
@@ -253,6 +264,11 @@ impl Model {
         let id = VertexId(self.alloc());
         self.record(Op::AddVertex(id, Vertex { pos }));
         id
+    }
+
+    pub(crate) fn move_vertex(&mut self, id: VertexId, to: DVec3) {
+        let from = self.pos(id);
+        self.record(Op::MoveVertex(id, from, to));
     }
 
     pub(crate) fn insert_edge(&mut self, a: VertexId, b: VertexId) -> EdgeId {
@@ -395,6 +411,22 @@ mod tests {
         assert_eq!(s.created, vec![EntityId::Edge(e2)]);
         assert_eq!(s.deleted, vec![EntityId::Edge(e)]);
         assert!(s.modified.is_empty());
+    }
+
+    #[test]
+    fn moved_vertices_undo_exactly_and_count_as_modified() {
+        let mut m = Model::new();
+        let a = m.insert_vertex(DVec3::ZERO);
+        m.take_changes();
+        let before = m.clone();
+        m.move_vertex(a, DVec3::X);
+        m.move_vertex(a, DVec3::Y);
+        let c = m.take_changes();
+        assert_eq!(m.position(a), Some(DVec3::Y));
+        assert_eq!(c.summary().modified, vec![EntityId::Vertex(a)]);
+        assert!(c.summary().created.is_empty() && c.summary().deleted.is_empty());
+        m.apply(&c.inverse());
+        assert_eq!(m, before);
     }
 
     #[test]
