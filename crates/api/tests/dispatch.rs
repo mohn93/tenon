@@ -118,13 +118,61 @@ fn describe_lists_methods_and_schemas() {
         assert!(d["methods"][m].is_object(), "missing method {m}");
     }
     let command_schema = d["schemas"]["Command"].to_string();
-    for variant in ["add_edge", "undo", "redo", "set_camera"] {
+    for variant in [
+        "add_edge",
+        "add_rectangle",
+        "push_pull",
+        "undo",
+        "redo",
+        "set_camera",
+    ] {
         assert!(
             command_schema.contains(variant),
             "Command schema lacks {variant}"
         );
     }
     assert!(d["schemas"]["Query"].to_string().contains("events"));
+}
+
+#[test]
+fn rectangle_and_push_pull_build_a_box() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 3, 0]}),
+    );
+    let face = r["result"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": face, "distance": 1.5}),
+    );
+    assert_eq!(r["result"]["revision"], 2);
+    let stats = call(&mut h, "query", json!({"type": "stats"}));
+    assert_eq!(
+        (&stats["result"]["vertices"], &stats["result"]["faces"]),
+        (&json!(8), &json!(6))
+    );
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": "e2", "distance": 1}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input");
+    assert_eq!(r["error"]["data"]["ids"], json!(["e2"]));
+    let top = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["face"], "within": {"min": [-1, -1, 1.4], "max": [3, 4, 1.6]}}),
+    );
+    assert_eq!(top["result"]["faces"].as_array().unwrap().len(), 1);
 }
 
 #[test]

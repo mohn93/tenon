@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope)
 
 ## Goal
 
@@ -183,8 +183,8 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M1**: workspace, window, empty viewport with orbit/pan/zoom, grid, axes.
 - **M2**: `session` crate (Document, Command/Query, executor; camera moved here); kernel `add_edge` and auto-face creation; Line tool with endpoint and axis inference; undo/redo.
 - **M2.5**: `api` crate: JSON-RPC server (socket + stdio), `execute`/`batch`/`query`/`render_view`/`subscribe`/`describe`; headless mode; end-to-end API tests.
-- **M3**: Rectangle, Push/Pull, VCB.
-- **M4**: Select, Move, Erase; full inference set.
+- **M3**: Rectangle, Push/Pull, VCB (lengths and `width,height`; shown in the window title until the egui shell lands in M4).
+- **M4**: egui shell (toolbar, measurements box, entity info); Select, Move/Copy (with VCB array syntax), Erase; full inference set; push/pull through to openings.
 - **M5**: groups and components; save/load; export.
 
 ## Risks

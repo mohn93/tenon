@@ -40,7 +40,8 @@ Queries:
 |---|---|
 | `{"type": "entities"}` | every vertex, edge and face, plus `revision` |
 | `{"type": "entities", "kinds": ["face"]}` | only the listed kinds (`vertex`, `edge`, `face`) |
-| `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error. `ids` and `kinds` combine (both must match); empty lists mean no filter |
+| `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error |
+| `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices all lie in the box (bounds included). `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "stats"}`, `{"type": "camera"}`, `{"type": "history"}` | counts and revision, camera, undo/redo depth |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
@@ -48,8 +49,23 @@ Queries:
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
 of silently doing nothing).
 
-Commands: `add_edge`, `undo`, `redo`, `set_camera`. Units are meters, Z is up, angles in degrees,
-coordinates within +/-1,000,000 m. Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face).
+Commands: `add_edge`, `add_rectangle`, `push_pull`, `undo`, `redo`, `set_camera`. Units are
+meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m. Entity ids are strings: `v12`
+(vertex), `e3` (edge), `f7` (face).
+
+Modeling commands, each one undo step:
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_edge", "start": [x,y,z], "end": [x,y,z]}` | A straight edge. It merges with nearby vertices, splits edges it crosses, and closed coplanar loops become faces. |
+| `{"type": "add_rectangle", "corner": [0,0,0], "opposite": [2,3,0]}` | A rectangle with sides along the axes. Without `normal` the corners must differ in exactly two coordinates. With `"normal": [nx,ny,nz]` it lies in the plane through `corner` with that normal; `opposite` must be in that plane. Sides then run horizontally (X on horizontal planes) and along `normal x horizontal`. |
+| `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in. A face whose neighbors all run along the normal, like a box top, moves and stretches them. |
+
+Find the face to push from the `created` ids of the command that made it, or with
+`{"type": "entities", "kinds": ["face"]}`. Faces created by push/pull point out of the solid. A
+push/pull that would collapse or invert the edges around a moved face fails with `invalid_input`.
+When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
+shape too.
 
 Behaviors worth knowing:
 
@@ -69,6 +85,17 @@ Behaviors worth knowing:
 -> {"jsonrpc":"2.0","id":2,"method":"query","params":{"type":"stats"}}
 <- {"jsonrpc":"2.0","id":2,"result":{"type":"stats","vertices":2,"edges":1,"faces":0,"revision":1}}
 ```
+
+Building a 2 x 3 x 1.5 m box on an empty model:
+
+```
+-> {"jsonrpc":"2.0","id":3,"method":"execute","params":{"type":"add_rectangle","corner":[0,0,0],"opposite":[2,3,0]}}
+<- {"jsonrpc":"2.0","id":3,"result":{"changes":{"created":["v0","v1","v3","v5","e2","e4","e6","e7","f8"],"deleted":[],"modified":[]},"revision":1}}
+-> {"jsonrpc":"2.0","id":4,"method":"execute","params":{"type":"push_pull","face":"f8","distance":1.5}}
+<- {"jsonrpc":"2.0","id":4,"result":{"changes":{"created":["v9","v11","v13","v15","e10","e12","e14","e16","e17","e19","e21","e23","f18","f20","f22","f24","f25"],"deleted":[],"modified":["f8"]},"revision":2}}
+```
+
+`f8` is now the box's bottom, flipped to face down; `f25` is the top.
 
 ## Errors
 
