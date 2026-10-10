@@ -1,0 +1,9 @@
+[package]
+name = "tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kernel = { path = "../kernel" }
+session = { path = "../session" }
+glam.workspace = true
