@@ -9,6 +9,4 @@ kernel = { path = "../kernel" }
 glam.workspace = true
 bytemuck.workspace = true
 wgpu.workspace = true
-
-[dev-dependencies]
 pollster.workspace = true

@@ -1,0 +1,108 @@
+//! Offscreen rendering to RGBA pixels, for headless mode and the API's `render_view`.
+
+use kernel::Model;
+use session::Camera;
+
+use crate::Renderer;
+
+/// Renders models to memory with its own offscreen renderer.
+pub struct Snapshotter {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    renderer: Renderer,
+}
+
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+impl Snapshotter {
+    /// Creates its own GPU device. None when no adapter is available.
+    pub fn new_headless() -> Option<Self> {
+        let instance = wgpu::Instance::default();
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        Some(Self::with_device(&device, &queue))
+    }
+
+    /// Shares an existing device, e.g. the window's.
+    pub fn with_device(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self {
+            device: device.clone(),
+            queue: queue.clone(),
+            renderer: Renderer::new(device, queue, FORMAT),
+        }
+    }
+
+    /// Renders `model` as seen by `camera` (its viewport is replaced by the image size) into
+    /// tightly packed RGBA8 pixels, top row first.
+    pub fn capture(&mut self, model: &Model, camera: &Camera, width: u32, height: u32) -> Vec<u8> {
+        let (width, height) = (width.max(1), height.max(1));
+        let mut camera = camera.clone();
+        camera.viewport = glam::DVec2::new(width as f64, height as f64);
+
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("snapshot"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.renderer.set_model(model);
+        self.renderer.render(&view, (width, height), &camera, &[]);
+
+        // Texture-to-buffer copies need rows padded to a multiple of 256 bytes.
+        let row = width * 4;
+        let padded_row =
+            row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("snapshot readback"),
+            size: (padded_row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            size,
+        );
+        self.queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.expect("map snapshot buffer"));
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+        mapped
+            .chunks(padded_row as usize)
+            .flat_map(|r| &r[..row as usize])
+            .copied()
+            .collect()
+    }
+}
