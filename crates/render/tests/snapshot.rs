@@ -27,7 +27,9 @@ fn capture_returns_tightly_packed_rows_for_any_width() {
     let mut camera = Camera::new(DVec2::new(10.0, 10.0));
     camera.eye = DVec3::new(0.0, -6.0, 1.5);
     camera.target = DVec3::new(0.0, 0.0, 1.5);
-    let px = snap.capture(&ground_square(), &camera, w, h);
+    let px = snap
+        .capture(&ground_square(), &camera, w, h)
+        .expect("capture");
     assert_eq!(px.len(), (w * h * 4) as usize);
 
     let at = |x: u32, y: u32| {
@@ -49,4 +51,29 @@ fn capture_returns_tightly_packed_rows_for_any_width() {
         sky,
         "face pixel must not be sky"
     );
+}
+
+#[test]
+fn capture_handles_padding_edge_widths() {
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut camera = Camera::new(DVec2::new(10.0, 10.0));
+    camera.eye = DVec3::new(0.0, -6.0, 1.5);
+    camera.target = DVec3::new(0.0, 0.0, 1.5);
+    let sky = BACKGROUND.map(|c| (c * 255.0).round() as u8);
+    let sky = [sky[0], sky[1], sky[2]];
+    let h = 8;
+    // Widths around the 64-pixel (256-byte) row alignment boundary.
+    for w in [1u32, 63, 64, 65] {
+        let px = snap.capture(&Model::new(), &camera, w, h).expect("capture");
+        assert_eq!(px.len(), (w * h * 4) as usize, "width {w}");
+        // At width 1 the only column is the image center, where the renderer draws the
+        // axis lines, so the sky check only applies to wider images.
+        if w > 1 {
+            let i = ((w - 1) * 4) as usize;
+            assert_eq!(&px[i..i + 3], &sky, "top-right pixel at width {w}");
+        }
+    }
 }

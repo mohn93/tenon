@@ -36,8 +36,14 @@ impl Snapshotter {
     }
 
     /// Renders `model` as seen by `camera` (its viewport is replaced by the image size) into
-    /// tightly packed RGBA8 pixels, top row first.
-    pub fn capture(&mut self, model: &Model, camera: &Camera, width: u32, height: u32) -> Vec<u8> {
+    /// tightly packed RGBA8 pixels, top row first. None if the GPU readback fails.
+    pub fn capture(
+        &mut self,
+        model: &Model,
+        camera: &Camera,
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         let (width, height) = (width.max(1), height.max(1));
         let mut camera = camera.clone();
         camera.viewport = glam::DVec2::new(width as f64, height as f64);
@@ -92,17 +98,17 @@ impl Snapshotter {
             size,
         );
         self.queue.submit([encoder.finish()]);
-        buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, |r| r.expect("map snapshot buffer"));
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("poll");
-        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
-        mapped
-            .chunks(padded_row as usize)
-            .flat_map(|r| &r[..row as usize])
-            .copied()
-            .collect()
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        rx.recv().ok()?.ok()?;
+        let mapped = buffer.slice(..).get_mapped_range().ok()?;
+        let mut pixels = Vec::with_capacity((row * height) as usize);
+        for r in mapped.chunks(padded_row as usize) {
+            pixels.extend_from_slice(&r[..row as usize]);
+        }
+        Some(pixels)
     }
 }
