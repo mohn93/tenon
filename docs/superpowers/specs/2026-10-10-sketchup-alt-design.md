@@ -150,7 +150,7 @@ Design rule for every milestone: the interface is one client of the command laye
 
 - `session::Command` is a serde-serializable enum covering every state change: modeling (add edge, draw rectangle/circle, push/pull face by distance, move/copy/rotate entities, erase, make group/component), selection, camera (set, orbit, zoom extents, standard views), undo/redo, file (new, open, save, import, export).
 - Commands take explicit values (points, distances, entity IDs), never screen coordinates or cursor state.
-- `Document::execute(Command) -> Result<ChangeSet, CommandError>`. One command = one undo step. Errors are structured (kind + message + offending IDs), never panics.
+- `Document::execute(Command) -> Result<Outcome, CommandError>`, where `Outcome` carries the net `ChangeSummary` (created/deleted/modified ids as strings). Each modeling command is one undo step; camera commands are not recorded. Errors are structured (`kind` + `message` + offending `ids`), never panics. Raw `ChangeSet`s stay internal.
 - Entity IDs are the kernel's stable ids, serialized as strings (`"v12"`, `"e3"`, `"f7"`).
 
 ### Queries
