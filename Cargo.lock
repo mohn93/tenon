@@ -138,6 +138,7 @@ dependencies = [
  "glam",
  "pollster",
  "render",
+ "session",
  "wgpu",
  "winit",
 ]
@@ -1607,6 +1608,7 @@ dependencies = [
  "bytemuck",
  "glam",
  "pollster",
+ "session",
  "wgpu",
 ]
 
@@ -1731,6 +1733,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.7",
+]
+
+[[package]]
+name = "session"
+version = "0.1.0"
+dependencies = [
+ "glam",
 ]
 
 [[package]]

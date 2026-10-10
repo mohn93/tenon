@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use glam::DVec2;
-use render::{Camera, Renderer};
+use render::Renderer;
+use session::Camera;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};

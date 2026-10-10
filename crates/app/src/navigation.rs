@@ -1,5 +1,5 @@
 use glam::{DVec2, DVec3};
-use render::Camera;
+use session::Camera;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {

@@ -1,7 +1,7 @@
 use wgpu::util::DeviceExt;
 
-use crate::Camera;
 use crate::grid::{BACKGROUND, LineVertex, scene_lines};
+use session::Camera;
 
 pub const SAMPLE_COUNT: u32 = 4;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;

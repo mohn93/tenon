@@ -1,5 +1,6 @@
 use glam::{DVec2, DVec3};
-use render::{Camera, Renderer, grid::BACKGROUND};
+use render::{Renderer, grid::BACKGROUND};
+use session::Camera;
 
 const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
 const H: u32 = 256;
