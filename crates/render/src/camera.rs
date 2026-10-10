@@ -91,15 +91,21 @@ impl Camera {
         let dir = self.forward()
             + self.right() * (ndc_x * half_h * self.aspect())
             + self.up() * (ndc_y * half_h);
-        Ray { origin: self.eye, dir: dir.normalize() }
+        Ray {
+            origin: self.eye,
+            dir: dir.normalize(),
+        }
     }
 
     pub fn orbit(&mut self, pivot: DVec3, delta_px: DVec2) {
         let yaw = -delta_px.x * ORBIT_RAD_PER_PX;
         // Rotating forward about right() by +a tilts it toward UP, reducing its polar angle by a.
-        let polar = self.forward().angle_between(UP).clamp(MIN_POLAR, PI - MIN_POLAR);
-        let pitch = (-delta_px.y * ORBIT_RAD_PER_PX)
-            .clamp(polar - (PI - MIN_POLAR), polar - MIN_POLAR);
+        let polar = self
+            .forward()
+            .angle_between(UP)
+            .clamp(MIN_POLAR, PI - MIN_POLAR);
+        let pitch =
+            (-delta_px.y * ORBIT_RAD_PER_PX).clamp(polar - (PI - MIN_POLAR), polar - MIN_POLAR);
         let rot = DQuat::from_axis_angle(UP, yaw) * DQuat::from_axis_angle(self.right(), pitch);
         self.eye = pivot + rot * (self.eye - pivot);
         self.target = pivot + rot * (self.target - pivot);
@@ -192,9 +198,19 @@ mod tests {
 
     #[test]
     fn ray_hits_ground_plane() {
-        let r = Ray { origin: DVec3::new(0.0, 0.0, 10.0), dir: DVec3::new(0.0, 0.6, -0.8) };
-        assert!(r.hit_ground().unwrap().abs_diff_eq(DVec3::new(0.0, 7.5, 0.0), 1e-9));
-        let up = Ray { origin: DVec3::new(0.0, 0.0, 10.0), dir: DVec3::Z };
+        let r = Ray {
+            origin: DVec3::new(0.0, 0.0, 10.0),
+            dir: DVec3::new(0.0, 0.6, -0.8),
+        };
+        assert!(
+            r.hit_ground()
+                .unwrap()
+                .abs_diff_eq(DVec3::new(0.0, 7.5, 0.0), 1e-9)
+        );
+        let up = Ray {
+            origin: DVec3::new(0.0, 0.0, 10.0),
+            dir: DVec3::Z,
+        };
         assert!(up.hit_ground().is_none());
     }
 
@@ -273,7 +289,10 @@ mod tests {
     #[test]
     fn anchor_is_ground_point_under_cursor() {
         let c = cam();
-        assert!(c.anchor_at(DVec2::new(400.0, 300.0)).abs_diff_eq(DVec3::ZERO, 1e-9));
+        assert!(
+            c.anchor_at(DVec2::new(400.0, 300.0))
+                .abs_diff_eq(DVec3::ZERO, 1e-9)
+        );
     }
 
     #[test]
@@ -283,6 +302,9 @@ mod tests {
         c.target = DVec3::new(0.0, 0.0, 1.0);
         let px = DVec2::new(400.0, 0.0);
         let r = c.ray(px);
-        assert!(c.anchor_at(px).abs_diff_eq(r.origin + r.dir * c.distance(), 1e-9));
+        assert!(
+            c.anchor_at(px)
+                .abs_diff_eq(r.origin + r.dir * c.distance(), 1e-9)
+        );
     }
 }

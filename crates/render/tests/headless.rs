@@ -7,7 +7,8 @@ const H: u32 = 256;
 fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
     let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .ok()?;
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
 
@@ -20,7 +21,11 @@ fn render(camera: &Camera) -> Option<Vec<u8>> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen"),
-        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -55,12 +60,24 @@ fn render(camera: &Camera) -> Option<Vec<u8>> {
                 rows_per_image: Some(H),
             },
         },
-        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit([encoder.finish()]);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-    let pixels = buffer.slice(..).get_mapped_range().expect("mapped range").to_vec();
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("poll");
+    let pixels = buffer
+        .slice(..)
+        .get_mapped_range()
+        .expect("mapped range")
+        .to_vec();
     Some(pixels)
 }
 
@@ -84,7 +101,10 @@ fn sky_is_cleared_to_background() {
     for x in [0, W / 4, 3 * W / 4, W - 1] {
         let p = pixel(&px, x, 0);
         for ch in 0..3 {
-            assert!((p[ch] as i32 - expected[ch]).abs() <= 1, "pixel {x},0 = {p:?}");
+            assert!(
+                (p[ch] as i32 - expected[ch]).abs() <= 1,
+                "pixel {x},0 = {p:?}"
+            );
         }
     }
 }
@@ -94,7 +114,11 @@ fn all_three_axes_are_visible() {
     let Some(px) = render(&camera()) else { return };
     let any = |f: &dyn Fn([u8; 4]) -> bool| px.chunks(4).any(|c| f([c[0], c[1], c[2], c[3]]));
     let dominant = |p: [u8; 4], i: usize| {
-        let (a, b) = match i { 0 => (1, 2), 1 => (0, 2), _ => (0, 1) };
+        let (a, b) = match i {
+            0 => (1, 2),
+            1 => (0, 2),
+            _ => (0, 1),
+        };
         p[i] as i32 > p[a] as i32 + 40 && p[i] as i32 > p[b] as i32 + 40
     };
     assert!(any(&|p| dominant(p, 0)), "no red axis pixels");

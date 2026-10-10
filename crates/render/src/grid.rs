@@ -16,7 +16,12 @@ pub const AXIS_Z: [f32; 4] = [0.15, 0.30, 0.85, 1.0];
 
 fn faded(c: [f32; 4]) -> [f32; 4] {
     let mix = |a: f32, b: f32| a + (b - a) * 0.6;
-    [mix(c[0], BACKGROUND[0]), mix(c[1], BACKGROUND[1]), mix(c[2], BACKGROUND[2]), 1.0]
+    [
+        mix(c[0], BACKGROUND[0]),
+        mix(c[1], BACKGROUND[1]),
+        mix(c[2], BACKGROUND[2]),
+        1.0,
+    ]
 }
 
 /// Ground grid on z = 0 as line-list vertex pairs. Lines on the axes are omitted.
@@ -24,7 +29,10 @@ pub fn grid_lines(half_extent: f32, spacing: f32) -> Vec<LineVertex> {
     assert!(spacing > 0.0 && half_extent >= spacing);
     let n = (half_extent / spacing).floor() as i32;
     let e = n as f32 * spacing;
-    let v = |x: f32, y: f32| LineVertex { pos: [x, y, 0.0], color: GRID_COLOR };
+    let v = |x: f32, y: f32| LineVertex {
+        pos: [x, y, 0.0],
+        color: GRID_COLOR,
+    };
     let mut out = Vec::with_capacity(8 * n as usize);
     for i in (-n..=n).filter(|&i| i != 0) {
         let o = i as f32 * spacing;
@@ -35,12 +43,23 @@ pub fn grid_lines(half_extent: f32, spacing: f32) -> Vec<LineVertex> {
 
 /// Red/green/blue axes from the origin; negative halves are faded.
 pub fn axis_lines(length: f32) -> Vec<LineVertex> {
-    let axes = [([1.0, 0.0, 0.0], AXIS_X), ([0.0, 1.0, 0.0], AXIS_Y), ([0.0, 0.0, 1.0], AXIS_Z)];
+    let axes = [
+        ([1.0, 0.0, 0.0], AXIS_X),
+        ([0.0, 1.0, 0.0], AXIS_Y),
+        ([0.0, 0.0, 1.0], AXIS_Z),
+    ];
     let mut out = Vec::with_capacity(12);
     for (dir, color) in axes {
         for (sign, c) in [(1.0, color), (-1.0, faded(color))] {
-            let end = [dir[0] * length * sign, dir[1] * length * sign, dir[2] * length * sign];
-            out.push(LineVertex { pos: [0.0, 0.0, 0.0], color: c });
+            let end = [
+                dir[0] * length * sign,
+                dir[1] * length * sign,
+                dir[2] * length * sign,
+            ];
+            out.push(LineVertex {
+                pos: [0.0, 0.0, 0.0],
+                color: c,
+            });
             out.push(LineVertex { pos: end, color: c });
         }
     }
@@ -68,7 +87,10 @@ mod tests {
     fn grid_lies_on_ground_and_spans_extent() {
         let v = grid_lines(10.0, 1.0);
         assert!(v.iter().all(|p| p.pos[2] == 0.0));
-        assert!(v.iter().all(|p| p.pos[0].abs() <= 10.0 && p.pos[1].abs() <= 10.0));
+        assert!(
+            v.iter()
+                .all(|p| p.pos[0].abs() <= 10.0 && p.pos[1].abs() <= 10.0)
+        );
         assert!(v.iter().any(|p| p.pos[0] == 10.0) && v.iter().any(|p| p.pos[1] == -10.0));
     }
 

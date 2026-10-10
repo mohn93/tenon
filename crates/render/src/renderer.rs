@@ -55,7 +55,10 @@ impl Renderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: wgpu::MultisampleState { count: SAMPLE_COUNT, ..Default::default() },
+            multisample: wgpu::MultisampleState {
+                count: SAMPLE_COUNT,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
@@ -79,7 +82,10 @@ impl Renderer {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera"),
             layout: &pipeline.get_bind_group_layout(0),
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            }],
         });
 
         let vertices = scene_lines();
@@ -109,12 +115,15 @@ impl Renderer {
         let targets = self.targets.as_ref().expect("targets just created");
 
         let view_proj = camera.view_proj_f32().to_cols_array();
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&view_proj));
+        self.queue
+            .write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&view_proj));
 
         let [r, g, b, a] = BACKGROUND.map(f64::from);
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame"),
+            });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -164,6 +173,10 @@ impl Renderer {
                 })
                 .create_view(&wgpu::TextureViewDescriptor::default())
         };
-        Targets { size, msaa: texture("msaa color", self.format), depth: texture("depth", DEPTH_FORMAT) }
+        Targets {
+            size,
+            msaa: texture("msaa color", self.format),
+            depth: texture("depth", DEPTH_FORMAT),
+        }
     }
 }
