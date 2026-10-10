@@ -51,8 +51,6 @@ pub fn failure(id: &Value, error: RpcError) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": e}).to_string()
 }
 
-// Used by the connection hub (Task 4); unused until then.
-#[allow(dead_code)]
 pub fn notification(method: &str, params: Value) -> String {
     json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string()
 }
