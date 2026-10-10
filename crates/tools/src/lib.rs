@@ -4,6 +4,7 @@
 pub mod inference;
 pub mod line;
 pub mod overlay;
+pub mod vcb;
 
-pub use inference::{Axis, Inference, SnapKind, infer};
+pub use inference::{Axis, Inference, SnapKind, face_under, infer};
 pub use line::{LineTool, ToolEvent, ToolOutput};

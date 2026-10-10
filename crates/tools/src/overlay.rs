@@ -88,6 +88,7 @@ mod tests {
         let hit = Inference {
             point: DVec3::new(0.0, 3.0, 0.0),
             kind: SnapKind::Axis(Axis::Y),
+            face: None,
         };
         let segs = overlay(&[[DVec3::ZERO, hit.point]], Some(&hit), &cam(), 1.0);
         assert_eq!(segs.len(), 1);
@@ -101,6 +102,7 @@ mod tests {
             let hit = Inference {
                 point: p,
                 kind: SnapKind::Endpoint,
+                face: None,
             };
             let segs = overlay(&[], Some(&hit), &c, 1.0);
             assert_eq!(segs.len(), 4);
@@ -122,6 +124,7 @@ mod tests {
         let hit = Inference {
             point: DVec3::new(1.0, 0.0, 0.0),
             kind: SnapKind::Endpoint,
+            face: None,
         };
         let side = |scale: f64| {
             let segs = overlay(&[], Some(&hit), &c, scale);
@@ -138,6 +141,7 @@ mod tests {
         let hit = Inference {
             point: DVec3::ZERO,
             kind: SnapKind::Ground,
+            face: None,
         };
         assert!(overlay(&[], Some(&hit), &cam(), 1.0).is_empty());
     }

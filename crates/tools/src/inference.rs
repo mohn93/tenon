@@ -1,8 +1,8 @@
 //! Snapping the cursor to meaningful 3D points.
 
 use glam::{DVec2, DVec3};
-use kernel::Model;
 use kernel::geom::{Plane, point_in_polygon};
+use kernel::{FaceId, Model};
 use session::{Camera, Ray};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,13 +43,15 @@ pub enum SnapKind {
 pub struct Inference {
     pub point: DVec3,
     pub kind: SnapKind,
+    /// The nearest face under the cursor, whatever the point snapped to.
+    pub face: Option<FaceId>,
 }
 
 /// Finds the 3D point under `cursor` (physical pixels). `anchor` is the point a tool is drawing
 /// from, enabling axis inference. Snap candidates count only within `radius_px` of the cursor.
 ///
 /// Ranking: endpoint, midpoint and origin (nearest on screen wins) > on-edge > axis > on-face >
-/// ground > free.
+/// ground > free. Points and edges hidden behind a face are skipped.
 pub fn infer(
     model: &Model,
     camera: &Camera,
@@ -58,8 +60,14 @@ pub fn infer(
     radius_px: f64,
 ) -> Inference {
     let ray = camera.ray(cursor);
+    let face_hit = nearest_face_hit(model, &ray);
+    let face = face_hit.map(|(f, _)| f);
     let screen_dist = |p: DVec3| camera.project(p).map(|s| s.distance(cursor));
-    let within = |p: DVec3| screen_dist(p).filter(|d| *d <= radius_px);
+    let within = |p: DVec3| {
+        screen_dist(p)
+            .filter(|d| *d <= radius_px)
+            .filter(|_| visible(model, camera.eye, p))
+    };
 
     // Points: vertices, edge midpoints, origin.
     let mut best: Option<(f64, Inference)> = None;
@@ -67,7 +75,14 @@ pub fn infer(
         if let Some(d) = within(p)
             && best.as_ref().is_none_or(|(bd, _)| d < *bd)
         {
-            *best = Some((d, Inference { point: p, kind }));
+            *best = Some((
+                d,
+                Inference {
+                    point: p,
+                    kind,
+                    face,
+                },
+            ));
         }
     };
     for (_, v) in model.vertices() {
@@ -99,6 +114,7 @@ pub fn infer(
         return Inference {
             point,
             kind: SnapKind::OnEdge,
+            face,
         };
     }
 
@@ -107,7 +123,8 @@ pub fn infer(
         let mut on_axis: Option<(f64, Inference)> = None;
         for axis in Axis::ALL {
             let p = closest_on_line_to_ray(anchor, axis.dir(), &ray, false);
-            if let Some(d) = within(p)
+            // Axis lines are guides, so they are not hidden by faces.
+            if let Some(d) = screen_dist(p).filter(|d| *d <= radius_px)
                 && p.distance(anchor) > 0.0
                 && on_axis.is_none_or(|(bd, _)| d < bd)
             {
@@ -116,6 +133,7 @@ pub fn infer(
                     Inference {
                         point: p,
                         kind: SnapKind::Axis(axis),
+                        face,
                     },
                 ));
             }
@@ -126,10 +144,11 @@ pub fn infer(
     }
 
     // On a face (nearest along the ray).
-    if let Some(point) = nearest_face_hit(model, &ray) {
+    if let Some((_, point)) = face_hit {
         return Inference {
             point,
             kind: SnapKind::OnFace,
+            face,
         };
     }
 
@@ -137,12 +156,33 @@ pub fn infer(
         Some(point) if point.distance(ray.origin) <= camera.distance() * 50.0 => Inference {
             point,
             kind: SnapKind::Ground,
+            face,
         },
         _ => Inference {
             point: camera.anchor_at(cursor),
             kind: SnapKind::Free,
+            face,
         },
     }
+}
+
+/// The nearest face under the cursor and the point where the cursor's ray meets it.
+pub fn face_under(model: &Model, camera: &Camera, cursor: DVec2) -> Option<(FaceId, DVec3)> {
+    nearest_face_hit(model, &camera.ray(cursor))
+}
+
+/// True if no face lies between the eye and `p` (faces through `p` itself do not hide it).
+fn visible(model: &Model, eye: DVec3, p: DVec3) -> bool {
+    let to = p - eye;
+    let dist = to.length();
+    if dist < 1e-12 {
+        return true;
+    }
+    let ray = Ray {
+        origin: eye,
+        dir: to / dist,
+    };
+    nearest_face_hit(model, &ray).is_none_or(|(_, q)| q.distance(eye) >= dist * (1.0 - 1e-6))
 }
 
 /// Point on the line `origin + t * dir` closest to the ray; `t` is clamped to [0, 1] when
@@ -166,9 +206,9 @@ fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segment: bool) -
     origin + dir * t
 }
 
-fn nearest_face_hit(model: &Model, ray: &Ray) -> Option<DVec3> {
-    let mut best: Option<(f64, DVec3)> = None;
-    for (_, f) in model.faces() {
+fn nearest_face_hit(model: &Model, ray: &Ray) -> Option<(FaceId, DVec3)> {
+    let mut best: Option<(f64, FaceId, DVec3)> = None;
+    for (id, f) in model.faces() {
         let Some(origin) = f.outer.first().and_then(|v| model.position(*v)) else {
             continue;
         };
@@ -181,7 +221,7 @@ fn nearest_face_hit(model: &Model, ray: &Ray) -> Option<DVec3> {
             continue;
         }
         let t = -plane.distance(ray.origin) / denom;
-        if t <= 0.0 || best.is_some_and(|(bt, _)| t >= bt) {
+        if t <= 0.0 || best.is_some_and(|(bt, _, _)| t >= bt) {
             continue;
         }
         let p = ray.origin + ray.dir * t;
@@ -195,10 +235,10 @@ fn nearest_face_hit(model: &Model, ray: &Ray) -> Option<DVec3> {
         if point_in_polygon(q, &project(&f.outer))
             && !f.holes.iter().any(|h| point_in_polygon(q, &project(h)))
         {
-            best = Some((t, p));
+            best = Some((t, id, p));
         }
     }
-    best.map(|(_, p)| p)
+    best.map(|(_, id, p)| (id, p))
 }
 
 #[cfg(test)]
@@ -240,7 +280,8 @@ mod tests {
             hit,
             Inference {
                 point: DVec3::new(3.0, 1.0, 0.0),
-                kind: SnapKind::Endpoint
+                kind: SnapKind::Endpoint,
+                face: None,
             }
         );
     }
@@ -339,5 +380,62 @@ mod tests {
         let inside_inner = infer(&m, &c, px(&c, DVec3::new(1.2, 0.8, 1.0)), None, R);
         assert_eq!(inside_inner.kind, SnapKind::OnFace);
         assert!((inside_inner.point.z - 1.0).abs() < 1e-9);
+    }
+
+    /// A 2 m box on the ground at the origin, built through push/pull.
+    fn cube() -> Model {
+        let mut m = Model::new();
+        let pts = [
+            DVec3::ZERO,
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::new(2.0, 2.0, 0.0),
+            DVec3::new(0.0, 2.0, 0.0),
+        ];
+        m.add_polygon(&pts).unwrap();
+        let base = m.faces().next().unwrap().0;
+        m.push_pull(base, 2.0).unwrap();
+        m
+    }
+
+    #[test]
+    fn hidden_corners_are_not_snapped() {
+        let (c, m) = (cam(), cube());
+        // The camera looks from (-8, -12, 7): the far bottom corner is behind the box.
+        let hidden = DVec3::new(2.0, 2.0, 0.0);
+        let hit = infer(&m, &c, px(&c, hidden), None, R);
+        assert_ne!(hit.kind, SnapKind::Endpoint);
+        assert_eq!(hit.kind, SnapKind::OnFace);
+        assert!(hit.face.is_some());
+
+        let near_top = DVec3::new(2.0, 2.0, 2.0);
+        let hit = infer(&m, &c, px(&c, near_top), None, R);
+        assert_eq!(hit.kind, SnapKind::Endpoint);
+        assert_eq!(hit.point, near_top);
+    }
+
+    #[test]
+    fn reports_the_face_under_the_cursor() {
+        let (c, m) = (cam(), cube());
+        let top = m
+            .faces()
+            .find(|(_, f)| f.normal == DVec3::Z)
+            .map(|(id, _)| id)
+            .unwrap();
+        let cursor = px(&c, DVec3::new(1.0, 1.2, 2.0));
+        let hit = infer(&m, &c, cursor, None, R);
+        assert_eq!((hit.kind, hit.face), (SnapKind::OnFace, Some(top)));
+        let (face, point) = face_under(&m, &c, cursor).unwrap();
+        assert_eq!(face, top);
+        assert!((point.z - 2.0).abs() < 1e-9);
+        assert!(face_under(&m, &c, px(&c, DVec3::new(-3.0, 4.0, 0.0))).is_none());
+    }
+
+    #[test]
+    fn axis_guides_show_through_faces() {
+        let (c, m) = (cam(), cube());
+        let anchor = DVec3::new(3.0, 3.0, 0.0);
+        let behind = DVec3::new(3.0, 3.0, 1.0);
+        let hit = infer(&m, &c, px(&c, behind), Some(anchor), R);
+        assert_eq!(hit.kind, SnapKind::Axis(Axis::Z));
     }
 }

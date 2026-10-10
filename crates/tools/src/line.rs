@@ -99,6 +99,7 @@ mod tests {
         Inference {
             point: DVec3::new(x, y, 0.0),
             kind: SnapKind::Ground,
+            face: None,
         }
     }
 
