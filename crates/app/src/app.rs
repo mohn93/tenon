@@ -44,13 +44,18 @@ impl State {
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("surface not supported by adapter");
         // Colors are authored as sRGB values, so prefer a non-sRGB target that writes them as-is.
+        // Keep the default format's channel layout when its non-sRGB twin is available.
         let caps = surface.get_capabilities(&adapter);
-        config.format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(config.format);
+        let linear = config.format.remove_srgb_suffix();
+        config.format = if caps.formats.contains(&linear) {
+            linear
+        } else {
+            caps.formats
+                .iter()
+                .copied()
+                .find(|f| !f.is_srgb())
+                .unwrap_or(config.format)
+        };
         surface.configure(&device, &config);
 
         let renderer = Renderer::new(&device, &queue, config.format);
@@ -120,7 +125,9 @@ impl ApplicationHandler for App {
             .with_title("sketchup-alt")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        self.state = Some(State::new(window));
+        let state = State::new(window);
+        state.window.request_redraw();
+        self.state = Some(state);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -141,6 +148,10 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(m) => {
                 s.nav
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
+                false
+            }
+            WindowEvent::Focused(false) => {
+                s.nav.reset();
                 false
             }
             WindowEvent::CursorMoved { position, .. } => s

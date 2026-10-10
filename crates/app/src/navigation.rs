@@ -21,7 +21,7 @@ pub struct Navigation {
     cursor: DVec2,
     shift: bool,
     alt: bool,
-    drag: Option<Drag>,
+    drag: Option<(Button, Drag)>,
 }
 
 impl Navigation {
@@ -30,9 +30,20 @@ impl Navigation {
         self.alt = alt;
     }
 
+    /// Drops any drag and modifier state, e.g. when the window loses focus and release
+    /// events would never arrive. The cursor position is kept.
+    pub fn reset(&mut self) {
+        self.drag = None;
+        self.shift = false;
+        self.alt = false;
+    }
+
     pub fn button(&mut self, cam: &Camera, button: Button, pressed: bool) {
         if !pressed {
-            if matches!(button, Button::Left | Button::Middle) {
+            if self
+                .drag
+                .is_some_and(|(started_by, _)| started_by == button)
+            {
                 self.drag = None;
             }
             return;
@@ -42,19 +53,20 @@ impl Navigation {
             return;
         }
         let point = cam.anchor_at(self.cursor);
-        self.drag = Some(if self.shift {
+        let drag = if self.shift {
             Drag::Pan { anchor: point }
         } else {
             Drag::Orbit { pivot: point }
-        });
+        };
+        self.drag = Some((button, drag));
     }
 
     pub fn cursor_moved(&mut self, cam: &mut Camera, pos: DVec2) -> bool {
         let delta = pos - self.cursor;
         self.cursor = pos;
         match self.drag {
-            Some(Drag::Orbit { pivot }) => cam.orbit(pivot, delta),
-            Some(Drag::Pan { anchor }) => cam.pan(anchor, delta),
+            Some((_, Drag::Orbit { pivot })) => cam.orbit(pivot, delta),
+            Some((_, Drag::Pan { anchor })) => cam.pan(anchor, delta),
             None => return false,
         }
         true
@@ -139,6 +151,44 @@ mod tests {
         let before = cam.clone();
         assert!(!nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
         assert_eq!(cam, before);
+    }
+
+    #[test]
+    fn other_button_release_does_not_end_middle_drag() {
+        let (mut nav, mut cam) = setup();
+        nav.button(&cam, Button::Middle, true);
+        nav.button(&cam, Button::Left, true);
+        nav.button(&cam, Button::Left, false);
+        let before = cam.clone();
+        assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
+        assert_ne!(cam, before);
+    }
+
+    #[test]
+    fn middle_release_does_not_end_alt_left_orbit() {
+        let (mut nav, mut cam) = setup();
+        nav.set_modifiers(false, true);
+        nav.button(&cam, Button::Left, true);
+        nav.button(&cam, Button::Middle, false);
+        let before = cam.clone();
+        assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
+        assert_ne!(cam, before);
+    }
+
+    #[test]
+    fn reset_clears_drag_and_modifiers() {
+        let (mut nav, mut cam) = setup();
+        nav.set_modifiers(true, false);
+        nav.button(&cam, Button::Middle, true);
+        nav.reset();
+        let before = cam.clone();
+        assert!(!nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
+        assert_eq!(cam, before);
+        nav.button(&cam, Button::Middle, true);
+        let forward = cam.forward();
+        assert!(nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
+        // Orbit rotates the view direction; pan would not.
+        assert!(!cam.forward().abs_diff_eq(forward, 1e-9));
     }
 
     #[test]
