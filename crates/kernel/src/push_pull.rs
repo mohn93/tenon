@@ -79,6 +79,23 @@ impl Model {
                 return Err(KernelError::Collapse);
             }
         }
+        // Every face that stretches must keep its fixed vertices on the side of the face they
+        // started on; otherwise its loops fold over (a hole could end up outside its outer loop).
+        let n = face.normal;
+        let origin = self.pos(face.outer[0]);
+        let d = offset.dot(n);
+        for (_, f) in self.faces() {
+            let verts = loop_vertices(f);
+            if verts.is_disjoint(&moving) || verts.is_subset(&moving) {
+                continue;
+            }
+            for v in verts.difference(&moving) {
+                let h = (self.pos(*v) - origin).dot(n);
+                if (h - d).abs() < LENGTH_TOL || h * (h - d) <= 0.0 {
+                    return Err(KernelError::Collapse);
+                }
+            }
+        }
         for &m in &moving {
             let to = self.pos(m) + offset;
             let lands_on_other = self
@@ -181,8 +198,9 @@ impl Model {
         self.replace_face(id, flipped);
     }
 
-    /// True if the face is connected through shared sides to a face in another plane, i.e. it
-    /// is part of a solid's surface rather than a flat sheet.
+    /// True if the face is part of a solid's surface with the solid behind it: it is connected
+    /// through shared sides to a face with a vertex behind its plane. Faces connected only to
+    /// faces in its plane or in front of it (a flat sheet, the ground beside a box) are not.
     fn in_solid(&self, id: FaceId) -> bool {
         let mut by_side: BTreeMap<(VertexId, VertexId), Vec<FaceId>> = BTreeMap::new();
         for (fid, f) in self.faces() {
@@ -196,11 +214,15 @@ impl Model {
             }
         }
         let n = self.face(id).unwrap().normal;
+        let origin = self.pos(self.face(id).unwrap().outer[0]);
         let mut seen = BTreeSet::from([id]);
         let mut stack = vec![id];
         while let Some(fid) = stack.pop() {
             let f = self.face(fid).unwrap();
-            if f.normal.cross(n).length() >= PLANE_ANGLE_TOL {
+            let behind = loop_vertices(f)
+                .iter()
+                .any(|v| (self.pos(*v) - origin).dot(n) < -LENGTH_TOL);
+            if behind {
                 return true;
             }
             for l in std::iter::once(&f.outer).chain(&f.holes) {

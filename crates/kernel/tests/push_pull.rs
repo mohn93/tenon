@@ -147,7 +147,52 @@ fn pushing_a_box_top_to_or_through_the_bottom_fails() {
     assert_eq!(m.push_pull(top, -2.0), Err(KernelError::Collapse));
     assert_eq!(m.push_pull(top, -3.0), Err(KernelError::Collapse));
     assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
     assert!(m.push_pull(top, -1.0).is_ok());
+}
+
+#[test]
+fn pushing_a_box_top_past_a_window_fails() {
+    let (mut m, top) = box_4x4x2();
+    m.add_polygon(&[
+        p(1.0, 0.0, 1.0),
+        p(2.0, 0.0, 1.0),
+        p(2.0, 0.0, 1.8),
+        p(1.0, 0.0, 1.8),
+    ])
+    .unwrap();
+    m.validate().unwrap();
+    let before = m.clone();
+    assert_eq!(m.push_pull(top, -1.5), Err(KernelError::Collapse));
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+    assert!(m.push_pull(top, -0.1).is_ok());
+    m.validate().unwrap();
+}
+
+#[test]
+fn pulling_the_second_of_two_adjacent_rectangles_keeps_its_floor() {
+    let mut m = Model::new();
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    let b = rect(&mut m, 2.0, 0.0, 4.0, 2.0, 0.0);
+    m.push_pull(a, 1.0).unwrap();
+    m.push_pull(b, 1.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.face(b).unwrap().normal, -DVec3::Z, "b keeps its floor");
+    assert_eq!(m.face(a).unwrap().normal, -DVec3::Z);
+    // The wall between the two boxes lies in plane x = 2 and is internal: skip it.
+    let on_shared_wall = |f: &FaceId| {
+        m.face(*f)
+            .unwrap()
+            .outer
+            .iter()
+            .all(|v| (m.position(*v).unwrap().x - 2.0).abs() < 1e-9)
+    };
+    let solid: Vec<FaceId> = all_faces(&m)
+        .into_iter()
+        .filter(|f| !on_shared_wall(f))
+        .collect();
+    assert_outward(&m, &solid);
 }
 
 #[test]
