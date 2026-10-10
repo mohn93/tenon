@@ -134,6 +134,7 @@ impl State {
         let before = (
             self.editor.doc().revision(),
             self.editor.doc().camera.clone(),
+            self.editor.overlay(),
         );
         let mut host = WindowHost {
             editor: &mut self.editor,
@@ -143,6 +144,7 @@ impl State {
         if (
             self.editor.doc().revision(),
             self.editor.doc().camera.clone(),
+            self.editor.overlay(),
         ) != before
         {
             self.window.request_redraw();
@@ -203,6 +205,12 @@ impl App {
 }
 
 impl ApplicationHandler<ApiWake> for App {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(path) = self.socket.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ApiWake) {
         if let Some(s) = self.state.as_mut() {
             s.process_api(&mut self.hub);
@@ -228,9 +236,6 @@ impl ApplicationHandler<ApiWake> for App {
         let Some(s) = self.state.as_mut() else { return };
         let changed = match event {
             WindowEvent::CloseRequested => {
-                if let Some(path) = self.socket.take() {
-                    let _ = std::fs::remove_file(path);
-                }
                 event_loop.exit();
                 false
             }

@@ -17,6 +17,7 @@ pub enum Transport {
 
 #[derive(Debug, PartialEq)]
 pub enum Mode {
+    Help,
     Window { socket: PathBuf },
     Headless { transport: Transport },
 }
@@ -30,19 +31,24 @@ pub const FALLBACK_DIR: &str = ".sketchup-alt";
 /// Default socket path: per-process, in the user's temp directory, or in `~/.sketchup-alt/` when
 /// the temp directory is too deep for a socket path. Never in a shared directory such as /tmp.
 pub fn default_socket() -> PathBuf {
-    let name = format!("sketchup-alt-{}.sock", std::process::id());
-    let preferred = std::env::temp_dir().join(&name);
-    if preferred.as_os_str().len() <= MAX_SOCKET_PATH {
-        return preferred;
-    }
-    match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join(FALLBACK_DIR).join(name),
-        // Listening on the too-long path reports the error.
-        None => preferred,
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    choose_socket(&std::env::temp_dir(), home.as_deref(), std::process::id())
+}
+
+/// The temp directory is used unless it is the shared `/tmp` (Linux without TMPDIR) or too deep
+/// for a socket path; then `<home>/.sketchup-alt` is used. Without a home, the temp path is
+/// kept and listening reports the error.
+fn choose_socket(temp_dir: &Path, home: Option<&Path>, pid: u32) -> PathBuf {
+    let name = format!("sketchup-alt-{pid}.sock");
+    let preferred = temp_dir.join(&name);
+    let usable = temp_dir != Path::new("/tmp") && preferred.as_os_str().len() <= MAX_SOCKET_PATH;
+    match home {
+        Some(home) if !usable => home.join(FALLBACK_DIR).join(name),
+        _ => preferred,
     }
 }
 
-/// True when `socket` lives in the `~/.sketchup-alt` fallback directory.
+/// Returns the private directory when `socket` lives in the `~/.sketchup-alt` fallback.
 pub fn private_dir_for(socket: &Path) -> Option<&Path> {
     let parent = socket.parent()?;
     (parent.file_name()? == FALLBACK_DIR).then_some(parent)
@@ -82,8 +88,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
         match arg.as_str() {
             "--headless" => headless = true,
             "--stdio" => stdio = true,
+            "-h" | "--help" => return Ok(Mode::Help),
             "--socket" => {
-                let path = args.next().ok_or("--socket needs a path")?;
+                let path = args
+                    .next()
+                    .filter(|p| !p.starts_with("--"))
+                    .ok_or("--socket needs a path")?;
                 socket = Some(PathBuf::from(path));
             }
             other => return Err(format!("unknown argument {other:?}")),
@@ -151,6 +161,34 @@ mod tests {
     }
 
     #[test]
+    fn help_flags_return_help() {
+        assert_eq!(parse(args("-h")).unwrap(), Mode::Help);
+        assert_eq!(parse(args("--headless --help")).unwrap(), Mode::Help);
+    }
+
+    #[test]
+    fn socket_choice() {
+        let home = Path::new("/Users/me");
+        let fallback = home.join(FALLBACK_DIR).join("sketchup-alt-7.sock");
+        let short = Path::new("/var/folders/ab/T");
+        assert_eq!(
+            choose_socket(short, Some(home), 7),
+            short.join("sketchup-alt-7.sock")
+        );
+        assert_eq!(choose_socket(Path::new("/tmp"), Some(home), 7), fallback);
+        let long = PathBuf::from(format!("/{}", "x".repeat(100)));
+        assert_eq!(choose_socket(&long, Some(home), 7), fallback);
+        assert_eq!(
+            choose_socket(&long, None, 7),
+            long.join("sketchup-alt-7.sock")
+        );
+        assert_eq!(
+            choose_socket(Path::new("/tmp"), None, 7),
+            Path::new("/tmp/sketchup-alt-7.sock")
+        );
+    }
+
+    #[test]
     fn default_socket_path_fits_the_os_limit() {
         assert!(default_socket().as_os_str().len() <= MAX_SOCKET_PATH);
     }
@@ -160,6 +198,11 @@ mod tests {
         assert!(parse(args("--stdio")).unwrap_err().contains("--headless"));
         assert!(parse(args("--headless --stdio --socket x")).is_err());
         assert!(parse(args("--socket")).is_err());
+        assert!(
+            parse(args("--socket --headless"))
+                .unwrap_err()
+                .contains("needs a path")
+        );
         assert!(parse(args("--fly")).unwrap_err().contains("--fly"));
     }
 

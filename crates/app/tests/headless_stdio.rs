@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -34,11 +36,23 @@ fn headless_stdio_session() {
         }
         // Dropping stdin ends the session; the process must flush its replies and exit.
     }
+    // Read on another thread so a shutdown regression fails instead of hanging the test.
     let stdout = BufReader::new(child.stdout.take().unwrap());
-    let messages: Vec<Value> = stdout
-        .lines()
-        .map(|l| serde_json::from_str(&l.unwrap()).unwrap())
-        .collect();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let messages: Vec<Value> = stdout
+            .lines()
+            .map(|l| serde_json::from_str(&l.unwrap()).unwrap())
+            .collect();
+        let _ = tx.send(messages);
+    });
+    let messages = match rx.recv_timeout(Duration::from_secs(30)) {
+        Ok(messages) => messages,
+        Err(_) => {
+            let _ = child.kill();
+            panic!("the session did not end within 30 seconds");
+        }
+    };
     let status = child.wait().unwrap();
     assert!(status.success(), "exit status {status}");
 

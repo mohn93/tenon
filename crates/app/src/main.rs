@@ -19,6 +19,7 @@ fn main() {
         }
     };
     match mode {
+        Mode::Help => println!("{}", cli::USAGE),
         Mode::Headless { transport } => {
             if let Transport::Socket(path) = &transport
                 && let Some(dir) = cli::private_dir_for(path)

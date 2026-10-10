@@ -10,11 +10,14 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app` | Window, plus a Unix socket (path printed on stderr: `agent API listening on ...`) |
 | `cargo run -p app -- --socket PATH` | Window, socket at `PATH` |
 | `cargo run -p app -- --headless --stdio` | No window; requests on stdin, replies on stdout; exits when stdin closes |
+| `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
 
 The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
 (created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
-readable only by the current user. Try it by hand with `nc -U PATH`.
+readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
+socket file on a normal quit; killing the app with a signal leaves it behind, and the next start
+replaces it.
 
 ## Methods
 
@@ -27,7 +30,7 @@ all commands and results.
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, e.g. `{"type": "stats"}`, `{"type": "entities"}`, `{"type": "events", "since": 3}` | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional) | `{width, height, png_base64}` |
-| `subscribe` | none | `{revision}`, then `changed` notifications after every model change |
+| `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `query` `entities` |
 | `describe` | none | the API description |
 
 Commands: `add_edge`, `undo`, `redo`, `set_camera`. Units are meters, Z is up, angles in degrees,
