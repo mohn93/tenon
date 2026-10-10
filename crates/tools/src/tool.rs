@@ -6,6 +6,7 @@ use session::{Camera, Command};
 
 use crate::inference::Inference;
 use crate::line::LineTool;
+use crate::rectangle::RectangleTool;
 
 /// What a tool may look at while handling an event.
 pub struct ToolContext<'a> {
@@ -56,12 +57,14 @@ pub trait Tool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
     Line,
+    Rectangle,
 }
 
 impl ToolKind {
     pub fn make(self) -> Box<dyn Tool> {
         match self {
             ToolKind::Line => Box::new(LineTool::new()),
+            ToolKind::Rectangle => Box::new(RectangleTool::new()),
         }
     }
 
@@ -69,6 +72,7 @@ impl ToolKind {
     pub fn from_shortcut(c: char) -> Option<ToolKind> {
         match c.to_ascii_lowercase() {
             'l' => Some(ToolKind::Line),
+            'r' => Some(ToolKind::Rectangle),
             _ => None,
         }
     }

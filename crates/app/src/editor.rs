@@ -463,6 +463,30 @@ mod tests {
     }
 
     #[test]
+    fn rectangle_tool_draws_one_undo_step_per_rectangle() {
+        let mut e = editor();
+        assert!(e.key(EditorKey::Char('r')));
+        assert!(e.status().starts_with("Rectangle"), "{}", e.status());
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert_eq!(stats(&e), (4, 1));
+        e.undo();
+        assert_eq!(stats(&e), (0, 0));
+    }
+
+    #[test]
+    fn typed_size_finishes_a_rectangle() {
+        let mut e = editor();
+        e.key(EditorKey::Char('r'));
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        move_to(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        type_text(&mut e, "3,2");
+        let model = e.doc().model();
+        let (face, _) = model.faces().next().unwrap();
+        assert!((model.area(face).unwrap() - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn leaving_the_window_hides_the_marker() {
         let mut e = editor();
         square(&mut e);

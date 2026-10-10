@@ -4,9 +4,11 @@
 pub mod inference;
 pub mod line;
 pub mod overlay;
+pub mod rectangle;
 pub mod tool;
 pub mod vcb;
 
 pub use inference::{Axis, Inference, SnapKind, face_under, infer};
 pub use line::LineTool;
+pub use rectangle::RectangleTool;
 pub use tool::{Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};
