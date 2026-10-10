@@ -148,18 +148,22 @@ impl Model {
         let mut matched: BTreeSet<FaceId> = BTreeSet::new();
         for r in wanted {
             let outer: BTreeSet<VertexId> = r.outer.iter().copied().collect();
+            // Faces in one plane may face opposite ways (push/pull flips a base face), so an
+            // old face matches by vertex set and keeps its own orientation.
             let same = old.iter().find(|(id, f)| {
-                !matched.contains(id)
-                    && f.normal.dot(plane.normal) > 0.0
-                    && f.outer.iter().copied().collect::<BTreeSet<_>>() == outer
+                !matched.contains(id) && f.outer.iter().copied().collect::<BTreeSet<_>>() == outer
             });
             match same {
                 Some((id, f)) => {
                     matched.insert(*id);
                     if loop_sets(&f.holes) != loop_sets(&r.holes) {
+                        let mut holes = r.holes;
+                        if f.normal.dot(plane.normal) < 0.0 {
+                            holes.iter_mut().for_each(|h| h.reverse());
+                        }
                         let face = Face {
                             outer: f.outer.clone(),
-                            holes: r.holes,
+                            holes,
                             normal: f.normal,
                         };
                         self.replace_face(*id, face);
@@ -219,6 +223,28 @@ mod tests {
         assert_eq!(m.faces().count(), 1);
         assert_eq!(m.face_area(id), 12.0);
         (m, id, f)
+    }
+
+    #[test]
+    fn flipped_face_keeps_its_id_and_orientation_when_its_plane_is_rebuilt() {
+        let mut m = Model::new();
+        square(&mut m, 0.0, 0.0, 4.0);
+        let (id, f) = m.faces().map(|(id, f)| (id, f.clone())).next().unwrap();
+        let mut outer = f.outer.clone();
+        outer.reverse();
+        let flipped = Face {
+            outer,
+            holes: vec![],
+            normal: -f.normal,
+        };
+        m.replace_face(id, flipped);
+        m.take_changes();
+        square(&mut m, 1.0, 1.0, 2.0);
+        let f = m.face(id).unwrap();
+        assert_eq!(f.normal, -DVec3::Z);
+        assert_eq!(f.holes.len(), 1);
+        assert_eq!(m.face_area(id), 12.0);
+        assert_eq!(m.faces().count(), 2);
     }
 
     #[test]

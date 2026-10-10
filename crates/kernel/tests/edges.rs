@@ -130,3 +130,35 @@ fn segment_through_an_existing_vertex_splits_there() {
     assert_eq!(m.edges().count(), 3);
     assert_eq!(m.vertices().count(), 4);
 }
+
+#[test]
+fn add_polygon_is_one_change_set_with_a_face() {
+    let mut m = Model::new();
+    let pts = [
+        DVec3::ZERO,
+        DVec3::new(2.0, 0.0, 0.0),
+        DVec3::new(2.0, 1.0, 0.0),
+        DVec3::new(0.0, 1.0, 0.0),
+    ];
+    let c = m.add_polygon(&pts).unwrap();
+    m.validate().unwrap();
+    assert_eq!(c.summary().created.len(), 4 + 4 + 1);
+    assert_eq!(m.faces().count(), 1);
+    m.apply(&c.inverse());
+    assert_eq!(m, Model::new());
+}
+
+#[test]
+fn add_polygon_rejects_bad_points_without_changes() {
+    let mut m = Model::new();
+    let (a, b) = (DVec3::ZERO, DVec3::X);
+    assert_eq!(
+        m.add_polygon(&[a, b, b, DVec3::Y]),
+        Err(KernelError::ZeroLength)
+    );
+    assert_eq!(
+        m.add_polygon(&[a, b, DVec3::NAN]),
+        Err(KernelError::NotFinite)
+    );
+    assert_eq!(m, Model::new());
+}

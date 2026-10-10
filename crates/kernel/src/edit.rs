@@ -29,18 +29,31 @@ impl Model {
     /// Returns the changes as one ChangeSet. It is empty only when nothing changed; it can be
     /// non-empty without a new edge when an existing edge was only split.
     pub fn add_edge(&mut self, a: DVec3, b: DVec3) -> Result<ChangeSet, KernelError> {
-        if !a.is_finite() || !b.is_finite() {
-            return Err(KernelError::NotFinite);
-        }
-        if a.distance(b) < LENGTH_TOL {
-            return Err(KernelError::ZeroLength);
-        }
-        let new_edges = self.insert_segment(a, b);
-        self.create_faces(&new_edges);
+        check_segment(a, b)?;
+        self.draw_segment(a, b);
         Ok(self.take_changes())
     }
 
-    fn find_vertex(&self, p: DVec3) -> Option<VertexId> {
+    /// Adds the closed polygon through `points` (each point joined to the next, the last to the
+    /// first) as one ChangeSet, with the same rules as `add_edge`.
+    pub fn add_polygon(&mut self, points: &[DVec3]) -> Result<ChangeSet, KernelError> {
+        let n = points.len();
+        for i in 0..n {
+            check_segment(points[i], points[(i + 1) % n])?;
+        }
+        for i in 0..n {
+            self.draw_segment(points[i], points[(i + 1) % n]);
+        }
+        Ok(self.take_changes())
+    }
+
+    /// `add_edge` without input checks or ending the edit; the caller checked the segment.
+    pub(crate) fn draw_segment(&mut self, a: DVec3, b: DVec3) {
+        let new_edges = self.insert_segment(a, b);
+        self.create_faces(&new_edges);
+    }
+
+    pub(crate) fn find_vertex(&self, p: DVec3) -> Option<VertexId> {
         self.vertices()
             .find(|(_, v)| v.pos.distance(p) < LENGTH_TOL)
             .map(|(id, _)| id)
@@ -123,6 +136,16 @@ impl Model {
         }
         created
     }
+}
+
+fn check_segment(a: DVec3, b: DVec3) -> Result<(), KernelError> {
+    if !a.is_finite() || !b.is_finite() {
+        return Err(KernelError::NotFinite);
+    }
+    if a.distance(b) < LENGTH_TOL {
+        return Err(KernelError::ZeroLength);
+    }
+    Ok(())
 }
 
 fn loop_has_side(l: &[VertexId], a: VertexId, b: VertexId) -> bool {
