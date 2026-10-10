@@ -18,6 +18,7 @@ enum Event {
     Opened { conn: u64, out: Sender<String> },
     Line { conn: u64, line: String },
     Closed { conn: u64 },
+    Reply { conn: u64, line: String },
 }
 
 /// The sending side used by transports. Cheap to clone; usable from any thread.
@@ -43,6 +44,11 @@ impl Inbox {
 
     pub fn close(&self, conn: u64) {
         self.send(Event::Closed { conn });
+    }
+
+    /// Sends a ready-made line straight back to the connection (e.g. a transport-level error).
+    pub fn reply(&self, conn: u64, line: String) {
+        self.send(Event::Reply { conn, line });
     }
 
     fn send(&self, event: Event) {
@@ -95,8 +101,9 @@ impl Hub {
         self.notify(host);
     }
 
-    /// Waits for at least one event, then handles everything waiting. Returns false if every
-    /// inbox has been dropped (no more input can arrive).
+    /// Waits for at least one event, then handles everything waiting. The hub holds its own
+    /// inbox, so this returns true for as long as the hub exists; callers decide when to stop
+    /// (e.g. when `open_connections()` drops to zero).
     pub fn process_blocking(&mut self, host: &mut dyn Host) -> bool {
         match self.rx.recv() {
             Ok(event) => {
@@ -146,6 +153,11 @@ impl Hub {
             Event::Closed { conn } => {
                 self.outs.remove(&conn);
                 self.subscribers.remove(&conn);
+            }
+            Event::Reply { conn, line } => {
+                if let Some(out) = self.outs.get(&conn) {
+                    let _ = out.send(line);
+                }
             }
             Event::Line { conn, line } => {
                 let reply = match parse(&line) {

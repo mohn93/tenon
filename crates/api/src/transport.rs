@@ -2,11 +2,14 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::thread::{self, JoinHandle};
 
+use serde_json::Value;
+
 use crate::hub::Inbox;
+use crate::protocol::{MAX_LINE_BYTES, RpcError, codes, failure};
 
 /// Serves one connection: lines read from `reader` go to the hub, replies and notifications are
 /// written to `writer`. Returns the connection id and the writer thread, which finishes once the
@@ -30,11 +33,44 @@ where
         }
     });
     thread::spawn(move || {
-        for line in BufReader::new(reader).lines() {
-            match line {
-                Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => inbox.send_line(conn, line),
-                Err(_) => break,
+        let mut reader = BufReader::new(reader);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            let limit = MAX_LINE_BYTES as u64 + 1;
+            match (&mut reader).take(limit).read_until(b'\n', &mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            if buf.len() > MAX_LINE_BYTES && buf.last() != Some(&b'\n') {
+                inbox.reply(
+                    conn,
+                    failure(
+                        &Value::Null,
+                        RpcError::new(codes::INVALID_REQUEST, "request too large"),
+                    ),
+                );
+                // Skip the rest of the oversized line.
+                let mut sink = Vec::new();
+                loop {
+                    sink.clear();
+                    match (&mut reader).take(64 * 1024).read_until(b'\n', &mut sink) {
+                        Ok(0) | Err(_) => {
+                            inbox.close(conn);
+                            return;
+                        }
+                        Ok(_) if sink.last() == Some(&b'\n') => break,
+                        Ok(_) => {}
+                    }
+                }
+                continue;
+            }
+            // Invalid UTF-8 is replaced so the request fails to parse with a -32700 reply instead
+            // of ending the connection.
+            let line = String::from_utf8_lossy(&buf);
+            let line = line.trim_end_matches(['\n', '\r']);
+            if !line.trim().is_empty() {
+                inbox.send_line(conn, line.to_string());
             }
         }
         inbox.close(conn);
@@ -48,11 +84,17 @@ pub fn serve_stdio(inbox: Inbox) -> JoinHandle<()> {
     serve_stream(inbox, io::stdin(), io::stdout()).1
 }
 
-/// Listens on a Unix socket readable only by the current user. A stale socket file at `path` is
-/// replaced; any other existing file is an error.
+/// Listens on a Unix socket readable only by the current user. A stale socket file (nobody
+/// listening) at `path` is replaced; a live socket or any other existing file is an error.
 pub fn listen_unix(path: &Path, inbox: Inbox) -> io::Result<()> {
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if meta.file_type().is_socket() {
+            if UnixStream::connect(path).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!("another instance is listening on {}", path.display()),
+                ));
+            }
             std::fs::remove_file(path)?;
         } else {
             return Err(io::Error::new(

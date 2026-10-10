@@ -2,6 +2,10 @@
 
 use serde_json::{Value, json};
 
+/// Longest accepted request line in bytes; longer lines get an invalid-request reply and are
+/// skipped.
+pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
 /// Error codes: the JSON-RPC standard ones plus application errors in -32000..-32099.
 pub mod codes {
     pub const PARSE_ERROR: i64 = -32700;
