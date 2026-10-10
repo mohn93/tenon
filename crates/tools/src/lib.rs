@@ -2,5 +2,8 @@
 //! edit the model directly.
 
 pub mod inference;
+pub mod line;
+pub mod overlay;
 
 pub use inference::{Axis, Inference, SnapKind, infer};
+pub use line::{LineTool, ToolEvent, ToolOutput};
