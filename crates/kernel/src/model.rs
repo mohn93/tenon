@@ -266,6 +266,12 @@ impl Model {
         id
     }
 
+    pub(crate) fn remove_vertex(&mut self, id: VertexId) -> Vertex {
+        let v = self.vertices[&id].clone();
+        self.record(Op::RemoveVertex(id, v.clone()));
+        v
+    }
+
     pub(crate) fn move_vertex(&mut self, id: VertexId, to: DVec3) {
         let from = self.pos(id);
         self.record(Op::MoveVertex(id, from, to));

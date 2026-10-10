@@ -2,11 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 
 use crate::edit::KernelError;
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane};
-use crate::ids::{FaceId, VertexId};
+use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
+use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
 impl Model {
@@ -123,27 +123,31 @@ impl Model {
             .iter()
             .map(|l| l.iter().map(|v| self.pos(*v)).collect())
             .collect();
+        // Every loop side (a, b) of the face with its positions; each sweeps the rectangle
+        // a, b, b + offset, a + offset.
+        let sides: Vec<(VertexId, VertexId, DVec3, DVec3)> = loops
+            .iter()
+            .zip(&points)
+            .flat_map(|(l, ps)| {
+                (0..l.len()).map(move |i| {
+                    let j = (i + 1) % l.len();
+                    (l[i], l[j], ps[i], ps[j])
+                })
+            })
+            .collect();
         let before: BTreeSet<FaceId> = self.faces().map(|(f, _)| f).collect();
-        // Planes of the faces each loop side already bordered, so a cut can tell which of its
-        // sides open onto an existing face (a notch at a box edge).
-        let bordered: Vec<Plane> = self
-            .faces()
-            .filter(|(f, _)| *f != id)
-            .filter_map(|(_, g)| {
-                let vs = loop_vertices(g);
-                loops
-                    .iter()
-                    .any(|l| {
-                        (0..l.len())
-                            .any(|i| vs.contains(&l[i]) && vs.contains(&l[(i + 1) % l.len()]))
-                    })
-                    .then(|| {
-                        let o = self.pos(g.outer[0]);
-                        Plane {
-                            normal: g.normal,
-                            d: g.normal.dot(o),
-                        }
-                    })
+        let edges_before: BTreeSet<EdgeId> = self.edges().map(|(e, _)| e).collect();
+        // A cut opens a side only where a face that existed before covered the side's swept
+        // region (a notch at a box edge): the middle of the swept rectangle lies inside it.
+        let opens: Vec<bool> = sides
+            .iter()
+            .map(|&(_, _, pa, pb)| {
+                let mid = (pa + pb) * 0.5 + offset * 0.5;
+                Plane::from_points(pa, pb, pa + offset).is_some_and(|sp| {
+                    self.faces()
+                        .filter(|(f, _)| *f != id)
+                        .any(|(_, g)| self.face_covers(g, &sp, mid))
+                })
             })
             .collect();
 
@@ -189,42 +193,93 @@ impl Model {
                 self.orient(f, cap_normal);
                 continue;
             }
-            // A side face holds a loop side of the pushed face as consecutive outer vertices.
-            let side_of = loops.iter().find_map(|l| {
-                (0..l.len()).find_map(|i| {
-                    let (a, b) = (l[i], l[(i + 1) % l.len()]);
-                    has_side(&g.outer, a, b).then_some((a, b))
-                })
-            });
-            let Some((a, b)) = side_of else {
+            // A side face lies inside a side's swept rectangle. Other new faces in a side's
+            // plane (the rest of a wall split by the extrusion) keep their orientation.
+            let Some(inside) = self.interior_point(f) else {
                 continue;
             };
-            let (pa, pb) = (self.pos(a), self.pos(b));
-            if cut {
-                let opens = Plane::from_points(pa, pb, pa + offset)
-                    .is_some_and(|sp| bordered.iter().any(|q| q.same_as(&sp)));
-                if opens {
-                    // The cut reaches an existing face in this side's plane: leave it open.
-                    self.remove_face(f);
-                    let stray = self.edge_between(a, b).filter(|_| {
-                        !self.faces().any(|(_, h)| {
-                            std::iter::once(&h.outer)
-                                .chain(&h.holes)
-                                .any(|l| has_side(l, a, b))
-                        })
-                    });
-                    if let Some(e) = stray {
-                        self.remove_edge(e);
-                    }
-                    continue;
-                }
+            let side = sides
+                .iter()
+                .position(|&(_, _, pa, pb)| in_swept(inside, pa, pb, offset));
+            let Some(i) = side else {
+                continue;
+            };
+            if cut && opens[i] {
+                // The cut reaches an existing face in this side's plane: leave it open.
+                self.remove_face(f);
+                continue;
             }
+            let (_, _, pa, pb) = sides[i];
             let out = (pb - pa).cross(n).normalize();
             self.orient(f, if cut { -out } else { out });
+        }
+        if cut {
+            self.remove_strays(&edges_before, &sides);
         }
         if !in_solid {
             self.orient(id, if distance > 0.0 { -n } else { n });
         }
+    }
+
+    /// After a cut, removes the edges that border no face and were created by it or are loop
+    /// sides of the pushed face, then the pushed face's loop vertices no edge uses any more.
+    fn remove_strays(
+        &mut self,
+        edges_before: &BTreeSet<EdgeId>,
+        sides: &[(VertexId, VertexId, DVec3, DVec3)],
+    ) {
+        let mut bordered: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
+        for (_, f) in self.faces() {
+            for l in std::iter::once(&f.outer).chain(&f.holes) {
+                for i in 0..l.len() {
+                    bordered.insert(side(l[i], l[(i + 1) % l.len()]));
+                }
+            }
+        }
+        let loop_sides: BTreeSet<(VertexId, VertexId)> =
+            sides.iter().map(|&(a, b, _, _)| side(a, b)).collect();
+        let strays: Vec<EdgeId> = self
+            .edges()
+            .filter(|(e, edge)| {
+                let s = side(edge.v[0], edge.v[1]);
+                (!edges_before.contains(e) || loop_sides.contains(&s)) && !bordered.contains(&s)
+            })
+            .map(|(e, _)| e)
+            .collect();
+        for e in strays {
+            self.remove_edge(e);
+        }
+        let loop_verts: BTreeSet<VertexId> = sides.iter().map(|&(a, _, _, _)| a).collect();
+        for v in loop_verts {
+            if self.edges_at(v).is_empty() {
+                self.remove_vertex(v);
+            }
+        }
+    }
+
+    /// True if face `g` lies in plane `plane` and `p` is inside it (inside its outer loop and
+    /// outside its holes).
+    fn face_covers(&self, g: &Face, plane: &Plane, p: DVec3) -> bool {
+        let o = self.pos(g.outer[0]);
+        let own = Plane {
+            normal: g.normal,
+            d: g.normal.dot(o),
+        };
+        if !own.same_as(plane) {
+            return false;
+        }
+        let poly = |l: &Vec<VertexId>| -> Vec<DVec2> {
+            l.iter().map(|v| own.project(self.pos(*v))).collect()
+        };
+        let q = own.project(p);
+        point_in_polygon(q, &poly(&g.outer))
+            && !g.holes.iter().any(|h| point_in_polygon(q, &poly(h)))
+    }
+
+    /// A point strictly inside face `id`: the centroid of its first triangle.
+    fn interior_point(&self, id: FaceId) -> Option<DVec3> {
+        let [a, b, c] = *self.triangulate(id)?.first()?;
+        Some((a + b + c) / 3.0)
     }
 
     /// Fails with `Obstructed` if face `id`, moved `distance` along its normal, would meet another
@@ -316,12 +371,15 @@ fn loop_vertices(f: &Face) -> BTreeSet<VertexId> {
         .collect()
 }
 
-/// True if `a` and `b` are consecutive in loop `l`, in either order (wrapping).
-fn has_side(l: &[VertexId], a: VertexId, b: VertexId) -> bool {
-    (0..l.len()).any(|i| {
-        let (x, y) = (l[i], l[(i + 1) % l.len()]);
-        (x, y) == (a, b) || (x, y) == (b, a)
-    })
+/// True if `p` lies inside the rectangle a, b, b + offset, a + offset (in its plane, with
+/// tolerance). `offset` is perpendicular to b - a.
+fn in_swept(p: DVec3, a: DVec3, b: DVec3, offset: DVec3) -> bool {
+    let (ab, rel) = (b - a, p - a);
+    let u = rel.dot(ab) / ab.length_squared();
+    let w = rel.dot(offset) / offset.length_squared();
+    let off_plane = (rel - ab * u - offset * w).length();
+    let (eu, ew) = (LENGTH_TOL / ab.length(), LENGTH_TOL / offset.length());
+    off_plane < LENGTH_TOL && u > -eu && u < 1.0 + eu && w > -ew && w < 1.0 + ew
 }
 
 /// Distance along unit `dir` from `from` to triangle `t`, if the ray meets it.

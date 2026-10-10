@@ -442,3 +442,133 @@ fn loop_drawn_beside_a_flipped_base_faces_up() {
     let b = rect(&mut m, 5.0, 5.0, 6.0, 6.0, 0.0);
     assert_eq!(m.face(b).unwrap().normal, DVec3::Z);
 }
+
+/// The face in plane z = `z` whose vertices all lie in the box [x0, x1] x [y0, y1].
+fn face_in(m: &Model, z: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> FaceId {
+    let e = 1e-9;
+    let mut found = faces_where(m, |q| {
+        (q.z - z).abs() < e && q.x > x0 - e && q.x < x1 + e && q.y > y0 - e && q.y < y1 + e
+    });
+    assert_eq!(found.len(), 1, "one face in the region");
+    found.pop().unwrap()
+}
+
+/// Number of face loops that hold `a`-`b` as a side, among faces not in `skip`.
+fn side_uses(m: &Model, a: kernel::VertexId, b: kernel::VertexId, skip: &[FaceId]) -> usize {
+    m.faces()
+        .filter(|(id, _)| !skip.contains(id))
+        .map(|(_, f)| {
+            std::iter::once(&f.outer)
+                .chain(&f.holes)
+                .map(|l| {
+                    (0..l.len())
+                        .filter(|&i| {
+                            let s = (l[i], l[(i + 1) % l.len()]);
+                            s == (a, b) || s == (b, a)
+                        })
+                        .count()
+                })
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+/// The model is a closed surface: every edge borders exactly two faces outside `internal`
+/// (edges only internal faces border are skipped), and every vertex has an edge.
+fn assert_closed(m: &Model, internal: &[FaceId]) {
+    for (id, e) in m.edges() {
+        let [a, b] = e.v;
+        let uses = side_uses(m, a, b, internal);
+        let internal_only = uses == 0 && side_uses(m, a, b, &[]) > 0;
+        assert!(
+            uses == 2 || internal_only,
+            "edge {id:?} {:?}-{:?} borders {uses} faces",
+            m.position(a).unwrap(),
+            m.position(b).unwrap()
+        );
+    }
+    assert_no_isolated_vertices(m);
+}
+
+fn assert_no_isolated_vertices(m: &Model) {
+    for (v, vert) in m.vertices() {
+        assert!(
+            !m.edges_at(v).is_empty(),
+            "vertex {v:?} at {:?} has no edge",
+            vert.pos
+        );
+    }
+}
+
+/// Push/pulls `id` by `d`, checks the inverse restores the model exactly, then redoes it.
+fn push_pull_undoable(m: &mut Model, id: FaceId, d: f64) {
+    let before = m.clone();
+    let c = m.push_pull(id, d).unwrap();
+    let after = m.clone();
+    m.apply(&c.inverse());
+    assert_eq!(*m, before, "undo is exact");
+    m.apply(&c);
+    assert_eq!(*m, after, "redo is exact");
+}
+
+#[test]
+fn step_wall_between_boxes_of_different_heights_faces_out() {
+    let mut m = Model::new();
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    m.push_pull(a, 1.0).unwrap();
+    let b = rect(&mut m, 2.0, 0.0, 4.0, 2.0, 0.0);
+    assert_eq!(m.face(b).unwrap().normal, DVec3::Z);
+    push_pull_undoable(&mut m, b, 1.5);
+    m.validate().unwrap();
+    let on_wall = |q: DVec3| (q.x - 2.0).abs() < 1e-9;
+    let internal = faces_where(&m, |q| on_wall(q) && q.z < 1.0 + 1e-9);
+    assert_eq!(internal.len(), 1, "one internal wall piece");
+    let step = faces_where(&m, |q| on_wall(q) && q.z > 1.0 - 1e-9);
+    assert_eq!(step.len(), 1, "one step wall");
+    assert_eq!(
+        m.face(step[0]).unwrap().normal,
+        -DVec3::X,
+        "the step wall faces -X"
+    );
+    let solid: Vec<FaceId> = all_faces(&m)
+        .into_iter()
+        .filter(|f| !internal.contains(f))
+        .collect();
+    assert_outward(&m, &solid);
+}
+
+#[test]
+fn cut_beside_a_rising_wall_keeps_the_recess_closed() {
+    let (mut m, _) = box_4x4x2();
+    rect(&mut m, 0.0, 0.0, 4.0, 1.0, 2.0);
+    let strip = face_in(&m, 2.0, 0.0, 0.0, 4.0, 1.0);
+    m.push_pull(strip, 2.0).unwrap();
+    m.validate().unwrap();
+    rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    let sub = face_in(&m, 2.0, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, sub, -1.0);
+    m.validate().unwrap();
+    assert_outward(&m, &all_faces(&m));
+    assert_closed(&m, &[]);
+}
+
+#[test]
+fn corner_notch_and_full_width_step_leave_no_stray_edges() {
+    for (x1, y1) in [(1.0, 1.0), (4.0, 1.0)] {
+        let (mut m, _) = box_4x4x2();
+        rect(&mut m, 0.0, 0.0, x1, y1, 2.0);
+        let sub = face_in(&m, 2.0, 0.0, 0.0, x1, y1);
+        push_pull_undoable(&mut m, sub, -1.0);
+        m.validate().unwrap();
+        assert_outward(&m, &all_faces(&m));
+        for (id, e) in m.edges() {
+            assert!(
+                side_uses(&m, e.v[0], e.v[1], &[]) > 0,
+                "notch to ({x1}, {y1}): edge {id:?} {:?}-{:?} borders no face",
+                m.position(e.v[0]).unwrap(),
+                m.position(e.v[1]).unwrap()
+            );
+        }
+        assert_no_isolated_vertices(&m);
+    }
+}
