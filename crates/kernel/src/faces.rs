@@ -226,10 +226,17 @@ mod tests {
     }
 
     #[test]
-    fn flipped_face_keeps_its_id_and_orientation_when_its_plane_is_rebuilt() {
+    fn flipped_face_keeps_its_id_and_orientation_in_a_plane_with_both_orientations() {
         let mut m = Model::new();
+        // The first face in the plane is +Z, so oriented() picks +Z for the plane.
+        square(&mut m, 10.0, 0.0, 2.0);
         square(&mut m, 0.0, 0.0, 4.0);
-        let (id, f) = m.faces().map(|(id, f)| (id, f.clone())).next().unwrap();
+        let (id, f) = m
+            .faces()
+            .find(|(id, _)| m.face_area(*id) == 16.0)
+            .map(|(id, f)| (id, f.clone()))
+            .unwrap();
+        assert_eq!(f.normal, DVec3::Z);
         let mut outer = f.outer.clone();
         outer.reverse();
         let flipped = Face {
@@ -240,11 +247,12 @@ mod tests {
         m.replace_face(id, flipped);
         m.take_changes();
         square(&mut m, 1.0, 1.0, 2.0);
+        m.validate().unwrap();
         let f = m.face(id).unwrap();
         assert_eq!(f.normal, -DVec3::Z);
         assert_eq!(f.holes.len(), 1);
         assert_eq!(m.face_area(id), 12.0);
-        assert_eq!(m.faces().count(), 2);
+        assert_eq!(m.faces().count(), 3);
     }
 
     #[test]
