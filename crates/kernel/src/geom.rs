@@ -39,9 +39,12 @@ impl Plane {
     }
 
     pub fn same_as(&self, other: &Plane) -> bool {
-        self.normal.cross(other.normal).length() < ANGLE_TOL * 1e3
-            && self.normal.dot(other.normal) > 0.0
-            && (self.d - other.d).abs() < LENGTH_TOL
+        if self.normal.cross(other.normal).length() >= ANGLE_TOL * 1e3 {
+            return false;
+        }
+        let dot = self.normal.dot(other.normal);
+        (dot > 0.0 && (self.d - other.d).abs() < LENGTH_TOL)
+            || (dot < 0.0 && (self.d + other.d).abs() < LENGTH_TOL)
     }
 
     /// Orthonormal in-plane axes (u, v) with u x v = normal.
@@ -184,6 +187,22 @@ mod tests {
                 .is_none(),
             "beyond end"
         );
+    }
+
+    #[test]
+    fn same_as_ignores_normal_orientation() {
+        let p = Plane::from_points(DVec3::ZERO, DVec3::Z, DVec3::new(1.0, 1.0, 0.0)).unwrap();
+        let q = Plane {
+            normal: -p.normal,
+            d: -p.d,
+        };
+        assert!(p.same_as(&q));
+        assert!(q.same_as(&p));
+        let offset = Plane {
+            normal: p.normal,
+            d: p.d + 1.0,
+        };
+        assert!(!p.same_as(&offset));
     }
 
     #[test]
