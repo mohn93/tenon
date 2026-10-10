@@ -350,7 +350,9 @@ impl ApplicationHandler<ApiWake> for App {
                     } else {
                         s.editor.undo()
                     }
-                } else if command_key {
+                } else if command_key || s.modifiers.alt_key() {
+                    // Alt/Option is the orbit modifier; Option+letter must not type or switch
+                    // tools through its physical-key fallback.
                     false
                 } else {
                     editor_key(&event.logical_key, event.physical_key)
