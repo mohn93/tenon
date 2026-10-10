@@ -1,11 +1,13 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Draft for review
+Status: Approved; amended 2026-10-10 (agent control, M2.5)
 
 ## Goal
 
 A desktop 3D modeler in Rust with SketchUp-style direct modeling: draw edges, faces form automatically, push/pull faces, inference snapping, groups and components. macOS first; Windows and Linux supported through wgpu without dedicated work.
+
+The app is fully controllable by agents: every action a user can take is a serializable command available through a local API, the model can be queried as structured data, and the app can run headless (see section 5).
 
 ## Non-goals (v1)
 
@@ -31,18 +33,21 @@ A desktop 3D modeler in Rust with SketchUp-style direct modeling: draw edges, fa
 | Serialization | `serde` + JSON/`bincode`, zip container |
 | Interop | `gltf`, OBJ/STL (in-house or small crates) |
 | Native dialogs | `rfd` |
+| Agent API | JSON-RPC 2.0 (`serde_json`), local Unix socket or stdio |
 
 ## Workspace layout
 
 ```
 crates/
   kernel/   geometry only; no GPU/UI deps
+  session/  Document (model, selection, camera, undo), Command/Query types and executor; no GPU/UI deps
   tools/    tool state machines, inference engine, VCB parsing
   render/   wgpu renderer
-  app/      winit + egui shell, wiring, file IO
+  api/      JSON-RPC server exposing session commands and queries
+  app/      winit + egui shell, wiring, file IO, headless mode
 ```
 
-Dependency direction: `app -> {tools, render} -> kernel`. `tools` and `render` do not depend on each other.
+Dependency direction: `app -> {api, tools, render} -> session -> kernel`. `tools`, `render` and `api` do not depend on each other. The camera lives in `session` (it is pure math, and `tools` needs it for inference).
 
 ## 1. Kernel (`kernel`)
 
@@ -84,10 +89,10 @@ trait Tool {
     fn on_event(&mut self, ev: &ToolEvent, ctx: &ToolContext) -> ToolResponse;
 }
 // ToolEvent: pointer move/down/up (with InferenceResult), key, VCB text
-// ToolResponse: Preview(geometry) | Commit(Vec<Op>) | Cancel | Status(text)
+// ToolResponse: Preview(geometry) | Commit(Command) | Cancel | Status(text)
 ```
 
-Tools never mutate the mesh directly. A `Commit` is applied atomically as one undo step.
+Tools never mutate the mesh directly. A `Commit` carries a `session::Command`, executed through the same path as API commands and applied atomically as one undo step. A tool is an interactive way to build a command; the command is always reachable without the tool.
 
 ### Inference engine
 
@@ -136,16 +141,54 @@ Unit tests for buffer building and camera math; a small set of headless golden-i
 - Native format `.skr`: zip with versioned JSON/bincode of definitions, instance tree, materials; schema version field for migrations.
 - Export: OBJ, STL, glTF. Import: OBJ, STL.
 
+## 5. Agent control (`session`, `api`)
+
+Design rule for every milestone: the interface is one client of the command layer, and the API is another. No feature may exist only in the interface.
+
+### Commands
+
+- `session::Command` is a serde-serializable enum covering every state change: modeling (add edge, draw rectangle/circle, push/pull face by distance, move/copy/rotate entities, erase, make group/component), selection, camera (set, orbit, zoom extents, standard views), undo/redo, file (new, open, save, import, export).
+- Commands take explicit values (points, distances, entity IDs), never screen coordinates or cursor state.
+- `Document::execute(Command) -> Result<ChangeSet, CommandError>`. One command = one undo step. Errors are structured (kind + message + offending IDs), never panics.
+- Entity IDs are the kernel's stable slotmap keys, serialized as strings.
+
+### Queries
+
+Read-only, structured: list/get entities (vertices, edges, faces, groups, instances) with geometry, bounding-box and type filters, selection, camera, model stats, undo history. Agents do not need screenshots to know the model state.
+
+### API server (`api`)
+
+- JSON-RPC 2.0 over a Unix domain socket (default, socket file mode 0600, path printed at startup) or stdio (headless). No network listener.
+- Methods: `execute` (one command), `batch` (list of commands, optionally atomic as one undo step), `query`, `render_view` (camera + size -> PNG bytes, uses the headless renderer), `subscribe` (stream of ChangeSets), `describe` (command/query catalogue with JSON Schemas, schema version).
+- Efficiency: batching, compact responses (IDs and changed entities only unless requested), no polling needed thanks to `subscribe`.
+- Commands from the API and from the interface go through one queue on the main thread, so the open window reflects agent edits live.
+
+### Headless mode
+
+`app --headless [--stdio | --socket PATH] [FILE]` runs the session and API without a window; rendering for `render_view` is offscreen.
+
+### MCP
+
+A thin MCP adapter that forwards to the JSON-RPC API is optional and out of scope for v1 milestones.
+
+### Testing
+
+Every milestone adds, for each new feature, at least one test that drives it through `session::Command`/queries without the interface. M2.5 adds end-to-end tests that talk JSON-RPC to a headless instance.
+
 ## Milestones
 
-1. **M1**: workspace, window, empty viewport with orbit/pan/zoom, grid, axes.
-2. **M2**: kernel `add_edge` and auto-face creation; Line tool with endpoint and axis inference; undo/redo.
-3. **M3**: Rectangle, Push/Pull, VCB.
-4. **M4**: Select, Move, Erase; full inference set.
-5. **M5**: groups and components; save/load; export.
+Every milestone's acceptance includes: new capabilities are reachable as `session` commands/queries and covered by a command-driven test.
+
+- **M1**: workspace, window, empty viewport with orbit/pan/zoom, grid, axes.
+- **M2**: `session` crate (Document, Command/Query, executor; camera moved here); kernel `add_edge` and auto-face creation; Line tool with endpoint and axis inference; undo/redo.
+- **M2.5**: `api` crate: JSON-RPC server (socket + stdio), `execute`/`batch`/`query`/`render_view`/`subscribe`/`describe`; headless mode; end-to-end API tests.
+- **M3**: Rectangle, Push/Pull, VCB.
+- **M4**: Select, Move, Erase; full inference set.
+- **M5**: groups and components; save/load; export.
 
 ## Risks
 
 - **Sticky geometry robustness**: edge merging and face detection under floating-point error is the main risk. Mitigation: robust predicates, explicit tolerances, invariant checks in every test, fuzz tests on random edge sequences.
 - **Inference feel**: hard to specify; plan for iteration after M2 with manual testing.
 - **Line rendering quality**: custom wide lines need care at grazing angles; acceptable fallback is thinner lines.
+- **Interface-only features creeping in**: mitigated by the per-milestone acceptance rule and command-driven tests.
