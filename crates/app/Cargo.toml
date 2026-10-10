@@ -7,8 +7,12 @@ edition.workspace = true
 render = { path = "../render" }
 session = { path = "../session" }
 tools = { path = "../tools" }
+api = { path = "../api" }
 glam.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 pollster.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

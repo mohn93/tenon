@@ -1,16 +1,23 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use api::{Hub, listen_unix};
 use glam::DVec2;
-use render::Renderer;
+use render::{Renderer, Snapshotter};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::editor::Editor;
+use crate::host::WindowHost;
 use crate::navigation::Button;
+
+/// Sent to the event loop when an agent API request arrives.
+#[derive(Debug)]
+pub struct ApiWake;
 
 /// Trackpad pixel deltas per zoom step.
 const PIXELS_PER_SCROLL_STEP: f64 = 50.0;
@@ -22,6 +29,7 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
+    snapshotter: Snapshotter,
     editor: Editor,
     /// Document revision the renderer's model buffers were built from.
     drawn_revision: Option<u64>,
@@ -63,6 +71,7 @@ impl State {
         surface.configure(&device, &config);
 
         let renderer = Renderer::new(&device, &queue, config.format);
+        let snapshotter = Snapshotter::with_device(&device, &queue);
         let editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
             window.scale_factor(),
@@ -74,6 +83,7 @@ impl State {
             queue,
             config,
             renderer,
+            snapshotter,
             editor,
             drawn_revision: None,
             modifiers: ModifiersState::empty(),
@@ -104,19 +114,48 @@ impl State {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let revision = self.editor.doc.revision();
+        let revision = self.editor.doc().revision();
         if self.drawn_revision != Some(revision) {
-            self.renderer.set_model(self.editor.doc.model());
+            self.renderer.set_model(self.editor.doc().model());
             self.drawn_revision = Some(revision);
         }
         self.renderer.render(
             &view,
             (self.config.width, self.config.height),
-            &self.editor.doc.camera,
+            &self.editor.doc().camera,
             &self.editor.overlay(),
         );
         self.window.pre_present_notify();
         self.queue.present(frame);
+    }
+
+    /// Handles waiting API requests; redraws if they changed the model or camera.
+    fn process_api(&mut self, hub: &mut Hub) {
+        let before = (
+            self.editor.doc().revision(),
+            self.editor.doc().camera.clone(),
+        );
+        let mut host = WindowHost {
+            editor: &mut self.editor,
+            snapshotter: &mut self.snapshotter,
+        };
+        hub.process(&mut host);
+        if (
+            self.editor.doc().revision(),
+            self.editor.doc().camera.clone(),
+        ) != before
+        {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Tells API subscribers about edits made in the window.
+    fn notify_api(&mut self, hub: &mut Hub) {
+        let host = WindowHost {
+            editor: &mut self.editor,
+            snapshotter: &mut self.snapshotter,
+        };
+        hub.notify(&host);
     }
 }
 
@@ -128,12 +167,48 @@ fn map_button(button: MouseButton) -> Button {
     }
 }
 
-#[derive(Default)]
 pub struct App {
     state: Option<State>,
+    hub: Hub,
+    /// Socket the agent API listens on, removed on exit (None if listening failed).
+    socket: Option<PathBuf>,
 }
 
-impl ApplicationHandler for App {
+impl App {
+    /// `socket` is where the agent API listens; None runs without it.
+    pub fn new(event_loop: &EventLoop<ApiWake>, socket: Option<PathBuf>) -> Self {
+        let proxy = event_loop.create_proxy();
+        let hub = Hub::new(move || {
+            let _ = proxy.send_event(ApiWake);
+        });
+        let socket = socket.and_then(|socket| match listen_unix(&socket, hub.inbox()) {
+            Ok(()) => {
+                eprintln!("agent API listening on {}", socket.display());
+                Some(socket)
+            }
+            Err(e) => {
+                eprintln!(
+                    "agent API disabled: cannot listen on {}: {e}",
+                    socket.display()
+                );
+                None
+            }
+        });
+        Self {
+            state: None,
+            hub,
+            socket,
+        }
+    }
+}
+
+impl ApplicationHandler<ApiWake> for App {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ApiWake) {
+        if let Some(s) = self.state.as_mut() {
+            s.process_api(&mut self.hub);
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -142,8 +217,10 @@ impl ApplicationHandler for App {
             .with_title("sketchup-alt")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        let state = State::new(window);
+        let mut state = State::new(window);
         state.window.request_redraw();
+        // Requests that arrived before the window existed.
+        state.process_api(&mut self.hub);
         self.state = Some(state);
     }
 
@@ -151,6 +228,9 @@ impl ApplicationHandler for App {
         let Some(s) = self.state.as_mut() else { return };
         let changed = match event {
             WindowEvent::CloseRequested => {
+                if let Some(path) = self.socket.take() {
+                    let _ = std::fs::remove_file(path);
+                }
                 event_loop.exit();
                 false
             }
@@ -191,8 +271,12 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
-                let is_z = matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("z"))
-                    || event.physical_key == PhysicalKey::Code(KeyCode::KeyZ);
+                // Use the physical Z key only when the layout's character is not ASCII (e.g.
+                // Arabic or Cyrillic), so Cmd+W on AZERTY does not undo.
+                let is_z = match &event.logical_key {
+                    Key::Character(c) if c.is_ascii() => c.eq_ignore_ascii_case("z"),
+                    _ => event.physical_key == PhysicalKey::Code(KeyCode::KeyZ),
+                };
                 if event.logical_key == Key::Named(NamedKey::Escape) {
                     s.editor.cancel()
                 } else if command_key && is_z {
@@ -209,6 +293,7 @@ impl ApplicationHandler for App {
         };
         if changed {
             s.window.request_redraw();
+            s.notify_api(&mut self.hub);
         }
     }
 }

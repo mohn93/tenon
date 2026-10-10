@@ -154,10 +154,12 @@ dependencies = [
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "api",
  "env_logger",
  "glam",
  "pollster",
  "render",
+ "serde_json",
  "session",
  "tools",
  "wgpu",
