@@ -152,3 +152,18 @@ fn not_found_error_serializes_requested_ids_and_other_errors_omit_them() {
     let back: session::CommandError = serde_json::from_value(v).unwrap();
     assert!(back.ids.is_empty());
 }
+
+#[test]
+fn revision_counts_model_changes_only() {
+    let mut d = doc();
+    assert_eq!(d.revision(), 0);
+    edge(&mut d, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    assert_eq!(d.revision(), 1);
+    edge(&mut d, [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    assert_eq!(d.revision(), 1, "a no-op edit does not change the model");
+    run(&mut d, json!({"type": "set_camera", "eye": [10.0, 0.0, 5.0], "target": [0.0, 0.0, 0.0], "fov_y_deg": null})).unwrap();
+    assert_eq!(d.revision(), 1, "camera moves do not change the model");
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(d.revision(), 3);
+}

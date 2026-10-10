@@ -11,6 +11,7 @@ pub struct Document {
     pub camera: Camera,
     undo: Vec<ChangeSet>,
     redo: Vec<ChangeSet>,
+    revision: u64,
 }
 
 impl Document {
@@ -20,11 +21,18 @@ impl Document {
             camera: Camera::new(viewport),
             undo: Vec::new(),
             redo: Vec::new(),
+            revision: 0,
         }
     }
 
     pub fn model(&self) -> &Model {
         &self.model
+    }
+
+    /// Increases every time the model changes (edits, undo, redo). Clients compare it to decide
+    /// whether to rebuild anything derived from the model.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
@@ -43,6 +51,7 @@ impl Document {
                 })?;
                 let inverse = changes.inverse();
                 self.model.apply(&inverse);
+                self.revision += 1;
                 self.redo.push(changes);
                 Ok(Outcome {
                     changes: inverse.summary(),
@@ -53,6 +62,7 @@ impl Document {
                     CommandError::new(ErrorKind::NothingToRedo, "nothing to redo")
                 })?;
                 self.model.apply(&changes);
+                self.revision += 1;
                 let summary = changes.summary();
                 self.undo.push(changes);
                 Ok(Outcome { changes: summary })
@@ -95,6 +105,7 @@ impl Document {
         if !changes.is_empty() {
             self.undo.push(changes);
             self.redo.clear();
+            self.revision += 1;
         }
         Outcome { changes: summary }
     }
