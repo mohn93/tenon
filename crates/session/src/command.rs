@@ -69,3 +69,13 @@ impl fmt::Display for CommandError {
 }
 
 impl std::error::Error for CommandError {}
+
+/// A batch stopped at command `index`. `completed` holds the outcomes of the commands before it;
+/// for an atomic batch they were rolled back and nothing changed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BatchError {
+    pub index: usize,
+    pub error: CommandError,
+    pub completed: Vec<Outcome>,
+    pub rolled_back: bool,
+}

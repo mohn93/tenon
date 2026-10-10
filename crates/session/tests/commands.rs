@@ -46,7 +46,7 @@ fn square_via_commands_makes_a_queryable_face() {
     let stats = ask(&d, json!({"type": "stats"}));
     assert_eq!(
         stats,
-        json!({"type": "stats", "vertices": 4, "edges": 4, "faces": 1})
+        json!({"type": "stats", "vertices": 4, "edges": 4, "faces": 1, "revision": 4})
     );
     let all = ask(&d, json!({"type": "entities"}));
     let face = &all["faces"][0];
@@ -64,7 +64,7 @@ fn undo_and_redo_walk_history() {
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 0);
     assert_eq!(
         ask(&d, json!({"type": "history"})),
-        json!({"type": "history", "undo_depth": 3, "redo_depth": 1})
+        json!({"type": "history", "undo_depth": 3, "redo_depth": 1, "revision": 5})
     );
     run(&mut d, json!({"type": "redo"})).unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 1);

@@ -6,6 +6,6 @@ mod document;
 mod query;
 
 pub use camera::{Camera, Ray};
-pub use command::{Command, CommandError, ErrorKind, Outcome};
-pub use document::Document;
-pub use query::{EdgeInfo, FaceInfo, Query, QueryResult, VertexInfo};
+pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome};
+pub use document::{Document, MAX_COORDINATE};
+pub use query::{ChangeEvent, EdgeInfo, FaceInfo, Query, QueryResult, VertexInfo};

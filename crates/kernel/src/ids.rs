@@ -44,8 +44,15 @@ impl FromStr for EntityId {
         let kind = chars
             .next()
             .ok_or_else(|| format!("invalid entity id {s:?}"))?;
-        let n: u64 = chars
-            .as_str()
+        // Canonical decimal only: digits, no sign, no leading zeros ("v0" is fine, "v007" is not).
+        let digits = chars.as_str();
+        let canonical = !digits.is_empty()
+            && digits.bytes().all(|b| b.is_ascii_digit())
+            && (digits == "0" || !digits.starts_with('0'));
+        if !canonical {
+            return Err(format!("invalid entity id {s:?}"));
+        }
+        let n: u64 = digits
             .parse()
             .map_err(|_| format!("invalid entity id {s:?}"))?;
         match kind {
@@ -89,7 +96,18 @@ mod tests {
 
     #[test]
     fn malformed_entity_ids_are_rejected() {
-        for s in ["", "x1", "v", "v-1", "e1.5", "é1"] {
+        for s in [
+            "",
+            "x1",
+            "v",
+            "v-1",
+            "e1.5",
+            "é1",
+            "v+5",
+            "v007",
+            "f 3",
+            "e99999999999999999999",
+        ] {
             assert!(s.parse::<EntityId>().is_err(), "{s:?} parsed");
         }
     }

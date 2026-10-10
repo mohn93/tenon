@@ -1,4 +1,4 @@
-use kernel::EntityId;
+use kernel::{ChangeSummary, EntityId};
 use serde::{Deserialize, Serialize};
 
 /// Read-only questions about the document.
@@ -14,6 +14,10 @@ pub enum Query {
     Camera,
     Stats,
     History,
+    /// Model changes after `since` (a revision number), oldest first.
+    Events {
+        since: u64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -59,9 +63,25 @@ pub enum QueryResult {
         vertices: usize,
         edges: usize,
         faces: usize,
+        revision: u64,
     },
     History {
         undo_depth: usize,
         redo_depth: usize,
+        revision: u64,
     },
+    /// `truncated` is true when changes after `since` were dropped from the log; the client
+    /// should re-read the model (e.g. with `entities`) instead of applying `events`.
+    Events {
+        revision: u64,
+        events: Vec<ChangeEvent>,
+        truncated: bool,
+    },
+}
+
+/// One model change: the revision it produced and what it changed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChangeEvent {
+    pub revision: u64,
+    pub changes: ChangeSummary,
 }
