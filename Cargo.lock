@@ -139,6 +139,7 @@ dependencies = [
  "pollster",
  "render",
  "session",
+ "tools",
  "wgpu",
  "winit",
 ]

@@ -1,4 +1,5 @@
 mod app;
+mod editor;
 mod navigation;
 
 use winit::event_loop::{ControlFlow, EventLoop};

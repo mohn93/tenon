@@ -2,17 +2,20 @@ use std::sync::Arc;
 
 use glam::DVec2;
 use render::Renderer;
-use session::Camera;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-use crate::navigation::{Button, Navigation};
+use crate::editor::Editor;
+use crate::navigation::Button;
 
 /// Trackpad pixel deltas per zoom step.
 const PIXELS_PER_SCROLL_STEP: f64 = 50.0;
+/// Snap radius in logical pixels (scaled to physical pixels by the window's scale factor).
+const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
 
 struct State {
     window: Arc<Window>,
@@ -21,8 +24,10 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
-    camera: Camera,
-    nav: Navigation,
+    editor: Editor,
+    /// Document revision the renderer's model buffers were built from.
+    drawn_revision: Option<u64>,
+    modifiers: ModifiersState,
 }
 
 impl State {
@@ -60,7 +65,10 @@ impl State {
         surface.configure(&device, &config);
 
         let renderer = Renderer::new(&device, &queue, config.format);
-        let camera = Camera::new(DVec2::new(config.width as f64, config.height as f64));
+        let editor = Editor::new(
+            DVec2::new(config.width as f64, config.height as f64),
+            PICK_RADIUS_LOGICAL_PX * window.scale_factor(),
+        );
         Self {
             window,
             surface,
@@ -68,8 +76,9 @@ impl State {
             queue,
             config,
             renderer,
-            camera,
-            nav: Navigation::default(),
+            editor,
+            drawn_revision: None,
+            modifiers: ModifiersState::empty(),
         }
     }
 
@@ -80,7 +89,7 @@ impl State {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        self.camera.viewport = DVec2::new(width as f64, height as f64);
+        self.editor.resize(DVec2::new(width as f64, height as f64));
     }
 
     fn render(&mut self) {
@@ -97,11 +106,16 @@ impl State {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let revision = self.editor.doc.revision();
+        if self.drawn_revision != Some(revision) {
+            self.renderer.set_model(self.editor.doc.model());
+            self.drawn_revision = Some(revision);
+        }
         self.renderer.render(
             &view,
             (self.config.width, self.config.height),
-            &self.camera,
-            &[],
+            &self.editor.doc.camera,
+            &self.editor.overlay(),
         );
         self.window.pre_present_notify();
         self.queue.present(frame);
@@ -146,36 +160,51 @@ impl ApplicationHandler for App {
                 s.resize(size.width, size.height);
                 true
             }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                s.editor
+                    .set_pick_radius(PICK_RADIUS_LOGICAL_PX * scale_factor);
+                false
+            }
             WindowEvent::RedrawRequested => {
                 s.render();
                 false
             }
             WindowEvent::ModifiersChanged(m) => {
-                s.nav
+                s.modifiers = m.state();
+                s.editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
                 false
             }
             WindowEvent::Focused(false) => {
-                s.nav.reset();
+                s.editor.focus_lost();
                 false
             }
-            WindowEvent::CursorMoved { position, .. } => s
-                .nav
-                .cursor_moved(&mut s.camera, DVec2::new(position.x, position.y)),
-            WindowEvent::MouseInput { state, button, .. } => {
-                s.nav.button(
-                    &s.camera,
-                    map_button(button),
-                    state == ElementState::Pressed,
-                );
-                false
+            WindowEvent::CursorMoved { position, .. } => {
+                s.editor.cursor_moved(DVec2::new(position.x, position.y))
             }
+            WindowEvent::MouseInput { state, button, .. } => s
+                .editor
+                .button(map_button(button), state == ElementState::Pressed),
             WindowEvent::MouseWheel { delta, .. } => {
                 let steps = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
                     MouseScrollDelta::PixelDelta(p) => p.y / PIXELS_PER_SCROLL_STEP,
                 };
-                s.nav.scroll(&mut s.camera, steps)
+                s.editor.scroll(steps)
+            }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                let command_key = s.modifiers.super_key() || s.modifiers.control_key();
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => s.editor.cancel(),
+                    Key::Character(c) if command_key && c.eq_ignore_ascii_case("z") => {
+                        if s.modifiers.shift_key() {
+                            s.editor.redo()
+                        } else {
+                            s.editor.undo()
+                        }
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         };

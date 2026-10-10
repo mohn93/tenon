@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 render = { path = "../render" }
 session = { path = "../session" }
+tools = { path = "../tools" }
 glam.workspace = true
 wgpu.workspace = true
 winit.workspace = true

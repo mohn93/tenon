@@ -38,19 +38,22 @@ impl Navigation {
         self.alt = false;
     }
 
-    pub fn button(&mut self, cam: &Camera, button: Button, pressed: bool) {
+    /// Handles a button press or release. Returns true if navigation used the event, so it
+    /// must not also go to the active tool.
+    pub fn button(&mut self, cam: &Camera, button: Button, pressed: bool) -> bool {
         if !pressed {
             if self
                 .drag
                 .is_some_and(|(started_by, _)| started_by == button)
             {
                 self.drag = None;
+                return true;
             }
-            return;
+            return false;
         }
         let navigates = button == Button::Middle || (button == Button::Left && self.alt);
         if !navigates {
-            return;
+            return false;
         }
         let point = cam.anchor_at(self.cursor);
         let drag = if self.shift {
@@ -59,6 +62,7 @@ impl Navigation {
             Drag::Orbit { pivot: point }
         };
         self.drag = Some((button, drag));
+        true
     }
 
     pub fn cursor_moved(&mut self, cam: &mut Camera, pos: DVec2) -> bool {
@@ -91,6 +95,20 @@ mod tests {
         let mut cam = Camera::new(DVec2::new(800.0, 600.0));
         nav.cursor_moved(&mut cam, DVec2::new(400.0, 300.0));
         (nav, cam)
+    }
+
+    #[test]
+    fn button_reports_whether_navigation_used_it() {
+        let (mut nav, cam) = setup();
+        assert!(
+            !nav.button(&cam, Button::Left, true),
+            "plain left belongs to tools"
+        );
+        assert!(!nav.button(&cam, Button::Left, false));
+        assert!(nav.button(&cam, Button::Middle, true));
+        assert!(nav.button(&cam, Button::Middle, false));
+        nav.set_modifiers(false, true);
+        assert!(nav.button(&cam, Button::Left, true), "alt+left orbits");
     }
 
     #[test]
