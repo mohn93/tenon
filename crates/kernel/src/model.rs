@@ -305,6 +305,16 @@ impl Model {
             if (f.normal.length() - 1.0).abs() > 1e-9 {
                 return Err(format!("face {id:?} normal is not unit length"));
             }
+            if f.outer.is_empty() {
+                return Err(format!("face {id:?} has an empty outer loop"));
+            }
+            if f.outer
+                .iter()
+                .chain(f.holes.iter().flatten())
+                .any(|v| !self.vertices.contains_key(v))
+            {
+                return Err(format!("face {id:?} references a missing vertex"));
+            }
             let origin = self.pos(f.outer[0]);
             for (k, lp) in std::iter::once(&f.outer).chain(&f.holes).enumerate() {
                 if lp.len() < 3 {
@@ -386,6 +396,69 @@ mod tests {
         m.apply(&c.inverse());
         let b = m.insert_vertex(DVec3::X);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn validate_checks_face_invariants() {
+        // Unit right triangle on the ground with its three sides as edges.
+        let base = || {
+            let mut m = Model::new();
+            let a = m.insert_vertex(DVec3::ZERO);
+            let b = m.insert_vertex(DVec3::X);
+            let c = m.insert_vertex(DVec3::Y);
+            m.insert_edge(a, b);
+            m.insert_edge(b, c);
+            m.insert_edge(c, a);
+            (m, a, b, c)
+        };
+
+        let (mut m, a, b, c) = base();
+        m.insert_face(Face {
+            outer: vec![a, b, c],
+            holes: vec![],
+            normal: DVec3::Z,
+        });
+        assert!(m.validate().is_ok());
+
+        let bad_faces: Vec<(&str, Face)> = vec![
+            (
+                "empty outer loop",
+                Face {
+                    outer: vec![],
+                    holes: vec![],
+                    normal: DVec3::Z,
+                },
+            ),
+            (
+                "missing vertex",
+                Face {
+                    outer: vec![a, b, VertexId(999)],
+                    holes: vec![],
+                    normal: DVec3::Z,
+                },
+            ),
+            (
+                "wrong winding",
+                Face {
+                    outer: vec![a, c, b],
+                    holes: vec![],
+                    normal: DVec3::Z,
+                },
+            ),
+            (
+                "non-unit normal",
+                Face {
+                    outer: vec![a, b, c],
+                    holes: vec![],
+                    normal: DVec3::new(0.0, 0.0, 2.0),
+                },
+            ),
+        ];
+        for (what, face) in bad_faces {
+            let (mut m, _, _, _) = base();
+            m.insert_face(face);
+            assert!(m.validate().is_err(), "{what} was accepted");
+        }
     }
 
     #[test]
