@@ -232,8 +232,12 @@ impl Editor {
         self.hit.take().is_some()
     }
 
-    /// The copy modifier (Ctrl) was tapped.
+    /// The copy modifier (Ctrl) was tapped. Only the Move tool copies; elsewhere it does
+    /// nothing and returns false.
     pub fn toggle_copy(&mut self) -> bool {
+        if self.kind != ToolKind::Move {
+            return false;
+        }
         self.send(ToolEvent::ToggleCopy);
         true
     }
@@ -269,14 +273,16 @@ impl Editor {
         zoomed
     }
 
-    /// Typing goes to the measurements box once it starts with a digit, "." or "-"; other
-    /// letters are tool shortcuts. Enter submits the typed text to the tool. Escape clears the
+    /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
+    /// (or "x" in the Move tool, for arrays like "x5"); other letters are tool shortcuts. Enter submits the typed text to the tool. Escape clears the
     /// typed text, or else cancels the tool's operation. Delete, and Backspace with nothing
     /// typed, erase the selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
-                if c.is_ascii_digit() || c == '.' || c == '-' {
+                let starts_value = c.is_ascii_digit() || matches!(c, '.' | '-' | '/' | '*');
+                let starts_array = matches!(c, 'x' | 'X') && self.kind == ToolKind::Move;
+                if starts_value || starts_array {
                     self.typed.push(c);
                     true
                 } else if let Some(kind) = ToolKind::from_shortcut(c) {
@@ -435,35 +441,48 @@ impl Editor {
     }
 
     /// Runs the tool's commands in order; a copy selects what it created, as in SketchUp.
-    /// The first command that fails stops the rest. If it fails after an undo from the same
-    /// list (an array replacing a copy), the undo is redone, and the tool drops its state.
+    /// The first command that fails stops the rest, and so does a copy that changes nothing
+    /// (it lands on existing geometry and leaves no undo step for an array to replace). If it
+    /// fails after an undo from the same list (an array replacing a copy), the undo is redone
+    /// and the copy reselected; either way the tool drops its state.
     fn apply(&mut self, out: ToolOutput) {
         let mut undone = false;
         for command in out.commands {
             let is_undo = matches!(command, Command::Undo);
             let is_copy = matches!(command, Command::Copy { .. });
-            let Some(outcome) = self.run(command) else {
-                if undone {
-                    let _ = self.doc.execute(Command::Redo);
+            let revision = self.doc.revision();
+            let outcome = self.run(command);
+            let unchanged = is_copy && outcome.is_some() && self.doc.revision() == revision;
+            if unchanged {
+                self.message = Some("Nothing new to copy".into());
+            }
+            let Some(outcome) = outcome.filter(|_| !unchanged) else {
+                if undone && let Ok(redone) = self.doc.execute(Command::Redo) {
+                    self.select_created(redone);
                 }
                 self.reset_tool();
                 return;
             };
             undone |= is_undo;
             if is_copy {
-                let ids = outcome
-                    .changes
-                    .created
-                    .into_iter()
-                    .filter(|id| !matches!(id, EntityId::Vertex(_)))
-                    .collect();
-                self.run(Command::Select {
-                    ids,
-                    mode: SelectMode::Replace,
-                });
+                self.select_created(outcome);
             }
         }
         self.preview = out.preview;
+    }
+
+    /// Selects the edges and faces a command created.
+    fn select_created(&mut self, outcome: Outcome) {
+        let ids = outcome
+            .changes
+            .created
+            .into_iter()
+            .filter(|id| !matches!(id, EntityId::Vertex(_)))
+            .collect();
+        self.run(Command::Select {
+            ids,
+            mode: SelectMode::Replace,
+        });
     }
 
     /// Drops the tool's operation in progress so it can't refer to geometry that changed.
@@ -983,11 +1002,86 @@ mod tests {
         type_text(&mut e, "30x");
         assert_eq!(stats(&e), (8, 2), "the copy is restored");
         assert!(!e.status_parts().message.unwrap_or_default().is_empty());
+        assert_eq!(
+            e.doc().selection().len(),
+            5,
+            "the restored copy is selected"
+        );
+        let model = e.doc().model();
+        assert!(e.doc().selection().iter().all(|id| {
+            match *id {
+                EntityId::Edge(edge) => model
+                    .edge(edge)
+                    .unwrap()
+                    .v
+                    .iter()
+                    .all(|v| model.position(*v).unwrap().x > 3.5),
+                EntityId::Face(f) => model.face(f).unwrap().outer.len() == 4,
+                EntityId::Vertex(_) => false,
+            }
+        }));
         // Typing another array must not undo anything.
         type_text(&mut e, "3x");
         assert_eq!(stats(&e), (8, 2));
         e.undo();
         assert_eq!(stats(&e), (4, 1), "the copy is still one undo step");
+    }
+
+    #[test]
+    fn a_copy_that_changes_nothing_does_not_arm_an_array() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 1.0, 0.0));
+        let selected = e.doc().selection().clone();
+        assert_eq!(selected.len(), 1, "the bottom edge");
+        e.key(EditorKey::Char('m'));
+        e.toggle_copy();
+        // Copy the bottom edge onto the top edge, which is already there.
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        click_at(&mut e, DVec3::new(1.0, 3.0, 0.0));
+        assert_eq!(stats(&e), (4, 1));
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Nothing new to copy")
+        );
+        type_text(&mut e, "3x");
+        assert_eq!(stats(&e), (4, 1), "the last edge drawn was not undone");
+        assert_eq!(e.doc().selection(), &selected);
+        e.undo();
+        assert_eq!(stats(&e), (3, 0), "the square's last edge is the last step");
+    }
+
+    #[test]
+    fn typed_arrays_can_start_with_a_symbol_or_x() {
+        for (distance, array) in [("6", "/3"), ("2", "*3"), ("2", "x3")] {
+            let mut e = editor();
+            start_copy(&mut e);
+            type_text(&mut e, distance);
+            assert_eq!(stats(&e).1, 2, "{array}");
+            type_text(&mut e, array);
+            assert_eq!(stats(&e), (13, 4), "{array}: four squares in a row");
+        }
+    }
+
+    #[test]
+    fn x_starts_typing_only_in_the_move_tool() {
+        let mut e = editor();
+        assert!(!e.key(EditorKey::Char('x')));
+        assert!(!e.status().contains("x_"), "{}", e.status());
+        e.key(EditorKey::Char('m'));
+        assert!(e.key(EditorKey::Char('x')));
+        assert!(e.status().contains("x_"), "{}", e.status());
+    }
+
+    #[test]
+    fn ctrl_outside_the_move_tool_keeps_the_message() {
+        let mut e = editor();
+        type_text(&mut e, "2");
+        let message = e.status_parts().message;
+        assert!(message.is_some(), "the line tool needs a start point");
+        assert!(!e.toggle_copy());
+        assert_eq!(e.status_parts().message, message);
     }
 
     #[test]
