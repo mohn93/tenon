@@ -331,3 +331,74 @@ fn a_copied_opening_stays_open_when_a_parent_edge_splits_it() {
         assert!(m.faces().all(|(_, f)| f.holes.len() == 1));
     }
 }
+
+/// The face ids of the model that the closure picks by the position of their first vertex.
+fn faces_at(m: &Model, f: impl Fn(DVec3) -> bool) -> Vec<FaceId> {
+    m.faces()
+        .filter(|(_, face)| f(m.position(face.outer[0]).unwrap()))
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// A 4 m square with a 2 m opening and a 1 m island face inside the opening.
+fn island_in_opening() -> Model {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 4.0);
+    let hole = square(&mut m, 1.0, 1.0, 2.0);
+    m.erase(&[], &[hole]);
+    square(&mut m, 1.5, 1.5, 1.0);
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 2);
+    m
+}
+
+#[test]
+fn an_island_inside_a_copied_opening_is_copied() {
+    let mut m = island_in_opening();
+    let normal = face_normal_of_first(&m);
+    let faces: Vec<_> = m.faces().map(|(id, _)| id).collect();
+    m.copy(&[], &faces, p(10.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 4);
+    assert!(m.faces().all(|(_, f)| f.normal == normal));
+    let copies = faces_at(&m, |q| q.x > 5.0);
+    assert_eq!(copies.len(), 2);
+    let holes: Vec<usize> = copies
+        .iter()
+        .map(|id| m.face(*id).unwrap().holes.len())
+        .collect();
+    assert!(holes.contains(&1) && holes.contains(&0), "{holes:?}");
+}
+
+#[test]
+fn a_washer_inside_a_copied_washer_is_copied() {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 10.0);
+    let a = square(&mut m, 2.0, 2.0, 6.0);
+    m.erase(&[], &[a]);
+    square(&mut m, 3.0, 3.0, 4.0);
+    let b = square(&mut m, 4.0, 4.0, 2.0);
+    m.erase(&[], &[b]);
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 2);
+    let faces: Vec<_> = m.faces().map(|(id, _)| id).collect();
+    m.copy(&[], &faces, p(20.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 4);
+    assert!(m.faces().all(|(_, f)| f.holes.len() == 1));
+    let copies = faces_at(&m, |q| q.x > 15.0);
+    assert_eq!(copies.len(), 2);
+}
+
+#[test]
+fn an_island_split_by_a_parent_edge_is_copied() {
+    let mut m = island_in_opening();
+    let normal = face_normal_of_first(&m);
+    m.add_edge(p(12.0, 1.5, 0.0), p(12.0, 2.5, 0.0)).unwrap();
+    let faces: Vec<_> = m.faces().map(|(id, _)| id).collect();
+    m.copy(&[], &faces, p(10.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    // The island copy is split in two; the opening around it stays open.
+    assert_eq!(m.faces().count(), 5);
+    assert!(m.faces().all(|(_, f)| f.normal == normal));
+}

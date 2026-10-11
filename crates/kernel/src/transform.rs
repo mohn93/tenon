@@ -137,6 +137,7 @@ impl Model {
         for e in edges.iter().filter_map(|e| self.edge(*e)) {
             sides.insert((e.v[0].min(e.v[1]), e.v[0].max(e.v[1])));
         }
+        let ring = |l: &[VertexId]| l.iter().map(|v| self.pos(*v)).collect::<Vec<DVec3>>();
         let mut s = Stencil::default();
         for f in faces.iter().filter_map(|f| self.face(*f)) {
             for l in loops(f) {
@@ -145,15 +146,20 @@ impl Model {
                     sides.insert((a.min(b), a.max(b)));
                 }
             }
-            s.faces
-                .push((f.outer.iter().map(|v| self.pos(*v)).collect(), f.normal));
+            let mut face = StencilFace {
+                outer: ring(&f.outer),
+                normal: f.normal,
+                openings: Vec::new(),
+                filled: Vec::new(),
+            };
             for h in &f.holes {
                 if self.face_with_outer(&h.iter().copied().collect()).is_none() {
-                    s.openings.push(h.iter().map(|v| self.pos(*v)).collect());
+                    face.openings.push(ring(h));
                 } else {
-                    s.filled.push(h.iter().map(|v| self.pos(*v)).collect());
+                    face.filled.push(ring(h));
                 }
             }
+            s.faces.push(face);
         }
         s.segments = sides
             .iter()
@@ -168,113 +174,86 @@ impl Model {
     /// from faces closed together with existing geometry.
     pub(crate) fn draw_stencil(&mut self, stencil: &Stencil, places: &[DAffine3]) {
         let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
-        for t in places {
-            for (a, b) in &stencil.segments {
-                self.draw_segment(t.transform_point3(*a), t.transform_point3(*b));
-            }
-        }
-        for t in places {
-            for (outer, normal) in &stencil.faces {
-                let normal = t.transform_vector3(*normal).normalize();
-                let ring: Option<Vec<VertexId>> = outer
-                    .iter()
-                    .map(|p| self.find_vertex(t.transform_point3(*p)))
-                    .collect();
-                let Some(ring) = ring else { continue };
-                let ids: BTreeSet<VertexId> = ring.iter().copied().collect();
-                if self.face_with_outer(&ids).is_none() {
-                    // Every side was there already, so drawing them closed no face: close it.
-                    let n = ring.len();
-                    let sides: Option<Vec<EdgeId>> = (0..n)
-                        .map(|i| self.edge_between(ring[i], ring[(i + 1) % n]))
-                        .collect();
-                    if let Some(sides) = sides {
-                        self.rebuild_plane(Plane::through(self.pos(ring[0]), normal), &sides);
-                    }
-                }
-                if let Some(id) = self.face_with_outer(&ids) {
-                    self.orient(id, normal);
-                }
-            }
-            // Drawing an opening's loop closes it into a face; take that face out again.
-            for hole in &stencil.openings {
-                let ids: Option<BTreeSet<VertexId>> = hole
-                    .iter()
-                    .map(|p| self.find_vertex(t.transform_point3(*p)))
-                    .collect();
-                let Some(ids) = ids else { continue };
-                if let Some(id) = self.face_with_outer(&ids)
-                    && !existing.contains(&id)
-                {
-                    self.remove_face(id);
-                }
-            }
-        }
-        // Faces drawing split are still the stencil's own: they lie within a placed face ring.
-        let rings: Vec<Vec<DVec3>> = places
+        let segments: Vec<(DVec3, DVec3)> = places
             .iter()
             .flat_map(|t| {
-                let rings = stencil.faces.iter().map(|(outer, _)| outer);
-                rings
-                    .chain(&stencil.filled)
-                    .map(move |ring| ring.iter().map(|p| t.transform_point3(*p)).collect())
+                (stencil.segments.iter())
+                    .map(|(a, b)| (t.transform_point3(*a), t.transform_point3(*b)))
             })
             .collect();
-        let openings: Vec<Vec<DVec3>> = places
+        let placed: Vec<StencilFace> = places
             .iter()
-            .flat_map(|t| {
-                stencil
+            .flat_map(|t| stencil.faces.iter().map(|f| f.placed(t)))
+            .collect();
+
+        for (a, b) in &segments {
+            self.draw_segment(*a, *b);
+        }
+        // A face whose sides were all there already is not closed by drawing them: close it.
+        for f in &placed {
+            let ring: Option<Vec<VertexId>> =
+                f.outer.iter().map(|p| self.find_vertex(*p)).collect();
+            let Some(ring) = ring else { continue };
+            if self
+                .face_with_outer(&ring.iter().copied().collect())
+                .is_some()
+            {
+                continue;
+            }
+            let n = ring.len();
+            let sides: Option<Vec<EdgeId>> = (0..n)
+                .map(|i| self.edge_between(ring[i], ring[(i + 1) % n]))
+                .collect();
+            if let Some(sides) = sides {
+                self.rebuild_plane(Plane::through(self.pos(ring[0]), f.normal), &sides);
+            }
+        }
+
+        // A new face is a stencil face (or a piece of one that other geometry split) when it
+        // lies within a placed face and not within one of that face's openings. Faces within
+        // a filled hole count too: the original's hole has a face in it.
+        let new: Vec<FaceId> = self
+            .faces()
+            .map(|(id, _)| id)
+            .filter(|id| !existing.contains(id))
+            .collect();
+        let own = |m: &Model, id: FaceId| {
+            placed.iter().any(|f| {
+                m.face_within(id, &f.outer) && !f.openings.iter().any(|h| m.face_within(id, h))
+            })
+        };
+        // Give each piece of a stencil face that face's orientation.
+        for f in &placed {
+            for &id in &new {
+                let in_hole = f
                     .openings
                     .iter()
-                    .map(move |h| h.iter().map(|p| t.transform_point3(*p)).collect())
-            })
-            .collect();
-        // A face filling a copied opening is never the stencil's own.
-        let own = |m: &Model, id: FaceId| {
-            rings.iter().any(|r| m.face_within(id, r))
-                && !openings.iter().any(|h| m.face_within(id, h))
-        };
-        for t in places {
-            for (outer, normal) in &stencil.faces {
-                let ring: Vec<DVec3> = outer.iter().map(|p| t.transform_point3(*p)).collect();
-                let normal = t.transform_vector3(*normal).normalize();
-                let split: Vec<FaceId> = self
-                    .faces()
-                    .map(|(id, _)| id)
-                    .filter(|id| !existing.contains(id) && self.face_within(*id, &ring))
-                    .filter(|id| !openings.iter().any(|h| self.face_within(*id, h)))
-                    .collect();
-                for id in split {
-                    self.orient(id, normal);
+                    .chain(&f.filled)
+                    .any(|h| self.face_within(id, h));
+                if self.face_within(id, &f.outer) && !in_hole {
+                    self.orient(id, f.normal);
                 }
             }
         }
-        // Drawing the sides can also close loops the stencil never had a face on; take those
-        // out too. A face stays if it is the stencil's, or if a side of it is not the stencil's.
+        // Drawing the sides also closes loops the stencil has no face on (openings, a missing
+        // lid); take those out. A face stays if it is the stencil's, or if a side of it is not.
         let on_stencil = |p: DVec3| {
-            places.iter().any(|t| {
-                stencil.segments.iter().any(|(a, b)| {
-                    let (a, b) = (t.transform_point3(*a), t.transform_point3(*b));
-                    let (u, d) = project_on_segment(p, a, b);
-                    (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL
-                })
+            segments.iter().any(|(a, b)| {
+                let (u, d) = project_on_segment(p, *a, *b);
+                (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL
             })
         };
-        let extra: Vec<FaceId> = self
-            .faces()
-            .filter(|(id, f)| {
-                !existing.contains(id)
-                    && f.outer.iter().all(|v| on_stencil(self.pos(*v)))
-                    && (0..f.outer.len()).all(|i| {
-                        let (a, b) = (
-                            self.pos(f.outer[i]),
-                            self.pos(f.outer[(i + 1) % f.outer.len()]),
-                        );
-                        on_stencil((a + b) / 2.0)
-                    })
-                    && !own(self, *id)
+        let extra: Vec<FaceId> = new
+            .iter()
+            .copied()
+            .filter(|id| {
+                let f = self.face(*id).unwrap();
+                let n = f.outer.len();
+                (0..n).all(|i| {
+                    let (a, b) = (self.pos(f.outer[i]), self.pos(f.outer[(i + 1) % n]));
+                    on_stencil(a) && on_stencil((a + b) / 2.0)
+                }) && !own(self, *id)
             })
-            .map(|(id, _)| id)
             .collect();
         for id in extra {
             self.remove_face(id);
@@ -315,12 +294,30 @@ impl Model {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stencil {
     segments: Vec<(DVec3, DVec3)>,
-    /// Outer loop and normal of each face.
-    faces: Vec<(Vec<DVec3>, DVec3)>,
-    /// Holes of the faces that no face fills.
+    faces: Vec<StencilFace>,
+}
+
+/// A face captured by position.
+#[derive(Clone, Debug)]
+struct StencilFace {
+    outer: Vec<DVec3>,
+    normal: DVec3,
+    /// Holes no face fills.
     openings: Vec<Vec<DVec3>>,
-    /// Holes that another face fills; their copies close into faces too.
+    /// Holes another face fills.
     filled: Vec<Vec<DVec3>>,
+}
+
+impl StencilFace {
+    fn placed(&self, t: &DAffine3) -> StencilFace {
+        let ring = |r: &Vec<DVec3>| r.iter().map(|p| t.transform_point3(*p)).collect();
+        StencilFace {
+            outer: ring(&self.outer),
+            normal: t.transform_vector3(self.normal).normalize(),
+            openings: self.openings.iter().map(ring).collect(),
+            filled: self.filled.iter().map(ring).collect(),
+        }
+    }
 }
 
 fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {
