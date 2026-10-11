@@ -6,7 +6,10 @@ use kernel::EntityId;
 use render::grid::LineVertex;
 use session::{BatchError, Command, CommandError, Document, ErrorKind, Outcome, SelectMode};
 use tools::overlay::overlay;
-use tools::{Inference, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, infer};
+use tools::{
+    Axis, Guides, Inference, Lock, SnapKind, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput,
+    edge_under, infer_with,
+};
 
 use crate::navigation::{Button, Navigation};
 
@@ -23,6 +26,10 @@ pub enum EditorKey {
     Backspace,
     Delete,
     Escape,
+    /// Lock the direction to an axis during an operation, or unlock it if it is locked there.
+    LockAxis(Axis),
+    /// Remove any direction lock.
+    Unlock,
 }
 
 /// What the status bar shows.
@@ -36,11 +43,16 @@ pub struct Status {
     pub value: Option<String>,
     /// Feedback from the last tool action or failed command.
     pub message: Option<String>,
+    /// The direction lock in force, e.g. "Locked: red axis".
+    pub lock: Option<&'static str>,
 }
 
 impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}  |  {}", self.tool, self.prompt)?;
+        if let Some(lock) = self.lock {
+            write!(f, "  |  {lock}")?;
+        }
         if let Some(value) = &self.value {
             write!(f, "  |  {}: {value}", self.label)?;
         }
@@ -60,6 +72,12 @@ pub struct Editor {
     shift: bool,
     /// Whether the left-button press reached the tool, so its release should too.
     tool_pressed: bool,
+    /// Direction of the last edge the cursor rested on, for parallel/perpendicular snaps.
+    reference: Option<DVec3>,
+    /// The direction lock in force during the current operation.
+    lock: Option<Lock>,
+    /// Whether `lock` comes from holding Shift (and ends when it is released).
+    shift_lock: bool,
     cursor: DVec2,
     hit: Option<Inference>,
     preview: Vec<[DVec3; 2]>,
@@ -80,6 +98,9 @@ impl Editor {
             kind: ToolKind::Line,
             shift: false,
             tool_pressed: false,
+            reference: None,
+            lock: None,
+            shift_lock: false,
             cursor: DVec2::ZERO,
             hit: None,
             preview: Vec::new(),
@@ -140,13 +161,47 @@ impl Editor {
         self.scale_factor = scale_factor;
     }
 
-    pub fn set_modifiers(&mut self, shift: bool, alt: bool) {
+    /// Pressing Shift during an operation locks the direction the cursor follows (an axis,
+    /// parallel or perpendicular); releasing it unlocks. Returns true if the lock changed.
+    pub fn set_modifiers(&mut self, shift: bool, alt: bool) -> bool {
+        let pressed = shift && !self.shift;
+        let released = !shift && self.shift;
         self.shift = shift;
         self.nav.set_modifiers(shift, alt);
+        if pressed && self.lock.is_none() {
+            let (Some(anchor), Some(hit)) = (self.tool.anchor(), self.hit) else {
+                return false;
+            };
+            let dir = match hit.kind {
+                SnapKind::Axis(a) => Some(a.dir()),
+                SnapKind::Parallel | SnapKind::Perpendicular => {
+                    (hit.point - anchor).try_normalize()
+                }
+                _ => None,
+            };
+            if let Some(dir) = dir {
+                self.lock = Some(Lock {
+                    dir,
+                    kind: hit.kind,
+                });
+                self.shift_lock = true;
+                self.update_hover();
+                return true;
+            }
+        } else if released && self.shift_lock {
+            self.lock = None;
+            self.shift_lock = false;
+            self.update_hover();
+            return true;
+        }
+        false
     }
 
     pub fn focus_lost(&mut self) {
         self.shift = false;
+        if std::mem::take(&mut self.shift_lock) {
+            self.lock = None;
+        }
         self.nav.reset();
     }
 
@@ -249,6 +304,25 @@ impl Editor {
                 self.send(ToolEvent::Cancel);
                 true
             }
+            EditorKey::LockAxis(axis) => {
+                if self.tool.anchor().is_none() {
+                    return false;
+                }
+                let same = self.lock.is_some_and(|l| l.kind == SnapKind::Axis(axis));
+                self.lock = (!same).then_some(Lock {
+                    dir: axis.dir(),
+                    kind: SnapKind::Axis(axis),
+                });
+                self.shift_lock = false;
+                self.update_hover();
+                true
+            }
+            EditorKey::Unlock => {
+                let had = self.lock.take().is_some();
+                self.shift_lock = false;
+                self.update_hover();
+                had
+            }
         }
     }
 
@@ -294,12 +368,20 @@ impl Editor {
         } else {
             Some(format!("{}_", self.typed))
         };
+        let lock = self.lock.map(|l| match l.kind {
+            SnapKind::Axis(Axis::X) => "Locked: red axis",
+            SnapKind::Axis(Axis::Y) => "Locked: green axis",
+            SnapKind::Axis(Axis::Z) => "Locked: blue axis",
+            SnapKind::Parallel => "Locked: parallel",
+            _ => "Locked: perpendicular",
+        });
         Status {
             tool: self.tool.name(),
             prompt: self.tool.prompt(),
             label,
             value,
             message: self.message.clone(),
+            lock,
         }
     }
 
@@ -399,13 +481,27 @@ impl Editor {
 
     /// Recomputes the inference under the cursor and the tool preview. True if either changed.
     fn update_hover(&mut self) -> bool {
-        let hit = infer(
-            self.doc.model(),
-            &self.doc.camera,
-            self.cursor,
-            self.tool.anchor(),
-            PICK_RADIUS_LOGICAL_PX * self.scale_factor,
-        );
+        let anchor = self.tool.anchor();
+        if anchor.is_none() {
+            // Locks last for one operation.
+            self.lock = None;
+            self.shift_lock = false;
+        }
+        let radius = PICK_RADIUS_LOGICAL_PX * self.scale_factor;
+        let (model, camera) = (self.doc.model(), &self.doc.camera);
+        let guides = Guides {
+            anchor,
+            reference: self.reference,
+            lock: self.lock,
+        };
+        let hit = infer_with(model, camera, self.cursor, &guides, radius);
+        // The edge the cursor rests on becomes the reference for later direction snaps.
+        if let Some(e) = edge_under(model, camera, self.cursor, radius)
+            && let Some(edge) = model.edge(e)
+            && let (Some(a), Some(b)) = (model.position(edge.v[0]), model.position(edge.v[1]))
+        {
+            self.reference = (b - a).try_normalize();
+        }
         let out = self.handle(ToolEvent::Move(hit));
         let changed = self.hit != Some(hit) || self.preview != out.preview;
         self.hit = Some(hit);
@@ -907,5 +1003,70 @@ mod tests {
         e.key(EditorKey::Char(' '));
         assert!(!e.button(Button::Left, false));
         assert!(e.doc().selection().is_empty());
+    }
+
+    /// The edge from the last click's chain: both ends of every edge, as positions.
+    fn edge_ends(e: &Editor) -> Vec<[DVec3; 2]> {
+        let m = e.doc().model();
+        m.edges()
+            .map(|(_, ed)| [m.position(ed.v[0]).unwrap(), m.position(ed.v[1]).unwrap()])
+            .collect()
+    }
+
+    #[test]
+    fn shift_locks_the_direction_under_the_cursor() {
+        let mut e = editor();
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        let up = e.doc().camera.project(DVec3::new(1.0, 1.0, 2.5)).unwrap();
+        e.cursor_moved(up + DVec2::new(4.0, 0.0));
+        assert!(e.set_modifiers(true, false));
+        assert!(e.status().contains("Locked: blue axis"), "{}", e.status());
+        click_at(&mut e, DVec3::new(4.0, 4.0, 0.0));
+        let [a, b] = edge_ends(&e)[0];
+        let near = |v: f64, w: f64| (v - w).abs() < 1e-9;
+        let vertical = near(a.x, b.x) && near(a.y, b.y) && near(a.x, 1.0) && near(a.y, 1.0);
+        assert!(vertical && (a.z - b.z).abs() > 0.5, "{a} {b}");
+        assert!(e.set_modifiers(false, false), "releasing Shift unlocks");
+        assert!(!e.status().contains("Locked"));
+    }
+
+    #[test]
+    fn arrow_keys_lock_an_axis_during_an_operation() {
+        let mut e = editor();
+        assert!(!e.key(EditorKey::LockAxis(Axis::X)), "nothing to lock yet");
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert!(e.key(EditorKey::LockAxis(Axis::X)));
+        assert!(e.status().contains("Locked: red axis"));
+        click_at(&mut e, DVec3::new(3.0, 4.0, 0.0));
+        let [a, b] = edge_ends(&e)[0];
+        let near = |v: f64, w: f64| (v - w).abs() < 1e-9;
+        let along_red = near(a.y, b.y) && near(a.z, 0.0) && near(b.z, 0.0);
+        assert!(along_red && (a.x - b.x).abs() > 0.1, "{a} {b}");
+        assert!(e.key(EditorKey::LockAxis(Axis::X)), "the same key unlocks");
+        assert!(!e.status().contains("Locked"));
+        e.key(EditorKey::LockAxis(Axis::Y));
+        assert!(e.key(EditorKey::Unlock));
+        e.key(EditorKey::Escape);
+        assert!(
+            !e.key(EditorKey::Unlock),
+            "the chain ended, so nothing is locked"
+        );
+    }
+
+    #[test]
+    fn hovering_an_edge_teaches_parallel_snaps() {
+        let mut e = editor();
+        e.execute(Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [2.0, 1.0, 0.0],
+        })
+        .unwrap();
+        let on_edge = e.doc().camera.project(DVec3::new(1.5, 0.75, 0.0)).unwrap();
+        e.cursor_moved(on_edge + DVec2::new(0.0, 2.0));
+        click_at(&mut e, DVec3::new(0.0, 3.0, 0.0));
+        let along = DVec3::new(0.0, 3.0, 0.0) + DVec3::new(2.0, 1.0, 0.0).normalize() * 2.0;
+        e.cursor_moved(e.doc().camera.project(along).unwrap());
+        let magenta = tools::overlay::MAGENTA;
+        assert!(e.overlay().iter().any(|v| v.color == magenta));
     }
 }

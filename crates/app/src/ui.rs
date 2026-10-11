@@ -58,6 +58,9 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     Panel::bottom("status").show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(view.status.prompt);
+            if let Some(lock) = view.status.lock {
+                ui.label(RichText::new(lock).strong());
+            }
             if let Some(message) = &view.status.message {
                 ui.label(RichText::new(message).color(ui.visuals().warn_fg_color));
             }
@@ -109,6 +112,7 @@ mod tests {
             label: "Length",
             value: Some("2.5_".into()),
             message: Some("Not a length: x".into()),
+            lock: None,
         }
     }
 

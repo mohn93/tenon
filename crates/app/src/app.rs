@@ -7,6 +7,7 @@ use api::{Hub, listen_unix};
 use glam::DVec2;
 use kernel::EntityId;
 use render::{Renderer, Snapshotter, Viewport};
+use tools::Axis;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -304,6 +305,11 @@ fn editor_key(logical: &Key, physical: PhysicalKey) -> Option<EditorKey> {
         Key::Named(NamedKey::Enter) => Some(EditorKey::Enter),
         Key::Named(NamedKey::Backspace) => Some(EditorKey::Backspace),
         Key::Named(NamedKey::Delete) => Some(EditorKey::Delete),
+        // Arrow keys lock the drawing direction: right red, left green, up blue, down unlocks.
+        Key::Named(NamedKey::ArrowRight) => Some(EditorKey::LockAxis(Axis::X)),
+        Key::Named(NamedKey::ArrowLeft) => Some(EditorKey::LockAxis(Axis::Y)),
+        Key::Named(NamedKey::ArrowUp) => Some(EditorKey::LockAxis(Axis::Z)),
+        Key::Named(NamedKey::ArrowDown) => Some(EditorKey::Unlock),
         Key::Named(NamedKey::Escape) => Some(EditorKey::Escape),
         Key::Named(NamedKey::Space) => Some(EditorKey::Char(' ')),
         Key::Character(text) => {
@@ -459,10 +465,12 @@ impl ApplicationHandler<ApiWake> for App {
             WindowEvent::ModifiersChanged(m) => {
                 let ctrl_pressed = m.state().control_key() && !s.modifiers.control_key();
                 s.modifiers = m.state();
-                s.editor
+                let locked = s
+                    .editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
                 // Tapping Ctrl switches tools that can copy (Move) between moving and copying.
-                ctrl_pressed && s.editor.toggle_copy()
+                let toggled = ctrl_pressed && s.editor.toggle_copy();
+                locked || toggled
             }
             WindowEvent::Focused(false) => {
                 s.editor.focus_lost();
