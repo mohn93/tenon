@@ -1,9 +1,12 @@
 mod app;
 mod cli;
 mod editor;
+mod gui;
 mod headless;
 mod host;
+mod info;
 mod navigation;
+mod ui;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 

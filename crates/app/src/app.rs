@@ -1,9 +1,11 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use api::{Hub, listen_unix};
 use glam::DVec2;
-use render::{Renderer, Snapshotter};
+use kernel::EntityId;
+use render::{Renderer, Snapshotter, Viewport};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -12,8 +14,11 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::editor::{Editor, EditorKey};
+use crate::gui::Gui;
 use crate::host::WindowHost;
+use crate::info::entity_info;
 use crate::navigation::Button;
+use crate::ui::{UiAction, View};
 
 /// Sent to the event loop when an agent API request arrives.
 #[derive(Debug)]
@@ -31,11 +36,14 @@ struct State {
     renderer: Renderer,
     snapshotter: Snapshotter,
     editor: Editor,
-    /// Document revision the renderer's model buffers were built from.
-    drawn_revision: Option<u64>,
+    gui: Gui,
+    /// Document revision and selection the renderer's model buffers were built from.
+    drawn: Option<(u64, BTreeSet<EntityId>)>,
     modifiers: ModifiersState,
-    /// The window title last set, which shows the editor status.
-    title: String,
+    /// Where the 3D view sits in the window (physical pixels), from the last frame's layout.
+    view: Viewport,
+    /// Last cursor position in window coordinates (physical pixels).
+    cursor: DVec2,
 }
 
 impl State {
@@ -73,6 +81,8 @@ impl State {
         surface.configure(&device, &config);
 
         let renderer = Renderer::new(&device, &queue, config.format);
+        let gui = Gui::new(&window, &device, config.format);
+        let view = Viewport::full((config.width, config.height));
         let snapshotter = Snapshotter::with_device(&device, &queue);
         let editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
@@ -87,18 +97,47 @@ impl State {
             renderer,
             snapshotter,
             editor,
-            drawn_revision: None,
+            gui,
+            drawn: None,
             modifiers: ModifiersState::empty(),
-            title: String::new(),
+            view,
+            cursor: DVec2::ZERO,
         }
     }
 
-    /// Shows the editor status (tool, prompt, measurement) in the window title.
-    fn sync_title(&mut self) {
-        let title = format!("sketchup-alt  |  {}", self.editor.status());
-        if title != self.title {
-            self.window.set_title(&title);
-            self.title = title;
+    /// True if `p` (window coordinates) lies in the 3D view.
+    fn in_view(&self, p: DVec2) -> bool {
+        let v = self.view;
+        p.x >= v.x as f64
+            && p.y >= v.y as f64
+            && p.x < (v.x + v.width) as f64
+            && p.y < (v.y + v.height) as f64
+    }
+
+    /// The cursor moved to `p` in window coordinates; the editor works in view coordinates.
+    fn cursor_moved(&mut self, p: DVec2) -> bool {
+        self.cursor = p;
+        let origin = DVec2::new(self.view.x as f64, self.view.y as f64);
+        let moved = self.editor.cursor_moved(p - origin);
+        if self.in_view(p) {
+            moved
+        } else {
+            self.editor.cursor_left() || moved
+        }
+    }
+
+    fn apply(&mut self, action: UiAction) {
+        match action {
+            UiAction::Tool(kind) => self.editor.select_tool(kind),
+            UiAction::Undo => {
+                self.editor.undo();
+            }
+            UiAction::Redo => {
+                self.editor.redo();
+            }
+            UiAction::EraseSelection => {
+                self.editor.erase_selection();
+            }
         }
     }
 
@@ -109,43 +148,80 @@ impl State {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        self.editor.resize(DVec2::new(width as f64, height as f64));
     }
 
-    fn render(&mut self) {
+    /// Lays out the panels, applies what was clicked in them, and draws the 3D view and the
+    /// panels. Returns true if a panel action ran (so subscribers should hear about edits).
+    fn render(&mut self) -> bool {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return;
+                return false;
             }
-            _ => return, // Timeout or occluded: skip this frame.
+            _ => return false, // Timeout or occluded: skip this frame.
         };
-        let view = frame
+        let target = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let revision = self.editor.doc().revision();
-        if self.drawn_revision != Some(revision) {
-            self.renderer
-                .set_model(self.editor.doc().model(), self.editor.doc().selection());
-            self.drawn_revision = Some(revision);
+        let size = (self.config.width, self.config.height);
+
+        let status = self.editor.status_parts();
+        let info = entity_info(self.editor.doc());
+        let panels = View {
+            tool: self.editor.tool_kind(),
+            status: &status,
+            info: &info,
+            has_selection: !self.editor.doc().selection().is_empty(),
+        };
+        let gui_frame = self.gui.frame(&self.window, &panels);
+        let acted = !gui_frame.actions.is_empty();
+        for action in gui_frame.actions.clone() {
+            self.apply(action);
         }
-        self.renderer.render(
-            &view,
-            (self.config.width, self.config.height),
+        if gui_frame.viewport != self.view {
+            self.view = gui_frame.viewport;
+            let v = self.view;
+            self.editor
+                .resize(DVec2::new(v.width.max(1) as f64, v.height.max(1) as f64));
+        }
+
+        let doc = self.editor.doc();
+        let drawn = (doc.revision(), doc.selection().clone());
+        if self.drawn.as_ref() != Some(&drawn) {
+            self.renderer.set_model(doc.model(), doc.selection());
+            self.drawn = Some(drawn);
+        }
+        self.renderer.render_in(
+            &target,
+            size,
+            self.view,
             &self.editor.doc().camera,
             &self.editor.overlay(),
         );
+        let again = self.gui.paint(
+            &self.window,
+            &self.device,
+            &self.queue,
+            &target,
+            size,
+            gui_frame,
+        );
         self.window.pre_present_notify();
         self.queue.present(frame);
+        if again || acted {
+            self.window.request_redraw();
+        }
+        acted
     }
 
-    /// Handles waiting API requests; redraws if they changed the model or camera.
+    /// Handles waiting API requests; redraws if they changed the model, selection or camera.
     fn process_api(&mut self, hub: &mut Hub) {
         let before = (
             self.editor.doc().revision(),
+            self.editor.doc().selection().clone(),
             self.editor.doc().camera.clone(),
             self.editor.overlay(),
         );
@@ -154,9 +230,9 @@ impl State {
             snapshotter: &mut self.snapshotter,
         };
         hub.process(&mut host);
-        self.sync_title();
         if (
             self.editor.doc().revision(),
+            self.editor.doc().selection().clone(),
             self.editor.doc().camera.clone(),
             self.editor.overlay(),
         ) != before
@@ -289,7 +365,6 @@ impl ApplicationHandler<ApiWake> for App {
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let mut state = State::new(window);
-        state.sync_title();
         state.window.request_redraw();
         // Requests that arrived before the window existed.
         state.process_api(&mut self.hub);
@@ -298,6 +373,9 @@ impl ApplicationHandler<ApiWake> for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
+        if s.gui.on_event(&s.window, &event) {
+            s.window.request_redraw();
+        }
         let changed = match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -312,7 +390,9 @@ impl ApplicationHandler<ApiWake> for App {
                 false
             }
             WindowEvent::RedrawRequested => {
-                s.render();
+                if s.render() {
+                    s.notify_api(&mut self.hub);
+                }
                 false
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -326,12 +406,23 @@ impl ApplicationHandler<ApiWake> for App {
                 false
             }
             WindowEvent::CursorMoved { position, .. } => {
-                s.editor.cursor_moved(DVec2::new(position.x, position.y))
+                s.cursor_moved(DVec2::new(position.x, position.y))
             }
             WindowEvent::CursorLeft { .. } => s.editor.cursor_left(),
-            WindowEvent::MouseInput { state, button, .. } => s
-                .editor
-                .button(map_button(button), state == ElementState::Pressed),
+            // Presses go to the view only when they land in it; releases always do, so a drag
+            // that ends over a panel still finishes.
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                if pressed && (s.gui.wants_pointer() || !s.in_view(s.cursor)) {
+                    false
+                } else {
+                    s.editor.button(map_button(button), pressed)
+                }
+            }
+            WindowEvent::MouseWheel { .. } if s.gui.wants_pointer() || !s.in_view(s.cursor) => {
+                false
+            }
+            WindowEvent::KeyboardInput { .. } if s.gui.wants_keyboard() => false,
             WindowEvent::MouseWheel { delta, .. } => {
                 let steps = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
@@ -365,7 +456,6 @@ impl ApplicationHandler<ApiWake> for App {
             _ => false,
         };
         if changed {
-            s.sync_title();
             s.window.request_redraw();
             s.notify_api(&mut self.hub);
         }

@@ -13,6 +13,10 @@ wgpu.workspace = true
 winit.workspace = true
 pollster.workspace = true
 env_logger.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
+kernel = { path = "../kernel" }
 
 [dev-dependencies]
 serde_json.workspace = true

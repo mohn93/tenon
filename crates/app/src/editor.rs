@@ -22,10 +22,37 @@ pub enum EditorKey {
     Escape,
 }
 
+/// What the status bar shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Status {
+    pub tool: &'static str,
+    pub prompt: &'static str,
+    /// The measurements box label, e.g. "Length"; empty when the tool measures nothing.
+    pub label: &'static str,
+    /// Typed text (with a trailing "_") while typing, otherwise the live measurement.
+    pub value: Option<String>,
+    /// Feedback from the last tool action or failed command.
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}  |  {}", self.tool, self.prompt)?;
+        if let Some(value) = &self.value {
+            write!(f, "  |  {}: {value}", self.label)?;
+        }
+        if let Some(message) = &self.message {
+            write!(f, "  |  {message}")?;
+        }
+        Ok(())
+    }
+}
+
 pub struct Editor {
     doc: Document,
     nav: Navigation,
     tool: Box<dyn Tool>,
+    kind: ToolKind,
     /// Whether Shift is held, as last reported by the window.
     shift: bool,
     cursor: DVec2,
@@ -45,6 +72,7 @@ impl Editor {
             doc: Document::new(viewport),
             nav: Navigation::default(),
             tool: ToolKind::Line.make(),
+            kind: ToolKind::Line,
             shift: false,
             cursor: DVec2::ZERO,
             hit: None,
@@ -87,10 +115,15 @@ impl Editor {
     /// Switches to another tool, dropping the current tool's operation and any typed text.
     pub fn select_tool(&mut self, kind: ToolKind) {
         self.tool = kind.make();
+        self.kind = kind;
         self.preview.clear();
         self.typed.clear();
         self.message = None;
         self.update_hover();
+    }
+
+    pub fn tool_kind(&self) -> ToolKind {
+        self.kind
     }
 
     pub fn resize(&mut self, viewport: DVec2) {
@@ -217,17 +250,27 @@ impl Editor {
         true
     }
 
-    /// One line describing the tool, what to do next, the measurement and any feedback.
+    /// The status as one line: tool, prompt, measurement and feedback separated by bars.
+    #[cfg(test)]
     pub fn status(&self) -> String {
+        self.status_parts().to_string()
+    }
+
+    /// The tool, what to do next, the measurement and any feedback.
+    pub fn status_parts(&self) -> Status {
         let (label, value) = self.tool.measurement();
-        let mut parts = vec![self.tool.name().to_string(), self.tool.prompt().to_string()];
-        if !self.typed.is_empty() {
-            parts.push(format!("{label}: {}_", self.typed));
-        } else if let Some(value) = value {
-            parts.push(format!("{label}: {value}"));
+        let value = if self.typed.is_empty() {
+            value
+        } else {
+            Some(format!("{}_", self.typed))
+        };
+        Status {
+            tool: self.tool.name(),
+            prompt: self.tool.prompt(),
+            label,
+            value,
+            message: self.message.clone(),
         }
-        parts.extend(self.message.clone());
-        parts.join("  |  ")
     }
 
     /// Line pairs for the renderer's overlay pass.
