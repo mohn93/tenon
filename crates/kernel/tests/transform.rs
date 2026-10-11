@@ -402,3 +402,59 @@ fn an_island_split_by_a_parent_edge_is_copied() {
     assert_eq!(m.faces().count(), 5);
     assert!(m.faces().all(|(_, f)| f.normal == normal));
 }
+
+/// A 10 m square with a 1 m square drawn on it, which splits it in two.
+fn square_drawn_on_a_face() -> Model {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 10.0);
+    square(&mut m, 1.0, 1.0, 1.0);
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 2);
+    m
+}
+
+#[test]
+fn copying_bare_edges_onto_a_face_keeps_the_piece_they_cut_out() {
+    let mut m = square_drawn_on_a_face();
+    let small: Vec<_> = m
+        .edges()
+        .filter(|(_, e)| e.v.iter().all(|v| m.position(*v).unwrap().x < 3.0))
+        .filter(|(_, e)| e.v.iter().all(|v| m.position(*v).unwrap().x > 0.5))
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(small.len(), 4);
+    let before = m.clone();
+    let c = m.copy(&small, &[], p(4.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    // The copied outline splits the 10 m face again; the piece inside stays a face.
+    assert_eq!(m.faces().count(), 3);
+    let normal = face_normal_of_first(&before);
+    assert!(m.faces().all(|(_, f)| f.normal == normal));
+    let pieces = faces_at(&m, |q| q.x > 4.5 && q.x < 6.5);
+    assert_eq!(pieces.len(), 1);
+    assert!(m.face(pieces[0]).unwrap().holes.is_empty());
+    let after = m.clone();
+    m.apply(&c.inverse());
+    assert_eq!(m, before);
+    m.apply(&c);
+    assert_eq!(m, after);
+}
+
+#[test]
+fn a_face_with_an_opening_copied_onto_a_face_leaves_the_face_under_the_opening() {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 10.0);
+    let source = square(&mut m, 20.0, 0.0, 4.0);
+    let hole = square(&mut m, 21.5, 1.5, 1.0);
+    m.erase(&[], &[hole]);
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 2);
+    m.copy(&[], &[source], p(-18.0, 2.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    // The copy splits the 10 m face; the piece under the copy's opening stays a face.
+    let under = faces_at(&m, |q| {
+        (3.4..4.6).contains(&q.x) && (3.4..4.6).contains(&q.y)
+    });
+    assert_eq!(under.len(), 1, "no hole is punched");
+    assert_eq!(m.faces().count(), 4);
+}

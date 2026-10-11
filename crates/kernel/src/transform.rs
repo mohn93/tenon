@@ -171,7 +171,8 @@ impl Model {
     /// Draws `stencil` once per placement, without ending the edit. Copies are drawn like new
     /// edges, so they merge with geometry they touch; each face keeps the orientation of its
     /// original, and openings stay open. Drawing adds no faces the stencil does not have, apart
-    /// from faces closed together with existing geometry.
+    /// from faces closed together with existing geometry; a region of an existing face that
+    /// the drawing splits off stays a face.
     pub(crate) fn draw_stencil(&mut self, stencil: &Stencil, places: &[DAffine3]) {
         let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
         let segments: Vec<(DVec3, DVec3)> = places
@@ -179,6 +180,20 @@ impl Model {
             .flat_map(|t| {
                 (stencil.segments.iter())
                     .map(|(a, b)| (t.transform_point3(*a), t.transform_point3(*b)))
+            })
+            .collect();
+        // Existing faces in a plane the drawing reaches, by position: (outer ring, holes).
+        let ring = |m: &Model, l: &[VertexId]| l.iter().map(|v| m.pos(*v)).collect::<Vec<_>>();
+        let before: Vec<(Vec<DVec3>, Vec<Vec<DVec3>>)> = self
+            .faces()
+            .filter(|(_, f)| {
+                let o = self.pos(f.outer[0]);
+                let on = |p: DVec3| (p - o).dot(f.normal).abs() < LENGTH_TOL;
+                segments.iter().any(|(a, b)| on(*a) && on(*b))
+            })
+            .map(|(_, f)| {
+                let holes = f.holes.iter().map(|h| ring(self, h)).collect();
+                (ring(self, &f.outer), holes)
             })
             .collect();
         let placed: Vec<StencilFace> = places
@@ -235,8 +250,16 @@ impl Model {
                 }
             }
         }
+        // A new face within an existing face (and not within one of its holes) is a piece of
+        // that face the drawing split off.
+        let split_off = |m: &Model, id: FaceId| {
+            before.iter().any(|(outer, holes)| {
+                m.face_within(id, outer) && !holes.iter().any(|h| m.face_within(id, h))
+            })
+        };
         // Drawing the sides also closes loops the stencil has no face on (openings, a missing
-        // lid); take those out. A face stays if it is the stencil's, or if a side of it is not.
+        // lid); take those out. A face stays if it is the stencil's, a piece of an existing
+        // face, or if a side of it is not on the stencil.
         let on_stencil = |p: DVec3| {
             segments.iter().any(|(a, b)| {
                 let (u, d) = project_on_segment(p, *a, *b);
@@ -253,6 +276,7 @@ impl Model {
                     let (a, b) = (self.pos(f.outer[i]), self.pos(f.outer[(i + 1) % n]));
                     on_stencil(a) && on_stencil((a + b) / 2.0)
                 }) && !own(self, *id)
+                    && !split_off(self, *id)
             })
             .collect();
         for id in extra {

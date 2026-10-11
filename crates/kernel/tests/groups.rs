@@ -590,3 +590,38 @@ fn an_instance_listed_twice_is_copied_once() {
         .unwrap();
     assert_eq!(change.summary().created.len(), 1);
 }
+
+#[test]
+fn exploding_bare_edges_onto_a_face_keeps_the_piece_they_cut_out() {
+    let mut m = Model::new();
+    m.add_polygon(&[
+        p(1.0, 1.0, 0.0),
+        p(2.0, 1.0, 0.0),
+        p(2.0, 2.0, 0.0),
+        p(1.0, 2.0, 0.0),
+    ])
+    .unwrap();
+    let mut s = Scene::from_root(m);
+    let (i, _) = group_all(&mut s, DefinitionKind::Group);
+    let d = definition_of(&s, i);
+    let inner = s.definition(d).unwrap().mesh.faces().next().unwrap().0;
+    s.edit(MeshId::Definition(d), |m| Ok(m.erase(&[], &[inner])))
+        .unwrap();
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&[
+            p(0.0, 0.0, 0.0),
+            p(10.0, 0.0, 0.0),
+            p(10.0, 10.0, 0.0),
+            p(0.0, 10.0, 0.0),
+        ])
+    })
+    .unwrap();
+    assert_eq!(root_counts(&s), (4, 4, 1, 1));
+    let before = s.clone();
+    let change = s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    // The outline splits the face; the piece inside it stays a face.
+    assert_eq!(root_counts(&s), (8, 8, 2, 0));
+    s.apply(&change.inverse());
+    assert_eq!(s, before);
+}
