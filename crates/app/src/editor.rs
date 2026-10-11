@@ -18,6 +18,7 @@ pub enum EditorKey {
     Char(char),
     Enter,
     Backspace,
+    Delete,
     Escape,
 }
 
@@ -148,7 +149,8 @@ impl Editor {
 
     /// Typing goes to the measurements box once it starts with a digit, "." or "-"; other
     /// letters are tool shortcuts. Enter submits the typed text to the tool. Escape clears the
-    /// typed text, or else cancels the tool's operation. Returns true if anything changed.
+    /// typed text, or else cancels the tool's operation. Delete, and Backspace with nothing
+    /// typed, erase the selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
@@ -168,7 +170,9 @@ impl Editor {
                 }
                 true
             }
+            EditorKey::Backspace if self.typed.is_empty() => self.erase_selection(),
             EditorKey::Backspace => self.typed.pop().is_some(),
+            EditorKey::Delete => self.erase_selection(),
             EditorKey::Enter if self.typed.is_empty() => false,
             EditorKey::Enter => {
                 let text = std::mem::take(&mut self.typed);
@@ -184,6 +188,19 @@ impl Editor {
                 true
             }
         }
+    }
+
+    /// Erases the selected edges and faces as one undo step. False if nothing is selected.
+    pub fn erase_selection(&mut self) -> bool {
+        if self.doc.selection().is_empty() {
+            return false;
+        }
+        let ids = self.doc.selection().iter().copied().collect();
+        self.reset_tool();
+        self.message = None;
+        self.run(Command::Erase { ids });
+        self.update_hover();
+        true
     }
 
     pub fn undo(&mut self) -> bool {
@@ -594,5 +611,66 @@ mod tests {
         assert!(!e.overlay().is_empty());
         assert!(e.cursor_left());
         assert!(e.overlay().is_empty());
+    }
+
+    #[test]
+    fn select_tool_clicks_pick_and_delete_erases_them() {
+        let mut e = editor();
+        square(&mut e);
+        assert!(e.key(EditorKey::Char(' ')));
+        assert!(e.status().starts_with("Select"), "{}", e.status());
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert_eq!(e.doc().selection().len(), 1);
+        assert!(e.key(EditorKey::Delete));
+        assert_eq!(stats(&e), (4, 0));
+        assert!(e.doc().selection().is_empty());
+        e.undo();
+        assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
+    fn backspace_erases_the_selection_only_when_nothing_is_typed() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.key(EditorKey::Char('1'));
+        assert!(e.key(EditorKey::Backspace));
+        assert_eq!(
+            stats(&e),
+            (4, 1),
+            "the first backspace deletes the typed digit"
+        );
+        assert!(e.key(EditorKey::Backspace));
+        assert_eq!(stats(&e), (4, 0));
+        assert!(!e.key(EditorKey::Delete), "nothing left to erase");
+    }
+
+    #[test]
+    fn dragging_a_box_selects_what_is_inside() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        let corners: Vec<DVec2> = [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]
+            .iter()
+            .map(|&(x, y)| e.doc().camera.project(DVec3::new(x, y, 0.0)).unwrap())
+            .collect();
+        let lo = corners.iter().fold(DVec2::INFINITY, |a, p| a.min(*p)) - 10.0;
+        let hi = corners.iter().fold(DVec2::NEG_INFINITY, |a, p| a.max(*p)) + 10.0;
+        e.cursor_moved(lo);
+        e.button(Button::Left, true);
+        e.cursor_moved(hi);
+        assert_eq!(e.overlay().len(), 8, "the box is drawn while dragging");
+        e.button(Button::Left, false);
+        assert_eq!(e.doc().selection().len(), 5, "four edges and the face");
+    }
+
+    #[test]
+    fn erase_tool_click_erases_an_edge_and_its_face() {
+        let mut e = editor();
+        square(&mut e);
+        assert!(e.key(EditorKey::Char('e')));
+        click_at(&mut e, DVec3::new(3.0, 2.0, 0.0));
+        assert_eq!(stats(&e), (3, 0));
     }
 }

@@ -181,6 +181,7 @@ fn editor_key(logical: &Key, physical: PhysicalKey) -> Option<EditorKey> {
     match logical {
         Key::Named(NamedKey::Enter) => Some(EditorKey::Enter),
         Key::Named(NamedKey::Backspace) => Some(EditorKey::Backspace),
+        Key::Named(NamedKey::Delete) => Some(EditorKey::Delete),
         Key::Named(NamedKey::Escape) => Some(EditorKey::Escape),
         Key::Named(NamedKey::Space) => Some(EditorKey::Char(' ')),
         Key::Character(text) => {
