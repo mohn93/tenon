@@ -173,8 +173,8 @@ pub fn infer_with(
 }
 
 /// The visible point snap under the cursor, if any: endpoint, midpoint or origin (nearest on
-/// screen), else the nearest apparent intersection of two edges, else the nearest point on an
-/// edge.
+/// screen), else the nearest apparent intersection of two edges both visible there, else the
+/// nearest point on an edge.
 fn snap_point(
     model: &Model,
     camera: &Camera,
@@ -212,7 +212,8 @@ fn snap_point(
     let mut crossing: Option<(f64, DVec3)> = None;
     for (i, &(_, a, b)) in near.segments.iter().enumerate() {
         for &(_, c, d) in &near.segments[i + 1..] {
-            if let Some(p) = apparent_crossing(camera, (a, b), (c, d))
+            if let Some((p, far)) = apparent_crossing(camera, (a, b), (c, d))
+                && visible(model, camera.eye, far)
                 && let Some(dist) = within(p)
                 && crossing.is_none_or(|(bd, _)| dist < bd)
             {
@@ -236,14 +237,14 @@ fn snap_point(
     on_edge.map(|(_, p)| (p, SnapKind::OnEdge))
 }
 
-/// Where segments a-b and c-d cross on screen away from their ends: the point under the
-/// crossing on whichever segment is nearer the camera. Edges that meet in space share a vertex
-/// (the kernel splits crossing edges), so their crossing is an endpoint, not this.
+/// Where segments a-b and c-d cross on screen away from their ends: the points under the
+/// crossing on the nearer and the farther segment, nearer first. Edges that meet in space share
+/// a vertex (the kernel splits crossing edges), so their crossing is an endpoint, not this.
 fn apparent_crossing(
     camera: &Camera,
     (a, b): (DVec3, DVec3),
     (c, d): (DVec3, DVec3),
-) -> Option<DVec3> {
+) -> Option<(DVec3, DVec3)> {
     let (sa, sb) = (camera.project(a)?, camera.project(b)?);
     let (sc, sd) = (camera.project(c)?, camera.project(d)?);
     let (r, q) = (sb - sa, sd - sc);
@@ -262,9 +263,9 @@ fn apparent_crossing(
     let on_cd = closest_on_line_to_ray(c, d - c, &ray, true);
     Some(
         if on_ab.distance(ray.origin) <= on_cd.distance(ray.origin) {
-            on_ab
+            (on_ab, on_cd)
         } else {
-            on_cd
+            (on_cd, on_ab)
         },
     )
 }
@@ -598,6 +599,22 @@ mod tests {
         let hit = infer(&m, &c, px(&c, near_top), None, R);
         assert_eq!(hit.kind, SnapKind::Endpoint);
         assert_eq!(hit.point, near_top);
+    }
+
+    #[test]
+    fn hidden_edges_make_no_intersections() {
+        let (c, m) = (cam(), cube());
+        // The hidden back edge (2,2,z) crosses the visible top-front edge on screen.
+        let front = (DVec3::new(0.0, 0.0, 2.0), DVec3::new(2.0, 0.0, 2.0));
+        let back = (DVec3::new(2.0, 2.0, 0.0), DVec3::new(2.0, 2.0, 2.0));
+        let (sa, sb) = (px(&c, front.0), px(&c, front.1));
+        let (sc, sd) = (px(&c, back.0), px(&c, back.1));
+        let (r, q) = (sb - sa, sd - sc);
+        let t = (sc - sa).perp_dot(q) / r.perp_dot(q);
+        assert!(t > 0.1 && t < 0.4, "{t}");
+        let hit = infer(&m, &c, sa + r * t, None, R);
+        assert_eq!(hit.kind, SnapKind::OnEdge, "{:?}", hit.point);
+        assert!((hit.point.y).abs() < 1e-9 && (hit.point.z - 2.0).abs() < 1e-9);
     }
 
     #[test]
