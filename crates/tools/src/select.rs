@@ -3,6 +3,7 @@
 //! Shift held, clicked or boxed entities are toggled instead of replacing the selection.
 
 use glam::{DVec2, DVec3};
+use kernel::geom::point_in_polygon;
 use kernel::{EntityId, Face, Model};
 use session::{Command, SelectMode};
 
@@ -46,8 +47,8 @@ fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
             .collect()
     };
     let inside = |s: DVec2| s.cmpge(lo).all() && s.cmple(hi).all();
+    let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
     let touches = |p: DVec2, q: DVec2| {
-        let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
         inside(p)
             || inside(q)
             || (0..4).any(|i| segments_cross(p, q, corners[i], corners[(i + 1) % 4]))
@@ -67,12 +68,24 @@ fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
             ids.push(EntityId::Edge(id));
         }
     }
+    // A crossing box also selects a face that it lies entirely inside: some corner of the box
+    // is within the face's projected outer loop and outside all of its holes.
+    let within = |f: &Face| {
+        let Some(outer) = screen(&f.outer) else {
+            return false;
+        };
+        let holes: Vec<Vec<DVec2>> = f.holes.iter().filter_map(|h| screen(h)).collect();
+        corners
+            .iter()
+            .any(|c| point_in_polygon(*c, &outer) && !holes.iter().any(|h| point_in_polygon(*c, h)))
+    };
     for (id, f) in m.faces() {
         let all = face_loops(f).all(|l| screen(l).is_some_and(|pts| !pts.is_empty()));
         let hit = if window {
             all && face_loops(f).all(|l| screen(l).is_some_and(|pts| chosen(true, &pts)))
         } else {
             face_loops(f).any(|l| screen(l).is_some_and(|pts| chosen(true, &pts)))
+                || (all && within(f))
         };
         if hit {
             ids.push(EntityId::Face(id));
@@ -307,6 +320,16 @@ mod tests {
         assert_eq!(out.commands, select(&["e2", "f8"], SelectMode::Replace));
         let window = r.drag(b, a);
         assert_eq!(window.commands, select(&[], SelectMode::Replace));
+    }
+
+    #[test]
+    fn dragging_left_inside_a_face_selects_it() {
+        let mut r = Rig::new();
+        // A small box around the middle of the square's interior, away from every edge.
+        let mid = r.px(DVec3::new(1.0, 1.0, 0.0));
+        let (a, b) = (mid + DVec2::new(6.0, -6.0), mid + DVec2::new(-6.0, 6.0));
+        let out = r.drag(a, b);
+        assert_eq!(out.commands, select(&["f8"], SelectMode::Replace));
     }
 
     #[test]
