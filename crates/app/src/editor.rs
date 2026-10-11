@@ -233,8 +233,13 @@ impl Editor {
 
     /// Sends a click, typed value or cancel to the tool and runs what it asks for.
     fn send(&mut self, event: ToolEvent) {
+        let is_release = matches!(event, ToolEvent::Release(_));
         let out = self.handle(event);
-        self.message = out.message.clone();
+        // A release that did nothing keeps the message from the click that preceded it.
+        let keep = is_release && out.commands.is_empty() && out.message.is_none();
+        if !keep {
+            self.message = out.message.clone();
+        }
         self.apply(out);
         self.update_hover();
     }
@@ -551,6 +556,18 @@ mod tests {
         click_at(&mut e, DVec3::new(1.0, 1.0, 1.0));
         type_text(&mut e, "-3");
         assert_eq!(stats(&e), (12, 6));
+        assert!(e.status().contains("collapse"), "{}", e.status());
+    }
+
+    #[test]
+    fn failed_clicks_keep_their_message_after_release() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char('p'));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        type_text(&mut e, "1");
+        click_at(&mut e, DVec3::new(2.0, 2.0, 1.0));
+        click_at(&mut e, DVec3::new(2.0, 2.0, -3.0));
         assert!(e.status().contains("collapse"), "{}", e.status());
     }
 
