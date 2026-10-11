@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c)
 
 ## Goal
 
@@ -71,7 +71,9 @@ SketchUp geometry is non-manifold (an edge can border three or more faces; edges
 
 - A `Definition` owns its own mesh. An `Instance` references a definition with a transform.
 - Model = root mesh + tree of instances. Geometry in different meshes never merges.
-- Groups are single-use definitions; components are shared.
+- Groups are single-use definitions; components are shared. Copying a group copies its definition; copying a component instance places the same definition. A group's definition goes with its last instance.
+- Entity ids are unique across all meshes, so an id alone names an entity anywhere in the model.
+- Editing happens in an open context: the root or an instance opened for editing (a path of instances). Commands and queries address the open context's mesh, in its own coordinates.
 
 ### Operations API
 
@@ -148,7 +150,7 @@ Design rule for every milestone: the interface is one client of the command laye
 
 ### Commands
 
-- `session::Command` is a serde-serializable enum covering every state change: modeling (add edge, draw rectangle/circle, push/pull face by distance, move/copy/rotate entities, erase, make group/component), selection, camera (set, orbit, zoom extents, standard views), undo/redo, file (new, open, save, import, export).
+- `session::Command` is a serde-serializable enum covering every state change: modeling (add edge, draw rectangle/circle, push/pull face by distance, move/copy/rotate entities, erase, make group/component, explode), editing context (open/close an instance), selection, camera (set, orbit, zoom extents, standard views), undo/redo, file (new, open, save, import, export).
 - Commands take explicit values (points, distances, entity IDs), never screen coordinates or cursor state.
 - `Document::execute(Command) -> Result<Outcome, CommandError>`, where `Outcome` carries the net `ChangeSummary` (created/deleted/modified ids as strings). Each modeling command is one undo step; camera commands are not recorded. Errors are structured (`kind` + `message` + offending `ids`), never panics. Raw `ChangeSet`s stay internal.
 - Entity IDs are the kernel's stable ids, serialized as strings (`"v12"`, `"e3"`, `"f7"`).
@@ -187,7 +189,9 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M4a**: egui shell (toolbar, measurements box, entity info); selection in the session; Select tool (click, box); Erase tool and command (with face merging and edge healing).
 - **M4b**: Move/Copy (with VCB array syntax); parallel/perpendicular inference; direction locks (Shift, arrow keys).
 - **M4c**: push/pull through to openings; push/pull back to flush welds the face and heals the seams; apparent-intersection snaps; BVH picking (a kernel index used by tools and push/pull).
-- **M5**: groups and components; save/load; export.
+- **M5a**: groups and components in the kernel and session: make group/component, explode, copy/move/erase/select instances, open/close an instance for editing (commands and queries), drawn with the selection and open context shown.
+- **M5b**: group and component tools: picking and box-selecting instances, double-click to open and close, Move on instances, inference on geometry inside instances, editing a moved instance with the tools, toolbar and shortcuts for make group/component and explode.
+- **M5c**: save/load (`.skr`); export OBJ, STL, glTF; file commands.
 
 ## Risks
 

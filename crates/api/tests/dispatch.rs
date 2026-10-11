@@ -129,13 +129,24 @@ fn describe_lists_methods_and_schemas() {
         "undo",
         "redo",
         "set_camera",
+        "make_group",
+        "make_component",
+        "explode",
+        "open_instance",
+        "close_instance",
     ] {
         assert!(
             command_schema.contains(variant),
             "Command schema lacks {variant}"
         );
     }
-    assert!(d["schemas"]["Query"].to_string().contains("events"));
+    let query_schema = d["schemas"]["Query"].to_string();
+    for variant in ["events", "definitions", "context"] {
+        assert!(
+            query_schema.contains(variant),
+            "Query schema lacks {variant}"
+        );
+    }
 }
 
 #[test]
@@ -377,4 +388,107 @@ fn ids_must_be_string_number_or_null() {
         let r: Value = serde_json::from_str(&handle(&mut h, &line).unwrap()).unwrap();
         assert!(r.get("result").is_some());
     }
+}
+
+#[test]
+fn components_over_json_rpc() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": "f8", "distance": 1.0}),
+    );
+    let all = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["edge", "face"]}),
+    )["result"]
+        .clone();
+    let ids: Vec<Value> = all["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(all["faces"].as_array().unwrap())
+        .map(|e| e["id"].clone())
+        .collect();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "make_component", "ids": ids, "name": "Crate"}),
+    );
+    let first = call(&mut h, "query", json!({"type": "selection"}))["result"]["ids"][0].clone();
+    assert!(
+        r["result"]["changes"]["created"]
+            .as_array()
+            .unwrap()
+            .contains(&first)
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "copy", "ids": [first], "offset": [3, 0, 0]}),
+    );
+
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "open_instance", "id": first}),
+    );
+    let faces = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["face"]}),
+    );
+    let top = faces["result"]["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["normal"] == json!([0.0, 0.0, 1.0]))
+        .unwrap()["id"]
+        .clone();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": top, "distance": 1.0}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+    let png = call(&mut h, "render_view", json!({"width": 64, "height": 64}));
+    assert!(
+        png["result"]["png_base64"].is_string()
+            || png["error"]["code"] == codes::RENDER_UNAVAILABLE,
+        "{png}"
+    );
+    call(&mut h, "execute", json!({"type": "close_instance"}));
+
+    let placed = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["instance"]}),
+    );
+    let tops: Vec<Value> = placed["result"]["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["bounds"]["max"][2].clone())
+        .collect();
+    assert_eq!(tops, [json!(2.0), json!(2.0)], "both copies grew");
+    let defs = call(&mut h, "query", json!({"type": "definitions"}));
+    assert_eq!(defs["result"]["definitions"][0]["instances"], 2);
+
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "explode", "ids": [first]}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+    let stats = call(&mut h, "query", json!({"type": "stats"}))["result"].clone();
+    assert_eq!(
+        (stats["faces"].clone(), stats["instances"].clone()),
+        (json!(6), json!(1))
+    );
 }
