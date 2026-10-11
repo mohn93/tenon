@@ -64,7 +64,7 @@ Modeling commands, each one undo step:
 | `{"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}` | Moves vertices, edges and faces (their vertices) by `offset`. Faces that share only some moved vertices stretch and may tilt but must stay flat: a move that would bend one is `invalid_input` naming that face. A move that would collapse an edge, turn a face over, make a face cross itself, push a hole out of its face or land a vertex on another is `invalid_input` naming the ids. Moved geometry does not merge with what it ends up touching. Unknown ids are `not_found`. |
 | `{"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 4}` | Copies edges and faces `count` times (default 1, at most 100); copy k is shifted by `k * offset`. Copies are drawn like new edges, so they merge with what they touch and closed loops become faces (an opening in a copied face stays open); copied faces keep the orientation of their originals. Vertex ids are `invalid_input`. |
 | `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges and faces. An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Faces are erased before edges, so erasing a face together with the seam it shares with a coplanar neighbour removes the neighbour too: the seam then bounds only one face. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with `ids`; empty `ids` is `invalid_input`. |
-| `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in. A face whose neighbors all run along the normal, like a box top, moves and stretches them. |
+| `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in; pushed in exactly as far as a parallel face that holds it (the back of a wall), it cuts an opening through. A face whose neighbors all run along the normal, like a box top, moves and stretches them; moved back flush with the surface around it (a recess or bump pushed back), it closes up and the seams heal. |
 
 `{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges and faces;
 `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and does not
@@ -83,8 +83,9 @@ Find the face to push from the `created` ids of the command that made it, or wit
 (a pulled-up rectangle's base faces down), so read the face's `normal` with
 `{"type": "entity", "id": "f8"}` before choosing the sign. A push/pull that would collapse or
 invert the edges around a moved face fails with `invalid_input`. So does one that would carry the
-face through other geometry (pushing a recess through the bottom of a box); push-through
-openings come in M4c.
+face into or past other geometry, unless it ends exactly on a parallel face that holds the whole
+pushed face, with nothing else on it inside that area: that cuts an opening (a window through a
+wall, a hole through a slab).
 When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
 shape too.
 

@@ -239,6 +239,72 @@ fn move_and_copy_over_json_rpc() {
     );
 }
 
+/// The id of the first face in a command result's `created` list.
+fn created_face(r: &Value) -> Value {
+    r["result"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn push_pull_opens_a_window_and_closes_a_recess_over_json_rpc() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 0.3, 0]}),
+    );
+    let base = created_face(&r);
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": base, "distance": 3}),
+    );
+    let faces = |h: &mut HeadlessHost| {
+        call(h, "query", json!({"type": "stats"}))["result"]["faces"].clone()
+    };
+    assert_eq!(faces(&mut h), json!(6));
+
+    // A window on the front (y = 0, facing -y) pushed back by the wall's thickness opens.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [1, 0, 1], "opposite": [2, 0, 2], "normal": [0, -1, 0]}),
+    );
+    let window = created_face(&r);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": window, "distance": -0.3}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    assert_eq!(faces(&mut h), json!(10));
+    call(&mut h, "execute", json!({"type": "undo"}));
+
+    // Pushed in part way it is a recess; pushed back flush, the wall is whole again.
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": window, "distance": -0.1}),
+    );
+    let floor = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["face"], "within": {"min": [1, 0.05, 1], "max": [2, 0.15, 2]}}),
+    );
+    let floor = floor["result"]["faces"][0]["id"].clone();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": floor, "distance": 0.1}),
+    );
+    assert_eq!(faces(&mut h), json!(6));
+}
+
 #[test]
 fn render_view_returns_a_png_or_reports_no_gpu() {
     let mut h = HeadlessHost::new();

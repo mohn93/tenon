@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope)
 
 ## Goal
 
@@ -29,7 +29,7 @@ The app is fully controllable by agents: every action a user can take is a seria
 | Robust predicates | `robust` |
 | Triangulation | `earcutr` (or `spade` if constrained triangulation is needed) |
 | Stable IDs | monotonic `u64` ids in `BTreeMap`s (undo restores original ids) |
-| Picking acceleration | BVH (`bvh` crate or in-house) |
+| Picking acceleration | BVH (in-house, in the kernel) |
 | Serialization | `serde` + JSON/`bincode`, zip container |
 | Interop | `gltf`, OBJ/STL (in-house or small crates) |
 | Native dialogs | `rfd` |
@@ -186,7 +186,7 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M3**: Rectangle, Push/Pull, VCB (lengths and `width,height`; shown in the window title until the egui shell lands in M4).
 - **M4a**: egui shell (toolbar, measurements box, entity info); selection in the session; Select tool (click, box); Erase tool and command (with face merging and edge healing).
 - **M4b**: Move/Copy (with VCB array syntax); parallel/perpendicular inference; direction locks (Shift, arrow keys).
-- **M4c**: push/pull through to openings; seam healing; apparent-intersection snaps; BVH picking.
+- **M4c**: push/pull through to openings; push/pull back to flush welds the face and heals the seams; apparent-intersection snaps; BVH picking (a kernel index used by tools and push/pull).
 - **M5**: groups and components; save/load; export.
 
 ## Risks
