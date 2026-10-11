@@ -39,6 +39,28 @@ pub fn parse_lengths(s: &str) -> Option<Vec<f64>> {
     s.split(',').map(parse_length).collect()
 }
 
+/// A typed array of copies: "5x", "x5" or "*5" make 5 copies at the last copy's spacing;
+/// "/5" makes 5 copies evenly between the original and the last copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Array {
+    Times(u32),
+    Divide(u32),
+}
+
+/// Parses array syntax; None if it is not an array or the count is 0.
+pub fn parse_array(s: &str) -> Option<Array> {
+    let s = s.trim().to_ascii_lowercase();
+    let count = |n: &str| n.trim().parse::<u32>().ok().filter(|n| *n > 0);
+    if let Some(n) = s.strip_prefix('/') {
+        return count(n).map(Array::Divide);
+    }
+    let n = s
+        .strip_suffix('x')
+        .or_else(|| s.strip_prefix('x'))
+        .or_else(|| s.strip_prefix('*'))?;
+    count(n).map(Array::Times)
+}
+
 /// A length for display, in meters with up to millimeter precision: "2.5 m".
 pub fn format_length(meters: f64) -> String {
     let s = format!("{meters:.3}");
@@ -121,6 +143,17 @@ mod tests {
             2.0,
             "rounding noise is not a direction"
         );
+    }
+
+    #[test]
+    fn array_syntax() {
+        assert_eq!(parse_array("5x"), Some(Array::Times(5)));
+        assert_eq!(parse_array(" X3 "), Some(Array::Times(3)));
+        assert_eq!(parse_array("*2"), Some(Array::Times(2)));
+        assert_eq!(parse_array("/4"), Some(Array::Divide(4)));
+        for bad in ["5", "0x", "/0", "x", "/", "2.5x", "-3x", "5m"] {
+            assert_eq!(parse_array(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

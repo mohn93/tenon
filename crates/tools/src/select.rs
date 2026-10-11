@@ -10,8 +10,6 @@ use session::{Command, SelectMode};
 use crate::inference::{edge_under, face_under};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
-/// How far (physical pixels) the cursor must move between press and release to make a box.
-
 #[derive(Clone, Debug, Default)]
 pub struct SelectTool {
     /// Cursor position where the button went down, while it is held.
@@ -164,6 +162,7 @@ impl Tool for SelectTool {
                 out.message = Some("The Select tool takes no typed values".into());
             }
             ToolEvent::Cancel => self.press = None,
+            ToolEvent::ToggleCopy => {}
         }
         if let Some(start) = self.press
             && start.distance(self.cursor) >= ctx.drag_threshold
@@ -238,6 +237,7 @@ mod tests {
                 pick_radius: 10.0,
                 drag_threshold: self.drag_threshold,
                 shift: self.shift,
+                selection: &Default::default(),
             };
             self.tool.handle(event, &ctx)
         }

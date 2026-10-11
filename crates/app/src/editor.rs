@@ -57,6 +57,8 @@ pub struct Editor {
     kind: ToolKind,
     /// Whether Shift is held, as last reported by the window.
     shift: bool,
+    /// Whether the left-button press reached the tool, so its release should too.
+    tool_pressed: bool,
     cursor: DVec2,
     hit: Option<Inference>,
     preview: Vec<[DVec3; 2]>,
@@ -76,6 +78,7 @@ impl Editor {
             tool: ToolKind::Line.make(),
             kind: ToolKind::Line,
             shift: false,
+            tool_pressed: false,
             cursor: DVec2::ZERO,
             hit: None,
             preview: Vec::new(),
@@ -175,8 +178,14 @@ impl Editor {
         if button != Button::Left {
             return false;
         }
+        // A release reaches the tool only if its press did (not one that began on a panel or
+        // in another tool).
+        if !pressed && !std::mem::take(&mut self.tool_pressed) {
+            return false;
+        }
         self.update_hover();
         let Some(hit) = self.hit else { return false };
+        self.tool_pressed = pressed;
         self.send(if pressed {
             ToolEvent::Click(hit)
         } else {
@@ -326,6 +335,7 @@ impl Editor {
             pick_radius: PICK_RADIUS_LOGICAL_PX * self.scale_factor,
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
             shift: self.shift,
+            selection: self.doc.selection(),
         };
         self.tool.handle(event, &ctx)
     }
@@ -769,5 +779,14 @@ mod tests {
         assert!(e.key(EditorKey::Char('e')));
         click_at(&mut e, DVec3::new(3.0, 2.0, 0.0));
         assert_eq!(stats(&e), (3, 0));
+    }
+
+    #[test]
+    fn a_release_without_its_press_is_not_sent_to_the_tool() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        assert!(!e.button(Button::Left, false));
+        assert!(e.doc().selection().is_empty());
     }
 }

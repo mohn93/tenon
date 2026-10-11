@@ -64,7 +64,7 @@ impl Tool for EraseTool {
             ToolEvent::Value(_) => {
                 out.message = Some("The Erase tool takes no typed values".into());
             }
-            ToolEvent::Release(_) | ToolEvent::Cancel => {}
+            ToolEvent::Release(_) | ToolEvent::Cancel | ToolEvent::ToggleCopy => {}
         }
         out.preview = self.outline.clone();
         out
@@ -105,6 +105,7 @@ mod tests {
             pick_radius: 10.0,
             drag_threshold: 4.0,
             shift: false,
+            selection: &Default::default(),
         };
         tool.handle(event, &ctx)
     }

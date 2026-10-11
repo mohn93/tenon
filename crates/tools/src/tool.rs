@@ -1,7 +1,9 @@
 //! What every interactive tool implements, and the tools the app can switch between.
 
+use std::collections::BTreeSet;
+
 use glam::{DVec2, DVec3};
-use kernel::Model;
+use kernel::{EntityId, Model};
 use session::{Camera, Command};
 
 use crate::erase::EraseTool;
@@ -23,6 +25,8 @@ pub struct ToolContext<'a> {
     pub drag_threshold: f64,
     /// Whether Shift is held.
     pub shift: bool,
+    /// The selected edges and faces.
+    pub selection: &'a BTreeSet<EntityId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,6 +41,9 @@ pub enum ToolEvent {
     Value(String),
     /// Escape: abandon the operation in progress.
     Cancel,
+    /// The copy modifier was tapped (Ctrl): tools that can copy switch between moving and
+    /// copying.
+    ToggleCopy,
 }
 
 /// What a tool wants done after an event.

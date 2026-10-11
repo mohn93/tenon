@@ -102,7 +102,7 @@ impl Tool for LineTool {
                     }
                 }
             }
-            ToolEvent::Release(_) => {}
+            ToolEvent::Release(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.reset(),
         }
         if let (Some(a), Some(b)) = (self.last, self.hover)
@@ -165,6 +165,7 @@ mod tests {
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
                 shift: false,
+                selection: &Default::default(),
             };
             self.tool.handle(event, &ctx)
         }

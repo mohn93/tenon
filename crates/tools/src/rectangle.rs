@@ -126,7 +126,7 @@ impl Tool for RectangleTool {
                 }
                 (Some(_), _) => out.message = Some(format!("Not width,height: {text}")),
             },
-            ToolEvent::Release(_) => {}
+            ToolEvent::Release(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((corner, normal)), Some(hover)) = (self.start, self.hover)
@@ -184,6 +184,7 @@ mod tests {
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
                 shift: false,
+                selection: &Default::default(),
             };
             self.tool.handle(event, &ctx)
         }

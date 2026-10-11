@@ -138,7 +138,7 @@ impl Tool for PushPullTool {
                     self.finish(v, &mut out);
                 }
             },
-            ToolEvent::Release(_) => {}
+            ToolEvent::Release(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         match &self.drag {
@@ -217,6 +217,7 @@ mod tests {
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
                 shift: false,
+                selection: &Default::default(),
             };
             self.tool.handle(event, &ctx)
         }
