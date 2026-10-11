@@ -184,7 +184,7 @@ pub(crate) fn loop_has_side(l: &[VertexId], a: VertexId, b: VertexId) -> bool {
     })
 }
 
-fn insert_between(l: &mut Vec<VertexId>, a: VertexId, b: VertexId, m: VertexId) {
+pub(crate) fn insert_between(l: &mut Vec<VertexId>, a: VertexId, b: VertexId, m: VertexId) {
     for i in 0..l.len() {
         let (x, y) = (l[i], l[(i + 1) % l.len()]);
         if (x, y) == (a, b) || (x, y) == (b, a) {

@@ -928,3 +928,18 @@ fn a_window_recess_pushed_back_flush_closes() {
     push_pull_undoable(&mut m, floor, 0.1);
     assert_plain_box(&m);
 }
+
+#[test]
+fn flush_push_keeps_a_line_that_ends_on_the_rim_without_overlaps() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    m.push_pull(sub, -1.0).unwrap();
+    m.add_edge(DVec3::new(1.5, 1.0, 2.0), DVec3::new(1.5, 0.0, 2.0))
+        .unwrap();
+    let floor = face_in(&m, 1.0, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, floor, 1.0);
+    m.validate().unwrap();
+    // 12 box edges, the front edge split at (1.5,0) (+1) and the line (+1); the rim is gone.
+    assert_eq!(counts(&m), (10, 14, 6));
+    assert_outward(&m, &all_faces(&m));
+}

@@ -3,8 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::edit::loop_has_side;
-use crate::geom::{LENGTH_TOL, Plane, vector_area};
+use crate::edit::{insert_between, loop_has_side};
+use crate::geom::{LENGTH_TOL, Plane, project_on_segment, vector_area};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{Face, Model};
 
@@ -73,8 +73,47 @@ impl Model {
         for (e, [a, b]) in joined {
             self.remove_edge(e);
             let (a, b) = (to(&a), to(&b));
-            if a != b && self.edge_between(a, b).is_none() {
-                self.insert_edge(a, b);
+            if a == b {
+                continue;
+            }
+            // Vertices left on the re-joined edge split it, in the edge and in the face loops.
+            let (pa, pb) = (self.pos(a), self.pos(b));
+            let mut along: Vec<(f64, VertexId)> = self
+                .vertices()
+                .filter(|(v, _)| *v != a && *v != b && !target.contains_key(v))
+                .filter_map(|(v, vert)| {
+                    let (t, dist) = project_on_segment(vert.pos, pa, pb);
+                    (dist < LENGTH_TOL
+                        && t > 0.0
+                        && t * pa.distance(pb) > LENGTH_TOL
+                        && (1.0 - t) * pa.distance(pb) > LENGTH_TOL)
+                        .then_some((t, v))
+                })
+                .collect();
+            along.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut chain = vec![a];
+            chain.extend(along.iter().map(|(_, v)| *v));
+            chain.push(b);
+            if chain.len() > 2 {
+                let users: Vec<FaceId> = self
+                    .faces()
+                    .filter(|(_, f)| loops(f).any(|l| loop_has_side(l, a, b)))
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in users {
+                    let mut f = self.face(id).unwrap().clone();
+                    for l in std::iter::once(&mut f.outer).chain(f.holes.iter_mut()) {
+                        for w in 1..chain.len() - 1 {
+                            insert_between(l, chain[w - 1], b, chain[w]);
+                        }
+                    }
+                    self.replace_face(id, f);
+                }
+            }
+            for w in chain.windows(2) {
+                if self.edge_between(w[0], w[1]).is_none() {
+                    self.insert_edge(w[0], w[1]);
+                }
             }
         }
         for &m in target.keys() {
