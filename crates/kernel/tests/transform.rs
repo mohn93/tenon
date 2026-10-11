@@ -216,3 +216,42 @@ fn moving_a_hole_out_of_its_face_is_refused() {
     );
     assert_eq!(m, before);
 }
+
+#[test]
+fn copying_a_face_with_an_opening_keeps_the_opening() {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 4.0);
+    let inner = square(&mut m, 1.5, 1.5, 1.0);
+    m.erase(&[], &[inner]);
+    m.validate().unwrap();
+    let f = m.faces().next().map(|(id, _)| id).unwrap();
+    assert_eq!(m.faces().count(), 1);
+    assert_eq!(m.face(f).unwrap().holes.len(), 1);
+    let before = m.clone();
+    let c = m.copy(&[], &[f], p(10.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 2);
+    let copy = m
+        .faces()
+        .find(|(id, _)| *id != f)
+        .map(|(_, face)| face.clone())
+        .unwrap();
+    assert_eq!(copy.holes.len(), 1);
+    let after = m.clone();
+    m.apply(&c.inverse());
+    assert_eq!(m, before);
+    m.apply(&c);
+    assert_eq!(m, after);
+}
+
+#[test]
+fn copying_a_face_with_a_filled_hole_does_not_remove_faces() {
+    let mut m = Model::new();
+    let outer = square(&mut m, 0.0, 0.0, 4.0);
+    square(&mut m, 1.5, 1.5, 1.0);
+    assert_eq!(m.faces().count(), 2);
+    m.copy(&[], &[outer], p(10.0, 0.0, 0.0), 2).unwrap();
+    m.validate().unwrap();
+    // The hole copies close into faces, as the original's hole is filled.
+    assert_eq!(m.faces().count(), 6);
+}

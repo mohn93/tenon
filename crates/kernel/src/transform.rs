@@ -107,7 +107,7 @@ impl Model {
     /// Copies `edges` and `faces` (with their edges) `count` times, copy k shifted by
     /// `k * offset`, as one ChangeSet. Copies are drawn like new edges, so they merge with
     /// geometry they touch and close loops into faces; each copied face keeps the orientation
-    /// of its original.
+    /// of its original, and an opening (a hole with no face in it) stays open.
     pub fn copy(
         &mut self,
         edges: &[EdgeId],
@@ -126,6 +126,8 @@ impl Model {
             segments.insert((e.v[0].min(e.v[1]), e.v[0].max(e.v[1])));
         }
         let mut originals: Vec<(Vec<DVec3>, DVec3)> = Vec::new();
+        // Holes of copied faces that no face fills.
+        let mut openings: Vec<Vec<DVec3>> = Vec::new();
         for f in faces.iter().filter_map(|f| self.face(*f)) {
             for l in loops(f) {
                 for i in 0..l.len() {
@@ -134,7 +136,13 @@ impl Model {
                 }
             }
             originals.push((f.outer.iter().map(|v| self.pos(*v)).collect(), f.normal));
+            for h in &f.holes {
+                if self.face_with_outer(&h.iter().copied().collect()).is_none() {
+                    openings.push(h.iter().map(|v| self.pos(*v)).collect());
+                }
+            }
         }
+        let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
         let points: Vec<(DVec3, DVec3)> = segments
             .iter()
             .map(|(a, b)| (self.pos(*a), self.pos(*b)))
@@ -151,16 +159,30 @@ impl Model {
                 let ids: Option<BTreeSet<VertexId>> =
                     outer.iter().map(|p| self.find_vertex(*p + shift)).collect();
                 let Some(ids) = ids else { continue };
-                let copy = self
-                    .faces()
-                    .find(|(_, f)| f.outer.iter().copied().collect::<BTreeSet<_>>() == ids)
-                    .map(|(id, _)| id);
-                if let Some(id) = copy {
+                if let Some(id) = self.face_with_outer(&ids) {
                     self.orient(id, *normal);
+                }
+            }
+            // Drawing an opening's loop closes it into a face; take that face out again.
+            for hole in &openings {
+                let ids: Option<BTreeSet<VertexId>> =
+                    hole.iter().map(|p| self.find_vertex(*p + shift)).collect();
+                let Some(ids) = ids else { continue };
+                if let Some(id) = self.face_with_outer(&ids)
+                    && !existing.contains(&id)
+                {
+                    self.remove_face(id);
                 }
             }
         }
         Ok(self.take_changes())
+    }
+
+    /// The face whose outer loop is exactly these vertices.
+    fn face_with_outer(&self, ids: &BTreeSet<VertexId>) -> Option<FaceId> {
+        self.faces()
+            .find(|(_, f)| f.outer.len() == ids.len() && f.outer.iter().all(|v| ids.contains(v)))
+            .map(|(id, _)| id)
     }
 }
 
