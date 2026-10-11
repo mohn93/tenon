@@ -33,6 +33,10 @@ pub enum SnapKind {
     OnEdge,
     /// Along a red/green/blue axis through the point the tool is drawing from.
     Axis(Axis),
+    /// Parallel to the reference edge, through the point the tool is drawing from.
+    Parallel,
+    /// Perpendicular to the reference edge, through the point the tool is drawing from.
+    Perpendicular,
     OnFace,
     Ground,
     /// Nothing to snap to: a point in front of the camera under the cursor.
@@ -47,11 +51,30 @@ pub struct Inference {
     pub face: Option<FaceId>,
 }
 
-/// Finds the 3D point under `cursor` (physical pixels). `anchor` is the point a tool is drawing
-/// from, enabling axis inference. Snap candidates count only within `radius_px` of the cursor.
-///
-/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > on-edge > axis > on-face >
-/// ground > free. Points and edges hidden behind a face are skipped.
+/// What inference can follow from the point a tool is drawing from.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Guides {
+    /// The point a tool is drawing from; directions are measured from it.
+    pub anchor: Option<DVec3>,
+    /// Unit direction of the last edge the cursor rested on: snaps parallel and perpendicular
+    /// to it are offered from the anchor.
+    pub reference: Option<DVec3>,
+    /// A locked direction (Shift or an arrow key): the point stays on the line through the
+    /// anchor, and points the cursor snaps to are projected onto it.
+    pub lock: Option<Lock>,
+}
+
+/// A direction inference is held to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lock {
+    /// Unit direction.
+    pub dir: DVec3,
+    /// How the locked point is reported (an axis, parallel or perpendicular).
+    pub kind: SnapKind,
+}
+
+/// Finds the 3D point under `cursor` (physical pixels) with no guides but `anchor`, which
+/// enables axis inference. See [`infer_with`].
 pub fn infer(
     model: &Model,
     camera: &Camera,
@@ -59,86 +82,68 @@ pub fn infer(
     anchor: Option<DVec3>,
     radius_px: f64,
 ) -> Inference {
+    let guides = Guides {
+        anchor,
+        ..Guides::default()
+    };
+    infer_with(model, camera, cursor, &guides, radius_px)
+}
+
+/// Finds the 3D point under `cursor` (physical pixels). Snap candidates count only within
+/// `radius_px` of the cursor.
+///
+/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > on-edge > directions from
+/// the anchor (axes, parallel or perpendicular to the reference edge; nearest wins) > on-face >
+/// ground > free. Points and edges hidden behind a face are skipped. With a lock, the result is
+/// always on the locked line.
+pub fn infer_with(
+    model: &Model,
+    camera: &Camera,
+    cursor: DVec2,
+    guides: &Guides,
+    radius_px: f64,
+) -> Inference {
     let ray = camera.ray(cursor);
     let face_hit = nearest_face_hit(model, &ray);
     let face = face_hit.map(|(f, _)| f);
     let screen_dist = |p: DVec3| camera.project(p).map(|s| s.distance(cursor));
-    let within = |p: DVec3| {
-        screen_dist(p)
-            .filter(|d| *d <= radius_px)
-            .filter(|_| visible(model, camera.eye, p))
-    };
+    let snapped = snap_point(model, camera, cursor, radius_px);
 
-    // Points: vertices, edge midpoints, origin.
-    let mut best: Option<(f64, Inference)> = None;
-    let offer = |p: DVec3, kind: SnapKind, best: &mut Option<(f64, Inference)>| {
-        if let Some(d) = within(p)
-            && best.as_ref().is_none_or(|(bd, _)| d < *bd)
-        {
-            *best = Some((
-                d,
-                Inference {
-                    point: p,
-                    kind,
-                    face,
-                },
-            ));
-        }
-    };
-    for (_, v) in model.vertices() {
-        offer(v.pos, SnapKind::Endpoint, &mut best);
-    }
-    for (_, e) in model.edges() {
-        if let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) {
-            offer((a + b) * 0.5, SnapKind::Midpoint, &mut best);
-        }
-    }
-    offer(DVec3::ZERO, SnapKind::Origin, &mut best);
-    if let Some((_, hit)) = best {
-        return hit;
-    }
-
-    // On an edge.
-    let mut on_edge: Option<(f64, DVec3)> = None;
-    for (_, e) in model.edges() {
-        if let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) {
-            let p = closest_on_line_to_ray(a, b - a, &ray, true);
-            if let Some(d) = within(p)
-                && on_edge.is_none_or(|(bd, _)| d < bd)
-            {
-                on_edge = Some((d, p));
-            }
-        }
-    }
-    if let Some((_, point)) = on_edge {
+    if let (Some(anchor), Some(lock)) = (guides.anchor, guides.lock) {
+        let point = match snapped {
+            Some((p, _)) => anchor + lock.dir * (p - anchor).dot(lock.dir),
+            None => closest_on_line_to_ray(anchor, lock.dir, &ray, false),
+        };
         return Inference {
             point,
-            kind: SnapKind::OnEdge,
+            kind: lock.kind,
             face,
         };
     }
+    if let Some((point, kind)) = snapped {
+        return Inference { point, kind, face };
+    }
 
-    // Along an axis from the anchor.
-    if let Some(anchor) = anchor {
-        let mut on_axis: Option<(f64, Inference)> = None;
-        for axis in Axis::ALL {
-            let p = closest_on_line_to_ray(anchor, axis.dir(), &ray, false);
-            // Axis lines are guides, so they are not hidden by faces.
+    // Along a direction from the anchor. Direction lines are guides, so faces do not hide them.
+    if let Some(anchor) = guides.anchor {
+        let mut along: Option<(f64, Inference)> = None;
+        for (dir, kind) in directions(guides.reference) {
+            let p = closest_on_line_to_ray(anchor, dir, &ray, false);
             if let Some(d) = screen_dist(p).filter(|d| *d <= radius_px)
                 && p.distance(anchor) > 0.0
-                && on_axis.is_none_or(|(bd, _)| d < bd)
+                && along.is_none_or(|(bd, _)| d < bd)
             {
-                on_axis = Some((
+                along = Some((
                     d,
                     Inference {
                         point: p,
-                        kind: SnapKind::Axis(axis),
+                        kind,
                         face,
                     },
                 ));
             }
         }
-        if let Some((_, hit)) = on_axis {
+        if let Some((_, hit)) = along {
             return hit;
         }
     }
@@ -164,6 +169,83 @@ pub fn infer(
             face,
         },
     }
+}
+
+/// The visible point snap under the cursor, if any: endpoint, midpoint or origin (nearest on
+/// screen), else the nearest point on an edge.
+fn snap_point(
+    model: &Model,
+    camera: &Camera,
+    cursor: DVec2,
+    radius_px: f64,
+) -> Option<(DVec3, SnapKind)> {
+    let ray = camera.ray(cursor);
+    let within = |p: DVec3| {
+        camera
+            .project(p)
+            .map(|s| s.distance(cursor))
+            .filter(|d| *d <= radius_px)
+            .filter(|_| visible(model, camera.eye, p))
+    };
+    let mut best: Option<(f64, DVec3, SnapKind)> = None;
+    let mut offer = |p: DVec3, kind: SnapKind| {
+        if let Some(d) = within(p)
+            && best.is_none_or(|(bd, _, _)| d < bd)
+        {
+            best = Some((d, p, kind));
+        }
+    };
+    for (_, v) in model.vertices() {
+        offer(v.pos, SnapKind::Endpoint);
+    }
+    for (_, e) in model.edges() {
+        if let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) {
+            offer((a + b) * 0.5, SnapKind::Midpoint);
+        }
+    }
+    offer(DVec3::ZERO, SnapKind::Origin);
+    if let Some((_, p, kind)) = best {
+        return Some((p, kind));
+    }
+
+    let mut on_edge: Option<(f64, DVec3)> = None;
+    for (_, e) in model.edges() {
+        if let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) {
+            let p = closest_on_line_to_ray(a, b - a, &ray, true);
+            if let Some(d) = within(p)
+                && on_edge.is_none_or(|(bd, _)| d < bd)
+            {
+                on_edge = Some((d, p));
+            }
+        }
+    }
+    on_edge.map(|(_, p)| (p, SnapKind::OnEdge))
+}
+
+/// Unit directions offered from the anchor: the three axes, plus, for a reference direction
+/// not along an axis, the direction itself (parallel) and two perpendiculars (one horizontal,
+/// one in the vertical plane through the reference) when they are not along an axis either.
+pub fn directions(reference: Option<DVec3>) -> Vec<(DVec3, SnapKind)> {
+    let mut out: Vec<(DVec3, SnapKind)> = Axis::ALL
+        .into_iter()
+        .map(|a| (a.dir(), SnapKind::Axis(a)))
+        .collect();
+    let along_axis = |d: DVec3| Axis::ALL.iter().any(|a| d.cross(a.dir()).length() < 1e-6);
+    let Some(r) = reference.and_then(|r| r.try_normalize()) else {
+        return out;
+    };
+    if along_axis(r) {
+        return out;
+    }
+    out.push((r, SnapKind::Parallel));
+    let horizontal = r.cross(DVec3::Z).try_normalize();
+    let upright = horizontal.and_then(|h| r.cross(h).try_normalize());
+    for p in [horizontal, upright].into_iter().flatten() {
+        if !along_axis(p) {
+            out.push((p, SnapKind::Perpendicular));
+        }
+    }
+    out
 }
 
 /// The nearest face under the cursor and the point where the cursor's ray meets it.
@@ -481,5 +563,57 @@ mod tests {
             edge_under(&m, &c, px(&c, DVec3::new(-3.0, 4.0, 0.0)), R),
             None
         );
+    }
+
+    fn guides(anchor: DVec3, reference: Option<DVec3>, lock: Option<Lock>) -> Guides {
+        Guides {
+            anchor: Some(anchor),
+            reference,
+            lock,
+        }
+    }
+
+    #[test]
+    fn follows_parallel_and_perpendicular_to_the_reference() {
+        let c = cam();
+        let anchor = DVec3::new(0.0, 3.0, 0.0);
+        let r = DVec3::new(2.0, 1.0, 0.0).normalize();
+        let g = guides(anchor, Some(r), None);
+        let along = anchor + r * 2.0;
+        let hit = infer_with(&Model::new(), &c, px(&c, along), &g, R);
+        assert_eq!(hit.kind, SnapKind::Parallel);
+        assert!(hit.point.abs_diff_eq(along, 1e-6));
+        let across = anchor + DVec3::new(1.0, -2.0, 0.0).normalize() * 2.0;
+        let hit = infer_with(&Model::new(), &c, px(&c, across), &g, R);
+        assert_eq!(hit.kind, SnapKind::Perpendicular);
+        assert!(hit.point.abs_diff_eq(across, 1e-6));
+    }
+
+    #[test]
+    fn a_reference_along_an_axis_adds_nothing() {
+        assert_eq!(directions(Some(DVec3::new(0.0, 3.0, 0.0))).len(), 3);
+        let tilted = directions(Some(DVec3::new(1.0, 1.0, 0.0)));
+        // Parallel and the horizontal perpendicular; the other perpendicular is vertical (Z).
+        assert_eq!(tilted.len(), 5);
+        assert_eq!(directions(None).len(), 3);
+    }
+
+    #[test]
+    fn a_lock_holds_the_point_on_its_line() {
+        let (c, mut m) = (cam(), Model::new());
+        m.add_edge(DVec3::new(3.0, 3.0, 2.0), DVec3::new(4.0, 3.0, 2.0))
+            .unwrap();
+        let anchor = DVec3::new(1.0, 1.0, 0.0);
+        let lock = Lock {
+            dir: DVec3::Z,
+            kind: SnapKind::Axis(Axis::Z),
+        };
+        let g = guides(anchor, None, Some(lock));
+        let far = infer_with(&m, &c, px(&c, DVec3::new(-4.0, 5.0, 0.0)), &g, R);
+        assert_eq!(far.kind, SnapKind::Axis(Axis::Z));
+        assert!(far.point.x == 1.0 && far.point.y == 1.0);
+        // An endpoint under the cursor sets the height.
+        let snapped = infer_with(&m, &c, px(&c, DVec3::new(3.0, 3.0, 2.0)), &g, R);
+        assert_eq!(snapped.point, DVec3::new(1.0, 1.0, 2.0));
     }
 }

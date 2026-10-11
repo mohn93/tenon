@@ -13,7 +13,9 @@ pub mod tool;
 pub mod vcb;
 
 pub use erase::EraseTool;
-pub use inference::{Axis, Inference, SnapKind, edge_under, face_under, infer};
+pub use inference::{
+    Axis, Guides, Inference, Lock, SnapKind, edge_under, face_under, infer, infer_with,
+};
 pub use line::LineTool;
 pub use move_tool::MoveTool;
 pub use push_pull::PushPullTool;

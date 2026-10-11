@@ -11,6 +11,7 @@ pub const PREVIEW: Color = [0.1, 0.1, 0.1, 1.0];
 pub const RED: Color = [0.85, 0.15, 0.15, 1.0];
 pub const GREEN: Color = [0.15, 0.65, 0.20, 1.0];
 pub const BLUE: Color = [0.15, 0.30, 0.85, 1.0];
+pub const MAGENTA: Color = [0.80, 0.10, 0.80, 1.0];
 pub const ENDPOINT: Color = [0.10, 0.60, 0.10, 1.0];
 pub const MIDPOINT: Color = [0.10, 0.70, 0.80, 1.0];
 pub const ON_EDGE: Color = [0.85, 0.10, 0.10, 1.0];
@@ -39,6 +40,7 @@ pub fn overlay(
         Some(SnapKind::Axis(Axis::X)) => RED,
         Some(SnapKind::Axis(Axis::Y)) => GREEN,
         Some(SnapKind::Axis(Axis::Z)) => BLUE,
+        Some(SnapKind::Parallel | SnapKind::Perpendicular) => MAGENTA,
         _ => PREVIEW,
     };
     let mut out: Vec<Segment> = preview
@@ -93,6 +95,19 @@ mod tests {
         let segs = overlay(&[[DVec3::ZERO, hit.point]], Some(&hit), &cam(), 1.0);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].color, GREEN);
+    }
+
+    #[test]
+    fn parallel_and_perpendicular_previews_are_magenta() {
+        for kind in [SnapKind::Parallel, SnapKind::Perpendicular] {
+            let hit = Inference {
+                point: DVec3::new(1.0, 2.0, 0.0),
+                kind,
+                face: None,
+            };
+            let segs = overlay(&[[DVec3::ZERO, hit.point]], Some(&hit), &cam(), 1.0);
+            assert_eq!(segs[0].color, MAGENTA);
+        }
     }
 
     #[test]
