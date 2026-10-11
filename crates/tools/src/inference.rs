@@ -2,7 +2,7 @@
 
 use glam::{DVec2, DVec3};
 use kernel::geom::{Plane, point_in_polygon};
-use kernel::{FaceId, Model};
+use kernel::{EdgeId, FaceId, Model};
 use session::{Camera, Ray};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +169,25 @@ pub fn infer(
 /// The nearest face under the cursor and the point where the cursor's ray meets it.
 pub fn face_under(model: &Model, camera: &Camera, cursor: DVec2) -> Option<(FaceId, DVec3)> {
     nearest_face_hit(model, &camera.ray(cursor))
+}
+
+/// The visible edge nearest the cursor on screen, if one lies within `radius_px`.
+pub fn edge_under(model: &Model, camera: &Camera, cursor: DVec2, radius_px: f64) -> Option<EdgeId> {
+    let ray = camera.ray(cursor);
+    let mut best: Option<(f64, EdgeId)> = None;
+    for (id, e) in model.edges() {
+        let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) else {
+            continue;
+        };
+        let p = closest_on_line_to_ray(a, b - a, &ray, true);
+        let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
+            continue;
+        };
+        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(model, camera.eye, p) {
+            best = Some((d, id));
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// True if no face lies between the eye and `p` (faces through `p` itself do not hide it).
@@ -437,5 +456,30 @@ mod tests {
         let behind = DVec3::new(3.0, 3.0, 1.0);
         let hit = infer(&m, &c, px(&c, behind), Some(anchor), R);
         assert_eq!(hit.kind, SnapKind::Axis(Axis::Z));
+    }
+
+    #[test]
+    fn edge_under_picks_the_nearest_visible_edge() {
+        let (c, m) = (cam(), cube());
+        let edge_at = |a: DVec3, b: DVec3| {
+            m.edges()
+                .find(|(_, e)| {
+                    let (p, q) = (m.position(e.v[0]).unwrap(), m.position(e.v[1]).unwrap());
+                    (p == a && q == b) || (p == b && q == a)
+                })
+                .unwrap()
+                .0
+        };
+        let near_top = edge_at(DVec3::new(0.0, 0.0, 2.0), DVec3::new(2.0, 0.0, 2.0));
+        let cursor = px(&c, DVec3::new(1.0, 0.0, 2.0)) + DVec2::new(0.0, 3.0);
+        assert_eq!(edge_under(&m, &c, cursor, R), Some(near_top));
+        // The far bottom edge lies behind the box.
+        let far_bottom = edge_at(DVec3::new(0.0, 2.0, 0.0), DVec3::new(2.0, 2.0, 0.0));
+        let behind = px(&c, DVec3::new(1.0, 2.0, 0.0));
+        assert_ne!(edge_under(&m, &c, behind, R), Some(far_bottom));
+        assert_eq!(
+            edge_under(&m, &c, px(&c, DVec3::new(-3.0, 4.0, 0.0)), R),
+            None
+        );
     }
 }

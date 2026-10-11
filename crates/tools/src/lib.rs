@@ -9,7 +9,7 @@ pub mod rectangle;
 pub mod tool;
 pub mod vcb;
 
-pub use inference::{Axis, Inference, SnapKind, face_under, infer};
+pub use inference::{Axis, Inference, SnapKind, edge_under, face_under, infer};
 pub use line::LineTool;
 pub use push_pull::PushPullTool;
 pub use rectangle::RectangleTool;

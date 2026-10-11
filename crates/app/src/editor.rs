@@ -25,6 +25,8 @@ pub struct Editor {
     doc: Document,
     nav: Navigation,
     tool: Box<dyn Tool>,
+    /// Whether Shift is held, as last reported by the window.
+    shift: bool,
     cursor: DVec2,
     hit: Option<Inference>,
     preview: Vec<[DVec3; 2]>,
@@ -42,6 +44,7 @@ impl Editor {
             doc: Document::new(viewport),
             nav: Navigation::default(),
             tool: ToolKind::Line.make(),
+            shift: false,
             cursor: DVec2::ZERO,
             hit: None,
             preview: Vec::new(),
@@ -98,6 +101,7 @@ impl Editor {
     }
 
     pub fn set_modifiers(&mut self, shift: bool, alt: bool) {
+        self.shift = shift;
         self.nav.set_modifiers(shift, alt);
     }
 
@@ -121,12 +125,16 @@ impl Editor {
         if self.nav.button(&self.doc.camera, button, pressed) {
             return false;
         }
-        if button != Button::Left || !pressed {
+        if button != Button::Left {
             return false;
         }
         self.update_hover();
         let Some(hit) = self.hit else { return false };
-        self.send(ToolEvent::Click(hit));
+        self.send(if pressed {
+            ToolEvent::Click(hit)
+        } else {
+            ToolEvent::Release(hit)
+        });
         true
     }
 
@@ -236,6 +244,8 @@ impl Editor {
             model: self.doc.model(),
             camera: &self.doc.camera,
             cursor: self.cursor,
+            pick_radius: PICK_RADIUS_LOGICAL_PX * self.scale_factor,
+            shift: self.shift,
         };
         self.tool.handle(event, &ctx)
     }

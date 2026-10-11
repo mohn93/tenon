@@ -102,6 +102,7 @@ impl Tool for LineTool {
                     }
                 }
             }
+            ToolEvent::Release(_) => {}
             ToolEvent::Cancel => self.reset(),
         }
         if let (Some(a), Some(b)) = (self.last, self.hover)
@@ -161,6 +162,8 @@ mod tests {
                 model: &self.model,
                 camera: &self.camera,
                 cursor: DVec2::ZERO,
+                pick_radius: 10.0,
+                shift: false,
             };
             self.tool.handle(event, &ctx)
         }

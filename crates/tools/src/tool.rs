@@ -15,6 +15,10 @@ pub struct ToolContext<'a> {
     pub camera: &'a Camera,
     /// Cursor position in physical pixels.
     pub cursor: DVec2,
+    /// How close (physical pixels) the cursor must be to an edge to pick it.
+    pub pick_radius: f64,
+    /// Whether Shift is held.
+    pub shift: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,6 +27,8 @@ pub enum ToolEvent {
     Move(Inference),
     /// The primary button was pressed at the current inference.
     Click(Inference),
+    /// The primary button was released at the current inference.
+    Release(Inference),
     /// Text typed into the measurements box, submitted with Enter.
     Value(String),
     /// Escape: abandon the operation in progress.

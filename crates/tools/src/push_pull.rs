@@ -138,6 +138,7 @@ impl Tool for PushPullTool {
                     self.finish(v, &mut out);
                 }
             },
+            ToolEvent::Release(_) => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         match &self.drag {
@@ -213,6 +214,8 @@ mod tests {
                 model: &self.model,
                 camera: &self.camera,
                 cursor: self.cursor,
+                pick_radius: 10.0,
+                shift: false,
             };
             self.tool.handle(event, &ctx)
         }

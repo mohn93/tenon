@@ -126,6 +126,7 @@ impl Tool for RectangleTool {
                 }
                 (Some(_), _) => out.message = Some(format!("Not width,height: {text}")),
             },
+            ToolEvent::Release(_) => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((corner, normal)), Some(hover)) = (self.start, self.hover)
@@ -180,6 +181,8 @@ mod tests {
                 model: &self.model,
                 camera: &self.camera,
                 cursor: self.cursor,
+                pick_radius: 10.0,
+                shift: false,
             };
             self.tool.handle(event, &ctx)
         }
