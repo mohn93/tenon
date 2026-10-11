@@ -625,3 +625,61 @@ fn exploding_bare_edges_onto_a_face_keeps_the_piece_they_cut_out() {
     s.apply(&change.inverse());
     assert_eq!(s, before);
 }
+
+#[test]
+fn exploding_a_component_with_a_group_inside_keeps_groups_single_use() {
+    let mut m = Model::new();
+    m.add_polygon(&[
+        p(0.0, 0.0, 0.0),
+        p(1.0, 0.0, 0.0),
+        p(1.0, 1.0, 0.0),
+        p(0.0, 1.0, 0.0),
+    ])
+    .unwrap();
+    let mut s = Scene::from_root(m);
+    let start = s.clone();
+    let mut history = Vec::new();
+    let (g, c) = group_all(&mut s, DefinitionKind::Group);
+    history.push(c);
+    let (comp, c) = s
+        .make_group(MeshId::Root, &[], &[], &[g], DefinitionKind::Component, "C")
+        .unwrap();
+    history.push(c);
+    history.push(
+        s.copy_instances(MeshId::Root, &[comp], p(3.0, 0.0, 0.0), 2)
+            .unwrap(),
+    );
+    let after_copy = s.clone();
+    let change = s.explode(MeshId::Root, comp).unwrap();
+    s.validate().unwrap();
+    let after = s.clone();
+    for (id, d) in s.definitions() {
+        if d.kind == DefinitionKind::Group {
+            assert_eq!(s.instance_count(id), 1, "group {id} is placed once");
+        }
+    }
+    assert_eq!(root_counts(&s), (0, 0, 0, 3));
+    s.apply(&change.inverse());
+    assert_eq!(s, after_copy);
+    s.apply(&change);
+    assert_eq!(s, after);
+    s.apply(&change.inverse());
+    for c in history.iter().rev() {
+        s.apply(&c.inverse());
+    }
+    assert_eq!(s, start);
+}
+
+#[test]
+fn exploding_a_group_with_a_group_inside_reuses_its_definition() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (inner, _) = group_all(&mut s, DefinitionKind::Group);
+    let d = definition_of(&s, inner);
+    let (outer, _) = s
+        .make_group(MeshId::Root, &[], &[], &[inner], DefinitionKind::Group, "")
+        .unwrap();
+    s.explode(MeshId::Root, outer).unwrap();
+    s.validate().unwrap();
+    assert_eq!(s.definitions().count(), 1);
+    assert_eq!(s.instance_count(d), 1);
+}

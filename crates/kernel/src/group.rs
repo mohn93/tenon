@@ -62,8 +62,9 @@ impl Scene {
 impl Scene {
     /// Replaces an instance in mesh `parent` by its definition's geometry, placed by the
     /// instance's transform and drawn like new edges, so it merges with what it touches.
-    /// Instances inside it become instances in `parent`, with new ids. A group's definition
-    /// goes with its last instance; a component's stays.
+    /// Instances inside it become instances in `parent`, with new ids; a group inside a
+    /// component gets a copy of its definition. A group's definition goes with its last
+    /// instance; a component's stays.
     pub fn explode(
         &mut self,
         parent: MeshId,
@@ -74,18 +75,35 @@ impl Scene {
             .and_then(|m| m.instance(instance))
             .cloned()
             .ok_or(KernelError::InstanceNotFound)?;
-        let mesh = &self
+        let definition = self
             .definition(placed.definition)
-            .expect("instance of a missing definition")
-            .mesh;
-        let stencil = whole(mesh);
-        let children: Vec<Instance> = mesh
+            .expect("instance of a missing definition");
+        // A definition that outlives this explode still places its groups, so the groups
+        // lifted out of it get copies of their definitions: a group is placed only once.
+        let survives = definition.kind == DefinitionKind::Component
+            || self.instance_count(placed.definition) > 1;
+        let stencil = whole(&definition.mesh);
+        let inner: Vec<Instance> = definition
+            .mesh
             .instances()
-            .map(|(_, i)| Instance {
-                definition: i.definition,
-                transform: placed.transform * i.transform,
-            })
+            .map(|(_, i)| i.clone())
             .collect();
+        let mut copied = SceneChange::default();
+        let mut children = Vec::new();
+        for i in inner {
+            let definition = match self.definition(i.definition).map(|d| d.kind) {
+                Some(DefinitionKind::Group) if survives => {
+                    let (d, made) = self.duplicate(i.definition);
+                    copied = SceneChange::join([copied, made]);
+                    d
+                }
+                _ => i.definition,
+            };
+            children.push(Instance {
+                definition,
+                transform: placed.transform * i.transform,
+            });
+        }
         let exploded = self.edit(parent, |m| {
             m.remove_instance(instance);
             m.draw_stencil(&stencil, &[placed.transform]);
@@ -94,7 +112,7 @@ impl Scene {
             }
             Ok(m.take_changes())
         })?;
-        Ok(SceneChange::join([exploded, self.prune()]))
+        Ok(SceneChange::join([copied, exploded, self.prune()]))
     }
 
     /// Places `count` copies of instances of mesh `parent`, copy k shifted by `k * offset`.
