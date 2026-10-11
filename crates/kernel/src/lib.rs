@@ -2,6 +2,7 @@
 //! No GPU or UI dependencies.
 
 mod edit;
+mod erase;
 mod faces;
 pub mod geom;
 mod ids;

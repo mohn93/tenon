@@ -62,7 +62,7 @@ impl Model {
 
     /// Recomputes the regions of `plane` and makes the face set match them. `plane` is in
     /// canonical orientation; regions are wound counter-clockwise around its normal.
-    fn rebuild_plane(&mut self, plane: Plane, new_edges: &[EdgeId]) {
+    pub(crate) fn rebuild_plane(&mut self, plane: Plane, new_edges: &[EdgeId]) {
         let old: Vec<(FaceId, Face)> = self
             .faces()
             .filter(|(_, f)| self.face_in_plane(f, &plane))

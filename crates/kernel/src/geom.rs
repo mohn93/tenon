@@ -33,6 +33,15 @@ impl Plane {
         })
     }
 
+    /// The plane through `p` with normal `normal` (unit length), in canonical orientation.
+    pub fn through(p: DVec3, normal: DVec3) -> Plane {
+        let normal = canonical(normal);
+        Plane {
+            normal,
+            d: normal.dot(p),
+        }
+    }
+
     pub fn distance(&self, p: DVec3) -> f64 {
         self.normal.dot(p) - self.d
     }

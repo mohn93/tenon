@@ -165,7 +165,7 @@ fn check_segment(a: DVec3, b: DVec3) -> Result<(), KernelError> {
     Ok(())
 }
 
-fn loop_has_side(l: &[VertexId], a: VertexId, b: VertexId) -> bool {
+pub(crate) fn loop_has_side(l: &[VertexId], a: VertexId, b: VertexId) -> bool {
     (0..l.len()).any(|i| {
         let (x, y) = (l[i], l[(i + 1) % l.len()]);
         (x, y) == (a, b) || (x, y) == (b, a)
