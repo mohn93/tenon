@@ -840,3 +840,91 @@ fn a_window_sticking_past_a_notched_back_refuses_the_push() {
     let win = window(&mut m, 1.0, 2.5, 2.0, 3.0);
     assert_refused(&mut m, win);
 }
+
+/// The model is exactly a plain box: 8 vertices, 12 edges and 6 faces pointing out.
+fn assert_plain_box(m: &Model) {
+    m.validate().unwrap();
+    assert_eq!(counts(m), (8, 12, 6));
+    assert!(
+        m.faces()
+            .all(|(_, f)| f.holes.is_empty() && f.outer.len() == 4)
+    );
+    assert_outward(m, &all_faces(m));
+}
+
+#[test]
+fn pushing_a_recess_back_flush_closes_it() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    m.push_pull(sub, -1.0).unwrap();
+    let floor = face_in(&m, 1.0, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, floor, 1.0);
+    assert_plain_box(&m);
+}
+
+#[test]
+fn pushing_a_bump_back_flush_removes_it() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    m.push_pull(sub, 1.0).unwrap();
+    let top = face_in(&m, 3.0, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, top, -1.0);
+    assert_plain_box(&m);
+}
+
+#[test]
+fn pushing_notches_and_steps_back_flush_restores_the_box() {
+    for (x1, y1) in [(1.0, 1.0), (4.0, 1.0), (2.0, 1.0)] {
+        let (mut m, _) = box_4x4x2();
+        rect(&mut m, 0.0, 0.0, x1, y1, 2.0);
+        let sub = face_in(&m, 2.0, 0.0, 0.0, x1, y1);
+        m.push_pull(sub, -1.0).unwrap();
+        let floor = face_in(&m, 1.0, 0.0, 0.0, x1, y1);
+        push_pull_undoable(&mut m, floor, 1.0);
+        assert_plain_box(&m);
+    }
+}
+
+#[test]
+fn pushing_a_recess_past_flush_is_refused() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    m.push_pull(sub, -1.0).unwrap();
+    let floor = face_in(&m, 1.0, 1.0, 1.0, 2.0, 2.0);
+    m.take_changes();
+    let before = m.clone();
+    assert_eq!(m.push_pull(floor, 1.5), Err(KernelError::Collapse));
+    assert_eq!(m, before);
+}
+
+#[test]
+fn pulling_a_lower_box_level_with_its_neighbour_removes_the_step() {
+    let mut m = Model::new();
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    m.push_pull(a, 2.0).unwrap();
+    let b = rect(&mut m, 2.0, 0.0, 4.0, 2.0, 0.0);
+    m.push_pull(b, 1.0).unwrap();
+    let top = face_in(&m, 1.0, 2.0, 0.0, 4.0, 2.0);
+    push_pull_undoable(&mut m, top, 1.0);
+    m.validate().unwrap();
+    let step = faces_where(&m, |q| (q.x - 2.0).abs() < 1e-9 && q.z > 1.0 - 1e-9);
+    assert!(step.is_empty(), "no step wall is left");
+    let internal = faces_where(&m, |q| (q.x - 2.0).abs() < 1e-9);
+    assert_eq!(internal.len(), 1, "one internal wall");
+    let solid: Vec<FaceId> = all_faces(&m)
+        .into_iter()
+        .filter(|f| !internal.contains(f))
+        .collect();
+    assert_outward(&m, &solid);
+    assert_closed(&m, &internal);
+}
+
+#[test]
+fn a_window_recess_pushed_back_flush_closes() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    m.push_pull(win, -0.1).unwrap();
+    let floor = faces_where(&m, |q| (q.y - 0.1).abs() < 1e-9)[0];
+    push_pull_undoable(&mut m, floor, 0.1);
+    assert_plain_box(&m);
+}

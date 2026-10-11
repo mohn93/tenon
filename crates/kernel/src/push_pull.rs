@@ -68,9 +68,13 @@ impl Model {
     }
 
     /// Moves every vertex of face `id` by `offset`, after checking that no edge leaving the face
-    /// collapses or flips, no vertex lands on another and the face passes through no other face.
+    /// flips, no vertex lands on another and the face passes through no other face. An edge
+    /// leaving the face may shrink to nothing exactly (a recess pushed back flush): the face
+    /// then lands on the geometry around it and is welded to it.
     fn move_face(&mut self, id: FaceId, face: &Face, offset: DVec3) -> Result<(), KernelError> {
         let moving = loop_vertices(face);
+        // Moving vertices that land on the far end of an edge leaving the face.
+        let mut meets: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
         for (_, e) in self.edges() {
             let [a, b] = e.v;
             let (m, fixed) = match (moving.contains(&a), moving.contains(&b)) {
@@ -80,10 +84,13 @@ impl Model {
             };
             let before = self.pos(m) - self.pos(fixed);
             let after = before + offset;
-            if after.length() < LENGTH_TOL || after.dot(before) <= 0.0 {
+            if after.length() < LENGTH_TOL {
+                meets.insert((m, fixed));
+            } else if after.dot(before) <= 0.0 {
                 return Err(KernelError::Collapse);
             }
         }
+        let flush = !meets.is_empty();
         // Every face that stretches must keep its fixed vertices on the side of the face they
         // started on; otherwise its loops fold over (a hole could end up outside its outer loop).
         let n = face.normal;
@@ -96,24 +103,33 @@ impl Model {
             }
             for v in verts.difference(&moving) {
                 let h = (self.pos(*v) - origin).dot(n);
-                if (h - d).abs() < LENGTH_TOL || h * (h - d) <= 0.0 {
+                let level = (h - d).abs() < LENGTH_TOL;
+                if (level && !flush) || (!level && h * (h - d) <= 0.0) {
                     return Err(KernelError::Collapse);
                 }
             }
         }
         for &m in &moving {
             let to = self.pos(m) + offset;
-            let lands_on_other = self
-                .vertices()
-                .any(|(v, vert)| !moving.contains(&v) && vert.pos.distance(to) < LENGTH_TOL);
+            let lands_on_other = self.vertices().any(|(v, vert)| {
+                !moving.contains(&v)
+                    && vert.pos.distance(to) < LENGTH_TOL
+                    && !meets.contains(&(m, v))
+            });
             if lands_on_other {
                 return Err(KernelError::Collapse);
             }
         }
-        self.check_unobstructed(id, offset.dot(n))?;
-        for m in moving {
+        // A face carried flush onto another face (a box top pushed down to its bottom) would
+        // flatten the solid: the edges joining them collapse.
+        self.check_unobstructed(id, offset.dot(n))
+            .map_err(|e| if flush { KernelError::Collapse } else { e })?;
+        for &m in &moving {
             let to = self.pos(m) + offset;
             self.move_vertex(m, to);
+        }
+        if flush {
+            self.weld(&moving);
         }
         Ok(())
     }

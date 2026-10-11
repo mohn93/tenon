@@ -1,0 +1,130 @@
+//! Welding: after a push/pull brings a face flush with the geometry around it, the vertices
+//! that met merge, collapsed edges and faces go, and the seams left in a flat surface heal.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::edit::loop_has_side;
+use crate::geom::{LENGTH_TOL, Plane, vector_area};
+use crate::ids::{EdgeId, FaceId, VertexId};
+use crate::model::{Face, Model};
+
+impl Model {
+    /// Merges every vertex of `moved` that now lies on another vertex into it. Edges that
+    /// collapse are removed and the others re-joined; faces drop the merged vertex and are
+    /// removed when nothing of them is left (the walls of a recess pushed back flush). Then
+    /// every edge at a merged vertex between exactly two faces in one plane facing the same way
+    /// is removed and those faces merge, and vertices left between two collinear edges heal.
+    pub(crate) fn weld(&mut self, moved: &BTreeSet<VertexId>) {
+        let mut target: BTreeMap<VertexId, VertexId> = BTreeMap::new();
+        for &m in moved {
+            let p = self.pos(m);
+            let other = self
+                .vertices()
+                .find(|(v, vert)| !moved.contains(v) && vert.pos.distance(p) < LENGTH_TOL)
+                .map(|(v, _)| v);
+            if let Some(f) = other {
+                target.insert(m, f);
+            }
+        }
+        if target.is_empty() {
+            return;
+        }
+        let to = |v: &VertexId| *target.get(v).unwrap_or(v);
+
+        let users: Vec<(FaceId, Face)> = self
+            .faces()
+            .filter(|(_, f)| loops(f).flatten().any(|v| target.contains_key(v)))
+            .map(|(id, f)| (id, f.clone()))
+            .collect();
+        for (id, f) in users {
+            let fix = |l: &Vec<VertexId>| -> Vec<VertexId> {
+                let mut out: Vec<VertexId> = l.iter().map(to).collect();
+                out.dedup();
+                while out.len() > 1 && out.first() == out.last() {
+                    out.pop();
+                }
+                out
+            };
+            let outer = fix(&f.outer);
+            let flat = |l: &Vec<VertexId>| {
+                let points: Vec<_> = l.iter().map(|v| self.pos(*v)).collect();
+                l.len() < 3 || vector_area(&points).length() < LENGTH_TOL * LENGTH_TOL
+            };
+            if flat(&outer) {
+                self.remove_face(id);
+                continue;
+            }
+            let holes = f.holes.iter().map(fix).filter(|h| !flat(h)).collect();
+            self.replace_face(
+                id,
+                Face {
+                    outer,
+                    holes,
+                    normal: f.normal,
+                },
+            );
+        }
+
+        let joined: Vec<(EdgeId, [VertexId; 2])> = self
+            .edges()
+            .filter(|(_, e)| e.v.iter().any(|v| target.contains_key(v)))
+            .map(|(id, e)| (id, e.v))
+            .collect();
+        for (e, [a, b]) in joined {
+            self.remove_edge(e);
+            let (a, b) = (to(&a), to(&b));
+            if a != b && self.edge_between(a, b).is_none() {
+                self.insert_edge(a, b);
+            }
+        }
+        for &m in target.keys() {
+            self.remove_vertex(m);
+        }
+
+        let met: BTreeSet<VertexId> = target.values().copied().collect();
+        let seams: Vec<(EdgeId, [VertexId; 2], Plane)> = self
+            .edges()
+            .filter(|(_, e)| e.v.iter().any(|v| met.contains(v)))
+            .filter_map(|(id, e)| {
+                let [a, b] = e.v;
+                let users: Vec<FaceId> = self
+                    .faces()
+                    .filter(|(_, f)| loops(f).any(|l| loop_has_side(l, a, b)))
+                    .map(|(f, _)| f)
+                    .collect();
+                let [f, g] = users[..] else {
+                    return None;
+                };
+                let facing = self.face(f)?.normal.dot(self.face(g)?.normal) > 0.0;
+                let plane = self.shared_plane(f, g).filter(|_| facing)?;
+                Some((id, e.v, plane))
+            })
+            .collect();
+        let mut touched = met;
+        let mut planes: Vec<Plane> = Vec::new();
+        for (e, ends, plane) in seams {
+            self.remove_edge(e);
+            touched.extend(ends);
+            if !planes.iter().any(|p| p.same_as(&plane)) {
+                planes.push(plane);
+            }
+        }
+        for plane in planes {
+            self.rebuild_plane(plane, &[]);
+        }
+        for &v in &touched {
+            if self.vertex(v).is_some() && self.edges_at(v).is_empty() {
+                self.remove_vertex(v);
+            }
+        }
+        for v in touched {
+            if self.vertex(v).is_some() {
+                self.heal(v);
+            }
+        }
+    }
+}
+
+fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {
+    std::iter::once(&f.outer).chain(&f.holes)
+}

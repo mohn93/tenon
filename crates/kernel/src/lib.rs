@@ -11,6 +11,7 @@ mod model;
 mod push_pull;
 mod regions;
 mod transform;
+mod weld;
 
 pub use edit::KernelError;
 pub use ids::{EdgeId, EntityId, FaceId, VertexId};

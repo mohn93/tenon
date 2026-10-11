@@ -60,7 +60,7 @@ impl Model {
     }
 
     /// The plane of faces `f` and `g` if they lie in the same plane.
-    fn shared_plane(&self, f: FaceId, g: FaceId) -> Option<Plane> {
+    pub(crate) fn shared_plane(&self, f: FaceId, g: FaceId) -> Option<Plane> {
         let (ff, gg) = (self.face(f)?, self.face(g)?);
         let plane = Plane::through(self.pos(ff.outer[0]), ff.normal);
         let same = ff.normal.cross(gg.normal).length() < PLANE_ANGLE_TOL
@@ -70,7 +70,7 @@ impl Model {
 
     /// Joins the two edges at `v` into one if they are collinear and nothing else meets there,
     /// removing `v` from the loops of the faces around it.
-    fn heal(&mut self, v: VertexId) {
+    pub(crate) fn heal(&mut self, v: VertexId) {
         let [e1, e2] = self.edges_at(v)[..] else {
             return;
         };
