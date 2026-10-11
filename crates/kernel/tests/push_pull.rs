@@ -774,3 +774,69 @@ fn pushing_a_ring_through_a_box_leaves_a_column() {
         1
     );
 }
+
+/// Draws the square x0..x1, z0..z1 on the wall's back face (y = 0.3) and moves it by `depth`
+/// outward (positive: a boss) or into the wall (negative: a pocket).
+fn back_feature(m: &mut Model, x0: f64, z0: f64, x1: f64, z1: f64, depth: f64) {
+    m.add_polygon(&[
+        p(x0, 0.3, z0),
+        p(x1, 0.3, z0),
+        p(x1, 0.3, z1),
+        p(x0, 0.3, z1),
+    ])
+    .unwrap();
+    m.validate().unwrap();
+    let e = 1e-9;
+    let id = faces_where(m, |q| {
+        (q.y - 0.3).abs() < e && q.x > x0 - e && q.x < x1 + e && q.z > z0 - e && q.z < z1 + e
+    })
+    .pop()
+    .expect("feature face");
+    let ny = m.faces().find(|(f, _)| *f == id).unwrap().1.normal.y;
+    // The feature face points out of the wall (+y) or into it, depending on how it was split.
+    m.push_pull(id, depth * ny.signum()).unwrap();
+    m.validate().unwrap();
+    m.take_changes();
+}
+
+/// Asserts that pushing `win` by -0.3 is refused and changes nothing.
+fn assert_refused(m: &mut Model, win: FaceId) {
+    m.take_changes();
+    let before = m.clone();
+    assert_eq!(m.push_pull(win, -0.3), Err(KernelError::Obstructed));
+    assert_eq!(*m, before);
+    assert!(m.take_changes().is_empty());
+}
+
+#[test]
+fn a_boss_on_the_back_inside_the_window_refuses_the_push() {
+    let mut m = wall();
+    back_feature(&mut m, 1.4, 1.4, 1.6, 1.6, 0.2);
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    assert_refused(&mut m, win);
+}
+
+#[test]
+fn a_pocket_on_the_back_inside_the_window_refuses_the_push() {
+    let mut m = wall();
+    back_feature(&mut m, 1.4, 1.4, 1.6, 1.6, -0.1);
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    assert_refused(&mut m, win);
+}
+
+#[test]
+fn a_notch_at_the_back_top_edge_inside_the_slot_refuses_the_push() {
+    let mut m = wall();
+    back_feature(&mut m, 1.1, 2.9, 1.3, 3.0, -0.1);
+    let win = window(&mut m, 1.0, 2.5, 2.0, 3.0);
+    assert_refused(&mut m, win);
+}
+
+#[test]
+fn a_window_sticking_past_a_notched_back_refuses_the_push() {
+    let mut m = wall();
+    // The notch edge crosses the window's side: x 1.5..2.5 against the window x 1..2.
+    back_feature(&mut m, 1.5, 2.9, 2.5, 3.0, -0.1);
+    let win = window(&mut m, 1.0, 2.5, 2.0, 3.0);
+    assert_refused(&mut m, win);
+}

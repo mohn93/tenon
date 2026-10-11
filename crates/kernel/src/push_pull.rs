@@ -192,7 +192,9 @@ impl Model {
             .filter_map(|l| l.iter().map(|p| self.find_vertex(*p + offset)).collect())
             .collect();
         if through {
-            // The cap lands on the back face: every face there inside the cap opens.
+            // The cap lands on the back face: every face there inside the cap opens. `holds`
+            // guarantees the moved loop splits the back face cleanly, so a face is either wholly
+            // inside the cap or wholly outside, and one interior point tells which.
             let inside: Vec<FaceId> = self
                 .faces()
                 .map(|(f, _)| f)
@@ -407,8 +409,10 @@ impl Model {
             .collect()
     }
 
-    /// True if face `g` is parallel to `face` and, in its plane, holds `face` moved by `offset`:
-    /// every corner and side midpoint of the moved outer loop lies inside `g` or on its boundary.
+    /// True if face `g` is parallel to `face` and, in its plane, holds `face` moved by `offset`
+    /// cleanly: every corner and side midpoint of the moved outer loop lies inside `g` or on its
+    /// boundary, no vertex of `g` lies strictly inside the moved loop (a hole, boss or notch) and
+    /// no side of `g` properly crosses a side of the moved loop.
     fn holds(&self, g: FaceId, face: &Face, offset: DVec3) -> bool {
         let gf = self.face(g).unwrap();
         let moved: Vec<DVec3> = face.outer.iter().map(|v| self.pos(*v) + offset).collect();
@@ -417,11 +421,40 @@ impl Model {
             return false;
         };
         let parallel = gf.normal.cross(face.normal).length() < PLANE_ANGLE_TOL;
-        parallel
-            && (0..moved.len()).all(|i| {
-                let (a, b) = (moved[i], moved[(i + 1) % moved.len()]);
-                plane.contains(a) && poly.holds(a) && poly.holds((a + b) * 0.5)
-            })
+        if !parallel {
+            return false;
+        }
+        let covered = (0..moved.len()).all(|i| {
+            let (a, b) = (moved[i], moved[(i + 1) % moved.len()]);
+            plane.contains(a) && poly.holds(a) && poly.holds((a + b) * 0.5)
+        });
+        if !covered {
+            return false;
+        }
+        let ring: Vec<DVec2> = moved.iter().map(|p| poly.plane.project(*p)).collect();
+        let sides_of = |l: &Vec<DVec2>| -> Vec<(DVec2, DVec2)> {
+            (0..l.len()).map(|i| (l[i], l[(i + 1) % l.len()])).collect()
+        };
+        let moved_sides = sides_of(&ring);
+        let g_loops = std::iter::once(&poly.outer).chain(&poly.holes);
+        for l in g_loops {
+            let strictly_inside = |q: &DVec2| {
+                point_in_polygon(*q, &ring)
+                    && moved_sides
+                        .iter()
+                        .all(|&(a, b)| segment_distance_2d(*q, a, b) > LENGTH_TOL)
+            };
+            if l.iter().any(strictly_inside) {
+                return false;
+            }
+            let crossing = sides_of(l)
+                .iter()
+                .any(|&(c, d)| moved_sides.iter().any(|&(a, b)| properly_cross(a, b, c, d)));
+            if crossing {
+                return false;
+            }
+        }
+        true
     }
 
     /// Flips face `id` if its normal points away from `want`.
@@ -502,6 +535,20 @@ impl Polygon {
         };
         on(&self.outer) || self.holes.iter().any(on) || self.contains(p)
     }
+}
+
+/// True if segments ab and cd cross at a point interior to both, beyond `LENGTH_TOL` from every
+/// end (not collinear overlap, not touching at ends).
+fn properly_cross(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
+    let (r, q) = (b - a, d - c);
+    let det = r.perp_dot(q);
+    if det.abs() < 1e-12 {
+        return false;
+    }
+    let t = (c - a).perp_dot(q) / det;
+    let u = (c - a).perp_dot(r) / det;
+    let (et, eu) = (LENGTH_TOL / r.length(), LENGTH_TOL / q.length());
+    t > et && t < 1.0 - et && u > eu && u < 1.0 - eu
 }
 
 fn loop_vertices(f: &Face) -> BTreeSet<VertexId> {
