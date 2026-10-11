@@ -9,6 +9,7 @@ use session::{Camera, Command};
 use crate::erase::EraseTool;
 use crate::inference::Inference;
 use crate::line::LineTool;
+use crate::move_tool::MoveTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 use crate::select::SelectTool;
@@ -78,16 +79,18 @@ pub enum ToolKind {
     Line,
     Rectangle,
     PushPull,
+    Move,
     Erase,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 5] = [
+    pub const ALL: [ToolKind; 6] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
         ToolKind::PushPull,
+        ToolKind::Move,
         ToolKind::Erase,
     ];
 
@@ -97,6 +100,7 @@ impl ToolKind {
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
             ToolKind::PushPull => Box::new(PushPullTool::new()),
+            ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
         }
     }
@@ -108,6 +112,7 @@ impl ToolKind {
             ToolKind::Line => "Line",
             ToolKind::Rectangle => "Rectangle",
             ToolKind::PushPull => "Push/Pull",
+            ToolKind::Move => "Move",
             ToolKind::Erase => "Erase",
         }
     }
@@ -119,6 +124,7 @@ impl ToolKind {
             ToolKind::Line => 'l',
             ToolKind::Rectangle => 'r',
             ToolKind::PushPull => 'p',
+            ToolKind::Move => 'm',
             ToolKind::Erase => 'e',
         }
     }
