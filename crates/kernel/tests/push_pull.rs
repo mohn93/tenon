@@ -1015,3 +1015,55 @@ fn pushing_a_recess_floor_past_the_back_is_refused() {
     assert_eq!(m, before);
     assert!(m.take_changes().is_empty());
 }
+
+/// Asserts that pushing `id` by `d` fails with `err` and changes nothing.
+fn assert_push_fails(m: &mut Model, id: FaceId, d: f64, err: KernelError) {
+    m.take_changes();
+    let before = m.clone();
+    assert_eq!(m.push_pull(id, d), Err(err));
+    assert_eq!(*m, before);
+    assert!(m.take_changes().is_empty());
+}
+
+#[test]
+fn full_width_strip_pushed_to_the_bottom_is_refused() {
+    // The cut would match the whole front face, which would be left floating.
+    let (mut m, _) = box_4x4x2();
+    rect(&mut m, 0.0, 0.0, 4.0, 1.0, 2.0);
+    let strip = face_in(&m, 2.0, 0.0, 0.0, 4.0, 1.0);
+    assert_push_fails(&mut m, strip, -2.0, KernelError::Obstructed);
+}
+
+#[test]
+fn lower_box_top_pushed_to_the_ground_beside_a_taller_box_collapses() {
+    let mut m = Model::new();
+    let a = rect(&mut m, 0.0, 0.0, 2.0, 2.0, 0.0);
+    m.push_pull(a, 1.0).unwrap();
+    let b = rect(&mut m, 2.0, 0.0, 4.0, 2.0, 0.0);
+    m.push_pull(b, 1.5).unwrap();
+    let top = face_in(&m, 1.0, 0.0, 0.0, 2.0, 2.0);
+    assert_push_fails(&mut m, top, -1.0, KernelError::Collapse);
+}
+
+#[test]
+fn full_width_tread_pushed_to_the_bottom_collapses() {
+    let (mut m, _) = box_4x4x2();
+    rect(&mut m, 0.0, 0.0, 4.0, 1.0, 2.0);
+    let strip = face_in(&m, 2.0, 0.0, 0.0, 4.0, 1.0);
+    m.push_pull(strip, -1.0).unwrap();
+    let tread = face_in(&m, 1.0, 0.0, 0.0, 4.0, 1.0);
+    assert_push_fails(&mut m, tread, -1.0, KernelError::Collapse);
+}
+
+#[test]
+fn corner_tread_pushed_to_the_bottom_opens_a_closed_notch() {
+    let (mut m, _) = box_4x4x2();
+    rect(&mut m, 0.0, 0.0, 1.0, 1.0, 2.0);
+    let corner = face_in(&m, 2.0, 0.0, 0.0, 1.0, 1.0);
+    m.push_pull(corner, -1.0).unwrap();
+    let tread = face_in(&m, 1.0, 0.0, 0.0, 1.0, 1.0);
+    push_pull_undoable(&mut m, tread, -1.0);
+    m.validate().unwrap();
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+}

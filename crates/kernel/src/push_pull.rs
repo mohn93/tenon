@@ -399,12 +399,29 @@ impl Model {
         let ends_on_back = distance < 0.0
             && (t - distance.abs()).abs() < LENGTH_TOL
             && self.holds(g, face, face.normal * distance)
-            && self.in_solid(id);
+            && self.in_solid(id)
+            && !self.sweep_covers_a_face(id, face, face.normal * distance);
         if ends_on_back {
             Ok(true)
         } else {
             Err(KernelError::Obstructed)
         }
+    }
+
+    /// True if a face other than `id` lies wholly inside the rectangle a side of `face`'s outer
+    /// loop sweeps when moved by `offset`. A cut through would match such a face exactly, so it
+    /// would never be split or removed and would be left floating.
+    fn sweep_covers_a_face(&self, id: FaceId, face: &Face, offset: DVec3) -> bool {
+        let l = &face.outer;
+        (0..l.len()).any(|i| {
+            let (a, b) = (self.pos(l[i]), self.pos(l[(i + 1) % l.len()]));
+            self.faces().any(|(f, g)| {
+                f != id
+                    && loop_vertices(g)
+                        .iter()
+                        .all(|v| in_swept(self.pos(*v), a, b, offset))
+            })
+        })
     }
 
     /// True if face `id` is the floor of a recess (a face on a side of its outer loop faces into
