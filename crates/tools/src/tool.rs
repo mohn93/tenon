@@ -12,11 +12,16 @@ use crate::line::LineTool;
 use crate::move_tool::MoveTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
+use crate::scenery::Scenery;
 use crate::select::SelectTool;
 
-/// What a tool may look at while handling an event.
+/// What a tool may look at while handling an event. Points, the camera and entity ids are in
+/// the open context's coordinates (see `session::Document::context`).
 pub struct ToolContext<'a> {
+    /// The open context's mesh: what tools edit.
     pub model: &'a Model,
+    /// Everything visible, for inference and picking; `scenery.open()` is `model`.
+    pub scenery: &'a Scenery<'a>,
     pub camera: &'a Camera,
     /// Cursor position in physical pixels.
     pub cursor: DVec2,

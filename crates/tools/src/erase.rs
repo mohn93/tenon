@@ -100,6 +100,7 @@ mod tests {
     ) -> ToolOutput {
         let ctx = ToolContext {
             model,
+            scenery: &crate::scenery::Scenery::single(model),
             camera,
             cursor: camera.project(at).unwrap(),
             pick_radius: 10.0,

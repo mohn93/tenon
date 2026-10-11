@@ -6,7 +6,8 @@ use kernel::geom::LENGTH_TOL;
 use kernel::{EntityId, FaceId, Model};
 use session::Command;
 
-use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under};
+use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
+use crate::scenery::Owner;
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, toward_cursor};
 
@@ -112,7 +113,10 @@ impl Tool for PushPullTool {
             },
             ToolEvent::Click(hit) => match self.drag.as_ref() {
                 None => {
-                    if let Some((face, start)) = face_under(ctx.model, ctx.camera, ctx.cursor) {
+                    let under = face_under_in(ctx.scenery, ctx.camera, ctx.cursor)
+                        .filter(|(owner, ..)| *owner == Owner::Open)
+                        .map(|(_, f, p)| (f, p));
+                    if let Some((face, start)) = under {
                         self.drag = Some(Drag {
                             face,
                             normal: ctx.model.face(face).unwrap().normal,
@@ -170,6 +174,7 @@ impl Tool for PushPullTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::face_under;
     use glam::DVec2;
     use session::Camera;
 
@@ -216,6 +221,7 @@ mod tests {
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
             let ctx = ToolContext {
                 model: &self.model,
+                scenery: &crate::scenery::Scenery::single(&self.model),
                 camera: &self.camera,
                 cursor: self.cursor,
                 pick_radius: 10.0,

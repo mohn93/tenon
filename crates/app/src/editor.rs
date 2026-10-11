@@ -4,11 +4,13 @@
 use glam::{DVec2, DVec3};
 use kernel::EntityId;
 use render::grid::LineVertex;
-use session::{BatchError, Command, CommandError, Document, ErrorKind, Outcome, SelectMode};
+use session::{
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, Outcome, SelectMode,
+};
 use tools::overlay::overlay;
 use tools::{
-    Axis, Guides, Inference, Lock, SnapKind, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput,
-    edge_under, infer_with,
+    Axis, Guides, Inference, Lock, Scenery, SnapKind, Tool, ToolContext, ToolEvent, ToolKind,
+    ToolOutput, edge_under_in, infer_in,
 };
 
 use crate::navigation::{Button, Navigation};
@@ -396,22 +398,28 @@ impl Editor {
         }
     }
 
-    /// Line pairs for the renderer's overlay pass.
+    /// Line pairs for the renderer's overlay pass. Tools work in the open context's
+    /// coordinates; the overlay is drawn in the root's.
     pub fn overlay(&self) -> Vec<LineVertex> {
-        overlay(
-            &self.preview,
-            self.hit.as_ref(),
-            &self.doc.camera,
-            self.scale_factor,
-        )
-        .into_iter()
-        .flat_map(|s| {
-            [s.a, s.b].map(|p| LineVertex {
-                pos: p.as_vec3().to_array(),
-                color: s.color,
+        let t = self.doc.context_transform();
+        let preview: Vec<[DVec3; 2]> = self
+            .preview
+            .iter()
+            .map(|[a, b]| [t.transform_point3(*a), t.transform_point3(*b)])
+            .collect();
+        let hit = self.hit.map(|h| Inference {
+            point: t.transform_point3(h.point),
+            ..h
+        });
+        overlay(&preview, hit.as_ref(), &self.doc.camera, self.scale_factor)
+            .into_iter()
+            .flat_map(|s| {
+                [s.a, s.b].map(|p| LineVertex {
+                    pos: p.as_vec3().to_array(),
+                    color: s.color,
+                })
             })
-        })
-        .collect()
+            .collect()
     }
 
     /// Sends a click, release, typed value or cancel to the tool and runs what it asks for.
@@ -427,10 +435,29 @@ impl Editor {
         self.update_hover();
     }
 
+    /// The camera in the open context's coordinates. Placements are moves, so only the eye
+    /// and the target change.
+    fn local_camera(&self) -> Camera {
+        let back = self.doc.context_transform().inverse();
+        let mut camera = self.doc.camera.clone();
+        camera.eye = back.transform_point3(camera.eye);
+        camera.target = back.transform_point3(camera.target);
+        camera
+    }
+
+    /// Everything tools can see, in the open context's coordinates.
+    fn scenery(&self) -> Scenery<'_> {
+        Scenery::of(self.doc.scene(), self.doc.context()).expect("the open context exists")
+    }
+
     fn handle(&mut self, event: ToolEvent) -> ToolOutput {
+        let camera = self.local_camera();
+        let scenery =
+            Scenery::of(self.doc.scene(), self.doc.context()).expect("the open context exists");
         let ctx = ToolContext {
             model: self.doc.model(),
-            camera: &self.doc.camera,
+            scenery: &scenery,
+            camera: &camera,
             cursor: self.cursor,
             pick_radius: PICK_RADIUS_LOGICAL_PX * self.scale_factor,
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
@@ -512,19 +539,19 @@ impl Editor {
             self.shift_lock = false;
         }
         let radius = PICK_RADIUS_LOGICAL_PX * self.scale_factor;
-        let (model, camera) = (self.doc.model(), &self.doc.camera);
+        let camera = self.local_camera();
+        let scenery = self.scenery();
         let guides = Guides {
             anchor,
             reference: self.reference,
             lock: self.lock,
         };
-        let hit = infer_with(model, camera, self.cursor, &guides, radius);
-        // The edge the cursor rests on becomes the reference for later direction snaps.
-        if let Some(e) = edge_under(model, camera, self.cursor, radius)
-            && let Some(edge) = model.edge(e)
-            && let (Some(a), Some(b)) = (model.position(edge.v[0]), model.position(edge.v[1]))
-        {
-            self.reference = (b - a).try_normalize();
+        let hit = infer_in(&scenery, &camera, self.cursor, &guides, radius);
+        // The edge the cursor rests on (anywhere) becomes the reference for direction snaps.
+        let reference = edge_under_in(&scenery, &camera, self.cursor, radius)
+            .and_then(|(_, _, a, b)| (b - a).try_normalize());
+        if reference.is_some() {
+            self.reference = reference;
         }
         let out = self.handle(ToolEvent::Move(hit));
         let changed = self.hit != Some(hit) || self.preview != out.preview;
@@ -1181,5 +1208,97 @@ mod tests {
         assert!(e.status().contains("Locked: red axis"), "{}", e.status());
         assert!(!e.key_repeat(EditorKey::Unlock));
         assert!(e.status().contains("Locked: red axis"));
+    }
+
+    /// A 2 x 2 x 1 box at the origin, grouped and moved by (10, 0, 0). Returns the instance.
+    fn moved_group(e: &mut Editor) -> EntityId {
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        e.execute(Command::PushPull {
+            face: "f8".parse().unwrap(),
+            distance: 1.0,
+        })
+        .unwrap();
+        let m = e.doc().model();
+        let ids = m
+            .edges()
+            .map(|(id, _)| EntityId::Edge(id))
+            .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
+            .collect();
+        e.execute(Command::MakeGroup { ids }).unwrap();
+        let group = *e.doc().selection().first().unwrap();
+        e.execute(Command::Move {
+            ids: vec![group],
+            offset: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+        group
+    }
+
+    /// True if the open context has an edge between these two points.
+    fn has_edge(e: &Editor, a: DVec3, b: DVec3) -> bool {
+        let m = e.doc().model();
+        m.edges().any(|(_, edge)| {
+            let (p, q) = (
+                m.position(edge.v[0]).unwrap(),
+                m.position(edge.v[1]).unwrap(),
+            );
+            (p.abs_diff_eq(a, 1e-9) && q.abs_diff_eq(b, 1e-9))
+                || (p.abs_diff_eq(b, 1e-9) && q.abs_diff_eq(a, 1e-9))
+        })
+    }
+
+    #[test]
+    fn tools_inside_a_moved_group_work_in_its_coordinates() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.select_tool(ToolKind::Line);
+        click_at(&mut e, DVec3::new(10.0, 0.0, 1.0));
+        click_at(&mut e, DVec3::new(12.0, 2.0, 1.0));
+        e.key(EditorKey::Escape);
+        assert!(
+            has_edge(&e, DVec3::new(0.0, 0.0, 1.0), DVec3::new(2.0, 2.0, 1.0)),
+            "the diagonal is drawn in the group's own coordinates"
+        );
+        assert_eq!(stats(&e), (13, 7), "it splits the group's top");
+    }
+
+    #[test]
+    fn the_marker_follows_the_cursor_inside_a_moved_group() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.select_tool(ToolKind::Line);
+        let corner = DVec3::new(10.0, 0.0, 1.0);
+        let px = e.doc().camera.project(corner).unwrap();
+        e.cursor_moved(px + DVec2::new(3.0, 2.0));
+        let overlay = e.overlay();
+        assert!(!overlay.is_empty());
+        assert!(
+            overlay
+                .iter()
+                .all(|v| DVec3::from(v.pos.map(f64::from)).distance(corner) < 0.5),
+            "the endpoint marker is drawn at the corner in root coordinates"
+        );
+    }
+
+    #[test]
+    fn lines_from_the_root_snap_to_a_groups_corner() {
+        let mut e = editor();
+        moved_group(&mut e);
+        e.select_tool(ToolKind::Line);
+        let corner = DVec3::new(10.0, 0.0, 0.0);
+        let px = e.doc().camera.project(corner).unwrap();
+        e.cursor_moved(px + DVec2::new(3.0, -2.0));
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+        click_at(&mut e, DVec3::new(10.0, -3.0, 0.0));
+        e.key(EditorKey::Escape);
+        assert!(has_edge(&e, corner, DVec3::new(10.0, -3.0, 0.0)));
     }
 }

@@ -7,7 +7,8 @@ use kernel::geom::point_in_polygon;
 use kernel::{EntityId, Face, Model};
 use session::{Command, SelectMode};
 
-use crate::inference::{edge_under, face_under};
+use crate::inference::{edge_under_in, face_under_in};
+use crate::scenery::Owner;
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
@@ -23,11 +24,18 @@ impl SelectTool {
     }
 }
 
-/// The edge under the cursor, or else the face under it.
+/// The open context's edge under the cursor, or else its face under it. Geometry elsewhere
+/// (inside instances, outside the open instance) hides what is behind it but is not picked.
 pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
-    edge_under(ctx.model, ctx.camera, ctx.cursor, ctx.pick_radius)
-        .map(EntityId::Edge)
-        .or_else(|| face_under(ctx.model, ctx.camera, ctx.cursor).map(|(f, _)| EntityId::Face(f)))
+    let open = |o: Owner| o == Owner::Open;
+    edge_under_in(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius)
+        .filter(|(o, ..)| open(*o))
+        .map(|(_, e, _, _)| EntityId::Edge(e))
+        .or_else(|| {
+            face_under_in(ctx.scenery, ctx.camera, ctx.cursor)
+                .filter(|(o, ..)| open(*o))
+                .map(|(_, f, _)| EntityId::Face(f))
+        })
 }
 
 /// Edges and faces selected by the screen box from `a` to `b`: inside it entirely when
@@ -232,6 +240,7 @@ mod tests {
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
             let ctx = ToolContext {
                 model: &self.model,
+                scenery: &crate::scenery::Scenery::single(&self.model),
                 camera: &self.camera,
                 cursor: self.cursor,
                 pick_radius: 10.0,

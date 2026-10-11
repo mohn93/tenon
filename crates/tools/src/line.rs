@@ -160,6 +160,7 @@ mod tests {
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
             let ctx = ToolContext {
                 model: &self.model,
+                scenery: &crate::scenery::Scenery::single(&self.model),
                 camera: &self.camera,
                 cursor: DVec2::ZERO,
                 pick_radius: 10.0,
