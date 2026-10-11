@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use glam::DVec3;
 
 use crate::edit::KernelError;
-use crate::geom::{LENGTH_TOL, vector_area};
+use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, segment_distance_2d, vector_area};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
@@ -77,11 +77,16 @@ impl Model {
             {
                 return Err(KernelError::Bend(id));
             }
+            let mut rings = vec![outer];
             for h in &f.holes {
                 let pts: Vec<DVec3> = h.iter().map(|v| at(self, *v)).collect();
                 if vector_area(&pts).dot(normal) >= 0.0 {
                     return Err(KernelError::Squash);
                 }
+                rings.push(pts);
+            }
+            if !rings_are_valid(&rings, normal) {
+                return Err(KernelError::Squash);
             }
             if normal.distance(f.normal) > 1e-12 {
                 let mut g = f.clone();
@@ -161,4 +166,44 @@ impl Model {
 
 fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {
     std::iter::once(&f.outer).chain(&f.holes)
+}
+
+/// True when no two non-adjacent edges of the rings touch or cross (in the plane with this
+/// normal) and every hole (ring 1..) lies inside the outer ring (ring 0).
+fn rings_are_valid(rings: &[Vec<DVec3>], normal: DVec3) -> bool {
+    let plane = Plane::through(rings[0][0], normal);
+    let flat: Vec<Vec<glam::DVec2>> = rings
+        .iter()
+        .map(|r| r.iter().map(|p| plane.project(*p)).collect())
+        .collect();
+    let mut edges = Vec::new();
+    for (r, ring) in flat.iter().enumerate() {
+        for i in 0..ring.len() {
+            edges.push((r, i, ring[i], ring[(i + 1) % ring.len()]));
+        }
+    }
+    for (x, e) in edges.iter().enumerate() {
+        for g in &edges[x + 1..] {
+            if e.0 == g.0 {
+                let n = flat[e.0].len();
+                if (e.1 + 1) % n == g.1 || (g.1 + 1) % n == e.1 {
+                    continue; // adjacent edges share a vertex
+                }
+            }
+            let tol = LENGTH_TOL;
+            let near = segment_distance_2d(e.2, g.2, g.3) < tol
+                || segment_distance_2d(e.3, g.2, g.3) < tol
+                || segment_distance_2d(g.2, e.2, e.3) < tol
+                || segment_distance_2d(g.3, e.2, e.3) < tol;
+            if near || segments_cross(e.2, e.3, g.2, g.3) {
+                return false;
+            }
+        }
+    }
+    flat[1..].iter().all(|h| point_in_polygon(h[0], &flat[0]))
+}
+
+fn segments_cross(p: glam::DVec2, q: glam::DVec2, a: glam::DVec2, b: glam::DVec2) -> bool {
+    let side = |o: glam::DVec2, u: glam::DVec2, w: glam::DVec2| (u - o).perp_dot(w - o);
+    side(p, q, a) * side(p, q, b) < 0.0 && side(a, b, p) * side(a, b, q) < 0.0
 }

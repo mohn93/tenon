@@ -187,3 +187,32 @@ fn copying_loose_edges_copies_only_edges() {
         Err(KernelError::ZeroDistance)
     );
 }
+
+#[test]
+fn moves_that_make_a_face_cross_itself_are_refused() {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 2.0);
+    let before = m.clone();
+    let corner = vertices_where(&m, |q| q == p(0.0, 0.0, 0.0));
+    assert_eq!(
+        m.move_vertices(&corner, p(2.5, 1.0, 0.0)),
+        Err(KernelError::Squash)
+    );
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+}
+
+#[test]
+fn moving_a_hole_out_of_its_face_is_refused() {
+    let mut m = Model::new();
+    square(&mut m, 0.0, 0.0, 4.0);
+    square(&mut m, 1.0, 1.0, 1.0);
+    let before = m.clone();
+    let hole = vertices_where(&m, |q| q.x >= 1.0 && q.x <= 2.0 && q.y >= 1.0 && q.y <= 2.0);
+    assert_eq!(hole.len(), 4);
+    assert_eq!(
+        m.move_vertices(&hole, p(5.0, 0.0, 0.0)),
+        Err(KernelError::Squash)
+    );
+    assert_eq!(m, before);
+}
