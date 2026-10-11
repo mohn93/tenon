@@ -408,18 +408,19 @@ impl Model {
         }
     }
 
-    /// True if a face other than `id` lies wholly inside the rectangle a side of `face`'s outer
-    /// loop sweeps when moved by `offset`. A cut through would match such a face exactly, so it
-    /// would never be split or removed and would be left floating.
+    /// True if a face other than `id` lies wholly inside the rectangle a side of any of
+    /// `face`'s loops (outer or hole) sweeps when moved by `offset`. A cut through would match
+    /// such a face exactly, so it would never be split or removed and would be left floating.
     fn sweep_covers_a_face(&self, id: FaceId, face: &Face, offset: DVec3) -> bool {
-        let l = &face.outer;
-        (0..l.len()).any(|i| {
-            let (a, b) = (self.pos(l[i]), self.pos(l[(i + 1) % l.len()]));
-            self.faces().any(|(f, g)| {
-                f != id
-                    && loop_vertices(g)
-                        .iter()
-                        .all(|v| in_swept(self.pos(*v), a, b, offset))
+        std::iter::once(&face.outer).chain(&face.holes).any(|l| {
+            (0..l.len()).any(|i| {
+                let (a, b) = (self.pos(l[i]), self.pos(l[(i + 1) % l.len()]));
+                self.faces().any(|(f, g)| {
+                    f != id
+                        && loop_vertices(g)
+                            .iter()
+                            .all(|v| in_swept(self.pos(*v), a, b, offset))
+                })
             })
         })
     }

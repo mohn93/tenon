@@ -1067,3 +1067,15 @@ fn corner_tread_pushed_to_the_bottom_opens_a_closed_notch() {
     assert_closed(&m, &[]);
     assert_outward(&m, &all_faces(&m));
 }
+
+#[test]
+fn ring_pushed_through_around_a_recess_is_refused() {
+    // The hole side's sweep would match the old recess walls, which would be left floating.
+    let (mut m, _) = box_4x4x2();
+    rect(&mut m, 1.0, 1.0, 3.0, 3.0, 2.0);
+    rect(&mut m, 1.5, 1.5, 2.5, 2.5, 2.0);
+    let inner = face_in(&m, 2.0, 1.5, 1.5, 2.5, 2.5);
+    m.push_pull(inner, -1.0).unwrap();
+    let ring = face_in(&m, 2.0, 1.0, 1.0, 3.0, 3.0);
+    assert_push_fails(&mut m, ring, -2.0, KernelError::Obstructed);
+}
