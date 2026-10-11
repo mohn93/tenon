@@ -210,27 +210,39 @@ impl Model {
                 }
             }
         }
-        // Drawing the sides can also close loops the stencil never had a face on; take those
-        // out too. A face stays if it is the stencil's, or if a side of it is not the stencil's.
-        let ring_ids = |t: &DAffine3, ring: &[DVec3]| -> Option<BTreeSet<VertexId>> {
-            ring.iter()
-                .map(|p| self.find_vertex(t.transform_point3(*p)))
-                .collect()
-        };
-        let own: Vec<BTreeSet<VertexId>> = places
+        // Faces drawing split are still the stencil's own: they lie within a placed face ring.
+        let rings: Vec<Vec<DVec3>> = places
             .iter()
             .flat_map(|t| {
                 let rings = stencil.faces.iter().map(|(outer, _)| outer);
-                rings.chain(&stencil.filled).map(move |ring| (t, ring))
+                rings
+                    .chain(&stencil.filled)
+                    .map(move |ring| ring.iter().map(|p| t.transform_point3(*p)).collect())
             })
-            .filter_map(|(t, outer)| ring_ids(t, outer))
             .collect();
+        let own = |m: &Model, id: FaceId| rings.iter().any(|r| m.face_within(id, r));
+        for t in places {
+            for (outer, normal) in &stencil.faces {
+                let ring: Vec<DVec3> = outer.iter().map(|p| t.transform_point3(*p)).collect();
+                let normal = t.transform_vector3(*normal).normalize();
+                let split: Vec<FaceId> = self
+                    .faces()
+                    .map(|(id, _)| id)
+                    .filter(|id| !existing.contains(id) && self.face_within(*id, &ring))
+                    .collect();
+                for id in split {
+                    self.orient(id, normal);
+                }
+            }
+        }
+        // Drawing the sides can also close loops the stencil never had a face on; take those
+        // out too. A face stays if it is the stencil's, or if a side of it is not the stencil's.
         let on_stencil = |p: DVec3| {
             places.iter().any(|t| {
                 stencil.segments.iter().any(|(a, b)| {
                     let (a, b) = (t.transform_point3(*a), t.transform_point3(*b));
                     let (u, d) = project_on_segment(p, a, b);
-                    (0.0..=1.0).contains(&u) && d < LENGTH_TOL
+                    (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL
                 })
             })
         };
@@ -238,9 +250,7 @@ impl Model {
             .faces()
             .filter(|(id, f)| {
                 !existing.contains(id)
-                    && !own.iter().any(|ids| {
-                        ids.len() == f.outer.len() && f.outer.iter().all(|v| ids.contains(v))
-                    })
+                    && !own(self, *id)
                     && f.outer.iter().all(|v| on_stencil(self.pos(*v)))
                     && (0..f.outer.len()).all(|i| {
                         let (a, b) = (
@@ -255,6 +265,26 @@ impl Model {
         for id in extra {
             self.remove_face(id);
         }
+    }
+
+    /// True when the face lies in the plane of `ring` and inside it.
+    fn face_within(&self, id: FaceId, ring: &[DVec3]) -> bool {
+        let n = vector_area(ring);
+        if n.length() < LENGTH_TOL * LENGTH_TOL {
+            return false;
+        }
+        let plane = Plane::through(ring[0], n.normalize());
+        let flat = |p: DVec3| (p - ring[0]).dot(plane.normal).abs() < LENGTH_TOL;
+        let Some(face) = self.face(id) else {
+            return false;
+        };
+        let Some([a, b, c]) = self.triangulate(id).and_then(|t| t.first().copied()) else {
+            return false;
+        };
+        let inside = (a + b + c) / 3.0;
+        let ring2: Vec<_> = ring.iter().map(|p| plane.project(*p)).collect();
+        face.outer.iter().all(|v| flat(self.pos(*v)))
+            && point_in_polygon(plane.project(inside), &ring2)
     }
 
     /// The face whose outer loop is exactly these vertices.

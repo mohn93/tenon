@@ -286,3 +286,29 @@ fn copying_an_open_cube_adds_no_lid() {
     m.validate().unwrap();
     assert_eq!(m.faces().count(), 10);
 }
+
+fn copy_next_to_parent_edge(a: DVec3, b: DVec3) {
+    let mut m = Model::new();
+    let f = square(&mut m, 0.0, 0.0, 1.0);
+    m.add_edge(a, b).unwrap();
+    m.copy(&[], &[f], p(10.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 2);
+    for (_, face) in m.faces() {
+        assert_eq!(face.normal, face_normal_of_first(&m));
+    }
+}
+
+fn face_normal_of_first(m: &Model) -> DVec3 {
+    m.faces().next().map(|(_, f)| f.normal).unwrap()
+}
+
+#[test]
+fn a_copy_touched_by_a_parent_edge_keeps_its_face() {
+    copy_next_to_parent_edge(p(10.5, -1.0, 0.0), p(10.5, 0.0, 0.0));
+}
+
+#[test]
+fn a_copy_with_a_parent_edge_along_its_side_keeps_its_face() {
+    copy_next_to_parent_edge(p(10.5, 0.0, 0.0), p(12.0, 0.0, 0.0));
+}
