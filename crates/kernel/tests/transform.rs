@@ -312,3 +312,22 @@ fn a_copy_touched_by_a_parent_edge_keeps_its_face() {
 fn a_copy_with_a_parent_edge_along_its_side_keeps_its_face() {
     copy_next_to_parent_edge(p(10.5, 0.0, 0.0), p(12.0, 0.0, 0.0));
 }
+
+#[test]
+fn a_copied_opening_stays_open_when_a_parent_edge_splits_it() {
+    for (a, b) in [
+        (p(12.0, 1.5, 0.0), p(12.0, 2.0, 0.0)),
+        (p(12.0, 1.5, 0.0), p(13.0, 1.5, 0.0)),
+        (p(11.0, 1.5, 0.0), p(11.6, 1.5, 0.0)),
+    ] {
+        let mut m = Model::new();
+        let outer = square(&mut m, 0.0, 0.0, 4.0);
+        let inner = square(&mut m, 1.5, 1.5, 1.0);
+        m.erase(&[], &[inner]);
+        m.add_edge(a, b).unwrap();
+        m.copy(&[], &[outer], p(10.0, 0.0, 0.0), 1).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.faces().count(), 2, "parent edge {a} to {b}");
+        assert!(m.faces().all(|(_, f)| f.holes.len() == 1));
+    }
+}

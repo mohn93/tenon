@@ -220,7 +220,20 @@ impl Model {
                     .map(move |ring| ring.iter().map(|p| t.transform_point3(*p)).collect())
             })
             .collect();
-        let own = |m: &Model, id: FaceId| rings.iter().any(|r| m.face_within(id, r));
+        let openings: Vec<Vec<DVec3>> = places
+            .iter()
+            .flat_map(|t| {
+                stencil
+                    .openings
+                    .iter()
+                    .map(move |h| h.iter().map(|p| t.transform_point3(*p)).collect())
+            })
+            .collect();
+        // A face filling a copied opening is never the stencil's own.
+        let own = |m: &Model, id: FaceId| {
+            rings.iter().any(|r| m.face_within(id, r))
+                && !openings.iter().any(|h| m.face_within(id, h))
+        };
         for t in places {
             for (outer, normal) in &stencil.faces {
                 let ring: Vec<DVec3> = outer.iter().map(|p| t.transform_point3(*p)).collect();
@@ -229,6 +242,7 @@ impl Model {
                     .faces()
                     .map(|(id, _)| id)
                     .filter(|id| !existing.contains(id) && self.face_within(*id, &ring))
+                    .filter(|id| !openings.iter().any(|h| self.face_within(*id, h)))
                     .collect();
                 for id in split {
                     self.orient(id, normal);
@@ -250,7 +264,6 @@ impl Model {
             .faces()
             .filter(|(id, f)| {
                 !existing.contains(id)
-                    && !own(self, *id)
                     && f.outer.iter().all(|v| on_stencil(self.pos(*v)))
                     && (0..f.outer.len()).all(|i| {
                         let (a, b) = (
@@ -259,6 +272,7 @@ impl Model {
                         );
                         on_stencil((a + b) / 2.0)
                     })
+                    && !own(self, *id)
             })
             .map(|(id, _)| id)
             .collect();
@@ -278,13 +292,15 @@ impl Model {
         let Some(face) = self.face(id) else {
             return false;
         };
+        if !face.outer.iter().all(|v| flat(self.pos(*v))) {
+            return false;
+        }
         let Some([a, b, c]) = self.triangulate(id).and_then(|t| t.first().copied()) else {
             return false;
         };
         let inside = (a + b + c) / 3.0;
         let ring2: Vec<_> = ring.iter().map(|p| plane.project(*p)).collect();
-        face.outer.iter().all(|v| flat(self.pos(*v)))
-            && point_in_polygon(plane.project(inside), &ring2)
+        point_in_polygon(plane.project(inside), &ring2)
     }
 
     /// The face whose outer loop is exactly these vertices.
