@@ -65,7 +65,11 @@ fn outline(loops: &[Vec<DVec3>], offset: DVec3, out: &mut Vec<[DVec3; 2]>) {
 fn measure(drag: &Drag, hit: &Inference, ctx: &ToolContext) -> f64 {
     let snapped = matches!(
         hit.kind,
-        SnapKind::Endpoint | SnapKind::Midpoint | SnapKind::Origin | SnapKind::OnEdge
+        SnapKind::Endpoint
+            | SnapKind::Midpoint
+            | SnapKind::Origin
+            | SnapKind::Intersection
+            | SnapKind::OnEdge
     );
     let p = if snapped {
         hit.point

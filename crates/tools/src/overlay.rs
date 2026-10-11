@@ -14,6 +14,7 @@ pub const BLUE: Color = [0.15, 0.30, 0.85, 1.0];
 pub const MAGENTA: Color = [0.80, 0.10, 0.80, 1.0];
 pub const ENDPOINT: Color = [0.10, 0.60, 0.10, 1.0];
 pub const MIDPOINT: Color = [0.10, 0.70, 0.80, 1.0];
+pub const INTERSECTION: Color = [0.95, 0.55, 0.05, 1.0];
 pub const ON_EDGE: Color = [0.85, 0.10, 0.10, 1.0];
 pub const ON_FACE: Color = [0.20, 0.25, 0.85, 1.0];
 
@@ -56,6 +57,7 @@ pub fn overlay(
     let color = match hit.kind {
         SnapKind::Endpoint | SnapKind::Origin => ENDPOINT,
         SnapKind::Midpoint => MIDPOINT,
+        SnapKind::Intersection => INTERSECTION,
         SnapKind::OnEdge => ON_EDGE,
         SnapKind::OnFace => ON_FACE,
         _ => return out,
@@ -108,6 +110,18 @@ mod tests {
             let segs = overlay(&[[DVec3::ZERO, hit.point]], Some(&hit), &cam(), 1.0);
             assert_eq!(segs[0].color, MAGENTA);
         }
+    }
+
+    #[test]
+    fn intersections_get_their_own_marker_color() {
+        let hit = Inference {
+            point: DVec3::new(1.0, 2.0, 0.0),
+            kind: SnapKind::Intersection,
+            face: None,
+        };
+        let segs = overlay(&[], Some(&hit), &cam(), 1.0);
+        assert_eq!(segs.len(), 4);
+        assert!(segs.iter().all(|s| s.color == INTERSECTION));
     }
 
     #[test]

@@ -29,6 +29,8 @@ pub enum SnapKind {
     Endpoint,
     Midpoint,
     Origin,
+    /// Where two edges cross on screen without meeting in space: the point on the nearer one.
+    Intersection,
     OnEdge,
     /// Along a red/green/blue axis through the point the tool is drawing from.
     Axis(Axis),
@@ -91,10 +93,10 @@ pub fn infer(
 /// Finds the 3D point under `cursor` (physical pixels). Snap candidates count only within
 /// `radius_px` of the cursor.
 ///
-/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > on-edge > directions from
-/// the anchor (axes, parallel or perpendicular to the reference edge; nearest wins) > on-face >
-/// ground > free. Points and edges hidden behind a face are skipped. With a lock, the result is
-/// always on the locked line.
+/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > intersection > on-edge >
+/// directions from the anchor (axes, parallel or perpendicular to the reference edge; nearest
+/// wins) > on-face > ground > free. Points and edges hidden behind a face are skipped. With a
+/// lock, the result is always on the locked line.
 pub fn infer_with(
     model: &Model,
     camera: &Camera,
@@ -171,7 +173,8 @@ pub fn infer_with(
 }
 
 /// The visible point snap under the cursor, if any: endpoint, midpoint or origin (nearest on
-/// screen), else the nearest point on an edge.
+/// screen), else the nearest apparent intersection of two edges, else the nearest point on an
+/// edge.
 fn snap_point(
     model: &Model,
     camera: &Camera,
@@ -206,6 +209,21 @@ fn snap_point(
         return Some((p, kind));
     }
 
+    let mut crossing: Option<(f64, DVec3)> = None;
+    for (i, &(_, a, b)) in near.segments.iter().enumerate() {
+        for &(_, c, d) in &near.segments[i + 1..] {
+            if let Some(p) = apparent_crossing(camera, (a, b), (c, d))
+                && let Some(dist) = within(p)
+                && crossing.is_none_or(|(bd, _)| dist < bd)
+            {
+                crossing = Some((dist, p));
+            }
+        }
+    }
+    if let Some((_, p)) = crossing {
+        return Some((p, SnapKind::Intersection));
+    }
+
     let mut on_edge: Option<(f64, DVec3)> = None;
     for &(_, a, b) in &near.segments {
         let p = closest_on_line_to_ray(a, b - a, &ray, true);
@@ -216,6 +234,39 @@ fn snap_point(
         }
     }
     on_edge.map(|(_, p)| (p, SnapKind::OnEdge))
+}
+
+/// Where segments a-b and c-d cross on screen away from their ends: the point under the
+/// crossing on whichever segment is nearer the camera. Edges that meet in space share a vertex
+/// (the kernel splits crossing edges), so their crossing is an endpoint, not this.
+fn apparent_crossing(
+    camera: &Camera,
+    (a, b): (DVec3, DVec3),
+    (c, d): (DVec3, DVec3),
+) -> Option<DVec3> {
+    let (sa, sb) = (camera.project(a)?, camera.project(b)?);
+    let (sc, sd) = (camera.project(c)?, camera.project(d)?);
+    let (r, q) = (sb - sa, sd - sc);
+    let denom = r.perp_dot(q);
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let t = (sc - sa).perp_dot(q) / denom;
+    let u = (sc - sa).perp_dot(r) / denom;
+    let inside = |k: f64| k > 1e-6 && k < 1.0 - 1e-6;
+    if !inside(t) || !inside(u) {
+        return None;
+    }
+    let ray = camera.ray(sa + r * t);
+    let on_ab = closest_on_line_to_ray(a, b - a, &ray, true);
+    let on_cd = closest_on_line_to_ray(c, d - c, &ray, true);
+    Some(
+        if on_ab.distance(ray.origin) <= on_cd.distance(ray.origin) {
+            on_ab
+        } else {
+            on_cd
+        },
+    )
 }
 
 /// Unit directions offered from the anchor: the three axes, plus, for a reference direction
@@ -410,6 +461,26 @@ mod tests {
         assert_eq!(hit.kind, SnapKind::OnEdge);
         assert!((hit.point.y - 1.0).abs() < 1e-9 && hit.point.z.abs() < 1e-9);
         assert!((hit.point.x - 4.2).abs() < 0.1);
+    }
+
+    #[test]
+    fn snaps_where_edges_cross_on_screen_to_the_nearer_edge() {
+        let (c, mut m) = (cam(), Model::new());
+        m.add_edge(DVec3::new(0.0, 1.0, 0.0), DVec3::new(4.0, 1.0, 0.0))
+            .unwrap();
+        // A second edge hovering between the eye and the first, across it, crossing it on
+        // screen away from both midpoints.
+        let behind = DVec3::new(2.7, 1.0, 0.0);
+        let front = behind + (c.eye - behind) * 0.3;
+        let across = DVec3::Z.cross(c.eye - behind).normalize() + DVec3::Z;
+        m.add_edge(front - across * 0.5, front + across * 1.5)
+            .unwrap();
+        let hit = infer(&m, &c, px(&c, behind) + DVec2::new(1.0, 2.0), None, R);
+        assert_eq!(hit.kind, SnapKind::Intersection);
+        assert!(hit.point.distance(front) < 1e-6, "{:?}", hit.point);
+        // Next to an end, the endpoint wins.
+        let end = infer(&m, &c, px(&c, DVec3::new(4.0, 1.0, 0.0)), None, R);
+        assert_eq!(end.kind, SnapKind::Endpoint);
     }
 
     #[test]
