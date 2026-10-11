@@ -309,3 +309,78 @@ fn repeated_ids_count_once() {
     run(&mut d, json!({"type": "explode", "ids": [outer, outer]})).unwrap();
     assert_eq!(counts(&d), [0, 0, 0, 1, 1]);
 }
+
+/// A group whose definition holds nothing: its only edge was erased from inside it.
+fn empty_group(d: &mut Document) -> String {
+    run(
+        d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+    let edges = ask(d, json!({"type": "entities", "kinds": ["edge"]}));
+    let e = edges["edges"][0]["id"].clone();
+    let g = created_instance(&run(d, json!({"type": "make_group", "ids": [e]})).unwrap());
+    run(d, json!({"type": "open_instance", "id": g})).unwrap();
+    let edges = ask(d, json!({"type": "entities", "kinds": ["edge"]}));
+    let e = edges["edges"][0]["id"].clone();
+    run(d, json!({"type": "erase", "ids": [e]})).unwrap();
+    run(d, json!({"type": "close_instance"})).unwrap();
+    assert_eq!(counts(d), [0, 0, 0, 1, 1]);
+    g
+}
+
+#[test]
+fn an_empty_group_cannot_be_moved_beyond_the_coordinate_limit() {
+    let mut d = doc();
+    let g = empty_group(&mut d);
+    run(
+        &mut d,
+        json!({"type": "move", "ids": [g], "offset": [1.0e6, 0, 0]}),
+    )
+    .unwrap();
+    let rev = d.revision();
+    for command in [
+        json!({"type": "move", "ids": [g], "offset": [1.0e6, 0, 0]}),
+        json!({"type": "copy", "ids": [g], "offset": [-1.0e6, 0, 0], "count": 3}),
+    ] {
+        let (kind, _) = run(&mut d, command.clone()).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{command}");
+    }
+    assert_eq!(d.revision(), rev);
+}
+
+#[test]
+fn exploding_beyond_the_coordinate_limit_is_refused() {
+    let mut d = doc();
+    let g = empty_group(&mut d);
+    run(
+        &mut d,
+        json!({"type": "move", "ids": [g], "offset": [1.0e6, 0, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "open_instance", "id": g})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let rev = d.revision();
+    assert_eq!(
+        run(&mut d, json!({"type": "explode", "ids": [g]})).unwrap_err(),
+        (ErrorKind::InvalidInput, vec![g.clone()])
+    );
+    assert_eq!(d.revision(), rev);
+    assert_eq!(counts(&d), [0, 0, 0, 1, 1]);
+}
+
+#[test]
+fn an_empty_instance_is_within_no_box() {
+    let mut d = doc();
+    empty_group(&mut d);
+    let far = ask(
+        &d,
+        json!({"type": "entities", "within": {"min": [100, 100, 100], "max": [101, 101, 101]}}),
+    );
+    assert_eq!(far["instances"], json!([]));
+}

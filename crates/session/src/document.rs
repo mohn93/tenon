@@ -471,8 +471,8 @@ impl Document {
         Ok(SceneChange::join([geometry, placed]))
     }
 
-    /// Rejects moves or copies that would put a vertex or an instance's bounding box beyond
-    /// `MAX_COORDINATE`.
+    /// Rejects moves or copies that would put a vertex or an instance's bounding box (its
+    /// origin when it has nothing in it) beyond `MAX_COORDINATE`.
     fn check_moved(
         &self,
         vertices: &BTreeSet<VertexId>,
@@ -484,7 +484,10 @@ impl Document {
             .map(|v| self.model().position(*v).unwrap())
             .collect();
         for i in instances {
-            points.extend(self.instance_box(*i).into_iter().flatten());
+            match self.instance_box(*i) {
+                Some(b) => points.extend(b),
+                None => points.extend((self.model().instance(*i)).map(|i| i.transform.translation)),
+            }
         }
         let moved: Vec<[f64; 3]> = points
             .iter()
@@ -630,8 +633,10 @@ impl Document {
                 let wanted = |id: EntityId, kind: EntityKind| {
                     (ids.is_empty() || ids.contains(&id))
                         && (kinds.is_empty() || kinds.contains(&kind))
-                        && within
-                            .is_none_or(|b| self.vertices_of(id).into_iter().all(|p| b.contains(p)))
+                        && within.is_none_or(|b| {
+                            let points = self.vertices_of(id);
+                            !points.is_empty() && points.into_iter().all(|p| b.contains(p))
+                        })
                 };
                 QueryResult::Entities {
                     vertices: m

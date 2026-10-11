@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use kernel::{DefinitionKind, EntityId, KernelError, SceneChange};
 
-use super::Document;
+use super::{Document, MAX_COORDINATE, check_coordinates};
 use crate::command::{CommandError, ErrorKind};
 use crate::query::{Bounds, InstanceInfo};
 
@@ -72,6 +72,20 @@ impl Document {
             .with_ids(others));
         }
         let parts = self.parts(ids)?;
+        for i in &parts.instances {
+            let placed = self.instance_box(*i).into_iter().flatten();
+            let points: Vec<[f64; 3]> = placed.map(|p| p.to_array()).collect();
+            if check_coordinates(&points).is_err() {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "{} would be placed beyond +/-{MAX_COORDINATE} m",
+                        EntityId::Instance(*i)
+                    ),
+                )
+                .with_ids(vec![EntityId::Instance(*i)]));
+            }
+        }
         let mesh = self.active();
         let mut done = Vec::new();
         for i in &parts.instances {
