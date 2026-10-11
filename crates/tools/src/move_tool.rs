@@ -6,7 +6,7 @@
 use glam::DVec3;
 use kernel::EntityId;
 use kernel::geom::LENGTH_TOL;
-use session::Command;
+use session::{Command, MAX_COPIES};
 
 use crate::select::{face_outline, pick};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
@@ -63,6 +63,10 @@ impl MoveTool {
             Array::Times(n) => (offset, n),
             Array::Divide(n) => (offset / n as f64, n),
         };
+        if count > MAX_COPIES {
+            out.message = Some(format!("At most {MAX_COPIES} copies"));
+            return;
+        }
         out.commands.push(Command::Undo);
         out.commands.push(Command::Copy {
             ids,
@@ -355,6 +359,20 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn oversized_arrays_are_refused_and_keep_the_copy() {
+        let mut r = Rig::new(&["f8"]);
+        r.send(ToolEvent::ToggleCopy);
+        r.click(DVec3::ZERO);
+        r.click(DVec3::new(3.0, 0.0, 0.0));
+        for text in ["5000x", "/5000"] {
+            let out = r.send(ToolEvent::Value(text.into()));
+            assert!(out.commands.is_empty() && out.message.is_some(), "{text}");
+        }
+        let ok = r.send(ToolEvent::Value("4x".into()));
+        assert_eq!(ok.commands.len(), 2);
     }
 
     #[test]
