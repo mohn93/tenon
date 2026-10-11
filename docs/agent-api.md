@@ -44,12 +44,14 @@ Queries:
 | `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices all lie in the box (bounds included). `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "stats"}`, `{"type": "camera"}`, `{"type": "history"}` | counts and revision, camera, undo/redo depth |
+| `{"type": "selection"}` | the selected edge and face ids, plus `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
 of silently doing nothing).
 
-Commands: `add_edge`, `add_rectangle`, `push_pull`, `undo`, `redo`, `set_camera`. Units are
+Commands: `add_edge`, `add_rectangle`, `push_pull`, `erase`, `select`, `undo`, `redo`,
+`set_camera`. Units are
 meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m. Entity ids are strings: `v12`
 (vertex), `e3` (edge), `f7` (face).
 
@@ -59,7 +61,13 @@ Modeling commands, each one undo step:
 |---|---|
 | `{"type": "add_edge", "start": [x,y,z], "end": [x,y,z]}` | A straight edge. It merges with nearby vertices, splits edges it crosses, and closed coplanar loops become faces. |
 | `{"type": "add_rectangle", "corner": [0,0,0], "opposite": [2,3,0]}` | A rectangle with sides along the axes. Without `normal` the corners must differ in exactly two coordinates. With `"normal": [nx,ny,nz]` it lies in the plane through `corner` with that normal; `opposite` must be in that plane. Sides then run along u = `Z x normal` (horizontal; X on horizontal planes) and v = `normal x u`, so directions are fixed only up to sign: on a plane with normal +Y, u = -X and v = +Z; with normal -Y, u = +X. |
+| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges and faces. An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Vertex ids are `invalid_input`. |
 | `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in. A face whose neighbors all run along the normal, like a box top, moves and stretches them. |
+
+`{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges and faces;
+`mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and does not
+change the revision. The window shows the selection and agents see what the user selected with
+the `selection` query. Erased entities leave the selection.
 
 Find the face to push from the `created` ids of the command that made it, or with
 `{"type": "entities", "kinds": ["face"]}`. Faces created by push/pull point out of the solid.

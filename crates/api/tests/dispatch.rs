@@ -122,6 +122,8 @@ fn describe_lists_methods_and_schemas() {
         "add_edge",
         "add_rectangle",
         "push_pull",
+        "erase",
+        "select",
         "undo",
         "redo",
         "set_camera",
@@ -173,6 +175,30 @@ fn rectangle_and_push_pull_build_a_box() {
         json!({"type": "entities", "kinds": ["face"], "within": {"min": [-1, -1, 1.4], "max": [3, 4, 1.6]}}),
     );
     assert_eq!(top["result"]["faces"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn select_then_erase_the_selection() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "select", "ids": ["f8", "e2"]}),
+    );
+    let sel = call(&mut h, "query", json!({"type": "selection"}));
+    assert_eq!(sel["result"]["ids"], json!(["e2", "f8"]));
+    let ids = sel["result"]["ids"].clone();
+    let r = call(&mut h, "execute", json!({"type": "erase", "ids": ids}));
+    assert_eq!(r["result"]["revision"], 2);
+    let sel = call(&mut h, "query", json!({"type": "selection"}));
+    assert_eq!(sel["result"]["ids"], json!([]));
+    let r = call(&mut h, "execute", json!({"type": "erase", "ids": ["v0"]}));
+    assert_eq!(r["error"]["data"]["ids"], json!(["v0"]));
 }
 
 #[test]
