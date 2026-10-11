@@ -47,10 +47,18 @@ pub enum Array {
     Divide(u32),
 }
 
-/// Parses array syntax; None if it is not an array or the count is 0.
+/// Parses array syntax; None if it is not an array or the count is 0. Surrounding spaces are
+/// allowed, spaces inside are not.
 pub fn parse_array(s: &str) -> Option<Array> {
     let s = s.trim().to_ascii_lowercase();
-    let count = |n: &str| n.trim().parse::<u32>().ok().filter(|n| *n > 0);
+    // Digits only: no sign, no inner spaces.
+    let count = |n: &str| {
+        let digits = !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
+        digits
+            .then(|| n.parse::<u32>().ok())
+            .flatten()
+            .filter(|n| *n > 0)
+    };
     if let Some(n) = s.strip_prefix('/') {
         return count(n).map(Array::Divide);
     }
@@ -151,7 +159,10 @@ mod tests {
         assert_eq!(parse_array(" X3 "), Some(Array::Times(3)));
         assert_eq!(parse_array("*2"), Some(Array::Times(2)));
         assert_eq!(parse_array("/4"), Some(Array::Divide(4)));
-        for bad in ["5", "0x", "/0", "x", "/", "2.5x", "-3x", "5m"] {
+        for bad in [
+            "5", "0x", "/0", "x", "/", "2.5x", "-3x", "5m", "+5x", "x+5", "/+5", "*+5", "5 x",
+            "x 5", "/ 5", "* 5", "1 0x",
+        ] {
             assert_eq!(parse_array(bad), None, "{bad:?}");
         }
     }
