@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use api::{Hub, listen_unix};
 use glam::DVec2;
@@ -9,7 +10,7 @@ use render::{Renderer, Snapshotter, Viewport};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
@@ -23,6 +24,42 @@ use crate::ui::{UiAction, View};
 /// Sent to the event loop when an agent API request arrives.
 #[derive(Debug)]
 pub struct ApiWake;
+
+/// Longest delayed repaint worth scheduling; egui uses huge delays to mean "never".
+const MAX_REPAINT_DELAY: Duration = Duration::from_secs(60);
+
+/// What to do with the repaint egui asked for after a frame.
+#[derive(Debug, PartialEq)]
+enum Repaint {
+    Now,
+    At(Instant),
+    Idle,
+}
+
+fn schedule_repaint(now: Instant, delay: Option<Duration>) -> Repaint {
+    match delay {
+        Some(d) if d.is_zero() => Repaint::Now,
+        Some(d) if d < MAX_REPAINT_DELAY => Repaint::At(now + d),
+        _ => Repaint::Idle,
+    }
+}
+
+/// What the event loop does before sleeping, given the pending repaint deadline.
+#[derive(Debug, PartialEq)]
+enum Wake {
+    /// The deadline passed: redraw and sleep until input.
+    Redraw,
+    Until(Instant),
+    Wait,
+}
+
+fn wake_decision(now: Instant, deadline: Option<Instant>) -> Wake {
+    match deadline {
+        Some(t) if t <= now => Wake::Redraw,
+        Some(t) => Wake::Until(t),
+        None => Wake::Wait,
+    }
+}
 
 /// Trackpad pixel deltas per zoom step.
 const PIXELS_PER_SCROLL_STEP: f64 = 50.0;
@@ -44,6 +81,8 @@ struct State {
     view: Viewport,
     /// Last cursor position in window coordinates (physical pixels).
     cursor: DVec2,
+    /// When egui wants its next frame without any input (e.g. a tooltip delay).
+    repaint_at: Option<Instant>,
 }
 
 impl State {
@@ -102,6 +141,7 @@ impl State {
             modifiers: ModifiersState::empty(),
             view,
             cursor: DVec2::ZERO,
+            repaint_at: None,
         }
     }
 
@@ -211,7 +251,13 @@ impl State {
         );
         self.window.pre_present_notify();
         self.queue.present(frame);
-        if again || acted {
+        self.repaint_at = None;
+        match schedule_repaint(Instant::now(), again) {
+            Repaint::Now => self.window.request_redraw(),
+            Repaint::At(t) => self.repaint_at = Some(t),
+            Repaint::Idle => {}
+        }
+        if acted {
             self.window.request_redraw();
         }
         acted
@@ -350,6 +396,21 @@ impl ApplicationHandler<ApiWake> for App {
         }
     }
 
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let deadline = self.state.as_ref().and_then(|s| s.repaint_at);
+        match wake_decision(Instant::now(), deadline) {
+            Wake::Redraw => {
+                if let Some(s) = self.state.as_mut() {
+                    s.repaint_at = None;
+                    s.window.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+            Wake::Until(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(t)),
+            Wake::Wait => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ApiWake) {
         if let Some(s) = self.state.as_mut() {
             s.process_api(&mut self.hub);
@@ -459,5 +520,39 @@ impl ApplicationHandler<ApiWake> for App {
             s.window.request_redraw();
             s.notify_api(&mut self.hub);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delayed_repaints_are_scheduled() {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        assert_eq!(schedule_repaint(now, None), Repaint::Idle);
+        assert_eq!(schedule_repaint(now, Some(ms(0))), Repaint::Now);
+        assert_eq!(
+            schedule_repaint(now, Some(ms(500))),
+            Repaint::At(now + ms(500))
+        );
+        assert_eq!(
+            schedule_repaint(now, Some(Duration::from_secs(3600))),
+            Repaint::Idle
+        );
+    }
+
+    #[test]
+    fn the_loop_wakes_at_the_deadline() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(300);
+        assert_eq!(wake_decision(now, None), Wake::Wait);
+        assert_eq!(wake_decision(now, Some(later)), Wake::Until(later));
+        assert_eq!(wake_decision(later, Some(later)), Wake::Redraw);
+        assert_eq!(
+            wake_decision(later + Duration::from_millis(1), Some(later)),
+            Wake::Redraw
+        );
     }
 }

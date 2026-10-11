@@ -1,5 +1,7 @@
 //! egui around the 3D view: window events in, panel layout per frame, painting on top.
 
+use std::time::Duration;
+
 use egui::ViewportId;
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use render::Viewport;
@@ -51,9 +53,9 @@ impl Gui {
         self.ctx.is_pointer_over_egui() || self.ctx.egui_is_using_pointer()
     }
 
-    /// True while an egui widget takes typing.
+    /// True while a text field has focus (a focused button must not swallow editor keys).
     pub fn wants_keyboard(&self) -> bool {
-        self.ctx.egui_wants_keyboard_input()
+        self.ctx.text_edit_focused()
     }
 
     /// Lays out the panels for this frame.
@@ -78,7 +80,7 @@ impl Gui {
     }
 
     /// Paints the frame's panels over `target` (whose size is `size`), handles clipboard and
-    /// cursor output, and returns true if egui asks to be repainted right away.
+    /// cursor output, and returns how soon egui wants another frame (None: only on input).
     pub fn paint(
         &mut self,
         window: &Window,
@@ -87,7 +89,7 @@ impl Gui {
         target: &wgpu::TextureView,
         size: (u32, u32),
         frame: GuiFrame,
-    ) -> bool {
+    ) -> Option<Duration> {
         let mut output = frame.output;
         self.state
             .handle_platform_output(window, output.platform_output);
@@ -132,6 +134,7 @@ impl Gui {
         output
             .viewport_output
             .get(&ViewportId::ROOT)
-            .is_some_and(|v| v.repaint_delay.is_zero())
+            .map(|v| v.repaint_delay)
+            .filter(|d| *d < Duration::MAX)
     }
 }
