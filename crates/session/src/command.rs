@@ -29,6 +29,18 @@ pub enum Command {
         face: EntityId,
         distance: f64,
     },
+    /// Erase edges and faces as one undo step. An erased edge takes the faces it bounds with
+    /// it, except that two faces in one plane meeting there merge into one. Vertices go away
+    /// with their last edge and cannot be erased directly.
+    Erase {
+        ids: Vec<EntityId>,
+    },
+    /// Change the selection of edges and faces. Not recorded in undo history.
+    Select {
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        mode: SelectMode,
+    },
     Undo,
     Redo,
     /// Place the camera. Not recorded in undo history.
@@ -40,10 +52,23 @@ pub enum Command {
 }
 
 impl Command {
-    /// True for commands that can change the model (everything except camera moves).
+    /// True for commands that can change the model (everything except camera and selection).
     pub fn changes_model(&self) -> bool {
-        !matches!(self, Command::SetCamera { .. })
+        !matches!(self, Command::SetCamera { .. } | Command::Select { .. })
     }
+}
+
+/// How `Command::Select` combines `ids` with the current selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectMode {
+    /// The selection becomes exactly `ids`.
+    #[default]
+    Replace,
+    Add,
+    Remove,
+    /// Selected ids are removed, the others added.
+    Toggle,
 }
 
 /// What a successful command changed.

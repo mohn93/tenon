@@ -24,6 +24,8 @@ pub enum Query {
     Camera,
     Stats,
     History,
+    /// The selected edges and faces.
+    Selection,
     /// Model changes after `since` (a revision number), oldest first.
     Events {
         since: u64,
@@ -102,6 +104,10 @@ pub enum QueryResult {
     History {
         undo_depth: usize,
         redo_depth: usize,
+        revision: u64,
+    },
+    Selection {
+        ids: Vec<EntityId>,
         revision: u64,
     },
     /// `truncated` is true when changes after `since` were dropped from the log; the client

@@ -1,10 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 use glam::{DVec2, DVec3};
 use kernel::{ChangeSet, EdgeId, EntityId, FaceId, Model, VertexId};
 
 use crate::camera::Camera;
-use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome};
+use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 use crate::query::{ChangeEvent, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo};
 use crate::rectangle::rectangle_corners;
 
@@ -14,10 +14,11 @@ pub const MAX_COORDINATE: f64 = 1.0e6;
 /// How many recent model changes `Query::Events` can return.
 const EVENT_LOG_LEN: usize = 1024;
 
-/// The open model plus everything needed to edit it: camera and undo history.
+/// The open model plus everything needed to edit it: camera, selection and undo history.
 pub struct Document {
     model: Model,
     pub camera: Camera,
+    selection: BTreeSet<EntityId>,
     undo: Vec<ChangeSet>,
     redo: Vec<ChangeSet>,
     revision: u64,
@@ -29,6 +30,7 @@ impl Document {
         Self {
             model: Model::new(),
             camera: Camera::new(viewport),
+            selection: BTreeSet::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             revision: 0,
@@ -38,6 +40,11 @@ impl Document {
 
     pub fn model(&self) -> &Model {
         &self.model
+    }
+
+    /// The selected edges and faces. Entities leave it when they stop existing.
+    pub fn selection(&self) -> &BTreeSet<EntityId> {
+        &self.selection
     }
 
     /// Increases every time the model changes (edits, undo, redo). Clients compare it to decide
@@ -93,15 +100,32 @@ impl Document {
                 self.camera = self.camera_for(eye, target, fov_y_deg)?;
                 Ok(Outcome::default())
             }
-            Command::AddEdge { .. } | Command::AddRectangle { .. } | Command::PushPull { .. } => {
+            Command::Select { ids, mode } => {
+                self.edges_and_faces(&ids)?;
+                let ids: BTreeSet<EntityId> = ids.into_iter().collect();
+                match mode {
+                    SelectMode::Replace => self.selection = ids,
+                    SelectMode::Add => self.selection.extend(ids),
+                    SelectMode::Remove => self.selection.retain(|id| !ids.contains(id)),
+                    SelectMode::Toggle => {
+                        self.selection =
+                            self.selection.symmetric_difference(&ids).copied().collect();
+                    }
+                }
+                Ok(Outcome::default())
+            }
+            Command::AddEdge { .. }
+            | Command::AddRectangle { .. }
+            | Command::PushPull { .. }
+            | Command::Erase { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
     }
 
     /// Applies an editing command to the model and returns its changes, not yet recorded in
-    /// history. None for commands that are not edits (undo, redo, camera). Every editing
-    /// command goes through here, so `execute` and atomic batches stay in step.
+    /// history. None for commands that are not edits (undo, redo, camera, selection). Every
+    /// editing command goes through here, so `execute` and atomic batches stay in step.
     fn edit(&mut self, command: &Command) -> Option<Result<ChangeSet, CommandError>> {
         Some(match command {
             Command::AddEdge { start, end } => self.add_edge_changes(*start, *end),
@@ -111,7 +135,10 @@ impl Document {
                 normal,
             } => self.add_rectangle_changes(*corner, *opposite, *normal),
             Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
-            Command::Undo | Command::Redo | Command::SetCamera { .. } => return None,
+            Command::Erase { ids } => self.erase_changes(ids),
+            Command::Undo | Command::Redo | Command::SetCamera { .. } | Command::Select { .. } => {
+                return None;
+            }
         })
     }
 
@@ -182,6 +209,7 @@ impl Document {
         }
 
         let camera_before = self.camera.clone();
+        let selection_before = self.selection.clone();
         let mut applied: Vec<ChangeSet> = Vec::new();
         for (index, command) in commands.into_iter().enumerate() {
             let result = match self.edit(&command) {
@@ -203,6 +231,7 @@ impl Document {
                         self.model.apply(&c.inverse());
                     }
                     self.camera = camera_before;
+                    self.selection = selection_before;
                     return Err(BatchError {
                         index,
                         error,
@@ -282,6 +311,66 @@ impl Document {
         })
     }
 
+    fn erase_changes(&mut self, ids: &[EntityId]) -> Result<ChangeSet, CommandError> {
+        if ids.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "ids must list at least one edge or face",
+            ));
+        }
+        let (edges, faces) = self.edges_and_faces(ids)?;
+        Ok(self.model.erase(&edges, &faces))
+    }
+
+    /// Splits ids into edges and faces. Vertex ids are invalid input and unknown ids are not
+    /// found; both errors list the offending ids.
+    fn edges_and_faces(
+        &self,
+        ids: &[EntityId],
+    ) -> Result<(Vec<EdgeId>, Vec<FaceId>), CommandError> {
+        let vertices: Vec<EntityId> = ids
+            .iter()
+            .copied()
+            .filter(|id| matches!(id, EntityId::Vertex(_)))
+            .collect();
+        if !vertices.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "only edges and faces can be selected or erased",
+            )
+            .with_ids(vertices));
+        }
+        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
+        if !missing.is_empty() {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
+            );
+        }
+        let edges = ids
+            .iter()
+            .filter_map(|id| match id {
+                EntityId::Edge(e) => Some(*e),
+                _ => None,
+            })
+            .collect();
+        let faces = ids
+            .iter()
+            .filter_map(|id| match id {
+                EntityId::Face(f) => Some(*f),
+                _ => None,
+            })
+            .collect();
+        Ok((edges, faces))
+    }
+
+    fn exists(&self, id: EntityId) -> bool {
+        match id {
+            EntityId::Vertex(v) => self.model.vertex(v).is_some(),
+            EntityId::Edge(e) => self.model.edge(e).is_some(),
+            EntityId::Face(f) => self.model.face(f).is_some(),
+        }
+    }
+
     fn record(&mut self, changes: ChangeSet) -> Outcome {
         if changes.is_empty() {
             return Outcome::default();
@@ -292,9 +381,16 @@ impl Document {
         outcome
     }
 
-    /// Bumps the revision and logs the change.
+    /// Bumps the revision, logs the change and drops entities that no longer exist from the
+    /// selection.
     fn changed(&mut self, changes: &ChangeSet) -> Outcome {
         self.revision += 1;
+        self.selection = self
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| self.exists(*id))
+            .collect();
         let summary = changes.summary();
         self.events.push_back(ChangeEvent {
             revision: self.revision,
@@ -367,6 +463,10 @@ impl Document {
             Query::History => QueryResult::History {
                 undo_depth: self.undo.len(),
                 redo_depth: self.redo.len(),
+                revision: self.revision,
+            },
+            Query::Selection => QueryResult::Selection {
+                ids: self.selection.iter().copied().collect(),
                 revision: self.revision,
             },
             Query::Events { since } => {
