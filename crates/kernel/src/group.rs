@@ -114,7 +114,8 @@ impl Scene {
             return Err(KernelError::ZeroDistance);
         }
         let source = self.mesh(parent).expect("copy in a missing mesh");
-        let originals: Vec<Instance> = instances
+        let unique: BTreeSet<InstanceId> = instances.iter().copied().collect();
+        let originals: Vec<Instance> = unique
             .iter()
             .map(|id| source.instance(*id).cloned())
             .collect::<Option<_>>()

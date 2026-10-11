@@ -275,3 +275,14 @@ fn a_face_copied_onto_an_empty_outline_fills_it() {
         "the copy keeps the bottom's orientation"
     );
 }
+
+#[test]
+fn copying_an_open_cube_adds_no_lid() {
+    let mut m = cube();
+    let top = face_with_normal(&m, DVec3::Z);
+    m.erase(&[], &[top]);
+    let faces: Vec<_> = m.faces().map(|(id, _)| id).collect();
+    m.copy(&[], &faces, p(10.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.faces().count(), 10);
+}

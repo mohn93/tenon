@@ -21,6 +21,7 @@ pub enum KernelError {
     /// A move would shrink an edge to nothing, turn a face inside out, or land a vertex on
     /// another.
     Squash,
+    /// An instance id names no instance in the mesh.
     InstanceNotFound,
 }
 

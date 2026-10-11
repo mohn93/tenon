@@ -498,6 +498,7 @@ fn erasing_a_component_instance_keeps_the_definition() {
     let (i, _) = group_all(&mut s, DefinitionKind::Component);
     let d = definition_of(&s, i);
     s.erase_instances(MeshId::Root, &[i]);
+    s.validate().unwrap();
     assert!(s.definition(d).is_some());
 }
 
@@ -536,4 +537,56 @@ fn paths_resolve_to_the_open_mesh_and_its_placement() {
         ))
     );
     assert_eq!(s.resolve(&[inner]), None, "inner is not in the root");
+}
+
+fn open_box_group(kind: DefinitionKind) -> (Scene, InstanceId) {
+    let mut s = box_scene(DVec3::ZERO);
+    let top = s
+        .root()
+        .faces()
+        .find(|(_, f)| f.normal.z > 0.5)
+        .map(|(id, _)| id)
+        .unwrap();
+    s.edit(MeshId::Root, |m| Ok(m.erase(&[], &[top]))).unwrap();
+    let (i, _) = group_all(&mut s, kind);
+    (s, i)
+}
+
+#[test]
+fn grouping_an_open_box_keeps_it_open() {
+    let (s, i) = open_box_group(DefinitionKind::Group);
+    s.validate().unwrap();
+    assert_eq!(root_counts(&s), (0, 0, 0, 1));
+    let d = s.definition(definition_of(&s, i)).unwrap();
+    assert_eq!(counts(&d.mesh), (8, 12, 5, 0));
+}
+
+#[test]
+fn exploding_an_open_box_keeps_it_open() {
+    let (mut s, i) = open_box_group(DefinitionKind::Group);
+    s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    assert_eq!(root_counts(&s), (8, 12, 5, 0));
+}
+
+#[test]
+fn copying_an_open_box_group_keeps_the_copy_open() {
+    let (mut s, i) = open_box_group(DefinitionKind::Group);
+    s.copy_instances(MeshId::Root, &[i], p(10.0, 0.0, 0.0), 1)
+        .unwrap();
+    s.validate().unwrap();
+    for (_, d) in s.definitions() {
+        assert_eq!(counts(&d.mesh), (8, 12, 5, 0));
+    }
+    assert_eq!(s.definitions().count(), 2);
+}
+
+#[test]
+fn an_instance_listed_twice_is_copied_once() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Component);
+    let change = s
+        .copy_instances(MeshId::Root, &[i, i], p(3.0, 0.0, 0.0), 1)
+        .unwrap();
+    assert_eq!(change.summary().created.len(), 1);
 }
