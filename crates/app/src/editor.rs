@@ -286,9 +286,11 @@ impl Editor {
     }
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
-    /// (or "x" in the Move tool, for arrays like "x5"); other letters are tool shortcuts. Enter submits the typed text to the tool. Escape clears the
-    /// typed text, or else cancels the tool's operation. Delete, and Backspace with nothing
-    /// typed, erase the selection. Returns true if anything changed.
+    /// (or "x" in the Move tool, for arrays like "x5"); "g" makes a group and "c" a component
+    /// of the selection; other letters are tool shortcuts. Enter submits the typed text to the
+    /// tool. Escape clears the typed text, or else cancels the tool's operation (the Select
+    /// tool then closes the open group). Delete, and Backspace with nothing typed, erase the
+    /// selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
@@ -297,6 +299,10 @@ impl Editor {
                 if starts_value || starts_array {
                     self.typed.push(c);
                     true
+                } else if c.eq_ignore_ascii_case(&'g') {
+                    self.make_group()
+                } else if c.eq_ignore_ascii_case(&'c') {
+                    self.make_component()
                 } else if let Some(kind) = ToolKind::from_shortcut(c) {
                     self.select_tool(kind);
                     true
@@ -359,6 +365,72 @@ impl Editor {
         self.typed.clear();
         self.message = None;
         self.run(Command::Erase { ids });
+        self.update_hover();
+        true
+    }
+
+    /// Makes a group of the selection. False if nothing is selected.
+    pub fn make_group(&mut self) -> bool {
+        let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
+        if ids.is_empty() {
+            self.message = Some("Select geometry to make a group".into());
+            return false;
+        }
+        self.run_selection_command(Command::MakeGroup { ids })
+    }
+
+    /// Makes a component of the selection, named "Component N" with the first free N. False
+    /// if nothing is selected.
+    pub fn make_component(&mut self) -> bool {
+        let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
+        if ids.is_empty() {
+            self.message = Some("Select geometry to make a component".into());
+            return false;
+        }
+        let names: Vec<&str> = self
+            .doc
+            .scene()
+            .definitions()
+            .map(|(_, d)| d.name.as_str())
+            .collect();
+        let name = (1..)
+            .map(|n| format!("Component {n}"))
+            .find(|n| !names.contains(&n.as_str()))
+            .expect("a free name");
+        self.run_selection_command(Command::MakeComponent { ids, name })
+    }
+
+    /// Explodes the selected groups and components. False if none is selected.
+    pub fn explode_selection(&mut self) -> bool {
+        let ids: Vec<EntityId> = self
+            .doc
+            .selection()
+            .iter()
+            .copied()
+            .filter(|id| matches!(id, EntityId::Instance(_)))
+            .collect();
+        if ids.is_empty() {
+            self.message = Some("Select a group or component to explode".into());
+            return false;
+        }
+        self.run_selection_command(Command::Explode { ids })
+    }
+
+    /// Closes the open group or component. False if none is open.
+    pub fn close_instance(&mut self) -> bool {
+        if self.doc.context().is_empty() {
+            return false;
+        }
+        self.run_selection_command(Command::CloseInstance)
+    }
+
+    /// Runs a command that works on the selection or the open context, dropping the tool's
+    /// operation and any typed text first.
+    fn run_selection_command(&mut self, command: Command) -> bool {
+        self.reset_tool();
+        self.typed.clear();
+        self.message = None;
+        self.run(command);
         self.update_hover();
         true
     }
@@ -1443,5 +1515,58 @@ mod tests {
         assert!(matches!(selected[0], EntityId::Instance(_)));
         assert_eq!(e.status_parts().message, None);
         assert!(box_min(&e, selected[0]).abs_diff_eq(DVec3::new(10.0, 4.0, 0.0), 1e-6));
+    }
+
+    /// Names of the definitions in the model, in id order.
+    fn definition_names(e: &Editor) -> Vec<String> {
+        e.doc()
+            .scene()
+            .definitions()
+            .map(|(_, d)| d.name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn g_and_c_group_the_selection_and_explode_takes_it_apart() {
+        let mut e = editor();
+        assert!(!e.key(EditorKey::Char('g')), "nothing selected");
+        assert!(e.status().contains("Select geometry to make a group"));
+        square(&mut e);
+        e.select_tool(ToolKind::Select);
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert!(e.key(EditorKey::Char('g')));
+        let group = *e.doc().selection().first().unwrap();
+        assert!(matches!(group, EntityId::Instance(_)));
+        assert_eq!(definition_names(&e), [""]);
+        assert!(e.key(EditorKey::Char('c')));
+        assert!(e.key(EditorKey::Char('C')));
+        assert_eq!(
+            definition_names(&e),
+            ["", "Component 1", "Component 2"],
+            "each component gets the next free name"
+        );
+        assert!(e.explode_selection());
+        assert!(e.explode_selection());
+        assert!(e.explode_selection());
+        assert_eq!(
+            definition_names(&e).len(),
+            3,
+            "the components stay, and so does the group inside Component 1"
+        );
+        assert_eq!(stats(&e), (4, 1), "the square is back in the root");
+        assert!(
+            !e.explode_selection(),
+            "the square's edges and face are no group"
+        );
+    }
+
+    #[test]
+    fn close_instance_goes_back_out() {
+        let mut e = editor();
+        assert!(!e.close_instance());
+        let group = moved_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        assert!(e.close_instance());
+        assert!(e.doc().context().is_empty());
     }
 }

@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools)
 
 ## Goal
 
@@ -105,6 +105,7 @@ Tools never mutate the mesh directly. A `Commit` carries a `session::Command`, e
 - Ranking: points over directions, nearer over farther; tolerance in screen pixels.
 - Output: snapped `DVec3`, snap kind, guide geometry, tooltip label.
 - Picking via BVH over faces and edges; edges get a pixel pick radius.
+- Tools work in the open context's coordinates. Inference sees all geometry (inside instances and outside the open instance) and faces anywhere hide what is behind them; clicking geometry inside an instance picks the instance, and geometry outside the open instance is never picked.
 
 ### Measurements box (VCB)
 

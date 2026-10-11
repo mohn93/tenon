@@ -194,6 +194,18 @@ impl State {
             UiAction::EraseSelection => {
                 self.editor.erase_selection();
             }
+            UiAction::MakeGroup => {
+                self.editor.make_group();
+            }
+            UiAction::MakeComponent => {
+                self.editor.make_component();
+            }
+            UiAction::Explode => {
+                self.editor.explode_selection();
+            }
+            UiAction::CloseInstance => {
+                self.editor.close_instance();
+            }
         }
     }
 
@@ -231,6 +243,13 @@ impl State {
             status: &status,
             info: &info,
             has_selection: !self.editor.doc().selection().is_empty(),
+            has_instance_selected: self
+                .editor
+                .doc()
+                .selection()
+                .iter()
+                .any(|id| matches!(id, EntityId::Instance(_))),
+            inside_instance: !self.editor.doc().context().is_empty(),
         };
         let gui_frame = self.gui.frame(&self.window, &panels);
         let acted = !gui_frame.actions.is_empty();
@@ -371,6 +390,8 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyP => 'p',
         KeyCode::KeyE => 'e',
         KeyCode::KeyM => 'm',
+        KeyCode::KeyG => 'g',
+        KeyCode::KeyC => 'c',
         _ => return None,
     })
 }

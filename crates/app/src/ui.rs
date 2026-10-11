@@ -12,6 +12,10 @@ pub enum UiAction {
     Undo,
     Redo,
     EraseSelection,
+    MakeGroup,
+    MakeComponent,
+    Explode,
+    CloseInstance,
 }
 
 /// What the panels show.
@@ -20,6 +24,10 @@ pub struct View<'a> {
     pub status: &'a Status,
     pub info: &'a [String],
     pub has_selection: bool,
+    /// Whether a group or component is selected.
+    pub has_instance_selected: bool,
+    /// Whether a group or component is open for editing.
+    pub inside_instance: bool,
 }
 
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
@@ -52,6 +60,32 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                 .on_hover_text("Delete");
             if erase.clicked() {
                 actions.push(UiAction::EraseSelection);
+            }
+            ui.separator();
+            let buttons = [
+                (view.has_selection, "Make group", "G", UiAction::MakeGroup),
+                (
+                    view.has_selection,
+                    "Make component",
+                    "C",
+                    UiAction::MakeComponent,
+                ),
+                (view.has_instance_selected, "Explode", "", UiAction::Explode),
+                (
+                    view.inside_instance,
+                    "Close group",
+                    "Escape",
+                    UiAction::CloseInstance,
+                ),
+            ];
+            for (enabled, label, key, action) in buttons {
+                let mut button = ui.add_enabled(enabled, egui::Button::new(label));
+                if !key.is_empty() {
+                    button = button.on_hover_text(key);
+                }
+                if button.clicked() {
+                    actions.push(action);
+                }
             }
         });
     });
@@ -126,6 +160,8 @@ mod tests {
             status: &status,
             info: &info,
             has_selection: false,
+            has_instance_selected: false,
+            inside_instance: false,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -148,12 +184,14 @@ mod tests {
             status: &status,
             info: &info,
             has_selection: true,
+            has_instance_selected: true,
+            inside_instance: true,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let row = central.min.y / 2.0;
         // Click along the toolbar row until a press lands on the Rectangle button.
         let mut clicked = Vec::new();
-        for x in (2..600).step_by(4) {
+        for x in (2..1000).step_by(4) {
             let pos = Pos2::new(x as f32, row);
             let pointer = |pressed: bool| egui::Event::PointerButton {
                 pos,
@@ -174,5 +212,13 @@ mod tests {
         );
         assert!(clicked.contains(&UiAction::Undo));
         assert!(clicked.contains(&UiAction::EraseSelection));
+        for action in [
+            UiAction::MakeGroup,
+            UiAction::MakeComponent,
+            UiAction::Explode,
+            UiAction::CloseInstance,
+        ] {
+            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+        }
     }
 }

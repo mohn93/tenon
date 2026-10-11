@@ -5,8 +5,28 @@ use session::Document;
 use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
-/// or the kind and name of a single instance.
+/// or the kind and name of a single instance. While a group or component is open, a first line
+/// says which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
+    let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
+    lines.extend(selection_info(doc));
+    lines
+}
+
+/// "Editing group" or "Editing component <name>" while one is open.
+fn editing(doc: &Document) -> Option<String> {
+    let (scene, path) = (doc.scene(), doc.context());
+    let (last, outer) = path.split_last()?;
+    let (parent, _) = scene.resolve(outer)?;
+    let instance = scene.mesh(parent)?.instance(*last)?;
+    let d = scene.definition(instance.definition)?;
+    Some(match d.kind {
+        DefinitionKind::Group => "Editing group".into(),
+        DefinitionKind::Component => format!("Editing component {}", d.name),
+    })
+}
+
+fn selection_info(doc: &Document) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     for id in doc.selection() {
@@ -152,5 +172,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(entity_info(&d), ["1 edge, 1 instance"]);
+    }
+
+    #[test]
+    fn says_what_is_being_edited() {
+        let mut d = doc_with_square();
+        let ids = ["e2", "e4", "e6", "e7", "f8"]
+            .map(|s| s.parse().unwrap())
+            .to_vec();
+        d.execute(Command::MakeComponent {
+            ids,
+            name: "Table".into(),
+        })
+        .unwrap();
+        let table = *d.selection().first().unwrap();
+        d.execute(Command::OpenInstance { id: table }).unwrap();
+        assert_eq!(
+            entity_info(&d),
+            ["Editing component Table", "Nothing selected"]
+        );
+        let ids = d.model().faces().map(|(f, _)| EntityId::Face(f)).collect();
+        d.execute(Command::MakeGroup { ids }).unwrap();
+        let group = *d.selection().first().unwrap();
+        d.execute(Command::OpenInstance { id: group }).unwrap();
+        assert_eq!(entity_info(&d), ["Editing group", "Nothing selected"]);
     }
 }
