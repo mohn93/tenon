@@ -613,3 +613,164 @@ fn cut_keeps_user_lines_it_splits() {
     }
     assert_no_isolated_vertices(&m);
 }
+
+/// A wall 4 m long, 0.3 m thick and 3 m high, pulled up from the ground.
+fn wall() -> Model {
+    let mut m = Model::new();
+    let base = rect(&mut m, 0.0, 0.0, 4.0, 0.3, 0.0);
+    m.push_pull(base, 3.0).unwrap();
+    m.take_changes();
+    m
+}
+
+/// Draws the rectangle x0..x1, z0..z1 on the wall's front face (y = 0) and returns its face.
+fn window(m: &mut Model, x0: f64, z0: f64, x1: f64, z1: f64) -> FaceId {
+    m.add_polygon(&[
+        p(x0, 0.0, z0),
+        p(x1, 0.0, z0),
+        p(x1, 0.0, z1),
+        p(x0, 0.0, z1),
+    ])
+    .unwrap();
+    m.validate().unwrap();
+    let e = 1e-9;
+    let mut found = faces_where(m, |q| {
+        q.y.abs() < e && q.x > x0 - e && q.x < x1 + e && q.z > z0 - e && q.z < z1 + e
+    });
+    assert_eq!(found.len(), 1, "one face in the window");
+    found.pop().unwrap()
+}
+
+/// The faces a ray along +y through (x, z) meets.
+fn faces_on_line(m: &Model, x: f64, z: f64) -> usize {
+    m.faces()
+        .filter(|(id, _)| {
+            m.triangulate(*id).unwrap().iter().any(|[a, b, c]| {
+                let n = (*b - *a).cross(*c - *a);
+                if n.y.abs() < 1e-12 {
+                    return false;
+                }
+                let q = p(x, 0.0, z);
+                let t = n.dot(*a - q) / n.y;
+                let hit = q + DVec3::Y * t;
+                let inside = |u: DVec3, v: DVec3| (v - u).cross(hit - u).dot(n) >= 0.0;
+                inside(*a, *b) && inside(*b, *c) && inside(*c, *a)
+            })
+        })
+        .count()
+}
+
+#[test]
+fn pushing_a_window_to_the_back_of_a_wall_opens_it() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    assert_eq!(faces_on_line(&m, 1.5, 1.5), 2, "front and back before");
+    push_pull_undoable(&mut m, win, -0.3);
+    m.validate().unwrap();
+    assert_eq!(
+        faces_on_line(&m, 1.5, 1.5),
+        0,
+        "nothing left in the opening"
+    );
+    assert_eq!(faces_on_line(&m, 0.5, 1.5), 2, "the wall beside it stays");
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    // The front and back keep a hole each; four reveals line the opening.
+    assert_eq!(m.faces().count(), 6 + 4);
+}
+
+#[test]
+fn pushing_a_window_at_the_top_of_a_wall_cuts_a_slot() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 2.0, 2.0, 3.0);
+    push_pull_undoable(&mut m, win, -0.3);
+    m.validate().unwrap();
+    assert_eq!(faces_on_line(&m, 1.5, 2.5), 0, "the slot is open");
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    let tops = faces_where(&m, |q| (q.z - 3.0).abs() < 1e-9).len();
+    assert_eq!(tops, 2, "the slot splits the top in two");
+    for (id, e) in m.edges() {
+        assert!(
+            side_uses(&m, e.v[0], e.v[1], &[]) > 0,
+            "edge {id:?} borders no face"
+        );
+    }
+}
+
+#[test]
+fn pushing_a_window_past_the_back_of_a_wall_is_refused() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    m.take_changes();
+    let before = m.clone();
+    assert_eq!(m.push_pull(win, -0.5), Err(KernelError::Obstructed));
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+}
+
+#[test]
+fn pushing_a_hole_through_a_box_from_the_top() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, sub, -2.0);
+    m.validate().unwrap();
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    let caps = faces_where(&m, |q| {
+        (q.x - 1.5).abs() < 0.5 + 1e-9 && (q.y - 1.5).abs() < 0.5 + 1e-9 && q.z.abs() < 1e-9
+    });
+    assert!(caps.is_empty(), "no face closes the bottom of the hole");
+    assert_eq!(m.faces().count(), 6 + 4);
+}
+
+#[test]
+fn a_window_drawn_on_both_sides_opens_both() {
+    let mut m = wall();
+    let back = [
+        p(1.0, 0.3, 1.0),
+        p(2.0, 0.3, 1.0),
+        p(2.0, 0.3, 2.0),
+        p(1.0, 0.3, 2.0),
+    ];
+    m.add_polygon(&back).unwrap();
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, win, -0.3);
+    m.validate().unwrap();
+    assert_eq!(
+        faces_on_line(&m, 1.5, 1.5),
+        0,
+        "nothing left in the opening"
+    );
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+}
+
+#[test]
+fn pushing_a_ring_through_a_box_leaves_a_column() {
+    let (mut m, _) = box_4x4x2();
+    rect(&mut m, 1.0, 1.0, 3.0, 3.0, 2.0);
+    rect(&mut m, 1.5, 1.5, 2.5, 2.5, 2.0);
+    let ring = m
+        .faces()
+        .find(|(_, f)| {
+            f.holes.len() == 1 && f.outer.len() == 4 && {
+                let q = m.position(f.outer[0]).unwrap();
+                (q.z - 2.0).abs() < 1e-9 && q.x > 0.5 && q.x < 3.5 && q.y > 0.5 && q.y < 3.5
+            }
+        })
+        .map(|(id, _)| id)
+        .expect("ring face");
+    push_pull_undoable(&mut m, ring, -2.0);
+    m.validate().unwrap();
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    // The column keeps its top and bottom.
+    assert_eq!(
+        faces_where(&m, |q| (q.x - 2.0).abs() < 0.5 + 1e-9
+            && (q.y - 2.0).abs() < 0.5 + 1e-9
+            && q.z.abs() < 1e-9)
+        .len(),
+        1
+    );
+}

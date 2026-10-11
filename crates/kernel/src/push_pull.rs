@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::{DVec2, DVec3};
 
 use crate::edit::KernelError;
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment};
+use crate::geom::{
+    LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d,
+};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
@@ -16,6 +18,8 @@ impl Model {
     /// moves and those faces stretch. Otherwise it is extruded: a side face for every side of
     /// every loop, plus a cap. The original face stays as the base when it lies in a flat sheet
     /// and is removed when it is part of a solid's surface. Extruded faces point out of the solid.
+    /// A push into a solid that ends exactly on a parallel face holding the whole pushed face
+    /// (the back of a wall) cuts an opening through to it.
     pub fn push_pull(&mut self, id: FaceId, distance: f64) -> Result<ChangeSet, KernelError> {
         let face = self.face(id).ok_or(KernelError::FaceNotFound)?.clone();
         if !distance.is_finite() {
@@ -27,8 +31,8 @@ impl Model {
         if self.stretches_around(id, &face) {
             self.move_face(id, &face, face.normal * distance)?;
         } else {
-            self.check_unobstructed(id, distance)?;
-            self.extrude(id, &face, distance);
+            let through = self.check_path(id, &face, distance)?;
+            self.extrude(id, &face, distance, through);
         }
         Ok(self.take_changes())
     }
@@ -114,7 +118,9 @@ impl Model {
         Ok(())
     }
 
-    fn extrude(&mut self, id: FaceId, face: &Face, distance: f64) {
+    /// Extrudes face `id` by `distance`. With `through`, the push ends on the back of the solid:
+    /// the cap and the part of the back face it covers are removed, leaving an opening.
+    fn extrude(&mut self, id: FaceId, face: &Face, distance: f64, through: bool) {
         let n = face.normal;
         let offset = n * distance;
         let in_solid = self.in_solid(id);
@@ -135,6 +141,16 @@ impl Model {
                 })
             })
             .collect();
+        // The moved loops, to tell the cap apart from the rest of a back face in its plane.
+        let cap_plane = Plane::through(points[0][0] + offset, n);
+        let ring = |l: &Vec<DVec3>| -> Vec<DVec2> {
+            l.iter().map(|p| cap_plane.project(*p + offset)).collect()
+        };
+        let cap = Polygon {
+            plane: cap_plane,
+            outer: ring(&points[0]),
+            holes: points[1..].iter().map(ring).collect(),
+        };
         let before: BTreeSet<FaceId> = self.faces().map(|(f, _)| f).collect();
         let vertices_before: BTreeSet<VertexId> = self.vertices().map(|(v, _)| v).collect();
         // A cut opens a piece of a side only where a face that existed before covered it (a
@@ -168,11 +184,29 @@ impl Model {
         }
 
         // Each hole's cap loop closes inside the cap, which fills it like any loop drawn on a
-        // face; that fill is removed so the hole stays open.
+        // face; that fill is removed so the hole stays open. Through a solid, the back face
+        // already fills it.
         let hole_caps: Vec<BTreeSet<VertexId>> = points[1..]
             .iter()
+            .filter(|_| !through)
             .filter_map(|l| l.iter().map(|p| self.find_vertex(*p + offset)).collect())
             .collect();
+        if through {
+            // The cap lands on the back face: every face there inside the cap opens.
+            let inside: Vec<FaceId> = self
+                .faces()
+                .map(|(f, _)| f)
+                .filter(|f| {
+                    let g = self.face(*f).unwrap();
+                    g.normal.cross(n).length() < PLANE_ANGLE_TOL
+                        && cap_plane.contains(self.pos(g.outer[0]))
+                        && self.interior_point(*f).is_some_and(|p| cap.contains(p))
+                })
+                .collect();
+            for f in inside {
+                self.remove_face(f);
+            }
+        }
         // A solid grows outward when pulled along the normal and is cut when pushed against it.
         let cut = in_solid && distance < 0.0;
         let cap_normal = if in_solid || distance > 0.0 { n } else { -n };
@@ -191,6 +225,10 @@ impl Model {
             }
             let in_cap = g.normal.cross(n).length() < PLANE_ANGLE_TOL
                 && (self.pos(g.outer[0]) - cap_origin).dot(n).abs() < LENGTH_TOL;
+            if in_cap && through {
+                // The rest of the back face keeps its orientation.
+                continue;
+            }
             if in_cap {
                 self.orient(f, cap_normal);
                 continue;
@@ -224,9 +262,10 @@ impl Model {
     }
 
     /// After a cut, removes the edges that border no face and lie on a swept vertical segment
-    /// (p to p + offset for a loop point p) or on a loop side of the pushed face. Then removes the
-    /// loop vertices, their offset copies and the vertices this push/pull created that no edge
-    /// uses any more. User lines the extrusion split lie on neither, so they stay.
+    /// (p to p + offset for a loop point p), on a loop side of the pushed face, or on one of its
+    /// moved sides (the rim of an opening on the back face). Then removes the loop vertices,
+    /// their offset copies and the vertices this push/pull created that no edge uses any more.
+    /// User lines the extrusion split lie on none of these, so they stay.
     fn remove_strays(
         &mut self,
         vertices_before: &BTreeSet<VertexId>,
@@ -243,7 +282,7 @@ impl Model {
         }
         let segments: Vec<(DVec3, DVec3)> = sides
             .iter()
-            .flat_map(|&(_, _, pa, pb)| [(pa, pa + offset), (pa, pb)])
+            .flat_map(|&(_, _, pa, pb)| [(pa, pa + offset), (pa, pb), (pa + offset, pb + offset)])
             .collect();
         let on_segment = |p: DVec3, (a, b): (DVec3, DVec3)| {
             let (t, d) = project_on_segment(p, a, b);
@@ -312,26 +351,77 @@ impl Model {
     /// Fails with `Obstructed` if face `id`, moved `distance` along its normal, would meet another
     /// face: a ray from a point inside it hits one within that distance.
     fn check_unobstructed(&self, id: FaceId, distance: f64) -> Result<(), KernelError> {
+        if self.hits_along(id, distance).is_empty() {
+            Ok(())
+        } else {
+            Err(KernelError::Obstructed)
+        }
+    }
+
+    /// Checks the path of face `id` extruded by `distance`, like `check_unobstructed`, except
+    /// that a push into a solid may end exactly on one face parallel to it that holds the whole
+    /// moved face (the back of a wall). Returns true in that case: the push cuts through.
+    fn check_path(&self, id: FaceId, face: &Face, distance: f64) -> Result<bool, KernelError> {
+        let hits = self.hits_along(id, distance);
+        let [(g, t)] = hits[..] else {
+            return if hits.is_empty() {
+                Ok(false)
+            } else {
+                Err(KernelError::Obstructed)
+            };
+        };
+        let ends_on_back = distance < 0.0
+            && (t - distance.abs()).abs() < LENGTH_TOL
+            && self.holds(g, face, face.normal * distance)
+            && self.in_solid(id);
+        if ends_on_back {
+            Ok(true)
+        } else {
+            Err(KernelError::Obstructed)
+        }
+    }
+
+    /// The faces a ray from a point inside face `id` meets beyond `LENGTH_TOL` and within
+    /// `distance` along its normal, each with the distance to its nearest hit.
+    fn hits_along(&self, id: FaceId, distance: f64) -> Vec<(FaceId, f64)> {
         let Some(tris) = self.triangulate(id) else {
-            return Ok(());
+            return Vec::new();
         };
         let Some([a, b, c]) = tris.first().copied() else {
-            return Ok(());
+            return Vec::new();
         };
         let from = (a + b + c) / 3.0;
         let dir = self.face(id).unwrap().normal * distance.signum();
         let reach = distance.abs() + LENGTH_TOL;
-        let hit = self
-            .faces()
+        self.faces()
             .filter(|(f, _)| *f != id)
-            .flat_map(|(f, _)| self.triangulate(f).unwrap_or_default())
-            .filter_map(|t| ray_hits_triangle(from, dir, t))
-            .any(|t| t > LENGTH_TOL && t <= reach);
-        if hit {
-            Err(KernelError::Obstructed)
-        } else {
-            Ok(())
-        }
+            .filter_map(|(f, _)| {
+                self.triangulate(f)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|t| ray_hits_triangle(from, dir, t))
+                    .filter(|t| *t > LENGTH_TOL && *t <= reach)
+                    .min_by(f64::total_cmp)
+                    .map(|t| (f, t))
+            })
+            .collect()
+    }
+
+    /// True if face `g` is parallel to `face` and, in its plane, holds `face` moved by `offset`:
+    /// every corner and side midpoint of the moved outer loop lies inside `g` or on its boundary.
+    fn holds(&self, g: FaceId, face: &Face, offset: DVec3) -> bool {
+        let gf = self.face(g).unwrap();
+        let moved: Vec<DVec3> = face.outer.iter().map(|v| self.pos(*v) + offset).collect();
+        let plane = Plane::through(self.pos(gf.outer[0]), gf.normal);
+        let Some(poly) = self.polygon_in(gf, &plane) else {
+            return false;
+        };
+        let parallel = gf.normal.cross(face.normal).length() < PLANE_ANGLE_TOL;
+        parallel
+            && (0..moved.len()).all(|i| {
+                let (a, b) = (moved[i], moved[(i + 1) % moved.len()]);
+                plane.contains(a) && poly.holds(a) && poly.holds((a + b) * 0.5)
+            })
     }
 
     /// Flips face `id` if its normal points away from `want`.
@@ -402,6 +492,15 @@ impl Polygon {
     fn contains(&self, p: DVec3) -> bool {
         let q = self.plane.project(p);
         point_in_polygon(q, &self.outer) && !self.holes.iter().any(|h| point_in_polygon(q, h))
+    }
+
+    /// True if `p` (assumed in the plane) is inside or on the boundary.
+    fn holds(&self, p: DVec3) -> bool {
+        let q = self.plane.project(p);
+        let on = |l: &Vec<DVec2>| {
+            (0..l.len()).any(|i| segment_distance_2d(q, l[i], l[(i + 1) % l.len()]) < LENGTH_TOL)
+        };
+        on(&self.outer) || self.holes.iter().any(on) || self.contains(p)
     }
 }
 
