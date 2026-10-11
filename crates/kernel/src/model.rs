@@ -387,9 +387,11 @@ impl Model {
         i
     }
 
-    /// Moves instances by `offset` as one ChangeSet. Unknown ids are skipped.
+    /// Moves instances by `offset` as one ChangeSet. Each listed instance moves once; unknown
+    /// ids are skipped.
     pub fn move_instances(&mut self, ids: &[InstanceId], offset: DVec3) -> ChangeSet {
-        for id in ids {
+        let ids: BTreeSet<InstanceId> = ids.iter().copied().collect();
+        for id in &ids {
             if let Some(i) = self.instances.get(id) {
                 let from = i.transform;
                 let to = DAffine3::from_translation(offset) * from;

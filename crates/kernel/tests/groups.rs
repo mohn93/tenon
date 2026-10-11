@@ -307,3 +307,19 @@ fn moving_an_instance_translates_it_and_undoes_exactly() {
     s.apply(&change.inverse());
     assert_eq!(s, before);
 }
+
+#[test]
+fn an_instance_listed_twice_moves_once_by_move_instances() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Group);
+    let change = s
+        .edit(MeshId::Root, |m| {
+            Ok(m.move_instances(&[i, i], p(1.0, 2.0, 3.0)))
+        })
+        .unwrap();
+    assert_eq!(
+        s.root().instance(i).unwrap().transform,
+        DAffine3::from_translation(p(1.0, 2.0, 3.0))
+    );
+    assert_eq!(change.summary().modified, vec![EntityId::Instance(i)]);
+}
