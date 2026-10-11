@@ -457,10 +457,12 @@ impl ApplicationHandler<ApiWake> for App {
                 false
             }
             WindowEvent::ModifiersChanged(m) => {
+                let ctrl_pressed = m.state().control_key() && !s.modifiers.control_key();
                 s.modifiers = m.state();
                 s.editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
-                false
+                // Tapping Ctrl switches tools that can copy (Move) between moving and copying.
+                ctrl_pressed && s.editor.toggle_copy()
             }
             WindowEvent::Focused(false) => {
                 s.editor.focus_lost();

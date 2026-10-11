@@ -2,8 +2,9 @@
 //! resulting commands on the document, and produces the overlay and status text to show.
 
 use glam::{DVec2, DVec3};
+use kernel::EntityId;
 use render::grid::LineVertex;
-use session::{BatchError, Command, CommandError, Document, ErrorKind, Outcome};
+use session::{BatchError, Command, CommandError, Document, ErrorKind, Outcome, SelectMode};
 use tools::overlay::overlay;
 use tools::{Inference, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, infer};
 
@@ -169,6 +170,12 @@ impl Editor {
     /// The cursor left the window: hide the inference marker.
     pub fn cursor_left(&mut self) -> bool {
         self.hit.take().is_some()
+    }
+
+    /// The copy modifier (Ctrl) was tapped.
+    pub fn toggle_copy(&mut self) -> bool {
+        self.send(ToolEvent::ToggleCopy);
+        true
     }
 
     pub fn button(&mut self, button: Button, pressed: bool) -> bool {
@@ -340,9 +347,34 @@ impl Editor {
         self.tool.handle(event, &ctx)
     }
 
+    /// Runs the tool's commands in order; a copy selects what it created, as in SketchUp.
+    /// The first command that fails stops the rest. If it fails after an undo from the same
+    /// list (an array replacing a copy), the undo is redone, and the tool drops its state.
     fn apply(&mut self, out: ToolOutput) {
+        let mut undone = false;
         for command in out.commands {
-            self.run(command);
+            let is_undo = matches!(command, Command::Undo);
+            let is_copy = matches!(command, Command::Copy { .. });
+            let Some(outcome) = self.run(command) else {
+                if undone {
+                    let _ = self.doc.execute(Command::Redo);
+                }
+                self.reset_tool();
+                return;
+            };
+            undone |= is_undo;
+            if is_copy {
+                let ids = outcome
+                    .changes
+                    .created
+                    .into_iter()
+                    .filter(|id| !matches!(id, EntityId::Vertex(_)))
+                    .collect();
+                self.run(Command::Select {
+                    ids,
+                    mode: SelectMode::Replace,
+                });
+            }
         }
         self.preview = out.preview;
     }
@@ -353,11 +385,15 @@ impl Editor {
         self.preview.clear();
     }
 
-    fn run(&mut self, command: Command) {
+    /// Runs a command; a failure becomes the status message.
+    fn run(&mut self, command: Command) -> Option<Outcome> {
         match self.doc.execute(command) {
-            Ok(_) => {}
-            Err(e) if matches!(e.kind, ErrorKind::NothingToUndo | ErrorKind::NothingToRedo) => {}
-            Err(e) => self.message = Some(e.message),
+            Ok(outcome) => Some(outcome),
+            Err(e) if matches!(e.kind, ErrorKind::NothingToUndo | ErrorKind::NothingToRedo) => None,
+            Err(e) => {
+                self.message = Some(e.message);
+                None
+            }
         }
     }
 
@@ -779,6 +815,89 @@ mod tests {
         assert!(e.key(EditorKey::Char('e')));
         click_at(&mut e, DVec3::new(3.0, 2.0, 0.0));
         assert_eq!(stats(&e), (3, 0));
+    }
+
+    #[test]
+    fn move_tool_moves_the_selection_by_a_typed_distance() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert!(e.key(EditorKey::Char('m')));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        move_to(&mut e, DVec3::new(2.0, 4.0, 0.0));
+        type_text(&mut e, "2");
+        assert_eq!(stats(&e), (4, 1));
+        let moved = DVec3::new(1.0, 3.0, 0.0);
+        let model = e.doc().model();
+        assert!(
+            model
+                .vertices()
+                .any(|(_, v)| v.pos.abs_diff_eq(moved, 1e-6))
+        );
+    }
+
+    #[test]
+    fn copies_are_selected_and_arrays_replace_them() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.key(EditorKey::Char('m'));
+        assert!(e.toggle_copy());
+        assert!(e.status().contains("Copy"), "{}", e.status());
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        move_to(&mut e, DVec3::new(5.0, 2.0, 0.0));
+        type_text(&mut e, "3");
+        assert_eq!(stats(&e), (8, 2));
+        assert_eq!(
+            e.doc().selection().len(),
+            5,
+            "the copy's four edges and face"
+        );
+        type_text(&mut e, "3x");
+        assert_eq!(stats(&e), (16, 4));
+        e.undo();
+        assert_eq!(stats(&e), (4, 1), "the array is one undo step");
+    }
+
+    /// A square, selected, with the Move tool in copy mode and the base point picked.
+    fn start_copy(e: &mut Editor) {
+        square(e);
+        e.key(EditorKey::Char(' '));
+        click_at(e, DVec3::new(2.0, 2.0, 0.0));
+        e.key(EditorKey::Char('m'));
+        e.toggle_copy();
+        click_at(e, DVec3::new(2.0, 2.0, 0.0));
+        move_to(e, DVec3::new(5.0, 2.0, 0.0));
+    }
+
+    #[test]
+    fn a_rejected_array_keeps_the_copy_and_disarms_the_array() {
+        let mut e = editor();
+        start_copy(&mut e);
+        type_text(&mut e, "5000");
+        assert_eq!(stats(&e), (8, 2));
+        type_text(&mut e, "900x");
+        assert_eq!(stats(&e), (8, 2), "the copy is restored");
+        assert!(!e.status_parts().message.unwrap_or_default().is_empty());
+        // Typing another array must not undo anything.
+        type_text(&mut e, "3x");
+        assert_eq!(stats(&e), (8, 2));
+        e.undo();
+        assert_eq!(stats(&e), (4, 1), "the copy is still one undo step");
+    }
+
+    #[test]
+    fn a_rejected_copy_does_not_arm_an_array() {
+        let mut e = editor();
+        start_copy(&mut e);
+        type_text(&mut e, "2000000");
+        assert_eq!(stats(&e), (4, 1), "the copy was rejected");
+        assert!(!e.status_parts().message.unwrap_or_default().is_empty());
+        type_text(&mut e, "5x");
+        assert_eq!(stats(&e), (4, 1), "nothing was undone or copied");
+        assert_eq!(e.doc().model().faces().count(), 1);
     }
 
     #[test]
