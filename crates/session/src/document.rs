@@ -1,12 +1,19 @@
 use std::collections::{BTreeSet, VecDeque};
 
-use glam::{DVec2, DVec3};
-use kernel::{ChangeSet, EdgeId, EntityId, FaceId, KernelError, Model, VertexId};
+use glam::{DAffine3, DVec2, DVec3};
+use kernel::{
+    ChangeSet, EdgeId, EntityId, FaceId, InstanceId, KernelError, MeshId, Model, Scene,
+    SceneChange, VertexId,
+};
 
 use crate::camera::Camera;
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
-use crate::query::{ChangeEvent, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo};
+use crate::query::{
+    ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo,
+};
 use crate::rectangle::rectangle_corners;
+
+mod groups;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -17,13 +24,16 @@ pub const MAX_COPIES: u32 = 100;
 /// How many recent model changes `Query::Events` can return.
 const EVENT_LOG_LEN: usize = 1024;
 
-/// The open model plus everything needed to edit it: camera, selection and undo history.
+/// The open model plus everything needed to edit it: camera, selection, the open context and
+/// undo history.
 pub struct Document {
-    model: Model,
+    scene: Scene,
+    /// The instances being edited, from the root; empty when the root is open.
+    context: Vec<InstanceId>,
     pub camera: Camera,
     selection: BTreeSet<EntityId>,
-    undo: Vec<ChangeSet>,
-    redo: Vec<ChangeSet>,
+    undo: Vec<SceneChange>,
+    redo: Vec<SceneChange>,
     revision: u64,
     events: VecDeque<ChangeEvent>,
 }
@@ -31,7 +41,8 @@ pub struct Document {
 impl Document {
     pub fn new(viewport: DVec2) -> Self {
         Self {
-            model: Model::new(),
+            scene: Scene::new(),
+            context: Vec::new(),
             camera: Camera::new(viewport),
             selection: BTreeSet::new(),
             undo: Vec::new(),
@@ -41,11 +52,48 @@ impl Document {
         }
     }
 
-    pub fn model(&self) -> &Model {
-        &self.model
+    /// The whole model: the root mesh and every definition.
+    pub fn scene(&self) -> &Scene {
+        &self.scene
     }
 
-    /// The selected edges and faces. Entities leave it when they stop existing.
+    /// The mesh being edited: the root, or the definition of the open instance.
+    pub fn model(&self) -> &Model {
+        self.scene
+            .mesh(self.active())
+            .expect("the open context exists")
+    }
+
+    /// The instances being edited, from the root; empty when the root is open.
+    pub fn context(&self) -> &[InstanceId] {
+        &self.context
+    }
+
+    /// Maps the open context's coordinates to the root's.
+    pub fn context_transform(&self) -> DAffine3 {
+        self.scene
+            .resolve(&self.context)
+            .expect("the open context exists")
+            .1
+    }
+
+    fn active(&self) -> MeshId {
+        self.scene
+            .resolve(&self.context)
+            .expect("the open context exists")
+            .0
+    }
+
+    /// Runs one kernel edit on the open context's mesh.
+    fn edit_mesh(
+        &mut self,
+        f: impl FnOnce(&mut Model) -> Result<ChangeSet, KernelError>,
+    ) -> Result<SceneChange, KernelError> {
+        let mesh = self.active();
+        self.scene.edit(mesh, f)
+    }
+
+    /// The selected edges, faces and instances. Entities leave it when they stop existing.
     pub fn selection(&self) -> &BTreeSet<EntityId> {
         &self.selection
     }
@@ -82,7 +130,7 @@ impl Document {
                     CommandError::new(ErrorKind::NothingToUndo, "nothing to undo")
                 })?;
                 let inverse = changes.inverse();
-                self.model.apply(&inverse);
+                self.scene.apply(&inverse);
                 self.redo.push(changes);
                 Ok(self.changed(&inverse))
             }
@@ -90,7 +138,7 @@ impl Document {
                 let changes = self.redo.pop().ok_or_else(|| {
                     CommandError::new(ErrorKind::NothingToRedo, "nothing to redo")
                 })?;
-                self.model.apply(&changes);
+                self.scene.apply(&changes);
                 let outcome = self.changed(&changes);
                 self.undo.push(changes);
                 Ok(outcome)
@@ -103,8 +151,16 @@ impl Document {
                 self.camera = self.camera_for(eye, target, fov_y_deg)?;
                 Ok(Outcome::default())
             }
+            Command::OpenInstance { id } => {
+                self.open_instance(id)?;
+                Ok(Outcome::default())
+            }
+            Command::CloseInstance => {
+                self.close_instance()?;
+                Ok(Outcome::default())
+            }
             Command::Select { ids, mode } => {
-                self.edges_and_faces(&ids)?;
+                self.parts(&ids)?;
                 let ids: BTreeSet<EntityId> = ids.into_iter().collect();
                 match mode {
                     SelectMode::Replace => self.selection = ids,
@@ -122,16 +178,19 @@ impl Document {
             | Command::PushPull { .. }
             | Command::Erase { .. }
             | Command::Move { .. }
-            | Command::Copy { .. } => {
+            | Command::Copy { .. }
+            | Command::MakeGroup { .. }
+            | Command::MakeComponent { .. }
+            | Command::Explode { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
     }
 
     /// Applies an editing command to the model and returns its changes, not yet recorded in
-    /// history. None for commands that are not edits (undo, redo, camera, selection). Every
-    /// editing command goes through here, so `execute` and atomic batches stay in step.
-    fn edit(&mut self, command: &Command) -> Option<Result<ChangeSet, CommandError>> {
+    /// history. None for commands that are not edits (undo, redo, camera, selection, context).
+    /// Every editing command goes through here, so `execute` and atomic batches stay in step.
+    fn edit(&mut self, command: &Command) -> Option<Result<SceneChange, CommandError>> {
         Some(match command {
             Command::AddEdge { start, end } => self.add_edge_changes(*start, *end),
             Command::AddRectangle {
@@ -145,7 +204,15 @@ impl Document {
             Command::Copy { ids, offset, count } => {
                 self.copy_changes(ids, *offset, count.unwrap_or(1))
             }
-            Command::Undo | Command::Redo | Command::SetCamera { .. } | Command::Select { .. } => {
+            Command::MakeGroup { ids } => self.group_changes(ids, None),
+            Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
+            Command::Explode { ids } => self.explode_changes(ids),
+            Command::Undo
+            | Command::Redo
+            | Command::SetCamera { .. }
+            | Command::Select { .. }
+            | Command::OpenInstance { .. }
+            | Command::CloseInstance => {
                 return None;
             }
         })
@@ -192,8 +259,9 @@ impl Document {
     /// A failed atomic batch still consumes entity ids: ids are never reused.
     ///
     /// Non-atomic: each command is its own undo step and earlier commands stay applied.
-    /// Atomic: all modeling commands become one undo step, and on error everything (model and
-    /// camera) is rolled back. Undo and redo are not allowed inside an atomic batch.
+    /// Atomic: all modeling commands become one undo step, and on error everything (model,
+    /// camera, selection and open context) is rolled back. Undo and redo are not allowed inside
+    /// an atomic batch.
     pub fn execute_batch(
         &mut self,
         commands: Vec<Command>,
@@ -219,7 +287,8 @@ impl Document {
 
         let camera_before = self.camera.clone();
         let selection_before = self.selection.clone();
-        let mut applied: Vec<ChangeSet> = Vec::new();
+        let context_before = self.context.clone();
+        let mut applied: Vec<SceneChange> = Vec::new();
         for (index, command) in commands.into_iter().enumerate() {
             let result = match self.edit(&command) {
                 Some(changes) => changes.map(|c| {
@@ -237,10 +306,11 @@ impl Document {
                 Ok(o) => outcomes.push(o),
                 Err(error) => {
                     for c in applied.iter().rev() {
-                        self.model.apply(&c.inverse());
+                        self.scene.apply(&c.inverse());
                     }
                     self.camera = camera_before;
                     self.selection = selection_before;
+                    self.context = context_before;
                     return Err(BatchError {
                         index,
                         error,
@@ -250,10 +320,7 @@ impl Document {
                 }
             }
         }
-        let merged = ChangeSet {
-            ops: applied.into_iter().flat_map(|c| c.ops).collect(),
-        };
-        self.record(merged);
+        self.record(SceneChange::join(applied));
         Ok(outcomes)
     }
 
@@ -261,10 +328,9 @@ impl Document {
         &mut self,
         start: [f64; 3],
         end: [f64; 3],
-    ) -> Result<ChangeSet, CommandError> {
+    ) -> Result<SceneChange, CommandError> {
         check_coordinates(&[start, end])?;
-        self.model
-            .add_edge(DVec3::from(start), DVec3::from(end))
+        self.edit_mesh(|m| m.add_edge(DVec3::from(start), DVec3::from(end)))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
@@ -273,7 +339,7 @@ impl Document {
         corner: [f64; 3],
         opposite: [f64; 3],
         normal: Option<[f64; 3]>,
-    ) -> Result<ChangeSet, CommandError> {
+    ) -> Result<SceneChange, CommandError> {
         check_coordinates(&[corner, opposite])?;
         let corners = rectangle_corners(
             DVec3::from(corner),
@@ -281,8 +347,7 @@ impl Document {
             normal.map(DVec3::from),
         )?;
         check_coordinates(&corners.map(|c| c.to_array()))?;
-        self.model
-            .add_polygon(&corners)
+        self.edit_mesh(|m| m.add_polygon(&corners))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
@@ -290,14 +355,14 @@ impl Document {
         &mut self,
         face: EntityId,
         distance: f64,
-    ) -> Result<ChangeSet, CommandError> {
+    ) -> Result<SceneChange, CommandError> {
         let EntityId::Face(id) = face else {
             return Err(
                 CommandError::new(ErrorKind::InvalidInput, "push_pull needs a face id")
                     .with_ids(vec![face]),
             );
         };
-        let Some(f) = self.model.face(id) else {
+        let Some(f) = self.model().face(id) else {
             return Err(
                 CommandError::new(ErrorKind::NotFound, format!("no entity {face}"))
                     .with_ids(vec![face]),
@@ -312,10 +377,10 @@ impl Document {
         let moved: Vec<[f64; 3]> = std::iter::once(&f.outer)
             .chain(&f.holes)
             .flatten()
-            .map(|v| (self.model.position(*v).unwrap() + f.normal * distance).to_array())
+            .map(|v| (self.model().position(*v).unwrap() + f.normal * distance).to_array())
             .collect();
         check_coordinates(&moved)?;
-        self.model.push_pull(id, distance).map_err(|e| {
+        self.edit_mesh(|m| m.push_pull(id, distance)).map_err(|e| {
             CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(vec![face])
         })
     }
@@ -324,11 +389,11 @@ impl Document {
         &mut self,
         ids: &[EntityId],
         offset: [f64; 3],
-    ) -> Result<ChangeSet, CommandError> {
+    ) -> Result<SceneChange, CommandError> {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one vertex, edge or face",
+                "ids must list at least one vertex, edge, face or instance",
             ));
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -339,11 +404,21 @@ impl Document {
         }
         check_coordinates(&[offset])?;
         let vertices = self.vertex_ids(ids);
+        let instances: Vec<InstanceId> = ids
+            .iter()
+            .filter_map(|id| match id {
+                EntityId::Instance(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
         let offset = DVec3::from(offset);
-        self.check_moved(&vertices, &[offset])?;
-        self.model
-            .move_vertices(&vertices, offset)
-            .map_err(|e| self.kernel_error(e, ids))
+        self.check_moved(&vertices, &instances, &[offset])?;
+        self.edit_mesh(|m| {
+            let mut c = m.move_vertices(&vertices, offset)?;
+            c.ops.extend(m.move_instances(&instances, offset).ops);
+            Ok(c)
+        })
+        .map_err(|e| self.kernel_error(e, ids))
     }
 
     fn copy_changes(
@@ -351,11 +426,11 @@ impl Document {
         ids: &[EntityId],
         offset: [f64; 3],
         count: u32,
-    ) -> Result<ChangeSet, CommandError> {
+    ) -> Result<SceneChange, CommandError> {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge or face",
+                "ids must list at least one edge, face or instance",
             ));
         }
         if !(1..=MAX_COPIES).contains(&count) {
@@ -364,34 +439,68 @@ impl Document {
                 format!("count must be between 1 and {MAX_COPIES}"),
             ));
         }
-        let (edges, faces) = self.edges_and_faces(ids)?;
+        let parts = self.parts(ids)?;
         check_coordinates(&[offset])?;
         let offset = DVec3::from(offset);
-        self.check_moved(&self.vertex_ids(ids), &[offset * count as f64])?;
-        self.model
-            .copy(&edges, &faces, offset, count)
-            .map_err(|e| self.kernel_error(e, ids))
+        self.check_moved(
+            &self.vertex_ids(ids),
+            &parts.instances,
+            &[offset * count as f64],
+        )?;
+        let geometry = if parts.edges.is_empty() && parts.faces.is_empty() {
+            SceneChange::default()
+        } else {
+            self.edit_mesh(|m| m.copy(&parts.edges, &parts.faces, offset, count))
+                .map_err(|e| self.kernel_error(e, ids))?
+        };
+        let placed = if parts.instances.is_empty() {
+            SceneChange::default()
+        } else {
+            let mesh = self.active();
+            match self
+                .scene
+                .copy_instances(mesh, &parts.instances, offset, count)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    self.scene.apply(&geometry.inverse());
+                    return Err(self.kernel_error(e, ids));
+                }
+            }
+        };
+        Ok(SceneChange::join([geometry, placed]))
     }
 
-    /// Rejects moves or copies that would put a vertex beyond `MAX_COORDINATE`.
+    /// Rejects moves or copies that would put a vertex or an instance's bounding box beyond
+    /// `MAX_COORDINATE`.
     fn check_moved(
         &self,
         vertices: &BTreeSet<VertexId>,
+        instances: &[InstanceId],
         offsets: &[DVec3],
     ) -> Result<(), CommandError> {
-        let moved: Vec<[f64; 3]> = vertices
+        let mut points: Vec<DVec3> = vertices
             .iter()
-            .flat_map(|v| {
-                let p = self.model.position(*v).unwrap();
-                offsets.iter().map(move |o| (p + *o).to_array())
-            })
+            .map(|v| self.model().position(*v).unwrap())
+            .collect();
+        for i in instances {
+            points.extend(self.instance_box(*i).into_iter().flatten());
+        }
+        let moved: Vec<[f64; 3]> = points
+            .iter()
+            .flat_map(|p| offsets.iter().map(move |o| (*p + *o).to_array()))
             .collect();
         check_coordinates(&moved)
     }
 
+    /// The box around an instance of the open context, in the context's coordinates.
+    fn instance_box(&self, id: InstanceId) -> Option<[DVec3; 2]> {
+        self.scene.instance_bounds(self.model().instance(id)?)
+    }
+
     /// The vertices that make up the entities (vertices themselves, edge ends, face loops).
     fn vertex_ids(&self, ids: &[EntityId]) -> BTreeSet<VertexId> {
-        let m = &self.model;
+        let m = self.model();
         let mut out = BTreeSet::new();
         for id in ids {
             match *id {
@@ -419,23 +528,26 @@ impl Document {
         CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(culprits)
     }
 
-    fn erase_changes(&mut self, ids: &[EntityId]) -> Result<ChangeSet, CommandError> {
+    fn erase_changes(&mut self, ids: &[EntityId]) -> Result<SceneChange, CommandError> {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge or face",
+                "ids must list at least one edge, face or instance",
             ));
         }
-        let (edges, faces) = self.edges_and_faces(ids)?;
-        Ok(self.model.erase(&edges, &faces))
+        let parts = self.parts(ids)?;
+        let erased = self
+            .edit_mesh(|m| Ok(m.erase(&parts.edges, &parts.faces)))
+            .expect("erase cannot fail");
+        let mesh = self.active();
+        let removed = self.scene.erase_instances(mesh, &parts.instances);
+        Ok(SceneChange::join([erased, removed]))
     }
 
-    /// Splits ids into edges and faces. Vertex ids are invalid input and unknown ids are not
-    /// found; both errors list the offending ids.
-    fn edges_and_faces(
-        &self,
-        ids: &[EntityId],
-    ) -> Result<(Vec<EdgeId>, Vec<FaceId>), CommandError> {
+    /// Splits ids (each counted once) into edges, faces and instances of the open context.
+    /// Vertex ids are invalid input and unknown ids are not found; both errors list the
+    /// offending ids.
+    fn parts(&self, ids: &[EntityId]) -> Result<Parts, CommandError> {
         let vertices: Vec<EntityId> = ids
             .iter()
             .copied()
@@ -444,7 +556,7 @@ impl Document {
         if !vertices.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "only edges and faces can be selected or erased",
+                "only edges, faces and instances are accepted here, not vertices",
             )
             .with_ids(vertices));
         }
@@ -454,33 +566,30 @@ impl Document {
                 CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
             );
         }
-        let edges = ids
-            .iter()
-            .filter_map(|id| match id {
-                EntityId::Edge(e) => Some(*e),
-                _ => None,
-            })
-            .collect();
-        let faces = ids
-            .iter()
-            .filter_map(|id| match id {
-                EntityId::Face(f) => Some(*f),
-                _ => None,
-            })
-            .collect();
-        Ok((edges, faces))
+        let mut parts = Parts::default();
+        for id in ids.iter().collect::<BTreeSet<_>>() {
+            match *id {
+                EntityId::Edge(e) => parts.edges.push(e),
+                EntityId::Face(f) => parts.faces.push(f),
+                EntityId::Instance(i) => parts.instances.push(i),
+                EntityId::Vertex(_) => {}
+            }
+        }
+        Ok(parts)
     }
 
+    /// Whether the open context holds the entity.
     fn exists(&self, id: EntityId) -> bool {
+        let m = self.model();
         match id {
-            EntityId::Vertex(v) => self.model.vertex(v).is_some(),
-            EntityId::Edge(e) => self.model.edge(e).is_some(),
-            EntityId::Face(f) => self.model.face(f).is_some(),
-            EntityId::Instance(i) => self.model.instance(i).is_some(),
+            EntityId::Vertex(v) => m.vertex(v).is_some(),
+            EntityId::Edge(e) => m.edge(e).is_some(),
+            EntityId::Face(f) => m.face(f).is_some(),
+            EntityId::Instance(i) => m.instance(i).is_some(),
         }
     }
 
-    fn record(&mut self, changes: ChangeSet) -> Outcome {
+    fn record(&mut self, changes: SceneChange) -> Outcome {
         if changes.is_empty() {
             return Outcome::default();
         }
@@ -490,10 +599,13 @@ impl Document {
         outcome
     }
 
-    /// Bumps the revision, logs the change and drops entities that no longer exist from the
-    /// selection.
-    fn changed(&mut self, changes: &ChangeSet) -> Outcome {
+    /// Bumps the revision, logs the change, closes open instances that no longer exist and
+    /// drops entities that are no longer in the open context from the selection.
+    fn changed(&mut self, changes: &SceneChange) -> Outcome {
         self.revision += 1;
+        while self.scene.resolve(&self.context).is_none() {
+            self.context.pop();
+        }
         self.selection = self
             .selection
             .iter()
@@ -512,13 +624,14 @@ impl Document {
     }
 
     pub fn query(&self, query: &Query) -> Result<QueryResult, CommandError> {
-        let m = &self.model;
+        let m = self.model();
         Ok(match query {
             Query::Entities { ids, kinds, within } => {
                 let wanted = |id: EntityId, kind: EntityKind| {
                     (ids.is_empty() || ids.contains(&id))
                         && (kinds.is_empty() || kinds.contains(&kind))
-                        && within.is_none_or(|b| self.vertices_of(id).all(|p| b.contains(p)))
+                        && within
+                            .is_none_or(|b| self.vertices_of(id).into_iter().all(|p| b.contains(p)))
                 };
                 QueryResult::Entities {
                     vertices: m
@@ -535,6 +648,11 @@ impl Document {
                         .faces()
                         .filter(|(id, _)| wanted(EntityId::Face(*id), EntityKind::Face))
                         .map(|(id, _)| self.face_info(id))
+                        .collect(),
+                    instances: m
+                        .instances()
+                        .filter(|(id, _)| wanted(EntityId::Instance(*id), EntityKind::Instance))
+                        .map(|(id, _)| self.instance_info(id))
                         .collect(),
                     revision: self.revision,
                 }
@@ -556,7 +674,11 @@ impl Document {
                     EntityId::Face(f) => {
                         QueryResult::Face(m.face(f).map(|_| self.face_info(f)).ok_or_else(missing)?)
                     }
-                    EntityId::Instance(_) => return Err(missing()),
+                    EntityId::Instance(i) => QueryResult::Instance(
+                        m.instance(i)
+                            .map(|_| self.instance_info(i))
+                            .ok_or_else(missing)?,
+                    ),
                 }
             }
             Query::Camera => QueryResult::Camera {
@@ -568,6 +690,8 @@ impl Document {
                 vertices: m.vertices().count(),
                 edges: m.edges().count(),
                 faces: m.faces().count(),
+                instances: m.instances().count(),
+                definitions: self.scene.definitions().count(),
                 revision: self.revision,
             },
             Query::History => QueryResult::History {
@@ -578,6 +702,32 @@ impl Document {
             Query::Selection => QueryResult::Selection {
                 ids: self.selection.iter().copied().collect(),
                 revision: self.revision,
+            },
+            Query::Definitions => QueryResult::Definitions {
+                definitions: self
+                    .scene
+                    .definitions()
+                    .map(|(id, d)| DefinitionInfo {
+                        id,
+                        name: d.name.clone(),
+                        kind: d.kind,
+                        instances: self.scene.instance_count(id),
+                        edges: d.mesh.edges().count(),
+                        faces: d.mesh.faces().count(),
+                    })
+                    .collect(),
+                revision: self.revision,
+            },
+            Query::Context => QueryResult::Context {
+                path: self
+                    .context
+                    .iter()
+                    .map(|i| EntityId::Instance(*i))
+                    .collect(),
+                definition: match self.active() {
+                    MeshId::Root => None,
+                    MeshId::Definition(d) => Some(d),
+                },
             },
             Query::Events { since } => {
                 let (events, truncated) = self.events_since(*since);
@@ -590,12 +740,20 @@ impl Document {
         })
     }
 
-    /// Positions of the vertices an entity is made of.
-    fn vertices_of(&self, id: EntityId) -> impl Iterator<Item = [f64; 3]> + '_ {
-        let m = &self.model;
+    /// Positions of the vertices an entity is made of; for an instance, the corners of its
+    /// bounding box.
+    fn vertices_of(&self, id: EntityId) -> Vec<[f64; 3]> {
+        let m = self.model();
         let ids: Vec<VertexId> = match id {
             EntityId::Vertex(v) => vec![v],
-            EntityId::Instance(_) => vec![],
+            EntityId::Instance(i) => {
+                return self
+                    .instance_box(i)
+                    .into_iter()
+                    .flatten()
+                    .map(|p| p.to_array())
+                    .collect();
+            }
             EntityId::Edge(e) => m.edge(e).map(|e| e.v.to_vec()).unwrap_or_default(),
             EntityId::Face(f) => m
                 .face(f)
@@ -610,36 +768,45 @@ impl Document {
         };
         ids.into_iter()
             .filter_map(|v| m.position(v).map(|p| p.to_array()))
+            .collect()
     }
 
     fn vertex_info(&self, id: VertexId) -> VertexInfo {
         VertexInfo {
             id: EntityId::Vertex(id),
-            position: self.model.position(id).unwrap().to_array(),
+            position: self.model().position(id).unwrap().to_array(),
         }
     }
 
     fn edge_info(&self, id: EdgeId) -> EdgeInfo {
-        let [a, b] = self.model.edge(id).unwrap().v;
+        let [a, b] = self.model().edge(id).unwrap().v;
         EdgeInfo {
             id: EntityId::Edge(id),
             vertices: [EntityId::Vertex(a), EntityId::Vertex(b)],
-            start: self.model.position(a).unwrap().to_array(),
-            end: self.model.position(b).unwrap().to_array(),
+            start: self.model().position(a).unwrap().to_array(),
+            end: self.model().position(b).unwrap().to_array(),
         }
     }
 
     fn face_info(&self, id: FaceId) -> FaceInfo {
-        let f = self.model.face(id).unwrap();
+        let f = self.model().face(id).unwrap();
         let ids = |l: &Vec<VertexId>| l.iter().map(|v| EntityId::Vertex(*v)).collect();
         FaceInfo {
             id: EntityId::Face(id),
             outer: ids(&f.outer),
             holes: f.holes.iter().map(ids).collect(),
             normal: f.normal.to_array(),
-            area: self.model.area(id).unwrap(),
+            area: self.model().area(id).unwrap(),
         }
     }
+}
+
+/// Edges, faces and instances named by a command.
+#[derive(Default)]
+struct Parts {
+    edges: Vec<EdgeId>,
+    faces: Vec<FaceId>,
+    instances: Vec<InstanceId>,
 }
 
 /// Rejects non-finite or out-of-range coordinates before they reach the kernel or camera.

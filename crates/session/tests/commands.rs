@@ -46,7 +46,15 @@ fn square_via_commands_makes_a_queryable_face() {
     let stats = ask(&d, json!({"type": "stats"}));
     assert_eq!(
         stats,
-        json!({"type": "stats", "vertices": 4, "edges": 4, "faces": 1, "revision": 4})
+        json!({
+            "type": "stats",
+            "vertices": 4,
+            "edges": 4,
+            "faces": 1,
+            "instances": 0,
+            "definitions": 0,
+            "revision": 4
+        })
     );
     let all = ask(&d, json!({"type": "entities"}));
     let face = &all["faces"][0];

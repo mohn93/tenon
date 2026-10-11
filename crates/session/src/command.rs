@@ -5,7 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
-/// commands never refer to screen positions or cursor state.
+/// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
+/// those of the open context (see `OpenInstance`): the root, or the definition of the instance
+/// being edited, in its own coordinates.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -29,27 +31,56 @@ pub enum Command {
         face: EntityId,
         distance: f64,
     },
-    /// Erase edges and faces as one undo step. An erased edge takes the faces it bounds with
-    /// it, except that two faces in one plane meeting there merge into one. Vertices go away
-    /// with their last edge and cannot be erased directly.
+    /// Erase edges, faces and instances as one undo step. An erased edge takes the faces it
+    /// bounds with it, except that two faces in one plane meeting there merge into one.
+    /// Vertices go away with their last edge and cannot be erased directly. A group's
+    /// definition goes with its last instance.
     Erase {
         ids: Vec<EntityId>,
     },
-    /// Move vertices, edges and faces by `offset` meters as one undo step. Faces that share
-    /// some of the moved vertices stretch and may tilt, but must stay flat.
+    /// Move vertices, edges, faces and instances by `offset` meters as one undo step. Faces
+    /// that share some of the moved vertices stretch and may tilt, but must stay flat.
     Move {
         ids: Vec<EntityId>,
         offset: [f64; 3],
     },
-    /// Copy edges and faces `count` times (default 1), copy k shifted by `k * offset`, as one
-    /// undo step. Copies merge with geometry they touch; copied faces keep their orientation.
+    /// Copy edges, faces and instances `count` times (default 1), copy k shifted by
+    /// `k * offset`, as one undo step. Copies merge with geometry they touch; copied faces keep
+    /// their orientation. A copied component instance places the same definition; a copied
+    /// group gets a definition of its own.
     Copy {
         ids: Vec<EntityId>,
         offset: [f64; 3],
         #[serde(default)]
         count: Option<u32>,
     },
-    /// Change the selection of edges and faces. Not recorded in undo history.
+    /// Turn edges, faces (with their edges) and instances into a group: they move into a new
+    /// definition, placed by one new instance where they were. The instance becomes the
+    /// selection.
+    MakeGroup {
+        ids: Vec<EntityId>,
+    },
+    /// Like `MakeGroup`, but the definition is a named component: copies of its instances
+    /// share it, so editing one edits them all.
+    MakeComponent {
+        ids: Vec<EntityId>,
+        name: String,
+    },
+    /// Replace instances by their geometry, which merges with what it touches. Instances
+    /// inside them come out as instances. What comes out becomes the selection.
+    Explode {
+        ids: Vec<EntityId>,
+    },
+    /// Edit the definition an instance of the open context places: its entities become the
+    /// ones commands and queries see, in its own coordinates. Clears the selection. Not
+    /// recorded in undo history.
+    OpenInstance {
+        id: EntityId,
+    },
+    /// Go back to editing the context the open instance is in. Clears the selection. Not
+    /// recorded in undo history.
+    CloseInstance,
+    /// Change the selection of edges, faces and instances. Not recorded in undo history.
     Select {
         ids: Vec<EntityId>,
         #[serde(default)]
@@ -66,7 +97,8 @@ pub enum Command {
 }
 
 impl Command {
-    /// True for commands that can change the model (everything except camera and selection).
+    /// True for commands that can change the model or the open context (everything except
+    /// camera and selection).
     pub fn changes_model(&self) -> bool {
         !matches!(self, Command::SetCamera { .. } | Command::Select { .. })
     }
