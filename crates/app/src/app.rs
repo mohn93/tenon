@@ -76,6 +76,12 @@ fn is_double_click(last: Option<(Instant, DVec2)>, now: Instant, at: DVec2, max_
     last.is_some_and(|(t, p)| now.duration_since(t) <= DOUBLE_CLICK && p.distance(at) <= max_px)
 }
 
+/// True if a release at `at` ends a click, that is the cursor is within `max_px` of where the
+/// button went down, rather than a drag.
+fn is_click(press: Option<DVec2>, at: DVec2, max_px: f64) -> bool {
+    press.is_some_and(|p| p.distance(at) <= max_px)
+}
+
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -98,6 +104,9 @@ struct State {
     repaint_at: Option<Instant>,
     /// When and where the left button was last released in the view, for double-clicks.
     last_release: Option<(Instant, DVec2)>,
+    /// Where the left button was last pressed in the view, so a release that ends a drag does
+    /// not count as a click.
+    left_press: Option<DVec2>,
 }
 
 impl State {
@@ -158,6 +167,7 @@ impl State {
             cursor: DVec2::ZERO,
             repaint_at: None,
             last_release: None,
+            left_press: None,
         }
     }
 
@@ -529,14 +539,19 @@ impl ApplicationHandler<ApiWake> for App {
                     false
                 } else {
                     let handled = s.editor.button(map_button(button), pressed);
-                    if handled && !pressed && button == MouseButton::Left {
+                    if pressed && button == MouseButton::Left {
+                        s.left_press = Some(s.cursor);
+                    } else if handled && button == MouseButton::Left {
                         let now = Instant::now();
                         let max = DOUBLE_CLICK_LOGICAL_PX * s.window.scale_factor();
-                        if is_double_click(s.last_release, now, s.cursor, max) {
+                        let click = is_click(s.left_press.take(), s.cursor, max);
+                        if click && is_double_click(s.last_release, now, s.cursor, max) {
                             s.last_release = None;
                             s.editor.double_click();
-                        } else {
+                        } else if click {
                             s.last_release = Some((now, s.cursor));
+                        } else {
+                            s.last_release = None;
                         }
                     }
                     handled
@@ -630,6 +645,14 @@ mod tests {
         ));
         let late = now + Duration::from_millis(800);
         assert!(!is_double_click(Some((now, at)), late, at, 6.0));
+    }
+
+    #[test]
+    fn a_release_far_from_its_press_ends_a_drag_not_a_click() {
+        let at = DVec2::new(100.0, 100.0);
+        assert!(!is_click(None, at, 6.0));
+        assert!(is_click(Some(at), at + DVec2::new(3.0, 3.0), 6.0));
+        assert!(!is_click(Some(at), at + DVec2::new(40.0, 0.0), 6.0));
     }
 
     #[test]

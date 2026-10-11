@@ -369,23 +369,24 @@ impl Editor {
         true
     }
 
-    /// Makes a group of the selection. False if nothing is selected.
+    /// Makes a group of the selection. With nothing selected it says so in the status line
+    /// (and returns true, so the window redraws).
     pub fn make_group(&mut self) -> bool {
         let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         if ids.is_empty() {
             self.message = Some("Select geometry to make a group".into());
-            return false;
+            return true;
         }
         self.run_selection_command(Command::MakeGroup { ids })
     }
 
-    /// Makes a component of the selection, named "Component N" with the first free N. False
-    /// if nothing is selected.
+    /// Makes a component of the selection, named "Component N" with the first free N. With
+    /// nothing selected it says so in the status line (and returns true, so the window redraws).
     pub fn make_component(&mut self) -> bool {
         let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         if ids.is_empty() {
             self.message = Some("Select geometry to make a component".into());
-            return false;
+            return true;
         }
         let names: Vec<&str> = self
             .doc
@@ -400,7 +401,8 @@ impl Editor {
         self.run_selection_command(Command::MakeComponent { ids, name })
     }
 
-    /// Explodes the selected groups and components. False if none is selected.
+    /// Explodes the selected groups and components. With none selected it says so in the
+    /// status line (and returns true, so the window redraws).
     pub fn explode_selection(&mut self) -> bool {
         let ids: Vec<EntityId> = self
             .doc
@@ -411,7 +413,7 @@ impl Editor {
             .collect();
         if ids.is_empty() {
             self.message = Some("Select a group or component to explode".into());
-            return false;
+            return true;
         }
         self.run_selection_command(Command::Explode { ids })
     }
@@ -1413,6 +1415,14 @@ mod tests {
         }
     }
 
+    /// The maximum corner of an instance's bounding box in the open context.
+    fn box_max(e: &Editor, id: EntityId) -> DVec3 {
+        match e.doc().query(&Query::Entity { id }).unwrap() {
+            QueryResult::Instance(info) => DVec3::from(info.bounds.unwrap().max),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
     #[test]
     fn clicking_a_group_selects_it() {
         let mut e = editor();
@@ -1529,7 +1539,7 @@ mod tests {
     #[test]
     fn g_and_c_group_the_selection_and_explode_takes_it_apart() {
         let mut e = editor();
-        assert!(!e.key(EditorKey::Char('g')), "nothing selected");
+        assert!(e.key(EditorKey::Char('g')), "the message needs a redraw");
         assert!(e.status().contains("Select geometry to make a group"));
         square(&mut e);
         e.select_tool(ToolKind::Select);
@@ -1554,8 +1564,14 @@ mod tests {
             "the components stay, and so does the group inside Component 1"
         );
         assert_eq!(stats(&e), (4, 1), "the square is back in the root");
+        assert!(e.explode_selection(), "the message needs a redraw");
         assert!(
-            !e.explode_selection(),
+            e.status()
+                .contains("Select a group or component to explode")
+        );
+        assert_eq!(
+            stats(&e),
+            (4, 1),
             "the square's edges and face are no group"
         );
     }
@@ -1568,5 +1584,105 @@ mod tests {
         e.execute(Command::OpenInstance { id: group }).unwrap();
         assert!(e.close_instance());
         assert!(e.doc().context().is_empty());
+    }
+
+    /// Clicks along the 2-long edge at y = 0, z = 1 of the moved group's box, from x = 10 to 12.
+    fn click_along_top_front_edge(e: &mut Editor) -> Vec<Vec<EntityId>> {
+        (1..20)
+            .map(|k| {
+                clear_selection(e);
+                click_at(e, DVec3::new(10.0 + 2.0 * k as f64 / 20.0, 0.0, 1.0));
+                e.doc().selection().iter().copied().collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_outside_edge_on_the_open_edge_never_steals_the_pick() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.execute(Command::AddEdge {
+            start: [9.0, 0.0, 1.0],
+            end: [13.0, 0.0, 1.0],
+        })
+        .unwrap();
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.select_tool(ToolKind::Select);
+        let picks = click_along_top_front_edge(&mut e);
+        assert!(
+            picks
+                .iter()
+                .all(|p| matches!(p.as_slice(), [EntityId::Edge(_)])),
+            "{picks:?}"
+        );
+    }
+
+    #[test]
+    fn a_root_edge_on_a_groups_edge_wins_the_pick_at_the_root() {
+        let mut e = editor();
+        moved_group(&mut e);
+        e.execute(Command::AddEdge {
+            start: [9.0, 0.0, 1.0],
+            end: [13.0, 0.0, 1.0],
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Select);
+        let picks = click_along_top_front_edge(&mut e);
+        assert!(
+            picks
+                .iter()
+                .all(|p| matches!(p.as_slice(), [EntityId::Edge(_)])),
+            "{picks:?}"
+        );
+    }
+
+    #[test]
+    fn push_pull_from_the_root_ignores_a_groups_face() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        let before = box_min(&e, group);
+        let top = box_max(&e, group);
+        e.select_tool(ToolKind::PushPull);
+        click_at(&mut e, DVec3::new(11.0, 1.0, 1.0));
+        let px = e.doc().camera.project(DVec3::new(11.0, 1.0, 2.0)).unwrap();
+        e.cursor_moved(px);
+        for c in "2".chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+        assert_eq!(box_min(&e, group), before);
+        assert_eq!(box_max(&e, group), top);
+        assert_eq!(stats(&e), (0, 0), "the root gained nothing");
+    }
+
+    #[test]
+    fn crossing_a_group_with_a_box_dragged_leftwards_selects_it() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        clear_selection(&mut e);
+        e.select_tool(ToolKind::Select);
+        let centre = e.doc().camera.project(DVec3::new(11.0, 1.0, 0.5)).unwrap();
+        e.cursor_moved(centre + DVec2::new(30.0, 30.0));
+        e.button(Button::Left, true);
+        e.cursor_moved(centre);
+        e.button(Button::Left, false);
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            [group]
+        );
+    }
+
+    #[test]
+    fn the_erase_tool_erases_a_group_and_undo_restores_it() {
+        let mut e = editor();
+        moved_group(&mut e);
+        assert_eq!(definition_names(&e).len(), 1);
+        e.select_tool(ToolKind::Erase);
+        click_at(&mut e, DVec3::new(11.0, 1.0, 1.0));
+        assert!(e.doc().model().instances().next().is_none());
+        assert_eq!(definition_names(&e).len(), 0, "its definition went too");
+        assert!(e.undo());
+        assert!(e.doc().model().instances().next().is_some());
+        assert_eq!(definition_names(&e).len(), 1);
     }
 }

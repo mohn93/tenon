@@ -339,15 +339,31 @@ pub fn edge_under_in(
     cursor: DVec2,
     radius_px: f64,
 ) -> Option<(Owner, EdgeId, DVec3, DVec3)> {
+    edge_under_where(scenery, camera, cursor, radius_px, |_| true)
+}
+
+/// Like `edge_under_in`, but only edges whose owner passes `keep` compete. Visibility is still
+/// tested against every part, so an edge hidden behind other geometry is not found.
+pub fn edge_under_where(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+    radius_px: f64,
+    keep: impl Fn(Owner) -> bool,
+) -> Option<(Owner, EdgeId, DVec3, DVec3)> {
     let ray = camera.ray(cursor);
     let mut best: Option<(f64, (Owner, EdgeId, DVec3, DVec3))> = None;
     for (part, id, a, b) in Near::around(scenery, camera, cursor, radius_px).segments {
+        let owner = scenery.parts[part].owner;
+        if !keep(owner) {
+            continue;
+        }
         let p = closest_on_line_to_ray(a, b - a, &ray, true);
         let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
             continue;
         };
         if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera.eye, p) {
-            best = Some((d, (scenery.parts[part].owner, id, a, b)));
+            best = Some((d, (owner, id, a, b)));
         }
     }
     best.map(|(_, hit)| hit)

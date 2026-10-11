@@ -9,7 +9,7 @@ use kernel::geom::point_in_polygon;
 use kernel::{EntityId, Face, Model};
 use session::{Command, SelectMode};
 
-use crate::inference::{edge_under_in, face_under_in};
+use crate::inference::{edge_under_where, face_under_in};
 use crate::scenery::Owner;
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
@@ -26,15 +26,19 @@ impl SelectTool {
     }
 }
 
-/// What a click picks: the open context's edge under the cursor, or else its face under it.
-/// An edge or face inside an instance of the open context picks the instance. Geometry outside
-/// the open instance hides what is behind it but is not picked.
+/// What a click picks: the open context's edge under the cursor, else an instance's edge
+/// (which picks the instance), else the face under it (the open context's face, or the
+/// instance). Geometry outside the open instance hides what is behind it but is not picked,
+/// and its edges do not outrank the open context's even when they lie on top of them.
 pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
-    let edge = edge_under_in(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius);
-    match edge {
-        Some((Owner::Open, e, _, _)) => return Some(EntityId::Edge(e)),
-        Some((Owner::Instance(i), ..)) => return Some(EntityId::Instance(i)),
-        _ => {}
+    let edge_of = |keep: fn(Owner) -> bool| {
+        edge_under_where(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius, keep)
+    };
+    if let Some((_, e, _, _)) = edge_of(|o| o == Owner::Open) {
+        return Some(EntityId::Edge(e));
+    }
+    if let Some((Owner::Instance(i), ..)) = edge_of(|o| matches!(o, Owner::Instance(_))) {
+        return Some(EntityId::Instance(i));
     }
     match face_under_in(ctx.scenery, ctx.camera, ctx.cursor)? {
         (Owner::Open, f, _) => Some(EntityId::Face(f)),
