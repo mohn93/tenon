@@ -472,10 +472,7 @@ impl ApplicationHandler<ApiWake> for App {
                 let toggled = ctrl_pressed && s.editor.toggle_copy();
                 locked || toggled
             }
-            WindowEvent::Focused(false) => {
-                s.editor.focus_lost();
-                false
-            }
+            WindowEvent::Focused(false) => s.editor.focus_lost(),
             WindowEvent::CursorMoved { position, .. } => {
                 s.cursor_moved(DVec2::new(position.x, position.y))
             }

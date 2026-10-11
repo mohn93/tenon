@@ -197,12 +197,16 @@ impl Editor {
         false
     }
 
-    pub fn focus_lost(&mut self) {
+    /// Returns true if a Shift lock ended, so the view needs a redraw.
+    pub fn focus_lost(&mut self) -> bool {
         self.shift = false;
-        if std::mem::take(&mut self.shift_lock) {
+        let unlocked = std::mem::take(&mut self.shift_lock);
+        if unlocked {
             self.lock = None;
+            self.update_hover();
         }
         self.nav.reset();
+        unlocked
     }
 
     /// A key-repeat event. Backspace only deletes typed text and Delete does nothing, so holding
@@ -210,7 +214,8 @@ impl Editor {
     pub fn key_repeat(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Backspace => self.typed.pop().is_some(),
-            EditorKey::Delete => false,
+            // Holding an arrow key must not toggle the lock at the repeat rate.
+            EditorKey::Delete | EditorKey::LockAxis(_) | EditorKey::Unlock => false,
             _ => self.key(key),
         }
     }
@@ -1068,5 +1073,18 @@ mod tests {
         e.cursor_moved(e.doc().camera.project(along).unwrap());
         let magenta = tools::overlay::MAGENTA;
         assert!(e.overlay().iter().any(|v| v.color == magenta));
+    }
+
+    #[test]
+    fn held_arrow_key_does_not_toggle_the_lock() {
+        let mut e = editor();
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert!(e.key(EditorKey::LockAxis(Axis::X)));
+        for _ in 0..3 {
+            assert!(!e.key_repeat(EditorKey::LockAxis(Axis::X)));
+        }
+        assert!(e.status().contains("Locked: red axis"), "{}", e.status());
+        assert!(!e.key_repeat(EditorKey::Unlock));
+        assert!(e.status().contains("Locked: red axis"));
     }
 }
