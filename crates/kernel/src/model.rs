@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{EdgeId, EntityId, FaceId, VertexId};
+use crate::index::Index;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Vertex {
@@ -119,6 +121,8 @@ pub struct Model {
     faces: BTreeMap<FaceId, Face>,
     next_id: u64,
     pending: Vec<Op>,
+    /// Built on first use after a change; see `Model::index`.
+    index: OnceLock<Index>,
 }
 
 /// Two models are equal when they hold the same entities under the same ids.
@@ -134,6 +138,11 @@ impl Model {
     }
 
     // ---- read access ----
+
+    /// The spatial index over the current geometry, built on first use after a change.
+    pub fn index(&self) -> &Index {
+        self.index.get_or_init(|| Index::build(self))
+    }
 
     pub fn vertex(&self, id: VertexId) -> Option<&Vertex> {
         self.vertices.get(&id)
@@ -213,6 +222,7 @@ impl Model {
     }
 
     fn apply_op(&mut self, op: Op) {
+        self.index.take();
         match op {
             Op::AddVertex(id, v) => {
                 self.bump(id.0);

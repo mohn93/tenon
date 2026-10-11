@@ -411,18 +411,9 @@ impl Model {
         let from = (a + b + c) / 3.0;
         let dir = self.face(id).unwrap().normal * distance.signum();
         let reach = distance.abs() + LENGTH_TOL;
-        self.faces()
-            .filter(|(f, _)| *f != id)
-            .filter_map(|(f, _)| {
-                self.triangulate(f)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|t| ray_hits_triangle(from, dir, t))
-                    .filter(|t| *t > LENGTH_TOL && *t <= reach)
-                    .min_by(f64::total_cmp)
-                    .map(|t| (f, t))
-            })
-            .collect()
+        let mut hits = self.index().ray_hits(from, dir, LENGTH_TOL, reach);
+        hits.retain(|(f, _)| *f != id);
+        hits
     }
 
     /// True if face `g` is parallel to `face` and, in its plane, holds `face` moved by `offset`
@@ -584,22 +575,6 @@ fn in_swept(p: DVec3, a: DVec3, b: DVec3, offset: DVec3) -> bool {
     let off_plane = (rel - ab * u - offset * w).length();
     let (eu, ew) = (LENGTH_TOL / ab.length(), LENGTH_TOL / offset.length());
     off_plane < LENGTH_TOL && u > -eu && u < 1.0 + eu && w > -ew && w < 1.0 + ew
-}
-
-/// Distance along unit `dir` from `from` to triangle `t`, if the ray meets it.
-fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
-    let (e1, e2) = (b - a, c - a);
-    let h = dir.cross(e2);
-    let det = e1.dot(h);
-    if det.abs() < 1e-12 {
-        return None;
-    }
-    let s = from - a;
-    let u = s.dot(h) / det;
-    let q = s.cross(e1);
-    let v = dir.dot(q) / det;
-    let eps = 1e-12;
-    (u >= -eps && v >= -eps && u + v <= 1.0 + eps).then(|| e2.dot(q) / det)
 }
 
 fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {

@@ -6,6 +6,7 @@ mod erase;
 mod faces;
 pub mod geom;
 mod ids;
+mod index;
 mod mesh;
 mod model;
 mod push_pull;
@@ -15,4 +16,5 @@ mod weld;
 
 pub use edit::KernelError;
 pub use ids::{EdgeId, EntityId, FaceId, VertexId};
+pub use index::{Index, Shape};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Model, Op, Vertex};
