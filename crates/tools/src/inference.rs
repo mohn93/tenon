@@ -4,6 +4,8 @@ use glam::{DVec2, DVec3};
 use kernel::{EdgeId, FaceId, Model, Shape, VertexId};
 use session::{Camera, Ray};
 
+use crate::scenery::{Owner, Scenery};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
     X,
@@ -48,7 +50,8 @@ pub enum SnapKind {
 pub struct Inference {
     pub point: DVec3,
     pub kind: SnapKind,
-    /// The nearest face under the cursor, whatever the point snapped to.
+    /// The nearest face under the cursor, whatever the point snapped to, if it belongs to the
+    /// open context (a face inside an instance or outside the open instance is not given).
     pub face: Option<FaceId>,
 }
 
@@ -74,8 +77,8 @@ pub struct Lock {
     pub kind: SnapKind,
 }
 
-/// Finds the 3D point under `cursor` (physical pixels) with no guides but `anchor`, which
-/// enables axis inference. See [`infer_with`].
+/// Finds the 3D point under `cursor` (physical pixels) on one mesh, with no guides but
+/// `anchor`, which enables axis inference. See [`infer_in`].
 pub fn infer(
     model: &Model,
     camera: &Camera,
@@ -90,13 +93,7 @@ pub fn infer(
     infer_with(model, camera, cursor, &guides, radius_px)
 }
 
-/// Finds the 3D point under `cursor` (physical pixels). Snap candidates count only within
-/// `radius_px` of the cursor.
-///
-/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > intersection > on-edge >
-/// directions from the anchor (axes, parallel or perpendicular to the reference edge; nearest
-/// wins) > on-face > ground > free. Points and edges hidden behind a face are skipped. With a
-/// lock, the result is always on the locked line.
+/// [`infer_in`] on one mesh.
 pub fn infer_with(
     model: &Model,
     camera: &Camera,
@@ -104,11 +101,29 @@ pub fn infer_with(
     guides: &Guides,
     radius_px: f64,
 ) -> Inference {
+    infer_in(&Scenery::single(model), camera, cursor, guides, radius_px)
+}
+
+/// Finds the 3D point under `cursor` (physical pixels) among everything `scenery` holds, in
+/// the open context's coordinates (`camera` must be in them too). Snap candidates count only
+/// within `radius_px` of the cursor.
+///
+/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > intersection > on-edge >
+/// directions from the anchor (axes, parallel or perpendicular to the reference edge; nearest
+/// wins) > on-face > ground > free. Points and edges hidden behind a face are skipped. With a
+/// lock, the result is always on the locked line.
+pub fn infer_in(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+    guides: &Guides,
+    radius_px: f64,
+) -> Inference {
     let ray = camera.ray(cursor);
-    let face_hit = nearest_face_hit(model, &ray);
-    let face = face_hit.map(|(f, _)| f);
+    let face_hit = nearest_face_hit(scenery, &ray);
+    let face = face_hit.and_then(|(owner, f, _)| (owner == Owner::Open).then_some(f));
     let screen_dist = |p: DVec3| camera.project(p).map(|s| s.distance(cursor));
-    let snapped = snap_point(model, camera, cursor, radius_px);
+    let snapped = snap_point(scenery, camera, cursor, radius_px);
 
     if let (Some(anchor), Some(lock)) = (guides.anchor, guides.lock) {
         let point = match snapped {
@@ -150,7 +165,7 @@ pub fn infer_with(
     }
 
     // On a face (nearest along the ray).
-    if let Some((_, point)) = face_hit {
+    if let Some((_, _, point)) = face_hit {
         return Inference {
             point,
             kind: SnapKind::OnFace,
@@ -176,7 +191,7 @@ pub fn infer_with(
 /// screen), else the nearest apparent intersection of two edges both visible there, else the
 /// nearest point on an edge.
 fn snap_point(
-    model: &Model,
+    scenery: &Scenery,
     camera: &Camera,
     cursor: DVec2,
     radius_px: f64,
@@ -187,9 +202,9 @@ fn snap_point(
             .project(p)
             .map(|s| s.distance(cursor))
             .filter(|d| *d <= radius_px)
-            .filter(|_| visible(model, camera.eye, p))
+            .filter(|_| visible(scenery, camera.eye, p))
     };
-    let near = Near::around(model, camera, cursor, radius_px);
+    let near = Near::around(scenery, camera, cursor, radius_px);
     let mut best: Option<(f64, DVec3, SnapKind)> = None;
     let mut offer = |p: DVec3, kind: SnapKind| {
         if let Some(d) = within(p)
@@ -198,10 +213,10 @@ fn snap_point(
             best = Some((d, p, kind));
         }
     };
-    for &(_, p) in &near.points {
+    for &(_, _, p) in &near.points {
         offer(p, SnapKind::Endpoint);
     }
-    for &(_, a, b) in &near.segments {
+    for &(_, _, a, b) in &near.segments {
         offer((a + b) * 0.5, SnapKind::Midpoint);
     }
     offer(DVec3::ZERO, SnapKind::Origin);
@@ -210,10 +225,10 @@ fn snap_point(
     }
 
     let mut crossing: Option<(f64, DVec3)> = None;
-    for (i, &(_, a, b)) in near.segments.iter().enumerate() {
-        for &(_, c, d) in &near.segments[i + 1..] {
+    for (i, &(_, _, a, b)) in near.segments.iter().enumerate() {
+        for &(_, _, c, d) in &near.segments[i + 1..] {
             if let Some((p, far)) = apparent_crossing(camera, (a, b), (c, d))
-                && visible(model, camera.eye, far)
+                && visible(scenery, camera.eye, far)
                 && let Some(dist) = within(p)
                 && crossing.is_none_or(|(bd, _)| dist < bd)
             {
@@ -226,7 +241,7 @@ fn snap_point(
     }
 
     let mut on_edge: Option<(f64, DVec3)> = None;
-    for &(_, a, b) in &near.segments {
+    for &(_, _, a, b) in &near.segments {
         let p = closest_on_line_to_ray(a, b - a, &ray, true);
         if let Some(d) = within(p)
             && on_edge.is_none_or(|(bd, _)| d < bd)
@@ -296,36 +311,58 @@ pub fn directions(reference: Option<DVec3>) -> Vec<(DVec3, SnapKind)> {
     out
 }
 
-/// The nearest face under the cursor and the point where the cursor's ray meets it.
+/// The nearest face of one mesh under the cursor and the point where the cursor's ray meets it.
 pub fn face_under(model: &Model, camera: &Camera, cursor: DVec2) -> Option<(FaceId, DVec3)> {
-    nearest_face_hit(model, &camera.ray(cursor))
+    face_under_in(&Scenery::single(model), camera, cursor).map(|(_, f, p)| (f, p))
 }
 
-/// The visible edge nearest the cursor on screen, if one lies within `radius_px`.
+/// The nearest face under the cursor among everything `scenery` holds: whose it is, the face
+/// (an id in its own mesh) and where the cursor's ray meets it.
+pub fn face_under_in(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+) -> Option<(Owner, FaceId, DVec3)> {
+    nearest_face_hit(scenery, &camera.ray(cursor))
+}
+
+/// The visible edge of one mesh nearest the cursor on screen, if one lies within `radius_px`.
 pub fn edge_under(model: &Model, camera: &Camera, cursor: DVec2, radius_px: f64) -> Option<EdgeId> {
+    edge_under_in(&Scenery::single(model), camera, cursor, radius_px).map(|(_, e, _, _)| e)
+}
+
+/// The visible edge nearest the cursor on screen among everything `scenery` holds, if one
+/// lies within `radius_px`: whose it is, the edge (an id in its own mesh) and its ends.
+pub fn edge_under_in(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+    radius_px: f64,
+) -> Option<(Owner, EdgeId, DVec3, DVec3)> {
     let ray = camera.ray(cursor);
-    let mut best: Option<(f64, EdgeId)> = None;
-    for (id, a, b) in Near::around(model, camera, cursor, radius_px).segments {
+    let mut best: Option<(f64, (Owner, EdgeId, DVec3, DVec3))> = None;
+    for (part, id, a, b) in Near::around(scenery, camera, cursor, radius_px).segments {
         let p = closest_on_line_to_ray(a, b - a, &ray, true);
         let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
             continue;
         };
-        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(model, camera.eye, p) {
-            best = Some((d, id));
+        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera.eye, p) {
+            best = Some((d, (scenery.parts[part].owner, id, a, b)));
         }
     }
-    best.map(|(_, id)| id)
+    best.map(|(_, hit)| hit)
 }
 
-/// The vertices and edges that may lie within `radius_px` of the cursor on screen, in id order
-/// so that ties between equally near candidates always go the same way.
+/// The vertices and edges that may lie within `radius_px` of the cursor on screen, with the
+/// index of the part each comes from and positions in the open context's coordinates, in
+/// part and id order so that ties between equally near candidates always go the same way.
 struct Near {
-    points: Vec<(VertexId, DVec3)>,
-    segments: Vec<(EdgeId, DVec3, DVec3)>,
+    points: Vec<(usize, VertexId, DVec3)>,
+    segments: Vec<(usize, EdgeId, DVec3, DVec3)>,
 }
 
 impl Near {
-    fn around(model: &Model, camera: &Camera, cursor: DVec2, radius_px: f64) -> Near {
+    fn around(scenery: &Scenery, camera: &Camera, cursor: DVec2, radius_px: f64) -> Near {
         let ray = camera.ray(cursor);
         // The rays through the cursor and a point `radius_px` beside it spread apart by the
         // cone's slope; doubling it covers the diagonal of the pixel square around the cursor.
@@ -335,30 +372,47 @@ impl Near {
             points: Vec::new(),
             segments: Vec::new(),
         };
-        model
-            .index()
-            .near_ray(ray.origin, ray.dir, 0.0, slope, |s| match *s {
-                Shape::Point(v, p) => near.points.push((v, p)),
-                Shape::Segment(e, a, b) => near.segments.push((e, a, b)),
-                Shape::Triangle(..) => {}
-            });
-        near.points.sort_by_key(|(v, _)| *v);
-        near.segments.sort_by_key(|(e, _, _)| *e);
+        for (k, part) in scenery.parts.iter().enumerate() {
+            let back = part.place.inverse();
+            let (origin, dir) = (
+                back.transform_point3(ray.origin),
+                back.transform_vector3(ray.dir),
+            );
+            let at = |p: DVec3| part.place.transform_point3(p);
+            part.model
+                .index()
+                .near_ray(origin, dir, 0.0, slope, |s| match *s {
+                    Shape::Point(v, p) => near.points.push((k, v, at(p))),
+                    Shape::Segment(e, a, b) => near.segments.push((k, e, at(a), at(b))),
+                    Shape::Triangle(..) => {}
+                });
+        }
+        near.points.sort_by_key(|(k, v, _)| (*k, *v));
+        near.segments.sort_by_key(|(k, e, _, _)| (*k, *e));
         near
     }
 }
 
 /// True if no face lies between the eye and `p` (faces through `p` itself do not hide it).
-fn visible(model: &Model, eye: DVec3, p: DVec3) -> bool {
+fn visible(scenery: &Scenery, eye: DVec3, p: DVec3) -> bool {
     let to = p - eye;
     let dist = to.length();
     if dist < 1e-12 {
         return true;
     }
-    model
-        .index()
-        .ray_hit(eye, to / dist, 0.0, dist * (1.0 - 1e-6))
-        .is_none()
+    let dir = to / dist;
+    scenery.parts.iter().all(|part| {
+        let back = part.place.inverse();
+        part.model
+            .index()
+            .ray_hit(
+                back.transform_point3(eye),
+                back.transform_vector3(dir),
+                0.0,
+                dist * (1.0 - 1e-6),
+            )
+            .is_none()
+    })
 }
 
 /// Point on the line `origin + t * dir` closest to the ray; `t` is clamped to [0, 1] when
@@ -382,12 +436,23 @@ pub(crate) fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segme
     origin + dir * t
 }
 
-/// The nearest face the ray meets in front of its origin, and where.
-fn nearest_face_hit(model: &Model, ray: &Ray) -> Option<(FaceId, DVec3)> {
-    model
-        .index()
-        .ray_hit(ray.origin, ray.dir, 0.0, f64::INFINITY)
-        .map(|(f, t)| (f, ray.origin + ray.dir * t))
+/// The nearest face the ray meets in front of its origin: whose it is, the face, and where.
+fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec3)> {
+    let mut best: Option<(f64, Owner, FaceId)> = None;
+    for part in &scenery.parts {
+        let back = part.place.inverse();
+        let reach = best.map_or(f64::INFINITY, |(t, _, _)| t);
+        if let Some((f, t)) = part.model.index().ray_hit(
+            back.transform_point3(ray.origin),
+            back.transform_vector3(ray.dir),
+            0.0,
+            reach,
+        ) && best.is_none_or(|(bt, _, _)| t < bt)
+        {
+            best = Some((t, part.owner, f));
+        }
+    }
+    best.map(|(t, owner, f)| (owner, f, ray.origin + ray.dir * t))
 }
 
 #[cfg(test)]

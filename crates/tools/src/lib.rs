@@ -8,17 +8,20 @@ pub mod move_tool;
 pub mod overlay;
 pub mod push_pull;
 pub mod rectangle;
+pub mod scenery;
 pub mod select;
 pub mod tool;
 pub mod vcb;
 
 pub use erase::EraseTool;
 pub use inference::{
-    Axis, Guides, Inference, Lock, SnapKind, edge_under, face_under, infer, infer_with,
+    Axis, Guides, Inference, Lock, SnapKind, edge_under, edge_under_in, face_under, face_under_in,
+    infer, infer_in, infer_with,
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;
 pub use push_pull::PushPullTool;
 pub use rectangle::RectangleTool;
+pub use scenery::{Owner, Part, Scenery};
 pub use select::SelectTool;
 pub use tool::{Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};
