@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 
 use crate::edit::KernelError;
 use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, segment_distance_2d, vector_area};
@@ -121,52 +121,70 @@ impl Model {
         if offset.length() < LENGTH_TOL {
             return Err(KernelError::ZeroDistance);
         }
-        let mut segments: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
+        let stencil = self.stencil(edges, faces);
+        let places: Vec<DAffine3> = (1..=count)
+            .map(|k| DAffine3::from_translation(offset * k as f64))
+            .collect();
+        self.draw_stencil(&stencil, &places);
+        Ok(self.take_changes())
+    }
+
+    /// Captures `edges` and `faces` (with their edges) by position.
+    pub(crate) fn stencil(&self, edges: &[EdgeId], faces: &[FaceId]) -> Stencil {
+        let mut sides: BTreeSet<(VertexId, VertexId)> = BTreeSet::new();
         for e in edges.iter().filter_map(|e| self.edge(*e)) {
-            segments.insert((e.v[0].min(e.v[1]), e.v[0].max(e.v[1])));
+            sides.insert((e.v[0].min(e.v[1]), e.v[0].max(e.v[1])));
         }
-        let mut originals: Vec<(Vec<DVec3>, DVec3)> = Vec::new();
-        // Holes of copied faces that no face fills.
-        let mut openings: Vec<Vec<DVec3>> = Vec::new();
+        let mut s = Stencil::default();
         for f in faces.iter().filter_map(|f| self.face(*f)) {
             for l in loops(f) {
                 for i in 0..l.len() {
                     let (a, b) = (l[i], l[(i + 1) % l.len()]);
-                    segments.insert((a.min(b), a.max(b)));
+                    sides.insert((a.min(b), a.max(b)));
                 }
             }
-            originals.push((f.outer.iter().map(|v| self.pos(*v)).collect(), f.normal));
+            s.faces
+                .push((f.outer.iter().map(|v| self.pos(*v)).collect(), f.normal));
             for h in &f.holes {
                 if self.face_with_outer(&h.iter().copied().collect()).is_none() {
-                    openings.push(h.iter().map(|v| self.pos(*v)).collect());
+                    s.openings.push(h.iter().map(|v| self.pos(*v)).collect());
                 }
             }
         }
-        let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
-        let points: Vec<(DVec3, DVec3)> = segments
+        s.segments = sides
             .iter()
             .map(|(a, b)| (self.pos(*a), self.pos(*b)))
             .collect();
-        for k in 1..=count {
-            let shift = offset * k as f64;
-            for (a, b) in &points {
-                self.draw_segment(*a + shift, *b + shift);
+        s
+    }
+
+    /// Draws `stencil` once per placement, without ending the edit. Copies are drawn like new
+    /// edges, so they merge with geometry they touch and close loops into faces; each face
+    /// keeps the orientation of its original, and openings stay open.
+    pub(crate) fn draw_stencil(&mut self, stencil: &Stencil, places: &[DAffine3]) {
+        let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
+        for t in places {
+            for (a, b) in &stencil.segments {
+                self.draw_segment(t.transform_point3(*a), t.transform_point3(*b));
             }
         }
-        for k in 1..=count {
-            let shift = offset * k as f64;
-            for (outer, normal) in &originals {
-                let ids: Option<BTreeSet<VertexId>> =
-                    outer.iter().map(|p| self.find_vertex(*p + shift)).collect();
+        for t in places {
+            for (outer, normal) in &stencil.faces {
+                let ids: Option<BTreeSet<VertexId>> = outer
+                    .iter()
+                    .map(|p| self.find_vertex(t.transform_point3(*p)))
+                    .collect();
                 let Some(ids) = ids else { continue };
                 if let Some(id) = self.face_with_outer(&ids) {
-                    self.orient(id, *normal);
+                    self.orient(id, t.transform_vector3(*normal).normalize());
                 }
             }
             // Drawing an opening's loop closes it into a face; take that face out again.
-            for hole in &openings {
-                let ids: Option<BTreeSet<VertexId>> =
-                    hole.iter().map(|p| self.find_vertex(*p + shift)).collect();
+            for hole in &stencil.openings {
+                let ids: Option<BTreeSet<VertexId>> = hole
+                    .iter()
+                    .map(|p| self.find_vertex(t.transform_point3(*p)))
+                    .collect();
                 let Some(ids) = ids else { continue };
                 if let Some(id) = self.face_with_outer(&ids)
                     && !existing.contains(&id)
@@ -175,7 +193,6 @@ impl Model {
                 }
             }
         }
-        Ok(self.take_changes())
     }
 
     /// The face whose outer loop is exactly these vertices.
@@ -184,6 +201,16 @@ impl Model {
             .find(|(_, f)| f.outer.len() == ids.len() && f.outer.iter().all(|v| ids.contains(v)))
             .map(|(id, _)| id)
     }
+}
+
+/// Edges and faces captured by position, to be drawn again elsewhere (copies, groups).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Stencil {
+    segments: Vec<(DVec3, DVec3)>,
+    /// Outer loop and normal of each face.
+    faces: Vec<(Vec<DVec3>, DVec3)>,
+    /// Holes of the faces that no face fills.
+    openings: Vec<Vec<DVec3>>,
 }
 
 fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {

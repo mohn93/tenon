@@ -1017,7 +1017,7 @@ mod tests {
                     .iter()
                     .all(|v| model.position(*v).unwrap().x > 3.5),
                 EntityId::Face(f) => model.face(f).unwrap().outer.len() == 4,
-                EntityId::Vertex(_) => false,
+                EntityId::Vertex(_) | EntityId::Instance(_) => false,
             }
         }));
         // Typing another array must not undo anything.

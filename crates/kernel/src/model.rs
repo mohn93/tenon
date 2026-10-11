@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
-use crate::ids::{EdgeId, EntityId, FaceId, VertexId};
+use crate::ids::{DefinitionId, EdgeId, EntityId, FaceId, InstanceId, VertexId};
 use crate::index::Index;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -27,6 +27,14 @@ pub struct Face {
     pub normal: DVec3,
 }
 
+/// A placed copy of a definition's geometry (a group or component).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Instance {
+    pub definition: DefinitionId,
+    /// Maps the definition's coordinates into the coordinates of the mesh holding the instance.
+    pub transform: DAffine3,
+}
+
 /// One primitive, invertible change to the model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Op {
@@ -38,6 +46,10 @@ pub enum Op {
     RemoveFace(FaceId, Face),
     /// A vertex moved from the first position to the second.
     MoveVertex(VertexId, DVec3, DVec3),
+    AddInstance(InstanceId, Instance),
+    RemoveInstance(InstanceId, Instance),
+    /// An instance's transform changed from the first to the second.
+    TransformInstance(InstanceId, DAffine3, DAffine3),
 }
 
 impl Op {
@@ -50,6 +62,9 @@ impl Op {
             Op::AddFace(id, f) => Op::RemoveFace(id, f),
             Op::RemoveFace(id, f) => Op::AddFace(id, f),
             Op::MoveVertex(id, from, to) => Op::MoveVertex(id, to, from),
+            Op::AddInstance(id, i) => Op::RemoveInstance(id, i),
+            Op::RemoveInstance(id, i) => Op::AddInstance(id, i),
+            Op::TransformInstance(id, from, to) => Op::TransformInstance(id, to, from),
         }
     }
 
@@ -63,6 +78,9 @@ impl Op {
             Op::RemoveEdge(id, _) => (EntityId::Edge(*id), true, false),
             Op::AddFace(id, _) => (EntityId::Face(*id), false, true),
             Op::RemoveFace(id, _) => (EntityId::Face(*id), true, false),
+            Op::AddInstance(id, _) => (EntityId::Instance(*id), false, true),
+            Op::RemoveInstance(id, _) => (EntityId::Instance(*id), true, false),
+            Op::TransformInstance(id, _, _) => (EntityId::Instance(*id), true, true),
         }
     }
 }
@@ -74,7 +92,7 @@ pub struct ChangeSet {
 }
 
 /// Net effect of a ChangeSet per entity. A moved vertex is `modified`; the edges and faces using
-/// it change shape without being listed.
+/// it change shape without being listed. A moved instance is `modified` too.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ChangeSummary {
     pub created: Vec<EntityId>,
@@ -113,12 +131,14 @@ impl ChangeSet {
     }
 }
 
-/// The geometry of one mesh. Every mutation is recorded as an `Op` until `take_changes`.
+/// The geometry of one mesh, plus the instances placed in it. Every mutation is recorded as an
+/// `Op` until `take_changes`.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
     vertices: BTreeMap<VertexId, Vertex>,
     edges: BTreeMap<EdgeId, Edge>,
     faces: BTreeMap<FaceId, Face>,
+    instances: BTreeMap<InstanceId, Instance>,
     next_id: u64,
     pending: Vec<Op>,
     /// Built on first use after a change; see `Model::index`.
@@ -128,7 +148,10 @@ pub struct Model {
 /// Two models are equal when they hold the same entities under the same ids.
 impl PartialEq for Model {
     fn eq(&self, other: &Self) -> bool {
-        self.vertices == other.vertices && self.edges == other.edges && self.faces == other.faces
+        self.vertices == other.vertices
+            && self.edges == other.edges
+            && self.faces == other.faces
+            && self.instances == other.instances
     }
 }
 
@@ -166,6 +189,19 @@ impl Model {
 
     pub fn faces(&self) -> impl Iterator<Item = (FaceId, &Face)> {
         self.faces.iter().map(|(k, v)| (*k, v))
+    }
+
+    pub fn instance(&self, id: InstanceId) -> Option<&Instance> {
+        self.instances.get(&id)
+    }
+
+    pub fn instances(&self) -> impl Iterator<Item = (InstanceId, &Instance)> {
+        self.instances.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// True when the mesh holds no vertices and no instances.
+    pub fn is_empty(&self) -> bool {
+        self.vertices.is_empty() && self.instances.is_empty()
     }
 
     pub(crate) fn pos(&self, id: VertexId) -> DVec3 {
@@ -250,11 +286,34 @@ impl Model {
                     v.pos = to;
                 }
             }
+            Op::AddInstance(id, i) => {
+                self.bump(id.0);
+                self.instances.insert(id, i);
+            }
+            Op::RemoveInstance(id, _) => {
+                self.instances.remove(&id);
+            }
+            Op::TransformInstance(id, _, to) => {
+                if let Some(i) = self.instances.get_mut(&id) {
+                    i.transform = to;
+                }
+            }
         }
     }
 
     fn bump(&mut self, used: u64) {
         self.next_id = self.next_id.max(used + 1);
+    }
+
+    /// The id the next new entity gets.
+    pub(crate) fn next_id(&self) -> u64 {
+        self.next_id
+    }
+
+    /// Makes new entities get ids from `first` on (or later), so that ids stay unique across
+    /// the meshes of a scene.
+    pub(crate) fn reserve_ids(&mut self, first: u64) {
+        self.next_id = self.next_id.max(first);
     }
 
     fn record(&mut self, op: Op) {
@@ -311,6 +370,35 @@ impl Model {
         f
     }
 
+    pub(crate) fn insert_instance(&mut self, instance: Instance) -> InstanceId {
+        let id = InstanceId(self.alloc());
+        self.record(Op::AddInstance(id, instance));
+        id
+    }
+
+    /// Adds an instance under an id it had elsewhere (an instance moved between meshes).
+    pub(crate) fn insert_instance_as(&mut self, id: InstanceId, instance: Instance) {
+        self.record(Op::AddInstance(id, instance));
+    }
+
+    pub(crate) fn remove_instance(&mut self, id: InstanceId) -> Instance {
+        let i = self.instances[&id].clone();
+        self.record(Op::RemoveInstance(id, i.clone()));
+        i
+    }
+
+    /// Moves instances by `offset` as one ChangeSet. Unknown ids are skipped.
+    pub fn move_instances(&mut self, ids: &[InstanceId], offset: DVec3) -> ChangeSet {
+        for id in ids {
+            if let Some(i) = self.instances.get(id) {
+                let from = i.transform;
+                let to = DAffine3::from_translation(offset) * from;
+                self.record(Op::TransformInstance(*id, from, to));
+            }
+        }
+        self.take_changes()
+    }
+
     /// Replaces a face's data, keeping its id.
     pub(crate) fn replace_face(&mut self, id: FaceId, face: Face) {
         self.remove_face(id);
@@ -340,6 +428,11 @@ impl Model {
                 if a.pos.distance(b.pos) < LENGTH_TOL {
                     return Err(format!("vertices {ia:?} and {ib:?} coincide"));
                 }
+            }
+        }
+        for (id, i) in &self.instances {
+            if !i.transform.is_finite() {
+                return Err(format!("instance {id:?} has a non-finite transform"));
             }
         }
         for (id, f) in &self.faces {

@@ -398,6 +398,7 @@ impl Document {
                 EntityId::Vertex(v) => {
                     out.insert(v);
                 }
+                EntityId::Instance(_) => {}
                 EntityId::Edge(e) => out.extend(m.edge(e).map(|e| e.v).into_iter().flatten()),
                 EntityId::Face(f) => {
                     if let Some(f) = m.face(f) {
@@ -475,6 +476,7 @@ impl Document {
             EntityId::Vertex(v) => self.model.vertex(v).is_some(),
             EntityId::Edge(e) => self.model.edge(e).is_some(),
             EntityId::Face(f) => self.model.face(f).is_some(),
+            EntityId::Instance(i) => self.model.instance(i).is_some(),
         }
     }
 
@@ -554,6 +556,7 @@ impl Document {
                     EntityId::Face(f) => {
                         QueryResult::Face(m.face(f).map(|_| self.face_info(f)).ok_or_else(missing)?)
                     }
+                    EntityId::Instance(_) => return Err(missing()),
                 }
             }
             Query::Camera => QueryResult::Camera {
@@ -592,6 +595,7 @@ impl Document {
         let m = &self.model;
         let ids: Vec<VertexId> = match id {
             EntityId::Vertex(v) => vec![v],
+            EntityId::Instance(_) => vec![],
             EntityId::Edge(e) => m.edge(e).map(|e| e.v.to_vec()).unwrap_or_default(),
             EntityId::Face(f) => m
                 .face(f)

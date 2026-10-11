@@ -28,7 +28,7 @@ fn outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
             .into_iter()
             .collect(),
         EntityId::Face(f) => m.face(f).map(|f| face_outline(m, f)).unwrap_or_default(),
-        EntityId::Vertex(_) => Vec::new(),
+        EntityId::Vertex(_) | EntityId::Instance(_) => Vec::new(),
     }
 }
 

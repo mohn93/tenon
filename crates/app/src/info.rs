@@ -12,7 +12,7 @@ pub fn entity_info(doc: &Document) -> Vec<String> {
         match id {
             EntityId::Edge(e) => edges.push(*e),
             EntityId::Face(f) => faces.push(*f),
-            EntityId::Vertex(_) => {}
+            EntityId::Vertex(_) | EntityId::Instance(_) => {}
         }
     }
     match (&edges[..], &faces[..]) {

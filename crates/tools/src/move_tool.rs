@@ -94,7 +94,7 @@ fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
                     out.extend(face_outline(m, f));
                 }
             }
-            EntityId::Vertex(_) => {}
+            EntityId::Vertex(_) | EntityId::Instance(_) => {}
         }
     }
     out
