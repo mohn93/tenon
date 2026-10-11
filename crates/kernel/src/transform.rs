@@ -159,8 +159,9 @@ impl Model {
     }
 
     /// Draws `stencil` once per placement, without ending the edit. Copies are drawn like new
-    /// edges, so they merge with geometry they touch and close loops into faces; each face
-    /// keeps the orientation of its original, and openings stay open.
+    /// edges, so they merge with geometry they touch and close loops into faces (also where
+    /// every side of a face was there already); each face keeps the orientation of its
+    /// original, and openings stay open.
     pub(crate) fn draw_stencil(&mut self, stencil: &Stencil, places: &[DAffine3]) {
         let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
         for t in places {
@@ -170,13 +171,25 @@ impl Model {
         }
         for t in places {
             for (outer, normal) in &stencil.faces {
-                let ids: Option<BTreeSet<VertexId>> = outer
+                let normal = t.transform_vector3(*normal).normalize();
+                let ring: Option<Vec<VertexId>> = outer
                     .iter()
                     .map(|p| self.find_vertex(t.transform_point3(*p)))
                     .collect();
-                let Some(ids) = ids else { continue };
+                let Some(ring) = ring else { continue };
+                let ids: BTreeSet<VertexId> = ring.iter().copied().collect();
+                if self.face_with_outer(&ids).is_none() {
+                    // Every side was there already, so drawing them closed no face: close it.
+                    let n = ring.len();
+                    let sides: Option<Vec<EdgeId>> = (0..n)
+                        .map(|i| self.edge_between(ring[i], ring[(i + 1) % n]))
+                        .collect();
+                    if let Some(sides) = sides {
+                        self.rebuild_plane(Plane::through(self.pos(ring[0]), normal), &sides);
+                    }
+                }
                 if let Some(id) = self.face_with_outer(&ids) {
-                    self.orient(id, t.transform_vector3(*normal).normalize());
+                    self.orient(id, normal);
                 }
             }
             // Drawing an opening's loop closes it into a face; take that face out again.

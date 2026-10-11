@@ -255,3 +255,23 @@ fn copying_a_face_with_a_filled_hole_does_not_remove_faces() {
     // The hole copies close into faces, as the original's hole is filled.
     assert_eq!(m.faces().count(), 6);
 }
+
+#[test]
+fn a_face_copied_onto_an_empty_outline_fills_it() {
+    let mut m = cube();
+    let top = face_with_normal(&m, DVec3::Z);
+    m.erase(&[], &[top]);
+    let bottom = face_with_normal(&m, -DVec3::Z);
+    m.copy(&[], &[bottom], p(0.0, 0.0, 2.0), 1).unwrap();
+    m.validate().unwrap();
+    assert_eq!(counts(&m), (8, 12, 6));
+    let lid = m
+        .faces()
+        .find(|(_, f)| f.outer.iter().all(|v| m.position(*v).unwrap().z > 1.0))
+        .map(|(_, f)| f.normal);
+    assert_eq!(
+        lid,
+        Some(-DVec3::Z),
+        "the copy keeps the bottom's orientation"
+    );
+}

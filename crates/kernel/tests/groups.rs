@@ -323,3 +323,217 @@ fn an_instance_listed_twice_moves_once_by_move_instances() {
     );
     assert_eq!(change.summary().modified, vec![EntityId::Instance(i)]);
 }
+
+fn root_counts(s: &Scene) -> (usize, usize, usize, usize) {
+    counts(s.root())
+}
+
+#[test]
+fn exploding_a_group_puts_its_geometry_back() {
+    let mut s = box_scene(DVec3::ZERO);
+    let original = root_counts(&s);
+    let (i, _) = group_all(&mut s, DefinitionKind::Group);
+    let d = definition_of(&s, i);
+    let before = s.clone();
+    let change = s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    assert_eq!(root_counts(&s), original);
+    assert!(s.definition(d).is_none(), "the group's definition goes");
+    assert!(change.summary().deleted.contains(&EntityId::Instance(i)));
+    s.apply(&change.inverse());
+    assert_eq!(s, before);
+}
+
+#[test]
+fn exploding_a_moved_instance_places_the_geometry_where_it_was_shown() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Group);
+    s.edit(MeshId::Root, |m| {
+        Ok(m.move_instances(&[i], p(10.0, 0.0, 0.0)))
+    })
+    .unwrap();
+    assert_eq!(
+        s.bounds(MeshId::Root),
+        Some([p(10.0, 0.0, 0.0), p(12.0, 3.0, 1.0)])
+    );
+    s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    assert_eq!(
+        s.bounds(MeshId::Root),
+        Some([p(10.0, 0.0, 0.0), p(12.0, 3.0, 1.0)])
+    );
+}
+
+#[test]
+fn an_exploded_face_merges_with_what_it_touches() {
+    let mut s = box_scene(DVec3::ZERO);
+    let top = s
+        .root()
+        .faces()
+        .find(|(_, f)| f.normal.z > 0.5)
+        .map(|(id, _)| id)
+        .unwrap();
+    let (i, _) = s
+        .make_group(MeshId::Root, &[], &[top], &[], DefinitionKind::Group, "Top")
+        .unwrap();
+    s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    assert_eq!(root_counts(&s), (8, 12, 6, 0));
+    let up = s.root().faces().filter(|(_, f)| f.normal.z > 0.5).count();
+    assert_eq!(up, 1);
+}
+
+#[test]
+fn a_component_definition_outlives_its_exploded_instances() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Component);
+    let d = definition_of(&s, i);
+    s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    assert!(s.definition(d).is_some());
+    assert_eq!(s.instance_count(d), 0);
+}
+
+#[test]
+fn exploding_a_nested_group_lifts_the_inner_instance() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (inner, _) = group_all(&mut s, DefinitionKind::Component);
+    s.edit(MeshId::Root, |m| {
+        Ok(m.move_instances(&[inner], p(0.0, 5.0, 0.0)))
+    })
+    .unwrap();
+    let (outer, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[inner],
+            DefinitionKind::Group,
+            "Outer",
+        )
+        .unwrap();
+    s.edit(MeshId::Root, |m| {
+        Ok(m.move_instances(&[outer], p(1.0, 0.0, 0.0)))
+    })
+    .unwrap();
+    s.explode(MeshId::Root, outer).unwrap();
+    s.validate().unwrap();
+    let lifted: Vec<_> = s.root().instances().collect();
+    assert_eq!(lifted.len(), 1);
+    assert_ne!(lifted[0].0, inner, "lifted instances get new ids");
+    assert_eq!(
+        lifted[0].1.transform,
+        DAffine3::from_translation(p(1.0, 5.0, 0.0))
+    );
+}
+
+#[test]
+fn copies_of_a_component_share_its_definition() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Component);
+    let d = definition_of(&s, i);
+    let change = s
+        .copy_instances(MeshId::Root, &[i], p(3.0, 0.0, 0.0), 3)
+        .unwrap();
+    s.validate().unwrap();
+    assert_eq!(s.instance_count(d), 4);
+    assert_eq!(s.definitions().count(), 1);
+    assert_eq!(change.summary().created.len(), 3);
+    assert_eq!(
+        s.bounds(MeshId::Root),
+        Some([p(0.0, 0.0, 0.0), p(11.0, 3.0, 1.0)])
+    );
+}
+
+#[test]
+fn a_copy_of_a_group_gets_its_own_definition() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (inner, _) = group_all(&mut s, DefinitionKind::Group);
+    let (outer, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[inner],
+            DefinitionKind::Group,
+            "Outer",
+        )
+        .unwrap();
+    let before = s.clone();
+    let change = s
+        .copy_instances(MeshId::Root, &[outer], p(0.0, 4.0, 0.0), 1)
+        .unwrap();
+    s.validate().unwrap();
+    assert_eq!(s.definitions().count(), 4, "outer and inner both copied");
+    let copy = s
+        .root()
+        .instances()
+        .find(|(id, _)| *id != outer)
+        .map(|(_, i)| i.definition)
+        .unwrap();
+    assert_ne!(copy, definition_of(&s, outer));
+    assert_eq!(s.instance_count(copy), 1);
+    s.apply(&change.inverse());
+    assert_eq!(s, before);
+}
+
+#[test]
+fn erasing_a_group_removes_its_definition_and_undoes_exactly() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Group);
+    let d = definition_of(&s, i);
+    let before = s.clone();
+    let change = s.erase_instances(MeshId::Root, &[i]);
+    s.validate().unwrap();
+    assert_eq!(root_counts(&s), (0, 0, 0, 0));
+    assert!(s.definition(d).is_none());
+    assert_eq!(change.summary().deleted, vec![EntityId::Instance(i)]);
+    s.apply(&change.inverse());
+    assert_eq!(s, before);
+}
+
+#[test]
+fn erasing_a_component_instance_keeps_the_definition() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Component);
+    let d = definition_of(&s, i);
+    s.erase_instances(MeshId::Root, &[i]);
+    assert!(s.definition(d).is_some());
+}
+
+#[test]
+fn paths_resolve_to_the_open_mesh_and_its_placement() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (inner, _) = group_all(&mut s, DefinitionKind::Group);
+    let (outer, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[inner],
+            DefinitionKind::Group,
+            "Outer",
+        )
+        .unwrap();
+    s.edit(MeshId::Root, |m| {
+        Ok(m.move_instances(&[outer], p(1.0, 2.0, 3.0)))
+    })
+    .unwrap();
+    let d_outer = definition_of(&s, outer);
+    let d_inner = s
+        .definition(d_outer)
+        .unwrap()
+        .mesh
+        .instance(inner)
+        .unwrap()
+        .definition;
+    assert_eq!(s.resolve(&[]), Some((MeshId::Root, DAffine3::IDENTITY)));
+    assert_eq!(
+        s.resolve(&[outer, inner]),
+        Some((
+            MeshId::Definition(d_inner),
+            DAffine3::from_translation(p(1.0, 2.0, 3.0))
+        ))
+    );
+    assert_eq!(s.resolve(&[inner]), None, "inner is not in the root");
+}

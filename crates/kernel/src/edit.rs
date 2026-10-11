@@ -21,6 +21,7 @@ pub enum KernelError {
     /// A move would shrink an edge to nothing, turn a face inside out, or land a vertex on
     /// another.
     Squash,
+    InstanceNotFound,
 }
 
 impl fmt::Display for KernelError {
@@ -46,6 +47,7 @@ impl fmt::Display for KernelError {
                 f,
                 "the move would collapse an edge, turn a face over, or land a vertex on another"
             ),
+            KernelError::InstanceNotFound => write!(f, "no such instance"),
         }
     }
 }

@@ -2,11 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{DefinitionId, EntityId};
-use crate::model::{ChangeSet, ChangeSummary, Model};
+use crate::ids::{DefinitionId, EntityId, InstanceId};
+use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
 /// shared by all its instances: editing it changes them all.
@@ -210,6 +211,56 @@ impl Scene {
         (id, step)
     }
 
+    /// Removes a definition and returns the step that removed it.
+    pub(crate) fn remove_definition(&mut self, id: DefinitionId) -> Step {
+        let step = Step::RemoveDefinition(id, self.definitions[&id].clone());
+        self.apply_step(&step);
+        step
+    }
+
+    /// Follows a path of instances from the root, each one in the mesh of the one before.
+    /// Returns the mesh the last one places and the transform from that mesh's coordinates to
+    /// the root's (the root itself for an empty path). None if a step is not where it should
+    /// be.
+    pub fn resolve(&self, path: &[InstanceId]) -> Option<(MeshId, DAffine3)> {
+        let mut mesh = MeshId::Root;
+        let mut transform = DAffine3::IDENTITY;
+        for id in path {
+            let i = self.mesh(mesh)?.instance(*id)?;
+            transform *= i.transform;
+            mesh = MeshId::Definition(i.definition);
+        }
+        Some((mesh, transform))
+    }
+
+    /// The box around a mesh's vertices and instances, in the mesh's coordinates. None when
+    /// the mesh is empty or missing.
+    pub fn bounds(&self, mesh: MeshId) -> Option<[DVec3; 2]> {
+        let m = self.mesh(mesh)?;
+        let mut points: Vec<DVec3> = m.vertices().map(|(_, v)| v.pos).collect();
+        for (_, i) in m.instances() {
+            points.extend(self.instance_bounds(i).into_iter().flatten());
+        }
+        enclose(&points)
+    }
+
+    /// The box around an instance's geometry, in the coordinates of the mesh holding it. None
+    /// when its definition is empty or missing.
+    pub fn instance_bounds(&self, instance: &Instance) -> Option<[DVec3; 2]> {
+        let [lo, hi] = self.bounds(MeshId::Definition(instance.definition))?;
+        let corners: Vec<DVec3> = (0..8)
+            .map(|k| {
+                let corner = DVec3::new(
+                    if k & 1 == 0 { lo.x } else { hi.x },
+                    if k & 2 == 0 { lo.y } else { hi.y },
+                    if k & 4 == 0 { lo.z } else { hi.z },
+                );
+                instance.transform.transform_point3(corner)
+            })
+            .collect();
+        enclose(&corners)
+    }
+
     /// Applies a change (e.g. an inverse for undo).
     pub fn apply(&mut self, change: &SceneChange) {
         for step in &change.steps {
@@ -277,6 +328,16 @@ impl Scene {
         }
         false
     }
+}
+
+/// The smallest box holding the points; None when there are none.
+fn enclose(points: &[DVec3]) -> Option<[DVec3; 2]> {
+    let first = *points.first()?;
+    Some(
+        points
+            .iter()
+            .fold([first, first], |[lo, hi], p| [lo.min(*p), hi.max(*p)]),
+    )
 }
 
 fn entity_ids(m: &Model) -> impl Iterator<Item = EntityId> + '_ {

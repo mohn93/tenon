@@ -2,12 +2,14 @@
 
 use std::collections::BTreeSet;
 
-use glam::DAffine3;
+use glam::{DAffine3, DVec3};
 
 use crate::edit::{KernelError, loop_has_side};
-use crate::ids::{EdgeId, FaceId, InstanceId, VertexId};
+use crate::geom::LENGTH_TOL;
+use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, VertexId};
 use crate::model::{Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
+use crate::transform::Stencil;
 
 impl Scene {
     /// Moves edges, faces (with their edges) and instances of mesh `parent` into a new
@@ -55,6 +57,166 @@ impl Scene {
         let change = SceneChange::join([SceneChange::from(added), left, filled]);
         Ok((placed.expect("instance placed"), change))
     }
+}
+
+impl Scene {
+    /// Replaces an instance in mesh `parent` by its definition's geometry, placed by the
+    /// instance's transform and drawn like new edges, so it merges with what it touches.
+    /// Instances inside it become instances in `parent`, with new ids. A group's definition
+    /// goes with its last instance; a component's stays.
+    pub fn explode(
+        &mut self,
+        parent: MeshId,
+        instance: InstanceId,
+    ) -> Result<SceneChange, KernelError> {
+        let placed = self
+            .mesh(parent)
+            .and_then(|m| m.instance(instance))
+            .cloned()
+            .ok_or(KernelError::InstanceNotFound)?;
+        let mesh = &self
+            .definition(placed.definition)
+            .expect("instance of a missing definition")
+            .mesh;
+        let stencil = whole(mesh);
+        let children: Vec<Instance> = mesh
+            .instances()
+            .map(|(_, i)| Instance {
+                definition: i.definition,
+                transform: placed.transform * i.transform,
+            })
+            .collect();
+        let exploded = self.edit(parent, |m| {
+            m.remove_instance(instance);
+            m.draw_stencil(&stencil, &[placed.transform]);
+            for child in children {
+                m.insert_instance(child);
+            }
+            Ok(m.take_changes())
+        })?;
+        Ok(SceneChange::join([exploded, self.prune()]))
+    }
+
+    /// Places `count` copies of instances of mesh `parent`, copy k shifted by `k * offset`.
+    /// Copies of a component instance place the same definition; each copy of a group gets a
+    /// copy of the group's definition (and of the groups inside it).
+    pub fn copy_instances(
+        &mut self,
+        parent: MeshId,
+        instances: &[InstanceId],
+        offset: DVec3,
+        count: u32,
+    ) -> Result<SceneChange, KernelError> {
+        if !offset.is_finite() {
+            return Err(KernelError::NotFinite);
+        }
+        if offset.length() < LENGTH_TOL {
+            return Err(KernelError::ZeroDistance);
+        }
+        let source = self.mesh(parent).expect("copy in a missing mesh");
+        let originals: Vec<Instance> = instances
+            .iter()
+            .map(|id| source.instance(*id).cloned())
+            .collect::<Option<_>>()
+            .ok_or(KernelError::InstanceNotFound)?;
+        let mut steps = SceneChange::default();
+        let mut copies = Vec::new();
+        for k in 1..=count {
+            for original in &originals {
+                let definition = match self.definition(original.definition).map(|d| d.kind) {
+                    Some(DefinitionKind::Group) => {
+                        let (d, made) = self.duplicate(original.definition);
+                        steps = SceneChange::join([steps, made]);
+                        d
+                    }
+                    _ => original.definition,
+                };
+                copies.push(Instance {
+                    definition,
+                    transform: DAffine3::from_translation(offset * k as f64) * original.transform,
+                });
+            }
+        }
+        let placed = self.edit(parent, |m| {
+            for c in copies {
+                m.insert_instance(c);
+            }
+            Ok(m.take_changes())
+        })?;
+        Ok(SceneChange::join([steps, placed]))
+    }
+
+    /// A new group definition holding a copy of `id`'s geometry, with new ids; groups inside it
+    /// are copied too, components inside are placed again.
+    fn duplicate(&mut self, id: DefinitionId) -> (DefinitionId, SceneChange) {
+        let original = self.definition(id).expect("copy of a missing definition");
+        let (name, kind) = (original.name.clone(), original.kind);
+        let stencil = whole(&original.mesh);
+        let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
+        let mut change = SceneChange::default();
+        let mut placed = Vec::new();
+        for child in children {
+            let definition = match self.definition(child.definition).map(|d| d.kind) {
+                Some(DefinitionKind::Group) => {
+                    let (d, made) = self.duplicate(child.definition);
+                    change = SceneChange::join([change, made]);
+                    d
+                }
+                _ => child.definition,
+            };
+            placed.push(Instance {
+                definition,
+                transform: child.transform,
+            });
+        }
+        let (copy, added) = self.add_definition(&name, kind);
+        let filled = self
+            .edit(MeshId::Definition(copy), |m| {
+                m.draw_stencil(&stencil, &[DAffine3::IDENTITY]);
+                for i in placed {
+                    m.insert_instance(i);
+                }
+                Ok(m.take_changes())
+            })
+            .expect("drawing a copy cannot fail");
+        (copy, SceneChange::join([change, added.into(), filled]))
+    }
+
+    /// Removes instances from mesh `parent`. A group's definition goes with its last instance.
+    pub fn erase_instances(&mut self, parent: MeshId, instances: &[InstanceId]) -> SceneChange {
+        let erased = self
+            .edit(parent, |m| {
+                for id in instances {
+                    if m.instance(*id).is_some() {
+                        m.remove_instance(*id);
+                    }
+                }
+                Ok(m.take_changes())
+            })
+            .expect("erasing cannot fail");
+        SceneChange::join([erased, self.prune()])
+    }
+
+    /// Removes group definitions that no instance places any more.
+    fn prune(&mut self) -> SceneChange {
+        let mut steps = Vec::new();
+        loop {
+            let unused = self
+                .definitions()
+                .find(|(id, d)| d.kind == DefinitionKind::Group && self.instance_count(*id) == 0)
+                .map(|(id, _)| id);
+            let Some(id) = unused else { break };
+            steps.push(self.remove_definition(id));
+        }
+        SceneChange { steps }
+    }
+}
+
+/// Every edge and face of a mesh, as a stencil.
+fn whole(m: &Model) -> Stencil {
+    let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+    let faces: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
+    m.stencil(&edges, &faces)
 }
 
 impl Model {
