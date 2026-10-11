@@ -217,6 +217,7 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyL => 'l',
         KeyCode::KeyR => 'r',
         KeyCode::KeyP => 'p',
+        KeyCode::KeyE => 'e',
         KeyCode::KeyM => 'm',
         _ => return None,
     })

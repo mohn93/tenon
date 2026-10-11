@@ -4,10 +4,12 @@ use glam::{DVec2, DVec3};
 use kernel::Model;
 use session::{Camera, Command};
 
+use crate::erase::EraseTool;
 use crate::inference::Inference;
 use crate::line::LineTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
+use crate::select::SelectTool;
 
 /// What a tool may look at while handling an event.
 pub struct ToolContext<'a> {
@@ -63,27 +65,72 @@ pub trait Tool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
+    Select,
     Line,
     Rectangle,
     PushPull,
+    Erase,
 }
 
 impl ToolKind {
+    /// Every tool, in toolbar order.
+    pub const ALL: [ToolKind; 5] = [
+        ToolKind::Select,
+        ToolKind::Line,
+        ToolKind::Rectangle,
+        ToolKind::PushPull,
+        ToolKind::Erase,
+    ];
+
     pub fn make(self) -> Box<dyn Tool> {
         match self {
+            ToolKind::Select => Box::new(SelectTool::new()),
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
             ToolKind::PushPull => Box::new(PushPullTool::new()),
+            ToolKind::Erase => Box::new(EraseTool::new()),
         }
     }
 
-    /// The keyboard shortcut that selects the tool.
-    pub fn from_shortcut(c: char) -> Option<ToolKind> {
-        match c.to_ascii_lowercase() {
-            'l' => Some(ToolKind::Line),
-            'r' => Some(ToolKind::Rectangle),
-            'p' => Some(ToolKind::PushPull),
-            _ => None,
+    /// The tool's name, as its `Tool::name` reports it.
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolKind::Select => "Select",
+            ToolKind::Line => "Line",
+            ToolKind::Rectangle => "Rectangle",
+            ToolKind::PushPull => "Push/Pull",
+            ToolKind::Erase => "Erase",
         }
+    }
+
+    /// The key that selects the tool.
+    pub fn shortcut(self) -> char {
+        match self {
+            ToolKind::Select => ' ',
+            ToolKind::Line => 'l',
+            ToolKind::Rectangle => 'r',
+            ToolKind::PushPull => 'p',
+            ToolKind::Erase => 'e',
+        }
+    }
+
+    pub fn from_shortcut(c: char) -> Option<ToolKind> {
+        let c = c.to_ascii_lowercase();
+        Self::ALL.into_iter().find(|k| k.shortcut() == c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_match_tool_names_and_shortcuts_round_trip() {
+        for kind in ToolKind::ALL {
+            assert_eq!(kind.make().name(), kind.label());
+            assert_eq!(ToolKind::from_shortcut(kind.shortcut()), Some(kind));
+        }
+        assert_eq!(ToolKind::from_shortcut('E'), Some(ToolKind::Erase));
+        assert_eq!(ToolKind::from_shortcut('z'), None);
     }
 }
