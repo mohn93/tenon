@@ -126,7 +126,7 @@ impl Tool for RectangleTool {
                 }
                 (Some(_), _) => out.message = Some(format!("Not width,height: {text}")),
             },
-            ToolEvent::Release(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((corner, normal)), Some(hover)) = (self.start, self.hover)

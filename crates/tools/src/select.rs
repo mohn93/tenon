@@ -1,6 +1,8 @@
-//! The Select tool: click an edge or face to select it, or drag a box. Dragging right selects
-//! what lies entirely inside the box; dragging left also selects what the box touches. With
-//! Shift held, clicked or boxed entities are toggled instead of replacing the selection.
+//! The Select tool: click an edge, face or group to select it, or drag a box. Dragging right
+//! selects what lies entirely inside the box; dragging left also selects what the box touches.
+//! With Shift held, clicked or boxed entities are toggled instead of replacing the selection.
+//! Double-clicking a group opens it for editing; double-clicking outside it, or Escape, closes
+//! it.
 
 use glam::{DVec2, DVec3};
 use kernel::geom::point_in_polygon;
@@ -24,23 +26,53 @@ impl SelectTool {
     }
 }
 
-/// The open context's edge under the cursor, or else its face under it. Geometry elsewhere
-/// (inside instances, outside the open instance) hides what is behind it but is not picked.
+/// What a click picks: the open context's edge under the cursor, or else its face under it.
+/// An edge or face inside an instance of the open context picks the instance. Geometry outside
+/// the open instance hides what is behind it but is not picked.
 pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
-    let open = |o: Owner| o == Owner::Open;
-    edge_under_in(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius)
-        .filter(|(o, ..)| open(*o))
-        .map(|(_, e, _, _)| EntityId::Edge(e))
-        .or_else(|| {
-            face_under_in(ctx.scenery, ctx.camera, ctx.cursor)
-                .filter(|(o, ..)| open(*o))
-                .map(|(_, f, _)| EntityId::Face(f))
-        })
+    let edge = edge_under_in(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius);
+    match edge {
+        Some((Owner::Open, e, _, _)) => return Some(EntityId::Edge(e)),
+        Some((Owner::Instance(i), ..)) => return Some(EntityId::Instance(i)),
+        _ => {}
+    }
+    match face_under_in(ctx.scenery, ctx.camera, ctx.cursor)? {
+        (Owner::Open, f, _) => Some(EntityId::Face(f)),
+        (Owner::Instance(i), _, _) => Some(EntityId::Instance(i)),
+        (Owner::Outside, _, _) => None,
+    }
 }
 
-/// Edges and faces selected by the screen box from `a` to `b`: inside it entirely when
-/// dragging right (`b.x >= a.x`), touching it when dragging left. Entities with a point behind
-/// the camera are skipped.
+/// The corners of an instance's bounding box (bit 0 picks x, bit 1 y, bit 2 z).
+fn box_corners(ctx: &ToolContext, id: EntityId) -> Option<[DVec3; 8]> {
+    let EntityId::Instance(i) = id else {
+        return None;
+    };
+    let [lo, hi] = ctx.scenery.instance_box(i)?;
+    Some(std::array::from_fn(|k| {
+        DVec3::new(
+            if k & 1 == 0 { lo.x } else { hi.x },
+            if k & 2 == 0 { lo.y } else { hi.y },
+            if k & 4 == 0 { lo.z } else { hi.z },
+        )
+    }))
+}
+
+/// The twelve edges of an instance's bounding box, for outlines.
+pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
+    let Some(c) = box_corners(ctx, id) else {
+        return Vec::new();
+    };
+    (0..8)
+        .flat_map(|k| [1, 2, 4].map(|bit| (k, k | bit)))
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| [c[a], c[b]])
+        .collect()
+}
+
+/// Edges, faces and instances selected by the screen box from `a` to `b`: inside it entirely
+/// when dragging right (`b.x >= a.x`), touching it when dragging left. Entities with a point
+/// behind the camera are skipped.
 fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
     let (lo, hi) = (a.min(b), a.max(b));
     let window = b.x >= a.x;
@@ -84,6 +116,32 @@ fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
             .iter()
             .any(|c| point_in_polygon(*c, &outer) && !holes.iter().any(|h| point_in_polygon(*c, h)))
     };
+    // Instances by their bounding boxes: inside when every corner is, touching when the box's
+    // screen rectangle overlaps the selection box.
+    for (id, _) in m.instances() {
+        let id = EntityId::Instance(id);
+        let Some(corners) = box_corners(ctx, id) else {
+            continue;
+        };
+        let Some(pts) = corners
+            .iter()
+            .map(|p| ctx.camera.project(*p))
+            .collect::<Option<Vec<DVec2>>>()
+        else {
+            continue;
+        };
+        let hit = if window {
+            pts.iter().all(|p| inside(*p))
+        } else {
+            let (bl, bh) = pts
+                .iter()
+                .fold((pts[0], pts[0]), |(l, h), p| (l.min(*p), h.max(*p)));
+            bl.cmple(hi).all() && bh.cmpge(lo).all()
+        };
+        if hit {
+            ids.push(id);
+        }
+    }
     for (id, f) in m.faces() {
         let all = face_loops(f).all(|l| screen(l).is_some_and(|pts| !pts.is_empty()));
         let hit = if window {
@@ -129,7 +187,9 @@ impl Tool for SelectTool {
 
     fn prompt(&self) -> &'static str {
         match self.press {
-            None => "Click an edge or face, or drag a box; Shift adds or removes",
+            None => {
+                "Click an edge, face or group, or drag a box; Shift adds or removes; double-click a group to edit it"
+            }
             Some(_) => "Release to select: drag right for inside the box, left for touching",
         }
     }
@@ -169,7 +229,21 @@ impl Tool for SelectTool {
             ToolEvent::Value(_) => {
                 out.message = Some("The Select tool takes no typed values".into());
             }
-            ToolEvent::Cancel => self.press = None,
+            ToolEvent::DoubleClick(_) => match pick(ctx) {
+                Some(id @ EntityId::Instance(_)) => {
+                    out.commands.push(Command::OpenInstance { id });
+                }
+                None if ctx.scenery.inside_instance() => {
+                    out.commands.push(Command::CloseInstance);
+                }
+                _ => {}
+            },
+            // Escape with nothing in progress closes the open instance.
+            ToolEvent::Cancel => {
+                if self.press.take().is_none() && ctx.scenery.inside_instance() {
+                    out.commands.push(Command::CloseInstance);
+                }
+            }
             ToolEvent::ToggleCopy => {}
         }
         if let Some(start) = self.press

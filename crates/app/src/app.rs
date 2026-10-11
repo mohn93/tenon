@@ -65,6 +65,17 @@ fn wake_decision(now: Instant, deadline: Option<Instant>) -> Wake {
 /// Trackpad pixel deltas per zoom step.
 const PIXELS_PER_SCROLL_STEP: f64 = 50.0;
 
+/// Longest time between the two releases of a double-click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+/// Farthest the cursor may move between them, in logical pixels.
+const DOUBLE_CLICK_LOGICAL_PX: f64 = 6.0;
+
+/// True if a release at `at` (physical pixels) at time `now` completes a double-click begun
+/// by the release `last`.
+fn is_double_click(last: Option<(Instant, DVec2)>, now: Instant, at: DVec2, max_px: f64) -> bool {
+    last.is_some_and(|(t, p)| now.duration_since(t) <= DOUBLE_CLICK && p.distance(at) <= max_px)
+}
+
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -85,6 +96,8 @@ struct State {
     cursor: DVec2,
     /// When egui wants its next frame without any input (e.g. a tooltip delay).
     repaint_at: Option<Instant>,
+    /// When and where the left button was last released in the view, for double-clicks.
+    last_release: Option<(Instant, DVec2)>,
 }
 
 impl State {
@@ -144,6 +157,7 @@ impl State {
             view,
             cursor: DVec2::ZERO,
             repaint_at: None,
+            last_release: None,
         }
     }
 
@@ -493,7 +507,18 @@ impl ApplicationHandler<ApiWake> for App {
                 if pressed && (s.gui.wants_pointer() || !s.in_view(s.cursor)) {
                     false
                 } else {
-                    s.editor.button(map_button(button), pressed)
+                    let handled = s.editor.button(map_button(button), pressed);
+                    if handled && !pressed && button == MouseButton::Left {
+                        let now = Instant::now();
+                        let max = DOUBLE_CLICK_LOGICAL_PX * s.window.scale_factor();
+                        if is_double_click(s.last_release, now, s.cursor, max) {
+                            s.last_release = None;
+                            s.editor.double_click();
+                        } else {
+                            s.last_release = Some((now, s.cursor));
+                        }
+                    }
+                    handled
                 }
             }
             WindowEvent::MouseWheel { .. } if s.gui.wants_pointer() || !s.in_view(s.cursor) => {
@@ -562,6 +587,28 @@ mod tests {
             schedule_repaint(now, Some(Duration::from_secs(3600))),
             Repaint::Idle
         );
+    }
+
+    #[test]
+    fn double_clicks_are_two_quick_releases_in_one_place() {
+        let now = Instant::now();
+        let at = DVec2::new(100.0, 100.0);
+        let soon = now + Duration::from_millis(300);
+        assert!(!is_double_click(None, now, at, 6.0));
+        assert!(is_double_click(
+            Some((now, at)),
+            soon,
+            at + DVec2::new(3.0, 3.0),
+            6.0
+        ));
+        assert!(!is_double_click(
+            Some((now, at)),
+            soon,
+            at + DVec2::new(10.0, 0.0),
+            6.0
+        ));
+        let late = now + Duration::from_millis(800);
+        assert!(!is_double_click(Some((now, at)), late, at, 6.0));
     }
 
     #[test]

@@ -43,6 +43,9 @@ pub enum ToolEvent {
     Click(Inference),
     /// The primary button was released at the current inference.
     Release(Inference),
+    /// The primary button was double-clicked at the current inference (sent after the second
+    /// release).
+    DoubleClick(Inference),
     /// Text typed into the measurements box, submitted with Enter.
     Value(String),
     /// Escape: abandon the operation in progress.

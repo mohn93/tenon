@@ -1,10 +1,11 @@
-//! The Erase tool: click an edge or face to erase it. The entity under the cursor is outlined.
+//! The Erase tool: click an edge, face or group to erase it. What is under the cursor is
+//! outlined.
 
 use glam::DVec3;
 use kernel::EntityId;
 use session::Command;
 
-use crate::select::{face_outline, pick};
+use crate::select::{box_outline, face_outline, pick};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
@@ -28,7 +29,8 @@ fn outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
             .into_iter()
             .collect(),
         EntityId::Face(f) => m.face(f).map(|f| face_outline(m, f)).unwrap_or_default(),
-        EntityId::Vertex(_) | EntityId::Instance(_) => Vec::new(),
+        EntityId::Instance(_) => box_outline(ctx, id),
+        EntityId::Vertex(_) => Vec::new(),
     }
 }
 
@@ -38,7 +40,7 @@ impl Tool for EraseTool {
     }
 
     fn prompt(&self) -> &'static str {
-        "Click an edge or face to erase it"
+        "Click an edge, face or group to erase it"
     }
 
     fn measurement(&self) -> (&'static str, Option<String>) {
@@ -64,7 +66,10 @@ impl Tool for EraseTool {
             ToolEvent::Value(_) => {
                 out.message = Some("The Erase tool takes no typed values".into());
             }
-            ToolEvent::Release(_) | ToolEvent::Cancel | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(_)
+            | ToolEvent::DoubleClick(_)
+            | ToolEvent::Cancel
+            | ToolEvent::ToggleCopy => {}
         }
         out.preview = self.outline.clone();
         out

@@ -8,7 +8,7 @@ use kernel::EntityId;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, MAX_COPIES};
 
-use crate::select::{face_outline, pick};
+use crate::select::{box_outline, face_outline, pick};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_length, parse_array, parse_length};
 
@@ -76,7 +76,7 @@ impl MoveTool {
     }
 }
 
-/// Segments outlining edges and faces.
+/// Segments outlining edges, faces and instances (their bounding boxes).
 fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
     let m = ctx.model;
     let mut out = Vec::new();
@@ -94,7 +94,8 @@ fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
                     out.extend(face_outline(m, f));
                 }
             }
-            EntityId::Vertex(_) | EntityId::Instance(_) => {}
+            EntityId::Instance(_) => out.extend(box_outline(ctx, *id)),
+            EntityId::Vertex(_) => {}
         }
     }
     out
@@ -110,8 +111,10 @@ impl Tool for MoveTool {
             (Some(_), false, _) => "Click the destination, or type a distance",
             (Some(_), true, _) => "Copy: click the destination, or type a distance",
             (None, _, Some(_)) => "Type 5x or /5 for more copies, or click a new base point",
-            (None, false, None) => "Select geometry, then click a base point (Ctrl copies)",
-            (None, true, None) => "Copy: select geometry, then click a base point",
+            (None, false, None) => {
+                "Select geometry or a group, then click a base point (Ctrl copies)"
+            }
+            (None, true, None) => "Copy: select geometry or a group, then click a base point",
         }
     }
 
@@ -140,7 +143,8 @@ impl Tool for MoveTool {
                         ctx.selection.iter().copied().collect()
                     };
                     if ids.is_empty() {
-                        out.message = Some("Select geometry, or click an edge or face".into());
+                        out.message =
+                            Some("Select geometry, or click an edge, face or group".into());
                     } else {
                         self.drag = Some(Drag {
                             base: hit.point,
@@ -181,7 +185,7 @@ impl Tool for MoveTool {
             },
             ToolEvent::ToggleCopy => self.copy = !self.copy,
             ToolEvent::Cancel => self.drag = None,
-            ToolEvent::Release(_) => {}
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) => {}
         }
         if let (Some(d), Some(hover)) = (&self.drag, self.hover) {
             let offset = hover - d.base;

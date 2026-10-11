@@ -267,6 +267,16 @@ impl Editor {
         true
     }
 
+    /// The primary button was double-clicked (call it after the second release). The Select
+    /// tool opens the group under the cursor, or closes the open one when there is nothing of
+    /// it there.
+    pub fn double_click(&mut self) -> bool {
+        self.update_hover();
+        let Some(hit) = self.hit else { return false };
+        self.send(ToolEvent::DoubleClick(hit));
+        true
+    }
+
     pub fn scroll(&mut self, steps: f64) -> bool {
         let zoomed = self.nav.scroll(&mut self.doc.camera, steps);
         if zoomed {
@@ -498,13 +508,20 @@ impl Editor {
         self.preview = out.preview;
     }
 
-    /// Selects the edges and faces a command created.
+    /// Selects the edges, faces and instances a command created in the open context (a copied
+    /// group's new contents live in its new definition and are left out).
     fn select_created(&mut self, outcome: Outcome) {
+        let m = self.doc.model();
         let ids = outcome
             .changes
             .created
             .into_iter()
-            .filter(|id| !matches!(id, EntityId::Vertex(_)))
+            .filter(|id| match *id {
+                EntityId::Edge(e) => m.edge(e).is_some(),
+                EntityId::Face(f) => m.face(f).is_some(),
+                EntityId::Instance(i) => m.instance(i).is_some(),
+                EntityId::Vertex(_) => false,
+            })
             .collect();
         self.run(Command::Select {
             ids,
@@ -1300,5 +1317,131 @@ mod tests {
         click_at(&mut e, DVec3::new(10.0, -3.0, 0.0));
         e.key(EditorKey::Escape);
         assert!(has_edge(&e, corner, DVec3::new(10.0, -3.0, 0.0)));
+    }
+
+    fn clear_selection(e: &mut Editor) {
+        e.execute(Command::Select {
+            ids: Vec::new(),
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+    }
+
+    fn double_click_at(e: &mut Editor, p: DVec3) {
+        click_at(e, p);
+        click_at(e, p);
+        e.double_click();
+    }
+
+    /// The minimum corner of an instance's bounding box in the open context.
+    fn box_min(e: &Editor, id: EntityId) -> DVec3 {
+        match e.doc().query(&Query::Entity { id }).unwrap() {
+            QueryResult::Instance(info) => DVec3::from(info.bounds.unwrap().min),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clicking_a_group_selects_it() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        clear_selection(&mut e);
+        e.select_tool(ToolKind::Select);
+        click_at(&mut e, DVec3::new(11.0, 1.0, 1.0));
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            [group]
+        );
+    }
+
+    #[test]
+    fn double_clicking_a_group_opens_it_and_escape_closes_it() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.select_tool(ToolKind::Select);
+        double_click_at(&mut e, DVec3::new(11.0, 1.0, 1.0));
+        let open: Vec<EntityId> = e
+            .doc()
+            .context()
+            .iter()
+            .map(|i| EntityId::Instance(*i))
+            .collect();
+        assert_eq!(open, [group]);
+        e.key(EditorKey::Escape);
+        assert!(e.doc().context().is_empty());
+    }
+
+    #[test]
+    fn double_clicking_outside_the_open_group_closes_it() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.select_tool(ToolKind::Select);
+        double_click_at(&mut e, DVec3::new(-3.0, -3.0, 0.0));
+        assert!(e.doc().context().is_empty());
+    }
+
+    #[test]
+    fn a_window_around_a_group_selects_it() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        clear_selection(&mut e);
+        e.select_tool(ToolKind::Select);
+        let corners: Vec<DVec2> = [0.0, 2.0]
+            .into_iter()
+            .flat_map(|x| [0.0, 2.0].map(move |y| (x, y)))
+            .flat_map(|(x, y)| [0.0, 1.0].map(move |z| DVec3::new(10.0 + x, y, z)))
+            .map(|p| e.doc().camera.project(p).unwrap())
+            .collect();
+        let lo = corners.iter().fold(corners[0], |a, b| a.min(*b)) - DVec2::splat(20.0);
+        let hi = corners.iter().fold(corners[0], |a, b| a.max(*b)) + DVec2::splat(20.0);
+        e.cursor_moved(lo);
+        e.button(Button::Left, true);
+        e.cursor_moved(hi);
+        e.button(Button::Left, false);
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            [group]
+        );
+    }
+
+    #[test]
+    fn the_move_tool_moves_a_selected_group() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.select_tool(ToolKind::Move);
+        click_at(&mut e, DVec3::new(10.0, 0.0, 0.0));
+        let px = e.doc().camera.project(DVec3::new(10.0, 3.0, 0.0)).unwrap();
+        e.cursor_moved(px);
+        for c in "5".chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+        assert!(
+            box_min(&e, group).abs_diff_eq(DVec3::new(10.0, 5.0, 0.0), 1e-6),
+            "{:?}",
+            box_min(&e, group)
+        );
+    }
+
+    #[test]
+    fn copying_a_group_selects_the_copy() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.select_tool(ToolKind::Move);
+        e.toggle_copy();
+        click_at(&mut e, DVec3::new(10.0, 0.0, 0.0));
+        let px = e.doc().camera.project(DVec3::new(10.0, 3.0, 0.0)).unwrap();
+        e.cursor_moved(px);
+        for c in "4".chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+        let selected: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        assert_eq!(selected.len(), 1);
+        assert_ne!(selected[0], group);
+        assert!(matches!(selected[0], EntityId::Instance(_)));
+        assert_eq!(e.status_parts().message, None);
+        assert!(box_min(&e, selected[0]).abs_diff_eq(DVec3::new(10.0, 4.0, 0.0), 1e-6));
     }
 }

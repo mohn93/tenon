@@ -146,7 +146,7 @@ impl Tool for PushPullTool {
                     self.finish(v, &mut out);
                 }
             },
-            ToolEvent::Release(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         match &self.drag {
