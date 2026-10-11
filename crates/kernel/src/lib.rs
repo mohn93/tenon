@@ -10,6 +10,7 @@ mod mesh;
 mod model;
 mod push_pull;
 mod regions;
+mod transform;
 
 pub use edit::KernelError;
 pub use ids::{EdgeId, EntityId, FaceId, VertexId};

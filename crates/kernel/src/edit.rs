@@ -16,6 +16,11 @@ pub enum KernelError {
     Collapse,
     /// A push/pull would carry the face through other faces.
     Obstructed,
+    /// A move would bend this face out of its plane.
+    Bend(FaceId),
+    /// A move would shrink an edge to nothing, turn a face inside out, or land a vertex on
+    /// another.
+    Squash,
 }
 
 impl fmt::Display for KernelError {
@@ -34,6 +39,13 @@ impl fmt::Display for KernelError {
             KernelError::Obstructed => {
                 write!(f, "distance would push the face through other geometry")
             }
+            KernelError::Bend(face) => {
+                write!(f, "the move would bend face f{} out of its plane", face.0)
+            }
+            KernelError::Squash => write!(
+                f,
+                "the move would collapse an edge, turn a face over, or land a vertex on another"
+            ),
         }
     }
 }

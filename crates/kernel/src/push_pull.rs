@@ -335,7 +335,7 @@ impl Model {
     }
 
     /// Flips face `id` if its normal points away from `want`.
-    fn orient(&mut self, id: FaceId, want: DVec3) {
+    pub(crate) fn orient(&mut self, id: FaceId, want: DVec3) {
         let f = self.face(id).unwrap();
         if f.normal.dot(want) >= 0.0 {
             return;
