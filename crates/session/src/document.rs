@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use glam::{DVec2, DVec3};
-use kernel::{ChangeSet, EdgeId, EntityId, FaceId, Model, VertexId};
+use kernel::{ChangeSet, EdgeId, EntityId, FaceId, KernelError, Model, VertexId};
 
 use crate::camera::Camera;
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
@@ -10,6 +10,9 @@ use crate::rectangle::rectangle_corners;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
+
+/// Most copies one `copy` command may make.
+pub const MAX_COPIES: u32 = 1000;
 
 /// How many recent model changes `Query::Events` can return.
 const EVENT_LOG_LEN: usize = 1024;
@@ -117,7 +120,9 @@ impl Document {
             Command::AddEdge { .. }
             | Command::AddRectangle { .. }
             | Command::PushPull { .. }
-            | Command::Erase { .. } => {
+            | Command::Erase { .. }
+            | Command::Move { .. }
+            | Command::Copy { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
@@ -136,6 +141,10 @@ impl Document {
             } => self.add_rectangle_changes(*corner, *opposite, *normal),
             Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
             Command::Erase { ids } => self.erase_changes(ids),
+            Command::Move { ids, offset } => self.move_changes(ids, *offset),
+            Command::Copy { ids, offset, count } => {
+                self.copy_changes(ids, *offset, count.unwrap_or(1))
+            }
             Command::Undo | Command::Redo | Command::SetCamera { .. } | Command::Select { .. } => {
                 return None;
             }
@@ -309,6 +318,104 @@ impl Document {
         self.model.push_pull(id, distance).map_err(|e| {
             CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(vec![face])
         })
+    }
+
+    fn move_changes(
+        &mut self,
+        ids: &[EntityId],
+        offset: [f64; 3],
+    ) -> Result<ChangeSet, CommandError> {
+        if ids.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "ids must list at least one vertex, edge or face",
+            ));
+        }
+        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
+        if !missing.is_empty() {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
+            );
+        }
+        check_coordinates(&[offset])?;
+        let vertices = self.vertex_ids(ids);
+        let offset = DVec3::from(offset);
+        self.check_moved(&vertices, &[offset])?;
+        self.model
+            .move_vertices(&vertices, offset)
+            .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn copy_changes(
+        &mut self,
+        ids: &[EntityId],
+        offset: [f64; 3],
+        count: u32,
+    ) -> Result<ChangeSet, CommandError> {
+        if ids.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "ids must list at least one edge or face",
+            ));
+        }
+        if !(1..=MAX_COPIES).contains(&count) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("count must be between 1 and {MAX_COPIES}"),
+            ));
+        }
+        let (edges, faces) = self.edges_and_faces(ids)?;
+        check_coordinates(&[offset])?;
+        let offset = DVec3::from(offset);
+        self.check_moved(&self.vertex_ids(ids), &[offset * count as f64])?;
+        self.model
+            .copy(&edges, &faces, offset, count)
+            .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    /// Rejects moves or copies that would put a vertex beyond `MAX_COORDINATE`.
+    fn check_moved(
+        &self,
+        vertices: &BTreeSet<VertexId>,
+        offsets: &[DVec3],
+    ) -> Result<(), CommandError> {
+        let moved: Vec<[f64; 3]> = vertices
+            .iter()
+            .flat_map(|v| {
+                let p = self.model.position(*v).unwrap();
+                offsets.iter().map(move |o| (p + *o).to_array())
+            })
+            .collect();
+        check_coordinates(&moved)
+    }
+
+    /// The vertices that make up the entities (vertices themselves, edge ends, face loops).
+    fn vertex_ids(&self, ids: &[EntityId]) -> BTreeSet<VertexId> {
+        let m = &self.model;
+        let mut out = BTreeSet::new();
+        for id in ids {
+            match *id {
+                EntityId::Vertex(v) => {
+                    out.insert(v);
+                }
+                EntityId::Edge(e) => out.extend(m.edge(e).map(|e| e.v).into_iter().flatten()),
+                EntityId::Face(f) => {
+                    if let Some(f) = m.face(f) {
+                        out.extend(f.outer.iter().chain(f.holes.iter().flatten()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// A kernel error from moving or copying `ids`, naming the bent face when there is one.
+    fn kernel_error(&self, e: KernelError, ids: &[EntityId]) -> CommandError {
+        let culprits = match e {
+            KernelError::Bend(f) => vec![EntityId::Face(f)],
+            _ => ids.to_vec(),
+        };
+        CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(culprits)
     }
 
     fn erase_changes(&mut self, ids: &[EntityId]) -> Result<ChangeSet, CommandError> {

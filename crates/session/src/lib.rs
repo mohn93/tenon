@@ -8,7 +8,7 @@ mod rectangle;
 
 pub use camera::{Camera, Ray};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
-pub use document::{Document, MAX_COORDINATE};
+pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
 pub use query::{
     Bounds, ChangeEvent, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo,
 };

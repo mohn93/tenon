@@ -35,6 +35,20 @@ pub enum Command {
     Erase {
         ids: Vec<EntityId>,
     },
+    /// Move vertices, edges and faces by `offset` meters as one undo step. Faces that share
+    /// some of the moved vertices stretch and may tilt, but must stay flat.
+    Move {
+        ids: Vec<EntityId>,
+        offset: [f64; 3],
+    },
+    /// Copy edges and faces `count` times (default 1), copy k shifted by `k * offset`, as one
+    /// undo step. Copies merge with geometry they touch; copied faces keep their orientation.
+    Copy {
+        ids: Vec<EntityId>,
+        offset: [f64; 3],
+        #[serde(default)]
+        count: Option<u32>,
+    },
     /// Change the selection of edges and faces. Not recorded in undo history.
     Select {
         ids: Vec<EntityId>,
