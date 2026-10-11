@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope)
 
 ## Goal
 
@@ -185,8 +185,8 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M2.5**: `api` crate: JSON-RPC server (socket + stdio), `execute`/`batch`/`query`/`render_view`/`subscribe`/`describe`; headless mode; end-to-end API tests.
 - **M3**: Rectangle, Push/Pull, VCB (lengths and `width,height`; shown in the window title until the egui shell lands in M4).
 - **M4a**: egui shell (toolbar, measurements box, entity info); selection in the session; Select tool (click, box); Erase tool and command (with face merging and edge healing).
-- **M4b**: Move/Copy (with VCB array syntax); full inference set.
-- **M4c**: push/pull through to openings; seam healing.
+- **M4b**: Move/Copy (with VCB array syntax); parallel/perpendicular inference; direction locks (Shift, arrow keys).
+- **M4c**: push/pull through to openings; seam healing; apparent-intersection snaps; BVH picking.
 - **M5**: groups and components; save/load; export.
 
 ## Risks

@@ -123,6 +123,8 @@ fn describe_lists_methods_and_schemas() {
         "add_rectangle",
         "push_pull",
         "erase",
+        "move",
+        "copy",
         "select",
         "undo",
         "redo",
@@ -199,6 +201,42 @@ fn select_then_erase_the_selection() {
     assert_eq!(sel["result"]["ids"], json!([]));
     let r = call(&mut h, "execute", json!({"type": "erase", "ids": ["v0"]}));
     assert_eq!(r["error"]["data"]["ids"], json!(["v0"]));
+}
+
+#[test]
+fn move_and_copy_over_json_rpc() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    );
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}),
+    );
+    assert_eq!(
+        r["result"]["changes"]["modified"].as_array().unwrap().len(),
+        4
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 2}),
+    );
+    let stats = call(&mut h, "query", json!({"type": "stats"}));
+    assert_eq!(stats["result"]["faces"], 3);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "move", "ids": ["v0"], "offset": [0, 0, 1]}),
+    );
+    assert_eq!(
+        r["error"]["data"]["ids"],
+        json!(["f8"]),
+        "lifting one corner bends f8"
+    );
 }
 
 #[test]
