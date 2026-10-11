@@ -99,7 +99,8 @@ impl Document {
     }
 
     /// Increases every time the model changes (edits, undo, redo). Clients compare it to decide
-    /// whether to rebuild anything derived from the model.
+    /// whether to rebuild anything derived from the model. Opening or closing an instance and
+    /// selection changes do not bump it; compare `context()` too.
     pub fn revision(&self) -> u64 {
         self.revision
     }

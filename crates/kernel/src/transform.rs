@@ -109,7 +109,8 @@ impl Model {
     /// Copies `edges` and `faces` (with their edges) `count` times, copy k shifted by
     /// `k * offset`, as one ChangeSet. Copies are drawn like new edges, so they merge with
     /// geometry they touch and close loops into faces; each copied face keeps the orientation
-    /// of its original, and an opening (a hole with no face in it) stays open.
+    /// of its original, and an opening (a hole with no face in it) stays open unless it is
+    /// drawn on an existing face: pieces of an existing face that copies split off stay faces.
     pub fn copy(
         &mut self,
         edges: &[EdgeId],
