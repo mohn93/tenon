@@ -1,9 +1,10 @@
-//! GPU vertex data built from a kernel model.
+//! GPU vertex data built from a kernel scene.
 
 use std::collections::BTreeSet;
 
 use bytemuck::{Pod, Zeroable};
-use kernel::{EntityId, Model};
+use glam::{DAffine3, DVec3};
+use kernel::{EntityId, InstanceId, MeshId, Scene};
 
 use crate::grid::LineVertex;
 
@@ -19,6 +20,11 @@ pub struct FaceVertex {
 pub const EDGE_COLOR: [f32; 4] = [0.08, 0.08, 0.08, 1.0];
 pub const SELECTED_EDGE_COLOR: [f32; 4] = [0.10, 0.35, 0.95, 1.0];
 
+/// Edges outside the open instance, while one is open.
+pub const FADED_EDGE_COLOR: [f32; 4] = [0.62, 0.62, 0.62, 1.0];
+/// The box around the open instance.
+pub const CONTEXT_BOX_COLOR: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
+
 /// Triangles for every face and line pairs for every edge.
 #[derive(Debug, Default, PartialEq)]
 pub struct ModelGeometry {
@@ -26,37 +32,42 @@ pub struct ModelGeometry {
     pub edges: Vec<LineVertex>,
 }
 
-/// Geometry for `model`, with the entities in `selection` highlighted.
-pub fn model_geometry(model: &Model, selection: &BTreeSet<EntityId>) -> ModelGeometry {
+/// Geometry for the whole scene in root coordinates, every instance placed by its transform.
+/// `context` is the path of open instances (see `session::Document::context`) and `selection`
+/// holds ids of the open context: selected entities there are highlighted, and a selected
+/// instance highlights everything it places. While an instance is open, edges outside it are
+/// faded and its bounding box is outlined.
+pub fn scene_geometry(
+    scene: &Scene,
+    context: &[InstanceId],
+    selection: &BTreeSet<EntityId>,
+) -> ModelGeometry {
     let mut g = ModelGeometry::default();
-    for (id, face) in model.faces() {
-        let normal = face.normal.as_vec3().to_array();
-        let selected = if selection.contains(&EntityId::Face(id)) {
-            1.0
-        } else {
-            0.0
+    let mut walk = Walk {
+        scene,
+        context,
+        selection,
+        path: Vec::new(),
+        g: &mut g,
+    };
+    walk.mesh(MeshId::Root, DAffine3::IDENTITY, false);
+    if !context.is_empty()
+        && let Some((mesh, t)) = scene.resolve(context)
+        && let Some([lo, hi]) = scene.bounds(mesh)
+    {
+        let corner = |k: usize| {
+            let c = DVec3::new(
+                if k & 1 == 0 { lo.x } else { hi.x },
+                if k & 2 == 0 { lo.y } else { hi.y },
+                if k & 4 == 0 { lo.z } else { hi.z },
+            );
+            t.transform_point3(c).as_vec3().to_array()
         };
-        for tri in model.triangulate(id).unwrap_or_default() {
-            for p in tri {
-                g.faces.push(FaceVertex {
-                    pos: p.as_vec3().to_array(),
-                    normal,
-                    selected,
-                });
-            }
-        }
-    }
-    for (id, edge) in model.edges() {
-        let color = if selection.contains(&EntityId::Edge(id)) {
-            SELECTED_EDGE_COLOR
-        } else {
-            EDGE_COLOR
-        };
-        for v in edge.v {
-            if let Some(p) = model.position(v) {
+        for (a, b) in BOX_EDGES {
+            for k in [a, b] {
                 g.edges.push(LineVertex {
-                    pos: p.as_vec3().to_array(),
-                    color,
+                    pos: corner(k),
+                    color: CONTEXT_BOX_COLOR,
                 });
             }
         }
@@ -64,10 +75,97 @@ pub fn model_geometry(model: &Model, selection: &BTreeSet<EntityId>) -> ModelGeo
     g
 }
 
+/// Corner pairs of a box's edges; corner k has bit 0 for x, bit 1 for y, bit 2 for z.
+const BOX_EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (2, 3),
+    (4, 5),
+    (6, 7),
+    (0, 2),
+    (1, 3),
+    (4, 6),
+    (5, 7),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
+
+struct Walk<'a> {
+    scene: &'a Scene,
+    context: &'a [InstanceId],
+    selection: &'a BTreeSet<EntityId>,
+    /// Instances from the root down to the mesh being walked.
+    path: Vec<InstanceId>,
+    g: &'a mut ModelGeometry,
+}
+
+impl Walk<'_> {
+    /// Adds a mesh placed by `t`; `lit` highlights all of it (it is inside a selected instance).
+    fn mesh(&mut self, id: MeshId, t: DAffine3, lit: bool) {
+        let Some(model) = self.scene.mesh(id) else {
+            return;
+        };
+        // Selection ids refer to the open context's placement only, not to other placements
+        // of the same component.
+        let open = self.path == self.context;
+        let inside = self.path.starts_with(self.context);
+        let selected = |e: EntityId| lit || (open && self.selection.contains(&e));
+        for (fid, face) in model.faces() {
+            let normal = t
+                .transform_vector3(face.normal)
+                .normalize()
+                .as_vec3()
+                .to_array();
+            let flag = if selected(EntityId::Face(fid)) {
+                1.0
+            } else {
+                0.0
+            };
+            for tri in model.triangulate(fid).unwrap_or_default() {
+                for p in tri {
+                    self.g.faces.push(FaceVertex {
+                        pos: t.transform_point3(p).as_vec3().to_array(),
+                        normal,
+                        selected: flag,
+                    });
+                }
+            }
+        }
+        for (eid, edge) in model.edges() {
+            let color = if selected(EntityId::Edge(eid)) {
+                SELECTED_EDGE_COLOR
+            } else if inside {
+                EDGE_COLOR
+            } else {
+                FADED_EDGE_COLOR
+            };
+            for v in edge.v {
+                if let Some(p) = model.position(v) {
+                    self.g.edges.push(LineVertex {
+                        pos: t.transform_point3(p).as_vec3().to_array(),
+                        color,
+                    });
+                }
+            }
+        }
+        for (iid, instance) in model.instances() {
+            let lit = selected(EntityId::Instance(iid));
+            self.path.push(iid);
+            self.mesh(
+                MeshId::Definition(instance.definition),
+                t * instance.transform,
+                lit,
+            );
+            self.path.pop();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::DVec3;
+    use kernel::{DefinitionKind, Model};
 
     fn square() -> Model {
         let mut m = Model::new();
@@ -76,17 +174,47 @@ mod tests {
         m
     }
 
+    fn geometry(m: Model, selection: &BTreeSet<EntityId>) -> ModelGeometry {
+        scene_geometry(&Scene::from_root(m), &[], selection)
+    }
+
+    /// The square made a component, copied 3 m along x. Returns the scene and both instances.
+    fn two_squares() -> (Scene, InstanceId, InstanceId) {
+        let mut s = Scene::from_root(square());
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (first, _) = s
+            .make_group(
+                MeshId::Root,
+                &edges,
+                &faces,
+                &[],
+                DefinitionKind::Component,
+                "Tile",
+            )
+            .unwrap();
+        s.copy_instances(MeshId::Root, &[first], DVec3::new(3.0, 0.0, 0.0), 1)
+            .unwrap();
+        let second = s
+            .root()
+            .instances()
+            .map(|(id, _)| id)
+            .find(|id| *id != first)
+            .unwrap();
+        (s, first, second)
+    }
+
     #[test]
     fn empty_model_has_no_geometry() {
         assert_eq!(
-            model_geometry(&Model::new(), &BTreeSet::new()),
+            geometry(Model::new(), &BTreeSet::new()),
             ModelGeometry::default()
         );
     }
 
     #[test]
     fn square_gives_two_triangles_and_four_edges() {
-        let g = model_geometry(&square(), &BTreeSet::new());
+        let g = geometry(square(), &BTreeSet::new());
         assert_eq!(g.faces.len(), 6);
         assert!(
             g.faces
@@ -103,7 +231,7 @@ mod tests {
         let face = m.faces().next().unwrap().0;
         let edge = m.edges().next().unwrap().0;
         let selection = BTreeSet::from([EntityId::Face(face), EntityId::Edge(edge)]);
-        let g = model_geometry(&m, &selection);
+        let g = geometry(m, &selection);
         assert!(g.faces.iter().all(|v| v.selected == 1.0));
         let blue = g
             .edges
@@ -111,5 +239,47 @@ mod tests {
             .filter(|v| v.color == SELECTED_EDGE_COLOR)
             .count();
         assert_eq!(blue, 2, "one edge, two vertices");
+    }
+
+    #[test]
+    fn every_instance_is_drawn_where_it_is_placed() {
+        let (s, _, _) = two_squares();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(g.faces.len(), 12);
+        assert_eq!(g.edges.len(), 16);
+        let max_x = g.faces.iter().map(|v| v.pos[0]).fold(f32::MIN, f32::max);
+        assert_eq!(max_x, 4.0);
+    }
+
+    #[test]
+    fn a_selected_instance_lights_up_what_it_places() {
+        let (s, first, _) = two_squares();
+        let selection = BTreeSet::from([EntityId::Instance(first)]);
+        let g = scene_geometry(&s, &[], &selection);
+        let lit: Vec<_> = g.faces.iter().filter(|v| v.selected == 1.0).collect();
+        assert_eq!(lit.len(), 6);
+        assert!(lit.iter().all(|v| v.pos[0] <= 1.0), "only the first square");
+        let blue = g
+            .edges
+            .iter()
+            .filter(|v| v.color == SELECTED_EDGE_COLOR)
+            .count();
+        assert_eq!(blue, 8);
+    }
+
+    #[test]
+    fn an_open_instance_fades_the_rest_and_is_boxed() {
+        let (s, first, _) = two_squares();
+        let d = s.root().instance(first).unwrap().definition;
+        let face = s.definition(d).unwrap().mesh.faces().next().unwrap().0;
+        let selection = BTreeSet::from([EntityId::Face(face)]);
+        let g = scene_geometry(&s, &[first], &selection);
+        let lit: Vec<_> = g.faces.iter().filter(|v| v.selected == 1.0).collect();
+        assert_eq!(lit.len(), 6, "the face is lit in the open placement only");
+        assert!(lit.iter().all(|v| v.pos[0] <= 1.0));
+        let count = |c: [f32; 4]| g.edges.iter().filter(|v| v.color == c).count();
+        assert_eq!(count(EDGE_COLOR), 8, "the open square's edges");
+        assert_eq!(count(FADED_EDGE_COLOR), 8, "the other square's edges");
+        assert_eq!(count(CONTEXT_BOX_COLOR), 24, "twelve box edges");
     }
 }

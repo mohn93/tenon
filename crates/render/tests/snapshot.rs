@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::Model;
+use kernel::{Model, Scene};
 use render::Snapshotter;
 use render::grid::BACKGROUND;
 use session::Camera;
@@ -30,7 +30,14 @@ fn capture_returns_tightly_packed_rows_for_any_width() {
     camera.eye = DVec3::new(0.0, -6.0, 1.5);
     camera.target = DVec3::new(0.0, 0.0, 1.5);
     let px = snap
-        .capture(&ground_square(), &BTreeSet::new(), &camera, w, h)
+        .capture(
+            &Scene::from_root(ground_square()),
+            &[],
+            &BTreeSet::new(),
+            &camera,
+            w,
+            h,
+        )
         .expect("capture");
     assert_eq!(px.len(), (w * h * 4) as usize);
 
@@ -70,7 +77,7 @@ fn capture_handles_padding_edge_widths() {
     // Widths around the 64-pixel (256-byte) row alignment boundary.
     for w in [1u32, 63, 64, 65] {
         let px = snap
-            .capture(&Model::new(), &BTreeSet::new(), &camera, w, h)
+            .capture(&Scene::new(), &[], &BTreeSet::new(), &camera, w, h)
             .expect("capture");
         assert_eq!(px.len(), (w * h * 4) as usize, "width {w}");
         // At width 1 the only column is the image center, where the renderer draws the

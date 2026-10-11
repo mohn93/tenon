@@ -31,7 +31,13 @@ impl Host for WindowHost<'_> {
 
     fn render_view(&mut self, camera: &Camera, width: u32, height: u32) -> Option<Vec<u8>> {
         let doc = self.editor.doc();
-        self.snapshotter
-            .capture(doc.model(), doc.selection(), camera, width, height)
+        self.snapshotter.capture(
+            doc.scene(),
+            doc.context(),
+            doc.selection(),
+            camera,
+            width,
+            height,
+        )
     }
 }

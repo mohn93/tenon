@@ -1,27 +1,40 @@
 //! Text for the Entity Info panel: what is selected and its measurements.
 
-use kernel::{EntityId, Model};
+use kernel::{DefinitionKind, EntityId, Model};
 use session::Document;
 use tools::vcb::format_length;
 
-/// Lines describing the selection: counts, plus length, area or normal for a single entity.
+/// Lines describing the selection: counts, plus length, area or normal for a single entity,
+/// or the kind and name of a single instance.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let m = doc.model();
-    let (mut edges, mut faces) = (Vec::new(), Vec::new());
+    let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     for id in doc.selection() {
         match id {
             EntityId::Edge(e) => edges.push(*e),
             EntityId::Face(f) => faces.push(*f),
-            EntityId::Vertex(_) | EntityId::Instance(_) => {}
+            EntityId::Instance(i) => instances.push(*i),
+            EntityId::Vertex(_) => {}
         }
     }
+    if let ([], [], [i]) = (&edges[..], &faces[..], &instances[..]) {
+        let d = m
+            .instance(*i)
+            .and_then(|i| doc.scene().definition(i.definition));
+        return match d {
+            Some(d) if d.kind == DefinitionKind::Component => {
+                vec!["1 component".into(), format!("Name: {}", d.name)]
+            }
+            _ => vec!["1 group".into()],
+        };
+    }
     match (&edges[..], &faces[..]) {
-        ([], []) => vec!["Nothing selected".into()],
-        ([e], []) => vec![
+        ([], []) if instances.is_empty() => vec!["Nothing selected".into()],
+        ([e], []) if instances.is_empty() => vec![
             "1 edge".into(),
             format!("Length: {}", format_length(edge_length(m, *e))),
         ],
-        ([], [f]) => {
+        ([], [f]) if instances.is_empty() => {
             let face = m.face(*f).unwrap();
             let n = face.normal.to_array().map(number);
             vec![
@@ -37,6 +50,9 @@ pub fn entity_info(doc: &Document) -> Vec<String> {
             }
             if !faces.is_empty() {
                 parts.push(count(faces.len(), "face"));
+            }
+            if !instances.is_empty() {
+                parts.push(count(instances.len(), "instance"));
             }
             vec![parts.join(", ")]
         }
@@ -101,5 +117,40 @@ mod tests {
         assert_eq!(entity_info(&d), ["1 edge", "Length: 2 m"]);
         select(&mut d, &["e2", "e4", "f8"]);
         assert_eq!(entity_info(&d), ["2 edges, 1 face"]);
+    }
+
+    #[test]
+    fn describes_groups_and_components() {
+        let mut d = doc_with_square();
+        let ids = ["e2", "e4", "e6", "e7", "f8"]
+            .map(|s| s.parse().unwrap())
+            .to_vec();
+        d.execute(Command::MakeGroup { ids }).unwrap();
+        assert_eq!(entity_info(&d), ["1 group"]);
+        let group = *d.selection().first().unwrap();
+        d.execute(Command::MakeComponent {
+            ids: vec![group],
+            name: "Table".into(),
+        })
+        .unwrap();
+        assert_eq!(entity_info(&d), ["1 component", "Name: Table"]);
+        d.execute(Command::AddEdge {
+            start: [5.0, 0.0, 0.0],
+            end: [6.0, 0.0, 0.0],
+        })
+        .unwrap();
+        let edge = d
+            .model()
+            .edges()
+            .map(|(id, _)| EntityId::Edge(id))
+            .next()
+            .unwrap();
+        let component = *d.selection().first().unwrap();
+        d.execute(Command::Select {
+            ids: vec![edge, component],
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        assert_eq!(entity_info(&d), ["1 edge, 1 instance"]);
     }
 }

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use api::{Hub, listen_unix};
 use glam::DVec2;
-use kernel::EntityId;
+use kernel::{EntityId, InstanceId};
 use render::{Renderer, Snapshotter, Viewport};
 use tools::Axis;
 use winit::application::ApplicationHandler;
@@ -75,8 +75,9 @@ struct State {
     snapshotter: Snapshotter,
     editor: Editor,
     gui: Gui,
-    /// Document revision and selection the renderer's model buffers were built from.
-    drawn: Option<(u64, BTreeSet<EntityId>)>,
+    /// Document revision, selection and open context the renderer's model buffers were built
+    /// from.
+    drawn: Option<(u64, BTreeSet<EntityId>, Vec<InstanceId>)>,
     modifiers: ModifiersState,
     /// Where the 3D view sits in the window (physical pixels), from the last frame's layout.
     view: Viewport,
@@ -230,9 +231,14 @@ impl State {
         }
 
         let doc = self.editor.doc();
-        let drawn = (doc.revision(), doc.selection().clone());
+        let drawn = (
+            doc.revision(),
+            doc.selection().clone(),
+            doc.context().to_vec(),
+        );
         if self.drawn.as_ref() != Some(&drawn) {
-            self.renderer.set_model(doc.model(), doc.selection());
+            self.renderer
+                .set_scene(doc.scene(), doc.context(), doc.selection());
             self.drawn = Some(drawn);
         }
         self.renderer.render_in(
@@ -264,11 +270,13 @@ impl State {
         acted
     }
 
-    /// Handles waiting API requests; redraws if they changed the model, selection or camera.
+    /// Handles waiting API requests; redraws if they changed the model, selection, open
+    /// context or camera.
     fn process_api(&mut self, hub: &mut Hub) {
         let before = (
             self.editor.doc().revision(),
             self.editor.doc().selection().clone(),
+            self.editor.doc().context().to_vec(),
             self.editor.doc().camera.clone(),
             self.editor.overlay(),
         );
@@ -280,6 +288,7 @@ impl State {
         if (
             self.editor.doc().revision(),
             self.editor.doc().selection().clone(),
+            self.editor.doc().context().to_vec(),
             self.editor.doc().camera.clone(),
             self.editor.overlay(),
         ) != before

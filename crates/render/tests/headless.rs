@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{EntityId, Model};
+use kernel::{EntityId, Model, Scene};
 use render::grid::{BACKGROUND, LineVertex};
 use render::{Renderer, Viewport};
 use session::Camera;
@@ -61,7 +61,7 @@ fn render_with(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = Renderer::new(&device, &queue, format);
-    renderer.set_model(model, selection);
+    renderer.set_scene(&Scene::from_root(model.clone()), &[], selection);
     renderer.render_in(&view, (W, H), viewport, camera, overlay);
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {

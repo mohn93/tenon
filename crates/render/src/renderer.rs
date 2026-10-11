@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
-use kernel::{EntityId, Model};
+use kernel::{EntityId, InstanceId, Scene};
 use session::Camera;
 use wgpu::util::DeviceExt;
 
 use crate::grid::{BACKGROUND, LineVertex, flat_ground_lines, vertical_axis_lines};
-use crate::scene::{FaceVertex, model_geometry};
+use crate::scene::{FaceVertex, scene_geometry};
 
 pub const SAMPLE_COUNT: u32 = 4;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -254,10 +254,16 @@ impl Renderer {
         }
     }
 
-    /// Rebuilds the face and edge buffers from the model, highlighting `selection`. Call when
-    /// the model or the selection changes.
-    pub fn set_model(&mut self, model: &Model, selection: &BTreeSet<EntityId>) {
-        let g = model_geometry(model, selection);
+    /// Rebuilds the face and edge buffers from the scene, with the open context `context` and
+    /// `selection` shown (see `scene_geometry`). Call when the model, the open context or the
+    /// selection changes.
+    pub fn set_scene(
+        &mut self,
+        scene: &Scene,
+        context: &[InstanceId],
+        selection: &BTreeSet<EntityId>,
+    ) {
+        let g = scene_geometry(scene, context, selection);
         self.faces = mesh(&self.device, "faces", &g.faces);
         self.edges = mesh(&self.device, "edges", &g.edges);
     }
