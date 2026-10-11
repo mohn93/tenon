@@ -163,6 +163,7 @@ mod tests {
                 camera: &self.camera,
                 cursor: DVec2::ZERO,
                 pick_radius: 10.0,
+                drag_threshold: 4.0,
                 shift: false,
             };
             self.tool.handle(event, &ctx)

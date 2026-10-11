@@ -215,6 +215,7 @@ mod tests {
                 camera: &self.camera,
                 cursor: self.cursor,
                 pick_radius: 10.0,
+                drag_threshold: 4.0,
                 shift: false,
             };
             self.tool.handle(event, &ctx)

@@ -61,13 +61,19 @@ Modeling commands, each one undo step:
 |---|---|
 | `{"type": "add_edge", "start": [x,y,z], "end": [x,y,z]}` | A straight edge. It merges with nearby vertices, splits edges it crosses, and closed coplanar loops become faces. |
 | `{"type": "add_rectangle", "corner": [0,0,0], "opposite": [2,3,0]}` | A rectangle with sides along the axes. Without `normal` the corners must differ in exactly two coordinates. With `"normal": [nx,ny,nz]` it lies in the plane through `corner` with that normal; `opposite` must be in that plane. Sides then run along u = `Z x normal` (horizontal; X on horizontal planes) and v = `normal x u`, so directions are fixed only up to sign: on a plane with normal +Y, u = -X and v = +Z; with normal -Y, u = +X. |
-| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges and faces. An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Vertex ids are `invalid_input`. |
+| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges and faces. An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Faces are erased before edges, so erasing a face together with the seam it shares with a coplanar neighbour removes the neighbour too: the seam then bounds only one face. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with `ids`; empty `ids` is `invalid_input`. |
 | `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in. A face whose neighbors all run along the normal, like a box top, moves and stretches them. |
 
 `{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges and faces;
 `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and does not
 change the revision. The window shows the selection and agents see what the user selected with
-the `selection` query. Erased entities leave the selection.
+the `selection` query. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with
+`ids`. Empty `ids` with mode `replace` clears the selection.
+
+The selection drops any entity that stops existing, through erase, merges, undo or redo. Undo does
+not restore the selection. The `selection` query's `revision` is the model revision: it does not
+change when only the selection changes, and there is no notification for selection changes, so
+compare ids to detect changes.
 
 Find the face to push from the `created` ids of the command that made it, or with
 `{"type": "entities", "kinds": ["face"]}`. Faces created by push/pull point out of the solid.
@@ -76,7 +82,7 @@ Find the face to push from the `created` ids of the command that made it, or wit
 `{"type": "entity", "id": "f8"}` before choosing the sign. A push/pull that would collapse or
 invert the edges around a moved face fails with `invalid_input`. So does one that would carry the
 face through other geometry (pushing a recess through the bottom of a box); push-through
-openings come in M4.
+openings come in M4c.
 When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
 shape too.
 

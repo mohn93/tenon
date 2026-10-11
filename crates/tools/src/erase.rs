@@ -103,6 +103,7 @@ mod tests {
             camera,
             cursor: camera.project(at).unwrap(),
             pick_radius: 10.0,
+            drag_threshold: 4.0,
             shift: false,
         };
         tool.handle(event, &ctx)

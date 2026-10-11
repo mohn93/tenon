@@ -11,6 +11,8 @@ use crate::navigation::{Button, Navigation};
 
 /// Snap radius in logical pixels (scaled to physical pixels by the display scale factor).
 const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
+/// How far (logical px) the cursor must travel from a press for it to be a drag.
+const DRAG_LOGICAL_PX: f64 = 4.0;
 
 /// Keys the editor handles itself (navigation and undo shortcuts are handled elsewhere).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,7 +142,18 @@ impl Editor {
     }
 
     pub fn focus_lost(&mut self) {
+        self.shift = false;
         self.nav.reset();
+    }
+
+    /// A key-repeat event. Backspace only deletes typed text and Delete does nothing, so holding
+    /// them never erases the selection; other keys behave as in [`Editor::key`].
+    pub fn key_repeat(&mut self, key: EditorKey) -> bool {
+        match key {
+            EditorKey::Backspace => self.typed.pop().is_some(),
+            EditorKey::Delete => false,
+            _ => self.key(key),
+        }
     }
 
     /// Returns true if anything visible changed.
@@ -230,6 +243,7 @@ impl Editor {
         }
         let ids = self.doc.selection().iter().copied().collect();
         self.reset_tool();
+        self.typed.clear();
         self.message = None;
         self.run(Command::Erase { ids });
         self.update_hover();
@@ -291,7 +305,7 @@ impl Editor {
         .collect()
     }
 
-    /// Sends a click, typed value or cancel to the tool and runs what it asks for.
+    /// Sends a click, release, typed value or cancel to the tool and runs what it asks for.
     fn send(&mut self, event: ToolEvent) {
         let is_release = matches!(event, ToolEvent::Release(_));
         let out = self.handle(event);
@@ -310,6 +324,7 @@ impl Editor {
             camera: &self.doc.camera,
             cursor: self.cursor,
             pick_radius: PICK_RADIUS_LOGICAL_PX * self.scale_factor,
+            drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
             shift: self.shift,
         };
         self.tool.handle(event, &ctx)
@@ -687,6 +702,45 @@ mod tests {
         assert!(e.key(EditorKey::Backspace));
         assert_eq!(stats(&e), (4, 0));
         assert!(!e.key(EditorKey::Delete), "nothing left to erase");
+    }
+
+    #[test]
+    fn repeated_backspace_and_delete_never_erase_the_selection() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.key(EditorKey::Char('1'));
+        e.key(EditorKey::Char('2'));
+        assert!(e.key_repeat(EditorKey::Backspace));
+        assert!(e.key_repeat(EditorKey::Backspace));
+        assert!(
+            !e.key_repeat(EditorKey::Backspace),
+            "the text is already empty"
+        );
+        assert_eq!(stats(&e), (4, 1));
+        assert_eq!(e.doc().selection().len(), 1);
+        assert!(!e.key_repeat(EditorKey::Delete));
+        assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
+    fn erasing_the_selection_clears_typed_text() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.key(EditorKey::Char('5'));
+        assert!(e.key(EditorKey::Delete));
+        assert!(!e.status().contains("5_"), "{}", e.status());
+    }
+
+    #[test]
+    fn losing_focus_releases_shift() {
+        let mut e = editor();
+        e.set_modifiers(true, false);
+        e.focus_lost();
+        assert!(!e.shift);
     }
 
     #[test]

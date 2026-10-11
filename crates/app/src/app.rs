@@ -510,8 +510,13 @@ impl ApplicationHandler<ApiWake> for App {
                     // tools through its physical-key fallback.
                     false
                 } else {
-                    editor_key(&event.logical_key, event.physical_key)
-                        .is_some_and(|k| s.editor.key(k))
+                    editor_key(&event.logical_key, event.physical_key).is_some_and(|k| {
+                        if event.repeat {
+                            s.editor.key_repeat(k)
+                        } else {
+                            s.editor.key(k)
+                        }
+                    })
                 }
             }
             _ => false,

@@ -19,6 +19,8 @@ pub struct ToolContext<'a> {
     pub cursor: DVec2,
     /// How close (physical pixels) the cursor must be to an edge to pick it.
     pub pick_radius: f64,
+    /// How far (physical pixels) the cursor must travel from a press for it to be a drag.
+    pub drag_threshold: f64,
     /// Whether Shift is held.
     pub shift: bool,
 }

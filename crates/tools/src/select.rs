@@ -11,7 +11,6 @@ use crate::inference::{edge_under, face_under};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
 /// How far (physical pixels) the cursor must move between press and release to make a box.
-const DRAG_PX: f64 = 4.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct SelectTool {
@@ -145,7 +144,7 @@ impl Tool for SelectTool {
             ToolEvent::Click(_) => self.press = Some(ctx.cursor),
             ToolEvent::Release(_) => {
                 if let Some(start) = self.press.take() {
-                    let ids = if start.distance(ctx.cursor) < DRAG_PX {
+                    let ids = if start.distance(ctx.cursor) < ctx.drag_threshold {
                         pick(ctx).into_iter().collect()
                     } else {
                         boxed(ctx, start, ctx.cursor)
@@ -167,7 +166,7 @@ impl Tool for SelectTool {
             ToolEvent::Cancel => self.press = None,
         }
         if let Some(start) = self.press
-            && start.distance(self.cursor) >= DRAG_PX
+            && start.distance(self.cursor) >= ctx.drag_threshold
         {
             out.preview = rubber_band(ctx, start, self.cursor);
         }
@@ -203,6 +202,7 @@ mod tests {
         model: Model,
         camera: Camera,
         cursor: DVec2,
+        drag_threshold: f64,
         shift: bool,
     }
 
@@ -222,6 +222,7 @@ mod tests {
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 cursor: DVec2::ZERO,
                 shift: false,
+                drag_threshold: 4.0,
             }
         }
 
@@ -235,6 +236,7 @@ mod tests {
                 camera: &self.camera,
                 cursor: self.cursor,
                 pick_radius: 10.0,
+                drag_threshold: self.drag_threshold,
                 shift: self.shift,
             };
             self.tool.handle(event, &ctx)
@@ -277,6 +279,18 @@ mod tests {
         assert_eq!(edge.commands, select(&["e2"], SelectMode::Replace));
         let face = r.click(DVec3::new(1.0, 1.0, 0.0));
         assert_eq!(face.commands, select(&["f8"], SelectMode::Replace));
+    }
+
+    #[test]
+    fn drag_threshold_decides_between_click_and_box() {
+        let mut r = Rig::new();
+        r.drag_threshold = 8.0;
+        let a = r.px(DVec3::new(1.0, 1.0, 0.0));
+        let out = r.drag(a, a + DVec2::new(6.0, 0.0));
+        assert_eq!(out.commands, select(&["f8"], SelectMode::Replace));
+        r.drag_threshold = 4.0;
+        let out = r.drag(a, a + DVec2::new(6.0, 0.0));
+        assert_ne!(out.commands, select(&["f8"], SelectMode::Replace));
     }
 
     #[test]
