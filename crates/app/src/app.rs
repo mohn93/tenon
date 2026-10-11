@@ -128,7 +128,8 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let revision = self.editor.doc().revision();
         if self.drawn_revision != Some(revision) {
-            self.renderer.set_model(self.editor.doc().model());
+            self.renderer
+                .set_model(self.editor.doc().model(), self.editor.doc().selection());
             self.drawn_revision = Some(revision);
         }
         self.renderer.render(

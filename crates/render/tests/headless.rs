@@ -1,7 +1,9 @@
+use std::collections::BTreeSet;
+
 use glam::{DVec2, DVec3};
-use kernel::Model;
-use render::Renderer;
+use kernel::{EntityId, Model};
 use render::grid::{BACKGROUND, LineVertex};
+use render::{Renderer, Viewport};
 use session::Camera;
 
 const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
@@ -21,6 +23,23 @@ fn render(camera: &Camera) -> Option<Vec<u8>> {
 }
 
 fn render_scene(camera: &Camera, model: &Model, overlay: &[LineVertex]) -> Option<Vec<u8>> {
+    render_with(
+        camera,
+        model,
+        &BTreeSet::new(),
+        Viewport::full((W, H)),
+        overlay,
+    )
+}
+
+/// Renders `model` with `selection` highlighted into `viewport` of a W x H target.
+fn render_with(
+    camera: &Camera,
+    model: &Model,
+    selection: &BTreeSet<EntityId>,
+    viewport: Viewport,
+    overlay: &[LineVertex],
+) -> Option<Vec<u8>> {
     let Some((device, queue)) = gpu() else {
         eprintln!("no GPU adapter, skipping");
         return None;
@@ -42,8 +61,8 @@ fn render_scene(camera: &Camera, model: &Model, overlay: &[LineVertex]) -> Optio
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = Renderer::new(&device, &queue, format);
-    renderer.set_model(model);
-    renderer.render(&view, (W, H), camera, overlay);
+    renderer.set_model(model, selection);
+    renderer.render_in(&view, (W, H), viewport, camera, overlay);
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
@@ -315,4 +334,49 @@ fn grid_hidden_under_ground_face_at_grazing_angle() {
         step < 4,
         "grid stripes show through the face: largest step {step}"
     );
+}
+
+#[test]
+fn selected_faces_are_tinted_blue() {
+    let cam = camera();
+    let model = ground_square();
+    let face = model.faces().next().unwrap().0;
+    let selection = BTreeSet::from([EntityId::Face(face)]);
+    let Some(px) = render_with(&cam, &model, &selection, Viewport::full((W, H)), &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, DVec3::new(0.5, 0.5, 0.0));
+    assert!(
+        p[2] as i32 > p[0] as i32 + 30,
+        "selected face should be blue, got {p:?}"
+    );
+}
+
+#[test]
+fn scene_stays_inside_its_viewport() {
+    // The left half holds the scene, sized to match; the right half is only background.
+    let mut cam = camera();
+    cam.viewport = DVec2::new((W / 2) as f64, H as f64);
+    let viewport = Viewport {
+        x: 0,
+        y: 0,
+        width: W / 2,
+        height: H,
+    };
+    let Some(px) = render_with(&cam, &ground_square(), &BTreeSet::new(), viewport, &[]) else {
+        return;
+    };
+    let expected = BACKGROUND.map(|c| (c * 255.0).round() as i32);
+    for y in (0..H).step_by(7) {
+        for x in (W / 2..W).step_by(5) {
+            let p = pixel(&px, x, y);
+            assert!(
+                (0..3).all(|ch| (p[ch] as i32 - expected[ch]).abs() <= 1),
+                "pixel {x},{y} = {p:?} outside the viewport"
+            );
+        }
+    }
+    let face = cam.project(DVec3::new(0.5, 0.5, 0.0)).unwrap();
+    assert!(face.x < (W / 2) as f64);
+    assert!(grayish(pixel(&px, face.x as u32, face.y as u32)));
 }

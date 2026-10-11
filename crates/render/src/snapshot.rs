@@ -1,6 +1,8 @@
 //! Offscreen rendering to RGBA pixels, for headless mode and the API's `render_view`.
 
-use kernel::Model;
+use std::collections::BTreeSet;
+
+use kernel::{EntityId, Model};
 use session::Camera;
 
 use crate::Renderer;
@@ -36,10 +38,12 @@ impl Snapshotter {
     }
 
     /// Renders `model` as seen by `camera` (its viewport is replaced by the image size) into
-    /// tightly packed RGBA8 pixels, top row first. None if the GPU readback fails.
+    /// tightly packed RGBA8 pixels, top row first, with `selection` highlighted. None if the
+    /// GPU readback fails.
     pub fn capture(
         &mut self,
         model: &Model,
+        selection: &BTreeSet<EntityId>,
         camera: &Camera,
         width: u32,
         height: u32,
@@ -64,7 +68,7 @@ impl Snapshotter {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.set_model(model);
+        self.renderer.set_model(model, selection);
         self.renderer.render(&view, (width, height), &camera, &[]);
 
         // Texture-to-buffer copies need rows padded to a multiple of 256 bytes.

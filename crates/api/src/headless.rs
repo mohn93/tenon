@@ -50,9 +50,9 @@ impl Host for HeadlessHost {
             self.gpu_checked = true;
             self.snapshotter = Snapshotter::new_headless();
         }
-        let model = self.doc.model();
+        let (model, selection) = (self.doc.model(), self.doc.selection());
         self.snapshotter
             .as_mut()
-            .and_then(|s| s.capture(model, camera, width, height))
+            .and_then(|s| s.capture(model, selection, camera, width, height))
     }
 }

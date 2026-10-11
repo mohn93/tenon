@@ -1,4 +1,6 @@
-use kernel::Model;
+use std::collections::BTreeSet;
+
+use kernel::{EntityId, Model};
 use session::Camera;
 use wgpu::util::DeviceExt;
 
@@ -10,8 +12,8 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-const FACE_ATTRIBS: [wgpu::VertexAttribute; 2] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+const FACE_ATTRIBS: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
 
 /// Camera data shared by every pipeline (matches `Uniforms` in scene.wgsl).
 #[repr(C)]
@@ -19,6 +21,27 @@ const FACE_ATTRIBS: [wgpu::VertexAttribute; 2] =
 struct Uniforms {
     view_proj: [f32; 16],
     eye: [f32; 4],
+}
+
+/// A rectangle of the render target in physical pixels, origin top-left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Viewport {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Viewport {
+    /// The whole target.
+    pub fn full(size: (u32, u32)) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: size.0,
+            height: size.1,
+        }
+    }
 }
 
 /// Multisampled color and depth attachments matching the output size.
@@ -231,18 +254,33 @@ impl Renderer {
         }
     }
 
-    /// Rebuilds the face and edge buffers from the model. Call when the model changes.
-    pub fn set_model(&mut self, model: &Model) {
-        let g = model_geometry(model);
+    /// Rebuilds the face and edge buffers from the model, highlighting `selection`. Call when
+    /// the model or the selection changes.
+    pub fn set_model(&mut self, model: &Model, selection: &BTreeSet<EntityId>) {
+        let g = model_geometry(model, selection);
         self.faces = mesh(&self.device, "faces", &g.faces);
         self.edges = mesh(&self.device, "edges", &g.edges);
     }
 
-    /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything).
+    /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything) over the
+    /// whole target.
     pub fn render(
         &mut self,
         target: &wgpu::TextureView,
         size: (u32, u32),
+        camera: &Camera,
+        overlay: &[LineVertex],
+    ) {
+        self.render_in(target, size, Viewport::full(size), camera, overlay);
+    }
+
+    /// Like `render`, but the scene fills only `viewport`; the rest of the target is cleared to
+    /// the background. `camera.viewport` should match the viewport's size.
+    pub fn render_in(
+        &mut self,
+        target: &wgpu::TextureView,
+        size: (u32, u32),
+        viewport: Viewport,
         camera: &Camera,
         overlay: &[LineVertex],
     ) {
@@ -288,19 +326,29 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            let layers = [
-                (&self.flat_ground_pipeline, Some(&self.flat_ground)),
-                (&self.ground_pipeline, Some(&self.vertical_axis)),
-                (&self.face_pipeline, self.faces.as_ref()),
-                (&self.edge_pipeline, self.edges.as_ref()),
-                (&self.overlay_pipeline, overlay.as_ref()),
-            ];
-            for (pipeline, mesh) in layers {
-                if let Some(mesh) = mesh {
-                    pass.set_pipeline(pipeline);
-                    pass.set_vertex_buffer(0, mesh.buffer.slice(..));
-                    pass.draw(0..mesh.count, 0..1);
+            // Clamp the viewport to the target; an empty one leaves just the cleared background.
+            let (x, y) = (viewport.x.min(size.0), viewport.y.min(size.1));
+            let (w, h) = (
+                viewport.width.min(size.0 - x),
+                viewport.height.min(size.1 - y),
+            );
+            if w > 0 && h > 0 {
+                pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+                pass.set_scissor_rect(x, y, w, h);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                let layers = [
+                    (&self.flat_ground_pipeline, Some(&self.flat_ground)),
+                    (&self.ground_pipeline, Some(&self.vertical_axis)),
+                    (&self.face_pipeline, self.faces.as_ref()),
+                    (&self.edge_pipeline, self.edges.as_ref()),
+                    (&self.overlay_pipeline, overlay.as_ref()),
+                ];
+                for (pipeline, mesh) in layers {
+                    if let Some(mesh) = mesh {
+                        pass.set_pipeline(pipeline);
+                        pass.set_vertex_buffer(0, mesh.buffer.slice(..));
+                        pass.draw(0..mesh.count, 0..1);
+                    }
                 }
             }
         }

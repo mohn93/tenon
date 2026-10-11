@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use glam::{DVec2, DVec3};
 use kernel::Model;
 use render::Snapshotter;
@@ -28,7 +30,7 @@ fn capture_returns_tightly_packed_rows_for_any_width() {
     camera.eye = DVec3::new(0.0, -6.0, 1.5);
     camera.target = DVec3::new(0.0, 0.0, 1.5);
     let px = snap
-        .capture(&ground_square(), &camera, w, h)
+        .capture(&ground_square(), &BTreeSet::new(), &camera, w, h)
         .expect("capture");
     assert_eq!(px.len(), (w * h * 4) as usize);
 
@@ -67,7 +69,9 @@ fn capture_handles_padding_edge_widths() {
     let h = 8;
     // Widths around the 64-pixel (256-byte) row alignment boundary.
     for w in [1u32, 63, 64, 65] {
-        let px = snap.capture(&Model::new(), &camera, w, h).expect("capture");
+        let px = snap
+            .capture(&Model::new(), &BTreeSet::new(), &camera, w, h)
+            .expect("capture");
         assert_eq!(px.len(), (w * h * 4) as usize, "width {w}");
         // At width 1 the only column is the image center, where the renderer draws the
         // axis lines, so the sky check only applies to wider images.

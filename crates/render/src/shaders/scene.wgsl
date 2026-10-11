@@ -49,26 +49,34 @@ struct FaceOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) world: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) selected: f32,
 };
 
 const FRONT: vec3<f32> = vec3<f32>(0.93, 0.93, 0.90);
 const BACK: vec3<f32> = vec3<f32>(0.60, 0.65, 0.76);
+const SELECTED: vec3<f32> = vec3<f32>(0.25, 0.45, 0.95);
 
 @vertex
-fn vs_face(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>) -> FaceOut {
+fn vs_face(
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) selected: f32,
+) -> FaceOut {
     var out: FaceOut;
     out.pos = u.view_proj * vec4<f32>(pos, 1.0);
     out.world = pos;
     out.normal = normal;
+    out.selected = selected;
     return out;
 }
 
-// Front sides are light, back sides blue-gray; a headlight at the eye shades both.
+// Front sides are light, back sides blue-gray; a headlight at the eye shades both. Selected
+// faces are tinted blue.
 @fragment
 fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world);
     let shade = 0.6 + 0.4 * max(dot(n, to_eye), 0.0);
-    let base = select(BACK, FRONT, front);
+    let base = mix(select(BACK, FRONT, front), SELECTED, 0.5 * in.selected);
     return vec4<f32>(base * shade, 1.0);
 }
