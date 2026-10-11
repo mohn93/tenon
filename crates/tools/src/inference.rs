@@ -1,8 +1,7 @@
 //! Snapping the cursor to meaningful 3D points.
 
 use glam::{DVec2, DVec3};
-use kernel::geom::{Plane, point_in_polygon};
-use kernel::{EdgeId, FaceId, Model};
+use kernel::{EdgeId, FaceId, Model, Shape, VertexId};
 use session::{Camera, Ray};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,6 +186,7 @@ fn snap_point(
             .filter(|d| *d <= radius_px)
             .filter(|_| visible(model, camera.eye, p))
     };
+    let near = Near::around(model, camera, cursor, radius_px);
     let mut best: Option<(f64, DVec3, SnapKind)> = None;
     let mut offer = |p: DVec3, kind: SnapKind| {
         if let Some(d) = within(p)
@@ -195,13 +195,11 @@ fn snap_point(
             best = Some((d, p, kind));
         }
     };
-    for (_, v) in model.vertices() {
-        offer(v.pos, SnapKind::Endpoint);
+    for &(_, p) in &near.points {
+        offer(p, SnapKind::Endpoint);
     }
-    for (_, e) in model.edges() {
-        if let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) {
-            offer((a + b) * 0.5, SnapKind::Midpoint);
-        }
+    for &(_, a, b) in &near.segments {
+        offer((a + b) * 0.5, SnapKind::Midpoint);
     }
     offer(DVec3::ZERO, SnapKind::Origin);
     if let Some((_, p, kind)) = best {
@@ -209,14 +207,12 @@ fn snap_point(
     }
 
     let mut on_edge: Option<(f64, DVec3)> = None;
-    for (_, e) in model.edges() {
-        if let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) {
-            let p = closest_on_line_to_ray(a, b - a, &ray, true);
-            if let Some(d) = within(p)
-                && on_edge.is_none_or(|(bd, _)| d < bd)
-            {
-                on_edge = Some((d, p));
-            }
+    for &(_, a, b) in &near.segments {
+        let p = closest_on_line_to_ray(a, b - a, &ray, true);
+        if let Some(d) = within(p)
+            && on_edge.is_none_or(|(bd, _)| d < bd)
+        {
+            on_edge = Some((d, p));
         }
     }
     on_edge.map(|(_, p)| (p, SnapKind::OnEdge))
@@ -257,10 +253,7 @@ pub fn face_under(model: &Model, camera: &Camera, cursor: DVec2) -> Option<(Face
 pub fn edge_under(model: &Model, camera: &Camera, cursor: DVec2, radius_px: f64) -> Option<EdgeId> {
     let ray = camera.ray(cursor);
     let mut best: Option<(f64, EdgeId)> = None;
-    for (id, e) in model.edges() {
-        let (Some(a), Some(b)) = (model.position(e.v[0]), model.position(e.v[1])) else {
-            continue;
-        };
+    for (id, a, b) in Near::around(model, camera, cursor, radius_px).segments {
         let p = closest_on_line_to_ray(a, b - a, &ray, true);
         let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
             continue;
@@ -272,6 +265,37 @@ pub fn edge_under(model: &Model, camera: &Camera, cursor: DVec2, radius_px: f64)
     best.map(|(_, id)| id)
 }
 
+/// The vertices and edges that may lie within `radius_px` of the cursor on screen, in id order
+/// so that ties between equally near candidates always go the same way.
+struct Near {
+    points: Vec<(VertexId, DVec3)>,
+    segments: Vec<(EdgeId, DVec3, DVec3)>,
+}
+
+impl Near {
+    fn around(model: &Model, camera: &Camera, cursor: DVec2, radius_px: f64) -> Near {
+        let ray = camera.ray(cursor);
+        // The rays through the cursor and a point `radius_px` beside it spread apart by the
+        // cone's slope; doubling it covers the diagonal of the pixel square around the cursor.
+        let beside = camera.ray(cursor + DVec2::new(radius_px, 0.0));
+        let slope = 2.0 * beside.dir.distance(ray.dir);
+        let mut near = Near {
+            points: Vec::new(),
+            segments: Vec::new(),
+        };
+        model
+            .index()
+            .near_ray(ray.origin, ray.dir, 0.0, slope, |s| match *s {
+                Shape::Point(v, p) => near.points.push((v, p)),
+                Shape::Segment(e, a, b) => near.segments.push((e, a, b)),
+                Shape::Triangle(..) => {}
+            });
+        near.points.sort_by_key(|(v, _)| *v);
+        near.segments.sort_by_key(|(e, _, _)| *e);
+        near
+    }
+}
+
 /// True if no face lies between the eye and `p` (faces through `p` itself do not hide it).
 fn visible(model: &Model, eye: DVec3, p: DVec3) -> bool {
     let to = p - eye;
@@ -279,11 +303,10 @@ fn visible(model: &Model, eye: DVec3, p: DVec3) -> bool {
     if dist < 1e-12 {
         return true;
     }
-    let ray = Ray {
-        origin: eye,
-        dir: to / dist,
-    };
-    nearest_face_hit(model, &ray).is_none_or(|(_, q)| q.distance(eye) >= dist * (1.0 - 1e-6))
+    model
+        .index()
+        .ray_hit(eye, to / dist, 0.0, dist * (1.0 - 1e-6))
+        .is_none()
 }
 
 /// Point on the line `origin + t * dir` closest to the ray; `t` is clamped to [0, 1] when
@@ -307,39 +330,12 @@ pub(crate) fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segme
     origin + dir * t
 }
 
+/// The nearest face the ray meets in front of its origin, and where.
 fn nearest_face_hit(model: &Model, ray: &Ray) -> Option<(FaceId, DVec3)> {
-    let mut best: Option<(f64, FaceId, DVec3)> = None;
-    for (id, f) in model.faces() {
-        let Some(origin) = f.outer.first().and_then(|v| model.position(*v)) else {
-            continue;
-        };
-        let plane = Plane {
-            normal: f.normal,
-            d: f.normal.dot(origin),
-        };
-        let denom = plane.normal.dot(ray.dir);
-        if denom.abs() < 1e-12 {
-            continue;
-        }
-        let t = -plane.distance(ray.origin) / denom;
-        if t <= 0.0 || best.is_some_and(|(bt, _, _)| t >= bt) {
-            continue;
-        }
-        let p = ray.origin + ray.dir * t;
-        let project = |l: &Vec<kernel::VertexId>| -> Vec<DVec2> {
-            l.iter()
-                .filter_map(|v| model.position(*v))
-                .map(|q| plane.project(q))
-                .collect()
-        };
-        let q = plane.project(p);
-        if point_in_polygon(q, &project(&f.outer))
-            && !f.holes.iter().any(|h| point_in_polygon(q, &project(h)))
-        {
-            best = Some((t, id, p));
-        }
-    }
-    best.map(|(_, id, p)| (id, p))
+    model
+        .index()
+        .ray_hit(ray.origin, ray.dir, 0.0, f64::INFINITY)
+        .map(|(f, t)| (f, ray.origin + ray.dir * t))
 }
 
 #[cfg(test)]
@@ -414,6 +410,25 @@ mod tests {
         assert_eq!(hit.kind, SnapKind::OnEdge);
         assert!((hit.point.y - 1.0).abs() < 1e-9 && hit.point.z.abs() < 1e-9);
         assert!((hit.point.x - 4.2).abs() < 0.1);
+    }
+
+    #[test]
+    fn snaps_find_their_edge_among_many() {
+        let (c, mut m) = (cam(), Model::new());
+        for i in -10..10 {
+            for j in -10..10 {
+                let a = DVec3::new(i as f64, j as f64, 0.0);
+                m.add_edge(a, a + DVec3::new(0.4, 0.0, 0.0)).unwrap();
+            }
+        }
+        let end = DVec3::new(2.4, 1.0, 0.0);
+        let hit = infer(&m, &c, px(&c, end) + DVec2::new(2.0, -1.0), None, R);
+        assert_eq!((hit.point, hit.kind), (end, SnapKind::Endpoint));
+        let mid = infer(&m, &c, px(&c, DVec3::new(2.2, 1.0, 0.0)), None, R);
+        assert_eq!(mid.kind, SnapKind::Midpoint);
+        let e = edge_under(&m, &c, px(&c, DVec3::new(2.1, 1.0, 0.0)), R).unwrap();
+        let ends = m.edge(e).unwrap().v.map(|v| m.position(v).unwrap());
+        assert_eq!(ends, [DVec3::new(2.0, 1.0, 0.0), end]);
     }
 
     #[test]
