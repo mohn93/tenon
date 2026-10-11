@@ -977,9 +977,10 @@ mod tests {
     fn a_rejected_array_keeps_the_copy_and_disarms_the_array() {
         let mut e = editor();
         start_copy(&mut e);
-        type_text(&mut e, "5000");
+        type_text(&mut e, "50000");
         assert_eq!(stats(&e), (8, 2));
-        type_text(&mut e, "900x");
+        // 30 copies 50 km apart pass the tool's count limit but leave the coordinate limit.
+        type_text(&mut e, "30x");
         assert_eq!(stats(&e), (8, 2), "the copy is restored");
         assert!(!e.status_parts().message.unwrap_or_default().is_empty());
         // Typing another array must not undo anything.

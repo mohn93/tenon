@@ -367,11 +367,12 @@ mod tests {
         r.send(ToolEvent::ToggleCopy);
         r.click(DVec3::ZERO);
         r.click(DVec3::new(3.0, 0.0, 0.0));
-        for text in ["5000x", "/5000"] {
+        for text in ["101x", "/101"] {
             let out = r.send(ToolEvent::Value(text.into()));
             assert!(out.commands.is_empty() && out.message.is_some(), "{text}");
+            assert_eq!(out.message.as_deref(), Some("At most 100 copies"));
         }
-        let ok = r.send(ToolEvent::Value("4x".into()));
+        let ok = r.send(ToolEvent::Value("100x".into()));
         assert_eq!(ok.commands.len(), 2);
     }
 

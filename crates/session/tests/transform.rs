@@ -123,10 +123,13 @@ fn bad_copies_change_nothing() {
         run(&mut d, cp(json!(["v0"]), 1)).unwrap_err(),
         (ErrorKind::InvalidInput, vec!["v0".to_string()])
     );
-    assert_eq!(
-        run(&mut d, cp(json!(["f8"]), 0)).unwrap_err().0,
-        ErrorKind::InvalidInput
-    );
+    for count in [0, 101] {
+        assert_eq!(
+            run(&mut d, cp(json!(["f8"]), count)).unwrap_err().0,
+            ErrorKind::InvalidInput,
+            "{count}"
+        );
+    }
     assert_eq!(
         run(
             &mut d,
