@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DVec2, DVec3};
 
-use crate::edit::KernelError;
+use crate::edit::{KernelError, loop_has_side};
 use crate::geom::{
     LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d,
 };
@@ -29,7 +29,15 @@ impl Model {
             return Err(KernelError::ZeroDistance);
         }
         if self.stretches_around(id, &face) {
-            self.move_face(id, &face, face.normal * distance)?;
+            if self.recess_floor_through(id, &face, distance) {
+                // The floor of a recess pushed on to the back of the solid: cut through from
+                // the floor as from the surface, then merge the new reveals into the recess
+                // walls they continue.
+                self.extrude(id, &face, distance, true);
+                self.merge_seams(loop_vertices(&face));
+            } else {
+                self.move_face(id, &face, face.normal * distance)?;
+            }
         } else {
             let through = self.check_path(id, &face, distance)?;
             self.extrude(id, &face, distance, through);
@@ -397,6 +405,30 @@ impl Model {
         } else {
             Err(KernelError::Obstructed)
         }
+    }
+
+    /// True if face `id` is the floor of a recess (a face on a side of its outer loop faces into
+    /// the loop: a recess wall) and pushing it in by `distance` ends on the back of the solid as
+    /// `check_path` allows. Faces on the other sides may face out (the top of a wall beside a
+    /// slot). A face whose sides all face out (a box top) is no recess floor: it never cuts.
+    fn recess_floor_through(&self, id: FaceId, face: &Face, distance: f64) -> bool {
+        if distance >= 0.0 {
+            return false;
+        }
+        let n = face.normal;
+        let l = &face.outer;
+        let recess_wall = (0..l.len()).any(|i| {
+            let (a, b) = (l[i], l[(i + 1) % l.len()]);
+            let out = (self.pos(b) - self.pos(a)).cross(n);
+            self.faces().any(|(f, g)| {
+                f != id
+                    && std::iter::once(&g.outer)
+                        .chain(&g.holes)
+                        .any(|gl| loop_has_side(gl, a, b))
+                    && g.normal.dot(out) < 0.0
+            })
+        });
+        recess_wall && matches!(self.check_path(id, face, distance), Ok(true))
     }
 
     /// The faces a ray from a point inside face `id` meets beyond `LENGTH_TOL` and within

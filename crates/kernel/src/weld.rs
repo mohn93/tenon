@@ -119,8 +119,13 @@ impl Model {
         for &m in target.keys() {
             self.remove_vertex(m);
         }
+        self.merge_seams(target.values().copied().collect());
+    }
 
-        let met: BTreeSet<VertexId> = target.values().copied().collect();
+    /// Removes every edge at a vertex of `met` between exactly two faces in one plane facing
+    /// the same way, merging those faces; then removes the vertices left without edges and heals
+    /// those left between two collinear edges.
+    pub(crate) fn merge_seams(&mut self, met: BTreeSet<VertexId>) {
         let seams: Vec<(EdgeId, [VertexId; 2], Plane)> = self
             .edges()
             .filter(|(_, e)| e.v.iter().any(|v| met.contains(v)))

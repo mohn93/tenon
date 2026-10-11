@@ -943,3 +943,75 @@ fn flush_push_keeps_a_line_that_ends_on_the_rim_without_overlaps() {
     assert_eq!(counts(&m), (10, 14, 6));
     assert_outward(&m, &all_faces(&m));
 }
+
+/// The face in plane y = `y` whose vertices all lie in x0..x1, z0..z1.
+fn face_at_depth(m: &Model, y: f64, x0: f64, z0: f64, x1: f64, z1: f64) -> FaceId {
+    let e = 1e-9;
+    let mut found = faces_where(m, |q| {
+        (q.y - y).abs() < e && q.x > x0 - e && q.x < x1 + e && q.z > z0 - e && q.z < z1 + e
+    });
+    assert_eq!(found.len(), 1, "one face at that depth");
+    found.pop().unwrap()
+}
+
+#[test]
+fn pushing_a_recess_floor_on_to_the_back_of_a_wall_opens_it() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    m.push_pull(win, -0.1).unwrap();
+    let floor = face_at_depth(&m, 0.1, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, floor, -0.2);
+    m.validate().unwrap();
+    assert_eq!(faces_on_line(&m, 1.5, 1.5), 0, "the opening is open");
+    assert_eq!(faces_on_line(&m, 0.5, 1.5), 2, "the wall beside it stays");
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    assert_eq!(m.faces().count(), 6 + 4);
+    assert_no_isolated_vertices(&m);
+}
+
+#[test]
+fn pushing_a_slot_floor_on_to_the_back_of_a_wall_opens_it() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 2.0, 2.0, 3.0);
+    m.push_pull(win, -0.1).unwrap();
+    let floor = face_at_depth(&m, 0.1, 1.0, 2.0, 2.0, 3.0);
+    push_pull_undoable(&mut m, floor, -0.2);
+    m.validate().unwrap();
+    assert_eq!(faces_on_line(&m, 1.5, 2.5), 0, "the slot is open");
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    let tops = faces_where(&m, |q| (q.z - 3.0).abs() < 1e-9).len();
+    assert_eq!(tops, 2, "the slot splits the top in two");
+}
+
+#[test]
+fn pushing_a_hole_floor_on_through_a_box() {
+    let (mut m, _) = box_4x4x2();
+    let sub = rect(&mut m, 1.0, 1.0, 2.0, 2.0, 2.0);
+    m.push_pull(sub, -1.0).unwrap();
+    let floor = face_in(&m, 1.0, 1.0, 1.0, 2.0, 2.0);
+    push_pull_undoable(&mut m, floor, -1.0);
+    m.validate().unwrap();
+    assert_closed(&m, &[]);
+    assert_outward(&m, &all_faces(&m));
+    let caps = faces_where(&m, |q| {
+        (q.x - 1.5).abs() < 0.5 + 1e-9 && (q.y - 1.5).abs() < 0.5 + 1e-9 && q.z.abs() < 1e-9
+    });
+    assert!(caps.is_empty(), "no face closes the bottom of the hole");
+    assert_eq!(m.faces().count(), 6 + 4);
+    assert_no_isolated_vertices(&m);
+}
+
+#[test]
+fn pushing_a_recess_floor_past_the_back_is_refused() {
+    let mut m = wall();
+    let win = window(&mut m, 1.0, 1.0, 2.0, 2.0);
+    m.push_pull(win, -0.1).unwrap();
+    let floor = face_at_depth(&m, 0.1, 1.0, 1.0, 2.0, 2.0);
+    m.take_changes();
+    let before = m.clone();
+    assert_eq!(m.push_pull(floor, -0.4), Err(KernelError::Obstructed));
+    assert_eq!(m, before);
+    assert!(m.take_changes().is_empty());
+}

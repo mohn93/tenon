@@ -85,7 +85,7 @@ Find the face to push from the `created` ids of the command that made it, or wit
 invert the edges around a moved face fails with `invalid_input`. So does one that would carry the
 face into or past other geometry, unless it ends exactly on a parallel face that holds the whole
 pushed face, with nothing else on it inside that area: that cuts an opening (a window through a
-wall, a hole through a slab).
+wall, a hole through a slab). The floor of a recess pushed on to the back opens the same way.
 When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
 shape too.
 
