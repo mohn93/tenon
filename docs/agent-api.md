@@ -205,7 +205,7 @@ fails with `invalid_input` and leaves the camera as it was.
 
 ```
 {"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
- "projection": "perspective", "view_height": 10.67}
+ "projection": "perspective", "view_height": 10.11}
 ```
 
 - `up` is the direction pointing up the screen: always `[0,0,1]`, except in a view straight down
@@ -219,8 +219,8 @@ fails with `invalid_input` and leaves the camera as it was.
 
 | Command | Effect |
 |---|---|
-| `{"type": "set_camera", "eye": [10,-10,8], "target": [0,0,0]}` | Places the camera. Optional `fov_y_deg` (1 to 170) and `projection` keep their values when absent. A view straight down or up takes the screen's up from the horizontal part of `up` (default `[0,1,0]`; a vertical `up` is `invalid_input`); any other view has `[0,0,1]` up and ignores `up`. `eye` equal to `target` is `invalid_input`. Feeding back what the `camera` query returned restores the view. |
-| `{"type": "orbit", "yaw": 30, "pitch": 10}` | Turns the eye about the target: `yaw` degrees about the vertical (counter-clockwise seen from above), then `pitch` degrees raising the eye (negative lowers it); both default to 0. The view stops 0.01 rad (0.57 degrees) short of straight down or up. From a Top or Bottom view, `yaw` spins the view about the vertical and only a pitch that tilts toward the top of the screen moves it. |
+| `{"type": "set_camera", "eye": [10,-10,8], "target": [0,0,0]}` | Places the camera. Optional `fov_y_deg` (1 to 170) and `projection` keep their values when absent. A view straight down or up takes the screen's up from the horizontal part of `up` (default `[0,1,0]`; a vertical `up` is `invalid_input`); any other view has `[0,0,1]` up and ignores `up`. `eye` equal to `target` is `invalid_input`. To restore a view, pass back the `eye`, `target`, `fov_y_deg`, `up` and `projection` the `camera` query returned. |
+| `{"type": "orbit", "yaw": 30, "pitch": 10}` | Turns the eye about the target: `yaw` degrees about the vertical (counter-clockwise seen from above), then `pitch` degrees raising the eye (negative lowers it); both default to 0. The view stops 0.01 rad (0.57 degrees) short of straight down or up. From a Top or Bottom view, `yaw` spins the view about the vertical and only a pitch that moves the eye toward the horizon moves it (from Top a negative pitch, from Bottom a positive one). |
 | `{"type": "pan", "right": 2, "up": 0.5}` | Moves the eye and target together, meters along the screen's right and up directions (each defaults to 0). |
 | `{"type": "zoom", "factor": 2}` | Moves the eye toward the target to `1/factor` of its distance (above 1 zooms in, below 1 out), never nearer than 0.01 m. `factor` must be positive. In a parallel view `view_height` shrinks the same way. |
 | `{"type": "zoom_extents"}` | Keeps the view direction and fits the whole model in the view: every vertex and placed instance of the root, in root coordinates, whatever instance is open (guides do not count). Perspective fits the sphere around the model's bounding box; parallel fits the box itself with 5% to spare. With nothing to fit, the camera stays (no error). |

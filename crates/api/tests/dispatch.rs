@@ -383,6 +383,17 @@ fn render_view_takes_a_parallel_top_view() {
 }
 
 #[test]
+fn render_view_rejects_an_unknown_projection() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "render_view",
+        json!({"width": 8, "height": 8, "camera": {"eye": [0, -5, 0], "target": [0, 0, 0], "projection": "ortho"}}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+}
+
+#[test]
 fn render_view_does_not_move_the_document_camera() {
     let mut h = HeadlessHost::new();
     let before = h.doc.camera.clone();

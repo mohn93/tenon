@@ -292,6 +292,55 @@ fn zoom_extents_fits_the_whole_model() {
 }
 
 #[test]
+fn parallel_zoom_extents_keeps_a_deep_thin_model_in_the_depth_range() {
+    let mut d = doc();
+    // A 0.1 x 60 x 0.1 m beam along Y.
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [0.1, 60, 0]}),
+    )
+    .unwrap();
+    let face = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"][0]["id"].clone();
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": face, "distance": 0.1}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "standard_view", "view": "front"})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "set_projection", "projection": "parallel"}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    let vertices = ask(&d, json!({"type": "entities", "kinds": ["vertex"]}));
+    let vertices = vertices["vertices"].as_array().unwrap();
+    assert_eq!(vertices.len(), 8);
+    for v in vertices {
+        let p = vec3(&v["position"]);
+        assert!(d.camera.sees_depth(p), "{p} is outside the depth range");
+    }
+}
+
+#[test]
+fn zoom_extents_ignores_guides() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_guide_line", "point": [5, 5, 0], "direction": [1, 0, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_guide_point", "position": [100, 0, 0]}),
+    )
+    .unwrap();
+    let before = ask(&d, json!({"type": "camera"}));
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"})), before);
+}
+
+#[test]
 fn zoom_extents_counts_groups_wherever_the_context_is() {
     let mut d = doc();
     block(&mut d);
@@ -356,7 +405,8 @@ fn a_failed_atomic_batch_puts_the_camera_back() {
 
 #[test]
 fn the_view_and_projection_are_saved_with_the_model() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session-camera");
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-camera-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("top.skr");
     let mut d = doc();

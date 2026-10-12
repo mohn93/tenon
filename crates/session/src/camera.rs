@@ -353,7 +353,8 @@ impl Camera {
     /// Turns the camera about `pivot`: by `yaw` radians about `UP` (counter-clockwise seen
     /// from above), then by `pitch` radians tilting the view toward `UP` (negative raises the
     /// eye). The pitch stops `MIN_POLAR` short of straight up or down, so from a vertical
-    /// view it only tilts toward the top of the screen. A view still vertical turns its
+    /// view only a pitch toward the horizon moves it (from Top a negative pitch, from Bottom
+    /// a positive one). A view still vertical turns its
     /// screen's up with the yaw; any other view has `UP` up.
     pub fn turn(&mut self, pivot: DVec3, yaw: f64, pitch: f64) {
         // Rotating forward about right() by +a tilts it toward UP, reducing its polar angle by a.
@@ -424,7 +425,8 @@ impl Camera {
             }
             Projection::Parallel => {
                 let (right, up) = (self.right(), self.up());
-                let (mut across, mut along) = (0.0f64, 0.0f64);
+                let forward = self.forward();
+                let (mut across, mut along, mut depth) = (0.0f64, 0.0f64, 0.0f64);
                 for k in 0..8 {
                     let corner = DVec3::new(
                         if k & 1 == 0 { lo.x } else { hi.x },
@@ -433,9 +435,12 @@ impl Camera {
                     ) - center;
                     across = across.max(corner.dot(right).abs());
                     along = along.max(corner.dot(up).abs());
+                    depth = depth.max(corner.dot(forward).abs());
                 }
                 let height = (2.0 * along).max(2.0 * across / self.aspect()) * FIT_MARGIN;
-                height / (2.0 * half_y.tan())
+                let d = height / (2.0 * half_y.tan());
+                // The whole box must also lie inside the depth range.
+                d.max(depth * FIT_MARGIN / PARALLEL_DEPTH)
             }
         };
         let forward = self.forward();
