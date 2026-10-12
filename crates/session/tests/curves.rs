@@ -202,7 +202,7 @@ fn curves_are_saved_and_older_files_still_open() {
 
     // A version 2 file (before curves) opens, its edges plain.
     edit_file(&path, |doc| {
-        assert_eq!(doc["schema_version"], 4);
+        assert_eq!(doc["schema_version"], session::file::SCHEMA_VERSION);
         doc["schema_version"] = json!(2);
         let camera = doc["camera"].as_object_mut().unwrap();
         camera.remove("up");

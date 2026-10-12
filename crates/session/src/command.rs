@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kernel::{ChangeSummary, DefinitionId, EntityId};
+use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -144,6 +144,38 @@ pub enum Command {
     /// Remove every definition that no instance places (components left after their last
     /// instance was erased or exploded), and what only they placed.
     PurgeDefinitions,
+    /// Add a material: a named sRGB color (each 0 to 255). Without `name` it is called
+    /// "Material" (or "Material 2", ... if taken). Names must be distinct, not blank, and at
+    /// most 256 characters. The new id is in the outcome's `changes.materials`.
+    AddMaterial {
+        #[serde(default)]
+        name: Option<String>,
+        color: [u8; 3],
+    },
+    /// Rename and/or recolor a material; absent fields stay as they are.
+    ChangeMaterial {
+        material: MaterialId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        color: Option<[u8; 3]>,
+    },
+    /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
+    /// to the default material.
+    DeleteMaterial {
+        material: MaterialId,
+    },
+    /// Paint faces and instances of the open context with `material` (absent or null: the
+    /// default material), as one undo step. On faces `side` (default `front`) picks the side
+    /// the normal points to, the other one, or both. An instance's material shows on the face
+    /// sides inside it (at any depth) that have no material of their own.
+    Paint {
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+        #[serde(default)]
+        side: Side,
+    },
     /// Start an empty model with the default view. Clears undo history; not an undo step.
     /// With changes not saved, fails (`unsaved_changes`) unless `discard` is true.
     New {

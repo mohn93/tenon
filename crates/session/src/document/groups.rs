@@ -174,6 +174,7 @@ impl Document {
                 min: lo.to_array(),
                 max: hi.to_array(),
             }),
+            material: i.material,
         }
     }
 }

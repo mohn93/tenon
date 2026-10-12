@@ -21,6 +21,7 @@ use crate::rotate::rotation;
 mod camera;
 mod files;
 mod groups;
+mod materials;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -237,7 +238,11 @@ impl Document {
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
             | Command::RenameDefinition { .. }
-            | Command::PurgeDefinitions => {
+            | Command::PurgeDefinitions
+            | Command::AddMaterial { .. }
+            | Command::ChangeMaterial { .. }
+            | Command::DeleteMaterial { .. }
+            | Command::Paint { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
@@ -301,6 +306,20 @@ impl Document {
                 self.rename_changes(*definition, name)
             }
             Command::PurgeDefinitions => Ok(self.scene.purge()),
+            Command::AddMaterial { name, color } => {
+                self.add_material_changes(name.as_deref(), *color)
+            }
+            Command::ChangeMaterial {
+                material,
+                name,
+                color,
+            } => self.change_material_changes(*material, name.as_deref(), *color),
+            Command::DeleteMaterial { material } => self.delete_material_changes(*material),
+            Command::Paint {
+                ids,
+                material,
+                side,
+            } => self.paint_changes(ids, *material, *side),
             Command::New { .. }
             | Command::Open { .. }
             | Command::Save { .. }
@@ -998,6 +1017,10 @@ impl Document {
                     .collect(),
                 revision: self.revision,
             },
+            Query::Materials => QueryResult::Materials {
+                materials: self.material_infos(),
+                revision: self.revision,
+            },
             Query::Context => QueryResult::Context {
                 path: self
                     .context
@@ -1146,6 +1169,8 @@ impl Document {
             holes: f.holes.iter().map(ids).collect(),
             normal: f.normal.to_array(),
             area: self.model().area(id).unwrap(),
+            front_material: f.front,
+            back_material: f.back,
         }
     }
 }

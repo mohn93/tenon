@@ -52,6 +52,7 @@ Queries:
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
+| `{"type": "materials"}` | every material: `id`, `name`, `color`, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
@@ -61,12 +62,13 @@ of silently doing nothing).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `rename_definition`,
-`purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `select`, `undo`,
+`purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
+`change_material`, `delete_material`, `paint`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `new`, `open`, `save`, `export`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component), `g9` (guide line or guide point). Definitions are `d5`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -164,6 +166,41 @@ guide keeps its id and is reported as `modified`). A guide's `entity` result, an
 the `guides` list in `entities`, is `{"id": "g9", "kind": "line", "point": [...], "direction":
 [...]}` (`kind` `point` has no `direction`). `stats` counts no guides.
 
+### Materials
+
+A material is a named color. Faces have two sides, each painted with a material or with none
+(the default material: light on the front, blue-gray on the back, as in the window); instances
+can be painted too. Materials belong to the whole model, not to the open context, and are saved
+with it.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_material", "name": "Brick", "color": [180, 60, 40]}` | Adds a material. `color` is sRGB red, green and blue, whole numbers 0 to 255. Without `name` it is called `Material` (`Material 2`, ... when taken). A name must not be blank, must have at most 256 characters and must differ from every other material's (`invalid_input`). The new id is the outcome's `changes.materials`, e.g. `["m31"]`. |
+| `{"type": "change_material", "material": "m31", "name": "Old brick", "color": [150, 50, 30]}` | Renames and/or recolors a material; an absent `name` or `color` stays. |
+| `{"type": "delete_material", "material": "m31"}` | Removes a material. Every face side and instance painted with it, anywhere in the model, goes back to the default material (and comes back with undo). |
+| `{"type": "paint", "ids": ["f8", "i4"], "material": "m31", "side": "front"}` | Paints faces and instances of the open context. `side` is `front` (default: the side the face's `normal` points to), `back` or `both`; it does not matter for instances. An absent or null `material` paints with the default material. Edge and guide ids are `invalid_input` (naming them), as are vertex ids and an empty list; unknown ids and an unknown material are `not_found`. Painting what is already painted so changes nothing. |
+
+Each is one undo step. A command that adds, removes, renames or recolors a material lists it in
+its `changes.materials` (also in `changed` notifications and `events`); painting reports the
+faces and instances as `modified`. Unknown material ids are `not_found`.
+
+The `entity` result of a face (and its entry in `entities`) has `front_material` and
+`back_material`, an instance's has `material`; each is absent for the default material.
+
+An instance's material shows on every face side inside it, at any depth, that has no material
+of its own; when instances inside each other are both painted, the one nearer the face wins.
+Painting an instance does not change the faces of its definition, so other instances of a
+component keep their own look. Exploding an instance paints its material onto the face sides
+and inner instances that come out without one.
+
+Paint follows the geometry: pieces of a face split by a new edge keep its materials, two faces
+merged by erasing the edge between them keep the materials of one of them (the one a point
+inside the merged face lies in), and copies, groups and components keep them. A
+face filling an opening is unpainted. Push/pull gives the extruded faces (the cap and the
+sides, also the walls and floor of a recess) the pushed face's front and back materials; a base
+that turns over (a pulled flat sheet) keeps each material on the side it was on, so its old
+front is now its back.
+
 ### Groups and components
 
 Commands and queries work on the open context: the root at first. `{"type": "open_instance",
@@ -233,10 +270,11 @@ projections; it sends these same commands.
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (4; version 3 files, written before camera projections,
-open in perspective, and versions 2 and 1, written before curves and guides, still open), the
-camera (eye, target, field of view, up and projection) and the model with every id, edges with
-their curve and soft flag.
+(`"sketchup-alt"`), `schema_version` (5; version 4 files, written before materials, open
+unpainted, version 3 files, written before camera projections, open in perspective, and
+versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
+of view, up and projection) and the model with every id, edges with their curve and soft flag,
+the materials and what is painted with them.
 
 | Command | Effect |
 |---|---|
@@ -251,8 +289,9 @@ are those it was saved with, and new ids continue after the largest one ever use
 cannot be read or written gives the error kind `file`, with a message naming the path and the
 reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
 over 256 MiB, ids over 2^53, a transform that cannot be inverted, a coordinate beyond the
-+/-1e6 m limit, a curve whose edges branch, fall apart or are straight, or a soft edge bounding
-fewer than two faces); the model is left as it was. `open` and `new` never drop changes the user has
++/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
+fewer than two faces, a face or instance painted with a material the file lacks, or a material
+name that is blank, too long or used twice); the model is left as it was. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
 itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an

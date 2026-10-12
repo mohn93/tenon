@@ -142,6 +142,10 @@ fn describe_lists_methods_and_schemas() {
         "close_instance",
         "rename_definition",
         "purge_definitions",
+        "add_material",
+        "change_material",
+        "delete_material",
+        "paint",
         "new",
         "open",
         "save",
@@ -153,7 +157,14 @@ fn describe_lists_methods_and_schemas() {
         );
     }
     let query_schema = d["schemas"]["Query"].to_string();
-    for variant in ["events", "definitions", "context", "file", "curve"] {
+    for variant in [
+        "events",
+        "definitions",
+        "context",
+        "file",
+        "curve",
+        "materials",
+    ] {
         assert!(
             query_schema.contains(variant),
             "Query schema lacks {variant}"

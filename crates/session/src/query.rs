@@ -1,4 +1,4 @@
-use kernel::{ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId};
+use kernel::{ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, MaterialId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +36,8 @@ pub enum Query {
     Selection,
     /// Every group and component definition.
     Definitions,
+    /// Every material.
+    Materials,
     /// The open context: the path of instances being edited, from the root.
     Context,
     /// The file the model was last opened from or saved to, and whether it changed since.
@@ -127,6 +129,12 @@ pub struct FaceInfo {
     pub holes: Vec<Vec<EntityId>>,
     pub normal: [f64; 3],
     pub area: f64,
+    /// The material of the side the normal points to; absent for the default material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front_material: Option<MaterialId>,
+    /// The material of the other side; absent for the default material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_material: Option<MaterialId>,
 }
 
 /// A placed group or component.
@@ -142,6 +150,9 @@ pub struct InstanceInfo {
     /// The box around the instance's geometry, in the open context's coordinates. Absent for
     /// an empty definition.
     pub bounds: Option<Bounds>,
+    /// The material shown on face sides inside it without one of their own; absent for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialId>,
 }
 
 /// Whether a guide is a line or a point.
@@ -172,6 +183,19 @@ pub struct DefinitionInfo {
     pub instances: usize,
     pub edges: usize,
     pub faces: usize,
+}
+
+/// A material and how much of the model uses it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MaterialInfo {
+    pub id: MaterialId,
+    pub name: String,
+    /// sRGB red, green and blue, 0 to 255.
+    pub color: [u8; 3],
+    /// Faces painted with it on either side, in the whole model (each definition counted once).
+    pub faces: usize,
+    /// Instances painted with it, in the whole model.
+    pub instances: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -222,6 +246,10 @@ pub enum QueryResult {
     },
     Definitions {
         definitions: Vec<DefinitionInfo>,
+        revision: u64,
+    },
+    Materials {
+        materials: Vec<MaterialInfo>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

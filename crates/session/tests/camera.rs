@@ -436,7 +436,7 @@ fn the_view_and_projection_are_saved_with_the_model() {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let mut document: Value =
         serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
-    assert_eq!(document["schema_version"], 4);
+    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
     assert_eq!(document["camera"]["projection"], "parallel");
     document["schema_version"] = json!(3);
     document["camera"] = json!({"eye": [-1, -2, 3], "target": [0, 0, 0], "fov_y_deg": 35});
