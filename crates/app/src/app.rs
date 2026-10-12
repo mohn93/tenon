@@ -539,6 +539,7 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyG => 'g',
         KeyCode::KeyS => 's',
         KeyCode::KeyC => 'c',
+        KeyCode::KeyA => 'a',
         KeyCode::KeyQ => 'q',
         KeyCode::KeyT => 't',
         _ => return None,
@@ -891,6 +892,8 @@ mod tests {
         assert_eq!(ch(editor_key(&arabic, q, false)), Some('q'));
         let t = PhysicalKey::Code(KeyCode::KeyT);
         assert_eq!(ch(editor_key(&arabic, t, false)), Some('t'));
+        let a = PhysicalKey::Code(KeyCode::KeyA);
+        assert_eq!(ch(editor_key(&arabic, a, false)), Some('a'));
         let ascii = Key::Character(SmolStr::new("g"));
         assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
     }

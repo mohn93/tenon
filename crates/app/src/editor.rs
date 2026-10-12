@@ -2205,6 +2205,31 @@ mod tests {
     }
 
     #[test]
+    fn the_arc_tool_draws_an_arc_from_three_clicks() {
+        let mut e = editor();
+        assert!(e.key(EditorKey::Char('a')));
+        assert_eq!(e.tool_kind(), ToolKind::Arc);
+        for c in "4s".chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+        assert!(e.status().contains("4 segments"), "{}", e.status());
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(2.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert_eq!(stats(&e), (4, 0));
+        for p in positions(&e) {
+            assert!(
+                (p.distance(DVec3::new(1.0, 0.0, 0.0)) - 1.0).abs() < 1e-6,
+                "{p}"
+            );
+        }
+        let edges: Vec<_> = e.doc().model().edges().map(|(id, _)| id).collect();
+        let curve = e.doc().model().curve_of(edges[0]).unwrap();
+        assert_eq!(curve.edges.len(), 4);
+    }
+
+    #[test]
     fn a_circle_started_on_a_wall_lies_in_the_wall() {
         let mut e = editor();
         e.execute(Command::AddRectangle {

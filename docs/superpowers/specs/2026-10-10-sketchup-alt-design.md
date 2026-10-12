@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves)
 
 ## Goal
 
@@ -56,7 +56,7 @@ Dependency direction: `app -> {api, tools, render} -> session -> kernel`. `tools
 SketchUp geometry is non-manifold (an edge can border three or more faces; edges can dangle), so the kernel uses an edge list with faces as vertex loops rather than a strict half-edge mesh.
 
 - **Vertex**: `DVec3` position.
-- **Edge**: two vertex ids; flags (soft, smooth, hidden) added when needed.
+- **Edge**: two vertex ids; an optional curve id (M6d: the edges of a circle or arc share one; the curve's shape is worked out from its edges, never stored); a soft flag (M6d: hidden, between faces of one smooth surface); smooth and hidden flags added when needed.
 - **Face**: outer vertex loop (counter-clockwise around the normal) + hole loops (clockwise); unit normal; front/back material (added with materials, M5). Consecutive loop vertices are always joined by an edge.
 - Ids are monotonically increasing `u64`s, never reused, stored in `BTreeMap`s, so undo can restore entities under their original ids. Adjacency is found by scanning until model sizes require an index.
 
@@ -117,7 +117,7 @@ Stack of ChangeSets grouped per commit.
 
 ### v1 tools
 
-Select, Line, Rectangle, Circle, Push/Pull, Move/Copy, Rotate, Erase, Orbit/Pan/Zoom, Tape Measure (guides), Make Group/Component.
+Select, Line, Rectangle, Circle, Arc, Push/Pull, Move/Copy, Rotate, Erase, Orbit/Pan/Zoom, Tape Measure (guides), Make Group/Component.
 
 ### Testing
 
@@ -197,6 +197,7 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M6a**: circles: an `add_circle` command (center, radius, plane normal, 3-360 sides, default 24) and a Circle tool (center, then rim or typed radius; "24s" sets the side count). `c` selects the Circle tool and Shift+G makes a component. Circles are plain edge chains until M6d tags them as curves.
 - **M6b**: rotate: a `rotate` command (vertices, edges, faces and instances about an axis through a center, angle in degrees, exact quarter turns; optional `copies` for radial arrays) and a Rotate tool (`q`: center on a face turns about its normal, else about Z; reference click, then angle click with 15-degree snapping, or a typed angle; Ctrl copies, "5x" and "/5" arrays). Turned placements work everywhere: render normals, picking, box select, inference and the tools' camera inside an open turned instance, bounds, Entity Info (rotation line), explode, files and export.
 - **M6c**: guides and the Tape Measure: guide lines (infinite) and guide points are model entities (`g<n>` ids) of the context they are drawn in; `add_guide_line`, `add_guide_point` and `delete_guides` commands, and `erase`, `select`, `move`, `rotate`, `copy`, `make_group` and `explode` take guides; saved in `.skr` (schema version 2; version 1 still opens), never exported. Inference snaps to guide points, onto guide lines, and where guide lines cross edges or each other. Guides are drawn dashed (guide points as small crosses), picked, box-selected and erased like edges, and shown in Entity Info. Tape Measure tool (`t`): from a point the second click adds a guide point, from an edge or guide line a parallel guide line; typed distances, retyped right after to adjust; Ctrl switches to measuring only. Edit > Delete Guides.
+- **M6d**: curves: edges carry an optional curve id; the edges of a curve always form one unbranched, non-straight chain (sticky splits keep both pieces on the curve, erasing leaves the rest a curve, a piece that falls off gets a new id, a lone edge is plain), and copies, groups and explodes get new curve ids; the shape (circle or arc, center, normal, radius, angle, segments, length) is derived from the edges, so moves and rotations need no upkeep; `add_circle` tags its edges; an `add_arc` command (center, start, signed angle in degrees, plane normal, 2-360 segments, default 12); a `curve` query and `curve`/`soft` fields on edges; `.skr` schema version 3 (versions 1 and 2 still open). Push/pull of a face bounded by a curve gives the cap a curve of its own and makes the swept edges between curve segments soft; a soft edge bounding fewer than two faces hardens. In the window, soft edges are not drawn, picked or snapped to; clicking a curve edge with Select selects the whole curve; Entity Info shows circles and arcs with radius, angle, segments and length. Arc tool (`a`, SketchUp's 2-point arc: start, end, bulge; typed chord and bulge lengths, "12s" segments). Smooth shading across soft edges is deferred.
 
 ## Risks
 

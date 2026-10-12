@@ -166,7 +166,7 @@ mod tests {
         out.unwrap()
     }
 
-    /// The window's default size (see `app.rs`); the toolbar needs about 1150 points.
+    /// The window's default size (see `app.rs`); the toolbar needs about 1190 points.
     fn screen() -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
@@ -359,10 +359,9 @@ mod tests {
             release.events = vec![pointer(false)];
             clicked.extend(run(&ctx, release, &view).0);
         }
-        assert!(
-            clicked.contains(&UiAction::Tool(ToolKind::Rectangle)),
-            "{clicked:?}"
-        );
+        for kind in [ToolKind::Rectangle, ToolKind::Arc] {
+            assert!(clicked.contains(&UiAction::Tool(kind)), "{clicked:?}");
+        }
         assert!(clicked.contains(&UiAction::Undo));
         assert!(clicked.contains(&UiAction::EraseSelection));
         for action in [

@@ -6,6 +6,7 @@ use glam::{DVec2, DVec3};
 use kernel::{EntityId, Model};
 use session::{Camera, Command};
 
+use crate::arc::ArcTool;
 use crate::circle::CircleTool;
 use crate::erase::EraseTool;
 use crate::inference::Inference;
@@ -90,6 +91,7 @@ pub enum ToolKind {
     Line,
     Rectangle,
     Circle,
+    Arc,
     PushPull,
     Move,
     Rotate,
@@ -99,11 +101,12 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 9] = [
+    pub const ALL: [ToolKind; 10] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
         ToolKind::Circle,
+        ToolKind::Arc,
         ToolKind::PushPull,
         ToolKind::Move,
         ToolKind::Rotate,
@@ -117,6 +120,7 @@ impl ToolKind {
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
             ToolKind::Circle => Box::new(CircleTool::new()),
+            ToolKind::Arc => Box::new(ArcTool::new()),
             ToolKind::PushPull => Box::new(PushPullTool::new()),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),
@@ -132,6 +136,7 @@ impl ToolKind {
             ToolKind::Line => "Line",
             ToolKind::Rectangle => "Rectangle",
             ToolKind::Circle => "Circle",
+            ToolKind::Arc => "Arc",
             ToolKind::PushPull => "Push/Pull",
             ToolKind::Move => "Move",
             ToolKind::Rotate => "Rotate",
@@ -147,6 +152,7 @@ impl ToolKind {
             ToolKind::Line => 'l',
             ToolKind::Rectangle => 'r',
             ToolKind::Circle => 'c',
+            ToolKind::Arc => 'a',
             ToolKind::PushPull => 'p',
             ToolKind::Move => 'm',
             ToolKind::Rotate => 'q',
