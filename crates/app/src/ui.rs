@@ -21,6 +21,7 @@ pub enum UiAction {
     SaveFile,
     SaveFileAs,
     ExportFile,
+    DeleteGuides,
 }
 
 /// What the panels show.
@@ -33,6 +34,8 @@ pub struct View<'a> {
     pub has_instance_selected: bool,
     /// Whether a group or component is open for editing.
     pub inside_instance: bool,
+    /// Whether the open context has guides to delete.
+    pub has_guides: bool,
 }
 
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
@@ -56,6 +59,14 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     {
                         actions.push(action);
                     }
+                }
+            });
+            ui.menu_button("Edit", |ui| {
+                if ui
+                    .add_enabled(view.has_guides, egui::Button::new("Delete Guides"))
+                    .clicked()
+                {
+                    actions.push(UiAction::DeleteGuides);
                 }
             });
             ui.separator();
@@ -155,9 +166,10 @@ mod tests {
         out.unwrap()
     }
 
+    /// The window's default size (see `app.rs`); the toolbar needs about 1150 points.
     fn screen() -> egui::RawInput {
         egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
             ..Default::default()
         }
     }
@@ -202,6 +214,7 @@ mod tests {
             has_selection: false,
             has_instance_selected: false,
             inside_instance: false,
+            has_guides: false,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let file = Pos2::new(14.0, central.min.y / 2.0);
@@ -238,6 +251,45 @@ mod tests {
     }
 
     #[test]
+    fn the_edit_menu_deletes_guides() {
+        let ctx = egui::Context::default();
+        let status = status();
+        let info = Vec::new();
+        let view = View {
+            tool: ToolKind::Line,
+            status: &status,
+            info: &info,
+            has_selection: false,
+            has_instance_selected: false,
+            inside_instance: false,
+            has_guides: true,
+        };
+        let (_, central) = run(&ctx, screen(), &view);
+        let row = central.min.y / 2.0;
+        let mut clicked = Vec::new();
+        // Open each menu right of File in turn, then click just below it.
+        for x in (40..90).step_by(6) {
+            click(&ctx, &view, Pos2::new(x as f32, row));
+            let _ = run(&ctx, screen(), &view);
+            clicked.extend(click(
+                &ctx,
+                &view,
+                Pos2::new(x as f32 + 10.0, central.min.y + 8.0),
+            ));
+            let mut escape = screen();
+            escape.events = vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }];
+            let _ = run(&ctx, escape, &view);
+        }
+        assert!(clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
+    }
+
+    #[test]
     fn panels_leave_a_central_view_inside_the_window() {
         let ctx = egui::Context::default();
         let status = status();
@@ -249,6 +301,7 @@ mod tests {
             has_selection: false,
             has_instance_selected: false,
             inside_instance: false,
+            has_guides: false,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -256,8 +309,8 @@ mod tests {
             rect.min.x == 0.0 && rect.min.y > 0.0,
             "toolbar above: {rect:?}"
         );
-        assert!(rect.max.x < 1000.0, "info panel on the right: {rect:?}");
-        assert!(rect.max.y < 700.0, "status bar below: {rect:?}");
+        assert!(rect.max.x < 1280.0, "info panel on the right: {rect:?}");
+        assert!(rect.max.y < 800.0, "status bar below: {rect:?}");
         assert!(rect.width() > 600.0 && rect.height() > 500.0, "{rect:?}");
     }
 
@@ -273,12 +326,13 @@ mod tests {
             has_selection: true,
             has_instance_selected: true,
             inside_instance: true,
+            has_guides: true,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let row = central.min.y / 2.0;
         // Click along the toolbar row until a press lands on the Rectangle button.
         let mut clicked = Vec::new();
-        for x in (2..1000).step_by(4) {
+        for x in (2..1280).step_by(4) {
             let pos = Pos2::new(x as f32, row);
             let pointer = |pressed: bool| egui::Event::PointerButton {
                 pos,

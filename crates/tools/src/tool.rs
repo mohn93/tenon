@@ -16,6 +16,7 @@ use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
 use crate::scenery::Scenery;
 use crate::select::SelectTool;
+use crate::tape::TapeMeasureTool;
 
 /// What a tool may look at while handling an event. Points, the camera and entity ids are in
 /// the open context's coordinates (see `session::Document::context`).
@@ -53,7 +54,7 @@ pub enum ToolEvent {
     /// Escape: abandon the operation in progress.
     Cancel,
     /// The copy modifier was tapped (Ctrl): tools that can copy switch between moving and
-    /// copying.
+    /// copying; the Tape Measure switches guide creation on and off.
     ToggleCopy,
 }
 
@@ -92,12 +93,13 @@ pub enum ToolKind {
     PushPull,
     Move,
     Rotate,
+    TapeMeasure,
     Erase,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 8] = [
+    pub const ALL: [ToolKind; 9] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -105,6 +107,7 @@ impl ToolKind {
         ToolKind::PushPull,
         ToolKind::Move,
         ToolKind::Rotate,
+        ToolKind::TapeMeasure,
         ToolKind::Erase,
     ];
 
@@ -117,6 +120,7 @@ impl ToolKind {
             ToolKind::PushPull => Box::new(PushPullTool::new()),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),
+            ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
         }
     }
@@ -131,6 +135,7 @@ impl ToolKind {
             ToolKind::PushPull => "Push/Pull",
             ToolKind::Move => "Move",
             ToolKind::Rotate => "Rotate",
+            ToolKind::TapeMeasure => "Tape Measure",
             ToolKind::Erase => "Erase",
         }
     }
@@ -145,6 +150,7 @@ impl ToolKind {
             ToolKind::PushPull => 'p',
             ToolKind::Move => 'm',
             ToolKind::Rotate => 'q',
+            ToolKind::TapeMeasure => 't',
             ToolKind::Erase => 'e',
         }
     }

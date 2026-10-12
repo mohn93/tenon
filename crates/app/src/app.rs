@@ -295,6 +295,9 @@ impl State {
             UiAction::CloseInstance => {
                 self.editor.close_instance();
             }
+            UiAction::DeleteGuides => {
+                self.editor.delete_guides();
+            }
         }
     }
 
@@ -346,6 +349,7 @@ impl State {
                 .iter()
                 .any(|id| matches!(id, EntityId::Instance(_))),
             inside_instance: !self.editor.doc().context().is_empty(),
+            has_guides: self.editor.doc().model().guides().next().is_some(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         // Applied once the frame is presented: some open modal dialogs, which must not run
@@ -536,6 +540,7 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyS => 's',
         KeyCode::KeyC => 'c',
         KeyCode::KeyQ => 'q',
+        KeyCode::KeyT => 't',
         _ => return None,
     })
 }
@@ -676,7 +681,8 @@ impl ApplicationHandler<ApiWake> for App {
                 let locked = s
                     .editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
-                // Tapping Ctrl switches tools that can copy (Move) between moving and copying.
+                // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and
+                // copying, and the Tape Measure between adding guides and measuring only.
                 let toggled = ctrl_pressed && s.editor.toggle_copy();
                 locked || toggled
             }
@@ -883,6 +889,8 @@ mod tests {
         assert_eq!(ch(editor_key(&arabic, s, false)), Some('s'));
         let q = PhysicalKey::Code(KeyCode::KeyQ);
         assert_eq!(ch(editor_key(&arabic, q, false)), Some('q'));
+        let t = PhysicalKey::Code(KeyCode::KeyT);
+        assert_eq!(ch(editor_key(&arabic, t, false)), Some('t'));
         let ascii = Key::Character(SmolStr::new("g"));
         assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
     }

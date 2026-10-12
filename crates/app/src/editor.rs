@@ -236,10 +236,10 @@ impl Editor {
         self.hit.take().is_some()
     }
 
-    /// The copy modifier (Ctrl) was tapped. Only the Move and Rotate tools copy; elsewhere it
-    /// does nothing and returns false.
+    /// The copy modifier (Ctrl) was tapped. The Move and Rotate tools switch copying, the Tape
+    /// Measure switches guide creation; elsewhere it does nothing and returns false.
     pub fn toggle_copy(&mut self) -> bool {
-        if !copies(self.kind) {
+        if !copies(self.kind) && self.kind != ToolKind::TapeMeasure {
             return false;
         }
         self.send(ToolEvent::ToggleCopy);
@@ -418,6 +418,14 @@ impl Editor {
             return true;
         }
         self.run_selection_command(Command::Explode { ids })
+    }
+
+    /// Erases every guide of the open context as one undo step. False if there are none.
+    pub fn delete_guides(&mut self) -> bool {
+        if self.doc.model().guides().next().is_none() {
+            return false;
+        }
+        self.run_selection_command(Command::DeleteGuides)
     }
 
     /// Closes the open group or component. False if none is open.
@@ -1089,6 +1097,51 @@ mod tests {
             vec!["g1".parse().unwrap()]
         );
         assert!(e.key(EditorKey::Delete));
+        assert_eq!(e.doc().model().guides().count(), 1);
+    }
+
+    #[test]
+    fn t_measures_from_an_edge_to_a_parallel_guide_and_ctrl_measures_only() {
+        let mut e = editor();
+        square(&mut e);
+        assert!(e.key(EditorKey::Char('t')));
+        assert_eq!(e.tool_kind(), ToolKind::TapeMeasure);
+        // From the bottom side of the square, 1.5 m out (the guide follows the cursor's side).
+        click_at(&mut e, DVec3::new(2.5, 1.0, 0.0));
+        move_to(&mut e, DVec3::new(2.5, -0.5, 0.0));
+        assert!(e.status().contains("Length: 1.5 m"), "{}", e.status());
+        type_text(&mut e, "2");
+        let guides: Vec<kernel::Guide> = e.doc().model().guides().map(|(_, g)| *g).collect();
+        let [kernel::Guide::Line { point, direction }] = guides[..] else {
+            panic!("{guides:?}");
+        };
+        assert!((point.y + 1.0).abs() < 1e-9, "{point:?}");
+        assert_eq!(direction, DVec3::X);
+        // Retyping moves that guide: one undo step replaced by another.
+        type_text(&mut e, "3");
+        let lines: Vec<f64> = e
+            .doc()
+            .model()
+            .guides()
+            .map(|(_, g)| g.anchor().y)
+            .collect();
+        assert_eq!(lines.len(), 1);
+        assert!((lines[0] + 2.0).abs() < 1e-9, "{lines:?}");
+
+        assert!(e.toggle_copy());
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        click_at(&mut e, DVec3::new(3.0, 3.0, 0.0));
+        assert!(e.status().contains("Distance: 2.828 m"), "{}", e.status());
+        assert_eq!(
+            e.doc().model().guides().count(),
+            1,
+            "no guide when measuring"
+        );
+
+        assert!(e.delete_guides());
+        assert_eq!(e.doc().model().guides().count(), 0);
+        assert!(!e.delete_guides());
+        e.undo();
         assert_eq!(e.doc().model().guides().count(), 1);
     }
 

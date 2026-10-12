@@ -12,6 +12,7 @@ pub mod rectangle;
 pub mod rotate;
 pub mod scenery;
 pub mod select;
+pub mod tape;
 pub mod tool;
 pub mod vcb;
 
@@ -28,4 +29,5 @@ pub use rectangle::RectangleTool;
 pub use rotate::RotateTool;
 pub use scenery::{Owner, Part, Scenery};
 pub use select::SelectTool;
+pub use tape::TapeMeasureTool;
 pub use tool::{Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};
