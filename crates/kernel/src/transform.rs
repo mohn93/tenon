@@ -54,13 +54,14 @@ impl Model {
             },
             "transform_vertices needs a rigid motion"
         );
-        // A vertex `t` leaves in place (on a rotation's axis) stays exactly where it is, not a
-        // rounding error away.
+        // A vertex a rotation leaves in place (on its axis) stays exactly where it is, not a
+        // rounding error away. A pure translation moves every vertex by its full offset.
+        let translation = t.matrix3 == glam::DMat3::IDENTITY;
         let at = |m: &Model, v: VertexId| {
             if moved.contains(&v) {
                 let p = m.pos(v);
                 let q = t.transform_point3(p);
-                if q.distance(p) <= 1e-12 * p.length().max(1.0) {
+                if !translation && q.distance(p) <= 1e-12 * p.length().max(1.0) {
                     p
                 } else {
                     q

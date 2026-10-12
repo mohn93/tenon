@@ -141,3 +141,26 @@ fn bad_copies_change_nothing() {
     );
     assert_eq!(counts(&d), (4, 4, 1));
 }
+
+#[test]
+fn a_tiny_move_far_from_the_origin_still_moves() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [1e6, 1e6, 1e6], "end": [1e6, 1e6, 999999]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "move", "ids": ["e2"], "offset": [-1.5e-6, 0, 0]}),
+    )
+    .unwrap();
+    let all = ask(&d, json!({"type": "entities", "kinds": ["vertex"]}));
+    let xs: Vec<f64> = all["vertices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["position"][0].as_f64().unwrap())
+        .collect();
+    assert!(xs.iter().all(|x| *x == 1e6 - 1.5e-6), "{xs:?}");
+}

@@ -45,6 +45,8 @@ struct Last {
     axis: DVec3,
     angle: f64,
     copy: bool,
+    /// How many copies the last operation made (1 unless an array replaced it).
+    count: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -93,20 +95,23 @@ impl RotateTool {
             axis: turn.axis,
             angle,
             copy: self.copy,
+            count: 1,
         };
         out.commands.push(command(&last, angle, None));
         self.last = Some(last);
     }
 
-    /// Replaces the last rotation with the same one by `angle`.
+    /// Replaces the last rotation with the same one by `angle`, turning the way it did and
+    /// making as many copies.
     fn redo_with(&mut self, angle: f64, out: &mut ToolOutput) {
         let Some(last) = self.last.as_mut() else {
             out.message = Some("Click the center of rotation first".into());
             return;
         };
+        let angle = if last.angle < 0.0 { -angle } else { angle };
         last.angle = angle;
         out.commands.push(Command::Undo);
-        out.commands.push(command(last, angle, None));
+        out.commands.push(command(last, angle, Some(last.count)));
     }
 
     /// Replaces the last copy with an array of copies.
@@ -125,6 +130,9 @@ impl RotateTool {
         }
         out.commands.push(Command::Undo);
         out.commands.push(command(last, step, Some(count)));
+        if let Some(last) = self.last.as_mut() {
+            last.count = count;
+        }
     }
 }
 
@@ -511,6 +519,48 @@ mod tests {
         );
         let big = r.send(ToolEvent::Value("101x".into()));
         assert_eq!(big.message.as_deref(), Some("At most 100 copies"));
+    }
+
+    #[test]
+    fn a_retyped_angle_keeps_the_direction_of_the_last_rotation() {
+        let mut r = Rig::new(&["f8"]);
+        r.click(DVec3::ZERO);
+        r.send(ToolEvent::Value("-30".into()));
+        let again = r.send(ToolEvent::Value("45".into()));
+        assert_eq!(
+            again.commands,
+            vec![Command::Undo, rotate(&["f8"], [0.0; 3], -45.0, None)]
+        );
+        let flipped = r.send(ToolEvent::Value("-20".into()));
+        assert_eq!(turned(&flipped), 20.0, "a typed minus flips it");
+    }
+
+    #[test]
+    fn a_retyped_angle_after_an_array_keeps_the_count() {
+        let mut r = Rig::new(&["f8"]);
+        r.send(ToolEvent::ToggleCopy);
+        r.click(DVec3::ZERO);
+        r.send(ToolEvent::Value("90".into()));
+        r.send(ToolEvent::Value("3x".into()));
+        let out = r.send(ToolEvent::Value("45".into()));
+        assert_eq!(
+            out.commands,
+            vec![Command::Undo, rotate(&["f8"], [0.0; 3], 45.0, Some(3))]
+        );
+        let five = r.send(ToolEvent::Value("5x".into()));
+        assert_eq!(turned(&five), 45.0);
+        assert!(matches!(
+            five.commands.last(),
+            Some(Command::Rotate {
+                copies: Some(5),
+                ..
+            })
+        ));
+        let divide = r.send(ToolEvent::Value("/5".into()));
+        assert_eq!(
+            divide.commands.last(),
+            Some(&rotate(&["f8"], [0.0; 3], 9.0, Some(5)))
+        );
     }
 
     #[test]

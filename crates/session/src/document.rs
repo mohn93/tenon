@@ -542,7 +542,7 @@ impl Document {
         }
         // Whole turns are dropped first, so copies k * angle stay finite and exact.
         let angle = angle % 360.0;
-        if angle == 0.0 {
+        if angle.abs() < 1e-9 || 360.0 - angle.abs() < 1e-9 {
             return Err(invalid("angle must not be a whole number of turns"));
         }
         let center = DVec3::from(center);

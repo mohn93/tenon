@@ -288,11 +288,11 @@ impl Editor {
     }
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
-    /// (or "x" in the Move and Rotate tools, for arrays like "x5"); "g" makes a group and "G" (Shift+G) a
-    /// component of the selection; other letters are tool shortcuts. Enter submits the typed
-    /// text to the tool. Escape clears the typed text, or else cancels the tool's operation
-    /// (the Select tool then closes the open group). Delete, and Backspace with nothing typed,
-    /// erase the selection. Returns true if anything changed.
+    /// (or "x" in the Move and Rotate tools, for arrays like "x5"); "g" makes a group and
+    /// "G" (Shift+G) a component of the selection; other letters are tool shortcuts. Enter
+    /// submits the typed text to the tool. Escape clears the typed text, or else cancels the
+    /// tool's operation (the Select tool then closes the open group). Delete, and Backspace
+    /// with nothing typed, erase the selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
@@ -612,6 +612,7 @@ impl Editor {
     /// and the copy reselected; either way the tool drops its state.
     fn apply(&mut self, out: ToolOutput) {
         let mut undone = false;
+        let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         for command in out.commands {
             let is_undo = matches!(command, Command::Undo);
             let is_copy = matches!(
@@ -636,7 +637,15 @@ impl Editor {
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
                 if undone && let Ok(redone) = self.doc.execute(Command::Redo) {
-                    self.select_created(redone);
+                    if redone.changes.created.is_empty() {
+                        // A plain rotation or move created nothing: keep what was selected.
+                        self.run(Command::Select {
+                            ids: selected,
+                            mode: SelectMode::Replace,
+                        });
+                    } else {
+                        self.select_created(redone);
+                    }
                 }
                 self.reset_tool();
                 return;
@@ -1671,6 +1680,102 @@ mod tests {
         assert!(e.status().contains("Nothing turned"), "{}", e.status());
         type_text(&mut e, "45");
         assert_eq!(stats(&e), (2, 0), "the later edge was not undone");
+    }
+
+    #[test]
+    fn a_refused_retyped_angle_keeps_the_selection() {
+        let mut e = editor();
+        square(&mut e);
+        let face = EntityId::Face(e.doc().model().faces().next().unwrap().0);
+        e.execute(Command::Select {
+            ids: vec![face],
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Rotate);
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        type_text(&mut e, "30");
+        type_text(&mut e, "360");
+        assert!(
+            e.status().contains("whole number of turns"),
+            "{}",
+            e.status()
+        );
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            vec![face],
+            "the selection survives the refused angle"
+        );
+    }
+
+    /// Every edge and face in the open context.
+    fn context_contents(e: &Editor) -> Vec<EntityId> {
+        let m = e.doc().model();
+        m.edges()
+            .map(|(id, _)| EntityId::Edge(id))
+            .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
+            .collect()
+    }
+
+    #[test]
+    fn tools_inside_a_nested_turned_group_work_in_the_inner_groups_coordinates() {
+        let mut e = editor();
+        let outer = turned_group(&mut e);
+        e.execute(Command::OpenInstance { id: outer }).unwrap();
+        let ids = context_contents(&e);
+        e.execute(Command::MakeGroup { ids }).unwrap();
+        let inner = *e.doc().selection().first().unwrap();
+        // The inner group's (x, y) go to (2 - y, x) in the outer one, and so to (12 - y, -z, x)
+        // in the world.
+        e.execute(Command::Rotate {
+            ids: vec![inner],
+            center: [1.0, 1.0, 0.0],
+            axis: Some([0.0, 0.0, 1.0]),
+            angle: 90.0,
+            copies: None,
+        })
+        .unwrap();
+        e.execute(Command::OpenInstance { id: inner }).unwrap();
+        e.select_tool(ToolKind::Line);
+        click_at(&mut e, DVec3::new(12.0, -1.0, 0.0));
+        click_at(&mut e, DVec3::new(10.0, -1.0, 2.0));
+        e.key(EditorKey::Escape);
+        assert!(
+            has_edge(&e, DVec3::new(0.0, 0.0, 1.0), DVec3::new(2.0, 2.0, 1.0)),
+            "the diagonal is drawn in the inner group's own coordinates"
+        );
+        assert_eq!(stats(&e), (13, 7), "it splits the inner group's top");
+    }
+
+    #[test]
+    fn rotating_inside_a_turned_group_uses_the_context_coordinates_and_the_faces_normal() {
+        let mut e = editor();
+        let group = turned_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        let ids = context_contents(&e);
+        e.execute(Command::Select {
+            ids,
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Rotate);
+        // The middle of the group's top (1, 1, 1), where it is shown; its normal is the
+        // group's own Z, which points along -Y in the world.
+        click_at(&mut e, DVec3::new(11.0, -1.0, 1.0));
+        type_text(&mut e, "30");
+        let (s, c) = 30f64.to_radians().sin_cos();
+        let turn = |x: f64, y: f64| {
+            DVec3::new(
+                1.0 + (x - 1.0) * c - (y - 1.0) * s,
+                1.0 + (x - 1.0) * s + (y - 1.0) * c,
+                1.0,
+            )
+        };
+        assert!(
+            has_edge(&e, turn(0.0, 0.0), turn(2.0, 0.0)),
+            "the box turned about the vertical line through (1, 1) in its own coordinates"
+        );
+        assert_eq!(stats(&e), (12, 6));
     }
 
     #[test]
