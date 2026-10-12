@@ -1,5 +1,6 @@
-//! The Select tool: click an edge, face, guide or group to select it, or drag a box. Dragging right
-//! selects what lies entirely inside the box; dragging left also selects what the box touches.
+//! The Select tool: click an edge, face, guide or group to select it, or drag a box. Clicking
+//! an edge of a curve (a circle or arc) selects the whole curve. Dragging right selects what
+//! lies entirely inside the box; dragging left also selects what the box touches.
 //! With Shift held, clicked or boxed entities are toggled instead of replacing the selection.
 //! Double-clicking a group opens it for editing; double-clicking outside it, or Escape, closes
 //! it.
@@ -51,6 +52,17 @@ pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
         (Owner::Open, f, _) => Some(EntityId::Face(f)),
         (Owner::Instance(i), _, _) => Some(EntityId::Instance(i)),
         (Owner::Outside, _, _) => None,
+    }
+}
+
+/// The edges of the curve `id` is part of, in order, or just `id` when it is not an edge of
+/// a curve.
+pub(crate) fn whole_curve(model: &Model, id: EntityId) -> Vec<EntityId> {
+    match id {
+        EntityId::Edge(e) => model.curve_of(e).map_or(vec![id], |c| {
+            c.edges.into_iter().map(EntityId::Edge).collect()
+        }),
+        _ => vec![id],
     }
 }
 
@@ -240,7 +252,7 @@ impl Tool for SelectTool {
             ToolEvent::Release(_) => {
                 if let Some(start) = self.press.take() {
                     let ids = if start.distance(ctx.cursor) < ctx.drag_threshold {
-                        pick(ctx).into_iter().collect()
+                        pick(ctx).map_or(Vec::new(), |id| whole_curve(ctx.model, id))
                     } else {
                         boxed(ctx, start, ctx.cursor)
                     };
@@ -414,6 +426,57 @@ mod tests {
         assert_eq!(edge.commands, select(&["e2"], SelectMode::Replace));
         let face = r.click(DVec3::new(1.0, 1.0, 0.0));
         assert_eq!(face.commands, select(&["f8"], SelectMode::Replace));
+    }
+
+    #[test]
+    fn clicking_a_curve_selects_all_of_it_and_soft_edges_are_not_picked() {
+        let mut r = Rig::new();
+        // A cylinder: an 8-sided circle of radius 1 pulled up 1 m, in front of the square.
+        let mut model = Model::new();
+        let ring: Vec<DVec3> = (0..8)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 8.0;
+                DVec3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        let c = model.add_curve(&ring, true).unwrap();
+        let face = c
+            .summary()
+            .created
+            .iter()
+            .find_map(|id| match id {
+                EntityId::Face(f) => Some(*f),
+                _ => None,
+            })
+            .unwrap();
+        model.push_pull(face, 1.0).unwrap();
+        r.model = model;
+        let at = |deg: f64, z: f64| {
+            let a = deg.to_radians();
+            DVec3::new(a.cos(), a.sin(), z)
+        };
+
+        // The middle of a top rim edge facing the camera: the whole top circle.
+        let rim = r.click((at(225.0, 1.0) + at(270.0, 1.0)) / 2.0);
+        let [Command::Select { ids, mode }] = &rim.commands[..] else {
+            panic!("{:?}", rim.commands);
+        };
+        assert_eq!(*mode, SelectMode::Replace);
+        assert_eq!(ids.len(), 8);
+        let EntityId::Edge(first) = ids[0] else {
+            panic!("{ids:?}")
+        };
+        let top = r.model.edge(first).unwrap().curve;
+        assert!(top.is_some());
+        assert!(ids.iter().all(|id| matches!(id, EntityId::Edge(e)
+            if r.model.edge(*e).unwrap().curve == top)));
+
+        // The soft edge up the side facing the camera is not picked: the face behind it is.
+        let side = r.click(at(225.0, 0.5));
+        let [Command::Select { ids, .. }] = &side.commands[..] else {
+            panic!("{:?}", side.commands);
+        };
+        assert!(matches!(ids[..], [EntityId::Face(_)]), "{ids:?}");
     }
 
     #[test]

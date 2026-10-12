@@ -1,13 +1,13 @@
 //! Text for the Entity Info panel: what is selected and its measurements.
 
 use glam::{DAffine3, DQuat};
-use kernel::{DefinitionKind, EntityId, Guide, Model};
+use kernel::{CurveKind, DefinitionKind, EdgeId, EntityId, Guide, Model};
 use session::Document;
 use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
-/// the direction or position of a single guide, or the kind, name and rotation of a single
-/// instance. While a group or component is open, a first line
+/// the radius, segments, angle and length of a whole curve (a circle or arc), the direction
+/// or position of a single guide, or the kind, name and rotation of a single instance. While a group or component is open, a first line
 /// says which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
@@ -62,6 +62,13 @@ fn selection_info(doc: &Document) -> Vec<String> {
         };
     }
     let guides = guides.len();
+    if instances.is_empty()
+        && faces.is_empty()
+        && guides == 0
+        && let Some(lines) = curve_info(m, &edges)
+    {
+        return lines;
+    }
     if let ([], [], [i], 0) = (&edges[..], &faces[..], &instances[..], guides) {
         let instance = m.instance(*i);
         let d = instance.and_then(|i| doc.scene().definition(i.definition));
@@ -106,6 +113,31 @@ fn selection_info(doc: &Document) -> Vec<String> {
             vec![parts.join(", ")]
         }
     }
+}
+
+/// "1 circle" (or arc, or curve) with its radius, angle, segments and length when `edges` are
+/// exactly the edges of one curve.
+fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
+    let curve = m.curve_of(*edges.first()?)?;
+    let mut mine = curve.edges.clone();
+    mine.sort();
+    if mine != edges {
+        return None;
+    }
+    let mut lines = vec![match curve.kind() {
+        CurveKind::Circle => "1 circle".to_string(),
+        CurveKind::Arc => "1 arc".to_string(),
+        CurveKind::Curve => "1 curve".to_string(),
+    }];
+    if let Some(c) = curve.circle {
+        lines.push(format!("Radius: {}", format_length(c.radius)));
+        if !curve.closed {
+            lines.push(format!("Angle: {}°", number(c.angle.to_degrees())));
+        }
+    }
+    lines.push(format!("Segments: {}", curve.segments));
+    lines.push(format!("Length: {}", format_length(curve.length)));
+    Some(lines)
 }
 
 /// "Rotation: 30° about 0, 0, 1" for a turned placement (the turn of at most 180 degrees,
@@ -188,6 +220,56 @@ mod tests {
         assert_eq!(entity_info(&d), ["1 edge", "Length: 2 m"]);
         select(&mut d, &["e2", "e4", "f8"]);
         assert_eq!(entity_info(&d), ["2 edges, 1 face"]);
+    }
+
+    #[test]
+    fn describes_a_whole_curve() {
+        let mut d = Document::new(DVec2::new(800.0, 600.0));
+        d.execute(Command::AddCircle {
+            center: [0.0, 0.0, 0.0],
+            radius: 2.0,
+            normal: None,
+            segments: Some(6),
+        })
+        .unwrap();
+        let edges: Vec<EntityId> = d.model().edges().map(|(e, _)| EntityId::Edge(e)).collect();
+        let pick = |d: &mut Document, ids: Vec<EntityId>| {
+            d.execute(Command::Select {
+                ids,
+                mode: SelectMode::Replace,
+            })
+            .unwrap();
+        };
+        pick(&mut d, edges.clone());
+        // A hexagon in a circle of radius 2 has sides of 2.
+        assert_eq!(
+            entity_info(&d),
+            ["1 circle", "Radius: 2 m", "Segments: 6", "Length: 12 m"]
+        );
+        pick(&mut d, edges[..2].to_vec());
+        assert_eq!(entity_info(&d), ["2 edges"]);
+
+        d.execute(Command::AddArc {
+            center: [10.0, 0.0, 0.0],
+            start: [11.0, 0.0, 0.0],
+            angle: 90.0,
+            normal: None,
+            segments: Some(3),
+        })
+        .unwrap();
+        let arc: Vec<EntityId> = d
+            .model()
+            .edges()
+            .filter(|(_, e)| e.v.iter().any(|v| d.model().position(*v).unwrap().x > 5.0))
+            .map(|(e, _)| EntityId::Edge(e))
+            .collect();
+        pick(&mut d, arc);
+        let lines = entity_info(&d);
+        assert_eq!(
+            lines[..4],
+            ["1 arc", "Radius: 1 m", "Angle: 90°", "Segments: 3"]
+        );
+        assert!(lines[4].starts_with("Length: 1.55"), "{lines:?}");
     }
 
     #[test]

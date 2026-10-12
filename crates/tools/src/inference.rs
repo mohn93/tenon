@@ -470,6 +470,8 @@ pub fn edge_under_where(
 /// The vertices and edges that may lie within `radius_px` of the cursor on screen, with the
 /// index of the part each comes from and positions in the open context's coordinates, in
 /// part and id order so that ties between equally near candidates always go the same way.
+/// Soft edges are hidden, so they are left out: nothing snaps to them or picks them (their
+/// ends are vertices of the edges around them and still snap).
 struct Near {
     points: Vec<(usize, VertexId, DVec3)>,
     segments: Vec<(usize, EdgeId, DVec3, DVec3)>,
@@ -497,7 +499,11 @@ impl Near {
                 .index()
                 .near_ray(origin, dir, 0.0, slope, |s| match *s {
                     Shape::Point(v, p) => near.points.push((k, v, at(p))),
-                    Shape::Segment(e, a, b) => near.segments.push((k, e, at(a), at(b))),
+                    Shape::Segment(e, a, b) => {
+                        if part.model.edge(e).is_some_and(|edge| !edge.soft) {
+                            near.segments.push((k, e, at(a), at(b)));
+                        }
+                    }
                     Shape::Triangle(..) => {}
                 });
         }

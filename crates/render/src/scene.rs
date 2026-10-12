@@ -134,7 +134,8 @@ impl Walk<'_> {
                 }
             }
         }
-        for (eid, edge) in model.edges() {
+        // Soft edges are hidden, selected or not: the faces around them read as one surface.
+        for (eid, edge) in model.edges().filter(|(_, e)| !e.soft) {
             let color = if selected(EntityId::Edge(eid)) {
                 SELECTED_EDGE_COLOR
             } else if inside {
@@ -243,6 +244,29 @@ mod tests {
         );
         assert_eq!(g.edges.len(), 8);
         assert!(g.edges.iter().all(|v| v.color == EDGE_COLOR));
+    }
+
+    #[test]
+    fn soft_edges_are_not_drawn() {
+        // A triangle pulled up: three side faces. Its sides made a curve first, so the
+        // swept edges between them are soft.
+        let mut m = Model::new();
+        let pts = [DVec3::ZERO, DVec3::X, DVec3::new(0.5, 0.8, 0.0)];
+        let c = m.add_curve(&pts, true).unwrap();
+        let face = c
+            .summary()
+            .created
+            .iter()
+            .find_map(|id| match id {
+                EntityId::Face(f) => Some(*f),
+                _ => None,
+            })
+            .unwrap();
+        m.push_pull(face, 1.0).unwrap();
+        assert_eq!(m.edges().filter(|(_, e)| e.soft).count(), 3);
+        let all: BTreeSet<EntityId> = m.edges().map(|(e, _)| EntityId::Edge(e)).collect();
+        let g = geometry(m, &all);
+        assert_eq!(g.edges.len(), 2 * 6, "the two rims, selected or not");
     }
 
     #[test]
