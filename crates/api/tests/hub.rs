@@ -104,3 +104,35 @@ fn notifications_reach_a_connection_that_closes_right_after() {
     assert_eq!(messages.len(), 3, "{messages:?}");
     assert_eq!(messages[2]["method"], "changed");
 }
+
+#[test]
+fn opening_a_file_tells_subscribers_to_read_the_model_again() {
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hub-open.skr");
+    let _ = std::fs::remove_file(&path);
+    let path = path.to_str().unwrap();
+    let mut host = HeadlessHost::new();
+    let mut hub = Hub::new(|| {});
+    let inbox = hub.inbox();
+    let (watcher, w_rx) = inbox.open();
+    let (writer, r_rx) = inbox.open();
+    inbox.send_line(writer, request(1, "execute", edge(0.0)));
+    inbox.send_line(
+        writer,
+        request(2, "execute", json!({"type": "save", "path": path})),
+    );
+    hub.process(&mut host);
+    assert!(next(&r_rx)["result"].is_object());
+    assert!(next(&r_rx)["result"].is_object());
+
+    inbox.send_line(watcher, request(3, "subscribe", json!(null)));
+    hub.process(&mut host);
+    assert_eq!(next(&w_rx)["result"]["revision"], 1);
+    inbox.send_line(
+        writer,
+        request(4, "execute", json!({"type": "open", "path": path})),
+    );
+    hub.process(&mut host);
+    let note = next(&w_rx);
+    assert_eq!(note["method"], "resync", "{note}");
+    assert_eq!(note["params"]["revision"], 2);
+}

@@ -134,6 +134,11 @@ fn describe_lists_methods_and_schemas() {
         "explode",
         "open_instance",
         "close_instance",
+        "rename_definition",
+        "purge_definitions",
+        "new",
+        "open",
+        "save",
     ] {
         assert!(
             command_schema.contains(variant),
@@ -141,7 +146,7 @@ fn describe_lists_methods_and_schemas() {
         );
     }
     let query_schema = d["schemas"]["Query"].to_string();
-    for variant in ["events", "definitions", "context"] {
+    for variant in ["events", "definitions", "context", "file"] {
         assert!(
             query_schema.contains(variant),
             "Query schema lacks {variant}"

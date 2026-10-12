@@ -23,7 +23,7 @@ fn main() {
     };
     match mode {
         Mode::Help => println!("{}", cli::USAGE),
-        Mode::Headless { transport } => {
+        Mode::Headless { transport, file } => {
             if let Transport::Socket(path) = &transport
                 && let Some(dir) = cli::private_dir_for(path)
                 && let Err(e) = cli::ensure_private_dir(dir)
@@ -31,9 +31,9 @@ fn main() {
                 eprintln!("cannot use {}: {e}", dir.display());
                 std::process::exit(1);
             }
-            std::process::exit(headless::run(transport))
+            std::process::exit(headless::run(transport, file))
         }
-        Mode::Window { socket } => {
+        Mode::Window { socket, file } => {
             // A socket in the fallback directory is only safe if that directory is private.
             let socket = match cli::private_dir_for(&socket).map(cli::ensure_private_dir) {
                 Some(Err(e)) => {
@@ -47,7 +47,7 @@ fn main() {
                 .expect("create event loop");
             // Redraw on demand only; the loop sleeps until input or an API request arrives.
             event_loop.set_control_flow(ControlFlow::Wait);
-            let mut app = app::App::new(&event_loop, socket);
+            let mut app = app::App::new(&event_loop, socket, file);
             event_loop.run_app(&mut app).expect("run app");
         }
     }

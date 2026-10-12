@@ -2,37 +2,28 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-#[test]
-fn headless_stdio_session() {
+/// Runs `app --headless --stdio` with `extra` arguments, sends `requests` and closes stdin.
+/// Returns the exit status and every message written to stdout.
+fn session(extra: &[&str], requests: &[Value]) -> (ExitStatus, Vec<Value>) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_app"))
         .args(["--headless", "--stdio"])
+        .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start app");
-
-    let c = [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]];
-    let square: Vec<Value> = (0..4)
-        .map(|i| json!({"type": "add_edge", "start": c[i], "end": c[(i + 1) % 4]}))
-        .collect();
-    let requests = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "subscribe"}),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "batch", "params": {"commands": square, "atomic": true}}),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "query", "params": {"type": "stats"}}),
-        json!({"jsonrpc": "2.0", "id": 4, "method": "render_view", "params": {"width": 32, "height": 24}}),
-        json!({"jsonrpc": "2.0", "id": 5, "method": "describe"}),
-    ];
     {
         let mut stdin = child.stdin.take().unwrap();
-        for r in &requests {
-            writeln!(stdin, "{r}").unwrap();
+        for r in requests {
+            // A process that already exited (a file it could not open) closed its stdin.
+            let _ = writeln!(stdin, "{r}");
         }
         // Dropping stdin ends the session; the process must flush its replies and exit.
     }
@@ -53,7 +44,26 @@ fn headless_stdio_session() {
             panic!("the session did not end within 30 seconds");
         }
     };
-    let status = child.wait().unwrap();
+    (child.wait().unwrap(), messages)
+}
+
+fn square() -> Vec<Value> {
+    let c = [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]];
+    (0..4)
+        .map(|i| json!({"type": "add_edge", "start": c[i], "end": c[(i + 1) % 4]}))
+        .collect()
+}
+
+#[test]
+fn headless_stdio_session() {
+    let requests = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "subscribe"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "batch", "params": {"commands": square(), "atomic": true}}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "query", "params": {"type": "stats"}}),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "render_view", "params": {"width": 32, "height": 24}}),
+        json!({"jsonrpc": "2.0", "id": 5, "method": "describe"}),
+    ];
+    let (status, messages) = session(&[], &requests);
     assert!(status.success(), "exit status {status}");
 
     let replies: HashMap<u64, &Value> = messages
@@ -77,4 +87,36 @@ fn headless_stdio_session() {
         .collect();
     assert_eq!(changed.len(), 1, "one notification for the atomic batch");
     assert_eq!(changed[0]["params"]["revision"], 1);
+}
+
+#[test]
+fn headless_opens_the_file_it_is_given() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let path = dir.join("headless-open.skr");
+    let _ = std::fs::remove_file(&path);
+    let path_text = path.to_str().unwrap();
+    let save = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "batch", "params": {"commands": square(), "atomic": true}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "execute", "params": {"type": "save", "path": path_text}}),
+    ];
+    let (status, messages) = session(&[], &save);
+    assert!(status.success() && messages.iter().all(|m| m.get("error").is_none()));
+
+    let ask = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "query", "params": {"type": "stats"}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "query", "params": {"type": "file"}}),
+    ];
+    let (status, messages) = session(&[path_text], &ask);
+    assert!(status.success(), "exit status {status}");
+    assert_eq!(messages[0]["result"]["faces"], 1);
+    assert_eq!(messages[1]["result"]["path"], json!(path_text));
+
+    let missing = dir.join("headless-missing.skr");
+    let (status, messages) = session(&[missing.to_str().unwrap()], &ask);
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "a file that cannot be opened stops the app"
+    );
+    assert!(messages.is_empty());
 }

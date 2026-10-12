@@ -13,6 +13,10 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
 
+Any of these can end with a `.skr` file to open at start, e.g.
+`cargo run -p app -- --headless --stdio house.skr`. In headless mode a file that cannot be opened
+stops the app with exit code 1 and a message on stderr.
+
 The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
 (created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
 readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
@@ -47,14 +51,15 @@ Queries:
 | `{"type": "selection"}` | the selected edge, face and instance ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
+| `{"type": "file"}` | `path` of the file last opened or saved (absent if never), `modified` since then, and `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
 of silently doing nothing).
 
 Commands: `add_edge`, `add_rectangle`, `push_pull`, `erase`, `move`, `copy`, `make_group`,
-`make_component`, `explode`, `open_instance`, `close_instance`, `select`, `undo`, `redo`,
-`set_camera`. Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
+`make_component`, `explode`, `open_instance`, `close_instance`, `rename_definition`,
+`purge_definitions`, `select`, `undo`, `redo`, `set_camera`, `new`, `open`, `save`. Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component). Definitions are `d5`. Ids are unique across the whole model, including inside
 groups and components.
@@ -119,6 +124,30 @@ were made in (the instance's transform starts as the identity).
 A command's `changes.created` can list ids inside a new definition (`make_group`, copying a
 group): they are `not_found` from the open context until that instance is opened.
 
+`{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
+undo step; a component's name must not be empty; an unknown definition is `not_found`).
+`{"type": "purge_definitions"}` removes every definition no instance places, such as a component
+whose last instance was erased, and what only it placed (one undo step).
+
+### Files
+
+Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
+(`"sketchup-alt"`), `schema_version` (1), the camera and the model with every id.
+
+| Command | Effect |
+|---|---|
+| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. |
+| `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. |
+| `{"type": "new"}` | An empty model with the default view, not saved anywhere. |
+
+Paths are relative to the app's working directory. None of these is an undo step. `open` and
+`new` clear the undo history, the selection and the open context, and change the revision;
+subscribers get a `resync` notification and should read the model again. Ids in an opened file
+are those it was saved with, and new ids continue after the largest one ever used. A file that
+cannot be read or written gives the error kind `file`, with a message naming the path and the
+reason (a missing file, not a sketchup-alt file, or a newer schema version); the model is left
+as it was. `new`, `open` and `save` are not allowed in an atomic batch.
+
 Behaviors worth knowing:
 
 - Replies come before the `changed` notifications they cause, and your own edits are notified too.
@@ -152,5 +181,6 @@ Building a 2 x 3 x 1.5 m box on an empty model:
 ## Errors
 
 Standard JSON-RPC codes (-32700 parse, -32600 invalid request, -32601 unknown method, -32602 bad
-params) plus `-32000` command failed (`data` is `{kind, message, ids?}`), `-32001` batch failed
+params) plus `-32000` command failed (`data` is `{kind, message, ids?}`; `kind` is `invalid_input`,
+`not_found`, `nothing_to_undo`, `nothing_to_redo` or `file`), `-32001` batch failed
 (`data` is `{index, error, completed, rolled_back}`) and `-32002` rendering unavailable.

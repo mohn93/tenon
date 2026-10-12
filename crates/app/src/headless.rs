@@ -1,12 +1,25 @@
 //! Running without a window: the agent API on stdio or a Unix socket.
 
+use std::path::PathBuf;
+
 use api::{HeadlessHost, Hub, listen_unix, serve_stdio};
+use session::Command;
 
 use crate::cli::Transport;
 
-/// Serves until stdin closes (stdio) or forever (socket). Returns the process exit code.
-pub fn run(transport: Transport) -> i32 {
+/// Opens `file` if given, then serves until stdin closes (stdio) or forever (socket). Returns
+/// the process exit code.
+pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
     let mut host = HeadlessHost::new();
+    if let Some(path) = file {
+        let open = Command::Open {
+            path: path.display().to_string(),
+        };
+        if let Err(e) = host.doc.execute(open) {
+            eprintln!("cannot open {}", e.message);
+            return 1;
+        }
+    }
     let mut hub = Hub::new(|| {});
     match transport {
         Transport::Stdio => {

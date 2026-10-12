@@ -7,6 +7,7 @@ use api::{Hub, listen_unix};
 use glam::DVec2;
 use kernel::{EntityId, InstanceId};
 use render::{Renderer, Snapshotter, Viewport};
+use session::Command;
 use tools::Axis;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -419,11 +420,18 @@ pub struct App {
     hub: Hub,
     /// Socket the agent API listens on, removed on exit (None if listening failed).
     socket: Option<PathBuf>,
+    /// A model to open once the window exists.
+    file: Option<PathBuf>,
 }
 
 impl App {
-    /// `socket` is where the agent API listens; None runs without it.
-    pub fn new(event_loop: &EventLoop<ApiWake>, socket: Option<PathBuf>) -> Self {
+    /// `socket` is where the agent API listens; None runs without it. `file` is a model to
+    /// open at start.
+    pub fn new(
+        event_loop: &EventLoop<ApiWake>,
+        socket: Option<PathBuf>,
+        file: Option<PathBuf>,
+    ) -> Self {
         let proxy = event_loop.create_proxy();
         let hub = Hub::new(move || {
             let _ = proxy.send_event(ApiWake);
@@ -445,6 +453,7 @@ impl App {
             state: None,
             hub,
             socket,
+            file,
         }
     }
 }
@@ -486,6 +495,14 @@ impl ApplicationHandler<ApiWake> for App {
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let mut state = State::new(window);
+        if let Some(path) = self.file.take() {
+            let open = Command::Open {
+                path: path.display().to_string(),
+            };
+            if let Err(e) = state.editor.execute(open) {
+                eprintln!("cannot open {}", e.message);
+            }
+        }
         state.window.request_redraw();
         // Requests that arrived before the window existed.
         state.process_api(&mut self.hub);
