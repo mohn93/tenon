@@ -17,7 +17,9 @@ mod scene;
 mod transform;
 mod weld;
 
-pub use data::{DefinitionData, EdgeData, FaceData, InstanceData, MeshData, SceneData, VertexData};
+pub use data::{
+    DefinitionData, EdgeData, FaceData, InstanceData, MAX_ID, MeshData, SceneData, VertexData,
+};
 pub use edit::KernelError;
 pub use ids::{DefinitionId, EdgeId, EntityId, FaceId, InstanceId, VertexId};
 pub use index::{Index, Shape};

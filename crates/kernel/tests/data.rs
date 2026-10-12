@@ -173,3 +173,126 @@ fn purging_removes_unused_definitions_and_what_only_they_place() {
     let mut used = scene();
     assert!(used.purge().is_empty(), "everything is placed");
 }
+
+/// Plain data for a root mesh of loose vertices at these ids and positions.
+fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
+    SceneData {
+        next_id,
+        root: kernel::MeshData {
+            vertices: vertices
+                .iter()
+                .map(|&(id, position)| kernel::VertexData { id, position })
+                .collect(),
+            ..Default::default()
+        },
+        definitions: vec![],
+    }
+}
+
+#[test]
+fn ids_beyond_exact_json_numbers_are_rejected() {
+    rejects(|d| d.root.vertices[0].id = u64::MAX, "too large");
+    rejects(|d| d.root.edges[0].id = kernel::MAX_ID + 1, "too large");
+    rejects(|d| d.next_id = u64::MAX, "too large");
+    rejects(|d| d.definitions[0].id = u64::MAX, "too large");
+    let err = Scene::from_data(&loose_vertices(
+        0,
+        &[(3, [0.0; 3]), (u64::MAX, [1.0, 0.0, 0.0])],
+    ))
+    .unwrap_err();
+    assert!(err.contains("too large"), "{err}");
+}
+
+#[test]
+fn ids_at_the_limit_load_and_keep_working() {
+    let data = loose_vertices(0, &[(3, [0.0; 3]), (kernel::MAX_ID, [1.0, 0.0, 0.0])]);
+    let mut s = Scene::from_data(&data).unwrap();
+    let change = s
+        .edit(MeshId::Root, |m| {
+            m.add_edge(p(0.0, 1.0, 0.0), p(1.0, 1.0, 0.0))
+        })
+        .unwrap();
+    let created = change.summary().created;
+    assert!(!created.is_empty());
+    assert!(s.root().vertices().any(|(id, _)| id.0 == 3), "v3 kept");
+    assert!(
+        s.root().vertices().any(|(id, _)| id.0 == kernel::MAX_ID),
+        "the largest id kept"
+    );
+    s.validate().unwrap();
+}
+
+#[test]
+fn transforms_that_cannot_be_inverted_are_rejected() {
+    rejects(
+        |d| d.root.instances[0].transform = [0.0; 12],
+        "not invertible",
+    );
+    rejects(
+        |d| {
+            // Squash the z axis flat.
+            let t = &mut d.root.instances[0].transform;
+            t[6..9].copy_from_slice(&[0.0, 0.0, 1e-15]);
+        },
+        "not invertible",
+    );
+}
+
+#[test]
+fn many_vertices_validate() {
+    // 20k vertices 1 mm apart on a grid, then one more within tolerance of one of them,
+    // straddling a tolerance-sized cell boundary.
+    let mut vertices = Vec::new();
+    for i in 0..20_000u64 {
+        let (x, y, z) = (i % 100, (i / 100) % 20, i / 2000);
+        vertices.push((i + 1, [x as f64 * 1e-3, y as f64 * 1e-3, z as f64 * 1e-3]));
+    }
+    let s = Scene::from_data(&loose_vertices(0, &vertices)).unwrap();
+    assert_eq!(s.root().vertices().count(), 20_000);
+    vertices.push((50_000, [-0.4e-6, 0.0, 0.0]));
+    let err = Scene::from_data(&loose_vertices(0, &vertices)).unwrap_err();
+    assert!(err.contains("coincide"), "{err}");
+}
+
+/// Plain data for a root placing a chain of `n` nested groups; when `cycle`, the last group
+/// places the first.
+fn nested(n: u64, cycle: bool) -> SceneData {
+    let instance = |id: u64, definition: u64| kernel::InstanceData {
+        id,
+        definition,
+        transform: glam::DAffine3::IDENTITY.to_cols_array(),
+    };
+    let definitions = (0..n)
+        .map(|k| kernel::DefinitionData {
+            id: k + 1,
+            name: String::new(),
+            kind: DefinitionKind::Group,
+            mesh: kernel::MeshData {
+                instances: if k + 1 < n {
+                    vec![instance(n + k + 2, k + 2)]
+                } else if cycle {
+                    vec![instance(n + k + 2, 1)]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            },
+        })
+        .collect();
+    SceneData {
+        next_id: 0,
+        root: kernel::MeshData {
+            instances: vec![instance(n + 1, 1)],
+            ..Default::default()
+        },
+        definitions,
+    }
+}
+
+#[test]
+fn deeply_nested_groups_validate() {
+    let s = Scene::from_data(&nested(2000, false)).unwrap();
+    assert_eq!(s.definitions().count(), 2000);
+    let err = Scene::from_data(&nested(2000, true)).unwrap_err();
+    assert!(err.contains("places itself"), "{err}");
+}

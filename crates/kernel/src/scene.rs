@@ -140,7 +140,7 @@ impl Scene {
     ) -> Self {
         let used = definitions
             .iter()
-            .map(|(id, d)| (id.0 + 1).max(d.mesh.next_id()))
+            .map(|(id, d)| id.0.saturating_add(1).max(d.mesh.next_id()))
             .chain([root.next_id(), next_id])
             .max()
             .unwrap_or(0);
@@ -338,7 +338,10 @@ impl Scene {
                 self.next_id = self.next_id.max(next);
             }
             Step::AddDefinition(id, d) => {
-                self.next_id = self.next_id.max(id.0 + 1).max(d.mesh.next_id());
+                self.next_id = self
+                    .next_id
+                    .max(id.0.saturating_add(1))
+                    .max(d.mesh.next_id());
                 self.definitions.insert(*id, d.clone());
             }
             Step::RemoveDefinition(id, _) => {
@@ -369,30 +372,55 @@ impl Scene {
                 }
             }
         }
-        for id in self.definitions.keys() {
-            if self.places(*id, *id) {
-                return Err(format!("definition {id} places itself"));
-            }
+        if let Some(id) = self.cycle() {
+            return Err(format!("definition {id} places itself"));
         }
         Ok(())
     }
 
-    /// True when `inside`'s mesh places `target`, directly or through other definitions.
-    fn places(&self, inside: DefinitionId, target: DefinitionId) -> bool {
-        let mut stack = vec![inside];
-        let mut visited = BTreeSet::new();
-        while let Some(d) = stack.pop() {
-            if !visited.insert(d) {
+    /// A definition that places itself (directly or deeper), if any: one depth-first search
+    /// over the whole definition graph, finding an edge back to a definition still being
+    /// searched.
+    fn cycle(&self) -> Option<DefinitionId> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum State {
+            Searching,
+            Done,
+        }
+        let mut state: BTreeMap<DefinitionId, State> = BTreeMap::new();
+        for start in self.definitions.keys() {
+            if state.contains_key(start) {
                 continue;
             }
-            for (_, i) in self.definitions[&d].mesh.instances() {
-                if i.definition == target {
-                    return true;
+            state.insert(*start, State::Searching);
+            let children = |d: &DefinitionId| {
+                self.definitions[d]
+                    .mesh
+                    .instances()
+                    .map(|(_, i)| i.definition)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            };
+            let mut stack = vec![(*start, children(start))];
+            while let Some((d, next)) = stack.last_mut() {
+                match next.next() {
+                    Some(child) => match state.get(&child) {
+                        Some(State::Searching) => return Some(child),
+                        Some(State::Done) => {}
+                        None => {
+                            state.insert(child, State::Searching);
+                            let grand = children(&child);
+                            stack.push((child, grand));
+                        }
+                    },
+                    None => {
+                        state.insert(*d, State::Done);
+                        stack.pop();
+                    }
                 }
-                stack.push(i.definition);
             }
         }
-        false
+        None
     }
 }
 

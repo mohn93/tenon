@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::OnceLock;
 
 use glam::{DAffine3, DVec3};
@@ -175,7 +175,7 @@ impl Model {
             .chain(faces.keys().map(|k| k.0))
             .chain(instances.keys().map(|k| k.0))
             .max()
-            .map_or(0, |m| m + 1);
+            .map_or(0, |m| m.saturating_add(1));
         Model {
             vertices,
             edges,
@@ -451,13 +451,29 @@ impl Model {
                 return Err(format!("edge {id:?} duplicates another edge"));
             }
         }
-        let verts: Vec<_> = self.vertices.iter().collect();
-        for (i, (ia, a)) in verts.iter().enumerate() {
-            for (ib, b) in &verts[i + 1..] {
-                if a.pos.distance(b.pos) < LENGTH_TOL {
-                    return Err(format!("vertices {ia:?} and {ib:?} coincide"));
+        // Vertices closer than LENGTH_TOL fall in the same or neighbouring cells of a
+        // LENGTH_TOL grid, so only those are compared.
+        let cell = |p: DVec3| (p / LENGTH_TOL).floor().to_array().map(|c| c as i64);
+        let mut grid: HashMap<[i64; 3], Vec<VertexId>> = HashMap::new();
+        for (ib, b) in &self.vertices {
+            let [x, y, z] = cell(b.pos);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let key = [
+                            x.saturating_add(dx),
+                            y.saturating_add(dy),
+                            z.saturating_add(dz),
+                        ];
+                        for ia in grid.get(&key).into_iter().flatten() {
+                            if self.pos(*ia).distance(b.pos) < LENGTH_TOL {
+                                return Err(format!("vertices {ia:?} and {ib:?} coincide"));
+                            }
+                        }
+                    }
                 }
             }
+            grid.entry([x, y, z]).or_default().push(*ib);
         }
         for (id, i) in &self.instances {
             if !i.transform.is_finite() {

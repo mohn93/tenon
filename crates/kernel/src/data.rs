@@ -9,6 +9,13 @@ use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, VertexId};
 use crate::model::{Edge, Face, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
 
+/// The largest id a file may use: every id up to it is exact as a JSON (double) number.
+pub const MAX_ID: u64 = 1 << 53;
+
+/// Instance transforms whose 3x3 part has a smaller determinant (in absolute value) cannot be
+/// inverted reliably and are rejected on load.
+const MIN_DETERMINANT: f64 = 1e-12;
+
 /// A whole scene as plain data. Ids are the kernel's numbers (without the "v"/"e"/... prefix).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,12 +95,19 @@ impl Scene {
     }
 
     /// Rebuilds a scene from plain data, keeping every id. Fails, naming the problem, when an
-    /// id is used twice, a number is not finite, or the result breaks a model invariant
-    /// (see [`Scene::validate`]).
+    /// id is used twice or is over [`MAX_ID`], a number is not finite, an instance's transform
+    /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]).
     pub fn from_data(data: &SceneData) -> Result<Scene, String> {
+        if data.next_id > MAX_ID {
+            return Err(format!(
+                "next_id {} is too large (over {MAX_ID})",
+                data.next_id
+            ));
+        }
         let root = mesh(&data.root)?;
         let mut definitions = BTreeMap::new();
         for d in &data.definitions {
+            check_id("definition d", d.id)?;
             let definition = Definition {
                 name: d.name.clone(),
                 kind: d.kind,
@@ -149,6 +163,13 @@ fn mesh_data(m: &Model) -> MeshData {
     }
 }
 
+fn check_id(what: &str, id: u64) -> Result<(), String> {
+    if id > MAX_ID {
+        return Err(format!("{what}{id} has an id too large (over {MAX_ID})"));
+    }
+    Ok(())
+}
+
 fn mesh(data: &MeshData) -> Result<Model, String> {
     let finite = |xs: &[f64], what: String| {
         if xs.iter().all(|x| x.is_finite()) {
@@ -159,6 +180,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
     };
     let mut vertices = BTreeMap::new();
     for v in &data.vertices {
+        check_id("vertex v", v.id)?;
         finite(&v.position, format!("vertex v{}", v.id))?;
         let vertex = Vertex {
             pos: DVec3::from(v.position),
@@ -169,6 +191,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
     }
     let mut edges = BTreeMap::new();
     for e in &data.edges {
+        check_id("edge e", e.id)?;
         let edge = Edge {
             v: e.vertices.map(VertexId),
         };
@@ -178,6 +201,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
     }
     let mut faces = BTreeMap::new();
     for f in &data.faces {
+        check_id("face f", f.id)?;
         finite(&f.normal, format!("face f{}", f.id))?;
         let ring = |l: &Vec<u64>| l.iter().map(|v| VertexId(*v)).collect();
         let face = Face {
@@ -191,10 +215,18 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
     }
     let mut instances = BTreeMap::new();
     for i in &data.instances {
+        check_id("instance i", i.id)?;
         finite(&i.transform, format!("instance i{}", i.id))?;
+        let transform = DAffine3::from_cols_array(&i.transform);
+        if transform.matrix3.determinant().abs() < MIN_DETERMINANT {
+            return Err(format!(
+                "instance i{} has a transform that is not invertible",
+                i.id
+            ));
+        }
         let instance = Instance {
             definition: DefinitionId(i.definition),
-            transform: DAffine3::from_cols_array(&i.transform),
+            transform,
         };
         if instances.insert(InstanceId(i.id), instance).is_some() {
             return Err(format!("instance i{} appears twice", i.id));
