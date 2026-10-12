@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images)
 
 ## Goal
 
@@ -135,7 +135,7 @@ Headless inference tests (fixed camera and cursor, assert snap kind and point). 
 
 ### Testing
 
-Unit tests for buffer building and camera math; a small set of headless golden-image tests.
+Unit tests for buffer building and camera math; a small set of headless golden-image tests (`crates/render/tests/golden.rs`, see `docs/testing.md`).
 
 ## 4. App shell and files (`app`)
 
@@ -203,7 +203,7 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M7c**: outliner: an `outliner` query (the tree of placed groups and components, the root's instances down, each level in id order: `id`, `definition`, `kind`, `name` (the definition's; empty for an unnamed group), `material`, `children`; `open` marks the nodes on the open context's path and `selected` the selected instances of the open context; a component's contents appear under each of its instances with the same ids, so a node is named by its path from the root) and an `open_path` command (makes a path of instances from the root the open context from wherever it is, `[]` being the root; clears the selection unless the path is already open; not an undo step; non-instances `invalid_input`, misplaced instances `not_found`). In the window, an Outliner section in the right panel under Materials: a Model row (click: back to the root) and the tree with expand and collapse (nodes on the open path start expanded), groups shown by name or as "Group", components as "<Name>", selected rows highlighted and open ones bold. A click selects the node, first opening the context it is in (as SketchUp does); Shift-click or Cmd/Ctrl-click adds it to or removes it from the selection when it is in the open context; a double-click opens it for editing. Instance names, a filter box, sorting by name and drag-to-reparent are deferred.
 
 - **M8a**: import: an `import` command (path; `format` obj or stl, from the extension; `as` group (default), component or context; `scale` meters per file unit, default 1; `up` y or z, default y for OBJ and z for STL, so export then import gives back the same geometry; `merge_coplanar`, default true) adding the file's faces to the open context as one undo step. A group or component is named after the file, placed at the context's origin and selected; `context` makes the group and explodes it, so the faces merge with what they touch (at most 2,000 faces). Faces are built straight from the polygons, not drawn: corners within 1e-6 m weld, a polygon that is bent or crosses itself becomes triangles, degenerate and repeated polygons are skipped and counted, neighbouring faces in one plane with one material merge (holes kept), and nothing is split where faces cross. OBJ: `v`, `f` (negative indices), `usemtl`, `mtllib` (a name the model has is its material, a library `Kd` color makes a new one, `default` is the default material); normals, texture coordinates, lines and groups are ignored. STL: binary (by its size) or ASCII. The outcome's `import` reports the instance, definition and polygon, face, vertex, skipped and new material counts. Files over 128 MiB, 200,000 polygons or 1,000,000 positions, broken lines, non-finite numbers, positions beyond +/-1e6 m and files making no face are `file` errors that change nothing. File > Import... (Cmd+I) picks an OBJ or STL and imports it as a group; the status reports faces and skipped polygons or the error. OBJ groups as separate groups, texture coordinates and a units choice in the window are deferred.
-- **M8b**: golden-image render tests (headless renders compared with stored images) and toolbar wrapping.
+- **M8b**: golden-image render tests and toolbar wrapping. Eight canonical scenes (a box, a painted open box showing front and back colors, a rotated component copy, dashed guides, a cylinder with soft sides hidden, a parallel top view, a selected face and edge, an open group fading the rest), built with commands, are rendered headless at 160 x 120 and compared with PNGs in `crates/render/tests/golden/`: a pixel differs when a color channel differs by more than 24, and at most 0.5% of pixels may differ. On a mismatch the actual and a diff image are written under the target's tmp directory; `UPDATE_GOLDEN=1` rewrites the stored images; without a GPU adapter the tests skip.
 - **M8c**: clean-up of deferred correctness and performance items.
 - **M8d**: clean-up of deferred UX and API polish items.
 
