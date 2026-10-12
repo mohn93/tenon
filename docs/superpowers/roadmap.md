@@ -14,7 +14,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M5c | Files: `.skr` save/open/new as commands, FILE argument, File menu with native dialogs and shortcuts, unsaved-changes prompts; rename and purge definitions | done 791774f..bc88ce9 |
 | M5d | Export OBJ, STL, glTF as commands and from the File menu | done 5d98f77..ff298be |
 | M6a | Circle tool and `add_circle` command (segment count; `c` = Circle, Shift+G = component) | done a748c20..0e40c5e |
-| M6b | Rotate command and tool (rotate vertices and instances about an axis; rotated placements: normals, picking, tool camera and bounds in rotated instances) | planned `plans/2026-10-12-m6b-rotate.md` |
+| M6b | Rotate command and tool (rotate vertices and instances about an axis; rotated placements: normals, picking, tool camera and bounds in rotated instances) | done 3d1c782..9d8e1ee |
 | M6c | Tape Measure tool: guide lines and points (session-level guides, inference snaps to them, commands to add/remove) | todo |
 | M6d | Curves: tag edge chains from circles (and arcs) as curves; select a whole curve, Entity Info shows it, soft side edges on pushed curves; Arc tool and command | todo |
 | M7a | Camera: orbit, zoom extents, standard views and orthographic projection as commands and UI | todo |
