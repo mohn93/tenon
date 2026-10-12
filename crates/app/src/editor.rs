@@ -1053,6 +1053,46 @@ mod tests {
     }
 
     #[test]
+    fn lines_snap_to_guides_and_select_picks_and_erases_them() {
+        let mut e = editor();
+        e.execute(Command::AddGuidePoint {
+            position: [1.0, 1.0, 0.0],
+        })
+        .unwrap();
+        e.execute(Command::AddGuideLine {
+            point: [0.0, 3.0, 0.0],
+            direction: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        let point = DVec3::new(1.0, 1.0, 0.0);
+        e.cursor_moved(e.doc().camera.project(point).unwrap() + DVec2::new(2.0, 1.0));
+        assert_eq!(
+            e.hit.map(|h| (h.point, h.kind)),
+            Some((point, SnapKind::GuidePoint))
+        );
+        // A line drawn from the guide point to the guide line ends on it.
+        click(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 3.0, 0.0));
+        e.key(EditorKey::Escape);
+        let ends = edge_ends(&e);
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0][0], point);
+        assert!(
+            ends[0][1].abs_diff_eq(DVec3::new(1.0, 3.0, 0.0), 1e-9),
+            "the line ends on the guide line: {ends:?}"
+        );
+
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(-2.0, 3.0, 0.0));
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            vec!["g1".parse().unwrap()]
+        );
+        assert!(e.key(EditorKey::Delete));
+        assert_eq!(e.doc().model().guides().count(), 1);
+    }
+
+    #[test]
     fn backspace_erases_the_selection_only_when_nothing_is_typed() {
         let mut e = editor();
         square(&mut e);

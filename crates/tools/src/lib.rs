@@ -19,7 +19,7 @@ pub use circle::CircleTool;
 pub use erase::EraseTool;
 pub use inference::{
     Axis, Guides, Inference, Lock, SnapKind, edge_under, edge_under_in, face_under, face_under_in,
-    infer, infer_in, infer_with,
+    guide_under_where, infer, infer_in, infer_with,
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;

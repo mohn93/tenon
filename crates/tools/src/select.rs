@@ -1,4 +1,4 @@
-//! The Select tool: click an edge, face or group to select it, or drag a box. Dragging right
+//! The Select tool: click an edge, face, guide or group to select it, or drag a box. Dragging right
 //! selects what lies entirely inside the box; dragging left also selects what the box touches.
 //! With Shift held, clicked or boxed entities are toggled instead of replacing the selection.
 //! Double-clicking a group opens it for editing; double-clicking outside it, or Escape, closes
@@ -6,10 +6,10 @@
 
 use glam::{DVec2, DVec3};
 use kernel::geom::point_in_polygon;
-use kernel::{EntityId, Face, Model};
+use kernel::{EntityId, Face, Guide, Model};
 use session::{Command, SelectMode};
 
-use crate::inference::{edge_under_where, face_under_in};
+use crate::inference::{edge_under_where, face_under_in, guide_under_where};
 use crate::scenery::Owner;
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
@@ -26,9 +26,9 @@ impl SelectTool {
     }
 }
 
-/// What a click picks: the open context's edge under the cursor, else an instance's edge
-/// (which picks the instance), else the face under it (the open context's face, or the
-/// instance). Geometry outside the open instance hides what is behind it but is not picked,
+/// What a click picks: the open context's edge under the cursor, else its guide, else an
+/// instance's edge (which picks the instance), else the face under it (the open context's
+/// face, or the instance). Geometry outside the open instance hides what is behind it but is not picked,
 /// and its edges do not outrank the open context's even when they lie on top of them.
 pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
     let edge_of = |keep: fn(Owner) -> bool| {
@@ -36,6 +36,12 @@ pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
     };
     if let Some((_, e, _, _)) = edge_of(|o| o == Owner::Open) {
         return Some(EntityId::Edge(e));
+    }
+    let open = |o: Owner| o == Owner::Open;
+    if let Some((_, g, _)) =
+        guide_under_where(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius, open)
+    {
+        return Some(EntityId::Guide(g));
     }
     if let Some((Owner::Instance(i), ..)) = edge_of(|o| matches!(o, Owner::Instance(_))) {
         return Some(EntityId::Instance(i));
@@ -74,9 +80,10 @@ pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
         .collect()
 }
 
-/// Edges, faces and instances selected by the screen box from `a` to `b`: inside it entirely
-/// when dragging right (`b.x >= a.x`), touching it when dragging left. Entities with a point
-/// behind the camera are skipped.
+/// Edges, faces, instances and guides selected by the screen box from `a` to `b`: inside it
+/// entirely when dragging right (`b.x >= a.x`), touching it when dragging left. Entities with
+/// a point behind the camera are skipped. Guide lines are never inside a box; a box dragged
+/// left selects those crossing it.
 fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
     let (lo, hi) = (a.min(b), a.max(b));
     let window = b.x >= a.x;
@@ -144,6 +151,22 @@ fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
         };
         if hit {
             ids.push(id);
+        }
+    }
+    for (id, g) in m.guides() {
+        let hit = match *g {
+            Guide::Point { position } => ctx.camera.project(position).is_some_and(inside),
+            Guide::Line { point, direction } => {
+                !window
+                    && ctx
+                        .camera
+                        .line_span(point, direction)
+                        .and_then(|[a, b]| Some((ctx.camera.project(a)?, ctx.camera.project(b)?)))
+                        .is_some_and(|(p, q)| touches(p, q))
+            }
+        };
+        if hit {
+            ids.push(EntityId::Guide(id));
         }
     }
     for (id, f) in m.faces() {
@@ -260,6 +283,29 @@ impl Tool for SelectTool {
 
     fn on_external_change(&mut self) {
         self.press = None;
+    }
+}
+
+/// Segments drawing a guide of the open context: the part of a guide line in view, or an X
+/// as wide as the pick radius on screen around a guide point.
+pub(crate) fn guide_outline(ctx: &ToolContext, g: &Guide) -> Vec<[DVec3; 2]> {
+    match *g {
+        Guide::Line { point, direction } => {
+            ctx.camera.line_span(point, direction).into_iter().collect()
+        }
+        Guide::Point { position } => {
+            let c = ctx.camera;
+            let depth = (position - c.eye).dot(c.forward());
+            if depth <= c.near() {
+                return Vec::new();
+            }
+            let size = ctx.pick_radius * 2.0 * depth * (c.fov_y * 0.5).tan() / c.viewport.y;
+            let (r, u) = (c.right() * size, c.up() * size);
+            vec![
+                [position - r - u, position + r + u],
+                [position - r + u, position + r - u],
+            ]
+        }
     }
 }
 
@@ -431,6 +477,46 @@ mod tests {
         let (a, b) = (mid + DVec2::new(6.0, -6.0), mid + DVec2::new(-6.0, 6.0));
         let out = r.drag(a, b);
         assert_eq!(out.commands, select(&["f8"], SelectMode::Replace));
+    }
+
+    #[test]
+    fn guides_are_clicked_after_edges_and_boxed() {
+        let mut r = Rig::new();
+        r.model
+            .add_guide(Guide::Point {
+                position: DVec3::new(3.0, 1.0, 0.0),
+            })
+            .unwrap();
+        r.model
+            .add_guide(Guide::Line {
+                point: DVec3::new(0.0, 3.0, 0.0),
+                direction: DVec3::X,
+            })
+            .unwrap();
+        let point = r.click(DVec3::new(3.0, 1.0, 0.0));
+        assert_eq!(point.commands, select(&["g9"], SelectMode::Replace));
+        let line = r.click(DVec3::new(-1.0, 3.0, 0.0));
+        assert_eq!(line.commands, select(&["g10"], SelectMode::Replace));
+        // Where the guide line runs over the square's edge, the edge wins.
+        r.model
+            .add_guide(Guide::Line {
+                point: DVec3::ZERO,
+                direction: DVec3::X,
+            })
+            .unwrap();
+        let edge = r.click(DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(edge.commands, select(&["e2"], SelectMode::Replace));
+
+        // A window around the guide point holds it; one across the guide line does not hold
+        // the line, but the same box dragged left selects it.
+        let p = r.px(DVec3::new(3.0, 1.0, 0.0));
+        let window = r.drag(p - 5.0, p + 5.0);
+        assert_eq!(window.commands, select(&["g9"], SelectMode::Replace));
+        let q = r.px(DVec3::new(-1.0, 3.0, 0.0));
+        let (a, b) = (q - 6.0, q + 6.0);
+        assert_eq!(r.drag(a, b).commands, select(&[], SelectMode::Replace));
+        let crossing = r.drag(DVec2::new(b.x, a.y), DVec2::new(a.x, b.y));
+        assert_eq!(crossing.commands, select(&["g10"], SelectMode::Replace));
     }
 
     #[test]

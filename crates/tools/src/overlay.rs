@@ -55,10 +55,10 @@ pub fn overlay(
 
     let Some(hit) = hit else { return out };
     let color = match hit.kind {
-        SnapKind::Endpoint | SnapKind::Origin => ENDPOINT,
+        SnapKind::Endpoint | SnapKind::Origin | SnapKind::GuidePoint => ENDPOINT,
         SnapKind::Midpoint => MIDPOINT,
         SnapKind::Intersection => INTERSECTION,
-        SnapKind::OnEdge => ON_EDGE,
+        SnapKind::OnEdge | SnapKind::OnGuide => ON_EDGE,
         SnapKind::OnFace => ON_FACE,
         _ => return out,
     };

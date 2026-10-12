@@ -1,12 +1,13 @@
 //! Text for the Entity Info panel: what is selected and its measurements.
 
 use glam::{DAffine3, DQuat};
-use kernel::{DefinitionKind, EntityId, Model};
+use kernel::{DefinitionKind, EntityId, Guide, Model};
 use session::Document;
 use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
-/// or the kind, name and rotation of a single instance. While a group or component is open, a first line
+/// the direction or position of a single guide, or the kind, name and rotation of a single
+/// instance. While a group or component is open, a first line
 /// says which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
@@ -30,15 +31,36 @@ fn editing(doc: &Document) -> Option<String> {
 fn selection_info(doc: &Document) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
+    let mut guides = Vec::new();
     for id in doc.selection() {
         match id {
             EntityId::Edge(e) => edges.push(*e),
             EntityId::Face(f) => faces.push(*f),
             EntityId::Instance(i) => instances.push(*i),
-            EntityId::Vertex(_) | EntityId::Guide(_) => {}
+            EntityId::Guide(g) => guides.push(*g),
+            EntityId::Vertex(_) => {}
         }
     }
-    if let ([], [], [i]) = (&edges[..], &faces[..], &instances[..]) {
+    if let ([], [], [], [g]) = (&edges[..], &faces[..], &instances[..], &guides[..]) {
+        let xyz = |v: glam::DVec3| v.to_array().map(number).join(", ");
+        return match m.guide(*g) {
+            Some(Guide::Line { direction, .. }) => {
+                vec![
+                    "1 guide line".into(),
+                    format!("Direction: {}", xyz(*direction)),
+                ]
+            }
+            Some(Guide::Point { position }) => {
+                vec![
+                    "1 guide point".into(),
+                    format!("Position: {}", xyz(*position)),
+                ]
+            }
+            None => Vec::new(),
+        };
+    }
+    let guides = guides.len();
+    if let ([], [], [i], 0) = (&edges[..], &faces[..], &instances[..], guides) {
         let instance = m.instance(*i);
         let d = instance.and_then(|i| doc.scene().definition(i.definition));
         let mut lines = match d {
@@ -51,12 +73,12 @@ fn selection_info(doc: &Document) -> Vec<String> {
         return lines;
     }
     match (&edges[..], &faces[..]) {
-        ([], []) if instances.is_empty() => vec!["Nothing selected".into()],
-        ([e], []) if instances.is_empty() => vec![
+        ([], []) if instances.is_empty() && guides == 0 => vec!["Nothing selected".into()],
+        ([e], []) if instances.is_empty() && guides == 0 => vec![
             "1 edge".into(),
             format!("Length: {}", format_length(edge_length(m, *e))),
         ],
-        ([], [f]) if instances.is_empty() => {
+        ([], [f]) if instances.is_empty() && guides == 0 => {
             let face = m.face(*f).unwrap();
             let n = face.normal.to_array().map(number);
             vec![
@@ -75,6 +97,9 @@ fn selection_info(doc: &Document) -> Vec<String> {
             }
             if !instances.is_empty() {
                 parts.push(count(instances.len(), "instance"));
+            }
+            if guides > 0 {
+                parts.push(count(guides, "guide"));
             }
             vec![parts.join(", ")]
         }
@@ -161,6 +186,26 @@ mod tests {
         assert_eq!(entity_info(&d), ["1 edge", "Length: 2 m"]);
         select(&mut d, &["e2", "e4", "f8"]);
         assert_eq!(entity_info(&d), ["2 edges, 1 face"]);
+    }
+
+    #[test]
+    fn describes_guides() {
+        let mut d = doc_with_square();
+        d.execute(Command::AddGuideLine {
+            point: [0.0, -1.0, 0.0],
+            direction: [0.0, 2.0, 0.0],
+        })
+        .unwrap();
+        d.execute(Command::AddGuidePoint {
+            position: [1.5, 2.0, 0.25],
+        })
+        .unwrap();
+        select(&mut d, &["g9"]);
+        assert_eq!(entity_info(&d), ["1 guide line", "Direction: 0, 1, 0"]);
+        select(&mut d, &["g10"]);
+        assert_eq!(entity_info(&d), ["1 guide point", "Position: 1.5, 2, 0.25"]);
+        select(&mut d, &["g9", "g10", "e2"]);
+        assert_eq!(entity_info(&d), ["1 edge, 2 guides"]);
     }
 
     #[test]

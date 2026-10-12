@@ -1,11 +1,11 @@
-//! The Erase tool: click an edge, face or group to erase it. What is under the cursor is
+//! The Erase tool: click an edge, face, guide or group to erase it. What is under the cursor is
 //! outlined.
 
 use glam::DVec3;
 use kernel::EntityId;
 use session::Command;
 
-use crate::select::{box_outline, face_outline, pick};
+use crate::select::{box_outline, face_outline, guide_outline, pick};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
@@ -30,7 +30,11 @@ fn outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
             .collect(),
         EntityId::Face(f) => m.face(f).map(|f| face_outline(m, f)).unwrap_or_default(),
         EntityId::Instance(_) => box_outline(ctx, id),
-        EntityId::Vertex(_) | EntityId::Guide(_) => Vec::new(),
+        EntityId::Guide(g) => m
+            .guide(g)
+            .map(|g| guide_outline(ctx, g))
+            .unwrap_or_default(),
+        EntityId::Vertex(_) => Vec::new(),
     }
 }
 
@@ -40,7 +44,7 @@ impl Tool for EraseTool {
     }
 
     fn prompt(&self) -> &'static str {
-        "Click an edge, face or group to erase it"
+        "Click an edge, face, guide or group to erase it"
     }
 
     fn measurement(&self) -> (&'static str, Option<String>) {

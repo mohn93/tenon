@@ -4,9 +4,10 @@ use std::collections::BTreeSet;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec3};
-use kernel::{EntityId, InstanceId, MeshId, Scene};
+use kernel::{EntityId, Guide, InstanceId, MeshId, Scene};
 
 use crate::grid::LineVertex;
+use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -25,18 +26,20 @@ pub const FADED_EDGE_COLOR: [f32; 4] = [0.62, 0.62, 0.62, 1.0];
 /// The box around the open instance.
 pub const CONTEXT_BOX_COLOR: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
 
-/// Triangles for every face and line pairs for every edge.
+/// Triangles for every face, line pairs for every edge, and the guides (drawn per frame, see
+/// `guides::guide_lines`).
 #[derive(Debug, Default, PartialEq)]
 pub struct ModelGeometry {
     pub faces: Vec<FaceVertex>,
     pub edges: Vec<LineVertex>,
+    pub guides: Vec<GuideShape>,
 }
 
 /// Geometry for the whole scene in root coordinates, every instance placed by its transform.
 /// `context` is the path of open instances (see `session::Document::context`) and `selection`
 /// holds ids of the open context: selected entities there are highlighted, and a selected
-/// instance highlights everything it places. While an instance is open, edges outside it are
-/// faded and its bounding box is outlined.
+/// instance highlights everything it places. While an instance is open, edges and guides
+/// outside it are faded and its bounding box is outlined.
 pub fn scene_geometry(
     scene: &Scene,
     context: &[InstanceId],
@@ -147,6 +150,24 @@ impl Walk<'_> {
                     });
                 }
             }
+        }
+        for (gid, guide) in model.guides() {
+            let color = if selected(EntityId::Guide(gid)) {
+                SELECTED_EDGE_COLOR
+            } else if inside {
+                GUIDE_COLOR
+            } else {
+                FADED_GUIDE_COLOR
+            };
+            let (point, direction) = match guide.transformed(t) {
+                Guide::Line { point, direction } => (point, Some(direction)),
+                Guide::Point { position } => (position, None),
+            };
+            self.g.guides.push(GuideShape {
+                point,
+                direction,
+                color,
+            });
         }
         for (iid, instance) in model.instances() {
             let lit = selected(EntityId::Instance(iid));
@@ -277,6 +298,53 @@ mod tests {
             .filter(|v| v.color == CONTEXT_BOX_COLOR)
             .any(|v| (v.pos[2] - sin).abs() < 1e-6);
         assert!(lifted_box, "the open instance's box turns with it");
+    }
+
+    #[test]
+    fn guides_are_placed_and_lit_when_selected() {
+        let (mut s, first, _) = two_squares();
+        let d = s.root().instance(first).unwrap().definition;
+        let inner = s
+            .edit(MeshId::Definition(d), |m| {
+                m.add_guide(Guide::Point {
+                    position: DVec3::new(0.5, 0.5, 0.0),
+                })
+            })
+            .unwrap()
+            .summary()
+            .created[0];
+        let root = s
+            .edit(MeshId::Root, |m| {
+                m.add_guide(Guide::Line {
+                    point: DVec3::ZERO,
+                    direction: DVec3::Y,
+                })
+            })
+            .unwrap()
+            .summary()
+            .created[0];
+        let g = scene_geometry(&s, &[], &BTreeSet::from([root]));
+        // The component is placed twice, so its guide point is drawn twice.
+        assert_eq!(g.guides.len(), 3);
+        let line = g.guides.iter().find(|s| s.direction.is_some()).unwrap();
+        assert_eq!(line.color, SELECTED_EDGE_COLOR);
+        let mut points: Vec<f64> = g
+            .guides
+            .iter()
+            .filter(|s| s.direction.is_none())
+            .map(|s| s.point.x)
+            .collect();
+        points.sort_by(f64::total_cmp);
+        assert_eq!(points, vec![0.5, 3.5]);
+        // Inside the first square, the root's guide line is faded.
+        let open = scene_geometry(&s, &[first], &BTreeSet::from([inner]));
+        let faded = open.guides.iter().filter(|s| s.color == FADED_GUIDE_COLOR);
+        assert_eq!(
+            faded.count(),
+            2,
+            "the root's line and the other square's point"
+        );
+        assert!(open.guides.iter().any(|s| s.color == SELECTED_EDGE_COLOR));
     }
 
     #[test]

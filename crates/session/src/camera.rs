@@ -11,6 +11,8 @@ pub const ZOOM_STEP: f64 = 0.85;
 pub const MIN_ZOOM_DISTANCE: f64 = 0.01;
 /// Ground hits farther than distance() * this are ignored as anchors.
 pub const MAX_ANCHOR_FACTOR: f64 = 50.0;
+/// How far (in eye-to-target distances) `Camera::line_span` reaches along an infinite line.
+pub const LINE_REACH: f64 = 1000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
@@ -85,8 +87,38 @@ impl Camera {
     /// Reversed-Z perspective with an infinite far plane: depth is 1 at the near plane and
     /// approaches 0 with distance, so nothing far away is ever clipped.
     pub fn proj(&self) -> DMat4 {
-        let near = (self.distance() * 1e-3).max(1e-5);
-        directx::perspective_infinite_reverse(self.fov_y, self.aspect(), near)
+        directx::perspective_infinite_reverse(self.fov_y, self.aspect(), self.near())
+    }
+
+    /// Distance from the eye to the near plane.
+    pub fn near(&self) -> f64 {
+        (self.distance() * 1e-3).max(1e-5)
+    }
+
+    /// The part of the infinite line through `point` along `dir` worth drawing or snapping
+    /// to: in front of the near plane (with a margin), and within `LINE_REACH` eye-to-target
+    /// distances of the eye in depth and along the line. Points beyond look the same as the
+    /// end. None when no part of the line is in front of the camera (or `dir` is zero).
+    pub fn line_span(&self, point: DVec3, dir: DVec3) -> Option<[DVec3; 2]> {
+        let dir = dir.try_normalize()?;
+        let reach = self.distance() * LINE_REACH;
+        let near = self.near() * 2.0;
+        // Along the line, around the point nearest the eye.
+        let foot = (self.eye - point).dot(dir);
+        let (mut lo, mut hi) = (foot - reach, foot + reach);
+        // In depth: near <= depth0 + t * slope <= reach.
+        let depth0 = (point - self.eye).dot(self.forward());
+        let slope = dir.dot(self.forward());
+        if slope.abs() < 1e-12 {
+            if !(near..=reach).contains(&depth0) {
+                return None;
+            }
+        } else {
+            let (a, b) = ((near - depth0) / slope, (reach - depth0) / slope);
+            lo = lo.max(a.min(b));
+            hi = hi.min(a.max(b));
+        }
+        (lo < hi).then(|| [point + dir * lo, point + dir * hi])
     }
 
     pub fn view_proj_f32(&self) -> Mat4 {
@@ -194,6 +226,25 @@ mod tests {
         let c = cam();
         let p = c.project(c.target).unwrap();
         assert!(p.abs_diff_eq(DVec2::new(400.0, 300.0), 1e-6));
+    }
+
+    #[test]
+    fn line_spans_stay_in_front_of_the_camera() {
+        let c = cam();
+        // A line through the target across the view: both ends project, far to either side.
+        let [a, b] = c.line_span(c.target, c.right()).unwrap();
+        assert!(c.project(a).is_some() && c.project(b).is_some());
+        assert!(a.distance(b) > c.distance() * 100.0);
+        // A line through the eye along the view (given pointing backwards) starts just past
+        // the near plane.
+        let [far, near] = c.line_span(c.eye, -c.forward()).unwrap();
+        let depth = |p: DVec3| (p - c.eye).dot(c.forward());
+        assert!(depth(near) > c.near() && depth(near) < c.near() * 3.0);
+        assert!((depth(far) - c.distance() * LINE_REACH).abs() < 1e-6);
+        // A line wholly behind the camera, across the view, has no span.
+        let behind = c.eye - c.forward();
+        assert!(c.line_span(behind, c.right()).is_none());
+        assert!(c.line_span(c.target, DVec3::ZERO).is_none());
     }
 
     #[test]

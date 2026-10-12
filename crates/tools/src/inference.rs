@@ -1,7 +1,7 @@
 //! Snapping the cursor to meaningful 3D points.
 
 use glam::{DVec2, DVec3};
-use kernel::{EdgeId, FaceId, Model, Shape, VertexId};
+use kernel::{EdgeId, FaceId, Guide, GuideId, Model, Shape, VertexId};
 use session::{Camera, Ray};
 
 use crate::scenery::{Owner, Scenery};
@@ -31,9 +31,14 @@ pub enum SnapKind {
     Endpoint,
     Midpoint,
     Origin,
-    /// Where two edges cross on screen without meeting in space: the point on the nearer one.
+    /// A guide point.
+    GuidePoint,
+    /// Where two edges or guide lines cross on screen (or in space): the point on the nearer
+    /// one.
     Intersection,
     OnEdge,
+    /// On a guide line.
+    OnGuide,
     /// Along a red/green/blue axis through the point the tool is drawing from.
     Axis(Axis),
     /// Parallel to the reference edge, through the point the tool is drawing from.
@@ -108,8 +113,8 @@ pub fn infer_with(
 /// the open context's coordinates (`camera` must be in them too). Snap candidates count only
 /// within `radius_px` of the cursor.
 ///
-/// Ranking: endpoint, midpoint and origin (nearest on screen wins) > intersection > on-edge >
-/// directions from the anchor (axes, parallel or perpendicular to the reference edge; nearest
+/// Ranking: endpoint, midpoint, origin and guide point (nearest on screen wins) > intersection
+/// (of edges and guide lines) > on-edge > on-guide-line > directions from the anchor (axes, parallel or perpendicular to the reference edge; nearest
 /// wins) > on-face > ground > free. Points and edges hidden behind a face are skipped. With a
 /// lock, the result is always on the locked line.
 pub fn infer_in(
@@ -187,9 +192,9 @@ pub fn infer_in(
     }
 }
 
-/// The visible point snap under the cursor, if any: endpoint, midpoint or origin (nearest on
-/// screen), else the nearest apparent intersection of two edges both visible there, else the
-/// nearest point on an edge.
+/// The visible point snap under the cursor, if any: endpoint, midpoint, origin or guide point
+/// (nearest on screen), else the nearest apparent intersection of two edges or guide lines
+/// both visible there, else the nearest point on an edge, else on a guide line.
 fn snap_point(
     scenery: &Scenery,
     camera: &Camera,
@@ -220,13 +225,44 @@ fn snap_point(
         offer((a + b) * 0.5, SnapKind::Midpoint);
     }
     offer(DVec3::ZERO, SnapKind::Origin);
+    let guides = placed_guides(scenery);
+    for &(_, _, g) in &guides {
+        if let Guide::Point { position } = g {
+            offer(position, SnapKind::GuidePoint);
+        }
+    }
     if let Some((_, p, kind)) = best {
         return Some((p, kind));
     }
 
+    // Guide lines passing near the cursor, as the part of them in view.
+    let guide_lines: Vec<(DVec3, DVec3)> = guides
+        .iter()
+        .filter_map(|&(_, _, g)| match g {
+            Guide::Line { point, direction } => Some((point, direction)),
+            Guide::Point { .. } => None,
+        })
+        .filter(|&(point, dir)| {
+            let p = closest_on_line_to_ray(point, dir, &ray, false);
+            camera
+                .project(p)
+                .is_some_and(|s| s.distance(cursor) <= radius_px)
+        })
+        .collect();
+    let lines: Vec<(DVec3, DVec3)> = near
+        .segments
+        .iter()
+        .map(|&(_, _, a, b)| (a, b))
+        .chain(
+            guide_lines
+                .iter()
+                .filter_map(|&(point, dir)| camera.line_span(point, dir))
+                .map(|[a, b]| (a, b)),
+        )
+        .collect();
     let mut crossing: Option<(f64, DVec3)> = None;
-    for (i, &(_, _, a, b)) in near.segments.iter().enumerate() {
-        for &(_, _, c, d) in &near.segments[i + 1..] {
+    for (i, &(a, b)) in lines.iter().enumerate() {
+        for &(c, d) in &lines[i + 1..] {
             if let Some((p, far)) = apparent_crossing(camera, (a, b), (c, d))
                 && visible(scenery, camera.eye, far)
                 && let Some(dist) = within(p)
@@ -249,7 +285,68 @@ fn snap_point(
             on_edge = Some((d, p));
         }
     }
-    on_edge.map(|(_, p)| (p, SnapKind::OnEdge))
+    if let Some((_, p)) = on_edge {
+        return Some((p, SnapKind::OnEdge));
+    }
+
+    let mut on_guide: Option<(f64, DVec3)> = None;
+    for &(point, dir) in &guide_lines {
+        let p = closest_on_line_to_ray(point, dir, &ray, false);
+        if let Some(d) = within(p)
+            && on_guide.is_none_or(|(bd, _)| d < bd)
+        {
+            on_guide = Some((d, p));
+        }
+    }
+    on_guide.map(|(_, p)| (p, SnapKind::OnGuide))
+}
+
+/// Every guide of every part, placed in the open context's coordinates, with the index of the
+/// part it comes from, in part and id order. Guides are few, so they are scanned, not indexed.
+fn placed_guides(scenery: &Scenery) -> Vec<(usize, GuideId, Guide)> {
+    scenery
+        .parts
+        .iter()
+        .enumerate()
+        .flat_map(|(k, part)| {
+            part.model
+                .guides()
+                .map(move |(id, g)| (k, id, g.transformed(part.place)))
+        })
+        .collect()
+}
+
+/// The visible guide nearest the cursor on screen whose owner passes `keep`, if one lies
+/// within `radius_px`: whose it is, the guide (an id in its own mesh) and the guide placed in
+/// the open context's coordinates.
+pub fn guide_under_where(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+    radius_px: f64,
+    keep: impl Fn(Owner) -> bool,
+) -> Option<(Owner, GuideId, Guide)> {
+    let ray = camera.ray(cursor);
+    let mut best: Option<(f64, (Owner, GuideId, Guide))> = None;
+    for (part, id, g) in placed_guides(scenery) {
+        let owner = scenery.parts[part].owner;
+        if !keep(owner) {
+            continue;
+        }
+        let p = match g {
+            Guide::Point { position } => position,
+            Guide::Line { point, direction } => {
+                closest_on_line_to_ray(point, direction, &ray, false)
+            }
+        };
+        let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
+            continue;
+        };
+        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera.eye, p) {
+            best = Some((d, (owner, id, g)));
+        }
+    }
+    best.map(|(_, hit)| hit)
 }
 
 /// Where segments a-b and c-d cross on screen away from their ends: the points under the
@@ -799,5 +896,83 @@ mod tests {
         // An endpoint under the cursor sets the height.
         let snapped = infer_with(&m, &c, px(&c, DVec3::new(3.0, 3.0, 2.0)), &g, R);
         assert_eq!(snapped.point, DVec3::new(1.0, 1.0, 2.0));
+    }
+
+    fn with_guides() -> Model {
+        let mut m = Model::new();
+        m.add_guide(Guide::Point {
+            position: DVec3::new(2.0, 1.0, 0.0),
+        })
+        .unwrap();
+        m.add_guide(Guide::Line {
+            point: DVec3::new(0.0, 3.0, 0.0),
+            direction: DVec3::X,
+        })
+        .unwrap();
+        m.add_guide(Guide::Line {
+            point: DVec3::new(5.0, 0.0, 0.0),
+            direction: DVec3::Y,
+        })
+        .unwrap();
+        m
+    }
+
+    #[test]
+    fn snaps_to_guide_points_and_onto_guide_lines() {
+        let (c, m) = (cam(), with_guides());
+        let point = DVec3::new(2.0, 1.0, 0.0);
+        let hit = infer(&m, &c, px(&c, point) + DVec2::new(3.0, -2.0), None, R);
+        assert_eq!((hit.point, hit.kind), (point, SnapKind::GuidePoint));
+        let hit = infer(
+            &m,
+            &c,
+            px(&c, DVec3::new(2.6, 3.0, 0.0)) + DVec2::new(0.0, 3.0),
+            None,
+            R,
+        );
+        assert_eq!(hit.kind, SnapKind::OnGuide);
+        assert!((hit.point.y - 3.0).abs() < 1e-9 && hit.point.z.abs() < 1e-9);
+        assert!((hit.point.x - 2.6).abs() < 0.1);
+    }
+
+    #[test]
+    fn guide_lines_cross_each_other_and_edges() {
+        let (c, mut m) = (cam(), with_guides());
+        let both = DVec3::new(5.0, 3.0, 0.0);
+        let hit = infer(&m, &c, px(&c, both) + DVec2::new(2.0, 1.0), None, R);
+        assert_eq!(hit.kind, SnapKind::Intersection);
+        assert!(hit.point.distance(both) < 1e-6, "{:?}", hit.point);
+        m.add_edge(DVec3::new(1.0, -3.0, 0.0), DVec3::new(1.0, 7.0, 0.0))
+            .unwrap();
+        let cross = DVec3::new(1.0, 3.0, 0.0);
+        let hit = infer(&m, &c, px(&c, cross) + DVec2::new(-1.0, 2.0), None, R);
+        assert_eq!(hit.kind, SnapKind::Intersection);
+        assert!(hit.point.distance(cross) < 1e-6, "{:?}", hit.point);
+        // Along the edge away from the guide, the edge wins over nothing.
+        let hit = infer(&m, &c, px(&c, DVec3::new(1.0, 0.5, 0.0)), None, R);
+        assert_eq!(hit.kind, SnapKind::OnEdge);
+    }
+
+    #[test]
+    fn finds_the_guide_under_the_cursor() {
+        let (c, m) = (cam(), with_guides());
+        let scenery = Scenery::single(&m);
+        let ids: Vec<GuideId> = m.guides().map(|(id, _)| id).collect();
+        let under = |p: DVec3| {
+            guide_under_where(&scenery, &c, px(&c, p) + DVec2::new(2.0, 2.0), R, |_| true)
+                .map(|(_, id, _)| id)
+        };
+        assert_eq!(under(DVec3::new(2.0, 1.0, 0.0)), Some(ids[0]));
+        assert_eq!(under(DVec3::new(-2.0, 3.0, 0.0)), Some(ids[1]));
+        assert_eq!(under(DVec3::new(5.0, -4.0, 0.0)), Some(ids[2]));
+        assert_eq!(under(DVec3::new(-3.0, -3.0, 0.0)), None);
+        // Guides behind a face are not found.
+        let mut hidden = with_guides();
+        let lid = [(-9.0, -9.0), (9.0, -9.0), (9.0, 9.0), (-9.0, 9.0)]
+            .map(|(x, y)| DVec3::new(x, y, 1.0));
+        hidden.add_polygon(&lid).unwrap();
+        let scenery = Scenery::single(&hidden);
+        let p = px(&c, DVec3::new(2.0, 1.0, 0.0));
+        assert!(guide_under_where(&scenery, &c, p, R, |_| true).is_none());
     }
 }

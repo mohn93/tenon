@@ -8,7 +8,7 @@ use kernel::EntityId;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, MAX_COPIES};
 
-use crate::select::{box_outline, face_outline, pick};
+use crate::select::{box_outline, face_outline, guide_outline, pick};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_length, parse_array, parse_length};
 
@@ -76,7 +76,7 @@ impl MoveTool {
     }
 }
 
-/// Segments outlining edges, faces and instances (their bounding boxes).
+/// Segments outlining edges, faces, instances (their bounding boxes) and guides.
 pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
     let m = ctx.model;
     let mut out = Vec::new();
@@ -95,7 +95,12 @@ pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
                 }
             }
             EntityId::Instance(_) => out.extend(box_outline(ctx, *id)),
-            EntityId::Vertex(_) | EntityId::Guide(_) => {}
+            EntityId::Guide(g) => {
+                if let Some(g) = m.guide(g) {
+                    out.extend(guide_outline(ctx, g));
+                }
+            }
+            EntityId::Vertex(_) => {}
         }
     }
     out

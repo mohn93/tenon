@@ -380,3 +380,30 @@ fn scene_stays_inside_its_viewport() {
     assert!(face.x < (W / 2) as f64);
     assert!(grayish(pixel(&px, face.x as u32, face.y as u32)));
 }
+
+#[test]
+fn a_guide_line_is_drawn_dashed_across_the_view() {
+    let c = camera();
+    let mut m = Model::new();
+    // A horizontal guide line across the view through the target, in front of the background.
+    m.add_guide(kernel::Guide::Line {
+        point: c.target,
+        direction: c.right(),
+    })
+    .unwrap();
+    let Some(pixels) = render_scene(&c, &m, &[]) else {
+        return;
+    };
+    // The line runs along the boundary between the two middle rows, so multisampling shares
+    // it between them: a column is part of a dash when either row is clearly darkened.
+    let dark = |x: u32| (H / 2 - 1..=H / 2).any(|y| pixel(&pixels, x, y)[0] < 200);
+    let along: Vec<bool> = (0..W).map(dark).collect();
+    let lit = along.iter().filter(|b| **b).count();
+    // Dashes and gaps of about 8 px: roughly half the row, broken many times.
+    assert!(
+        lit > W as usize / 4 && lit < W as usize * 3 / 4,
+        "{lit} guide pixels"
+    );
+    let breaks = along.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(breaks > 20, "{breaks} dash ends");
+}

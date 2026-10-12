@@ -5,6 +5,7 @@ use session::Camera;
 use wgpu::util::DeviceExt;
 
 use crate::grid::{BACKGROUND, LineVertex, flat_ground_lines, vertical_axis_lines};
+use crate::guides::{GuideShape, guide_lines};
 use crate::scene::{FaceVertex, scene_geometry};
 
 pub const SAMPLE_COUNT: u32 = 4;
@@ -72,6 +73,8 @@ pub struct Renderer {
     vertical_axis: Mesh,
     faces: Option<Mesh>,
     edges: Option<Mesh>,
+    /// Guides in root coordinates; their lines depend on the camera, so they are built per frame.
+    guides: Vec<GuideShape>,
     targets: Option<Targets>,
 }
 
@@ -250,6 +253,7 @@ impl Renderer {
             vertical_axis,
             faces: None,
             edges: None,
+            guides: Vec::new(),
             targets: None,
         }
     }
@@ -266,6 +270,7 @@ impl Renderer {
         let g = scene_geometry(scene, context, selection);
         self.faces = mesh(&self.device, "faces", &g.faces);
         self.edges = mesh(&self.device, "edges", &g.edges);
+        self.guides = g.guides;
     }
 
     /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything) over the
@@ -303,6 +308,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
         let overlay = mesh(&self.device, "overlay", overlay);
+        let guides = mesh(&self.device, "guides", &guide_lines(&self.guides, camera));
 
         let [r, g, b, a] = BACKGROUND.map(f64::from);
         let mut encoder = self
@@ -347,6 +353,7 @@ impl Renderer {
                     (&self.ground_pipeline, Some(&self.vertical_axis)),
                     (&self.face_pipeline, self.faces.as_ref()),
                     (&self.edge_pipeline, self.edges.as_ref()),
+                    (&self.edge_pipeline, guides.as_ref()),
                     (&self.overlay_pipeline, overlay.as_ref()),
                 ];
                 for (pipeline, mesh) in layers {
