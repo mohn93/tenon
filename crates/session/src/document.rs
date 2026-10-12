@@ -196,6 +196,10 @@ impl Document {
                 self.save_file(path.as_deref())?;
                 Ok(Outcome::default())
             }
+            Command::Export { path, format } => {
+                self.export_file(&path, format)?;
+                Ok(Outcome::default())
+            }
             Command::Select { ids, mode } => {
                 self.parts(&ids)?;
                 let ids: BTreeSet<EntityId> = ids.into_iter().collect();
@@ -250,7 +254,10 @@ impl Document {
                 self.rename_changes(*definition, name)
             }
             Command::PurgeDefinitions => Ok(self.scene.purge()),
-            Command::New { .. } | Command::Open { .. } | Command::Save { .. } => return None,
+            Command::New { .. }
+            | Command::Open { .. }
+            | Command::Save { .. }
+            | Command::Export { .. } => return None,
             Command::Undo
             | Command::Redo
             | Command::SetCamera { .. }
@@ -347,11 +354,12 @@ impl Document {
                         | Command::New { .. }
                         | Command::Open { .. }
                         | Command::Save { .. }
+                        | Command::Export { .. }
                 ) =>
                 {
                     Err(CommandError::new(
                         ErrorKind::InvalidInput,
-                        "undo, redo, new, open and save are not allowed in an atomic batch",
+                        "undo, redo, new, open, save and export are not allowed in an atomic batch",
                     ))
                 }
                 None => self.execute(command),

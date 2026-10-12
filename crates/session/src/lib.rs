@@ -3,6 +3,7 @@
 pub mod camera;
 mod command;
 mod document;
+pub mod export;
 pub mod file;
 mod query;
 mod rectangle;

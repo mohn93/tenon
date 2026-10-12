@@ -51,17 +51,23 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
         model: scene.to_data(),
     };
     let json = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file(ENTRY, options).map_err(|e| e.to_string())?;
+    zip.write_all(&json).map_err(|e| e.to_string())?;
+    let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
+    replace_file(path, &bytes)
+}
+
+/// Writes `bytes` to `path`, replacing the file there only once they are all on disk.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut name = path.as_os_str().to_owned();
     name.push(".partial");
     let partial = Path::new(&name);
     let result = (|| -> Result<(), String> {
-        let file = std::fs::File::create(partial).map_err(|e| e.to_string())?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-        zip.start_file(ENTRY, options).map_err(|e| e.to_string())?;
-        zip.write_all(&json).map_err(|e| e.to_string())?;
-        let file = zip.finish().map_err(|e| e.to_string())?;
+        let mut file = std::fs::File::create(partial).map_err(|e| e.to_string())?;
+        file.write_all(bytes).map_err(|e| e.to_string())?;
         // The data must be on disk before the rename makes it the file.
         file.sync_all().map_err(|e| e.to_string())?;
         std::fs::rename(partial, path).map_err(|e| e.to_string())?;

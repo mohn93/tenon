@@ -7,6 +7,7 @@ use kernel::{DefinitionId, DefinitionKind, Scene, SceneChange};
 use super::Document;
 use crate::camera::Camera;
 use crate::command::{CommandError, ErrorKind};
+use crate::export::{self, ExportFormat};
 use crate::file;
 
 impl Document {
@@ -57,6 +58,30 @@ impl Document {
         self.path = Some(target);
         self.clean_revision = self.revision;
         Ok(())
+    }
+
+    /// Writes every face of the whole model as triangles in `format`, or the format the
+    /// path's extension names.
+    pub(super) fn export_file(
+        &self,
+        path: &str,
+        format: Option<ExportFormat>,
+    ) -> Result<(), CommandError> {
+        let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "give a format, or a path ending in .obj, .stl, .glb or .gltf",
+            ));
+        };
+        let triangles = self.scene.triangles();
+        if triangles.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "nothing to export: the model has no faces",
+            ));
+        }
+        file::replace_file(Path::new(path), &export::encode(&triangles, format))
+            .map_err(|e| file_error(path, e))
     }
 
     /// Swaps in another model: history, selection and the open context start over, and event

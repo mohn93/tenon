@@ -1,6 +1,8 @@
 use std::fmt;
 
 use kernel::{ChangeSummary, DefinitionId, EntityId};
+
+use crate::export::ExportFormat;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +110,14 @@ pub enum Command {
         #[serde(default)]
         path: Option<String>,
     },
+    /// Write every face of the model (all instances placed, in root coordinates) as triangles
+    /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
+    /// `.stl`, `.glb`, `.gltf`). Not an undo step.
+    Export {
+        path: String,
+        #[serde(default)]
+        format: Option<ExportFormat>,
+    },
     /// Change the selection of edges, faces and instances. Not recorded in undo history.
     Select {
         ids: Vec<EntityId>,
@@ -130,7 +140,10 @@ impl Command {
     pub fn changes_model(&self) -> bool {
         !matches!(
             self,
-            Command::SetCamera { .. } | Command::Select { .. } | Command::Save { .. }
+            Command::SetCamera { .. }
+                | Command::Select { .. }
+                | Command::Save { .. }
+                | Command::Export { .. }
         )
     }
 }
