@@ -15,6 +15,7 @@ mod push_pull;
 mod regions;
 mod scene;
 mod transform;
+mod triangles;
 mod weld;
 
 pub use data::{
@@ -25,3 +26,4 @@ pub use ids::{DefinitionId, EdgeId, EntityId, FaceId, InstanceId, VertexId};
 pub use index::{Index, Shape};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Instance, Model, Op, Vertex};
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
+pub use triangles::Triangle;
