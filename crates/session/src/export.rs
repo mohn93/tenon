@@ -136,7 +136,7 @@ impl<'a> Groups<'a> {
 }
 
 /// An sRGB component (0 to 1) as linear light, as glTF colors and most `.mtl` readers take it.
-fn linear(c: f64) -> f64 {
+pub(crate) fn linear(c: f64) -> f64 {
     if c <= 0.04045 {
         c / 12.92
     } else {

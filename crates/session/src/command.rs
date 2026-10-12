@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::{Projection, StandardView};
 use crate::export::ExportFormat;
+use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
@@ -210,6 +211,28 @@ pub enum Command {
         #[serde(default)]
         format: Option<ExportFormat>,
     },
+    /// Read an OBJ or STL file and add its faces to the open context, as one undo step: as a
+    /// new group (default) or component named after the file, placed at the context's origin
+    /// and selected, or (`"as": "context"`) as loose geometry merging with what it touches,
+    /// which becomes the selection. `format` defaults to the one the extension names (`.obj`,
+    /// `.stl`). File units are meters times `scale` (default 1); `up` is the file's up axis
+    /// (default `y` for OBJ, `z` for STL, as `export` writes them). Corners closer than
+    /// 1e-6 m are welded, and with `merge_coplanar` (default true) neighbouring faces in one
+    /// plane with one material become one face. OBJ materials come from its `mtllib`
+    /// libraries. The outcome's `import` says what was made.
+    Import {
+        path: String,
+        #[serde(default)]
+        format: Option<ImportFormat>,
+        #[serde(default, rename = "as")]
+        place: ImportAs,
+        #[serde(default)]
+        scale: Option<f64>,
+        #[serde(default)]
+        up: Option<UpAxis>,
+        #[serde(default)]
+        merge_coplanar: Option<bool>,
+    },
     /// Change the selection of edges, faces, instances and guides. Not recorded in undo history.
     Select {
         ids: Vec<EntityId>,
@@ -313,6 +336,9 @@ pub enum SelectMode {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Outcome {
     pub changes: ChangeSummary,
+    /// What an `import` read and made; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<ImportReport>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

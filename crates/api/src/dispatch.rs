@@ -50,7 +50,9 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
         "execute" => {
             let command: Command = params_as(params)?;
             let outcome = host.execute(command).map_err(command_failed)?;
-            Ok(json!({"changes": outcome.changes, "revision": host.document().revision()}))
+            let mut result = json!(outcome);
+            result["revision"] = json!(host.document().revision());
+            Ok(result)
         }
         "batch" => {
             #[derive(Deserialize)]
@@ -151,7 +153,10 @@ pub fn describe() -> Value {
         "protocol": "JSON-RPC 2.0, one JSON object per line (UTF-8, '\\n' terminated)",
         "units": "meters; Z is up; angles in degrees",
         "methods": {
-            "execute": {"params": "Command", "result": "{changes: ChangeSummary, revision}"},
+            "execute": {
+                "params": "Command",
+                "result": "{changes: ChangeSummary, import?: ImportReport, revision}"
+            },
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], revision}",

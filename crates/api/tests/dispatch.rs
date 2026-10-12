@@ -592,3 +592,38 @@ fn components_over_json_rpc() {
         (json!(6), json!(1))
     );
 }
+
+#[test]
+fn import_reports_what_it_made_over_json_rpc() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("api-import");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tri.stl");
+    std::fs::write(
+        &path,
+        "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n\
+         endloop\nendfacet\nendsolid t\n",
+    )
+    .unwrap();
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    );
+    let result = &r["result"];
+    assert_eq!(result["revision"], 1);
+    assert_eq!(result["import"]["faces"], 1);
+    assert_eq!(result["import"]["polygons"], 1);
+    assert!(
+        result["import"]["instance"]
+            .as_str()
+            .unwrap()
+            .starts_with('i')
+    );
+    let plain = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_edge", "start": [5, 0, 0], "end": [6, 0, 0]}),
+    );
+    assert!(plain["result"].get("import").is_none());
+}

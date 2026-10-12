@@ -31,7 +31,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}` |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below) |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does) | `{width, height, png_base64}` |
@@ -66,7 +66,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `er
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
 `change_material`, `delete_material`, `paint`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
-`new`, `open`, `save`, `export`.
+`new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`. Ids are unique across the whole model, including inside
@@ -378,6 +378,50 @@ beside the old (or no) `.obj`.
 
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
 does not change the revision or the `file` query.
+
+### Import
+
+`{"type": "import", "path": "/abs/chair.obj"}` reads an OBJ or STL file and adds its faces to
+the open context as one undo step. `format` (`obj`, `stl`) defaults to the one the path's
+extension names, in any case; any other extension without `format` is `invalid_input`, and so
+is a `.skr` path (use `open`).
+
+| Field | Meaning |
+|---|---|
+| `as` | `group` (default): a new group named after the file (`chair`), placed at the open context's origin and selected. `component`: the same as a component. `context`: loose geometry in the open context that merges with what it touches (splitting edges and faces as drawing does), as if the group were made and exploded; what comes out is selected. Drawing with sticky geometry is slow for big files, so a file making more than 2,000 faces is `invalid_input` here (import it as a group). |
+| `scale` | Meters per file unit, default 1 (a millimeter file: `0.001`). Positive and finite, else `invalid_input`. |
+| `up` | The file's up axis: `y` or `z`. Defaults to `y` for OBJ and `z` for STL, as `export` writes them, so exporting and importing again gives back the same geometry (a Y-up file's (x, y, z) becomes (x, -z, y)). |
+| `merge_coplanar` | Default true: neighbouring faces that share an edge no third face uses, lie in one plane, face the same way and have the same material become one face (an STL's triangles come back as the model's faces, holes included). False keeps one face per polygon. |
+
+Reading: OBJ `v` positions, `f` polygons (`v`, `v/vt`, `v/vt/vn`, `v//vn` corners; negative
+indices count back from the last position), `usemtl` and `mtllib`, comments and lines continued
+with `\`; normals, texture coordinates, lines, groups and objects are ignored. STL is binary
+when the file is exactly 84 bytes plus 50 per triangle its header counts, else ASCII; stored
+normals are ignored. Every polygon's front is the side its corners turn counter-clockwise
+around. Corners closer than 1e-6 m (after scaling) are welded into one vertex. A polygon that is
+not flat, or whose sides cross, becomes triangles. A polygon with fewer than three distinct
+corners, no area, or the same corners as an earlier one makes no face and is counted as
+`skipped`. Faces are made as the file has them: nothing is split where they cross, and no face
+is added the file does not have.
+
+OBJ materials: a material name the model already has is that material (whatever its color);
+a name that only the `mtllib` libraries (read beside the OBJ, relative to its folder; missing
+or unreadable ones are ignored) give a diffuse color (`Kd`, linear) becomes a new material of
+that color, listed in `changes.materials`; `default` (any case) and unknown names are the
+default material. Materials go on the faces' front sides.
+
+The outcome's `import` reports what was made:
+
+```
+{"changes": {...}, "import": {"instance": "i40", "definition": "d39", "polygons": 24,
+ "faces": 12, "vertices": 16, "skipped": 0, "materials": 1}, "revision": 3}
+```
+
+`instance` and `definition` are absent for `"as": "context"`. Errors leave the model as it was:
+a file that cannot be read, is over 128 MiB, has more than 200,000 polygons or 1,000,000 OBJ
+positions, has a broken line (the message names it), a number that is not finite, a position
+beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
+`import` is allowed in an atomic batch.
 
 Behaviors worth knowing:
 

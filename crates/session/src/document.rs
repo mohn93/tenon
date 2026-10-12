@@ -11,6 +11,7 @@ use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
 use crate::camera::Camera;
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
+use crate::import::ImportReport;
 use crate::query::{
     ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind,
     Query, QueryResult, VertexInfo,
@@ -21,7 +22,10 @@ use crate::rotate::rotation;
 mod camera;
 mod files;
 mod groups;
+mod import;
 mod materials;
+
+use import::ImportOptions;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -50,6 +54,8 @@ pub struct Document {
     path: Option<PathBuf>,
     /// The revision the model had when it was last opened, saved or started.
     clean_revision: u64,
+    /// What the last `import` edit made, until its outcome takes it.
+    import_report: Option<ImportReport>,
 }
 
 impl Document {
@@ -66,6 +72,7 @@ impl Document {
             log_start: 0,
             path: None,
             clean_revision: 0,
+            import_report: None,
         }
     }
 
@@ -151,7 +158,9 @@ impl Document {
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
         if let Some(changes) = self.edit(&command) {
-            return Ok(self.record(changes?));
+            let mut outcome = self.record(changes?);
+            outcome.import = self.import_report.take();
+            return Ok(outcome);
         }
         match command {
             Command::Undo => {
@@ -246,7 +255,8 @@ impl Document {
             | Command::AddMaterial { .. }
             | Command::ChangeMaterial { .. }
             | Command::DeleteMaterial { .. }
-            | Command::Paint { .. } => {
+            | Command::Paint { .. }
+            | Command::Import { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
@@ -324,6 +334,23 @@ impl Document {
                 material,
                 side,
             } => self.paint_changes(ids, *material, *side),
+            Command::Import {
+                path,
+                format,
+                place,
+                scale,
+                up,
+                merge_coplanar,
+            } => self.import_changes(
+                path,
+                &ImportOptions {
+                    format: *format,
+                    place: *place,
+                    scale: *scale,
+                    up: *up,
+                    merge_coplanar: *merge_coplanar,
+                },
+            ),
             Command::New { .. }
             | Command::Open { .. }
             | Command::Save { .. }
@@ -386,7 +413,10 @@ impl Document {
                 Some(changes) => changes.map(|c| {
                     let summary = c.summary();
                     applied.push(c);
-                    Outcome { changes: summary }
+                    Outcome {
+                        changes: summary,
+                        import: self.import_report.take(),
+                    }
                 }),
                 None if matches!(
                     command,
@@ -910,7 +940,10 @@ impl Document {
         if self.events.len() > EVENT_LOG_LEN {
             self.events.pop_front();
         }
-        Outcome { changes: summary }
+        Outcome {
+            changes: summary,
+            import: None,
+        }
     }
 
     pub fn query(&self, query: &Query) -> Result<QueryResult, CommandError> {

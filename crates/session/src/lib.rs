@@ -7,6 +7,7 @@ mod command;
 mod document;
 pub mod export;
 pub mod file;
+mod import;
 mod query;
 mod rectangle;
 mod rotate;
@@ -16,6 +17,10 @@ pub use camera::{Camera, Projection, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
+pub use import::{
+    ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
+    MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
+};
 pub use kernel::{CurveKind, MaterialId, Side};
 pub use query::{
     Bounds, ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo,
