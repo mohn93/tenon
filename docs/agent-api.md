@@ -59,7 +59,8 @@ of silently doing nothing).
 
 Commands: `add_edge`, `add_rectangle`, `push_pull`, `erase`, `move`, `copy`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `rename_definition`,
-`purge_definitions`, `select`, `undo`, `redo`, `set_camera`, `new`, `open`, `save`. Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
+`purge_definitions`, `select`, `undo`, `redo`, `set_camera`, `new`, `open`, `save`, `export`.
+Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component). Definitions are `d5`. Ids are unique across the whole model, including inside
 groups and components.
@@ -150,7 +151,26 @@ over 256 MiB, ids over 2^53, a transform that cannot be inverted, or a coordinat
 +/-1e6 m limit); the model is left as it was. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
-itself before its own New and Open. `new`, `open` and `save` are not allowed in an atomic batch.
+itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an
+atomic batch.
+
+### Export
+
+`{"type": "export", "path": "/abs/house.glb"}` writes every face of the whole model as
+triangles: the root's faces and every instance's, placed in root coordinates (a component placed
+twice is written twice), whatever instance is open. Edges without faces are not written.
+`format` (`obj`, `stl`, `glb`, `gltf`) defaults to the one the path's extension names, in any
+case; any other extension without `format` is `invalid_input`, and so is a model with no faces.
+
+| Format | Content |
+|---|---|
+| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y) |
+| `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model |
+| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`); Y up |
+| `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
+
+Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
+does not change the revision or the `file` query.
 
 Behaviors worth knowing:
 

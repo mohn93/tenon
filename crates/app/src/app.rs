@@ -246,6 +246,22 @@ impl State {
         self.editor.save_file(path.as_deref())
     }
 
+    /// Exports to a file chosen in a dialog; its extension picks the format.
+    fn export(&mut self) {
+        let stem = file_name(self.editor.doc().path());
+        let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
+        let chosen = rfd::FileDialog::new()
+            .add_filter("OBJ", &["obj"])
+            .add_filter("STL", &["stl"])
+            .add_filter("glTF binary", &["glb"])
+            .add_filter("glTF", &["gltf"])
+            .set_file_name(format!("{stem}.obj"))
+            .save_file();
+        if let Some(path) = chosen {
+            self.editor.export_file(&path);
+        }
+    }
+
     fn apply(&mut self, action: UiAction) {
         match action {
             UiAction::NewModel => self.new_model(),
@@ -256,6 +272,7 @@ impl State {
             UiAction::SaveFileAs => {
                 self.save(true);
             }
+            UiAction::ExportFile => self.export(),
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
                 self.editor.undo();
@@ -433,6 +450,7 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
             PhysicalKey::Code(KeyCode::KeyN) => Some('n'),
             PhysicalKey::Code(KeyCode::KeyO) => Some('o'),
             PhysicalKey::Code(KeyCode::KeyS) => Some('s'),
+            PhysicalKey::Code(KeyCode::KeyE) => Some('e'),
             PhysicalKey::Code(KeyCode::KeyQ) => Some('q'),
             _ => None,
         },
@@ -714,6 +732,13 @@ impl ApplicationHandler<ApiWake> for App {
                 } else if command_key && !event.repeat && letter == Some('s') {
                     s.save(s.modifiers.shift_key());
                     true
+                } else if command_key
+                    && !event.repeat
+                    && s.modifiers.shift_key()
+                    && letter == Some('e')
+                {
+                    s.export();
+                    true
                 } else if command_key && !event.repeat && letter == Some('q') {
                     if s.settle_changes() {
                         event_loop.exit();
@@ -814,6 +839,7 @@ mod tests {
         assert_eq!(shortcut_letter(&ch("ب"), code(KeyCode::KeyF)), None);
         assert_eq!(shortcut_letter(&ch("ض"), code(KeyCode::KeyQ)), Some('q'));
         assert_eq!(shortcut_letter(&ch("Q"), code(KeyCode::KeyQ)), Some('q'));
+        assert_eq!(shortcut_letter(&ch("ث"), code(KeyCode::KeyE)), Some('e'));
     }
 
     #[test]

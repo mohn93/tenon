@@ -193,7 +193,7 @@ Every milestone's acceptance includes: new capabilities are reachable as `sessio
 - **M5a**: groups and components in the kernel and session: make group/component, explode, copy/move/erase/select instances, open/close an instance for editing (commands and queries), drawn with the selection and open context shown.
 - **M5b**: group and component tools: picking and box-selecting instances, double-click to open and close, Move on instances, inference on geometry inside instances, editing a moved instance with the tools, toolbar and shortcuts for make group/component and explode.
 - **M5c**: files: `.skr` save/open/new as commands (zip with versioned JSON keeping every id), opening a file given on the command line, File menu with native dialogs and shortcuts, unsaved-changes prompts; rename and purge definitions.
-- **M5d**: export OBJ, STL, glTF as commands and from the File menu.
+- **M5d**: export OBJ, STL, glTF as commands and from the File menu (faces as triangles in root coordinates; OBJ and glTF Y-up, STL Z-up).
 
 ## Risks
 

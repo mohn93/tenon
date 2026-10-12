@@ -476,6 +476,22 @@ impl Editor {
         saved
     }
 
+    /// Exports every face of the model to `path`, in the format its extension names. False if
+    /// it cannot be exported; the status then says why.
+    pub fn export_file(&mut self, path: &Path) -> bool {
+        self.message = None;
+        let exported = self
+            .run(Command::Export {
+                path: path.display().to_string(),
+                format: None,
+            })
+            .is_some();
+        if exported {
+            self.message = Some(format!("Exported {}", path.display()));
+        }
+        exported
+    }
+
     pub fn undo(&mut self) -> bool {
         self.reset_tool();
         self.run(Command::Undo);
@@ -1755,6 +1771,26 @@ mod tests {
         assert!(!e.open_file(&missing));
         assert!(e.status().contains("missing.skr"), "{}", e.status());
         assert_eq!(stats(&e), (4, 1), "a failed open leaves the model");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn exporting_writes_the_file_its_extension_names() {
+        let mut e = editor();
+        let path = temp_file("square.stl");
+        assert!(
+            !e.export_file(&path),
+            "an empty model has nothing to export"
+        );
+        assert!(e.status().contains("no faces"), "{}", e.status());
+        square(&mut e);
+        e.key(EditorKey::Escape);
+        assert!(e.export_file(&path));
+        assert!(e.status().contains("Exported"), "{}", e.status());
+        assert_eq!(std::fs::read(&path).unwrap().len(), 84 + 50 * 2);
+        let unknown = temp_file("square.dwg");
+        assert!(!e.export_file(&unknown));
+        assert!(e.status().contains(".obj"), "{}", e.status());
         let _ = std::fs::remove_file(&path);
     }
 }

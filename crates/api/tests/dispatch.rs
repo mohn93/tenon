@@ -139,6 +139,7 @@ fn describe_lists_methods_and_schemas() {
         "new",
         "open",
         "save",
+        "export",
     ] {
         assert!(
             command_schema.contains(variant),

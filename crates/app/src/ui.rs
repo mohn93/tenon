@@ -20,6 +20,7 @@ pub enum UiAction {
     OpenFile,
     SaveFile,
     SaveFileAs,
+    ExportFile,
 }
 
 /// What the panels show.
@@ -46,6 +47,7 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     ("Open...", "Cmd+O", UiAction::OpenFile),
                     ("Save", "Cmd+S", UiAction::SaveFile),
                     ("Save As...", "Shift+Cmd+S", UiAction::SaveFileAs),
+                    ("Export...", "Shift+Cmd+E", UiAction::ExportFile),
                 ];
                 for (label, key, action) in items {
                     if ui
@@ -229,6 +231,7 @@ mod tests {
             UiAction::OpenFile,
             UiAction::SaveFile,
             UiAction::SaveFileAs,
+            UiAction::ExportFile,
         ] {
             assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
         }
