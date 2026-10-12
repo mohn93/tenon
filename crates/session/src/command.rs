@@ -28,6 +28,17 @@ pub enum Command {
         #[serde(default)]
         normal: Option<[f64; 3]>,
     },
+    /// Draw a circle as a regular polygon of `segments` sides (default 24, at most 360) around
+    /// `center` with `radius`, in the plane with `normal` (default Z), as one undo step. The
+    /// first corner lies along the plane's u axis (see `add_rectangle`).
+    AddCircle {
+        center: [f64; 3],
+        radius: f64,
+        #[serde(default)]
+        normal: Option<[f64; 3]>,
+        #[serde(default)]
+        segments: Option<u32>,
+    },
     /// Move a face along its normal by `distance` meters (negative: against the normal),
     /// extruding new sides or stretching the faces around it.
     PushPull {

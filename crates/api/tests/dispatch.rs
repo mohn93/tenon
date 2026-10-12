@@ -121,6 +121,7 @@ fn describe_lists_methods_and_schemas() {
     for variant in [
         "add_edge",
         "add_rectangle",
+        "add_circle",
         "push_pull",
         "erase",
         "move",

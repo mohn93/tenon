@@ -1,6 +1,7 @@
 //! The editable document and the command/query layer every client (UI, API, tests) goes through.
 
 pub mod camera;
+mod circle;
 mod command;
 mod document;
 pub mod export;
@@ -9,6 +10,7 @@ mod query;
 mod rectangle;
 
 pub use camera::{Camera, Ray};
+pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
 pub use query::{

@@ -8,6 +8,7 @@ use kernel::{
 };
 
 use crate::camera::Camera;
+use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 use crate::query::{
     ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo,
@@ -216,6 +217,7 @@ impl Document {
             }
             Command::AddEdge { .. }
             | Command::AddRectangle { .. }
+            | Command::AddCircle { .. }
             | Command::PushPull { .. }
             | Command::Erase { .. }
             | Command::Move { .. }
@@ -241,6 +243,12 @@ impl Document {
                 opposite,
                 normal,
             } => self.add_rectangle_changes(*corner, *opposite, *normal),
+            Command::AddCircle {
+                center,
+                radius,
+                normal,
+                segments,
+            } => self.add_circle_changes(*center, *radius, *normal, *segments),
             Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
             Command::Erase { ids } => self.erase_changes(ids),
             Command::Move { ids, offset } => self.move_changes(ids, *offset),
@@ -393,6 +401,25 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         check_coordinates(&[start, end])?;
         self.edit_mesh(|m| m.add_edge(DVec3::from(start), DVec3::from(end)))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    fn add_circle_changes(
+        &mut self,
+        center: [f64; 3],
+        radius: f64,
+        normal: Option<[f64; 3]>,
+        segments: Option<u32>,
+    ) -> Result<SceneChange, CommandError> {
+        check_coordinates(&[center])?;
+        let points = circle_points(
+            DVec3::from(center),
+            radius,
+            normal.map(DVec3::from),
+            segments.unwrap_or(DEFAULT_CIRCLE_SEGMENTS),
+        )?;
+        check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
+        self.edit_mesh(|m| m.add_polygon(&points))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
