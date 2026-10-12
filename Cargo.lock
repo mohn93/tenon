@@ -1353,6 +1353,7 @@ dependencies = [
  "glam",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

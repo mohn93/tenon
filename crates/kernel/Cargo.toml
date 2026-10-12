@@ -8,3 +8,6 @@ glam = { workspace = true, features = ["serde"] }
 serde.workspace = true
 schemars.workspace = true
 earcutr.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

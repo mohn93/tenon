@@ -1,6 +1,7 @@
 //! Geometry kernel: vertices, edges and faces with SketchUp-style sticky geometry.
 //! No GPU or UI dependencies.
 
+mod data;
 mod edit;
 mod erase;
 mod faces;
@@ -16,6 +17,7 @@ mod scene;
 mod transform;
 mod weld;
 
+pub use data::{DefinitionData, EdgeData, FaceData, InstanceData, MeshData, SceneData, VertexData};
 pub use edit::KernelError;
 pub use ids::{DefinitionId, EdgeId, EntityId, FaceId, InstanceId, VertexId};
 pub use index::{Index, Shape};

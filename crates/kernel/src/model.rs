@@ -160,6 +160,33 @@ impl Model {
         Self::default()
     }
 
+    /// A model holding exactly these entities, with nothing recorded. New ids continue after
+    /// the largest one given. The caller validates the result.
+    pub(crate) fn from_parts(
+        vertices: BTreeMap<VertexId, Vertex>,
+        edges: BTreeMap<EdgeId, Edge>,
+        faces: BTreeMap<FaceId, Face>,
+        instances: BTreeMap<InstanceId, Instance>,
+    ) -> Model {
+        let next_id = vertices
+            .keys()
+            .map(|k| k.0)
+            .chain(edges.keys().map(|k| k.0))
+            .chain(faces.keys().map(|k| k.0))
+            .chain(instances.keys().map(|k| k.0))
+            .max()
+            .map_or(0, |m| m + 1);
+        Model {
+            vertices,
+            edges,
+            faces,
+            instances,
+            next_id,
+            pending: Vec::new(),
+            index: OnceLock::new(),
+        }
+    }
+
     // ---- read access ----
 
     /// The spatial index over the current geometry, built on first use after a change.

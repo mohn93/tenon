@@ -40,6 +40,8 @@ pub enum Step {
     Edit(MeshId, ChangeSet),
     AddDefinition(DefinitionId, Definition),
     RemoveDefinition(DefinitionId, Definition),
+    /// A definition's name changed from the first to the second.
+    RenameDefinition(DefinitionId, String, String),
 }
 
 impl Step {
@@ -48,6 +50,7 @@ impl Step {
             Step::Edit(mesh, c) => Step::Edit(mesh, c.inverse()),
             Step::AddDefinition(id, d) => Step::RemoveDefinition(id, d),
             Step::RemoveDefinition(id, d) => Step::AddDefinition(id, d),
+            Step::RenameDefinition(id, from, to) => Step::RenameDefinition(id, to, from),
         }
     }
 }
@@ -126,6 +129,31 @@ impl Scene {
             root: model,
             definitions: BTreeMap::new(),
         }
+    }
+
+    /// A scene of these meshes; new ids start at `next_id` or after the largest id used,
+    /// whichever is later. The caller validates the result.
+    pub(crate) fn from_meshes(
+        root: Model,
+        definitions: BTreeMap<DefinitionId, Definition>,
+        next_id: u64,
+    ) -> Self {
+        let used = definitions
+            .iter()
+            .map(|(id, d)| (id.0 + 1).max(d.mesh.next_id()))
+            .chain([root.next_id(), next_id])
+            .max()
+            .unwrap_or(0);
+        Scene {
+            root,
+            definitions,
+            next_id: used,
+        }
+    }
+
+    /// The id the next new entity or definition gets.
+    pub(crate) fn next_id(&self) -> u64 {
+        self.next_id
     }
 
     pub fn root(&self) -> &Model {
@@ -261,6 +289,39 @@ impl Scene {
         enclose(&corners)
     }
 
+    /// Renames a definition. An unchanged name changes nothing.
+    pub fn rename_definition(
+        &mut self,
+        id: DefinitionId,
+        name: &str,
+    ) -> Result<SceneChange, KernelError> {
+        let d = self
+            .definitions
+            .get(&id)
+            .ok_or(KernelError::DefinitionNotFound)?;
+        if d.name == name {
+            return Ok(SceneChange::default());
+        }
+        let step = Step::RenameDefinition(id, d.name.clone(), name.to_string());
+        self.apply_step(&step);
+        Ok(step.into())
+    }
+
+    /// Removes every definition that no instance places, including ones only unused
+    /// definitions placed.
+    pub fn purge(&mut self) -> SceneChange {
+        let mut steps = Vec::new();
+        loop {
+            let unused = self
+                .definitions()
+                .find(|(id, _)| self.instance_count(*id) == 0)
+                .map(|(id, _)| id);
+            let Some(id) = unused else { break };
+            steps.push(self.remove_definition(id));
+        }
+        SceneChange { steps }
+    }
+
     /// Applies a change (e.g. an inverse for undo).
     pub fn apply(&mut self, change: &SceneChange) {
         for step in &change.steps {
@@ -282,6 +343,11 @@ impl Scene {
             }
             Step::RemoveDefinition(id, _) => {
                 self.definitions.remove(id);
+            }
+            Step::RenameDefinition(id, _, to) => {
+                if let Some(d) = self.definitions.get_mut(id) {
+                    d.name = to.clone();
+                }
             }
         }
     }

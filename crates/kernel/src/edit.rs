@@ -23,6 +23,8 @@ pub enum KernelError {
     Squash,
     /// An instance id names no instance in the mesh.
     InstanceNotFound,
+    /// A definition id names no definition in the scene.
+    DefinitionNotFound,
 }
 
 impl fmt::Display for KernelError {
@@ -49,6 +51,7 @@ impl fmt::Display for KernelError {
                 "the move would collapse an edge, turn a face over, or land a vertex on another"
             ),
             KernelError::InstanceNotFound => write!(f, "no such instance"),
+            KernelError::DefinitionNotFound => write!(f, "no such definition"),
         }
     }
 }
