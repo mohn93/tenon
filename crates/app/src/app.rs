@@ -781,25 +781,8 @@ impl ApplicationHandler<ApiWake> for App {
 
 #[cfg(test)]
 mod tests {
-    use winit::keyboard::SmolStr;
-
-    #[test]
-    fn non_ascii_layouts_fall_back_to_the_physical_key() {
-        let arabic = Key::Character(SmolStr::new("ا"));
-        let g = PhysicalKey::Code(KeyCode::KeyG);
-        let ch = |k: Option<EditorKey>| match k {
-            Some(EditorKey::Char(c)) => Some(c),
-            _ => None,
-        };
-        assert_eq!(ch(editor_key(&arabic, g, true)), Some('G'));
-        assert_eq!(ch(editor_key(&arabic, g, false)), Some('g'));
-        let s = PhysicalKey::Code(KeyCode::KeyS);
-        assert_eq!(ch(editor_key(&arabic, s, false)), Some('s'));
-        let ascii = Key::Character(SmolStr::new("g"));
-        assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
-    }
-
     use super::*;
+    use winit::keyboard::SmolStr;
 
     #[test]
     fn delayed_repaints_are_scheduled() {
@@ -883,5 +866,21 @@ mod tests {
             wake_decision(later + Duration::from_millis(1), Some(later)),
             Wake::Redraw
         );
+    }
+
+    #[test]
+    fn non_ascii_layouts_fall_back_to_the_physical_key() {
+        let arabic = Key::Character(SmolStr::new("ا"));
+        let g = PhysicalKey::Code(KeyCode::KeyG);
+        let ch = |k: Option<EditorKey>| match k {
+            Some(EditorKey::Char(c)) => Some(c),
+            _ => None,
+        };
+        assert_eq!(ch(editor_key(&arabic, g, true)), Some('G'));
+        assert_eq!(ch(editor_key(&arabic, g, false)), Some('g'));
+        let s = PhysicalKey::Code(KeyCode::KeyS);
+        assert_eq!(ch(editor_key(&arabic, s, false)), Some('s'));
+        let ascii = Key::Character(SmolStr::new("g"));
+        assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
     }
 }

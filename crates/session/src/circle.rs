@@ -26,8 +26,10 @@ pub fn circle_points(
     let invalid = |m: String| CommandError::new(ErrorKind::InvalidInput, m);
     let normal = match normal {
         None => DVec3::Z,
-        Some(n) if n.is_finite() && n.length() > 1e-9 => n.normalize(),
-        Some(_) => return Err(invalid("normal must be a non-zero vector".into())),
+        Some(n) => match n.try_normalize() {
+            Some(n) => n,
+            None => return Err(invalid("normal must be a non-zero vector".into())),
+        },
     };
     if !(3..=MAX_CIRCLE_SEGMENTS).contains(&segments) {
         return Err(invalid(format!(

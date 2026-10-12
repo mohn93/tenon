@@ -98,6 +98,7 @@ fn bad_circles_are_refused() {
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": -1.0}),
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1e-6, "segments": 360}),
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "normal": [0, 0, 0]}),
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "normal": [1e155, 1e155, 0]}),
         json!({"type": "add_circle", "center": [2e6, 0, 0], "radius": 1.0}),
         json!({"type": "add_circle", "center": [999999, 0, 0], "radius": 10.0}),
     ] {

@@ -1,6 +1,6 @@
 //! The Circle tool: click the center, then a point on the rim (or type the radius). The
 //! circle lies on the face under the center click, or on a horizontal plane. Typing "24s" sets
-//! the number of sides, before or during a circle; the count is kept for later circles.
+//! the number of sides, before or during a circle; the count is kept while the Circle tool stays selected.
 
 use glam::DVec3;
 use session::{Command, DEFAULT_CIRCLE_SEGMENTS, circle_points};
@@ -133,5 +133,149 @@ impl Tool for CircleTool {
     fn on_external_change(&mut self) {
         self.center = None;
         self.hover = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inference::{Inference, SnapKind};
+    use crate::scenery::Scenery;
+    use glam::DVec2;
+    use kernel::Model;
+    use session::{Camera, Document};
+
+    fn ground(x: f64, y: f64) -> Inference {
+        Inference {
+            point: DVec3::new(x, y, 0.0),
+            kind: SnapKind::Ground,
+            face: None,
+        }
+    }
+
+    fn send(
+        tool: &mut CircleTool,
+        scenery: &Scenery,
+        model: &Model,
+        event: ToolEvent,
+    ) -> ToolOutput {
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let ctx = ToolContext {
+            model,
+            scenery,
+            camera: &camera,
+            cursor: DVec2::ZERO,
+            pick_radius: 10.0,
+            drag_threshold: 4.0,
+            shift: false,
+            selection: &Default::default(),
+        };
+        tool.handle(event, &ctx)
+    }
+
+    fn on_ground(tool: &mut CircleTool, event: ToolEvent) -> ToolOutput {
+        let model = Model::new();
+        send(tool, &Scenery::single(&model), &model, event)
+    }
+
+    fn circle(center: [f64; 3], radius: f64, segments: u32) -> Command {
+        Command::AddCircle {
+            center,
+            radius,
+            normal: Some([0.0, 0.0, 1.0]),
+            segments: Some(segments),
+        }
+    }
+
+    #[test]
+    fn a_circle_in_an_open_group_is_in_the_groups_coordinates() {
+        let mut d = Document::new(DVec2::new(800.0, 600.0));
+        let made = d
+            .execute(Command::AddRectangle {
+                corner: [0.0, 0.0, 0.0],
+                opposite: [1.0, 1.0, 0.0],
+                normal: None,
+            })
+            .unwrap();
+        d.execute(Command::MakeGroup {
+            ids: made
+                .changes
+                .created
+                .into_iter()
+                .filter(|id| !matches!(id, kernel::EntityId::Vertex(_)))
+                .collect(),
+        })
+        .unwrap();
+        let group = *d.selection().iter().next().unwrap();
+        d.execute(Command::Move {
+            ids: vec![group],
+            offset: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+        d.execute(Command::OpenInstance { id: group }).unwrap();
+        assert!(!d.context().is_empty());
+
+        let mut tool = CircleTool::new();
+        let scenery = Scenery::of(d.scene(), d.context()).unwrap();
+        // Hits arrive in the open group's own coordinates, not the root's.
+        send(
+            &mut tool,
+            &scenery,
+            d.model(),
+            ToolEvent::Click(ground(2.0, 3.0)),
+        );
+        let out = send(
+            &mut tool,
+            &scenery,
+            d.model(),
+            ToolEvent::Click(ground(4.0, 3.0)),
+        );
+        assert_eq!(out.commands, vec![circle([2.0, 3.0, 0.0], 2.0, 24)]);
+        d.execute(out.commands[0].clone()).unwrap();
+    }
+
+    #[test]
+    fn a_typed_radius_right_after_the_center_click_draws_the_circle() {
+        let mut tool = CircleTool::new();
+        on_ground(&mut tool, ToolEvent::Click(ground(1.0, 1.0)));
+        assert_eq!(tool.hover, None);
+        let out = on_ground(&mut tool, ToolEvent::Value("2".into()));
+        assert_eq!(out.commands, vec![circle([1.0, 1.0, 0.0], 2.0, 24)]);
+        assert_eq!(tool.anchor(), None);
+    }
+
+    #[test]
+    fn a_click_on_the_center_is_refused_and_keeps_the_center() {
+        let mut tool = CircleTool::new();
+        on_ground(&mut tool, ToolEvent::Click(ground(1.0, 1.0)));
+        let out = on_ground(&mut tool, ToolEvent::Click(ground(1.0, 1.0)));
+        assert!(out.commands.is_empty());
+        let message = out.message.expect("the refusal is explained");
+        assert!(message.contains("radius"), "{message}");
+        assert_eq!(tool.anchor(), Some(DVec3::new(1.0, 1.0, 0.0)));
+    }
+
+    #[test]
+    fn a_typed_side_count_applies_to_the_next_circle() {
+        let mut tool = CircleTool::new();
+        let out = on_ground(&mut tool, ToolEvent::Value("8s".into()));
+        assert_eq!(out.message.as_deref(), Some("Circles get 8 sides"));
+        on_ground(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
+        let out = on_ground(&mut tool, ToolEvent::Click(ground(1.0, 0.0)));
+        assert_eq!(out.commands, vec![circle([0.0; 3], 1.0, 8)]);
+    }
+
+    #[test]
+    fn escape_cancels_the_circle_but_keeps_the_side_count() {
+        let mut tool = CircleTool::new();
+        on_ground(&mut tool, ToolEvent::Value("8s".into()));
+        on_ground(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
+        on_ground(&mut tool, ToolEvent::Move(ground(1.0, 0.0)));
+        let out = on_ground(&mut tool, ToolEvent::Cancel);
+        assert!(out.commands.is_empty() && out.preview.is_empty());
+        assert_eq!(tool.anchor(), None);
+        on_ground(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
+        let out = on_ground(&mut tool, ToolEvent::Click(ground(2.0, 0.0)));
+        assert_eq!(out.commands, vec![circle([0.0; 3], 2.0, 8)]);
     }
 }
