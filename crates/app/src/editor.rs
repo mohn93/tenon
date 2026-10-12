@@ -658,8 +658,8 @@ impl Editor {
         self.preview = out.preview;
     }
 
-    /// Selects the edges, faces and instances a command created in the open context (a copied
-    /// group's new contents live in its new definition and are left out).
+    /// Selects the edges, faces, instances and guides a command created in the open context (a
+    /// copied group's new contents live in its new definition and are left out).
     fn select_created(&mut self, outcome: Outcome) {
         let m = self.doc.model();
         let ids = outcome
@@ -670,6 +670,7 @@ impl Editor {
                 EntityId::Edge(e) => m.edge(e).is_some(),
                 EntityId::Face(f) => m.face(f).is_some(),
                 EntityId::Instance(i) => m.instance(i).is_some(),
+                EntityId::Guide(g) => m.guide(g).is_some(),
                 EntityId::Vertex(_) => false,
             })
             .collect();
@@ -1216,7 +1217,7 @@ mod tests {
                     .iter()
                     .all(|v| model.position(*v).unwrap().x > 3.5),
                 EntityId::Face(f) => model.face(f).unwrap().outer.len() == 4,
-                EntityId::Vertex(_) | EntityId::Instance(_) => false,
+                EntityId::Vertex(_) | EntityId::Instance(_) | EntityId::Guide(_) => false,
             }
         }));
         // Typing another array must not undo anything.

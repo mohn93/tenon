@@ -95,7 +95,7 @@ pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
                 }
             }
             EntityId::Instance(_) => out.extend(box_outline(ctx, *id)),
-            EntityId::Vertex(_) => {}
+            EntityId::Vertex(_) | EntityId::Guide(_) => {}
         }
     }
     out

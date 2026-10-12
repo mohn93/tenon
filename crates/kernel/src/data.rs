@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, VertexId};
-use crate::model::{Edge, Face, Instance, Model, Vertex};
+use crate::ids::{DefinitionId, EdgeId, FaceId, GuideId, InstanceId, VertexId};
+use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
 
 /// The largest id a file may use: every id up to it is exact as a JSON (double) number.
@@ -33,6 +33,9 @@ pub struct MeshData {
     pub edges: Vec<EdgeData>,
     pub faces: Vec<FaceData>,
     pub instances: Vec<InstanceData>,
+    /// Absent in files written before guides existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<GuideData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,6 +68,17 @@ pub struct InstanceData {
     pub definition: u64,
     /// Column-major 3x4: x axis, y axis, z axis, translation.
     pub transform: [f64; 12],
+}
+
+/// A guide line through `point` along `direction` (a unit vector), or, without `direction`, a
+/// guide point at `point`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuideData {
+    pub id: u64,
+    pub point: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f64; 3]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,6 +174,21 @@ fn mesh_data(m: &Model) -> MeshData {
                 transform: i.transform.to_cols_array(),
             })
             .collect(),
+        guides: m
+            .guides()
+            .map(|(id, g)| match *g {
+                Guide::Line { point, direction } => GuideData {
+                    id: id.0,
+                    point: point.to_array(),
+                    direction: Some(direction.to_array()),
+                },
+                Guide::Point { position } => GuideData {
+                    id: id.0,
+                    point: position.to_array(),
+                    direction: None,
+                },
+            })
+            .collect(),
     }
 }
 
@@ -232,16 +261,40 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             return Err(format!("instance i{} appears twice", i.id));
         }
     }
-    let ids = vertices.len() + edges.len() + faces.len() + instances.len();
+    let mut guides = BTreeMap::new();
+    for g in &data.guides {
+        check_id("guide g", g.id)?;
+        finite(&g.point, format!("guide g{}", g.id))?;
+        let point = DVec3::from(g.point);
+        let guide = match g.direction {
+            None => Guide::Point { position: point },
+            Some(d) => {
+                finite(&d, format!("guide g{}", g.id))?;
+                let direction = DVec3::from(d);
+                if (direction.length() - 1.0).abs() > 1e-9 {
+                    return Err(format!(
+                        "guide g{} has a direction that is not a unit vector",
+                        g.id
+                    ));
+                }
+                Guide::Line { point, direction }
+            }
+        };
+        if guides.insert(GuideId(g.id), guide).is_some() {
+            return Err(format!("guide g{} appears twice", g.id));
+        }
+    }
+    let ids = vertices.len() + edges.len() + faces.len() + instances.len() + guides.len();
     let distinct: std::collections::BTreeSet<u64> = vertices
         .keys()
         .map(|k| k.0)
         .chain(edges.keys().map(|k| k.0))
         .chain(faces.keys().map(|k| k.0))
         .chain(instances.keys().map(|k| k.0))
+        .chain(guides.keys().map(|k| k.0))
         .collect();
     if distinct.len() != ids {
         return Err("two entities of different kinds share an id".into());
     }
-    Ok(Model::from_parts(vertices, edges, faces, instances))
+    Ok(Model::from_parts(vertices, edges, faces, instances, guides))
 }

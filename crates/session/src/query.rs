@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Query {
-    /// Vertices, edges, faces and instances. An entity is returned when `ids` is empty or lists
-    /// it, `kinds` is empty or lists its kind, and `within` is absent or contains all its
-    /// vertices (an instance: its bounding box); unknown ids are simply absent from the result.
+    /// Vertices, edges, faces, instances and guides. An entity is returned when `ids` is empty
+    /// or lists it, `kinds` is empty or lists its kind, and `within` is absent or contains all
+    /// its vertices (an instance: its bounding box; a guide point: its position; a guide line
+    /// is in no box); unknown ids are simply absent from the result.
     Entities {
         #[serde(default)]
         ids: Vec<EntityId>,
@@ -18,7 +19,7 @@ pub enum Query {
         #[serde(default)]
         within: Option<Bounds>,
     },
-    /// One entity by id ("v3", "e7", "f2", "i4").
+    /// One entity by id ("v3", "e7", "f2", "i4", "g9").
     Entity {
         id: EntityId,
     },
@@ -61,6 +62,7 @@ pub enum EntityKind {
     Edge,
     Face,
     Instance,
+    Guide,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -101,6 +103,25 @@ pub struct InstanceInfo {
     pub bounds: Option<Bounds>,
 }
 
+/// Whether a guide is a line or a point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GuideKind {
+    Line,
+    Point,
+}
+
+/// A guide line (through `point` along the unit vector `direction`) or a guide point (at
+/// `point`, no `direction`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct GuideInfo {
+    pub id: EntityId,
+    pub kind: GuideKind,
+    pub point: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f64; 3]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DefinitionInfo {
     pub id: DefinitionId,
@@ -120,12 +141,14 @@ pub enum QueryResult {
         edges: Vec<EdgeInfo>,
         faces: Vec<FaceInfo>,
         instances: Vec<InstanceInfo>,
+        guides: Vec<GuideInfo>,
         revision: u64,
     },
     Vertex(VertexInfo),
     Edge(EdgeInfo),
     Face(FaceInfo),
     Instance(InstanceInfo),
+    Guide(GuideInfo),
     Camera {
         eye: [f64; 3],
         target: [f64; 3],

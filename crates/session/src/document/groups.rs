@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use kernel::{DefinitionKind, EntityId, KernelError, SceneChange};
+use kernel::{DefinitionKind, EntityId, KernelError, MeshId, SceneChange};
 
 use super::{Document, MAX_COORDINATE, check_coordinates};
 use crate::command::{CommandError, ErrorKind};
@@ -32,6 +32,13 @@ impl Document {
             Some(n) => (DefinitionKind::Component, n.as_str()),
         };
         let parts = self.parts(ids)?;
+        if parts.edges.is_empty() && parts.faces.is_empty() && parts.instances.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "guides alone cannot be grouped: include an edge, face or instance",
+            )
+            .with_ids(ids.to_vec()));
+        }
         let mesh = self.active();
         let (instance, change) = self
             .scene
@@ -44,8 +51,12 @@ impl Document {
                 name,
             )
             .map_err(|e| invalid(e, ids))?;
+        let definition = self.model().instance(instance).expect("placed").definition;
+        let guides = self
+            .scene
+            .move_guides(mesh, MeshId::Definition(definition), &parts.guides);
         self.selection = BTreeSet::from([EntityId::Instance(instance)]);
-        Ok(change)
+        Ok(SceneChange::join([change, guides]))
     }
 
     /// Explodes instances and selects what comes out of them.

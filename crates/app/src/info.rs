@@ -35,7 +35,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
             EntityId::Edge(e) => edges.push(*e),
             EntityId::Face(f) => faces.push(*f),
             EntityId::Instance(i) => instances.push(*i),
-            EntityId::Vertex(_) => {}
+            EntityId::Vertex(_) | EntityId::Guide(_) => {}
         }
     }
     if let ([], [], [i]) = (&edges[..], &faces[..], &instances[..]) {

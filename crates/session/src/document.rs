@@ -3,15 +3,16 @@ use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    ChangeSet, EdgeId, EntityId, FaceId, Instance, InstanceId, KernelError, MeshId, Model, Scene,
-    SceneChange, VertexId,
+    ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError, MeshId,
+    Model, Scene, SceneChange, VertexId,
 };
 
 use crate::camera::Camera;
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 use crate::query::{
-    ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo,
+    ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind, Query,
+    QueryResult, VertexInfo,
 };
 use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
@@ -219,6 +220,9 @@ impl Document {
             Command::AddEdge { .. }
             | Command::AddRectangle { .. }
             | Command::AddCircle { .. }
+            | Command::AddGuideLine { .. }
+            | Command::AddGuidePoint { .. }
+            | Command::DeleteGuides
             | Command::PushPull { .. }
             | Command::Erase { .. }
             | Command::Move { .. }
@@ -251,6 +255,20 @@ impl Document {
                 normal,
                 segments,
             } => self.add_circle_changes(*center, *radius, *normal, *segments),
+            Command::AddGuideLine { point, direction } => {
+                self.add_guide_line_changes(*point, *direction)
+            }
+            Command::AddGuidePoint { position } => check_coordinates(&[*position]).and_then(|()| {
+                self.add_guide(Guide::Point {
+                    position: DVec3::from(*position),
+                })
+            }),
+            Command::DeleteGuides => {
+                let all: Vec<GuideId> = self.model().guides().map(|(id, _)| id).collect();
+                Ok(self
+                    .edit_mesh(|m| Ok(m.erase_guides(&all)))
+                    .expect("erasing guides cannot fail"))
+            }
             Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
             Command::Erase { ids } => self.erase_changes(ids),
             Command::Move { ids, offset } => self.move_changes(ids, *offset),
@@ -413,6 +431,29 @@ impl Document {
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
+    fn add_guide_line_changes(
+        &mut self,
+        point: [f64; 3],
+        direction: [f64; 3],
+    ) -> Result<SceneChange, CommandError> {
+        check_coordinates(&[point, direction])?;
+        let Some(direction) = DVec3::from(direction).try_normalize() else {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "direction must be a non-zero vector",
+            ));
+        };
+        self.add_guide(Guide::Line {
+            point: DVec3::from(point),
+            direction,
+        })
+    }
+
+    fn add_guide(&mut self, guide: Guide) -> Result<SceneChange, CommandError> {
+        self.edit_mesh(|m| m.add_guide(guide))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
     fn add_circle_changes(
         &mut self,
         center: [f64; 3],
@@ -491,7 +532,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one vertex, edge, face or instance",
+                "ids must list at least one vertex, edge, face, instance or guide",
             ));
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -502,18 +543,14 @@ impl Document {
         }
         check_coordinates(&[offset])?;
         let vertices = self.vertex_ids(ids);
-        let instances: Vec<InstanceId> = ids
-            .iter()
-            .filter_map(|id| match id {
-                EntityId::Instance(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
+        let (instances, guides) = (instance_ids(ids), guide_ids(ids));
         let offset = DVec3::from(offset);
-        self.check_placed(&vertices, &instances, &[DAffine3::from_translation(offset)])?;
+        let shift = DAffine3::from_translation(offset);
+        self.check_placed(&vertices, &instances, &guides, &[shift])?;
         self.edit_mesh(|m| {
             let mut c = m.move_vertices(&vertices, offset)?;
             c.ops.extend(m.move_instances(&instances, offset).ops);
+            c.ops.extend(m.transform_guides(&guides, shift).ops);
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -530,7 +567,7 @@ impl Document {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         if ids.is_empty() {
             return Err(invalid(
-                "ids must list at least one vertex, edge, face or instance",
+                "ids must list at least one vertex, edge, face, instance or guide",
             ));
         }
         check_coordinates(&[center, axis.unwrap_or([0.0, 0.0, 1.0])])?;
@@ -562,7 +599,12 @@ impl Document {
             let places: Vec<DAffine3> = (1..=count)
                 .map(|k| rotation(center, axis, angle * k as f64))
                 .collect();
-            self.check_placed(&self.vertex_ids(ids), &parts.instances, &places)?;
+            self.check_placed(
+                &self.vertex_ids(ids),
+                &parts.instances,
+                &parts.guides,
+                &places,
+            )?;
             return self.copy_placed_changes(ids, &parts, &places);
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -572,18 +614,13 @@ impl Document {
             );
         }
         let vertices = self.vertex_ids(ids);
-        let instances: Vec<InstanceId> = ids
-            .iter()
-            .filter_map(|id| match id {
-                EntityId::Instance(i) => Some(*i),
-                _ => None,
-            })
-            .collect();
+        let (instances, guides) = (instance_ids(ids), guide_ids(ids));
         let turn = rotation(center, axis, angle);
-        self.check_placed(&vertices, &instances, &[turn])?;
+        self.check_placed(&vertices, &instances, &guides, &[turn])?;
         self.edit_mesh(|m| {
             let mut c = m.transform_vertices(&vertices, turn)?;
             c.ops.extend(m.transform_instances(&instances, turn).ops);
+            c.ops.extend(m.transform_guides(&guides, turn).ops);
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -601,7 +638,12 @@ impl Document {
         let places: Vec<DAffine3> = (1..=count)
             .map(|k| DAffine3::from_translation(offset * k as f64))
             .collect();
-        self.check_placed(&self.vertex_ids(ids), &parts.instances, &places)?;
+        self.check_placed(
+            &self.vertex_ids(ids),
+            &parts.instances,
+            &parts.guides,
+            &places,
+        )?;
         if offset.length() < kernel::geom::LENGTH_TOL {
             return Err(self.kernel_error(KernelError::ZeroDistance, ids));
         }
@@ -613,7 +655,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face or instance",
+                "ids must list at least one edge, face, instance or guide",
             ));
         }
         if !(1..=MAX_COPIES).contains(&count) {
@@ -653,16 +695,20 @@ impl Document {
                 }
             }
         };
-        Ok(SceneChange::join([geometry, placed]))
+        let guides = self
+            .edit_mesh(|m| Ok(m.copy_guides(&parts.guides, places)))
+            .expect("copying guides cannot fail");
+        Ok(SceneChange::join([geometry, placed, guides]))
     }
 
-    /// Rejects moves, rotations or copies that would put a vertex or an instance's bounding
-    /// box (its origin when it has nothing in it) beyond `MAX_COORDINATE` under any of
-    /// `places`.
+    /// Rejects moves, rotations or copies that would put a vertex, an instance's bounding
+    /// box (its origin when it has nothing in it) or a guide's point beyond `MAX_COORDINATE`
+    /// under any of `places`.
     fn check_placed(
         &self,
         vertices: &BTreeSet<VertexId>,
         instances: &[InstanceId],
+        guides: &[GuideId],
         places: &[DAffine3],
     ) -> Result<(), CommandError> {
         let m = self.model();
@@ -670,6 +716,12 @@ impl Document {
         for t in places {
             let at = |p: DVec3| t.transform_point3(p).to_array();
             moved.extend(vertices.iter().map(|v| at(m.position(*v).unwrap())));
+            moved.extend(
+                guides
+                    .iter()
+                    .filter_map(|g| m.guide(*g))
+                    .map(|g| at(g.anchor())),
+            );
             for i in instances.iter().filter_map(|i| m.instance(*i)) {
                 let placed = Instance {
                     definition: i.definition,
@@ -698,7 +750,7 @@ impl Document {
                 EntityId::Vertex(v) => {
                     out.insert(v);
                 }
-                EntityId::Instance(_) => {}
+                EntityId::Instance(_) | EntityId::Guide(_) => {}
                 EntityId::Edge(e) => out.extend(m.edge(e).map(|e| e.v).into_iter().flatten()),
                 EntityId::Face(f) => {
                     if let Some(f) = m.face(f) {
@@ -723,19 +775,24 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face or instance",
+                "ids must list at least one edge, face, instance or guide",
             ));
         }
         let parts = self.parts(ids)?;
         let erased = self
-            .edit_mesh(|m| Ok(m.erase(&parts.edges, &parts.faces)))
+            .edit_mesh(|m| {
+                let mut c = m.erase(&parts.edges, &parts.faces);
+                c.ops.extend(m.erase_guides(&parts.guides).ops);
+                Ok(c)
+            })
             .expect("erase cannot fail");
         let mesh = self.active();
         let removed = self.scene.erase_instances(mesh, &parts.instances);
         Ok(SceneChange::join([erased, removed]))
     }
 
-    /// Splits ids (each counted once) into edges, faces and instances of the open context.
+    /// Splits ids (each counted once) into edges, faces, instances and guides of the open
+    /// context.
     /// Vertex ids are invalid input and unknown ids are not found; both errors list the
     /// offending ids.
     fn parts(&self, ids: &[EntityId]) -> Result<Parts, CommandError> {
@@ -747,7 +804,7 @@ impl Document {
         if !vertices.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "only edges, faces and instances are accepted here, not vertices",
+                "only edges, faces, instances and guides are accepted here, not vertices",
             )
             .with_ids(vertices));
         }
@@ -763,6 +820,7 @@ impl Document {
                 EntityId::Edge(e) => parts.edges.push(e),
                 EntityId::Face(f) => parts.faces.push(f),
                 EntityId::Instance(i) => parts.instances.push(i),
+                EntityId::Guide(g) => parts.guides.push(g),
                 EntityId::Vertex(_) => {}
             }
         }
@@ -777,6 +835,7 @@ impl Document {
             EntityId::Edge(e) => m.edge(e).is_some(),
             EntityId::Face(f) => m.face(f).is_some(),
             EntityId::Instance(i) => m.instance(i).is_some(),
+            EntityId::Guide(g) => m.guide(g).is_some(),
         }
     }
 
@@ -847,6 +906,11 @@ impl Document {
                         .filter(|(id, _)| wanted(EntityId::Instance(*id), EntityKind::Instance))
                         .map(|(id, _)| self.instance_info(id))
                         .collect(),
+                    guides: m
+                        .guides()
+                        .filter(|(id, _)| wanted(EntityId::Guide(*id), EntityKind::Guide))
+                        .map(|(id, _)| self.guide_info(id))
+                        .collect(),
                     revision: self.revision,
                 }
             }
@@ -871,6 +935,9 @@ impl Document {
                         m.instance(i)
                             .map(|_| self.instance_info(i))
                             .ok_or_else(missing)?,
+                    ),
+                    EntityId::Guide(g) => QueryResult::Guide(
+                        m.guide(g).map(|_| self.guide_info(g)).ok_or_else(missing)?,
                     ),
                 }
             }
@@ -939,7 +1006,7 @@ impl Document {
     }
 
     /// Positions of the vertices an entity is made of; for an instance, the corners of its
-    /// bounding box.
+    /// bounding box; for a guide point, its position (none for a guide line).
     fn vertices_of(&self, id: EntityId) -> Vec<[f64; 3]> {
         let m = self.model();
         let ids: Vec<VertexId> = match id {
@@ -951,6 +1018,12 @@ impl Document {
                     .flatten()
                     .map(|p| p.to_array())
                     .collect();
+            }
+            EntityId::Guide(g) => {
+                return match m.guide(g) {
+                    Some(Guide::Point { position }) => vec![position.to_array()],
+                    _ => Vec::new(),
+                };
             }
             EntityId::Edge(e) => m.edge(e).map(|e| e.v.to_vec()).unwrap_or_default(),
             EntityId::Face(f) => m
@@ -986,6 +1059,19 @@ impl Document {
         }
     }
 
+    fn guide_info(&self, id: GuideId) -> GuideInfo {
+        let (kind, point, direction) = match *self.model().guide(id).unwrap() {
+            Guide::Line { point, direction } => (GuideKind::Line, point, Some(direction)),
+            Guide::Point { position } => (GuideKind::Point, position, None),
+        };
+        GuideInfo {
+            id: EntityId::Guide(id),
+            kind,
+            point: point.to_array(),
+            direction: direction.map(|d| d.to_array()),
+        }
+    }
+
     fn face_info(&self, id: FaceId) -> FaceInfo {
         let f = self.model().face(id).unwrap();
         let ids = |l: &Vec<VertexId>| l.iter().map(|v| EntityId::Vertex(*v)).collect();
@@ -999,12 +1085,33 @@ impl Document {
     }
 }
 
-/// Edges, faces and instances named by a command.
+/// Edges, faces, instances and guides named by a command.
 #[derive(Default)]
 struct Parts {
     edges: Vec<EdgeId>,
     faces: Vec<FaceId>,
     instances: Vec<InstanceId>,
+    guides: Vec<GuideId>,
+}
+
+/// The instances among `ids`.
+fn instance_ids(ids: &[EntityId]) -> Vec<InstanceId> {
+    ids.iter()
+        .filter_map(|id| match id {
+            EntityId::Instance(i) => Some(*i),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The guides among `ids`.
+fn guide_ids(ids: &[EntityId]) -> Vec<GuideId> {
+    ids.iter()
+        .filter_map(|id| match id {
+            EntityId::Guide(g) => Some(*g),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Rejects non-finite or out-of-range coordinates before they reach the kernel or camera.

@@ -14,8 +14,9 @@ use crate::document::MAX_COORDINATE;
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The schema version this build writes and the newest it reads.
-pub const SCHEMA_VERSION: u32 = 1;
+/// The schema version this build writes and the newest it reads. Version 2 added guides;
+/// version 1 files (no guides) still open.
+pub const SCHEMA_VERSION: u32 = 2;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
 /// The largest `document.json` this build reads, uncompressed.
@@ -134,7 +135,7 @@ fn read_limited(reader: impl Read, limit: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Fails, naming the entity, when a vertex or an instance's position is beyond
+/// Fails, naming the entity, when a vertex, an instance's position or a guide's point is beyond
 /// `MAX_COORDINATE`, the limit commands keep to.
 fn check_coordinates(model: &SceneData) -> Result<(), String> {
     let meshes = std::iter::once(&model.root).chain(model.definitions.iter().map(|d| &d.mesh));
@@ -144,6 +145,7 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
         let MeshData {
             vertices,
             instances,
+            guides,
             ..
         } = mesh;
         if let Some(v) = vertices.iter().find(|v| !within(&v.position)) {
@@ -151,6 +153,9 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
         }
         if let Some(i) = instances.iter().find(|i| !within(&i.transform[9..])) {
             return Err(beyond(format!("instance i{}'s position", i.id)));
+        }
+        if let Some(g) = guides.iter().find(|g| !within(&g.point)) {
+            return Err(beyond(format!("guide g{}", g.id)));
         }
     }
     Ok(())

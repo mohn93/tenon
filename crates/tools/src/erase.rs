@@ -30,7 +30,7 @@ fn outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
             .collect(),
         EntityId::Face(f) => m.face(f).map(|f| face_outline(m, f)).unwrap_or_default(),
         EntityId::Instance(_) => box_outline(ctx, id),
-        EntityId::Vertex(_) => Vec::new(),
+        EntityId::Vertex(_) | EntityId::Guide(_) => Vec::new(),
     }
 }
 

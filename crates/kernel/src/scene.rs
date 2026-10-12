@@ -440,4 +440,5 @@ fn entity_ids(m: &Model) -> impl Iterator<Item = EntityId> + '_ {
         .chain(m.edges().map(|(id, _)| EntityId::Edge(id)))
         .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
         .chain(m.instances().map(|(id, _)| EntityId::Instance(id)))
+        .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
 }

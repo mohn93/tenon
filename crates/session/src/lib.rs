@@ -15,8 +15,8 @@ pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
 pub use query::{
-    Bounds, ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, InstanceInfo, Query,
-    QueryResult, VertexInfo,
+    Bounds, ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind,
+    InstanceInfo, Query, QueryResult, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;

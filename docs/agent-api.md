@@ -42,10 +42,10 @@ Queries:
 
 | Query | Result |
 |---|---|
-| `{"type": "entities"}` | every vertex, edge, face and instance of the open context, plus `revision` |
-| `{"type": "entities", "kinds": ["face"]}` | only the listed kinds (`vertex`, `edge`, `face`, `instance`) |
+| `{"type": "entities"}` | every vertex, edge, face, instance and guide of the open context, plus `revision` |
+| `{"type": "entities", "kinds": ["face"]}` | only the listed kinds (`vertex`, `edge`, `face`, `instance`, `guide`) |
 | `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error |
-| `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box) all lie in the box, bounds included; an instance with nothing in it is in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
+| `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box; a guide point: its position) all lie in the box, bounds included; an instance with nothing in it and a guide line are in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "stats"}`, `{"type": "camera"}`, `{"type": "history"}` | counts for the open context (plus the number of definitions) and revision, camera, undo/redo depth |
 | `{"type": "selection"}` | the selected edge, face and instance ids, plus `revision` |
@@ -59,10 +59,11 @@ of silently doing nothing).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `rename_definition`,
-`purge_definitions`, `select`, `undo`, `redo`, `set_camera`, `new`, `open`, `save`, `export`.
+`purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `select`, `undo`,
+`redo`, `set_camera`, `new`, `open`, `save`, `export`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component). Definitions are `d5`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point). Definitions are `d5`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -75,14 +76,14 @@ Modeling commands, each one undo step:
 | `{"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}` | Moves vertices, edges and faces (their vertices) and instances by `offset` (an instance must keep its bounding box, or its origin when it holds nothing, within the coordinate limit; so must copies). Faces that share only some moved vertices stretch and may tilt but must stay flat: a move that would bend one is `invalid_input` naming that face. A move that would collapse an edge, turn a face over, make a face cross itself, push a hole out of its face or land a vertex on another is `invalid_input` naming the ids. Moved geometry does not merge with what it ends up touching. Unknown ids are `not_found`. |
 | `{"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 4}` | Copies edges, faces and instances `count` times (default 1, at most 100); copy k is shifted by `k * offset`. Copies are drawn like new edges, so they merge with what they touch: a copy has the faces its original had, made even where their sides already exist as bare edges, plus faces it closes together with existing edges. A copy drawn on a face splits it and every piece stays a face (also under an opening of the copy); elsewhere an opening in a copied face stays open and a loop the original had no face in gets none. Copied faces keep the orientation of their originals. A copied component instance places the same definition; a copied group gets a definition of its own. Vertex ids are `invalid_input`. |
 | `{"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 90}` | Turns vertices, edges and faces (their vertices) and instances by `angle` degrees about the line through `center` along `axis` (default `[0,0,1]`), counter-clockwise looking down the axis (right-hand rule), under the rules of `move`: faces that share only some turned vertices must stay flat, and so on; geometry turned whole keeps its shape. Multiples of 90 degrees are exact. An instance turns with its transform. A zero `axis` and whole turns (0, 360, ..., or within 1e-9 degrees of one) are `invalid_input`. With `"copies": n` (1 to 100) the originals stay and n copies are made under the rules of `copy`, copy k turned by `k * angle` (a radial array; vertex ids are then `invalid_input`, and so is a count where a copy would complete a whole turn and land on the original, e.g. angle 90 with 4 copies). Vertices on the axis do not move, and a rotation that moves nothing changes nothing. |
-| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges, faces and instances (a group's definition goes with its last instance). An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Faces are erased before edges, so erasing a face together with the seam it shares with a coplanar neighbour removes the neighbour too: the seam then bounds only one face. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with `ids`; empty `ids` is `invalid_input`. |
-| `{"type": "make_group", "ids": ["e2", "f8", "i4"]}` | Moves edges, faces (with their edges) and instances into a new group definition and places one instance of it where they were; the instance becomes the selection. Edges that still bound a face left behind stay outside too. Vertex ids are `invalid_input`. |
+| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges, faces, instances and guides (a group's definition goes with its last instance). An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Faces are erased before edges, so erasing a face together with the seam it shares with a coplanar neighbour removes the neighbour too: the seam then bounds only one face. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with `ids`; empty `ids` is `invalid_input`. |
+| `{"type": "make_group", "ids": ["e2", "f8", "i4"]}` | Moves edges, faces (with their edges), instances and guides (keeping their ids) into a new group definition and places one instance of it where they were; the instance becomes the selection. Edges that still bound a face left behind stay outside too. Vertex ids are `invalid_input`, and so are ids naming only guides. |
 | `{"type": "make_component", "ids": ["f8"], "name": "Chair"}` | Like `make_group`, but makes a named component: its copies share the definition, so editing one edits them all. An empty name is `invalid_input`. |
-| `{"type": "explode", "ids": ["i4"]}` | Replaces instances by their geometry, which merges with what it touches; instances inside come out as instances (with new ids). What comes out becomes the selection. Ids that are not instances are `invalid_input`, and so is an instance whose geometry would land beyond the coordinate limit (naming it). |
+| `{"type": "explode", "ids": ["i4"]}` | Replaces instances by their geometry, which merges with what it touches; instances and guides inside come out as instances and guides (with new ids). What comes out becomes the selection. Ids that are not instances are `invalid_input`, and so is an instance whose geometry would land beyond the coordinate limit (naming it). |
 | `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in; pushed in exactly as far as a parallel face that holds it (the back of a wall), it cuts an opening through. A face whose neighbors all run along the normal, like a box top, moves and stretches them; moved back flush with the surface around it (a recess or bump pushed back), it closes up and the seams heal. |
 
-`{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges, faces and
-instances; `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and
+`{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges, faces,
+instances and guides; `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and
 does not change the revision. The window shows the selection and agents see what the user
 selected with the `selection` query. Vertex ids are `invalid_input` and unknown ids are
 `not_found`, both with `ids`. Empty `ids` with mode `replace` clears the selection.
@@ -103,6 +104,24 @@ pushed face, with nothing else on it inside that area: that cuts an opening (a w
 wall, a hole through a slab). The floor of a recess pushed on to the back opens the same way.
 When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
 shape too.
+
+### Guides
+
+Guides are construction geometry, as drawn by the Tape Measure tool: guide lines (infinite) and
+guide points. Tools snap to them; they never merge with edges, bound no faces and are not
+exported. They belong to the open context they are added in (the root, or a group or component
+definition) and are saved with the model.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_guide_line", "point": [0, -1, 0], "direction": [1, 0, 0]}` | A guide line through `point` along `direction` (any non-zero length; stored as a unit vector). One undo step. |
+| `{"type": "add_guide_point", "position": [1, 1, 0]}` | A guide point. One undo step. |
+| `{"type": "delete_guides"}` | Erases every guide of the open context as one undo step; with none there it changes nothing (no error, no undo step). |
+
+`erase`, `select`, `move`, `rotate` and `copy` take guide ids like any other (a moved or turned
+guide keeps its id and is reported as `modified`). A guide's `entity` result, and each entry of
+the `guides` list in `entities`, is `{"id": "g9", "kind": "line", "point": [...], "direction":
+[...]}` (`kind` `point` has no `direction`). `stats` counts no guides.
 
 ### Groups and components
 
@@ -136,7 +155,8 @@ whose last instance was erased, and what only it placed (one undo step).
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (1), the camera and the model with every id.
+(`"sketchup-alt"`), `schema_version` (2; version 1 files, written before guides, still open), the
+camera and the model with every id.
 
 | Command | Effect |
 |---|---|

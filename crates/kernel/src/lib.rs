@@ -7,6 +7,7 @@ mod erase;
 mod faces;
 pub mod geom;
 mod group;
+mod guides;
 mod ids;
 mod index;
 mod mesh;
@@ -19,11 +20,12 @@ mod triangles;
 mod weld;
 
 pub use data::{
-    DefinitionData, EdgeData, FaceData, InstanceData, MAX_ID, MeshData, SceneData, VertexData,
+    DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MeshData, SceneData,
+    VertexData,
 };
 pub use edit::KernelError;
-pub use ids::{DefinitionId, EdgeId, EntityId, FaceId, InstanceId, VertexId};
+pub use ids::{DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
 pub use index::{Index, Shape};
-pub use model::{ChangeSet, ChangeSummary, Edge, Face, Instance, Model, Op, Vertex};
+pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
 pub use triangles::Triangle;

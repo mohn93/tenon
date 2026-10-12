@@ -45,20 +45,34 @@ pub enum Command {
         face: EntityId,
         distance: f64,
     },
-    /// Erase edges, faces and instances as one undo step. An erased edge takes the faces it
-    /// bounds with it, except that two faces in one plane meeting there merge into one.
-    /// Vertices go away with their last edge and cannot be erased directly. A group's
+    /// Add a guide line: the infinite line through `point` along `direction` (any non-zero
+    /// length), as one undo step. Guides are construction geometry: tools snap to them, they
+    /// bound no faces and are not exported.
+    AddGuideLine {
+        point: [f64; 3],
+        direction: [f64; 3],
+    },
+    /// Add a guide point at `position`, as one undo step.
+    AddGuidePoint {
+        position: [f64; 3],
+    },
+    /// Erase every guide of the open context, as one undo step (nothing to erase is not an
+    /// error and makes no undo step).
+    DeleteGuides,
+    /// Erase edges, faces, instances and guides as one undo step. An erased edge takes the
+    /// faces it bounds with it, except that two faces in one plane meeting there merge into
+    /// one. Vertices go away with their last edge and cannot be erased directly. A group's
     /// definition goes with its last instance.
     Erase {
         ids: Vec<EntityId>,
     },
-    /// Move vertices, edges, faces and instances by `offset` meters as one undo step. Faces
-    /// that share some of the moved vertices stretch and may tilt, but must stay flat.
+    /// Move vertices, edges, faces, instances and guides by `offset` meters as one undo step.
+    /// Faces that share some of the moved vertices stretch and may tilt, but must stay flat.
     Move {
         ids: Vec<EntityId>,
         offset: [f64; 3],
     },
-    /// Copy edges, faces and instances `count` times (default 1), copy k shifted by
+    /// Copy edges, faces, instances and guides `count` times (default 1), copy k shifted by
     /// `k * offset`, as one undo step. Copies merge with geometry they touch; copied faces keep
     /// their orientation. A copied component instance places the same definition; a copied
     /// group gets a definition of its own.
@@ -68,9 +82,9 @@ pub enum Command {
         #[serde(default)]
         count: Option<u32>,
     },
-    /// Rotate vertices, edges, faces (their vertices) and instances by `angle` degrees about
-    /// the line through `center` along `axis` (default Z), counter-clockwise looking down the
-    /// axis, as one undo step. Faces that share some of the turned vertices stretch and may
+    /// Rotate vertices, edges, faces (their vertices), instances and guides by `angle` degrees
+    /// about the line through `center` along `axis` (default Z), counter-clockwise looking
+    /// down the axis, as one undo step. Faces that share some of the turned vertices stretch and may
     /// tilt, but must stay flat. With `copies`, the originals stay and that many copies are
     /// made instead, copy k turned by `k * angle`, under the rules of `Copy`.
     Rotate {
@@ -82,9 +96,9 @@ pub enum Command {
         #[serde(default)]
         copies: Option<u32>,
     },
-    /// Turn edges, faces (with their edges) and instances into a group: they move into a new
-    /// definition, placed by one new instance where they were. The instance becomes the
-    /// selection.
+    /// Turn edges, faces (with their edges), instances and guides into a group: they move into
+    /// a new definition, placed by one new instance where they were. Guides alone cannot be
+    /// grouped. The instance becomes the selection.
     MakeGroup {
         ids: Vec<EntityId>,
     },
@@ -94,8 +108,8 @@ pub enum Command {
         ids: Vec<EntityId>,
         name: String,
     },
-    /// Replace instances by their geometry, which merges with what it touches. Instances
-    /// inside them come out as instances. What comes out becomes the selection.
+    /// Replace instances by their geometry, which merges with what it touches. Instances and
+    /// guides inside them come out as instances and guides. What comes out becomes the selection.
     Explode {
         ids: Vec<EntityId>,
     },
@@ -144,7 +158,7 @@ pub enum Command {
         #[serde(default)]
         format: Option<ExportFormat>,
     },
-    /// Change the selection of edges, faces and instances. Not recorded in undo history.
+    /// Change the selection of edges, faces, instances and guides. Not recorded in undo history.
     Select {
         ids: Vec<EntityId>,
         #[serde(default)]

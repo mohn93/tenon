@@ -17,8 +17,9 @@ id_type!(VertexId);
 id_type!(EdgeId);
 id_type!(FaceId);
 id_type!(InstanceId);
+id_type!(GuideId);
 
-/// Any kernel entity. Serialized as a short string: "v12", "e3", "f7", "i4".
+/// Any kernel entity. Serialized as a short string: "v12", "e3", "f7", "i4", "g9".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum EntityId {
@@ -27,6 +28,8 @@ pub enum EntityId {
     Face(FaceId),
     /// A placed group or component.
     Instance(InstanceId),
+    /// A guide line or guide point (see `Guide`).
+    Guide(GuideId),
 }
 
 impl fmt::Display for EntityId {
@@ -36,6 +39,7 @@ impl fmt::Display for EntityId {
             EntityId::Edge(id) => write!(f, "e{}", id.0),
             EntityId::Face(id) => write!(f, "f{}", id.0),
             EntityId::Instance(id) => write!(f, "i{}", id.0),
+            EntityId::Guide(id) => write!(f, "g{}", id.0),
         }
     }
 }
@@ -50,6 +54,7 @@ impl FromStr for EntityId {
             'e' => Ok(EntityId::Edge(EdgeId(n))),
             'f' => Ok(EntityId::Face(FaceId(n))),
             'i' => Ok(EntityId::Instance(InstanceId(n))),
+            'g' => Ok(EntityId::Guide(GuideId(n))),
             _ => Err(format!("invalid entity id {s:?}")),
         }
     }
@@ -70,7 +75,8 @@ fn parse_prefixed(s: &str) -> Option<(char, u64)> {
     Some((kind, digits.parse().ok()?))
 }
 
-/// Ids appear in JSON as strings: "v12" (vertex), "e3" (edge), "f7" (face), "i4" (instance).
+/// Ids appear in JSON as strings: "v12" (vertex), "e3" (edge), "f7" (face), "i4" (instance),
+/// "g9" (guide).
 impl schemars::JsonSchema for EntityId {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "EntityId".into()
@@ -79,8 +85,8 @@ impl schemars::JsonSchema for EntityId {
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "pattern": "^[vefi](0|[1-9][0-9]*)$",
-            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face, i<n> instance"
+            "pattern": "^[vefig](0|[1-9][0-9]*)$",
+            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face, i<n> instance, g<n> guide"
         })
     }
 }
@@ -160,11 +166,13 @@ mod tests {
             EntityId::Edge(EdgeId(0)),
             EntityId::Face(FaceId(7)),
             EntityId::Instance(InstanceId(4)),
+            EntityId::Guide(GuideId(9)),
         ] {
             assert_eq!(id.to_string().parse::<EntityId>().unwrap(), id);
         }
         assert_eq!(EntityId::Face(FaceId(7)).to_string(), "f7");
         assert_eq!(EntityId::Instance(InstanceId(4)).to_string(), "i4");
+        assert_eq!(EntityId::Guide(GuideId(9)).to_string(), "g9");
         assert_eq!("d3".parse::<DefinitionId>(), Ok(DefinitionId(3)));
         assert_eq!(DefinitionId(3).to_string(), "d3");
         for s in ["", "d", "f3", "d03", "d-1"] {

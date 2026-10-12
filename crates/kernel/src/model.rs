@@ -5,7 +5,7 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
-use crate::ids::{DefinitionId, EdgeId, EntityId, FaceId, InstanceId, VertexId};
+use crate::ids::{DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
 use crate::index::Index;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,6 +35,38 @@ pub struct Instance {
     pub transform: DAffine3,
 }
 
+/// Construction geometry drawn by the Tape Measure: not part of any face, never exported.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Guide {
+    /// The infinite line through `point` along the unit vector `direction`.
+    Line { point: DVec3, direction: DVec3 },
+    /// A single point.
+    Point { position: DVec3 },
+}
+
+impl Guide {
+    /// The guide moved by a rigid motion `t`.
+    pub fn transformed(&self, t: DAffine3) -> Guide {
+        match *self {
+            Guide::Line { point, direction } => Guide::Line {
+                point: t.transform_point3(point),
+                direction: t.transform_vector3(direction).normalize(),
+            },
+            Guide::Point { position } => Guide::Point {
+                position: t.transform_point3(position),
+            },
+        }
+    }
+
+    /// The point a guide line passes through, or the guide point itself.
+    pub fn anchor(&self) -> DVec3 {
+        match *self {
+            Guide::Line { point, .. } => point,
+            Guide::Point { position } => position,
+        }
+    }
+}
+
 /// One primitive, invertible change to the model.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Op {
@@ -50,6 +82,8 @@ pub enum Op {
     RemoveInstance(InstanceId, Instance),
     /// An instance's transform changed from the first to the second.
     TransformInstance(InstanceId, DAffine3, DAffine3),
+    AddGuide(GuideId, Guide),
+    RemoveGuide(GuideId, Guide),
 }
 
 impl Op {
@@ -65,6 +99,8 @@ impl Op {
             Op::AddInstance(id, i) => Op::RemoveInstance(id, i),
             Op::RemoveInstance(id, i) => Op::AddInstance(id, i),
             Op::TransformInstance(id, from, to) => Op::TransformInstance(id, to, from),
+            Op::AddGuide(id, g) => Op::RemoveGuide(id, g),
+            Op::RemoveGuide(id, g) => Op::AddGuide(id, g),
         }
     }
 
@@ -81,6 +117,8 @@ impl Op {
             Op::AddInstance(id, _) => (EntityId::Instance(*id), false, true),
             Op::RemoveInstance(id, _) => (EntityId::Instance(*id), true, false),
             Op::TransformInstance(id, _, _) => (EntityId::Instance(*id), true, true),
+            Op::AddGuide(id, _) => (EntityId::Guide(*id), false, true),
+            Op::RemoveGuide(id, _) => (EntityId::Guide(*id), true, false),
         }
     }
 }
@@ -131,7 +169,7 @@ impl ChangeSet {
     }
 }
 
-/// The geometry of one mesh, plus the instances placed in it. Every mutation is recorded as an
+/// The geometry of one mesh, plus the instances and guides placed in it. Every mutation is recorded as an
 /// `Op` until `take_changes`.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
@@ -139,6 +177,7 @@ pub struct Model {
     edges: BTreeMap<EdgeId, Edge>,
     faces: BTreeMap<FaceId, Face>,
     instances: BTreeMap<InstanceId, Instance>,
+    guides: BTreeMap<GuideId, Guide>,
     next_id: u64,
     pending: Vec<Op>,
     /// Built on first use after a change; see `Model::index`.
@@ -152,6 +191,7 @@ impl PartialEq for Model {
             && self.edges == other.edges
             && self.faces == other.faces
             && self.instances == other.instances
+            && self.guides == other.guides
     }
 }
 
@@ -167,6 +207,7 @@ impl Model {
         edges: BTreeMap<EdgeId, Edge>,
         faces: BTreeMap<FaceId, Face>,
         instances: BTreeMap<InstanceId, Instance>,
+        guides: BTreeMap<GuideId, Guide>,
     ) -> Model {
         let next_id = vertices
             .keys()
@@ -174,6 +215,7 @@ impl Model {
             .chain(edges.keys().map(|k| k.0))
             .chain(faces.keys().map(|k| k.0))
             .chain(instances.keys().map(|k| k.0))
+            .chain(guides.keys().map(|k| k.0))
             .max()
             .map_or(0, |m| m.saturating_add(1));
         Model {
@@ -181,6 +223,7 @@ impl Model {
             edges,
             faces,
             instances,
+            guides,
             next_id,
             pending: Vec::new(),
             index: OnceLock::new(),
@@ -226,7 +269,15 @@ impl Model {
         self.instances.iter().map(|(k, v)| (*k, v))
     }
 
-    /// True when the mesh holds no vertices and no instances.
+    pub fn guide(&self, id: GuideId) -> Option<&Guide> {
+        self.guides.get(&id)
+    }
+
+    pub fn guides(&self) -> impl Iterator<Item = (GuideId, &Guide)> {
+        self.guides.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// True when the mesh holds no vertices and no instances (guides do not count).
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty() && self.instances.is_empty()
     }
@@ -325,6 +376,13 @@ impl Model {
                     i.transform = to;
                 }
             }
+            Op::AddGuide(id, g) => {
+                self.bump(id.0);
+                self.guides.insert(id, g);
+            }
+            Op::RemoveGuide(id, _) => {
+                self.guides.remove(&id);
+            }
         }
     }
 
@@ -414,6 +472,24 @@ impl Model {
         i
     }
 
+    pub(crate) fn insert_guide(&mut self, guide: Guide) -> GuideId {
+        let id = GuideId(self.alloc());
+        self.record(Op::AddGuide(id, guide));
+        id
+    }
+
+    /// Adds a guide under an id it had elsewhere (a guide moved between meshes) or before
+    /// (a guide moved in place).
+    pub(crate) fn insert_guide_as(&mut self, id: GuideId, guide: Guide) {
+        self.record(Op::AddGuide(id, guide));
+    }
+
+    pub(crate) fn remove_guide(&mut self, id: GuideId) -> Guide {
+        let g = self.guides[&id];
+        self.record(Op::RemoveGuide(id, g));
+        g
+    }
+
     /// Moves instances by `offset` as one ChangeSet. Each listed instance moves once; unknown
     /// ids are skipped.
     pub fn move_instances(&mut self, ids: &[InstanceId], offset: DVec3) -> ChangeSet {
@@ -484,6 +560,21 @@ impl Model {
         for (id, i) in &self.instances {
             if !i.transform.is_finite() {
                 return Err(format!("instance {id:?} has a non-finite transform"));
+            }
+        }
+        for (id, g) in &self.guides {
+            let ok = match g {
+                Guide::Line { point, direction } => {
+                    point.is_finite()
+                        && direction.is_finite()
+                        && (direction.length() - 1.0).abs() <= 1e-9
+                }
+                Guide::Point { position } => position.is_finite(),
+            };
+            if !ok {
+                return Err(format!(
+                    "guide {id:?} is not finite or its direction is not a unit vector"
+                ));
             }
         }
         for (id, f) in &self.faces {

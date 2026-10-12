@@ -7,7 +7,7 @@ use glam::{DAffine3, DVec3};
 use crate::edit::{KernelError, loop_has_side};
 use crate::geom::LENGTH_TOL;
 use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, VertexId};
-use crate::model::{Instance, Model};
+use crate::model::{Guide, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
 use crate::transform::Stencil;
 
@@ -62,7 +62,7 @@ impl Scene {
 impl Scene {
     /// Replaces an instance in mesh `parent` by its definition's geometry, placed by the
     /// instance's transform and drawn like new edges, so it merges with what it touches.
-    /// Instances inside it become instances in `parent`, with new ids; a group inside a
+    /// Instances and guides inside it come out into `parent`, with new ids; a group inside a
     /// component gets a copy of its definition. A group's definition goes with its last
     /// instance; a component's stays.
     pub fn explode(
@@ -88,6 +88,11 @@ impl Scene {
             .instances()
             .map(|(_, i)| i.clone())
             .collect();
+        let guides: Vec<Guide> = definition
+            .mesh
+            .guides()
+            .map(|(_, g)| g.transformed(placed.transform))
+            .collect();
         let mut copied = SceneChange::default();
         let mut children = Vec::new();
         for i in inner {
@@ -109,6 +114,9 @@ impl Scene {
             m.draw_stencil(&stencil, &[placed.transform]);
             for child in children {
                 m.insert_instance(child);
+            }
+            for g in guides {
+                m.insert_guide(g);
             }
             Ok(m.take_changes())
         })?;
@@ -182,13 +190,14 @@ impl Scene {
         Ok(SceneChange::join([steps, placed]))
     }
 
-    /// A new group definition holding a copy of `id`'s geometry, with new ids; groups inside it
-    /// are copied too, components inside are placed again.
+    /// A new group definition holding a copy of `id`'s geometry and guides, with new ids;
+    /// groups inside it are copied too, components inside are placed again.
     fn duplicate(&mut self, id: DefinitionId) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
         let (name, kind) = (original.name.clone(), original.kind);
         let stencil = whole(&original.mesh);
         let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
+        let guides: Vec<Guide> = original.mesh.guides().map(|(_, g)| *g).collect();
         let mut change = SceneChange::default();
         let mut placed = Vec::new();
         for child in children {
@@ -211,6 +220,9 @@ impl Scene {
                 m.draw_stencil(&stencil, &[DAffine3::IDENTITY]);
                 for i in placed {
                     m.insert_instance(i);
+                }
+                for g in guides {
+                    m.insert_guide(g);
                 }
                 Ok(m.take_changes())
             })
