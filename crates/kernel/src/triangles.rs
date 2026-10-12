@@ -22,9 +22,22 @@ impl Scene {
     /// placed twice gives its faces twice. Edges without faces give nothing. The order is
     /// fixed: faces by id, then instances by id, depth first.
     pub fn triangles(&self) -> Vec<Triangle> {
+        self.triangles_and_skipped().0
+    }
+
+    /// `triangles`, and how many faces gave none (a face that cannot be triangulated, such as
+    /// one whose hole covers it; counted once per placement).
+    pub fn triangles_and_skipped(&self) -> (Vec<Triangle>, usize) {
         let mut out = Vec::new();
-        self.collect_triangles(MeshId::Root, DAffine3::IDENTITY, None, &mut out);
-        out
+        let mut skipped = 0;
+        self.collect_triangles(
+            MeshId::Root,
+            DAffine3::IDENTITY,
+            None,
+            &mut out,
+            &mut skipped,
+        );
+        (out, skipped)
     }
 
     /// `inherited` is the material of the nearest painted instance placing the mesh.
@@ -34,6 +47,7 @@ impl Scene {
         place: DAffine3,
         inherited: Option<MaterialId>,
         out: &mut Vec<Triangle>,
+        skipped: &mut usize,
     ) {
         let Some(model) = self.mesh(id) else { return };
         // A mirroring placement turns triangles inside out; swapping two corners restores the
@@ -43,7 +57,11 @@ impl Scene {
         for (fid, face) in model.faces() {
             let normal = (normal_map * face.normal).normalize();
             let (front, back) = (face.front.or(inherited), face.back.or(inherited));
-            for tri in model.triangulate(fid).unwrap_or_default() {
+            let tris = model.triangulate(fid).unwrap_or_default();
+            if tris.is_empty() {
+                *skipped += 1;
+            }
+            for tri in tris {
                 let [a, b, c] = tri.map(|p| place.transform_point3(p));
                 out.push(Triangle {
                     corners: if mirrored { [a, c, b] } else { [a, b, c] },
@@ -59,6 +77,7 @@ impl Scene {
                 place * instance.transform,
                 instance.material.or(inherited),
                 out,
+                skipped,
             );
         }
     }

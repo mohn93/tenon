@@ -222,7 +222,9 @@ fn within_finds_guide_points_but_never_guide_lines() {
 
 /// A fresh path in the test scratch directory.
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session-guides");
+    // The process id keeps concurrent test runs (sharing a target directory) apart.
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-guides-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     let _ = std::fs::remove_file(&path);

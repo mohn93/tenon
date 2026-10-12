@@ -169,3 +169,89 @@ fn triangles_carry_face_materials_and_inherit_the_nearest_painted_instance() {
     );
     assert!(tris.iter().all(|t| t.back == Some(blue)));
 }
+
+/// A mesh holding a 1 m triangle and a square face whose hole is its own outer loop (it
+/// passes validation but covers nothing, so it gives no triangles), ids from `first`.
+fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
+    use kernel::{EdgeData, FaceData, MeshData, VertexData};
+    let id = |k: u64| first + k;
+    let v = |k, position| VertexData {
+        id: id(k),
+        position,
+    };
+    let e = |k, a, b| EdgeData {
+        id: id(k),
+        vertices: [id(a), id(b)],
+        curve: None,
+        soft: false,
+    };
+    let face = |k, outer: &[u64], holes: Vec<Vec<u64>>| FaceData {
+        id: id(k),
+        outer: outer.iter().map(|&a| id(a)).collect(),
+        holes: holes
+            .into_iter()
+            .map(|h| h.into_iter().map(id).collect())
+            .collect(),
+        normal: [0.0, 0.0, 1.0],
+        front: None,
+        back: None,
+    };
+    MeshData {
+        vertices: vec![
+            v(0, [x, 0.0, 0.0]),
+            v(1, [x + 1.0, 0.0, 0.0]),
+            v(2, [x + 1.0, 1.0, 0.0]),
+            v(3, [x, 1.0, 0.0]),
+            v(4, [x, 2.0, 0.0]),
+            v(5, [x + 1.0, 2.0, 0.0]),
+        ],
+        edges: vec![
+            e(6, 0, 1),
+            e(7, 1, 2),
+            e(8, 2, 3),
+            e(9, 3, 0),
+            e(10, 3, 5),
+            e(11, 5, 4),
+            e(12, 4, 3),
+        ],
+        faces: vec![
+            face(13, &[0, 1, 2, 3], vec![vec![0, 3, 2, 1]]),
+            face(14, &[3, 5, 4], vec![]),
+        ],
+        instances: vec![],
+        guides: vec![],
+    }
+}
+
+#[test]
+fn faces_that_give_no_triangles_are_counted_once_per_placement() {
+    let mut root = mesh_with_an_empty_face(100, 0.0);
+    let place = |k: u64, x: f64| kernel::InstanceData {
+        id: 200 + k,
+        definition: 1,
+        transform: glam::DAffine3::from_translation(p(x, 5.0, 0.0)).to_cols_array(),
+        material: None,
+    };
+    root.instances = vec![place(0, 0.0), place(1, 3.0)];
+    let data = kernel::SceneData {
+        next_id: 300,
+        root,
+        definitions: vec![kernel::DefinitionData {
+            id: 1,
+            name: "Part".into(),
+            kind: DefinitionKind::Component,
+            mesh: mesh_with_an_empty_face(2, 0.0),
+        }],
+        materials: vec![],
+    };
+    let s = Scene::from_data(&data).unwrap();
+    let (tris, skipped) = s.triangles_and_skipped();
+    assert_eq!(tris.len(), 3, "one triangle per mesh placement");
+    assert_eq!(
+        skipped, 3,
+        "the empty face in the root and in each placement"
+    );
+    assert_eq!(s.triangles(), tris);
+    let (_, none) = Scene::from_root(box_model()).triangles_and_skipped();
+    assert_eq!(none, 0);
+}

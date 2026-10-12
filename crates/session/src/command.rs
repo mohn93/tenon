@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::{Projection, StandardView};
-use crate::export::ExportFormat;
+use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
@@ -205,7 +205,8 @@ pub enum Command {
     },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
-    /// `.stl`, `.glb`, `.gltf`). Not an undo step.
+    /// `.stl`, `.glb`, `.gltf`). Not an undo step. The outcome's `export` counts the triangles
+    /// written and the faces left out because they could not be triangulated.
     Export {
         path: String,
         #[serde(default)]
@@ -339,6 +340,9 @@ pub struct Outcome {
     /// What an `import` read and made; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import: Option<ImportReport>,
+    /// What an `export` wrote; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export: Option<ExportReport>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -378,7 +378,11 @@ be the export path itself or the open model's file is refused with `invalid_inpu
 beside the old (or no) `.obj`.
 
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
-does not change the revision or the `file` query.
+does not change the revision or the `file` query. Its result has `"export": {"triangles": n,
+"skipped_faces": k}`: the triangles written and the faces left out because they could not be
+triangulated (counted once per placement). A binary STL holds at most 2^32 - 1 triangles and a
+`.glb` at most 4 GiB (about 59 million triangles); a larger model is refused with
+`invalid_input` and nothing is written.
 
 ### Import
 

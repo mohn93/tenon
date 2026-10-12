@@ -7,7 +7,7 @@ use kernel::{DefinitionId, DefinitionKind, Scene, SceneChange};
 use super::Document;
 use crate::camera::Camera;
 use crate::command::{CommandError, ErrorKind};
-use crate::export::{self, ExportFormat};
+use crate::export::{self, ExportFormat, ExportReport};
 use crate::file;
 
 impl Document {
@@ -65,7 +65,7 @@ impl Document {
         &self,
         path: &str,
         format: Option<ExportFormat>,
-    ) -> Result<(), CommandError> {
+    ) -> Result<ExportReport, CommandError> {
         let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
@@ -96,7 +96,7 @@ impl Document {
                 "that is the open model's own file: export to another path",
             ));
         }
-        let triangles = self.scene.triangles();
+        let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
         if triangles.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
@@ -108,7 +108,8 @@ impl Document {
         let mtl_name = mtl_path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let encoded = export::encode(&self.scene, &triangles, format, &mtl_name);
+        let encoded = export::encode(&self.scene, &triangles, format, &mtl_name)
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
         if let Some(mtl) = &encoded.mtl {
             if mtl_path == target || own(&mtl_path) {
                 return Err(CommandError::new(
@@ -123,7 +124,11 @@ impl Document {
             file::replace_file(&mtl_path, mtl)
                 .map_err(|e| file_error(&mtl_path.display().to_string(), e))?;
         }
-        file::replace_file(target, &encoded.bytes).map_err(|e| file_error(path, e))
+        file::replace_file(target, &encoded.bytes).map_err(|e| file_error(path, e))?;
+        Ok(ExportReport {
+            triangles: triangles.len(),
+            skipped_faces,
+        })
     }
 
     /// Swaps in another model: history, selection and the open context start over, and event

@@ -652,16 +652,16 @@ impl Editor {
     /// it cannot be exported; the status then says why.
     pub fn export_file(&mut self, path: &Path) -> bool {
         self.message = None;
-        let exported = self
-            .run(Command::Export {
-                path: path.display().to_string(),
-                format: None,
-            })
-            .is_some();
-        if exported {
-            self.message = Some(format!("Exported {}", path.display()));
-        }
-        exported
+        let outcome = self.run(Command::Export {
+            path: path.display().to_string(),
+            format: None,
+        });
+        let Some(outcome) = outcome else {
+            return false;
+        };
+        let skipped = outcome.export.map_or(0, |r| r.skipped_faces);
+        self.message = Some(export_message(path, skipped));
+        true
     }
 
     /// Imports an OBJ or STL file (the format its extension names) as a group in the open
@@ -948,6 +948,22 @@ impl Editor {
 /// True for the tools Ctrl switches to copying.
 fn copies(kind: ToolKind) -> bool {
     matches!(kind, ToolKind::Move | ToolKind::Rotate)
+}
+
+/// The status after exporting to `path`, leaving out `skipped` faces that could not be
+/// triangulated.
+fn export_message(path: &Path, skipped: usize) -> String {
+    match skipped {
+        0 => format!("Exported {}", path.display()),
+        1 => format!(
+            "Exported {} without 1 face that could not be triangulated",
+            path.display()
+        ),
+        n => format!(
+            "Exported {} without {n} faces that could not be triangulated",
+            path.display()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -2502,6 +2518,14 @@ mod tests {
         assert!(!e.export_file(&unknown));
         assert!(e.status().contains(".obj"), "{}", e.status());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_export_status_counts_faces_left_out() {
+        let path = Path::new("model.stl");
+        assert_eq!(export_message(path, 0), "Exported model.stl");
+        assert!(export_message(path, 1).ends_with("without 1 face that could not be triangulated"));
+        assert!(export_message(path, 3).contains("without 3 faces"));
     }
 
     #[test]

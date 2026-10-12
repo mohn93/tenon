@@ -45,6 +45,15 @@ impl ExportFormat {
 /// The default material's front color (sRGB), as the window shows it.
 const DEFAULT_COLOR: [f64; 3] = [0.93, 0.93, 0.90];
 
+/// What an `export` wrote.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExportReport {
+    /// Triangles written.
+    pub triangles: usize,
+    /// Faces left out because they could not be triangulated (counted once per placement).
+    pub skipped_faces: usize,
+}
+
 /// What an export writes: the file's bytes and, for an OBJ whose faces are painted, the bytes
 /// of the material library (`.mtl`) it names.
 pub(crate) struct Encoded {
@@ -53,15 +62,17 @@ pub(crate) struct Encoded {
 }
 
 /// The bytes of `triangles` in `format`. Materials are looked up in `scene`; an OBJ refers to
-/// its material library as `mtl_name`.
+/// its material library as `mtl_name`. Fails when the triangles do not fit the format's 32-bit
+/// counts: a binary STL holds at most 2^32 - 1 triangles and a `.glb` at most 4 GiB (about
+/// 59 million triangles).
 pub(crate) fn encode(
     scene: &Scene,
     triangles: &[Triangle],
     format: ExportFormat,
     mtl_name: &str,
-) -> Encoded {
+) -> Result<Encoded, String> {
     let groups = Groups::of(scene, triangles);
-    match format {
+    Ok(match format {
         ExportFormat::Obj => {
             let (obj, mtl) = obj(&groups, mtl_name);
             Encoded {
@@ -70,17 +81,42 @@ pub(crate) fn encode(
             }
         }
         ExportFormat::Stl => Encoded {
-            bytes: stl(triangles),
+            bytes: stl(triangles)?,
             mtl: None,
         },
         ExportFormat::Glb => Encoded {
-            bytes: glb(&groups),
+            bytes: glb(&groups)?,
             mtl: None,
         },
         ExportFormat::Gltf => Encoded {
             bytes: gltf(&groups).into_bytes(),
             mtl: None,
         },
+    })
+}
+
+/// A binary STL's triangle count, if it fits its 32 bits.
+fn stl_count(triangles: usize) -> Result<u32, String> {
+    u32::try_from(triangles).map_err(|_| {
+        format!(
+            "too many triangles for a binary STL: {triangles} (at most {})",
+            u32::MAX
+        )
+    })
+}
+
+/// A `.glb`'s total, JSON chunk and BIN chunk lengths (chunks already padded), if the whole
+/// file fits the 32-bit length in its header.
+fn glb_lengths(json: usize, bin: usize) -> Result<[u32; 3], String> {
+    // Header 12 bytes, then each chunk's 8-byte header and data.
+    let total = json
+        .checked_add(bin)
+        .and_then(|n| n.checked_add(12 + 8 + 8));
+    match total.map(u32::try_from) {
+        Some(Ok(total)) => Ok([total, json as u32, bin as u32]),
+        _ => Err(
+            "the model is too large for a .glb (over 4 GiB): export to .gltf or .obj".to_string(),
+        ),
     }
 }
 
@@ -234,13 +270,14 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
 
 /// Binary STL: an 80-byte header, the triangle count, then per triangle its normal, its three
 /// corners (f32, little-endian) and a zero attribute word.
-fn stl(triangles: &[Triangle]) -> Vec<u8> {
+fn stl(triangles: &[Triangle]) -> Result<Vec<u8>, String> {
+    let count = stl_count(triangles.len())?;
     let mut out = Vec::with_capacity(84 + 50 * triangles.len());
     let mut header = [0u8; 80];
     let title = b"sketchup-alt export, meters";
     header[..title.len()].copy_from_slice(title);
     out.extend_from_slice(&header);
-    out.extend_from_slice(&(triangles.len() as u32).to_le_bytes());
+    out.extend_from_slice(&count.to_le_bytes());
     for t in triangles {
         for v in std::iter::once(t.normal).chain(t.corners) {
             for c in v.to_array() {
@@ -249,7 +286,7 @@ fn stl(triangles: &[Triangle]) -> Vec<u8> {
         }
         out.extend_from_slice(&0u16.to_le_bytes());
     }
-    out
+    Ok(out)
 }
 
 /// The vertex buffer (positions then normals, f32 little-endian, Y-up, each material's
@@ -330,7 +367,7 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
 
 /// Binary glTF: a 12-byte header, a JSON chunk padded with spaces and a BIN chunk padded with
 /// zeros, each to a multiple of 4 bytes.
-fn glb(groups: &Groups) -> Vec<u8> {
+fn glb(groups: &Groups) -> Result<Vec<u8>, String> {
     let (mut bin, doc) = gltf_parts(groups);
     let mut json = serde_json::to_vec(&doc).expect("a JSON value serializes");
     while json.len() % 4 != 0 {
@@ -339,18 +376,18 @@ fn glb(groups: &Groups) -> Vec<u8> {
     while bin.len() % 4 != 0 {
         bin.push(0);
     }
-    let total = 12 + 8 + json.len() + 8 + bin.len();
-    let mut out = Vec::with_capacity(total);
+    let [total, json_len, bin_len] = glb_lengths(json.len(), bin.len())?;
+    let mut out = Vec::with_capacity(total as usize);
     out.extend_from_slice(b"glTF");
     out.extend_from_slice(&2u32.to_le_bytes());
-    out.extend_from_slice(&(total as u32).to_le_bytes());
-    out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    out.extend_from_slice(&total.to_le_bytes());
+    out.extend_from_slice(&json_len.to_le_bytes());
     out.extend_from_slice(b"JSON");
     out.extend_from_slice(&json);
-    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(&bin_len.to_le_bytes());
     out.extend_from_slice(b"BIN\0");
     out.extend_from_slice(&bin);
-    out
+    Ok(out)
 }
 
 /// glTF JSON with the buffer embedded as a base64 data URI.
@@ -361,4 +398,29 @@ fn gltf(groups: &Groups) -> String {
         base64::engine::general_purpose::STANDARD.encode(&bytes)
     ));
     serde_json::to_string_pretty(&doc).expect("a JSON value serializes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_past_32_bits_are_refused() {
+        assert_eq!(stl_count(5), Ok(5));
+        assert_eq!(stl_count(u32::MAX as usize), Ok(u32::MAX));
+        let err = stl_count(u32::MAX as usize + 1).unwrap_err();
+        assert!(err.contains("too many triangles for a binary STL"), "{err}");
+
+        assert_eq!(glb_lengths(100, 72), Ok([200, 100, 72]));
+        let most = u32::MAX as usize - 28;
+        assert_eq!(
+            glb_lengths(4, most - 4),
+            Ok([u32::MAX, 4, (most - 4) as u32])
+        );
+        // 60 million triangles take 72 bytes each in the BIN chunk.
+        let err = glb_lengths(1000, 60_000_000 * 72).unwrap_err();
+        assert!(err.contains("too large for a .glb"), "{err}");
+        assert!(glb_lengths(4, most - 3).is_err());
+        assert!(glb_lengths(usize::MAX, 8).is_err());
+    }
 }

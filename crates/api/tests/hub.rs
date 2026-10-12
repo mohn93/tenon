@@ -107,7 +107,8 @@ fn notifications_reach_a_connection_that_closes_right_after() {
 
 #[test]
 fn opening_a_file_tells_subscribers_to_read_the_model_again() {
-    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hub-open.skr");
+    let path = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("hub-open-{}.skr", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let path = path.to_str().unwrap();
     let mut host = HeadlessHost::new();

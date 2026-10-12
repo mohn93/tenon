@@ -406,7 +406,8 @@ fn a_turned_group_is_saved_and_opened_turned() {
     let mut d = doc();
     let group = turned_group(&mut d);
     let before = ask(&d, json!({"type": "entity", "id": group}));
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session-rotate");
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-rotate-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("turned.skr");
     let path = path.to_str().unwrap();

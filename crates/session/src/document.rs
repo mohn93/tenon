@@ -218,8 +218,11 @@ impl Document {
                 Ok(Outcome::default())
             }
             Command::Export { path, format } => {
-                self.export_file(&path, format)?;
-                Ok(Outcome::default())
+                let report = self.export_file(&path, format)?;
+                Ok(Outcome {
+                    export: Some(report),
+                    ..Outcome::default()
+                })
             }
             Command::Select { ids, mode } => {
                 self.parts(&ids)?;
@@ -416,6 +419,7 @@ impl Document {
                     Outcome {
                         changes: summary,
                         import: self.import_report.take(),
+                        export: None,
                     }
                 }),
                 None if matches!(
@@ -943,6 +947,7 @@ impl Document {
         Outcome {
             changes: summary,
             import: None,
+            export: None,
         }
     }
 

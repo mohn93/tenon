@@ -595,7 +595,8 @@ fn components_over_json_rpc() {
 
 #[test]
 fn import_reports_what_it_made_over_json_rpc() {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("api-import");
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("api-import-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("tri.stl");
     std::fs::write(

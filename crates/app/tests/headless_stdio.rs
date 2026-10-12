@@ -92,7 +92,7 @@ fn headless_stdio_session() {
 #[test]
 fn headless_opens_the_file_it_is_given() {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let path = dir.join("headless-open.skr");
+    let path = dir.join(format!("headless-open-{}.skr", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let path_text = path.to_str().unwrap();
     let save = [
