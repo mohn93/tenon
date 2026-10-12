@@ -261,6 +261,9 @@ fn bad_paint_commands_are_refused() {
         let (got, message, got_ids) = run(&mut d, command.clone()).unwrap_err();
         assert_eq!(got, kind, "{command}: {message}");
         assert_eq!(got_ids, ids, "{command}");
+        if command["ids"] == json!(["v0"]) || command["ids"] == json!(["f8", "e2"]) {
+            assert!(message.contains("only faces and instances"), "{message}");
+        }
     }
     assert_eq!(d.revision(), revision);
     assert!(

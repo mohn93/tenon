@@ -191,6 +191,17 @@ fn deleting_a_material_unpaints_everything_painted_with_it() {
     assert!(change.summary().materials == vec![id]);
     s.apply(&change.inverse());
     assert_eq!(s, before);
+    // Redo: the same change again unpaints once more.
+    let after = {
+        let mut a = before.clone();
+        a.delete_material(id).unwrap();
+        a
+    };
+    s.apply(&change);
+    assert_eq!(s, after);
+    assert!(s.material(id).is_none());
+    assert_eq!(s.root().instance(group).unwrap().material, None);
+    s.validate().unwrap();
 }
 
 #[test]
@@ -414,6 +425,40 @@ fn copies_groups_and_explodes_carry_paint() {
 }
 
 #[test]
+fn exploding_a_mirrored_painted_instance_keeps_each_material_on_its_physical_side() {
+    let (mut s, face) = square_scene();
+    let id = red(&mut s);
+    let blue = s.add_material("Blue", BLUE).unwrap().0;
+    s.paint(MeshId::Root, &[face], &[], Side::Front, Some(id))
+        .unwrap();
+    s.paint(MeshId::Root, &[face], &[], Side::Back, Some(blue))
+        .unwrap();
+    let edges: Vec<_> = s.root().edges().map(|(e, _)| e).collect();
+    let (group, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &[face],
+            &[],
+            DefinitionKind::Group,
+            "",
+        )
+        .unwrap();
+    // Mirrored in z, the red side that faced up now faces down.
+    let mirror = glam::DAffine3::from_scale(DVec3::new(1.0, 1.0, -1.0));
+    s.edit(
+        MeshId::Root,
+        |m| Ok(m.transform_instances(&[group], mirror)),
+    )
+    .unwrap();
+    s.explode(MeshId::Root, group).unwrap();
+    s.validate().unwrap();
+    let (_, f) = s.root().faces().next().unwrap();
+    assert_eq!(f.normal, -DVec3::Z);
+    assert_eq!(f.paint(), [Some(id), Some(blue)], "red faces down, blue up");
+}
+
+#[test]
 fn materials_survive_files_and_bad_material_data_is_rejected() {
     let (mut s, face) = square_scene();
     let id = red(&mut s);
@@ -477,4 +522,39 @@ fn materials_survive_files_and_bad_material_data_is_rejected() {
     // A color component over 255 is not a material color.
     let bad = json.replace("[200,30,30]", "[256,30,30]");
     assert!(serde_json::from_str::<SceneData>(&bad).is_err());
+}
+
+#[test]
+fn a_sheet_pushed_against_its_normal_keeps_the_painted_side_outside() {
+    // A vertical rectangle in the plane y = 0 (normal +Y), painted red on its back (the -Y side).
+    let mut m = Model::new();
+    m.add_polygon(&[
+        p(0.0, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(2.0, 0.0, 2.0),
+        p(0.0, 0.0, 2.0),
+    ])
+    .unwrap();
+    let face = m.faces().next().unwrap().0;
+    let mut s = Scene::from_root(m);
+    let id = red(&mut s);
+    assert_eq!(s.root().face(face).unwrap().normal, DVec3::Y);
+    s.paint(MeshId::Root, &[face], &[], Side::Back, Some(id))
+        .unwrap();
+    s.edit(MeshId::Root, |m| m.push_pull(face, -1.0)).unwrap();
+    s.validate().unwrap();
+    let m = s.root();
+    assert_eq!(m.faces().count(), 6);
+    let cap = m
+        .faces()
+        .find(|(_, f)| {
+            f.normal == -DVec3::Y && f.outer.iter().all(|v| m.position(*v).unwrap().y < -0.5)
+        })
+        .unwrap()
+        .1;
+    assert_eq!(cap.front, Some(id));
+    // Every face of the solid except the base shows red on its outward (front) side.
+    for (fid, f) in m.faces().filter(|(f, _)| *f != face) {
+        assert_eq!(f.front, Some(id), "{fid:?}");
+    }
 }

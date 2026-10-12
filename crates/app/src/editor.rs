@@ -94,7 +94,7 @@ pub struct Editor {
     scale_factor: f64,
     /// The material the Paint tool paints with (None: the default material).
     material: Option<MaterialId>,
-    /// Whether the sampling modifier (Cmd on macOS, Ctrl elsewhere) is held.
+    /// Whether the sampling modifier (Cmd or Ctrl) is held.
     sample: bool,
 }
 
@@ -224,7 +224,7 @@ impl Editor {
         false
     }
 
-    /// Whether the sampling modifier (Cmd on macOS, Ctrl elsewhere) is held: a Paint click then
+    /// Whether the sampling modifier (Cmd or Ctrl) is held: a Paint click then
     /// picks up a material instead of painting.
     pub fn set_sample_modifier(&mut self, held: bool) {
         self.sample = held;
@@ -569,6 +569,8 @@ impl Editor {
     /// Starts an empty model, dropping unsaved changes (the window asks about them first).
     /// Always true (the view changes).
     pub fn new_model(&mut self) -> bool {
+        // Material ids come from the model's own counter: the old choice would name another.
+        self.material = None;
         self.run_selection_command(Command::New { discard: true })
     }
 
@@ -580,7 +582,11 @@ impl Editor {
             path: path.display().to_string(),
             discard: true,
         });
-        self.doc.revision() != revision
+        let opened = self.doc.revision() != revision;
+        if opened {
+            self.material = None;
+        }
+        opened
     }
 
     /// Saves to `path`, or to the file last opened or saved. False if it cannot be saved; the
@@ -2303,6 +2309,25 @@ mod tests {
         assert!(!e.open_file(&missing));
         assert!(e.status().contains("missing.skr"), "{}", e.status());
         assert_eq!(stats(&e), (4, 1), "a failed open leaves the model");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_new_or_opened_model_forgets_the_chosen_material() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Escape);
+        assert!(e.add_material());
+        assert!(e.current_material().is_some());
+        let path = temp_file("material.skr");
+        assert!(e.save_file(Some(&path)));
+        // The file holds the material, so only the reset can make the choice go away.
+        assert!(e.open_file(&path));
+        assert_eq!(e.material, None);
+        assert!(e.add_material());
+        assert!(e.new_model());
+        assert_eq!(e.material, None);
+        assert_eq!(e.current_material(), None);
         let _ = std::fs::remove_file(&path);
     }
 

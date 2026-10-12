@@ -45,8 +45,8 @@ impl Document {
             .map_err(|e| material_error(e, Some(id)))
     }
 
-    /// Paints faces and instances of the open context. Edges and guides are invalid input,
-    /// as are vertices and an empty list.
+    /// Paints faces and instances of the open context. Edges, guides and vertices are
+    /// invalid input, as is an empty list.
     pub(super) fn paint_changes(
         &mut self,
         ids: &[EntityId],
@@ -59,11 +59,10 @@ impl Document {
                 "ids must list at least one face or instance",
             ));
         }
-        let parts = self.parts(ids)?;
         let others: Vec<EntityId> = ids
             .iter()
             .copied()
-            .filter(|id| matches!(id, EntityId::Edge(_) | EntityId::Guide(_)))
+            .filter(|id| !matches!(id, EntityId::Face(_) | EntityId::Instance(_)))
             .collect();
         if !others.is_empty() {
             return Err(CommandError::new(
@@ -72,6 +71,7 @@ impl Document {
             )
             .with_ids(others));
         }
+        let parts = self.parts(ids)?;
         let mesh = self.active();
         self.scene
             .paint(mesh, &parts.faces, &parts.instances, side, material)

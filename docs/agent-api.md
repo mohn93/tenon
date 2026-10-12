@@ -199,12 +199,13 @@ inside the merged face lies in), and copies, groups and components keep them. A
 face filling an opening is unpainted. Push/pull gives the extruded faces (the cap and the
 sides, also the walls and floor of a recess) the pushed face's front and back materials; a base
 that turns over (a pulled flat sheet) keeps each material on the side it was on, so its old
-front is now its back.
+front is now its back. A sheet pushed against its normal gives the cap and sides its back
+material as their front, so the material on the side facing the pull ends up outside.
 
 In the window, the Paint tool (`b`) paints the side of a face facing the viewer with the
 current material (a click on something selected paints the whole selection's faces and
-groups, a click on a group paints the group), and Cmd-click (Ctrl-click on other systems)
-picks up the clicked side's material instead. The Materials list under Entity Info chooses the
+groups, a click on a group paints the group), and Cmd-click or Ctrl-click (either key, on every
+system) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
 current material and adds, renames, recolors and deletes materials, all through these commands.
 
 ### Groups and components
@@ -322,7 +323,9 @@ never overwrites a model; use `save`.
 
 Colors come from each face's front side (its own material, else that of the nearest painted
 instance placing it); back-side materials are not exported. An OBJ export whose `.mtl` would
-be the export path itself or the open model's file is refused with `invalid_input`.
+be the export path itself or the open model's file is refused with `invalid_input`. The
+`.mtl` is written before the `.obj`, so a failure writing the `.obj` can leave a new `.mtl`
+beside the old (or no) `.obj`.
 
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
 does not change the revision or the `file` query.

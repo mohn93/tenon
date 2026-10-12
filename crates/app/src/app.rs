@@ -721,7 +721,7 @@ impl ApplicationHandler<ApiWake> for App {
                 let locked = s
                     .editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
-                // Cmd (Ctrl elsewhere) held makes a Paint click pick up a material.
+                // Cmd or Ctrl held makes a Paint click pick up a material.
                 s.editor
                     .set_sample_modifier(m.state().super_key() || m.state().control_key());
                 // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and

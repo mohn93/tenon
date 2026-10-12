@@ -254,6 +254,13 @@ impl Model {
         let cut = in_solid && distance < 0.0;
         let cap_normal = if in_solid || distance > 0.0 { n } else { -n };
         let cap_origin = points[0][0] + offset;
+        // A flat sheet pulled against its normal turns over: the side facing the pull direction
+        // is the one that ends up outside, so the cap and sides take the materials swapped.
+        let new_paint = if cap_normal == -n {
+            face.reversed().paint()
+        } else {
+            face.paint()
+        };
         let created: Vec<FaceId> = self
             .faces()
             .map(|(f, _)| f)
@@ -274,7 +281,7 @@ impl Model {
             }
             if in_cap {
                 self.orient(f, cap_normal);
-                self.set_paint(f, face.paint());
+                self.set_paint(f, new_paint);
                 continue;
             }
             // A side face lies inside a side's swept rectangle. Other new faces in a side's
@@ -297,7 +304,7 @@ impl Model {
             let out = (pb - pa).cross(n).normalize();
             self.orient(f, if cut { -out } else { out });
             // The sides take the pushed face's materials, as the cap does.
-            self.set_paint(f, face.paint());
+            self.set_paint(f, new_paint);
         }
         if cut {
             self.remove_strays(&vertices_before, &sides, offset);

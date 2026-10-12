@@ -134,6 +134,9 @@ impl Walk<'_> {
         // Normals follow the inverse transpose, right for any linear map (placements turn and
         // move, so it is the rotation itself for now).
         let normal_map = t.matrix3.inverse().transpose();
+        // A mirroring placement turns triangles inside out; swapping two corners restores the
+        // winding, so the front side (and the headlight) stay right.
+        let mirrored = t.matrix3.determinant() < 0.0;
         for (fid, face) in model.faces() {
             let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
             let flag = if selected(EntityId::Face(fid)) {
@@ -143,7 +146,10 @@ impl Walk<'_> {
             };
             let front = side_color(self.scene, face.front.or(inherited), DEFAULT_FRONT);
             let back = side_color(self.scene, face.back.or(inherited), DEFAULT_BACK);
-            for tri in model.triangulate(fid).unwrap_or_default() {
+            for mut tri in model.triangulate(fid).unwrap_or_default() {
+                if mirrored {
+                    tri.swap(1, 2);
+                }
                 for p in tri {
                     self.g.faces.push(FaceVertex {
                         pos: t.transform_point3(p).as_vec3().to_array(),
@@ -383,6 +389,49 @@ mod tests {
             .filter(|v| v.color == CONTEXT_BOX_COLOR)
             .any(|v| (v.pos[2] - sin).abs() < 1e-6);
         assert!(lifted_box, "the open instance's box turns with it");
+    }
+
+    #[test]
+    fn a_mirrored_instance_is_wound_around_its_transformed_normal() {
+        let (mut s, first, second) = two_squares();
+        let (red, _) = s.add_material("Red", [255, 0, 0]).unwrap();
+        // The component's face is red in front only; the second placement is mirrored in z.
+        let d = s.root().instance(first).unwrap().definition;
+        let face = s.definition(d).unwrap().mesh.faces().next().unwrap().0;
+        s.paint(
+            MeshId::Definition(d),
+            &[face],
+            &[],
+            kernel::Side::Front,
+            Some(red),
+        )
+        .unwrap();
+        let mirror = DAffine3::from_scale(DVec3::new(1.0, 1.0, -1.0));
+        s.edit(MeshId::Root, |m| {
+            Ok(m.transform_instances(&[second], mirror))
+        })
+        .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        let mut checked = 0;
+        for tri in g.faces.chunks(3).filter(|t| t[0].pos[0] >= 3.0) {
+            let [a, b, c] = [0, 1, 2].map(|i| glam::Vec3::from_array(tri[i].pos));
+            let n = glam::Vec3::from_array(tri[0].normal);
+            assert_eq!(n, glam::Vec3::NEG_Z);
+            assert!(
+                (b - a).cross(c - a).dot(n) > 0.0,
+                "counter-clockwise around the normal"
+            );
+            assert!(tri.iter().all(|v| v.front == [1.0, 0.0, 0.0]));
+            checked += 1;
+        }
+        assert_eq!(checked, 2);
+        // The unmirrored placement still faces +Z.
+        assert!(
+            g.faces
+                .iter()
+                .filter(|v| v.pos[0] <= 1.0)
+                .all(|v| v.normal == [0.0, 0.0, 1.0])
+        );
     }
 
     #[test]

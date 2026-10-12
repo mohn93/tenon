@@ -268,7 +268,10 @@ fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         .unwrap_or_else(|| m.name.clone());
     let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
     if edit.lost_focus() {
-        if text != m.name {
+        // Escape discards the edit; so does deleting the material in the same frame.
+        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let deleted = actions.contains(&UiAction::DeleteMaterial(m.id));
+        if text != m.name && !escaped && !deleted {
             actions.push(UiAction::RenameMaterial(m.id, text));
         }
         ui.data_mut(|d| d.remove::<String>(key));
@@ -565,23 +568,33 @@ mod tests {
     /// Clicks down the right panel at `x`, every 4 points; after each click, types `typed`
     /// and presses Enter. Returns every action.
     fn panel_actions(view: &View, x: f32, typed: Option<&str>) -> Vec<UiAction> {
+        panel_actions_ending(view, x, typed, egui::Key::Enter)
+    }
+
+    /// `panel_actions`, ending what was typed with `end` instead of Enter.
+    fn panel_actions_ending(
+        view: &View,
+        x: f32,
+        typed: Option<&str>,
+        end: egui::Key,
+    ) -> Vec<UiAction> {
         let ctx = egui::Context::default();
         let mut clicked = Vec::new();
         for y in (0..800).step_by(4) {
             clicked.extend(click(&ctx, view, Pos2::new(x, y as f32)));
             if let Some(text) = typed {
                 let mut typing = screen();
-                typing.events = vec![
-                    egui::Event::Text(text.into()),
-                    egui::Event::Key {
-                        key: egui::Key::Enter,
-                        physical_key: None,
-                        pressed: true,
-                        repeat: false,
-                        modifiers: Default::default(),
-                    },
-                ];
+                typing.events = vec![egui::Event::Text(text.into())];
                 clicked.extend(run(&ctx, typing, view).0);
+                let mut ending = screen();
+                ending.events = vec![egui::Event::Key {
+                    key: end,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }];
+                clicked.extend(run(&ctx, ending, view).0);
                 clicked.extend(run(&ctx, screen(), view).0);
             }
         }
@@ -651,6 +664,125 @@ mod tests {
                     | UiAction::RecolorMaterial(..)
             )),
             "{clicked:?}"
+        );
+    }
+
+    /// Two materials, the first chosen, for the name-field tests.
+    fn name_field_view<'a>(
+        status: &'a Status,
+        info: &'a [String],
+        rows: &'a [MaterialRow],
+    ) -> View<'a> {
+        View {
+            tool: ToolKind::Line,
+            status,
+            info,
+            has_selection: false,
+            has_instance_selected: false,
+            inside_instance: false,
+            has_guides: false,
+            projection: Projection::Perspective,
+            materials: rows,
+            material: Some(MaterialId(31)),
+        }
+    }
+
+    fn brick() -> [MaterialRow; 1] {
+        [MaterialRow {
+            id: MaterialId(31),
+            name: "Brick".into(),
+            color: [180, 60, 40],
+        }]
+    }
+
+    #[test]
+    fn escape_in_the_material_name_field_discards_the_edit() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let rows = brick();
+        let view = name_field_view(&status, &info, &rows);
+        let entered = panel_actions(&view, 1280.0 - 120.0, Some("Old"));
+        assert!(
+            entered
+                .iter()
+                .any(|a| matches!(a, UiAction::RenameMaterial(..))),
+            "Enter renames: {entered:?}"
+        );
+        let escaped = panel_actions_ending(&view, 1280.0 - 120.0, Some("Old"), egui::Key::Escape);
+        assert!(
+            !escaped
+                .iter()
+                .any(|a| matches!(a, UiAction::RenameMaterial(..))),
+            "{escaped:?}"
+        );
+    }
+
+    #[test]
+    fn deleting_a_material_does_not_also_rename_it() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let rows = brick();
+        let view = name_field_view(&status, &info, &rows);
+        let x = 1280.0 - 120.0;
+        let row_of = |wanted: fn(&UiAction) -> bool, typed: Option<&str>| {
+            (0..800)
+                .step_by(4)
+                .find(|y| {
+                    let ctx = egui::Context::default();
+                    run(&ctx, screen(), &view);
+                    let mut actions = click(&ctx, &view, Pos2::new(x, *y as f32));
+                    if let Some(text) = typed {
+                        let mut typing = screen();
+                        typing.events = vec![
+                            egui::Event::Text(text.into()),
+                            egui::Event::Key {
+                                key: egui::Key::Enter,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Default::default(),
+                            },
+                        ];
+                        actions.extend(run(&ctx, typing, &view).0);
+                        actions.extend(run(&ctx, screen(), &view).0);
+                    }
+                    actions.iter().any(wanted)
+                })
+                .expect("found the row") as f32
+        };
+        let delete_y = row_of(|a| matches!(a, UiAction::DeleteMaterial(_)), None);
+        let field_y = row_of(|a| matches!(a, UiAction::RenameMaterial(..)), Some("Old"));
+        // Type into the field, then press and release on Delete in one frame.
+        let ctx = egui::Context::default();
+        run(&ctx, screen(), &view);
+        let mut actions = click(&ctx, &view, Pos2::new(x, field_y));
+        let mut typing = screen();
+        typing.events = vec![egui::Event::Text("Old".into())];
+        actions.extend(run(&ctx, typing, &view).0);
+        let pos = Pos2::new(x, delete_y);
+        let pointer = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut both = screen();
+        both.events = vec![
+            egui::Event::PointerMoved(pos),
+            pointer(true),
+            pointer(false),
+        ];
+        actions.extend(run(&ctx, both, &view).0);
+        actions.extend(run(&ctx, screen(), &view).0);
+        assert!(
+            actions.contains(&UiAction::DeleteMaterial(MaterialId(31))),
+            "{actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, UiAction::RenameMaterial(..))),
+            "{actions:?}"
         );
     }
 }
