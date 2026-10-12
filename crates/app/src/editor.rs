@@ -439,16 +439,19 @@ impl Editor {
         true
     }
 
-    /// Starts an empty model. Always true (the view changes).
+    /// Starts an empty model, dropping unsaved changes (the window asks about them first).
+    /// Always true (the view changes).
     pub fn new_model(&mut self) -> bool {
-        self.run_selection_command(Command::New)
+        self.run_selection_command(Command::New { discard: true })
     }
 
-    /// Opens a `.skr` file. False if it cannot be opened; the status then says why.
+    /// Opens a `.skr` file, dropping unsaved changes (the window asks about them first). False
+    /// if it cannot be opened; the status then says why.
     pub fn open_file(&mut self, path: &Path) -> bool {
         let revision = self.doc.revision();
         self.run_selection_command(Command::Open {
             path: path.display().to_string(),
+            discard: true,
         });
         self.doc.revision() != revision
     }

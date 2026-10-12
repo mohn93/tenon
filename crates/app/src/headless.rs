@@ -14,6 +14,8 @@ pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
     if let Some(path) = file {
         let open = Command::Open {
             path: path.display().to_string(),
+            // A fresh model: nothing to lose.
+            discard: false,
         };
         if let Err(e) = host.doc.execute(open) {
             eprintln!("cannot open {}", e.message);

@@ -159,7 +159,7 @@ pub enum QueryResult {
         path: Vec<EntityId>,
         definition: Option<DefinitionId>,
     },
-    /// `path` is absent for a model never saved. `modified` is true when the model changed
+    /// `path` is null for a model never saved. `modified` is true when the model changed
     /// since it was opened, saved or started.
     File {
         path: Option<String>,

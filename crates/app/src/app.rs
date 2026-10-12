@@ -290,8 +290,9 @@ impl State {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Lays out the panels, applies what was clicked in them, and draws the 3D view and the
-    /// panels. Returns true if a panel action ran (so subscribers should hear about edits).
+    /// Lays out and draws the 3D view and the panels, then applies what was clicked in them
+    /// and asks for another frame to show the result. Returns true if a panel action ran (so
+    /// subscribers should hear about edits).
     fn render(&mut self) -> bool {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
@@ -329,11 +330,11 @@ impl State {
                 .any(|id| matches!(id, EntityId::Instance(_))),
             inside_instance: !self.editor.doc().context().is_empty(),
         };
-        let gui_frame = self.gui.frame(&self.window, &panels);
-        let acted = !gui_frame.actions.is_empty();
-        for action in gui_frame.actions.clone() {
-            self.apply(action);
-        }
+        let mut gui_frame = self.gui.frame(&self.window, &panels);
+        // Applied once the frame is presented: some open modal dialogs, which must not run
+        // while this frame's surface texture is held.
+        let actions = std::mem::take(&mut gui_frame.actions);
+        let acted = !actions.is_empty();
         if gui_frame.viewport != self.view {
             self.view = gui_frame.viewport;
             let v = self.view;
@@ -374,6 +375,9 @@ impl State {
             Repaint::Now => self.window.request_redraw(),
             Repaint::At(t) => self.repaint_at = Some(t),
             Repaint::Idle => {}
+        }
+        for action in actions {
+            self.apply(action);
         }
         if acted {
             self.window.request_redraw();
@@ -601,6 +605,8 @@ impl ApplicationHandler<ApiWake> for App {
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),
+                // A fresh model: nothing to lose.
+                discard: false,
             };
             if let Err(e) = state.editor.execute(open) {
                 eprintln!("cannot open {}", e.message);

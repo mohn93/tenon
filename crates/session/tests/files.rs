@@ -1,7 +1,7 @@
 //! New, open and save, renaming and purging definitions, driven through JSON commands.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use glam::DVec2;
 use serde_json::{Value, json};
@@ -181,7 +181,7 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
     let missing = scratch("missing.skr");
     let (kind, message) = run(
         &mut d,
-        json!({"type": "open", "path": missing.to_str().unwrap()}),
+        json!({"type": "open", "path": missing.to_str().unwrap(), "discard": true}),
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
@@ -191,7 +191,7 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
     std::fs::write(&garbage, b"not a zip").unwrap();
     let (kind, message) = run(
         &mut d,
-        json!({"type": "open", "path": garbage.to_str().unwrap()}),
+        json!({"type": "open", "path": garbage.to_str().unwrap(), "discard": true}),
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
@@ -206,7 +206,7 @@ fn files_that_cannot_be_opened_leave_the_model_alone() {
     zip.finish().unwrap();
     let (kind, message) = run(
         &mut d,
-        json!({"type": "open", "path": newer.to_str().unwrap()}),
+        json!({"type": "open", "path": newer.to_str().unwrap(), "discard": true}),
     )
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
@@ -295,4 +295,139 @@ fn renaming_and_purging_are_undo_steps() {
     assert_eq!(ask(&d, json!({"type": "stats"}))["definitions"], 0);
     run(&mut d, json!({"type": "undo"})).unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["definitions"], 1);
+}
+
+#[test]
+fn a_failed_save_leaves_no_partial_file_and_the_model_modified() {
+    let dir = scratch("a-directory.skr");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut d = doc();
+    model(&mut d);
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "save", "path": dir.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("a-directory.skr"), "{message}");
+    let mut partial = dir.clone().into_os_string();
+    partial.push(".partial");
+    assert!(!PathBuf::from(partial).exists(), "the partial file is gone");
+    assert!(dir.is_dir(), "the target is untouched");
+    let file = ask(&d, json!({"type": "file"}));
+    assert_eq!(file["modified"], true);
+    assert_eq!(file["path"], Value::Null);
+}
+
+/// Saves `model()` to `name`, then rewrites its document with `f`.
+fn edited_file(name: &str, f: impl FnOnce(&mut Value)) -> PathBuf {
+    let path = scratch(name);
+    let mut d = doc();
+    model(&mut d);
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut document: Value =
+        serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
+    f(&mut document);
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.start_file("document.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(&serde_json::to_vec(&document).unwrap())
+        .unwrap();
+    zip.finish().unwrap();
+    path
+}
+
+/// Opening `path` in a fresh document fails with a file error containing `expected`.
+fn open_fails(path: &Path, expected: &str) {
+    let mut d = doc();
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File, "{message}");
+    assert!(message.contains(expected), "{message:?} lacks {expected:?}");
+}
+
+#[test]
+fn files_with_out_of_range_numbers_or_versions_do_not_open() {
+    let far = edited_file("far-vertex-x.skr", |d| {
+        d["model"]["definitions"][0]["mesh"]["vertices"][0]["position"][0] = json!(2.0e6);
+    });
+    open_fails(&far, "beyond");
+    let far = edited_file("far-vertex-z.skr", |d| {
+        d["model"]["definitions"][0]["mesh"]["vertices"][1]["position"][2] = json!(-2.0e6);
+    });
+    open_fails(&far, "beyond");
+    let far = edited_file("far-instance.skr", |d| {
+        d["model"]["root"]["instances"][0]["transform"][9] = json!(5.0e6);
+    });
+    open_fails(&far, "beyond");
+    let flat = edited_file("flat-instance.skr", |d| {
+        d["model"]["root"]["instances"][0]["transform"] = Value::from(vec![0.0; 12]);
+    });
+    open_fails(&flat, "not invertible");
+    let unversioned = edited_file("unversioned.skr", |d| {
+        d.as_object_mut().unwrap().remove("schema_version");
+    });
+    open_fails(&unversioned, "schema version");
+    let zero = edited_file("version-zero.skr", |d| d["schema_version"] = json!(0));
+    open_fails(&zero, "schema version");
+}
+
+#[test]
+fn new_and_open_refuse_to_drop_unsaved_changes_unless_told_to() {
+    let path = scratch("unsaved.skr");
+    let mut d = doc();
+    model(&mut d);
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, -2, 0], "end": [1, -2, 0]}),
+    )
+    .unwrap();
+    let entities = ask(&d, json!({"type": "entities"}));
+    for command in [
+        json!({"type": "new"}),
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+        json!({"type": "new", "discard": false}),
+    ] {
+        let (kind, message) = run(&mut d, command).unwrap_err();
+        assert_eq!(kind, ErrorKind::UnsavedChanges);
+        assert!(message.contains("discard"), "{message}");
+    }
+    assert_eq!(ask(&d, json!({"type": "entities"})), entities);
+    assert_eq!(ask(&d, json!({"type": "file"}))["modified"], true);
+    let kind = serde_json::to_value(ErrorKind::UnsavedChanges).unwrap();
+    assert_eq!(kind, "unsaved_changes");
+
+    run(
+        &mut d,
+        json!({"type": "open", "path": path.to_str().unwrap(), "discard": true}),
+    )
+    .unwrap();
+    assert_eq!(ask(&d, json!({"type": "file"}))["modified"], false);
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, -2, 0], "end": [1, -2, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "new", "discard": true})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "stats"}))["vertices"], 0);
+    // A model without changes needs no discard.
+    run(
+        &mut d,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
 }

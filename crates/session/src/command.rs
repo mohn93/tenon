@@ -89,11 +89,18 @@ pub enum Command {
     /// instance was erased or exploded), and what only they placed.
     PurgeDefinitions,
     /// Start an empty model with the default view. Clears undo history; not an undo step.
-    New,
+    /// With changes not saved, fails (`unsaved_changes`) unless `discard` is true.
+    New {
+        #[serde(default)]
+        discard: bool,
+    },
     /// Replace the model and view with those saved in a `.skr` file. Clears undo history;
-    /// not an undo step.
+    /// not an undo step. With changes not saved, fails (`unsaved_changes`) unless `discard`
+    /// is true.
     Open {
         path: String,
+        #[serde(default)]
+        discard: bool,
     },
     /// Save the model and view as a `.skr` file at `path`, or at the path last opened or
     /// saved when `path` is absent. Not an undo step.
@@ -156,6 +163,8 @@ pub enum ErrorKind {
     NotFound,
     /// A file could not be read or written; `message` says why.
     File,
+    /// `new` or `open` would drop changes not saved; pass `"discard": true` to drop them.
+    UnsavedChanges,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

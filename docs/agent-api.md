@@ -51,7 +51,7 @@ Queries:
 | `{"type": "selection"}` | the selected edge, face and instance ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
-| `{"type": "file"}` | `path` of the file last opened or saved (absent if never), `modified` since then, and `revision` |
+| `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
@@ -137,16 +137,20 @@ Models are saved as `.skr` files: a zip archive holding `document.json`, which r
 | Command | Effect |
 |---|---|
 | `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. |
-| `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. |
-| `{"type": "new"}` | An empty model with the default view, not saved anywhere. |
+| `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
+| `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
 Paths are relative to the app's working directory. None of these is an undo step. `open` and
 `new` clear the undo history, the selection and the open context, and change the revision;
 subscribers get a `resync` notification and should read the model again. Ids in an opened file
 are those it was saved with, and new ids continue after the largest one ever used. A file that
 cannot be read or written gives the error kind `file`, with a message naming the path and the
-reason (a missing file, not a sketchup-alt file, or a newer schema version); the model is left
-as it was. `new`, `open` and `save` are not allowed in an atomic batch.
+reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
+over 256 MiB, ids over 2^53, a transform that cannot be inverted, or a coordinate beyond the
++/-1e6 m limit); the model is left as it was. `open` and `new` never drop changes the user has
+not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
+a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
+itself before its own New and Open. `new`, `open` and `save` are not allowed in an atomic batch.
 
 Behaviors worth knowing:
 
@@ -182,5 +186,5 @@ Building a 2 x 3 x 1.5 m box on an empty model:
 
 Standard JSON-RPC codes (-32700 parse, -32600 invalid request, -32601 unknown method, -32602 bad
 params) plus `-32000` command failed (`data` is `{kind, message, ids?}`; `kind` is `invalid_input`,
-`not_found`, `nothing_to_undo`, `nothing_to_redo` or `file`), `-32001` batch failed
+`not_found`, `nothing_to_undo`, `nothing_to_redo`, `file` or `unsaved_changes`), `-32001` batch failed
 (`data` is `{index, error, completed, rolled_back}`) and `-32002` rendering unavailable.

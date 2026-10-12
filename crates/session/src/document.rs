@@ -182,11 +182,13 @@ impl Document {
                 self.close_instance()?;
                 Ok(Outcome::default())
             }
-            Command::New => {
+            Command::New { discard } => {
+                self.check_unsaved(discard)?;
                 self.new_model();
                 Ok(Outcome::default())
             }
-            Command::Open { path } => {
+            Command::Open { path, discard } => {
+                self.check_unsaved(discard)?;
                 self.open_file(&path)?;
                 Ok(Outcome::default())
             }
@@ -248,7 +250,7 @@ impl Document {
                 self.rename_changes(*definition, name)
             }
             Command::PurgeDefinitions => Ok(self.scene.purge()),
-            Command::New | Command::Open { .. } | Command::Save { .. } => return None,
+            Command::New { .. } | Command::Open { .. } | Command::Save { .. } => return None,
             Command::Undo
             | Command::Redo
             | Command::SetCamera { .. }
@@ -342,7 +344,7 @@ impl Document {
                     command,
                     Command::Undo
                         | Command::Redo
-                        | Command::New
+                        | Command::New { .. }
                         | Command::Open { .. }
                         | Command::Save { .. }
                 ) =>

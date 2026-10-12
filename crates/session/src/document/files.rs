@@ -10,6 +10,17 @@ use crate::command::{CommandError, ErrorKind};
 use crate::file;
 
 impl Document {
+    /// Fails when the model has changes not saved, unless the command said to discard them.
+    pub(super) fn check_unsaved(&self, discard: bool) -> Result<(), CommandError> {
+        if self.is_modified() && !discard {
+            return Err(CommandError::new(
+                ErrorKind::UnsavedChanges,
+                "the model has unsaved changes: save it first, or pass \"discard\": true",
+            ));
+        }
+        Ok(())
+    }
+
     /// An empty model with the default view.
     pub(super) fn new_model(&mut self) {
         let camera = Camera::new(self.camera.viewport);
