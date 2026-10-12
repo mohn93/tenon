@@ -337,17 +337,27 @@ fn golden_painted_box_front_and_back() {
     let brick = add_material(&mut d, "Brick", [190, 70, 50]);
     let leaf = add_material(&mut d, "Leaf", [60, 170, 80]);
     let faces = all_faces(&d);
-    for (material, side) in [(brick, Side::Front), (leaf, Side::Back)] {
-        run(
-            &mut d,
-            Command::Paint {
-                ids: faces.clone(),
-                material: Some(material),
-                side,
-            },
-        );
-    }
-    // From above, into the open box: outside walls are brick, the inside leaf green.
+    // The floor (z = 0) keeps its unpainted back, so the default back color shows inside.
+    let floor = top_face(&d, 0.0);
+    let walls: Vec<EntityId> = faces.iter().copied().filter(|f| *f != floor).collect();
+    run(
+        &mut d,
+        Command::Paint {
+            ids: faces.clone(),
+            material: Some(brick),
+            side: Side::Front,
+        },
+    );
+    run(
+        &mut d,
+        Command::Paint {
+            ids: walls,
+            material: Some(leaf),
+            side: Side::Back,
+        },
+    );
+    // From above, into the open box: outside walls are brick, the inside walls leaf green,
+    // and the floor shows the default back color.
     look(&mut d, [4.0, -3.5, 4.5], [1.0, 0.75, 0.3]);
     check("painted_box", &d);
 }
@@ -436,7 +446,10 @@ fn golden_guides_are_dashed() {
             position: [1.5, -1.0, 0.5],
         },
     );
-    look(&mut d, [3.0, -4.5, 3.5], [0.0, 0.0, 0.0]);
+    for position in [[-1.5, 1.0, 0.8], [0.0, -1.0, 1.2]] {
+        run(&mut d, Command::AddGuidePoint { position });
+    }
+    look(&mut d, [2.5, -3.5, 2.8], [0.0, 0.0, 0.3]);
     check("guides", &d);
 }
 
@@ -491,22 +504,23 @@ fn golden_parallel_top_view() {
 fn golden_selection_highlight() {
     let mut d = doc();
     let top = add_box(&mut d, [0.0, 0.0]);
-    // One vertical edge: the one standing at the box's corner nearest the camera.
+    // The top face and its four boundary edges.
     let model = d.model();
-    let (edge, _) = model
-        .edges()
-        .find(|(_, e)| {
-            let [a, b] = e.v.map(|v| model.position(v).unwrap());
-            (a.x - 2.0).abs() < 1e-9
-                && a.y.abs() < 1e-9
-                && (b.x - 2.0).abs() < 1e-9
-                && b.y.abs() < 1e-9
-        })
-        .expect("corner edge");
+    let mut ids = vec![top];
+    ids.extend(
+        model
+            .edges()
+            .filter(|(_, e)| {
+                e.v.iter()
+                    .all(|v| model.position(*v).is_some_and(|p| (p.z - 1.0).abs() < 1e-9))
+            })
+            .map(|(id, _)| EntityId::Edge(id)),
+    );
+    assert_eq!(ids.len(), 5, "top face and four edges");
     run(
         &mut d,
         Command::Select {
-            ids: vec![top, EntityId::Edge(edge)],
+            ids,
             mode: Default::default(),
         },
     );

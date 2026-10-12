@@ -100,7 +100,7 @@ const BELOW_MATERIALS_LIST: f32 = 140.0 + OUTLINER_MIN_HEIGHT;
 pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     let mut actions = Vec::new();
     Panel::top("toolbar").show(ui, |ui| {
-        // Wraps onto more rows when the window is narrower than the buttons (about 1240 points).
+        // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
         ui.horizontal_wrapped(|ui| {
             ui.menu_button("File", |ui| {
                 let items = [
@@ -717,10 +717,8 @@ mod tests {
         }
     }
 
-    /// Clicks over the whole toolbar of a `width`-point window, every 4 points across and 6
-    /// down. Returns the actions and the toolbar's height (the 3D view's top).
-    fn toolbar_clicks(width: f32) -> (Vec<UiAction>, f32) {
-        let ctx = egui::Context::default();
+    /// Runs `f` with a view that has every toolbar button enabled.
+    fn with_toolbar_view<R>(f: impl FnOnce(&View) -> R) -> R {
         let status = status();
         let info = Vec::new();
         let view = View {
@@ -738,7 +736,24 @@ mod tests {
             context: &[],
             selection: &NO_SELECTION,
         };
-        let (_, central) = run(&ctx, screen_of(width), &view);
+        f(&view)
+    }
+
+    /// The 3D view's rectangle after one layout pass of a `width`-point window; its top is
+    /// the toolbar's height.
+    fn central_of(width: f32) -> Rect {
+        with_toolbar_view(|view| run(&egui::Context::default(), screen_of(width), view).1)
+    }
+
+    /// Clicks over the whole toolbar of a `width`-point window, every 4 points across and 6
+    /// down. Returns the actions and the toolbar's height (the 3D view's top).
+    fn toolbar_clicks(width: f32) -> (Vec<UiAction>, f32) {
+        with_toolbar_view(|view| toolbar_clicks_in(view, width))
+    }
+
+    fn toolbar_clicks_in(view: &View, width: f32) -> (Vec<UiAction>, f32) {
+        let ctx = egui::Context::default();
+        let (_, central) = run(&ctx, screen_of(width), view);
         let mut clicked = Vec::new();
         for y in (3..central.min.y as i32).step_by(6) {
             for x in (2..width as i32).step_by(4) {
@@ -751,10 +766,10 @@ mod tests {
                 };
                 let mut press = screen_of(width);
                 press.events = vec![egui::Event::PointerMoved(pos), pointer(true)];
-                let _ = run(&ctx, press, &view);
+                let _ = run(&ctx, press, view);
                 let mut release = screen_of(width);
                 release.events = vec![pointer(false)];
-                clicked.extend(run(&ctx, release, &view).0);
+                clicked.extend(run(&ctx, release, view).0);
             }
         }
         (clicked, central.min.y)
@@ -788,13 +803,13 @@ mod tests {
         let (clicked, height) = toolbar_clicks(1280.0);
         assert_every_toolbar_button(&clicked, 1280.0);
         // The default window keeps the toolbar on one row, as a very wide one does.
-        let (_, wide) = toolbar_clicks(2400.0);
+        let wide = central_of(2400.0).min.y;
         assert_eq!(height, wide, "one toolbar row at 1280 points");
     }
 
     #[test]
     fn a_narrow_window_wraps_the_toolbar_and_keeps_every_button() {
-        let (_, one_row) = toolbar_clicks(2400.0);
+        let one_row = central_of(2400.0).min.y;
         for width in [900.0, 640.0] {
             let (clicked, height) = toolbar_clicks(width);
             assert_every_toolbar_button(&clicked, width);
@@ -803,6 +818,11 @@ mod tests {
                 "the toolbar wraps at {width} points: {height} vs {one_row}"
             );
             assert!(height < 200.0, "{height} points of toolbar at {width}");
+            let central = central_of(width);
+            assert!(
+                central.width() > 0.0 && central.height() > 0.0,
+                "a 3D view is left at {width} points: {central:?}"
+            );
         }
     }
 
