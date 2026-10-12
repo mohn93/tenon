@@ -249,6 +249,18 @@ impl State {
         self.editor.save_file(path.as_deref())
     }
 
+    /// Imports an OBJ or STL file chosen in a dialog as a group in the open context.
+    fn import(&mut self) {
+        let chosen = rfd::FileDialog::new()
+            .add_filter("OBJ or STL", &["obj", "stl"])
+            .add_filter("OBJ", &["obj"])
+            .add_filter("STL", &["stl"])
+            .pick_file();
+        if let Some(path) = chosen {
+            self.editor.import_file(&path);
+        }
+    }
+
     /// Exports to a file chosen in a dialog; its extension picks the format.
     fn export(&mut self) {
         let stem = file_name(self.editor.doc().path());
@@ -275,6 +287,7 @@ impl State {
             UiAction::SaveFileAs => {
                 self.save(true);
             }
+            UiAction::ImportFile => self.import(),
             UiAction::ExportFile => self.export(),
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
@@ -813,6 +826,13 @@ impl ApplicationHandler<ApiWake> for App {
                     true
                 } else if command_key && !event.repeat && letter == Some('s') {
                     s.save(s.modifiers.shift_key());
+                    true
+                } else if command_key
+                    && !event.repeat
+                    && !s.modifiers.shift_key()
+                    && letter == Some('i')
+                {
+                    s.import();
                     true
                 } else if command_key
                     && !event.repeat

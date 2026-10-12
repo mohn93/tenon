@@ -26,6 +26,7 @@ pub enum UiAction {
     OpenFile,
     SaveFile,
     SaveFileAs,
+    ImportFile,
     ExportFile,
     DeleteGuides,
     ZoomExtents,
@@ -106,6 +107,7 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     ("Open...", "Cmd+O", UiAction::OpenFile),
                     ("Save", "Cmd+S", UiAction::SaveFile),
                     ("Save As...", "Shift+Cmd+S", UiAction::SaveFileAs),
+                    ("Import...", "Cmd+I", UiAction::ImportFile),
                     ("Export...", "Shift+Cmd+E", UiAction::ExportFile),
                 ];
                 for (label, key, action) in items {
@@ -563,6 +565,7 @@ mod tests {
             UiAction::OpenFile,
             UiAction::SaveFile,
             UiAction::SaveFileAs,
+            UiAction::ImportFile,
             UiAction::ExportFile,
         ] {
             assert!(clicked.contains(&action), "{action:?} in {clicked:?}");

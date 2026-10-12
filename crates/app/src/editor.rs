@@ -7,7 +7,7 @@ use glam::{DVec2, DVec3};
 use kernel::{EntityId, MaterialId};
 use render::grid::LineVertex;
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, Outcome, Projection,
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Outcome, Projection,
     SelectMode, StandardView,
 };
 use tools::overlay::overlay;
@@ -662,6 +662,40 @@ impl Editor {
             self.message = Some(format!("Exported {}", path.display()));
         }
         exported
+    }
+
+    /// Imports an OBJ or STL file (the format its extension names) as a group in the open
+    /// context, which becomes the selection, as one undo step. False if it cannot be
+    /// imported; the status then says why.
+    pub fn import_file(&mut self, path: &Path) -> bool {
+        self.reset_tool();
+        self.typed.clear();
+        self.message = None;
+        let outcome = self.run(Command::Import {
+            path: path.display().to_string(),
+            format: None,
+            place: ImportAs::Group,
+            scale: None,
+            up: None,
+            merge_coplanar: None,
+        });
+        self.update_hover();
+        let Some(report) = outcome.and_then(|o| o.import) else {
+            return false;
+        };
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let faces = match report.faces {
+            1 => "1 face".to_string(),
+            n => format!("{n} faces"),
+        };
+        self.message = Some(match report.skipped {
+            0 => format!("Imported {name}: {faces}"),
+            1 => format!("Imported {name}: {faces}; 1 polygon skipped"),
+            n => format!("Imported {name}: {faces}; {n} polygons skipped"),
+        });
+        true
     }
 
     pub fn undo(&mut self) -> bool {
@@ -2467,6 +2501,32 @@ mod tests {
         let unknown = temp_file("square.dwg");
         assert!(!e.export_file(&unknown));
         assert!(e.status().contains(".obj"), "{}", e.status());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn importing_adds_a_selected_group_and_reports_it() {
+        let mut e = editor();
+        let path = temp_file("tri.obj");
+        std::fs::write(
+            &path,
+            "v 0 0 0\nv 1 0 0\nv 0 0 -1\nv 2 0 0\nf 1 2 3\nf 1 2 4\n",
+        )
+        .unwrap();
+        assert!(e.import_file(&path));
+        assert!(
+            e.status().contains("1 face; 1 polygon skipped"),
+            "{}",
+            e.status()
+        );
+        let instance = e.doc().model().instances().next().unwrap().0;
+        assert!(e.doc().selection().contains(&EntityId::Instance(instance)));
+        assert!(e.undo());
+        assert_eq!(e.doc().model().instances().count(), 0);
+
+        let missing = temp_file("missing.stl");
+        assert!(!e.import_file(&missing));
+        assert!(e.status().contains("missing.stl"), "{}", e.status());
         let _ = std::fs::remove_file(&path);
     }
 

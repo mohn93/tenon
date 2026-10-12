@@ -423,6 +423,9 @@ positions, has a broken line (the message names it), a number that is not finite
 beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
 `import` is allowed in an atomic batch.
 
+In the window, File > Import... (Cmd+I) picks an OBJ or STL file and imports it as a group
+with these defaults; the status line reports the faces made and polygons skipped, or the error.
+
 Details: for `"as": "context"` the report's `faces` counts the faces built from the file, before
 they merge with what is already in the context. A `.mtl` over 16 MiB is ignored, as is a library
 that is not a regular file or is named by an absolute path (relative paths, `..` included, are
