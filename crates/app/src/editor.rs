@@ -645,14 +645,15 @@ impl Editor {
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
                 if undone && let Ok(redone) = self.doc.execute(Command::Redo) {
-                    if redone.changes.created.is_empty() {
-                        // A plain rotation or move created nothing: keep what was selected.
+                    if is_copy && !redone.changes.created.is_empty() {
+                        self.select_created(redone);
+                    } else {
+                        // Only a refused copy reselects its copies; anything else (a plain
+                        // move or turn, a guide) keeps what was selected.
                         self.run(Command::Select {
                             ids: selected,
                             mode: SelectMode::Replace,
                         });
-                    } else {
-                        self.select_created(redone);
                     }
                 }
                 self.reset_tool();
@@ -1143,6 +1144,42 @@ mod tests {
         assert!(!e.delete_guides());
         e.undo();
         assert_eq!(e.doc().model().guides().count(), 1);
+    }
+
+    #[test]
+    fn a_refused_retyped_guide_distance_keeps_the_guide_and_the_selection() {
+        let mut e = editor();
+        square(&mut e);
+        let face = e
+            .doc()
+            .model()
+            .faces()
+            .next()
+            .map(|(id, _)| EntityId::Face(id))
+            .unwrap();
+        e.run(Command::Select {
+            ids: vec![face],
+            mode: SelectMode::Replace,
+        });
+        assert!(e.key(EditorKey::Char('t')));
+        click_at(&mut e, DVec3::new(2.5, 1.0, 0.0));
+        move_to(&mut e, DVec3::new(2.5, -0.5, 0.0));
+        type_text(&mut e, "2");
+        let guide = |e: &Editor| {
+            e.doc()
+                .model()
+                .guides()
+                .map(|(_, g)| *g)
+                .collect::<Vec<_>>()
+        };
+        let before = guide(&e);
+        assert_eq!(before.len(), 1);
+        let selected: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        type_text(&mut e, "2000000");
+        assert!(e.status().contains("within +/-1000000 m"), "{}", e.status());
+        assert_eq!(guide(&e), before);
+        let after: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        assert_eq!(after, selected);
     }
 
     #[test]
