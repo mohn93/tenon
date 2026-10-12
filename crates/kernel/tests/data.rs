@@ -195,7 +195,13 @@ fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
 fn ids_beyond_exact_json_numbers_are_rejected() {
     rejects(|d| d.root.vertices[0].id = u64::MAX, "too large");
     rejects(|d| d.root.edges[0].id = kernel::MAX_ID + 1, "too large");
+    rejects(|d| d.root.edges[0].id = kernel::MAX_ID, "too large");
+    rejects(
+        |d| d.root.edges[0].curve = Some(kernel::MAX_ID),
+        "too large",
+    );
     rejects(|d| d.next_id = u64::MAX, "too large");
+    rejects(|d| d.next_id = kernel::MAX_ID + 1, "too large");
     rejects(|d| d.definitions[0].id = u64::MAX, "too large");
     let err = Scene::from_data(&loose_vertices(
         0,
@@ -206,8 +212,21 @@ fn ids_beyond_exact_json_numbers_are_rejected() {
 }
 
 #[test]
+fn ids_at_the_limit_load_save_and_load_again() {
+    let mut data = scene().to_data();
+    data.next_id = kernel::MAX_ID;
+    let s = Scene::from_data(&data).unwrap();
+    assert_eq!(s.to_data().next_id, kernel::MAX_ID);
+    let last = loose_vertices(0, &[(3, [0.0; 3]), (kernel::MAX_ID - 1, [1.0, 0.0, 0.0])]);
+    let s = Scene::from_data(&last).unwrap();
+    let saved = s.to_data();
+    assert_eq!(saved.next_id, kernel::MAX_ID);
+    assert_eq!(Scene::from_data(&saved).unwrap(), s);
+}
+
+#[test]
 fn ids_at_the_limit_load_and_keep_working() {
-    let data = loose_vertices(0, &[(3, [0.0; 3]), (kernel::MAX_ID, [1.0, 0.0, 0.0])]);
+    let data = loose_vertices(0, &[(3, [0.0; 3]), (kernel::MAX_ID - 1, [1.0, 0.0, 0.0])]);
     let mut s = Scene::from_data(&data).unwrap();
     let change = s
         .edit(MeshId::Root, |m| {
@@ -218,10 +237,109 @@ fn ids_at_the_limit_load_and_keep_working() {
     assert!(!created.is_empty());
     assert!(s.root().vertices().any(|(id, _)| id.0 == 3), "v3 kept");
     assert!(
-        s.root().vertices().any(|(id, _)| id.0 == kernel::MAX_ID),
+        s.root()
+            .vertices()
+            .any(|(id, _)| id.0 == kernel::MAX_ID - 1),
         "the largest id kept"
     );
     s.validate().unwrap();
+}
+
+#[test]
+fn coordinates_survive_a_json_round_trip_bit_for_bit() {
+    // Numbers that serde_json parses one unit in the last place off without float_roundtrip.
+    let tricky = [
+        [180.17933438838418, -930.0397635799367, 474.47532350305437],
+        [-452.10277274836835, -420.07796691370356, 0.1 + 0.2],
+    ];
+    let data = loose_vertices(0, &[(1, tricky[0]), (2, tricky[1])]);
+    let s = Scene::from_data(&data).unwrap();
+    let back = round_trip(&s);
+    for (id, v) in back.root().vertices() {
+        let want = tricky[id.0 as usize - 1];
+        assert_eq!(
+            v.pos.to_array().map(f64::to_bits),
+            want.map(f64::to_bits),
+            "v{}",
+            id.0
+        );
+    }
+    assert_eq!(back, s);
+}
+
+/// `scene()` with a circle drawn in the root, a guide in the root and a material.
+fn scene_with_every_kind() -> Scene {
+    let mut s = scene();
+    let ring: Vec<DVec3> = (0..12)
+        .map(|k| {
+            let a = std::f64::consts::TAU * k as f64 / 12.0;
+            p(-5.0 + a.cos(), a.sin(), 0.0)
+        })
+        .collect();
+    s.edit(MeshId::Root, |m| m.add_curve(&ring, true)).unwrap();
+    s.edit(MeshId::Root, |m| {
+        m.add_guide(kernel::Guide::Point {
+            position: p(0.0, 0.0, 5.0),
+        })
+    })
+    .unwrap();
+    s.add_material("Red", [200, 0, 0]).unwrap();
+    s.validate().unwrap();
+    s
+}
+
+#[test]
+fn no_number_is_the_id_of_two_things() {
+    let s = scene_with_every_kind();
+    assert_eq!(round_trip(&s), s);
+    let data = s.to_data();
+    let curve = data.root.edges.iter().find_map(|e| e.curve).unwrap();
+    let definition = data.definitions[0].id;
+    let inner_vertex = data.definitions[0].mesh.vertices[0].id;
+    let inner_face = data.definitions[0].mesh.faces[0].id;
+    let root_vertex = data.root.vertices[0].id;
+    let recurve = move |d: &mut SceneData, to: u64| {
+        for e in &mut d.root.edges {
+            if e.curve == Some(curve) {
+                e.curve = Some(to);
+            }
+        }
+    };
+    type Change = Box<dyn Fn(&mut SceneData)>;
+    let changes: Vec<(&str, Change)> = vec![
+        (
+            "curve = definition",
+            Box::new(move |d| recurve(d, definition)),
+        ),
+        (
+            "curve = vertex in a definition",
+            Box::new(move |d| recurve(d, inner_vertex)),
+        ),
+        (
+            "material = face in a definition",
+            Box::new(move |d| d.materials[0].id = inner_face),
+        ),
+        (
+            "material = definition",
+            Box::new(move |d| d.materials[0].id = definition),
+        ),
+        (
+            "guide in a definition = vertex in the root",
+            Box::new(move |d| {
+                d.definitions[0].mesh.guides.push(kernel::GuideData {
+                    id: root_vertex,
+                    point: [0.0, 0.0, 9.0],
+                    direction: None,
+                })
+            }),
+        ),
+    ];
+    for (what, change) in changes {
+        let mut d = data.clone();
+        change(&mut d);
+        let err = Scene::from_data(&d).unwrap_err();
+        assert!(err.contains("share an id"), "{what}: {err}");
+    }
 }
 
 #[test]

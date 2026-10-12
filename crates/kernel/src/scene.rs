@@ -437,8 +437,9 @@ impl Scene {
     }
 
     /// Checks every mesh, that instances place existing definitions, that no definition places
-    /// itself (directly or deeper), that no id is used in two meshes, that every material
-    /// painted exists, and that material names are valid and distinct.
+    /// itself (directly or deeper), that no number is the id of two things (entities in any
+    /// mesh, curves, definitions and materials all take ids from one counter), that every
+    /// material painted exists, and that material names are valid and distinct.
     pub fn validate(&self) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for (id, m) in &self.materials {
@@ -451,8 +452,19 @@ impl Scene {
             }
         }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
-        let mut seen = BTreeSet::new();
-        let mut curves_seen = BTreeSet::new();
+        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "c", "d", "m").
+        let mut owner: BTreeMap<u64, char> = BTreeMap::new();
+        let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
+            None => Ok(()),
+            Some(p) if p == prefix => Err(format!("{prefix}{id} is used in two meshes")),
+            Some(p) => Err(format!("{p}{id} and {prefix}{id} share an id")),
+        };
+        for id in self.definitions.keys() {
+            claim(id.0, 'd')?;
+        }
+        for id in self.materials.keys() {
+            claim(id.0, 'm')?;
+        }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;
             for (id, i) in m.instances() {
@@ -471,15 +483,18 @@ impl Scene {
                 }
             }
             for id in entity_ids(m) {
-                if !seen.insert(id) {
-                    return Err(format!("{id} is used in two meshes"));
-                }
+                let (prefix, n) = match id {
+                    EntityId::Vertex(v) => ('v', v.0),
+                    EntityId::Edge(e) => ('e', e.0),
+                    EntityId::Face(f) => ('f', f.0),
+                    EntityId::Instance(i) => ('i', i.0),
+                    EntityId::Guide(g) => ('g', g.0),
+                };
+                claim(n, prefix)?;
             }
             let curves: BTreeSet<CurveId> = m.edges().filter_map(|(_, e)| e.curve).collect();
             for c in curves {
-                if !curves_seen.insert(c) {
-                    return Err(format!("curve {c} is used in two meshes"));
-                }
+                claim(c.0, 'c')?;
             }
         }
         if let Some(id) = self.cycle() {

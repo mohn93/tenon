@@ -431,3 +431,89 @@ fn new_and_open_refuse_to_drop_unsaved_changes_unless_told_to() {
     )
     .unwrap();
 }
+
+#[test]
+fn coordinates_and_the_view_reopen_bit_for_bit() {
+    let path = scratch("bits.skr");
+    let mut d = doc();
+    // serde_json reads these back one unit in the last place off without float_roundtrip.
+    let start = [180.17933438838418, -930.0397635799367, 474.47532350305437];
+    let end = [-452.10277274836835, -420.07796691370356, 0.1 + 0.2];
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": start, "end": end}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [10.000000000000002, -9.87654321012345, 8.1], "target": start, "fov_y_deg": 41.3}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut opened = doc();
+    run(
+        &mut opened,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let bits = |d: &Document| -> Vec<[u64; 3]> {
+        d.model()
+            .vertices()
+            .map(|(_, v)| v.pos.to_array().map(f64::to_bits))
+            .collect()
+    };
+    assert_eq!(bits(&opened), bits(&d));
+    assert_eq!(
+        bits(&opened),
+        vec![start.map(f64::to_bits), end.map(f64::to_bits)]
+    );
+    let view = |d: &Document| {
+        [d.camera.eye, d.camera.target]
+            .map(|p| p.to_array().map(f64::to_bits))
+            .to_vec()
+    };
+    assert_eq!(view(&opened), view(&d));
+}
+
+#[test]
+fn a_model_that_has_used_up_its_ids_is_not_saved() {
+    let path = edited_file("last-ids.skr", |d| {
+        d["model"]["next_id"] = json!(kernel::MAX_ID);
+    });
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    // Saving as it is works: no id at or past the limit was given out.
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, -5, 0], "end": [1, -5, 0]}),
+    )
+    .unwrap();
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("more than a file can hold"), "{message}");
+    // The file on disk is the one saved before.
+    let mut again = doc();
+    run(
+        &mut again,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert!(d.is_modified());
+}

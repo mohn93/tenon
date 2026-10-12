@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use kernel::{MeshData, Scene, SceneData};
+use kernel::{MAX_ID, MeshData, Scene, SceneData};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -46,7 +46,14 @@ pub(crate) struct StoredCamera {
 }
 
 /// Writes the model and camera to `path`, replacing it only once the whole file is written.
+/// Fails when the model has given out ids past [`MAX_ID`], which no file can hold.
 pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), String> {
+    let model = scene.to_data();
+    if model.next_id > MAX_ID {
+        return Err(format!(
+            "the model has used ids past {MAX_ID}, more than a file can hold"
+        ));
+    }
     let stored = Stored {
         format: FORMAT.into(),
         schema_version: SCHEMA_VERSION,
@@ -57,7 +64,7 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
             up: Some(camera.up.to_array()),
             projection: camera.projection,
         },
-        model: scene.to_data(),
+        model,
     };
     let json = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

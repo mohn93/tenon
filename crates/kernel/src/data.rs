@@ -12,7 +12,8 @@ use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
 
-/// The largest id a file may use: every id up to it is exact as a JSON (double) number.
+/// Ids in a file are below this, and its `next_id` is at most this, so every id is exact as a
+/// JSON (double) number and a scene that loads also saves and loads again.
 pub const MAX_ID: u64 = 1 << 53;
 
 /// Instance transforms whose 3x3 part has a smaller determinant (in absolute value) cannot be
@@ -146,7 +147,8 @@ impl Scene {
     }
 
     /// Rebuilds a scene from plain data, keeping every id. Fails, naming the problem, when an
-    /// id is used twice or is over [`MAX_ID`], a number is not finite, an instance's transform
+    /// id is used twice (by things of any kind) or is not below [`MAX_ID`], `next_id` is over
+    /// it, a number is not finite, an instance's transform
     /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]:
     /// that includes painting with a missing material and blank, overlong or repeated
     /// material names).
@@ -248,8 +250,10 @@ fn mesh_data(m: &Model) -> MeshData {
 }
 
 fn check_id(what: &str, id: u64) -> Result<(), String> {
-    if id > MAX_ID {
-        return Err(format!("{what}{id} has an id too large (over {MAX_ID})"));
+    if id >= MAX_ID {
+        return Err(format!(
+            "{what}{id} has an id too large (ids must be below {MAX_ID})"
+        ));
     }
     Ok(())
 }

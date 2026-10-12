@@ -344,10 +344,11 @@ subscribers get a `resync` notification and should read the model again. Ids in 
 are those it was saved with, and new ids continue after the largest one ever used. A file that
 cannot be read or written gives the error kind `file`, with a message naming the path and the
 reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
-over 256 MiB, ids over 2^53, a transform that cannot be inverted, a coordinate beyond the
+over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
 fewer than two faces, a face or instance painted with a material the file lacks, or a material
-name that is blank, too long or used twice); the model is left as it was. `open` and `new` never drop changes the user has
+name that is blank, too long or used twice); the model is left as it was. `save` also fails
+when the model has given out ids past 2^53, which no file can hold. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
 itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an
