@@ -26,7 +26,7 @@ pub enum Query {
     Camera,
     Stats,
     History,
-    /// The selected edges, faces and instances.
+    /// The selected edges, faces, instances and guides.
     Selection,
     /// Every group and component definition.
     Definitions,

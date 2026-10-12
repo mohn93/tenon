@@ -291,3 +291,32 @@ fn guides_are_saved_but_not_exported_and_old_files_still_open() {
         ErrorKind::File
     );
 }
+
+#[test]
+fn explode_refuses_to_put_a_guide_beyond_the_coordinate_limit() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    )
+    .unwrap();
+    let added = run(
+        &mut d,
+        json!({"type": "add_guide_point", "position": [900000, 0, 0]}),
+    )
+    .unwrap();
+    let guide = added["changes"]["created"][0].clone();
+    let face = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"][0]["id"].clone();
+    run(&mut d, json!({"type": "make_group", "ids": [face, guide]})).unwrap();
+    let group = ask(&d, json!({"type": "selection"}))["ids"][0].clone();
+    run(
+        &mut d,
+        json!({"type": "move", "ids": [group], "offset": [500000, 0, 0]}),
+    )
+    .unwrap();
+    let before = ask(&d, json!({"type": "entities"}));
+    let err = run(&mut d, json!({"type": "explode", "ids": [group]})).unwrap_err();
+    assert_eq!(err.0, ErrorKind::InvalidInput);
+    assert_eq!(err.1, vec![group.as_str().unwrap().to_string()]);
+    assert_eq!(ask(&d, json!({"type": "entities"})), before);
+}

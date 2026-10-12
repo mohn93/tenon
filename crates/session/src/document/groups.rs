@@ -85,7 +85,17 @@ impl Document {
         let parts = self.parts(ids)?;
         for i in &parts.instances {
             let placed = self.instance_box(*i).into_iter().flatten();
-            let points: Vec<[f64; 3]> = placed.map(|p| p.to_array()).collect();
+            let mut points: Vec<[f64; 3]> = placed.map(|p| p.to_array()).collect();
+            // Guides come out too, and the instance box does not cover them.
+            if let Some(inst) = self.model().instance(*i)
+                && let Some(def) = self.scene.definition(inst.definition)
+            {
+                points.extend(
+                    def.mesh
+                        .guides()
+                        .map(|(_, g)| inst.transform.transform_point3(g.anchor()).to_array()),
+                );
+            }
             if check_coordinates(&points).is_err() {
                 return Err(CommandError::new(
                     ErrorKind::InvalidInput,

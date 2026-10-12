@@ -84,9 +84,9 @@ pub enum Command {
     },
     /// Rotate vertices, edges, faces (their vertices), instances and guides by `angle` degrees
     /// about the line through `center` along `axis` (default Z), counter-clockwise looking
-    /// down the axis, as one undo step. Faces that share some of the turned vertices stretch and may
-    /// tilt, but must stay flat. With `copies`, the originals stay and that many copies are
-    /// made instead, copy k turned by `k * angle`, under the rules of `Copy`.
+    /// down the axis, as one undo step. Faces that share some of the turned vertices stretch
+    /// and may tilt, but must stay flat. With `copies`, the originals stay and that many copies
+    /// are made instead, copy k turned by `k * angle`, under the rules of `Copy`.
     Rotate {
         ids: Vec<EntityId>,
         center: [f64; 3],
