@@ -298,6 +298,15 @@ impl State {
             UiAction::DeleteGuides => {
                 self.editor.delete_guides();
             }
+            UiAction::ZoomExtents => {
+                self.editor.zoom_extents();
+            }
+            UiAction::StandardView(view) => {
+                self.editor.standard_view(view);
+            }
+            UiAction::SetProjection(projection) => {
+                self.editor.set_projection(projection);
+            }
         }
     }
 
@@ -350,6 +359,7 @@ impl State {
                 .any(|id| matches!(id, EntityId::Instance(_))),
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
+            projection: self.editor.doc().camera.projection,
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         // Applied once the frame is presented: some open modal dialogs, which must not run
@@ -542,6 +552,7 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyA => 'a',
         KeyCode::KeyQ => 'q',
         KeyCode::KeyT => 't',
+        KeyCode::KeyZ => 'z',
         _ => return None,
     })
 }
@@ -894,6 +905,12 @@ mod tests {
         assert_eq!(ch(editor_key(&arabic, t, false)), Some('t'));
         let a = PhysicalKey::Code(KeyCode::KeyA);
         assert_eq!(ch(editor_key(&arabic, a, false)), Some('a'));
+        let z = PhysicalKey::Code(KeyCode::KeyZ);
+        assert_eq!(
+            ch(editor_key(&arabic, z, true)),
+            Some('Z'),
+            "Shift+Z zooms extents"
+        );
         let ascii = Key::Character(SmolStr::new("g"));
         assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
     }

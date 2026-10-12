@@ -1,6 +1,7 @@
 //! The window's panels: toolbar, status bar with the measurements box, and Entity Info.
 
 use egui::{Align, Layout, Panel, RichText, Ui};
+use session::{Projection, StandardView};
 use tools::ToolKind;
 
 use crate::editor::Status;
@@ -22,6 +23,9 @@ pub enum UiAction {
     SaveFileAs,
     ExportFile,
     DeleteGuides,
+    ZoomExtents,
+    StandardView(StandardView),
+    SetProjection(Projection),
 }
 
 /// What the panels show.
@@ -36,6 +40,8 @@ pub struct View<'a> {
     pub inside_instance: bool,
     /// Whether the open context has guides to delete.
     pub has_guides: bool,
+    /// The camera's projection, checked in the Camera menu.
+    pub projection: Projection,
 }
 
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
@@ -62,11 +68,41 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                 }
             });
             ui.menu_button("Edit", |ui| {
+                let erase = egui::Button::new("Erase Selection").shortcut_text("Delete");
+                if ui.add_enabled(view.has_selection, erase).clicked() {
+                    actions.push(UiAction::EraseSelection);
+                }
                 if ui
                     .add_enabled(view.has_guides, egui::Button::new("Delete Guides"))
                     .clicked()
                 {
                     actions.push(UiAction::DeleteGuides);
+                }
+            });
+            ui.menu_button("Camera", |ui| {
+                if ui
+                    .add(egui::Button::new("Zoom Extents").shortcut_text("Shift+Z"))
+                    .clicked()
+                {
+                    actions.push(UiAction::ZoomExtents);
+                }
+                ui.separator();
+                for v in StandardView::ALL {
+                    if ui.button(v.label()).clicked() {
+                        actions.push(UiAction::StandardView(v));
+                    }
+                }
+                ui.separator();
+                for (projection, label) in [
+                    (Projection::Perspective, "Perspective"),
+                    (Projection::Parallel, "Parallel Projection"),
+                ] {
+                    if ui
+                        .selectable_label(view.projection == projection, label)
+                        .clicked()
+                    {
+                        actions.push(UiAction::SetProjection(projection));
+                    }
                 }
             });
             ui.separator();
@@ -88,12 +124,6 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
             }
             if ui.button("Redo").on_hover_text("Shift+Cmd+Z").clicked() {
                 actions.push(UiAction::Redo);
-            }
-            let erase = ui
-                .add_enabled(view.has_selection, egui::Button::new("Erase selection"))
-                .on_hover_text("Delete");
-            if erase.clicked() {
-                actions.push(UiAction::EraseSelection);
             }
             ui.separator();
             let buttons = [
@@ -166,7 +196,7 @@ mod tests {
         out.unwrap()
     }
 
-    /// The window's default size (see `app.rs`); the toolbar needs about 1190 points.
+    /// The window's default size (see `app.rs`); the toolbar needs about 1200 points.
     fn screen() -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
@@ -215,6 +245,7 @@ mod tests {
             has_instance_selected: false,
             inside_instance: false,
             has_guides: false,
+            projection: Projection::Perspective,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let file = Pos2::new(14.0, central.min.y / 2.0);
@@ -250,54 +281,98 @@ mod tests {
         }
     }
 
-    /// The actions produced by opening each menu right of File and clicking just below it.
-    fn edit_menu_actions(has_guides: bool) -> Vec<UiAction> {
+    /// The actions produced by opening the menu under each x in `xs` on the toolbar row and
+    /// clicking one spot below it, down the menu.
+    fn menu_actions(view: &View, xs: std::ops::Range<i32>) -> Vec<UiAction> {
         let ctx = egui::Context::default();
+        let (_, central) = run(&ctx, screen(), view);
+        let row = central.min.y / 2.0;
+        let mut clicked = Vec::new();
+        for x in xs.step_by(12) {
+            for y in (0..300).step_by(8) {
+                click(&ctx, view, Pos2::new(x as f32, row));
+                let _ = run(&ctx, screen(), view);
+                clicked.extend(click(
+                    &ctx,
+                    view,
+                    Pos2::new(x as f32 + 10.0, central.min.y + y as f32),
+                ));
+                let mut escape = screen();
+                escape.events = vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }];
+                let _ = run(&ctx, escape, view);
+            }
+        }
+        clicked
+    }
+
+    #[test]
+    fn the_camera_menu_has_views_zoom_extents_and_projections() {
         let status = status();
         let info = Vec::new();
-        let view = View {
+        let mut view = View {
             tool: ToolKind::Line,
             status: &status,
             info: &info,
             has_selection: false,
             has_instance_selected: false,
             inside_instance: false,
-            has_guides,
+            has_guides: false,
+            projection: Projection::Perspective,
         };
-        let (_, central) = run(&ctx, screen(), &view);
-        let row = central.min.y / 2.0;
-        let mut clicked = Vec::new();
-        // The Edit button sits right after File (which ends before x = 40), so 40..90 reaches it.
-        for x in (40..90).step_by(6) {
-            click(&ctx, &view, Pos2::new(x as f32, row));
-            let _ = run(&ctx, screen(), &view);
-            clicked.extend(click(
-                &ctx,
-                &view,
-                Pos2::new(x as f32 + 10.0, central.min.y + 8.0),
-            ));
-            let mut escape = screen();
-            escape.events = vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }];
-            let _ = run(&ctx, escape, &view);
+        // The Camera menu sits right after File and Edit.
+        let clicked = menu_actions(&view, 80..140);
+        assert!(clicked.contains(&UiAction::ZoomExtents), "{clicked:?}");
+        for v in StandardView::ALL {
+            assert!(
+                clicked.contains(&UiAction::StandardView(v)),
+                "{v:?} in {clicked:?}"
+            );
         }
-        clicked
+        for p in [Projection::Perspective, Projection::Parallel] {
+            assert!(
+                clicked.contains(&UiAction::SetProjection(p)),
+                "{p:?} in {clicked:?}"
+            );
+        }
+        view.projection = Projection::Parallel;
+        let clicked = menu_actions(&view, 80..140);
+        assert!(clicked.contains(&UiAction::SetProjection(Projection::Perspective)));
+    }
+
+    fn edit_menu_actions(has_selection: bool, has_guides: bool) -> Vec<UiAction> {
+        let status = status();
+        let info = Vec::new();
+        let view = View {
+            tool: ToolKind::Line,
+            status: &status,
+            info: &info,
+            has_selection,
+            has_instance_selected: false,
+            inside_instance: false,
+            has_guides,
+            projection: Projection::Perspective,
+        };
+        // The Edit button sits right after File (which ends before x = 40).
+        menu_actions(&view, 40..80)
     }
 
     #[test]
-    fn the_edit_menu_deletes_guides() {
-        let clicked = edit_menu_actions(true);
+    fn the_edit_menu_erases_the_selection_and_deletes_guides() {
+        let clicked = edit_menu_actions(true, true);
+        assert!(clicked.contains(&UiAction::EraseSelection), "{clicked:?}");
         assert!(clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
     }
 
     #[test]
-    fn the_edit_menu_cannot_delete_guides_when_there_are_none() {
-        let clicked = edit_menu_actions(false);
+    fn the_edit_menu_items_need_a_selection_and_guides() {
+        let clicked = edit_menu_actions(false, false);
+        assert!(!clicked.contains(&UiAction::EraseSelection), "{clicked:?}");
         assert!(!clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
     }
 
@@ -314,6 +389,7 @@ mod tests {
             has_instance_selected: false,
             inside_instance: false,
             has_guides: false,
+            projection: Projection::Perspective,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -339,6 +415,7 @@ mod tests {
             has_instance_selected: true,
             inside_instance: true,
             has_guides: true,
+            projection: Projection::Perspective,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let row = central.min.y / 2.0;
@@ -363,7 +440,6 @@ mod tests {
             assert!(clicked.contains(&UiAction::Tool(kind)), "{clicked:?}");
         }
         assert!(clicked.contains(&UiAction::Undo));
-        assert!(clicked.contains(&UiAction::EraseSelection));
         for action in [
             UiAction::MakeGroup,
             UiAction::MakeComponent,

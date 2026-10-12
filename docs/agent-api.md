@@ -227,6 +227,9 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "standard_view", "view": "top"}` | Looks at the target from a standard direction, from the same distance: `top` (from +Z, `up` +Y), `bottom` (from -Z, `up` +Y), `front` (from -Y, looking along +Y), `back` (from +Y), `left` (from -X), `right` (from +X), `iso` (from the front left above, along (1,1,-1)). The projection does not change. |
 | `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
 
+In the window, the Camera menu has Zoom Extents (Shift+Z), the standard views and the two
+projections; it sends these same commands.
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`

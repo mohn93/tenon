@@ -7,7 +7,8 @@ use glam::{DVec2, DVec3};
 use kernel::EntityId;
 use render::grid::LineVertex;
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, Outcome, SelectMode,
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, Outcome, Projection,
+    SelectMode, StandardView,
 };
 use tools::overlay::overlay;
 use tools::{
@@ -289,7 +290,8 @@ impl Editor {
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
     /// (or "x" in the Move and Rotate tools, for arrays like "x5"); "g" makes a group and
-    /// "G" (Shift+G) a component of the selection; other letters are tool shortcuts. Enter
+    /// "G" (Shift+G) a component of the selection; "Z" (Shift+Z) zooms to the whole model;
+    /// other letters are tool shortcuts. Enter
     /// submits the typed text to the tool. Escape clears the typed text, or else cancels the
     /// tool's operation (the Select tool then closes the open group). Delete, and Backspace
     /// with nothing typed, erase the selection. Returns true if anything changed.
@@ -305,6 +307,8 @@ impl Editor {
                     self.make_group()
                 } else if c == 'G' {
                     self.make_component()
+                } else if c == 'Z' {
+                    self.zoom_extents()
                 } else if let Some(kind) = ToolKind::from_shortcut(c) {
                     self.select_tool(kind);
                     true
@@ -418,6 +422,33 @@ impl Editor {
             return true;
         }
         self.run_selection_command(Command::Explode { ids })
+    }
+
+    /// Fits the whole model in the view (Shift+Z). The tool's operation goes on. Always true
+    /// (the view may change).
+    pub fn zoom_extents(&mut self) -> bool {
+        self.run_camera_command(Command::ZoomExtents)
+    }
+
+    /// Looks at the target from a standard direction. The tool's operation goes on.
+    pub fn standard_view(&mut self, view: StandardView) -> bool {
+        self.run_camera_command(Command::StandardView { view })
+    }
+
+    /// Switches the projection. False if the camera already has it.
+    pub fn set_projection(&mut self, projection: Projection) -> bool {
+        if self.doc.camera.projection == projection {
+            return false;
+        }
+        self.run_camera_command(Command::SetProjection { projection })
+    }
+
+    /// Runs a camera command; the tool's operation and typed text stay.
+    fn run_camera_command(&mut self, command: Command) -> bool {
+        self.message = None;
+        self.run(command);
+        self.update_hover();
+        true
     }
 
     /// Erases every guide of the open context as one undo step. False if there are none.
@@ -1956,6 +1987,43 @@ mod tests {
             .definitions()
             .map(|(_, d)| d.name.clone())
             .collect()
+    }
+
+    #[test]
+    fn shift_z_zooms_to_the_model_and_keeps_the_line_going() {
+        let mut e = editor();
+        square(&mut e);
+        click_at(&mut e, DVec3::new(5.0, 1.0, 0.0));
+        let before = stats(&e);
+        assert!(e.key(EditorKey::Char('Z')));
+        let target = e.doc().camera.target;
+        assert!(
+            target.abs_diff_eq(DVec3::new(2.0, 2.0, 0.0), 1e-9),
+            "{target}"
+        );
+        assert_eq!(stats(&e), before, "a camera move is not an edit");
+        click_at(&mut e, DVec3::new(5.0, 3.0, 0.0));
+        assert_eq!(stats(&e).0, before.0 + 1, "the chain went on from (5, 1)");
+    }
+
+    #[test]
+    fn standard_views_and_projection_come_from_the_editor() {
+        let mut e = editor();
+        assert!(e.standard_view(StandardView::Top));
+        assert!(e.doc().camera.is_vertical());
+        assert!(e.set_projection(Projection::Parallel));
+        assert!(e.doc().camera.is_parallel());
+        // Drawing still lands where the cursor points in a parallel top view.
+        square(&mut e);
+        assert_eq!(stats(&e), (4, 1));
+        assert!(e.zoom_extents());
+        assert!(
+            e.doc()
+                .camera
+                .target
+                .abs_diff_eq(DVec3::new(2.0, 2.0, 0.0), 1e-9)
+        );
+        assert!(!e.set_projection(Projection::Parallel), "already parallel");
     }
 
     #[test]
