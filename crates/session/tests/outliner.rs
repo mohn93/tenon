@@ -264,3 +264,154 @@ fn the_tree_follows_edits_and_undo() {
     run(&mut d, json!({"type": "undo"})).unwrap();
     assert_eq!(outliner(&d)["instances"][1]["id"], json!(second));
 }
+
+/// A group placing an "Outer" component placing an "Inner" component (a 2 x 2 x 1 box).
+/// Returns (group, outer, inner).
+fn nested(d: &mut Document) -> (String, String, String) {
+    run(
+        d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    )
+    .unwrap();
+    run(
+        d,
+        json!({"type": "push_pull", "face": "f8", "distance": 1.0}),
+    )
+    .unwrap();
+    let ids = everything(d);
+    let inner = created_instance(
+        &run(
+            d,
+            json!({"type": "make_component", "ids": ids, "name": "Inner"}),
+        )
+        .unwrap(),
+    );
+    let outer = created_instance(
+        &run(
+            d,
+            json!({"type": "make_component", "ids": [inner], "name": "Outer"}),
+        )
+        .unwrap(),
+    );
+    let group = created_instance(&run(d, json!({"type": "make_group", "ids": [outer]})).unwrap());
+    run(d, json!({"type": "select", "ids": []})).unwrap();
+    (group, outer, inner)
+}
+
+#[test]
+fn a_three_level_tree_marks_the_open_path_and_the_selection_at_depth() {
+    let mut d = doc();
+    let (group, outer, inner) = nested(&mut d);
+    run(&mut d, json!({"type": "open_path", "path": [group, outer]})).unwrap();
+    run(&mut d, json!({"type": "select", "ids": [inner]})).unwrap();
+    let tree = outliner(&d);
+    let g = &tree["instances"][0];
+    let o = &g["children"][0];
+    let i = &o["children"][0];
+    assert_eq!(
+        (&g["id"], &o["id"], &i["id"]),
+        (&json!(group), &json!(outer), &json!(inner))
+    );
+    assert_eq!(
+        (&g["kind"], &o["name"], &i["name"]),
+        (&json!("group"), &json!("Outer"), &json!("Inner"))
+    );
+    assert_eq!(g["open"], true);
+    assert!(g.get("selected").is_none());
+    assert_eq!(o["open"], true);
+    assert!(o.get("selected").is_none());
+    assert_eq!(i["selected"], true);
+    assert!(i.get("open").is_none());
+    assert_eq!(i["children"], json!([]));
+}
+
+#[test]
+fn open_path_names_the_mid_path_parent_it_could_not_find_a_child_in() {
+    let mut d = doc();
+    let (group, outer, inner) = nested(&mut d);
+    // The inner component is in the outer one, not directly in the group.
+    let cmd: Command =
+        serde_json::from_value(json!({"type": "open_path", "path": [group, inner, outer]}))
+            .unwrap();
+    let err = d.execute(cmd).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::NotFound);
+    assert_eq!(
+        err.ids.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+        vec![inner.clone()]
+    );
+    assert!(err.message.contains(&group), "{}", err.message);
+    assert_eq!(path(&d), json!([]), "unchanged");
+}
+
+#[test]
+fn an_undo_that_closes_the_open_context_updates_the_marks() {
+    let mut d = doc();
+    let (group, outer, _) = nested(&mut d);
+    run(&mut d, json!({"type": "open_path", "path": [group, outer]})).unwrap();
+    assert_eq!(outliner(&d)["instances"][0]["open"], true);
+    // Undoing make_group removes the group the open path starts with.
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(path(&d), json!([]));
+    let tree = outliner(&d);
+    let top = &tree["instances"][0];
+    assert_eq!(top["id"], json!(outer));
+    assert!(top.get("open").is_none(), "{tree}");
+    assert!(top["children"][0].get("open").is_none(), "{tree}");
+}
+
+#[test]
+fn a_failed_atomic_batch_also_restores_the_selection() {
+    let mut d = doc();
+    let (first, _, group, _) = boxes(&mut d);
+    run(&mut d, json!({"type": "select", "ids": [first]})).unwrap();
+    let commands: Vec<Command> = serde_json::from_value(json!([
+        {"type": "open_path", "path": [first]},
+        {"type": "select", "ids": [group]},
+        {"type": "push_pull", "face": "f999", "distance": 1.0}
+    ]))
+    .unwrap();
+    let err = d.execute_batch(commands, true).unwrap_err();
+    assert_eq!(err.index, 2);
+    assert_eq!(path(&d), json!([]));
+    assert_eq!(selection(&d), json!([first]));
+    assert_eq!(outliner(&d)["instances"][0]["selected"], true);
+}
+
+#[test]
+fn a_non_atomic_batch_opens_a_parent_and_selects_a_leaf() {
+    let mut d = doc();
+    let (_, second, group, _) = boxes(&mut d);
+    let commands: Vec<Command> = serde_json::from_value(json!([
+        {"type": "open_path", "path": [second]},
+        {"type": "select", "ids": [group]}
+    ]))
+    .unwrap();
+    d.execute_batch(commands, false).unwrap();
+    assert_eq!(path(&d), json!([second]));
+    assert_eq!(selection(&d), json!([group]));
+    let tree = outliner(&d);
+    assert_eq!(tree["instances"][1]["open"], true);
+    assert_eq!(tree["instances"][1]["children"][0]["selected"], true);
+    assert!(
+        tree["instances"][0]["children"][0]
+            .get("selected")
+            .is_none()
+    );
+}
+
+#[test]
+fn the_row_table_lists_each_definitions_instances_once() {
+    let mut d = doc();
+    let (first, second, group, red) = boxes(&mut d);
+    let table = d.outliner_rows();
+    let roots: Vec<String> = table.roots.iter().map(|r| r.id.to_string()).collect();
+    assert_eq!(roots, vec![first, second]);
+    assert_eq!(table.roots[1].material.map(|m| m.to_string()), Some(red));
+    let boxed = table.children(table.roots[0].definition);
+    assert_eq!(boxed.len(), 1);
+    assert_eq!(boxed[0].id.to_string(), group);
+    assert_eq!(boxed[0].name, "");
+    assert!(table.children(boxed[0].definition).is_empty());
+    // One entry per definition, however many times it is placed.
+    assert_eq!(table.by_definition.len(), 2);
+}

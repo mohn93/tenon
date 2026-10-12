@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use kernel::{ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, MaterialId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -210,6 +212,36 @@ pub struct OutlinerNode {
     pub selected: bool,
     /// The instances its definition places, in id order.
     pub children: Vec<OutlinerNode>,
+}
+
+/// One placed group or component in an `OutlinerTable`: what `OutlinerNode` says about it
+/// apart from the marks and children, which depend on where it is placed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlinerRow {
+    pub id: EntityId,
+    pub definition: DefinitionId,
+    pub kind: DefinitionKind,
+    /// The definition's name; empty for an unnamed group.
+    pub name: String,
+    pub material: Option<MaterialId>,
+}
+
+/// The outliner tree stored flat (`Document::outliner_rows`): the root's instances and, for
+/// each definition, the instances it places. Its size is linear in the model however deep the
+/// nesting; a node's children are `children(node.definition)`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OutlinerTable {
+    pub roots: Vec<OutlinerRow>,
+    pub by_definition: BTreeMap<DefinitionId, Vec<OutlinerRow>>,
+}
+
+impl OutlinerTable {
+    /// The instances `definition` places, in id order (none for an unknown definition).
+    pub fn children(&self, definition: DefinitionId) -> &[OutlinerRow] {
+        self.by_definition
+            .get(&definition)
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 /// A material and how much of the model uses it.

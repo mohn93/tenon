@@ -19,7 +19,8 @@ pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
 pub use kernel::{CurveKind, MaterialId, Side};
 pub use query::{
     Bounds, ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo,
-    GuideKind, InstanceInfo, MaterialInfo, OutlinerNode, Query, QueryResult, VertexInfo,
+    GuideKind, InstanceInfo, MaterialInfo, OutlinerNode, OutlinerRow, OutlinerTable, Query,
+    QueryResult, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;

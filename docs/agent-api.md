@@ -260,16 +260,26 @@ open:
 - `open` (absent when false) marks the nodes on the open context's path: the open instance and
   the ones it is inside of. `selected` (absent when false) marks selected instances of the open
   context; the same ids under another placement are not marked.
+- `revision` covers the tree's structure (names, materials, children). The `open` and
+  `selected` marks follow the open context and the selection, which change no revision and send
+  no `changed` notification: query again after `open_path`, `open_instance`, `close_instance` or
+  `select`.
 - To select a node elsewhere in the tree, open its parent's path, then select it:
-  `open_path` with the path minus its last id, then `select`.
+  `open_path` with the path minus its last id, then `select` (a non-atomic `batch` of the two
+  works).
+- The output grows with nesting, since each placement repeats its definition's whole subtree,
+  and each nesting level adds about two levels of JSON depth (a node and its `children` array).
+  For large or deeply nested models use `definitions` to see what exists, then `open_path` and
+  `entities` to look inside one placement at a time.
 
 In the window, the Outliner under the Materials list shows this tree (components as `<Name>`,
 groups by name or as `Group`, selected rows highlighted, open ones bold, nodes on the open path
-expanded at first) and sends these same commands: a click selects the node, with `open_path`
-first when it is in another context; Shift-click or Cmd/Ctrl-click adds it to or removes it from
-the selection when it is in the open context (`select` with mode `toggle`); a double-click opens
-it (`open_path` with its whole path); the Model row at the top goes back to the root
-(`open_path` with `[]`).
+expanded whenever the open context changes) and sends these same commands: a click selects the
+node, with `open_path` first when it is in another context; Shift-click, Cmd-click or Ctrl-click
+(either key on every system) adds it to or removes it from the selection when it is in the open
+context (`select` with mode `toggle`); a double-click opens it (`open_path` with its whole path);
+the Model row at the top goes back to the root (`open_path` with `[]`; nothing when already
+there).
 
 `{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
 undo step; a component's name must not be empty; an unknown definition is `not_found`).

@@ -56,6 +56,43 @@ fn batch_and_query_round_trip() {
 }
 
 #[test]
+fn outliner_query_round_trip() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "batch",
+        json!({"commands": square(), "atomic": true}),
+    );
+    let all = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["edge", "face"]}),
+    );
+    let ids: Vec<Value> = ["edges", "faces"]
+        .iter()
+        .flat_map(|k| all["result"][k].as_array().unwrap().clone())
+        .map(|e| e["id"].clone())
+        .collect();
+    let r = call(&mut h, "execute", json!({"type": "make_group", "ids": ids}));
+    let group = r["result"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('i'))
+        .unwrap()
+        .clone();
+    let tree = call(&mut h, "query", json!({"type": "outliner"}));
+    let result = &tree["result"];
+    assert_eq!(result["type"], "outliner");
+    assert_eq!(result["revision"], 2);
+    let node = &result["instances"][0];
+    assert_eq!(node["id"], group);
+    assert_eq!(node["kind"], "group");
+    assert_eq!(node["selected"], true, "make_group selects the new group");
+    assert_eq!(node["children"], json!([]));
+}
+
+#[test]
 fn failed_atomic_batch_reports_where_it_stopped() {
     let mut h = HeadlessHost::new();
     let mut cmds = square();

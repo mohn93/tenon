@@ -6,7 +6,7 @@ use kernel::{DefinitionKind, EntityId, InstanceId, KernelError, MeshId, SceneCha
 
 use super::{Document, MAX_COORDINATE, check_coordinates};
 use crate::command::{CommandError, ErrorKind};
-use crate::query::{Bounds, InstanceInfo, OutlinerNode};
+use crate::query::{Bounds, InstanceInfo, OutlinerNode, OutlinerRow, OutlinerTable};
 
 impl Document {
     /// Makes a group (`name` None) or a named component from `ids` and selects its instance.
@@ -194,36 +194,40 @@ impl Document {
         Ok(())
     }
 
-    /// The tree of placed groups and components, from the root's instances down.
+    /// The tree of placed groups and components, from the root's instances down, with the
+    /// open path and the selection marked. Built from `outliner_rows`; its size grows with
+    /// nesting, since each placement repeats its definition's subtree.
     pub fn outliner(&self) -> Vec<OutlinerNode> {
-        self.outliner_nodes(MeshId::Root, &mut Vec::new())
+        let table = self.outliner_rows();
+        outliner_nodes(&table, &table.roots, &mut Vec::new(), self)
     }
 
-    /// The nodes for the instances in `mesh`, which `path` (from the root) opens.
-    fn outliner_nodes(&self, mesh: MeshId, path: &mut Vec<InstanceId>) -> Vec<OutlinerNode> {
-        let Some(m) = self.scene.mesh(mesh) else {
-            return Vec::new();
+    /// The outliner tree stored flat: the root's instances and the instances each definition
+    /// places. Linear in the model; no open or selected marks (they follow the context and
+    /// selection, which change no revision).
+    pub fn outliner_rows(&self) -> OutlinerTable {
+        let rows = |mesh: &kernel::Model| -> Vec<OutlinerRow> {
+            mesh.instances()
+                .map(|(id, i)| {
+                    let d = self.scene.definition(i.definition).expect("placed");
+                    OutlinerRow {
+                        id: EntityId::Instance(id),
+                        definition: i.definition,
+                        kind: d.kind,
+                        name: d.name.clone(),
+                        material: i.material,
+                    }
+                })
+                .collect()
         };
-        let in_context = *path == self.context;
-        m.instances()
-            .map(|(id, i)| {
-                let d = self.scene.definition(i.definition).expect("placed");
-                path.push(id);
-                let open = self.context.starts_with(path);
-                let children = self.outliner_nodes(MeshId::Definition(i.definition), path);
-                path.pop();
-                OutlinerNode {
-                    id: EntityId::Instance(id),
-                    definition: i.definition,
-                    kind: d.kind,
-                    name: d.name.clone(),
-                    material: i.material,
-                    open,
-                    selected: in_context && self.selection.contains(&EntityId::Instance(id)),
-                    children,
-                }
-            })
-            .collect()
+        OutlinerTable {
+            roots: rows(self.scene.root()),
+            by_definition: self
+                .scene
+                .definitions()
+                .map(|(id, d)| (id, rows(&d.mesh)))
+                .collect(),
+        }
     }
 
     pub(super) fn instance_info(&self, id: kernel::InstanceId) -> InstanceInfo {
@@ -246,4 +250,35 @@ impl Document {
 
 fn invalid(e: KernelError, ids: &[EntityId]) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(ids.to_vec())
+}
+
+/// The nodes for `rows`, placed along `path` (instance ids from the root), with their marks.
+fn outliner_nodes(
+    table: &OutlinerTable,
+    rows: &[OutlinerRow],
+    path: &mut Vec<InstanceId>,
+    doc: &Document,
+) -> Vec<OutlinerNode> {
+    let in_context = *path == doc.context;
+    rows.iter()
+        .map(|row| {
+            let EntityId::Instance(id) = row.id else {
+                unreachable!("outliner rows are instances")
+            };
+            path.push(id);
+            let open = doc.context.starts_with(path);
+            let children = outliner_nodes(table, table.children(row.definition), path, doc);
+            path.pop();
+            OutlinerNode {
+                id: row.id,
+                definition: row.definition,
+                kind: row.kind,
+                name: row.name.clone(),
+                material: row.material,
+                open,
+                selected: in_context && doc.selection.contains(&row.id),
+                children,
+            }
+        })
+        .collect()
 }
