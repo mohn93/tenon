@@ -517,3 +517,47 @@ fn a_big_file_goes_into_the_context_only_as_a_group() {
     let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
     assert_eq!(r["import"]["faces"], n);
 }
+
+#[test]
+fn only_regular_files_are_read_and_absolute_libraries_are_ignored() {
+    let mut d = doc();
+    let dir = scratch("a_directory.obj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "import", "path": dir.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("regular file"), "{message}");
+
+    // A library naming a directory, and one by absolute path, are not read.
+    let abs = scratch("abs.mtl");
+    std::fs::write(&abs, "newmtl Red\nKd 1 0 0\n").unwrap();
+    let text = format!(
+        "mtllib . {}\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl Red\nf 1 2 3\n",
+        abs.to_str().unwrap()
+    );
+    let path = write("libs.obj", &text);
+    let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
+    assert_eq!(r["import"]["materials"], 0);
+    assert_eq!(r["import"]["faces"], 1);
+}
+
+#[test]
+fn a_face_over_the_corner_limit_is_refused() {
+    let mut text = String::from("v 0 0 0\n");
+    text += &format!("f{}\n", " 1".repeat(session::MAX_IMPORT_POINTS + 1));
+    let path = write("corners.obj", &text);
+    let mut d = doc();
+    let (kind, message) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("corners"), "{message}");
+    let mut stl = String::from("solid t\nouter loop\n");
+    stl += &"vertex 0 0 0\n".repeat(session::MAX_IMPORT_POINTS + 1);
+    let path = write("corners.stl", &stl);
+    let (kind, message) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("more than"), "{message}");
+    assert_eq!(ask(&d, json!({"type": "stats"}))["revision"], 0);
+}

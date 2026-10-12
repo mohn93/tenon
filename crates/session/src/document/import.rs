@@ -51,7 +51,7 @@ impl Document {
         }
         let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
         let bytes = read_limited(file, MAX_IMPORT_BYTES).map_err(file_error)?;
-        let read = match format {
+        let mut read = match format {
             ImportFormat::Obj => read_obj(&bytes),
             ImportFormat::Stl => read_stl(&bytes),
         }
@@ -72,11 +72,11 @@ impl Document {
         }
 
         let (materials, added) = self.import_materials(file, &read);
-        let polygons: Vec<MeshPolygon> = read
-            .polygons
-            .iter()
+        let polygon_count = read.polygons.len();
+        let polygons: Vec<MeshPolygon> = std::mem::take(&mut read.polygons)
+            .into_iter()
             .map(|p| MeshPolygon {
-                corners: p.corners.clone(),
+                corners: p.corners,
                 material: p.material.as_ref().and_then(|m| materials.get(m).copied()),
             })
             .collect();
@@ -109,7 +109,7 @@ impl Document {
         let mut report = ImportReport {
             instance: Some(EntityId::Instance(instance)),
             definition,
-            polygons: read.polygons.len(),
+            polygons: polygon_count,
             faces: built.faces,
             vertices: built.vertices,
             skipped: built.skipped,
@@ -168,7 +168,11 @@ impl Document {
         let mut colors: BTreeMap<String, [u8; 3]> = BTreeMap::new();
         if !used.is_empty() {
             let dir = obj.parent().unwrap_or(Path::new(""));
-            for library in &read.libraries {
+            for library in read
+                .libraries
+                .iter()
+                .filter(|l| !Path::new(l).is_absolute())
+            {
                 if let Ok(bytes) = read_limited(&dir.join(library), MAX_MTL_BYTES) {
                     colors.extend(read_mtl(&bytes));
                 }
@@ -197,6 +201,13 @@ impl Document {
 
 /// The whole file, failing when it holds more than `limit` bytes.
 fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    // A pipe or device could block forever (or eat the host's stdin): regular files only.
+    if !std::fs::metadata(path)
+        .map_err(|e| e.to_string())?
+        .is_file()
+    {
+        return Err("not a regular file".into());
+    }
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     file.take(limit + 1)

@@ -423,6 +423,15 @@ positions, has a broken line (the message names it), a number that is not finite
 beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
 `import` is allowed in an atomic batch.
 
+Details: for `"as": "context"` the report's `faces` counts the faces built from the file, before
+they merge with what is already in the context. A `.mtl` over 16 MiB is ignored, as is a library
+that is not a regular file or is named by an absolute path (relative paths, `..` included, are
+read); a model path that is not a regular file (a directory, a pipe) is a `file` error. A
+polygon of more than 256 corners is triangulated and merged back, so collinear points closer
+than the merge tolerance along its outline may drop. A file may have at most 1,000,000 polygon
+corners in all (OBJ `f` corners, STL vertices) and ASCII STL keywords are read in any case;
+vertices left without an `endloop` are a `file` error.
+
 Behaviors worth knowing:
 
 - Replies come before the `changed` notifications they cause, and your own edits are notified too.

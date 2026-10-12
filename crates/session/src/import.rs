@@ -137,6 +137,7 @@ pub(crate) fn read_obj(bytes: &[u8]) -> Result<ReadMesh, String> {
     let mut material: Option<String> = None;
     let mut pending = String::new();
     let mut start = 0;
+    let mut corner_total = 0usize;
     for (n, raw) in text.lines().enumerate() {
         let raw = raw.split('#').next().unwrap_or("");
         if pending.is_empty() {
@@ -177,6 +178,10 @@ pub(crate) fn read_obj(bytes: &[u8]) -> Result<ReadMesh, String> {
                     if i == 0 || !(0..count).contains(&resolved) {
                         return Err(at(format!("corner {i} names no position")));
                     }
+                    if corner_total == MAX_IMPORT_POINTS {
+                        return Err(at(format!("more than {MAX_IMPORT_POINTS} corners in all")));
+                    }
+                    corner_total += 1;
                     corners.push(resolved as usize);
                 }
                 if mesh.polygons.len() == MAX_IMPORT_POLYGONS {
@@ -296,7 +301,11 @@ pub(crate) fn read_stl(bytes: &[u8]) -> Result<ReadMesh, String> {
 
 fn read_ascii_stl(bytes: &[u8]) -> Result<Vec<Vec<DVec3>>, String> {
     let text = String::from_utf8_lossy(bytes);
-    if !text.trim_start().starts_with("solid") {
+    if !text
+        .trim_start()
+        .get(..5)
+        .is_some_and(|w| w.eq_ignore_ascii_case("solid"))
+    {
         return Err(if bytes.len() >= 84 {
             "not an STL file: binary size does not match its triangle count, and it does not \
              start with \"solid\""
@@ -308,12 +317,20 @@ fn read_ascii_stl(bytes: &[u8]) -> Result<Vec<Vec<DVec3>>, String> {
     let mut out = Vec::new();
     let mut corners: Vec<DVec3> = Vec::new();
     let mut tokens = text.split_whitespace();
+    let mut total = 0usize;
     while let Some(t) = tokens.next() {
-        match t {
+        let word = t.to_ascii_lowercase();
+        match word.as_str() {
             "vertex" => {
+                if total == MAX_IMPORT_POINTS {
+                    return Err(format!("more than {MAX_IMPORT_POINTS} vertices"));
+                }
+                total += 1;
                 let mut xyz = [0.0; 3];
                 for c in &mut xyz {
-                    let t = tokens.next().ok_or("a vertex needs x, y and z")?;
+                    let t = tokens.next().ok_or_else(|| {
+                        format!("facet {}: a vertex needs x, y and z", out.len() + 1)
+                    })?;
                     *c = number(t).map_err(|e| format!("facet {}: {e}", out.len() + 1))?;
                 }
                 corners.push(DVec3::from(xyz));
@@ -326,6 +343,12 @@ fn read_ascii_stl(bytes: &[u8]) -> Result<Vec<Vec<DVec3>>, String> {
             }
             _ => {}
         }
+    }
+    if !corners.is_empty() {
+        return Err(format!(
+            "facet {}: vertices without an endloop",
+            out.len() + 1
+        ));
     }
     Ok(out)
 }
@@ -426,5 +449,24 @@ mod tests {
             DVec3::new(1.0, -3.0, 2.0)
         );
         assert_eq!(UpAxis::Z.to_model(DVec3::ONE), DVec3::ONE);
+    }
+
+    #[test]
+    fn corner_totals_are_bounded_and_ascii_stl_is_case_blind() {
+        let mut text = String::from("v 0 0 0\n");
+        let face = format!("f{}\n", " 1".repeat(MAX_IMPORT_POINTS + 1));
+        text.push_str(&face);
+        let e = read_obj(text.as_bytes()).unwrap_err();
+        assert!(e.contains("corners"), "{e}");
+        let mut stl = String::from("SOLID t\nFACET NORMAL 0 0 1\nOUTER LOOP\n");
+        stl.push_str(&"VERTEX 0 0 0\n".repeat(MAX_IMPORT_POINTS + 1));
+        let e = read_stl(stl.as_bytes()).unwrap_err();
+        assert!(e.contains("more than"), "{e}");
+        let ok = "SOLID t\nOUTER LOOP\nVERTEX 0 0 0\nVERTEX 1 0 0\nVERTEX 0 1 0\nENDLOOP\n";
+        assert_eq!(read_stl(ok.as_bytes()).unwrap().polygons.len(), 1);
+        let e = read_stl(b"solid t\nvertex 0 0 0\nvertex 1 0").unwrap_err();
+        assert!(e.contains("facet 1"), "{e}");
+        let e = read_stl(b"solid t\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n").unwrap_err();
+        assert!(e.contains("endloop"), "{e}");
     }
 }
