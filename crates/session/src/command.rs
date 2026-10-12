@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kernel::{ChangeSummary, EntityId};
+use kernel::{ChangeSummary, DefinitionId, EntityId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -80,6 +80,27 @@ pub enum Command {
     /// Go back to editing the context the open instance is in. Clears the selection. Not
     /// recorded in undo history.
     CloseInstance,
+    /// Rename a group or component definition. A component's name must not be empty.
+    RenameDefinition {
+        definition: DefinitionId,
+        name: String,
+    },
+    /// Remove every definition that no instance places (components left after their last
+    /// instance was erased or exploded), and what only they placed.
+    PurgeDefinitions,
+    /// Start an empty model with the default view. Clears undo history; not an undo step.
+    New,
+    /// Replace the model and view with those saved in a `.skr` file. Clears undo history;
+    /// not an undo step.
+    Open {
+        path: String,
+    },
+    /// Save the model and view as a `.skr` file at `path`, or at the path last opened or
+    /// saved when `path` is absent. Not an undo step.
+    Save {
+        #[serde(default)]
+        path: Option<String>,
+    },
     /// Change the selection of edges, faces and instances. Not recorded in undo history.
     Select {
         ids: Vec<EntityId>,
@@ -98,9 +119,12 @@ pub enum Command {
 
 impl Command {
     /// True for commands that can change the model or the open context (everything except
-    /// camera and selection).
+    /// camera, selection and saving).
     pub fn changes_model(&self) -> bool {
-        !matches!(self, Command::SetCamera { .. } | Command::Select { .. })
+        !matches!(
+            self,
+            Command::SetCamera { .. } | Command::Select { .. } | Command::Save { .. }
+        )
     }
 }
 
@@ -130,6 +154,8 @@ pub enum ErrorKind {
     NothingToUndo,
     NothingToRedo,
     NotFound,
+    /// A file could not be read or written; `message` says why.
+    File,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

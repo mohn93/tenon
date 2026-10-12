@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
@@ -13,6 +14,7 @@ use crate::query::{
 };
 use crate::rectangle::rectangle_corners;
 
+mod files;
 mod groups;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
@@ -36,6 +38,12 @@ pub struct Document {
     redo: Vec<SceneChange>,
     revision: u64,
     events: VecDeque<ChangeEvent>,
+    /// Changes up to this revision are missing from `events` (the model was replaced).
+    log_start: u64,
+    /// The file last opened or saved.
+    path: Option<PathBuf>,
+    /// The revision the model had when it was last opened, saved or started.
+    clean_revision: u64,
 }
 
 impl Document {
@@ -49,7 +57,20 @@ impl Document {
             redo: Vec::new(),
             revision: 0,
             events: VecDeque::new(),
+            log_start: 0,
+            path: None,
+            clean_revision: 0,
         }
+    }
+
+    /// The file the model was last opened from or saved to.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// True when the model changed since it was opened, saved or started.
+    pub fn is_modified(&self) -> bool {
+        self.revision != self.clean_revision
     }
 
     /// The whole model: the root mesh and every definition.
@@ -107,10 +128,11 @@ impl Document {
 
     /// Model changes after `since`, oldest first, and whether older ones were dropped.
     pub fn events_since(&self, since: u64) -> (Vec<ChangeEvent>, bool) {
-        let truncated = self
-            .events
-            .front()
-            .is_some_and(|first| first.revision > since.saturating_add(1));
+        let truncated = since < self.log_start
+            || self
+                .events
+                .front()
+                .is_some_and(|first| first.revision > since.saturating_add(1));
         let events = self
             .events
             .iter()
@@ -160,6 +182,18 @@ impl Document {
                 self.close_instance()?;
                 Ok(Outcome::default())
             }
+            Command::New => {
+                self.new_model();
+                Ok(Outcome::default())
+            }
+            Command::Open { path } => {
+                self.open_file(&path)?;
+                Ok(Outcome::default())
+            }
+            Command::Save { path } => {
+                self.save_file(path.as_deref())?;
+                Ok(Outcome::default())
+            }
             Command::Select { ids, mode } => {
                 self.parts(&ids)?;
                 let ids: BTreeSet<EntityId> = ids.into_iter().collect();
@@ -182,7 +216,9 @@ impl Document {
             | Command::Copy { .. }
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
-            | Command::Explode { .. } => {
+            | Command::Explode { .. }
+            | Command::RenameDefinition { .. }
+            | Command::PurgeDefinitions => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
@@ -208,6 +244,11 @@ impl Document {
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
+            Command::RenameDefinition { definition, name } => {
+                self.rename_changes(*definition, name)
+            }
+            Command::PurgeDefinitions => Ok(self.scene.purge()),
+            Command::New | Command::Open { .. } | Command::Save { .. } => return None,
             Command::Undo
             | Command::Redo
             | Command::SetCamera { .. }
@@ -297,10 +338,20 @@ impl Document {
                     applied.push(c);
                     Outcome { changes: summary }
                 }),
-                None if matches!(command, Command::Undo | Command::Redo) => Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    "undo and redo are not allowed in an atomic batch",
-                )),
+                None if matches!(
+                    command,
+                    Command::Undo
+                        | Command::Redo
+                        | Command::New
+                        | Command::Open { .. }
+                        | Command::Save { .. }
+                ) =>
+                {
+                    Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        "undo, redo, new, open and save are not allowed in an atomic batch",
+                    ))
+                }
                 None => self.execute(command),
             };
             match result {
@@ -734,6 +785,11 @@ impl Document {
                     MeshId::Root => None,
                     MeshId::Definition(d) => Some(d),
                 },
+            },
+            Query::File => QueryResult::File {
+                path: self.path.as_ref().map(|p| p.display().to_string()),
+                modified: self.is_modified(),
+                revision: self.revision,
             },
             Query::Events { since } => {
                 let (events, truncated) = self.events_since(*since);

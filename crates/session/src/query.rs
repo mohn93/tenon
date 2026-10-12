@@ -31,6 +31,8 @@ pub enum Query {
     Definitions,
     /// The open context: the path of instances being edited, from the root.
     Context,
+    /// The file the model was last opened from or saved to, and whether it changed since.
+    File,
     /// Model changes after `since` (a revision number), oldest first.
     Events {
         since: u64,
@@ -156,6 +158,13 @@ pub enum QueryResult {
     Context {
         path: Vec<EntityId>,
         definition: Option<DefinitionId>,
+    },
+    /// `path` is absent for a model never saved. `modified` is true when the model changed
+    /// since it was opened, saved or started.
+    File {
+        path: Option<String>,
+        modified: bool,
+        revision: u64,
     },
     /// `truncated` is true when changes after `since` were dropped from the log; the client
     /// should re-read the model (e.g. with `entities`) instead of applying `events`.
