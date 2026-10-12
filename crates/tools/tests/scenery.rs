@@ -1,7 +1,7 @@
 //! Inference and picking across groups: geometry inside instances and outside the open
 //! instance is seen and snapped to, in the open context's coordinates.
 
-use glam::{DVec2, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 use kernel::{DefinitionKind, InstanceId, MeshId, Model, Scene};
 use session::Camera;
 use tools::{Guides, Owner, Scenery, SnapKind, edge_under_in, face_under_in, infer_in};
@@ -137,4 +137,68 @@ fn inside_the_group_the_root_is_snapped_to_in_the_groups_coordinates() {
     // The group's own top face is the open context's face.
     let hit = infer_in(&view, &c, px(&c, p(0.5, 0.5, 1.0)), &Guides::default(), R);
     assert!(hit.face.is_some());
+}
+
+/// `scene()` with the group turned a quarter turn about Z through its corner (3, 0, 0): its
+/// box now spans x 2..3, y 0..1. Returns the turn too (the group's own coordinates to the
+/// root's).
+fn turned_scene() -> (Scene, InstanceId, DAffine3) {
+    let (mut s, i) = scene();
+    let turn = DAffine3::from_translation(p(3.0, 0.0, 0.0))
+        * DAffine3::from_cols(DVec3::Y, -DVec3::X, DVec3::Z, DVec3::ZERO)
+        * DAffine3::from_translation(p(-3.0, 0.0, 0.0));
+    s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[i], turn)))
+        .unwrap();
+    let place = s.root().instance(i).unwrap().transform;
+    (s, i, place)
+}
+
+#[test]
+fn a_turned_groups_corners_and_faces_are_where_they_are_shown() {
+    let (s, i, _) = turned_scene();
+    let view = Scenery::of(&s, &[]).unwrap();
+    let c = camera(DVec3::ZERO);
+    // The group's corner (1, 0, 1) shows at (3, 1, 1).
+    let corner = p(3.0, 1.0, 1.0);
+    let hit = infer_in(
+        &view,
+        &c,
+        px(&c, corner) + DVec2::new(3.0, 2.0),
+        &Guides::default(),
+        R,
+    );
+    assert_eq!(hit.kind, SnapKind::Endpoint);
+    assert!(hit.point.abs_diff_eq(corner, 1e-9), "{:?}", hit.point);
+    let top = p(2.5, 0.5, 1.0);
+    let (owner, _, at) = face_under_in(&view, &c, px(&c, top)).unwrap();
+    assert_eq!(owner, Owner::Instance(i));
+    assert!(at.abs_diff_eq(top, 1e-9));
+    assert_eq!(
+        view.instance_box(i),
+        Some([p(2.0, 0.0, 0.0), p(3.0, 1.0, 1.0)])
+    );
+}
+
+#[test]
+fn inside_a_turned_group_the_root_is_seen_in_the_groups_coordinates() {
+    let (s, i, place) = turned_scene();
+    let view = Scenery::of(&s, &[i]).unwrap();
+    let c = Camera::new(DVec2::new(800.0, 600.0)).placed(place.inverse());
+    // The root edge's end (1, -2, 0) in the group's coordinates.
+    let end = place.inverse().transform_point3(p(1.0, -2.0, 0.0));
+    let hit = infer_in(
+        &view,
+        &c,
+        px(&c, end) + DVec2::new(2.0, 2.0),
+        &Guides::default(),
+        R,
+    );
+    assert_eq!(hit.kind, SnapKind::Endpoint);
+    assert!(hit.point.abs_diff_eq(end, 1e-9), "{:?}", hit.point);
+    // The group's own top face, under the cursor where it is shown.
+    let top = p(0.5, 0.5, 1.0);
+    let shown = Camera::new(DVec2::new(800.0, 600.0)).project(place.transform_point3(top));
+    let hit = infer_in(&view, &c, shown.unwrap(), &Guides::default(), R);
+    assert!(hit.face.is_some());
+    assert!(hit.point.abs_diff_eq(top, 1e-9), "{:?}", hit.point);
 }

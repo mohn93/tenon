@@ -90,6 +90,40 @@ fn obj_has_shared_corners_triangles_and_y_up() {
 }
 
 #[test]
+fn a_turned_instance_is_written_turned() {
+    let mut d = doc();
+    two_boxes(&mut d);
+    let instances = ask(&d, json!({"type": "entities", "kinds": ["instance"]}));
+    let second = instances["instances"][1]["id"].clone();
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [second], "center": [3, 0, 0], "angle": 45}),
+    )
+    .unwrap();
+    let text = String::from_utf8(export(&mut d, "turned.obj")).unwrap();
+    let count = |prefix: &str| text.lines().filter(|l| l.starts_with(prefix)).count();
+    assert_eq!(
+        count("vn "),
+        6 + 4,
+        "the turned box's sides face four new ways"
+    );
+    assert_eq!(count("f "), 24);
+    // Y up: (x, z, -y). Every turned side lies flat in the model, at 45 degrees to x.
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    let diagonal = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("vn "))
+        .map(|l| {
+            l.split(' ')
+                .map(|c| c.parse::<f64>().unwrap())
+                .collect::<Vec<_>>()
+        })
+        .filter(|n| (n[0].abs() - half).abs() < 1e-9 && n[1] == 0.0)
+        .count();
+    assert_eq!(diagonal, 4);
+}
+
+#[test]
 fn stl_is_binary_with_one_record_per_triangle() {
     let mut d = doc();
     two_boxes(&mut d);

@@ -365,3 +365,49 @@ fn copies_that_complete_a_turn_are_refused() {
     assert_eq!(counts(&d), [4, 4, 1, 0]);
     run(&mut d, rot(3)).unwrap();
 }
+
+/// The box grouped and turned 30 degrees about Y through the origin; returns the instance.
+fn turned_group(d: &mut Document) -> Value {
+    let ids = cube(d);
+    let out = run(d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('i'))
+        .unwrap()
+        .clone();
+    run(
+        d,
+        json!({"type": "rotate", "ids": [group], "center": [0, 0, 0], "axis": [0, 1, 0], "angle": 30}),
+    )
+    .unwrap();
+    group
+}
+
+#[test]
+fn exploding_a_turned_group_puts_its_geometry_where_it_was_shown() {
+    let mut d = doc();
+    let group = turned_group(&mut d);
+    run(&mut d, json!({"type": "explode", "ids": [group]})).unwrap();
+    assert_eq!(counts(&d), [8, 12, 6, 0]);
+    let (s, c) = 30f64.to_radians().sin_cos();
+    // Turning about +Y carries +Z toward +X: the top corner (0, 0, 1) goes to (sin, 0, cos).
+    assert!(positions(&d).into_iter().any(|p| near(p, [s, 0.0, c])));
+    assert!(normals(&d).into_iter().any(|(_, n)| near(n, [s, 0.0, c])));
+}
+
+#[test]
+fn a_turned_group_is_saved_and_opened_turned() {
+    let mut d = doc();
+    let group = turned_group(&mut d);
+    let before = ask(&d, json!({"type": "entity", "id": group}));
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session-rotate");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("turned.skr");
+    let path = path.to_str().unwrap();
+    run(&mut d, json!({"type": "save", "path": path})).unwrap();
+    let mut opened = doc();
+    run(&mut opened, json!({"type": "open", "path": path})).unwrap();
+    assert_eq!(ask(&opened, json!({"type": "entity", "id": group})), before);
+}

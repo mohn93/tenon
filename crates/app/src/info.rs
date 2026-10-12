@@ -1,11 +1,12 @@
 //! Text for the Entity Info panel: what is selected and its measurements.
 
+use glam::{DAffine3, DQuat};
 use kernel::{DefinitionKind, EntityId, Model};
 use session::Document;
 use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
-/// or the kind and name of a single instance. While a group or component is open, a first line
+/// or the kind, name and rotation of a single instance. While a group or component is open, a first line
 /// says which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
@@ -38,15 +39,16 @@ fn selection_info(doc: &Document) -> Vec<String> {
         }
     }
     if let ([], [], [i]) = (&edges[..], &faces[..], &instances[..]) {
-        let d = m
-            .instance(*i)
-            .and_then(|i| doc.scene().definition(i.definition));
-        return match d {
+        let instance = m.instance(*i);
+        let d = instance.and_then(|i| doc.scene().definition(i.definition));
+        let mut lines = match d {
             Some(d) if d.kind == DefinitionKind::Component => {
                 vec!["1 component".into(), format!("Name: {}", d.name)]
             }
             _ => vec!["1 group".into()],
         };
+        lines.extend(instance.and_then(|i| rotation(i.transform)));
+        return lines;
     }
     match (&edges[..], &faces[..]) {
         ([], []) if instances.is_empty() => vec!["Nothing selected".into()],
@@ -77,6 +79,28 @@ fn selection_info(doc: &Document) -> Vec<String> {
             vec![parts.join(", ")]
         }
     }
+}
+
+/// "Rotation: 30° about 0, 0, 1" for a turned placement (the turn of at most 180 degrees,
+/// counter-clockwise looking down the axis); None when it is not turned.
+fn rotation(t: DAffine3) -> Option<String> {
+    let (mut axis, angle) = DQuat::from_mat3(&t.matrix3).to_axis_angle();
+    let mut degrees = angle.to_degrees();
+    if degrees > 180.0 {
+        degrees = 360.0 - degrees;
+        axis = -axis;
+    }
+    if number(degrees) == "0" {
+        return None;
+    }
+    let a = axis.to_array().map(number);
+    Some(format!(
+        "Rotation: {}° about {}, {}, {}",
+        number(degrees),
+        a[0],
+        a[1],
+        a[2]
+    ))
 }
 
 fn edge_length(m: &Model, e: kernel::EdgeId) -> f64 {
@@ -172,6 +196,35 @@ mod tests {
         })
         .unwrap();
         assert_eq!(entity_info(&d), ["1 edge, 1 instance"]);
+    }
+
+    #[test]
+    fn a_turned_instance_shows_its_rotation() {
+        let mut d = doc_with_square();
+        let ids = ["e2", "e4", "e6", "e7", "f8"]
+            .map(|s| s.parse().unwrap())
+            .to_vec();
+        d.execute(Command::MakeGroup { ids }).unwrap();
+        let group = *d.selection().first().unwrap();
+        let turn = |d: &mut Document, angle: f64| {
+            d.execute(Command::Rotate {
+                ids: vec![group],
+                center: [1.0, 1.0, 0.0],
+                axis: None,
+                angle,
+                copies: None,
+            })
+            .unwrap();
+        };
+        turn(&mut d, 90.0);
+        assert_eq!(entity_info(&d), ["1 group", "Rotation: 90° about 0, 0, 1"]);
+        turn(&mut d, 150.0);
+        assert_eq!(
+            entity_info(&d),
+            ["1 group", "Rotation: 120° about 0, 0, -1"]
+        );
+        turn(&mut d, 120.0);
+        assert_eq!(entity_info(&d), ["1 group"]);
     }
 
     #[test]

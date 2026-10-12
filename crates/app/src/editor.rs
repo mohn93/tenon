@@ -574,14 +574,12 @@ impl Editor {
         self.update_hover();
     }
 
-    /// The camera in the open context's coordinates. Placements are moves, so only the eye
-    /// and the target change.
+    /// The camera in the open context's coordinates. Placements turn and move, so inside a
+    /// turned instance its up direction is no longer the context's Z.
     fn local_camera(&self) -> Camera {
-        let back = self.doc.context_transform().inverse();
-        let mut camera = self.doc.camera.clone();
-        camera.eye = back.transform_point3(camera.eye);
-        camera.target = back.transform_point3(camera.target);
-        camera
+        self.doc
+            .camera
+            .placed(self.doc.context_transform().inverse())
     }
 
     /// Everything tools can see, in the open context's coordinates.
@@ -1385,6 +1383,21 @@ mod tests {
         group
     }
 
+    /// The box of `moved_group`, turned a quarter turn about X (its top, z = 1, now faces -Y
+    /// at y = -1) and then moved by (10, 0, 0). Returns the instance.
+    fn turned_group(e: &mut Editor) -> EntityId {
+        let group = moved_group(e);
+        e.execute(Command::Rotate {
+            ids: vec![group],
+            center: [10.0, 0.0, 0.0],
+            axis: Some([1.0, 0.0, 0.0]),
+            angle: 90.0,
+            copies: None,
+        })
+        .unwrap();
+        group
+    }
+
     /// True if the open context has an edge between these two points.
     fn has_edge(e: &Editor, a: DVec3, b: DVec3) -> bool {
         let m = e.doc().model();
@@ -1412,6 +1425,38 @@ mod tests {
             "the diagonal is drawn in the group's own coordinates"
         );
         assert_eq!(stats(&e), (13, 7), "it splits the group's top");
+    }
+
+    #[test]
+    fn tools_inside_a_turned_group_work_in_its_coordinates() {
+        let mut e = editor();
+        let group = turned_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.select_tool(ToolKind::Line);
+        // The group's top corners (0, 0, 1) and (2, 2, 1), where they are shown.
+        click_at(&mut e, DVec3::new(10.0, -1.0, 0.0));
+        click_at(&mut e, DVec3::new(12.0, -1.0, 2.0));
+        e.key(EditorKey::Escape);
+        assert!(
+            has_edge(&e, DVec3::new(0.0, 0.0, 1.0), DVec3::new(2.0, 2.0, 1.0)),
+            "the diagonal is drawn in the group's own coordinates"
+        );
+        assert_eq!(stats(&e), (13, 7), "it splits the group's top");
+    }
+
+    #[test]
+    fn a_turned_group_is_picked_and_boxed_where_it_is_shown() {
+        let mut e = editor();
+        let group = turned_group(&mut e);
+        clear_selection(&mut e);
+        e.select_tool(ToolKind::Select);
+        click_at(&mut e, DVec3::new(11.0, -1.0, 1.0));
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            [group]
+        );
+        assert_eq!(box_min(&e, group), DVec3::new(10.0, -1.0, 0.0));
+        assert_eq!(box_max(&e, group), DVec3::new(12.0, 0.0, 2.0));
     }
 
     #[test]

@@ -20,7 +20,7 @@ pub enum Owner {
 #[derive(Clone, Copy, Debug)]
 pub struct Part<'a> {
     pub model: &'a Model,
-    /// Maps the mesh's coordinates into the open context's. Rigid (placements are moves).
+    /// Maps the mesh's coordinates into the open context's. Rigid (placements turn and move).
     pub place: DAffine3,
     pub owner: Owner,
 }

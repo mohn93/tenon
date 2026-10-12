@@ -119,8 +119,9 @@ are `invalid_input`. While an instance is open:
 - edits change the definition, so every instance of a component changes with it.
 
 An instance's `entity` result has its `definition`, `name`, `kind` (`group` or `component`),
-`transform` (column-major 3x4: x axis, y axis, z axis, translation) and `bounds` in the open
-context's coordinates. Undo and redo apply to the whole model wherever the change was made; an
+`transform` (column-major 3x4: x axis, y axis, z axis, translation; the axes turn when the
+instance is rotated) and `bounds` (the box around its turned geometry) in the open context's
+coordinates. Undo and redo apply to the whole model wherever the change was made; an
 open instance that stops existing is closed. Groups keep the coordinates of the context they
 were made in (the instance's transform starts as the identity).
 

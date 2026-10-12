@@ -1,5 +1,5 @@
 use glam::dcamera::rh::{proj::directx, view::look_at_mat4};
-use glam::{DMat4, DQuat, DVec2, DVec3, Mat4};
+use glam::{DAffine3, DMat4, DQuat, DVec2, DVec3, Mat4};
 use std::f64::consts::PI;
 
 pub const UP: DVec3 = DVec3::Z;
@@ -32,11 +32,15 @@ impl Ray {
     }
 }
 
-/// Perspective camera looking from `eye` at `target`, Z-up.
+/// Perspective camera looking from `eye` at `target`, with `up` (Z for the document's camera)
+/// pointing up the screen.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
     pub eye: DVec3,
     pub target: DVec3,
+    /// Which way is up: `UP`, except in a camera seen from another frame (see `placed`).
+    /// Orbiting and the ground plane always use `UP`.
+    pub up: DVec3,
     /// Vertical field of view in radians.
     pub fov_y: f64,
     /// Viewport size in physical pixels.
@@ -48,6 +52,7 @@ impl Camera {
         Self {
             eye: DVec3::new(-8.0, -12.0, 7.0),
             target: DVec3::ZERO,
+            up: UP,
             fov_y: 35f64.to_radians(),
             viewport,
         }
@@ -58,7 +63,7 @@ impl Camera {
     }
 
     pub fn right(&self) -> DVec3 {
-        self.forward().cross(UP).normalize()
+        self.forward().cross(self.up).normalize()
     }
 
     pub fn up(&self) -> DVec3 {
@@ -74,7 +79,7 @@ impl Camera {
     }
 
     pub fn view(&self) -> DMat4 {
-        look_at_mat4(self.eye, self.target, UP)
+        look_at_mat4(self.eye, self.target, self.up)
     }
 
     /// Reversed-Z perspective with an infinite far plane: depth is 1 at the near plane and
@@ -99,6 +104,17 @@ impl Camera {
         Ray {
             origin: self.eye,
             dir: dir.normalize(),
+        }
+    }
+
+    /// The same view in other coordinates: `t` (rigid) maps this camera's coordinates to the
+    /// new ones. Points `t` maps project where they did.
+    pub fn placed(&self, t: DAffine3) -> Camera {
+        Camera {
+            eye: t.transform_point3(self.eye),
+            target: t.transform_point3(self.target),
+            up: t.transform_vector3(self.up).normalize(),
+            ..self.clone()
         }
     }
 
@@ -186,6 +202,28 @@ mod tests {
         let world = DVec3::new(3.0, -2.0, 1.5);
         let r = c.ray(c.project(world).unwrap());
         assert!(r.dir.abs_diff_eq((world - r.origin).normalize(), 1e-9));
+    }
+
+    #[test]
+    fn a_placed_camera_sees_placed_points_where_they_were() {
+        let c = cam();
+        let t = DAffine3::from_translation(DVec3::new(1.0, 2.0, 3.0))
+            * DAffine3::from_axis_angle(DVec3::new(1.0, -1.0, 0.5).normalize(), 1.2);
+        let placed = c.placed(t);
+        for p in [
+            DVec3::new(3.0, -2.0, 1.5),
+            DVec3::ZERO,
+            DVec3::new(-1.0, 4.0, 0.0),
+        ] {
+            let (a, b) = (
+                c.project(p).unwrap(),
+                placed.project(t.transform_point3(p)).unwrap(),
+            );
+            assert!(a.abs_diff_eq(b, 1e-6), "{a} vs {b}");
+        }
+        let ray = placed.ray(DVec2::new(100.0, 50.0));
+        let original = c.ray(DVec2::new(100.0, 50.0));
+        assert!(ray.dir.abs_diff_eq(t.transform_vector3(original.dir), 1e-9));
     }
 
     #[test]

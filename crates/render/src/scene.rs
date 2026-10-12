@@ -111,12 +111,11 @@ impl Walk<'_> {
         let open = self.path == self.context;
         let inside = self.path.starts_with(self.context);
         let selected = |e: EntityId| lit || (open && self.selection.contains(&e));
+        // Normals follow the inverse transpose, right for any linear map (placements turn and
+        // move, so it is the rotation itself for now).
+        let normal_map = t.matrix3.inverse().transpose();
         for (fid, face) in model.faces() {
-            let normal = t
-                .transform_vector3(face.normal)
-                .normalize()
-                .as_vec3()
-                .to_array();
+            let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
             let flag = if selected(EntityId::Face(fid)) {
                 1.0
             } else {
@@ -249,6 +248,35 @@ mod tests {
         assert_eq!(g.edges.len(), 16);
         let max_x = g.faces.iter().map(|v| v.pos[0]).fold(f32::MIN, f32::max);
         assert_eq!(max_x, 4.0);
+    }
+
+    #[test]
+    fn a_turned_instance_is_drawn_turned_with_turned_normals() {
+        let (mut s, _, second) = two_squares();
+        // A third of a quarter turn about X through the second square's corner (3, 0, 0).
+        let turn = DAffine3::from_translation(DVec3::new(3.0, 0.0, 0.0))
+            * DAffine3::from_rotation_x(30f64.to_radians())
+            * DAffine3::from_translation(DVec3::new(-3.0, 0.0, 0.0));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[second], turn)))
+            .unwrap();
+        let g = scene_geometry(&s, &[second], &BTreeSet::new());
+        let (sin, cos) = 30f32.to_radians().sin_cos();
+        let turned: Vec<_> = g.faces.iter().filter(|v| v.pos[0] >= 3.0).collect();
+        assert_eq!(turned.len(), 6);
+        for v in turned {
+            let n = v.normal;
+            assert!((n[0]).abs() < 1e-6 && (n[1] + sin).abs() < 1e-6 && (n[2] - cos).abs() < 1e-6);
+        }
+        assert!(
+            g.faces.iter().any(|v| (v.pos[2] - sin).abs() < 1e-6),
+            "the far side is lifted"
+        );
+        let lifted_box = g
+            .edges
+            .iter()
+            .filter(|v| v.color == CONTEXT_BOX_COLOR)
+            .any(|v| (v.pos[2] - sin).abs() < 1e-6);
+        assert!(lifted_box, "the open instance's box turns with it");
     }
 
     #[test]
