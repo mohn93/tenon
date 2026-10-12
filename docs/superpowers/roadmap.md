@@ -20,7 +20,10 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M7a | Camera: orbit, zoom extents, standard views and orthographic projection as commands and UI | done 83d8f17..afd4001 |
 | M7b | Materials: front/back face colors, Paint tool, material list in the UI, materials in `.skr` and export | done d05ff34..19429bf |
 | M7c | Outliner panel (groups/components tree, select and open from it) | done b63d32f..44d13dd |
-| M8 | Import OBJ and STL; golden-image render tests; clean-up of deferred minors recorded in memory | todo |
+| M8a | Import OBJ and STL as commands and from the File menu (into the open context or as a group) | todo |
+| M8b | Golden-image render tests (headless renders compared with stored images) and toolbar wrapping | todo |
+| M8c | Clean-up of deferred correctness and performance items recorded in memory (copy/stencil speed, BVH rebuild on paint, float round trip in files, fixed tmp paths in tests, and the like) | todo |
+| M8d | Clean-up of deferred UX and API polish items recorded in memory | todo |
 
 ## Rules for the loop
 
