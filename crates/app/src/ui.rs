@@ -1,13 +1,14 @@
-//! The window's panels: toolbar, status bar with the measurements box, and Entity Info.
+//! The window's panels: toolbar, status bar with the measurements box, and on the right Entity
+//! Info and the Materials list.
 
-use egui::{Align, Layout, Panel, RichText, Ui};
-use session::{Projection, StandardView};
+use egui::{Align, Color32, Layout, Panel, RichText, Sense, Ui, Vec2};
+use session::{MaterialId, Projection, StandardView};
 use tools::ToolKind;
 
-use crate::editor::Status;
+use crate::editor::{MATERIAL_PALETTE, Status};
 
 /// What the user asked for through the panels this frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiAction {
     Tool(ToolKind),
     Undo,
@@ -26,7 +27,24 @@ pub enum UiAction {
     ZoomExtents,
     StandardView(StandardView),
     SetProjection(Projection),
+    /// Paint with this material (None: the default material), switching to the Paint tool.
+    ChooseMaterial(Option<MaterialId>),
+    AddMaterial,
+    DeleteMaterial(MaterialId),
+    RenameMaterial(MaterialId, String),
+    RecolorMaterial(MaterialId, [u8; 3]),
 }
+
+/// A material as the Materials list shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterialRow {
+    pub id: MaterialId,
+    pub name: String,
+    pub color: [u8; 3],
+}
+
+/// The default material's swatch: its front color.
+const DEFAULT_SWATCH: Color32 = Color32::from_rgb(237, 237, 230);
 
 /// What the panels show.
 pub struct View<'a> {
@@ -42,6 +60,10 @@ pub struct View<'a> {
     pub has_guides: bool,
     /// The camera's projection, checked in the Camera menu.
     pub projection: Projection,
+    /// Every material, in id order.
+    pub materials: &'a [MaterialRow],
+    /// The material the Paint tool paints with (None: the default material).
+    pub material: Option<MaterialId>,
 }
 
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
@@ -180,8 +202,87 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
             for line in view.info {
                 ui.label(line);
             }
+            ui.separator();
+            materials(ui, view, &mut actions);
         });
     (actions, ui.available_rect_before_wrap())
+}
+
+/// A small square of `color` that can be clicked.
+fn swatch(ui: &mut Ui, color: Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+    ui.painter().rect_filled(rect, 2.0, color);
+    response
+}
+
+fn rgb(c: [u8; 3]) -> Color32 {
+    Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// The Materials list: the default material and every material, the one painted with
+/// highlighted (clicking one chooses it and the Paint tool); Add and Delete; and for the
+/// chosen material its name (renamed on Enter or leaving the field) and colors to pick from.
+fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+    ui.heading("Materials");
+    egui::ScrollArea::vertical()
+        .max_height(220.0)
+        .show(ui, |ui| {
+            let rows = std::iter::once((None, "Default", DEFAULT_SWATCH)).chain(
+                view.materials
+                    .iter()
+                    .map(|m| (Some(m.id), m.name.as_str(), rgb(m.color))),
+            );
+            for (id, name, color) in rows {
+                ui.horizontal(|ui| {
+                    let picked = swatch(ui, color).clicked();
+                    let label = ui.selectable_label(view.material == id, name);
+                    if picked || label.clicked() {
+                        actions.push(UiAction::ChooseMaterial(id));
+                    }
+                });
+            }
+        });
+    ui.horizontal(|ui| {
+        if ui.button("Add").clicked() {
+            actions.push(UiAction::AddMaterial);
+        }
+        let current = view.material;
+        if ui
+            .add_enabled(current.is_some(), egui::Button::new("Delete"))
+            .clicked()
+            && let Some(id) = current
+        {
+            actions.push(UiAction::DeleteMaterial(id));
+        }
+    });
+    let Some(m) = view
+        .material
+        .and_then(|id| view.materials.iter().find(|m| m.id == id))
+    else {
+        return;
+    };
+    // The name being typed lives in egui's memory until the field loses focus.
+    let key = egui::Id::new(("material-name", m.id.0));
+    let mut text = ui
+        .data(|d| d.get_temp::<String>(key))
+        .unwrap_or_else(|| m.name.clone());
+    let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+    if edit.lost_focus() {
+        if text != m.name {
+            actions.push(UiAction::RenameMaterial(m.id, text));
+        }
+        ui.data_mut(|d| d.remove::<String>(key));
+    } else if edit.has_focus() {
+        ui.data_mut(|d| d.insert_temp(key, text));
+    }
+    ui.horizontal_wrapped(|ui| {
+        for color in MATERIAL_PALETTE {
+            let response = swatch(ui, rgb(color));
+            if response.clicked() && color != m.color {
+                actions.push(UiAction::RecolorMaterial(m.id, color));
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -246,6 +347,8 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            materials: &[],
+            material: None,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let file = Pos2::new(14.0, central.min.y / 2.0);
@@ -324,6 +427,8 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            materials: &[],
+            material: None,
         };
         // The Camera menu sits right after File and Edit.
         let clicked = menu_actions(&view, 80..140);
@@ -357,6 +462,8 @@ mod tests {
             inside_instance: false,
             has_guides,
             projection: Projection::Perspective,
+            materials: &[],
+            material: None,
         };
         // The Edit button sits right after File (which ends before x = 40).
         menu_actions(&view, 40..80)
@@ -390,6 +497,8 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            materials: &[],
+            material: None,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -416,6 +525,8 @@ mod tests {
             inside_instance: true,
             has_guides: true,
             projection: Projection::Perspective,
+            materials: &[],
+            material: None,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let row = central.min.y / 2.0;
@@ -436,7 +547,8 @@ mod tests {
             release.events = vec![pointer(false)];
             clicked.extend(run(&ctx, release, &view).0);
         }
-        for kind in [ToolKind::Rectangle, ToolKind::Arc] {
+        // Paint is the last tool: the toolbar still fits a 1280-point window.
+        for kind in [ToolKind::Rectangle, ToolKind::Arc, ToolKind::Paint] {
             assert!(clicked.contains(&UiAction::Tool(kind)), "{clicked:?}");
         }
         assert!(clicked.contains(&UiAction::Undo));
@@ -448,5 +560,97 @@ mod tests {
         ] {
             assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
         }
+    }
+
+    /// Clicks down the right panel at `x`, every 4 points; after each click, types `typed`
+    /// and presses Enter. Returns every action.
+    fn panel_actions(view: &View, x: f32, typed: Option<&str>) -> Vec<UiAction> {
+        let ctx = egui::Context::default();
+        let mut clicked = Vec::new();
+        for y in (0..800).step_by(4) {
+            clicked.extend(click(&ctx, view, Pos2::new(x, y as f32)));
+            if let Some(text) = typed {
+                let mut typing = screen();
+                typing.events = vec![
+                    egui::Event::Text(text.into()),
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    },
+                ];
+                clicked.extend(run(&ctx, typing, view).0);
+                clicked.extend(run(&ctx, screen(), view).0);
+            }
+        }
+        clicked
+    }
+
+    #[test]
+    fn the_materials_list_chooses_adds_renames_recolors_and_deletes() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let rows = [
+            MaterialRow {
+                id: MaterialId(31),
+                name: "Brick".into(),
+                color: [180, 60, 40],
+            },
+            MaterialRow {
+                id: MaterialId(32),
+                name: "Glass".into(),
+                color: [90, 170, 170],
+            },
+        ];
+        let mut view = View {
+            tool: ToolKind::Line,
+            status: &status,
+            info: &info,
+            has_selection: false,
+            has_instance_selected: false,
+            inside_instance: false,
+            has_guides: false,
+            projection: Projection::Perspective,
+            materials: &rows,
+            material: Some(MaterialId(31)),
+        };
+        // Down the panel's left part: swatches and names, Add, the name field, the palette.
+        let clicked = panel_actions(&view, 1280.0 - 160.0, None);
+        for action in [
+            UiAction::ChooseMaterial(None),
+            UiAction::ChooseMaterial(Some(MaterialId(31))),
+            UiAction::ChooseMaterial(Some(MaterialId(32))),
+            UiAction::AddMaterial,
+            UiAction::RecolorMaterial(MaterialId(31), MATERIAL_PALETTE[0]),
+        ] {
+            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+        }
+        // Further right: Delete, and typing into the name field renames on Enter.
+        let clicked = panel_actions(&view, 1280.0 - 120.0, Some("Old"));
+        assert!(
+            clicked.contains(&UiAction::DeleteMaterial(MaterialId(31))),
+            "{clicked:?}"
+        );
+        assert!(
+            clicked.iter().any(|a| matches!(
+                a,
+                UiAction::RenameMaterial(MaterialId(31), name) if name.contains("Old")
+            )),
+            "{clicked:?}"
+        );
+        // With the default material chosen there is nothing to delete, rename or recolor.
+        view.material = None;
+        let clicked = panel_actions(&view, 1280.0 - 120.0, Some("Old"));
+        assert!(
+            !clicked.iter().any(|a| matches!(
+                a,
+                UiAction::DeleteMaterial(_)
+                    | UiAction::RenameMaterial(..)
+                    | UiAction::RecolorMaterial(..)
+            )),
+            "{clicked:?}"
+        );
     }
 }

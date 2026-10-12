@@ -7,8 +7,9 @@ use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
 /// the radius, segments, angle and length of a whole curve (a circle or arc), the direction
-/// or position of a single guide, or the kind, name and rotation of a single instance. While a
-/// group or component is open, a first line says which.
+/// or position of a single guide, or the kind, name and rotation of a single instance; a single
+/// face's front and back materials and a painted instance's material. While a group or
+/// component is open, a first line says which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
     lines.extend(selection_info(doc));
@@ -79,6 +80,9 @@ fn selection_info(doc: &Document) -> Vec<String> {
             _ => vec!["1 group".into()],
         };
         lines.extend(instance.and_then(|i| rotation(i.transform)));
+        if let Some(material) = instance.and_then(|i| i.material) {
+            lines.push(format!("Material: {}", material_name(doc, Some(material))));
+        }
         return lines;
     }
     match (&edges[..], &faces[..]) {
@@ -94,6 +98,8 @@ fn selection_info(doc: &Document) -> Vec<String> {
                 "1 face".into(),
                 format!("Area: {} m²", number(m.area(*f).unwrap_or(0.0))),
                 format!("Normal: {}, {}, {}", n[0], n[1], n[2]),
+                format!("Front: {}", material_name(doc, face.front)),
+                format!("Back: {}", material_name(doc, face.back)),
             ]
         }
         _ => {
@@ -113,6 +119,13 @@ fn selection_info(doc: &Document) -> Vec<String> {
             vec![parts.join(", ")]
         }
     }
+}
+
+/// A material's name, or "Default" for none.
+fn material_name(doc: &Document, material: Option<kernel::MaterialId>) -> String {
+    material
+        .and_then(|m| doc.scene().material(m))
+        .map_or_else(|| "Default".to_string(), |m| m.name.clone())
 }
 
 /// "1 circle" (or arc, or curve) with its radius, angle, segments and length when `edges` are
@@ -215,11 +228,53 @@ mod tests {
         let mut d = doc_with_square();
         assert_eq!(entity_info(&d), ["Nothing selected"]);
         select(&mut d, &["f8"]);
-        assert_eq!(entity_info(&d), ["1 face", "Area: 6 m²", "Normal: 0, 0, 1"]);
+        assert_eq!(
+            entity_info(&d),
+            [
+                "1 face",
+                "Area: 6 m²",
+                "Normal: 0, 0, 1",
+                "Front: Default",
+                "Back: Default"
+            ]
+        );
         select(&mut d, &["e2"]);
         assert_eq!(entity_info(&d), ["1 edge", "Length: 2 m"]);
         select(&mut d, &["e2", "e4", "f8"]);
         assert_eq!(entity_info(&d), ["2 edges, 1 face"]);
+    }
+
+    #[test]
+    fn names_the_materials_of_a_face_and_a_painted_group() {
+        let mut d = doc_with_square();
+        let added = d
+            .execute(Command::AddMaterial {
+                name: Some("Brick".into()),
+                color: [180, 60, 40],
+            })
+            .unwrap();
+        let brick = added.changes.materials[0];
+        d.execute(Command::Paint {
+            ids: vec!["f8".parse().unwrap()],
+            material: Some(brick),
+            side: kernel::Side::Back,
+        })
+        .unwrap();
+        select(&mut d, &["f8"]);
+        let lines = entity_info(&d);
+        assert_eq!(lines[3..], ["Front: Default", "Back: Brick"]);
+        d.execute(Command::MakeGroup {
+            ids: vec!["f8".parse().unwrap()],
+        })
+        .unwrap();
+        let group = *d.selection().iter().next().unwrap();
+        d.execute(Command::Paint {
+            ids: vec![group],
+            material: Some(brick),
+            side: kernel::Side::Front,
+        })
+        .unwrap();
+        assert_eq!(entity_info(&d), ["1 group", "Material: Brick"]);
     }
 
     #[test]

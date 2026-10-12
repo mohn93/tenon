@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use glam::{DVec2, DVec3};
-use kernel::EntityId;
+use kernel::{EntityId, MaterialId};
 use render::grid::LineVertex;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, Outcome, Projection,
@@ -92,7 +92,27 @@ pub struct Editor {
     message: Option<String>,
     /// Physical pixels per logical pixel.
     scale_factor: f64,
+    /// The material the Paint tool paints with (None: the default material).
+    material: Option<MaterialId>,
+    /// Whether the sampling modifier (Cmd on macOS, Ctrl elsewhere) is held.
+    sample: bool,
 }
+
+/// The colors the Materials panel offers; new materials get them in turn.
+pub const MATERIAL_PALETTE: [[u8; 3]; 12] = [
+    [196, 84, 64],
+    [222, 184, 135],
+    [112, 146, 80],
+    [70, 120, 180],
+    [150, 150, 150],
+    [240, 200, 80],
+    [140, 90, 60],
+    [120, 90, 160],
+    [250, 250, 250],
+    [40, 40, 40],
+    [90, 170, 170],
+    [230, 130, 160],
+];
 
 impl Editor {
     pub fn new(viewport: DVec2, scale_factor: f64) -> Self {
@@ -112,6 +132,8 @@ impl Editor {
             typed: String::new(),
             message: None,
             scale_factor,
+            material: None,
+            sample: false,
         }
     }
 
@@ -202,9 +224,75 @@ impl Editor {
         false
     }
 
+    /// Whether the sampling modifier (Cmd on macOS, Ctrl elsewhere) is held: a Paint click then
+    /// picks up a material instead of painting.
+    pub fn set_sample_modifier(&mut self, held: bool) {
+        self.sample = held;
+    }
+
+    /// The material the Paint tool paints with; None (the default material) also when the
+    /// one chosen no longer exists.
+    pub fn current_material(&self) -> Option<MaterialId> {
+        self.material
+            .filter(|m| self.doc.scene().material(*m).is_some())
+    }
+
+    /// Makes `material` the one to paint with and switches to the Paint tool.
+    pub fn choose_material(&mut self, material: Option<MaterialId>) -> bool {
+        self.material = material;
+        if self.kind != ToolKind::Paint {
+            self.select_tool(ToolKind::Paint);
+        }
+        true
+    }
+
+    /// Adds a material named "Material" (numbered when taken) in the next palette color and
+    /// chooses it. False if it could not be added (the status says why).
+    pub fn add_material(&mut self) -> bool {
+        let count = self.doc.scene().materials().count();
+        let color = MATERIAL_PALETTE[count % MATERIAL_PALETTE.len()];
+        self.message = None;
+        let Some(outcome) = self.run(Command::AddMaterial { name: None, color }) else {
+            return true;
+        };
+        let added = outcome.changes.materials.first().copied();
+        self.choose_material(added)
+    }
+
+    /// Renames a material. A refused name leaves it and says why in the status.
+    pub fn rename_material(&mut self, material: MaterialId, name: String) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: Some(name),
+            color: None,
+        });
+        true
+    }
+
+    /// Recolors a material.
+    pub fn recolor_material(&mut self, material: MaterialId, color: [u8; 3]) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: Some(color),
+        });
+        true
+    }
+
+    /// Deletes a material; what was painted with it goes back to the default material.
+    pub fn delete_material(&mut self, material: MaterialId) -> bool {
+        self.message = None;
+        self.run(Command::DeleteMaterial { material });
+        self.update_hover();
+        true
+    }
+
     /// Returns true if a Shift lock ended, so the view needs a redraw.
     pub fn focus_lost(&mut self) -> bool {
         self.shift = false;
+        self.sample = false;
         let unlocked = std::mem::take(&mut self.shift_lock);
         if unlocked {
             self.lock = None;
@@ -609,6 +697,13 @@ impl Editor {
         if !keep {
             self.message = out.message.clone();
         }
+        if let Some(sampled) = out.sampled {
+            self.material = sampled;
+            let name = sampled
+                .and_then(|m| self.doc.scene().material(m))
+                .map_or("the default material", |m| m.name.as_str());
+            self.message = Some(format!("Painting with {name}"));
+        }
         self.apply(out);
         self.update_hover();
     }
@@ -639,6 +734,8 @@ impl Editor {
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
             shift: self.shift,
             selection: self.doc.selection(),
+            material: self.current_material(),
+            sample: self.sample,
         };
         self.tool.handle(event, &ctx)
     }
@@ -2320,5 +2417,89 @@ mod tests {
             circle.iter().all(|p| p.y.abs() < 1e-9),
             "in the wall's plane"
         );
+    }
+
+    /// The front and back materials of the open context's only face.
+    fn face_paint(e: &Editor) -> [Option<MaterialId>; 2] {
+        e.doc().model().faces().next().unwrap().1.paint()
+    }
+
+    #[test]
+    fn b_paints_faces_with_the_chosen_material_and_cmd_click_picks_one_up() {
+        let mut e = editor();
+        square(&mut e);
+        assert!(e.key(EditorKey::Char('b')));
+        assert_eq!(e.tool_kind(), ToolKind::Paint);
+        assert!(e.add_material());
+        let first = e.current_material().expect("the new material is chosen");
+        assert_eq!(
+            e.doc().scene().material(first).unwrap().color,
+            MATERIAL_PALETTE[0]
+        );
+        let inside = DVec3::new(2.0, 2.0, 0.0);
+        click_at(&mut e, inside);
+        assert_eq!(face_paint(&e), [Some(first), None]);
+        e.undo();
+        assert_eq!(face_paint(&e), [None, None]);
+        e.redo();
+
+        // A second material, then pick the first back up with Cmd held: nothing is painted.
+        e.add_material();
+        let second = e.current_material().unwrap();
+        assert_ne!(first, second);
+        let revision = e.doc().revision();
+        e.set_sample_modifier(true);
+        click_at(&mut e, inside);
+        e.set_sample_modifier(false);
+        assert_eq!(e.doc().revision(), revision);
+        assert_eq!(e.current_material(), Some(first));
+        assert!(
+            e.status().contains("Painting with Material"),
+            "{}",
+            e.status()
+        );
+
+        // Choosing the default material in the list paints faces back to default.
+        e.choose_material(None);
+        click_at(&mut e, inside);
+        assert_eq!(face_paint(&e), [None, None]);
+
+        // Renaming, recoloring and deleting go through commands; deleting the chosen
+        // material leaves the default chosen.
+        e.choose_material(Some(second));
+        e.rename_material(second, "Brick".into());
+        e.recolor_material(second, [1, 2, 3]);
+        let m = e.doc().scene().material(second).unwrap();
+        assert_eq!((m.name.as_str(), m.color), ("Brick", [1, 2, 3]));
+        e.rename_material(second, "  ".into());
+        assert!(e.status().contains("needs a name"), "{}", e.status());
+        e.delete_material(second);
+        assert_eq!(e.current_material(), None);
+    }
+
+    #[test]
+    fn clicking_a_selected_face_paints_the_whole_selection() {
+        let mut e = editor();
+        square(&mut e);
+        for (x, y) in [(5.0, 1.0), (7.0, 1.0), (7.0, 3.0), (5.0, 3.0), (5.0, 1.0)] {
+            click_at(&mut e, DVec3::new(x, y, 0.0));
+        }
+        let faces: Vec<EntityId> = e
+            .doc()
+            .model()
+            .faces()
+            .map(|(f, _)| EntityId::Face(f))
+            .collect();
+        assert_eq!(faces.len(), 2);
+        e.execute(Command::Select {
+            ids: faces,
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Paint);
+        e.add_material();
+        let m = e.current_material();
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert!(e.doc().model().faces().all(|(_, f)| f.front == m));
     }
 }

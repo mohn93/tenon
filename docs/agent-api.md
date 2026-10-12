@@ -201,6 +201,12 @@ sides, also the walls and floor of a recess) the pushed face's front and back ma
 that turns over (a pulled flat sheet) keeps each material on the side it was on, so its old
 front is now its back.
 
+In the window, the Paint tool (`b`) paints the side of a face facing the viewer with the
+current material (a click on something selected paints the whole selection's faces and
+groups, a click on a group paints the group), and Cmd-click (Ctrl-click on other systems)
+picks up the clicked side's material instead. The Materials list under Entity Info chooses the
+current material and adds, renames, recolors and deletes materials, all through these commands.
+
 ### Groups and components
 
 Commands and queries work on the open context: the root at first. `{"type": "open_instance",

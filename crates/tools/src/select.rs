@@ -396,6 +396,8 @@ mod tests {
                 drag_threshold: self.drag_threshold,
                 shift: self.shift,
                 selection: &self.selection,
+                material: None,
+                sample: false,
             };
             self.tool.handle(event, &ctx)
         }
@@ -655,6 +657,8 @@ mod tests {
                 drag_threshold: 4.0,
                 shift: false,
                 selection: &Default::default(),
+                material: None,
+                sample: false,
             };
             pick(&ctx)
         };

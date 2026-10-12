@@ -21,7 +21,7 @@ use crate::gui::Gui;
 use crate::host::WindowHost;
 use crate::info::entity_info;
 use crate::navigation::Button;
-use crate::ui::{UiAction, View};
+use crate::ui::{MaterialRow, UiAction, View};
 
 /// Sent to the event loop when an agent API request arrives.
 #[derive(Debug)]
@@ -307,6 +307,21 @@ impl State {
             UiAction::SetProjection(projection) => {
                 self.editor.set_projection(projection);
             }
+            UiAction::ChooseMaterial(material) => {
+                self.editor.choose_material(material);
+            }
+            UiAction::AddMaterial => {
+                self.editor.add_material();
+            }
+            UiAction::DeleteMaterial(material) => {
+                self.editor.delete_material(material);
+            }
+            UiAction::RenameMaterial(material, name) => {
+                self.editor.rename_material(material, name);
+            }
+            UiAction::RecolorMaterial(material, color) => {
+                self.editor.recolor_material(material, color);
+            }
         }
     }
 
@@ -346,6 +361,17 @@ impl State {
         }
         let status = self.editor.status_parts();
         let info = entity_info(self.editor.doc());
+        let materials: Vec<MaterialRow> = self
+            .editor
+            .doc()
+            .scene()
+            .materials()
+            .map(|(id, m)| MaterialRow {
+                id,
+                name: m.name.clone(),
+                color: m.color,
+            })
+            .collect();
         let panels = View {
             tool: self.editor.tool_kind(),
             status: &status,
@@ -360,6 +386,8 @@ impl State {
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,
+            materials: &materials,
+            material: self.editor.current_material(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         // Applied once the frame is presented: some open modal dialogs, which must not run
@@ -693,6 +721,9 @@ impl ApplicationHandler<ApiWake> for App {
                 let locked = s
                     .editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
+                // Cmd (Ctrl elsewhere) held makes a Paint click pick up a material.
+                s.editor
+                    .set_sample_modifier(m.state().super_key() || m.state().control_key());
                 // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and
                 // copying, and the Tape Measure between adding guides and measuring only.
                 let toggled = ctrl_pressed && s.editor.toggle_copy();

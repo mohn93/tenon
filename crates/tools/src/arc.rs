@@ -261,6 +261,8 @@ mod tests {
             drag_threshold: 4.0,
             shift: false,
             selection: &Default::default(),
+            material: None,
+            sample: false,
         };
         tool.handle(event, &ctx)
     }

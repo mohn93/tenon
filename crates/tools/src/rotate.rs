@@ -373,6 +373,8 @@ mod tests {
                 drag_threshold: 4.0,
                 shift: false,
                 selection: &self.selection,
+                material: None,
+                sample: false,
             };
             self.tool.handle(event, &ctx)
         }

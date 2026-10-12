@@ -8,6 +8,7 @@ pub mod inference;
 pub mod line;
 pub mod move_tool;
 pub mod overlay;
+pub mod paint;
 pub mod push_pull;
 pub mod rectangle;
 pub mod rotate;
@@ -26,6 +27,7 @@ pub use inference::{
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;
+pub use paint::PaintTool;
 pub use push_pull::PushPullTool;
 pub use rectangle::RectangleTool;
 pub use rotate::RotateTool;

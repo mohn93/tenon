@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{EntityId, Model};
+use kernel::{EntityId, MaterialId, Model};
 use session::{Camera, Command};
 
 use crate::arc::ArcTool;
@@ -12,6 +12,7 @@ use crate::erase::EraseTool;
 use crate::inference::Inference;
 use crate::line::LineTool;
 use crate::move_tool::MoveTool;
+use crate::paint::PaintTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
@@ -37,6 +38,11 @@ pub struct ToolContext<'a> {
     pub shift: bool,
     /// The selected edges and faces.
     pub selection: &'a BTreeSet<EntityId>,
+    /// The material the Paint tool paints with (None: the default material).
+    pub material: Option<MaterialId>,
+    /// Whether the sampling modifier is held (Cmd on macOS, Ctrl elsewhere): the Paint tool
+    /// then picks up the material clicked instead of painting.
+    pub sample: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +74,8 @@ pub struct ToolOutput {
     pub preview: Vec<[DVec3; 2]>,
     /// Feedback for the user, e.g. why typed text was ignored.
     pub message: Option<String>,
+    /// A material the tool picked up to paint with next (Some(None): the default material).
+    pub sampled: Option<Option<MaterialId>>,
 }
 
 /// An interactive way to build commands. Tools never edit the model themselves.
@@ -97,11 +105,12 @@ pub enum ToolKind {
     Rotate,
     TapeMeasure,
     Erase,
+    Paint,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 10] = [
+    pub const ALL: [ToolKind; 11] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -112,6 +121,7 @@ impl ToolKind {
         ToolKind::Rotate,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
+        ToolKind::Paint,
     ];
 
     pub fn make(self) -> Box<dyn Tool> {
@@ -126,6 +136,7 @@ impl ToolKind {
             ToolKind::Rotate => Box::new(RotateTool::new()),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
+            ToolKind::Paint => Box::new(PaintTool::new()),
         }
     }
 
@@ -142,6 +153,7 @@ impl ToolKind {
             ToolKind::Rotate => "Rotate",
             ToolKind::TapeMeasure => "Tape Measure",
             ToolKind::Erase => "Erase",
+            ToolKind::Paint => "Paint",
         }
     }
 
@@ -158,6 +170,7 @@ impl ToolKind {
             ToolKind::Rotate => 'q',
             ToolKind::TapeMeasure => 't',
             ToolKind::Erase => 'e',
+            ToolKind::Paint => 'b',
         }
     }
 
