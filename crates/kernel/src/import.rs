@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use glam::{DAffine3, DVec2, DVec3};
 
 use crate::edit::KernelError;
-use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, signed_area2, vector_area};
+use crate::geom::{LENGTH_TOL, Plane, signed_area2, vector_area};
 use crate::ids::{InstanceId, MaterialId, VertexId};
 use crate::model::{Face, Instance, Model};
 use crate::regions::PlaneGraph;
@@ -38,6 +38,9 @@ pub struct MeshReport {
 /// tolerance, so the faces made pass `Model::validate` with room for rounding.
 const FLAT_TOL: f64 = 0.5 * LENGTH_TOL;
 
+/// Most corners of a flat polygon that are checked for crossing sides.
+const MAX_SIMPLE_CHECK: usize = 256;
+
 impl Scene {
     /// Builds a new definition from `points` and `polygons` (see [`build_mesh`]) and places
     /// one instance of it, with an identity transform, in mesh `parent`. With `merge`, faces
@@ -54,6 +57,9 @@ impl Scene {
         kind: DefinitionKind,
         name: &str,
     ) -> Result<(InstanceId, MeshReport, SceneChange), KernelError> {
+        if self.mesh(parent).is_none() {
+            return Err(KernelError::DefinitionNotFound);
+        }
         if points.iter().any(|p| !p.is_finite()) {
             return Err(KernelError::NotFinite);
         }
@@ -244,7 +250,9 @@ fn pieces(points: &[DVec3], mut corners: Vec<usize>) -> Vec<(Vec<usize>, DVec3)>
         .all(|p| (*p - pts[0]).dot(normal).abs() <= FLAT_TOL);
     let plane = Plane::through(pts[0], normal);
     let flat2: Vec<DVec2> = pts.iter().map(|p| plane.project(*p)).collect();
-    if flat && (pts.len() == 3 || is_simple(&flat2)) {
+    // The simplicity check is quadratic in the corners, so a long polygon skips it and goes
+    // to the triangulation, which cuts it into triangles even when it was simple.
+    if flat && (pts.len() == 3 || (pts.len() <= MAX_SIMPLE_CHECK && is_simple(&flat2))) {
         return vec![(corners, normal)];
     }
     let coords: Vec<f64> = flat2.iter().flat_map(|q| [q.x, q.y]).collect();
@@ -395,6 +403,7 @@ fn merged(
         .max_by(|a, b| area(**a).total_cmp(&area(**b)))?;
     let normal = faces[largest].normal;
     let plane = Plane::through(points[faces[largest].loops[0][0]], normal);
+    let flipped = normal.dot(plane.normal) < 0.0;
     let inside: HashSet<usize> = members.iter().copied().collect();
     // A side is interior when exactly two faces use it and both are members.
     let mut boundary: Vec<[VertexId; 2]> = Vec::new();
@@ -421,21 +430,18 @@ fn merged(
         pos,
         edges: boundary,
     };
-    let polys: Vec<Vec<DVec2>> = members
-        .iter()
-        .map(|&i| {
-            faces[i].loops[0]
-                .iter()
-                .map(|&c| plane.project(points[c]))
-                .collect()
-        })
-        .collect();
     let total: f64 = members.iter().map(|&i| area(i)).sum();
     let mut covered = 0.0;
     let mut out = Vec::new();
     for r in graph.regions() {
-        let p = graph.interior_point(&r)?;
-        if !polys.iter().any(|poly| point_in_polygon(p, poly)) {
+        // Members wind counter-clockwise around `normal`, so a region is covered exactly when a
+        // member runs along its first side in the same direction (the opposite one when the
+        // plane's canonical normal points against `normal`).
+        let (a, b) = (r.outer[0].0 as usize, r.outer[1].0 as usize);
+        if !users[&(a.min(b), a.max(b))]
+            .iter()
+            .any(|(f, forward)| *forward == ((a < b) != flipped) && inside.contains(f))
+        {
             continue;
         }
         covered += signed_area2(&graph.poly(&r.outer)) * 0.5;
@@ -450,7 +456,7 @@ fn merged(
             .map(index)
             .collect();
         // Regions wind counter-clockwise around the plane's own normal.
-        if normal.dot(plane.normal) < 0.0 {
+        if flipped {
             loops.iter_mut().for_each(|l| l.reverse());
         }
         let o = points[loops[0][0]];
@@ -724,5 +730,126 @@ mod tests {
         let built = build_mesh(&p, &polys(&[&[0, 1, 2, 3, 4]]), false);
         assert!(!built.faces.is_empty());
         assert!(built.faces.iter().all(|f| f.loops[0].len() == 3));
+    }
+
+    /// An n x n sheet of unit cells in the z = 0 plane as triangles, leaving out the cells
+    /// `open` names.
+    fn sheet(n: usize, open: impl Fn(usize, usize) -> bool) -> (Vec<DVec3>, Vec<Vec<usize>>) {
+        let p = (0..(n + 1) * (n + 1))
+            .map(|i| DVec3::new((i % (n + 1)) as f64, (i / (n + 1)) as f64, 0.0))
+            .collect();
+        let at = |x: usize, y: usize| y * (n + 1) + x;
+        let mut tris = Vec::new();
+        for y in 0..n {
+            for x in 0..n {
+                if !open(x, y) {
+                    let (a, b, c, d) = (at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1));
+                    tris.push(vec![a, b, c]);
+                    tris.push(vec![a, c, d]);
+                }
+            }
+        }
+        (p, tris)
+    }
+
+    #[test]
+    fn a_pinched_hole_stays_one_hole() {
+        // Cells (1,1) and (2,2) are open and meet at one corner.
+        let (p, tris) = sheet(3, |x, y| (x, y) == (1, 1) || (x, y) == (2, 2));
+        let list: Vec<&[usize]> = tris.iter().map(|t| &t[..]).collect();
+        let (s, report) = import(&p, &list, true);
+        assert_eq!(report.faces, 1);
+        let m = mesh(&s);
+        let (id, f) = m.faces().next().unwrap();
+        assert_eq!(f.holes.len(), 1);
+        assert!((m.area(id).unwrap() - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn squares_touching_at_a_corner_stay_two_faces() {
+        let p = vec![
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::Y,
+            DVec3::new(2.0, 1.0, 0.0),
+            DVec3::new(2.0, 2.0, 0.0),
+            DVec3::new(1.0, 2.0, 0.0),
+        ];
+        let (s, report) = import(&p, &[&[0, 1, 2, 3], &[2, 4, 5, 6]], true);
+        assert_eq!((report.faces, report.vertices), (2, 7));
+        assert_eq!(mesh(&s).faces().count(), 2);
+    }
+
+    #[test]
+    fn a_strip_drifting_off_its_plane_is_left_unmerged_and_valid() {
+        // Each cell is flat and the next lies within tolerance of its plane, but twelve cells
+        // together bend further than the tolerance allows one face.
+        let strip = |c: f64| {
+            let n = 12;
+            let mut p = Vec::new();
+            for i in 0..=n {
+                let z = c * (i * i) as f64;
+                p.push(DVec3::new(100.0 * i as f64, 0.0, z));
+                p.push(DVec3::new(100.0 * i as f64, 1.0, z));
+            }
+            let quads: Vec<Vec<usize>> = (0..n)
+                .map(|i| vec![2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1])
+                .collect();
+            (p, quads, n)
+        };
+        let (p, quads, n) = strip(2e-7);
+        let list: Vec<&[usize]> = quads.iter().map(|q| &q[..]).collect();
+        let (s, report) = import(&p, &list, true);
+        assert_eq!(report.faces, n);
+        s.validate().unwrap();
+        // The same strip without the bend is one face.
+        let (p, quads, _) = strip(0.0);
+        let list: Vec<&[usize]> = quads.iter().map(|q| &q[..]).collect();
+        let (_, report) = import(&p, &list, true);
+        assert_eq!(report.faces, 1);
+    }
+
+    #[test]
+    fn a_self_crossing_polygon_imports_as_valid_triangles() {
+        let p = vec![
+            DVec3::ZERO,
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(4.0, 3.0, 0.0),
+            DVec3::new(2.0, -1.0, 0.0),
+            DVec3::new(0.0, 3.0, 0.0),
+        ];
+        let (s, report) = import(&p, &[&[0, 1, 2, 3, 4]], false);
+        assert!(report.faces >= 1);
+        assert!(mesh(&s).faces().all(|(_, f)| f.outer.len() == 3));
+    }
+
+    #[test]
+    fn a_missing_parent_changes_nothing() {
+        let mut s = Scene::new();
+        let p = [DVec3::ZERO, DVec3::X, DVec3::Y];
+        let r = s.import_mesh(
+            MeshId::Definition(crate::ids::DefinitionId(77)),
+            &p,
+            &polys(&[&[0, 1, 2]]),
+            true,
+            DefinitionKind::Group,
+            "",
+        );
+        assert_eq!(r.unwrap_err(), KernelError::DefinitionNotFound);
+        assert_eq!(s, Scene::new());
+    }
+
+    #[test]
+    fn a_sheet_with_sixteen_hundred_holes_merges_into_one_face() {
+        // 81 x 81 cells, a cell open wherever both coordinates are odd: 40 x 40 holes.
+        let (p, tris) = sheet(81, |x, y| x % 2 == 1 && y % 2 == 1);
+        let list: Vec<&[usize]> = tris.iter().map(|t| &t[..]).collect();
+        let start = std::time::Instant::now();
+        let (s, report) = import(&p, &list, true);
+        let took = start.elapsed();
+        assert!(took.as_secs() < 10, "{took:?}");
+        assert_eq!(report.faces, 1);
+        assert_eq!(mesh(&s).faces().next().unwrap().1.holes.len(), 1600);
     }
 }

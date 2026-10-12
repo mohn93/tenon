@@ -54,13 +54,62 @@ impl PlaneGraph {
             }
         }
         // The outside walk of a separate component is a hole of the smallest region around it.
+        // A grid over the regions' bounding boxes lists, for the cell holding a hole's corner,
+        // the regions whose box could hold the hole, so inputs with many separate components
+        // stay near-linear.
+        let bounds = |poly: &[DVec2]| {
+            poly.iter().fold((DVec2::MAX, DVec2::MIN), |(lo, hi), p| {
+                (lo.min(*p), hi.max(*p))
+            })
+        };
+        let shapes: Vec<(Vec<DVec2>, (DVec2, DVec2))> = regions
+            .iter()
+            .map(|(r, _)| {
+                let poly = self.poly(&r.outer);
+                let b = bounds(&poly);
+                (poly, b)
+            })
+            .collect();
+        let (all_lo, all_hi) = shapes
+            .iter()
+            .fold((DVec2::MAX, DVec2::MIN), |(lo, hi), (_, (l, h))| {
+                (lo.min(*l), hi.max(*h))
+            });
+        let side = ((regions.len() as f64).sqrt().ceil() as usize).max(1);
+        let scale =
+            (side as f64 / (all_hi - all_lo).max_element().max(f64::MIN_POSITIVE)).min(f64::MAX);
+        let cell = |p: DVec2| {
+            let c = ((p - all_lo) * scale)
+                .floor()
+                .clamp(DVec2::ZERO, DVec2::splat((side - 1) as f64));
+            (c.x as usize, c.y as usize)
+        };
+        let mut grid: Vec<Vec<usize>> = vec![Vec::new(); side * side];
+        if !loose.is_empty() {
+            for (i, (_, (lo, hi))) in shapes.iter().enumerate() {
+                let ((x0, y0), (x1, y1)) = (cell(*lo), cell(*hi));
+                for y in y0..=y1 {
+                    for x in x0..=x1 {
+                        grid[y * side + x].push(i);
+                    }
+                }
+            }
+        }
         for h in loose {
-            let container = (0..regions.len())
+            let (hlo, hhi) = bounds(&self.poly(&h));
+            let (x, y) = cell(hlo);
+            let container = grid[y * side + x]
+                .iter()
+                .copied()
                 .filter(|&i| {
+                    let (lo, hi) = shapes[i].1;
+                    if !(lo.cmple(hlo).all() && hhi.cmple(hi).all()) {
+                        return false;
+                    }
                     let outer: BTreeSet<_> = regions[i].0.outer.iter().collect();
-                    h.iter().find(|v| !outer.contains(v)).is_some_and(|v| {
-                        point_in_polygon(self.pos[v], &self.poly(&regions[i].0.outer))
-                    })
+                    h.iter()
+                        .find(|v| !outer.contains(v))
+                        .is_some_and(|v| point_in_polygon(self.pos[v], &shapes[i].0))
                 })
                 .min_by(|&a, &b| regions[a].1.total_cmp(&regions[b].1));
             if let Some(i) = container {
