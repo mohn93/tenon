@@ -548,6 +548,17 @@ impl Document {
         let center = DVec3::from(center);
         if let Some(count) = copies {
             let parts = self.copy_parts(ids, count)?;
+            // A copy turned by a whole number of turns would land exactly on the original.
+            let whole = |k: u32| {
+                let r = (angle * k as f64).rem_euclid(360.0);
+                r < 1e-9 || 360.0 - r < 1e-9
+            };
+            if let Some(k) = (1..=count).find(|k| whole(*k)) {
+                return Err(invalid(&format!(
+                    "copies would complete a whole turn and land on the original (at most {})",
+                    k - 1
+                )));
+            }
             let places: Vec<DAffine3> = (1..=count)
                 .map(|k| rotation(center, axis, angle * k as f64))
                 .collect();

@@ -314,3 +314,54 @@ fn rotations_run_in_atomic_batches() {
     run(&mut d, json!({"type": "undo"})).unwrap();
     assert!(positions(&d).contains(&[2.0, 2.0, 0.0]));
 }
+
+#[test]
+fn vertices_on_the_axis_stay_put_at_any_angle() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [1, 1, 0], "opposite": [1, 3, 2]}),
+    )
+    .unwrap();
+    let before = positions(&d);
+    let out = run(
+        &mut d,
+        json!({"type": "rotate", "ids": ["f8"], "center": [1, 1, 0], "angle": 60}),
+    )
+    .unwrap();
+    // Only the two vertices off the axis move.
+    assert_eq!(out["changes"]["modified"].as_array().unwrap().len(), 3);
+    let after = positions(&d);
+    for b in before.iter().filter(|p| p[0] == 1.0 && p[1] == 1.0) {
+        assert!(after.contains(b), "{b:?} drifted");
+    }
+}
+
+#[test]
+fn an_edge_on_the_axis_rotates_to_nothing_about_any_center() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [2, 0, 0]}),
+    )
+    .unwrap();
+    let edge = ask(&d, json!({"type": "entities", "kinds": ["edge"]}))["edges"][0]["id"].clone();
+    let out = run(
+        &mut d,
+        json!({"type": "rotate", "ids": [edge], "center": [0.3, 0, 0], "axis": [1, 0, 0], "angle": 60}),
+    )
+    .unwrap();
+    assert_eq!(out["changes"]["modified"], json!([]));
+    assert_eq!(d.revision(), 1);
+}
+
+#[test]
+fn copies_that_complete_a_turn_are_refused() {
+    let mut d = doc();
+    square(&mut d);
+    let rot = |n: u32| json!({"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 90, "copies": n});
+    let (kind, _) = run(&mut d, rot(4)).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert_eq!(counts(&d), [4, 4, 1, 0]);
+    run(&mut d, rot(3)).unwrap();
+}

@@ -7,6 +7,7 @@ use glam::{DAffine3, DMat3, DVec3};
 /// its base). Multiples of 90 degrees are exact, so quarter turns of axis-aligned geometry
 /// stay on round coordinates.
 pub fn rotation(center: DVec3, axis: DVec3, angle: f64) -> DAffine3 {
+    let angle = angle.rem_euclid(360.0);
     let quarters = angle / 90.0;
     let (sin, cos) = if quarters == quarters.round() {
         match (quarters as i64).rem_euclid(4) {
@@ -43,6 +44,8 @@ mod tests {
         );
         let t = rotation(DVec3::ZERO, DVec3::X, -90.0);
         assert_eq!(t.transform_point3(DVec3::Y), -DVec3::Z);
+        let t = rotation(DVec3::ZERO, DVec3::Z, 450.0);
+        assert_eq!(t.transform_point3(DVec3::X), DVec3::Y);
         let t = rotation(DVec3::ZERO, DVec3::Z, 540.0);
         assert_eq!(t.transform_point3(DVec3::X), -DVec3::X);
     }

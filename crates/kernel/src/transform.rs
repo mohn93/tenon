@@ -47,9 +47,24 @@ impl Model {
             .copied()
             .filter(|v| self.vertex(*v).is_some())
             .collect();
+        debug_assert!(
+            {
+                let m = t.matrix3;
+                (m.transpose() * m).abs_diff_eq(glam::DMat3::IDENTITY, 1e-9)
+            },
+            "transform_vertices needs a rigid motion"
+        );
+        // A vertex `t` leaves in place (on a rotation's axis) stays exactly where it is, not a
+        // rounding error away.
         let at = |m: &Model, v: VertexId| {
             if moved.contains(&v) {
-                t.transform_point3(m.pos(v))
+                let p = m.pos(v);
+                let q = t.transform_point3(p);
+                if q.distance(p) <= 1e-12 * p.length().max(1.0) {
+                    p
+                } else {
+                    q
+                }
             } else {
                 m.pos(v)
             }
