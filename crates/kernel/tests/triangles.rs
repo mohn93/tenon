@@ -108,3 +108,64 @@ fn a_mirrored_instance_keeps_its_triangles_wound_around_outward_normals() {
         assert!((mid - centre).dot(t.normal) > 0.0, "faces out of the box");
     }
 }
+
+#[test]
+fn triangles_carry_face_materials_and_inherit_the_nearest_painted_instance() {
+    let mut s = Scene::from_root(box_model());
+    let (red, _) = s.add_material("Red", [255, 0, 0]).unwrap();
+    let (blue, _) = s.add_material("Blue", [0, 0, 255]).unwrap();
+    let (green, _) = s.add_material("Green", [0, 255, 0]).unwrap();
+    let top = s
+        .root()
+        .faces()
+        .find(|(_, f)| f.normal == DVec3::Z)
+        .unwrap()
+        .0;
+    s.paint(MeshId::Root, &[top], &[], kernel::Side::Front, Some(red))
+        .unwrap();
+    let tris = s.triangles();
+    assert_eq!(
+        tris.iter().filter(|t| t.front == Some(red)).count(),
+        2,
+        "the top's two triangles"
+    );
+    assert!(tris.iter().all(|t| t.back.is_none()));
+
+    // Group the box, then group the group: paint the inner instance blue and the outer green.
+    let edges: Vec<_> = s.root().edges().map(|(e, _)| e).collect();
+    let faces: Vec<_> = s.root().faces().map(|(f, _)| f).collect();
+    let (inner, _) = s
+        .make_group(MeshId::Root, &edges, &faces, &[], DefinitionKind::Group, "")
+        .unwrap();
+    let (outer, _) = s
+        .make_group(MeshId::Root, &[], &[], &[inner], DefinitionKind::Group, "")
+        .unwrap();
+    let d = s.root().instance(outer).unwrap().definition;
+    s.paint(
+        MeshId::Root,
+        &[],
+        &[outer],
+        kernel::Side::Front,
+        Some(green),
+    )
+    .unwrap();
+    let tris = s.triangles();
+    assert_eq!(tris.iter().filter(|t| t.front == Some(green)).count(), 10);
+    assert!(tris.iter().all(|t| t.back == Some(green)));
+    s.paint(
+        MeshId::Definition(d),
+        &[],
+        &[inner],
+        kernel::Side::Front,
+        Some(blue),
+    )
+    .unwrap();
+    let tris = s.triangles();
+    assert_eq!(tris.iter().filter(|t| t.front == Some(red)).count(), 2);
+    assert_eq!(
+        tris.iter().filter(|t| t.front == Some(blue)).count(),
+        10,
+        "the nearer instance wins"
+    );
+    assert!(tris.iter().all(|t| t.back == Some(blue)));
+}

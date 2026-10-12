@@ -309,10 +309,14 @@ never overwrites a model; use `save`.
 
 | Format | Content |
 |---|---|
-| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y) |
-| `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model |
-| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`) with a double-sided default material, so lone faces show from behind; Y up |
+| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y). When faces are painted, it names a material library (`mtllib house.mtl`) written beside it under the same name with `.mtl` (replacing a file there), and each material's triangles follow a `usemtl` line; the library gives each material its diffuse color (`Kd`, linear). Material names have spaces and other separators replaced by `_` (and a number added when two become alike); faces without a material use `default`. Without painted faces no `.mtl` is written. |
+| `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors |
+| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear), the default one is named `default`; Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
+
+Colors come from each face's front side (its own material, else that of the nearest painted
+instance placing it); back-side materials are not exported. An OBJ export whose `.mtl` would
+be the export path itself or the open model's file is refused with `invalid_input`.
 
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
 does not change the revision or the `file` query.

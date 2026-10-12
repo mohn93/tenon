@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{EntityId, Model, Scene};
+use kernel::{EntityId, MeshId, Model, Scene, Side};
 use render::grid::{BACKGROUND, LineVertex};
 use render::{Renderer, Viewport};
 use session::Camera;
@@ -40,6 +40,18 @@ fn render_with(
     viewport: Viewport,
     overlay: &[LineVertex],
 ) -> Option<Vec<u8>> {
+    let scene = Scene::from_root(model.clone());
+    render_scene_with(camera, &scene, selection, viewport, overlay)
+}
+
+/// Renders a whole scene (with its materials) with `selection` highlighted into `viewport`.
+fn render_scene_with(
+    camera: &Camera,
+    scene: &Scene,
+    selection: &BTreeSet<EntityId>,
+    viewport: Viewport,
+    overlay: &[LineVertex],
+) -> Option<Vec<u8>> {
     let Some((device, queue)) = gpu() else {
         eprintln!("no GPU adapter, skipping");
         return None;
@@ -61,7 +73,7 @@ fn render_with(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = Renderer::new(&device, &queue, format);
-    renderer.set_scene(&Scene::from_root(model.clone()), &[], selection);
+    renderer.set_scene(scene, &[], selection);
     renderer.render_in(&view, (W, H), viewport, camera, overlay);
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -349,6 +361,46 @@ fn selected_faces_are_tinted_blue() {
     assert!(
         p[2] as i32 > p[0] as i32 + 30,
         "selected face should be blue, got {p:?}"
+    );
+}
+
+#[test]
+fn painted_sides_show_their_colors_and_selection_still_tints() {
+    let mut scene = Scene::from_root(ground_square());
+    let (red, _) = scene.add_material("Red", [220, 20, 20]).unwrap();
+    let (green, _) = scene.add_material("Green", [20, 200, 20]).unwrap();
+    let face = scene.root().faces().next().unwrap().0;
+    scene
+        .paint(MeshId::Root, &[face], &[], Side::Front, Some(red))
+        .unwrap();
+    scene
+        .paint(MeshId::Root, &[face], &[], Side::Back, Some(green))
+        .unwrap();
+    let cam = camera();
+    let at = DVec3::new(0.5, 0.5, 0.0);
+    let full = Viewport::full((W, H));
+    let Some(px) = render_scene_with(&cam, &scene, &BTreeSet::new(), full, &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, at);
+    assert!(
+        p[0] as i32 > p[1] as i32 + 80,
+        "front should be red, got {p:?}"
+    );
+    let mut below = camera();
+    below.eye = DVec3::new(-8.0, -12.0, -7.0);
+    let px = render_scene_with(&below, &scene, &BTreeSet::new(), full, &[]).unwrap();
+    let p = pixel_at(&px, &below, at);
+    assert!(
+        p[1] as i32 > p[0] as i32 + 80,
+        "back should be green, got {p:?}"
+    );
+    let selection = BTreeSet::from([EntityId::Face(face)]);
+    let px = render_scene_with(&cam, &scene, &selection, full, &[]).unwrap();
+    let p = pixel_at(&px, &cam, at);
+    assert!(
+        p[2] as i32 > 60 && (p[2] as i32) > p[1] as i32,
+        "selected red face should be tinted blue, got {p:?}"
     );
 }
 

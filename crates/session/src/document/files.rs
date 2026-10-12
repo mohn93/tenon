@@ -82,17 +82,19 @@ impl Document {
                 "a .skr path is a model file: use save, not export",
             ));
         }
-        if let Some(own) = &self.path {
-            let same = match (own.canonicalize(), target.canonicalize()) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => own == target,
-            };
-            if same {
-                return Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    "that is the open model's own file: export to another path",
-                ));
-            }
+        let own = |p: &Path| {
+            self.path
+                .as_ref()
+                .is_some_and(|own| match (own.canonicalize(), p.canonicalize()) {
+                    (Ok(a), Ok(b)) => a == b,
+                    _ => own == p,
+                })
+        };
+        if own(target) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "that is the open model's own file: export to another path",
+            ));
         }
         let triangles = self.scene.triangles();
         if triangles.is_empty() {
@@ -101,8 +103,27 @@ impl Document {
                 "nothing to export: the model has no faces",
             ));
         }
-        file::replace_file(Path::new(path), &export::encode(&triangles, format))
-            .map_err(|e| file_error(path, e))
+        // An OBJ with painted faces names a material library beside it: same name, `.mtl`.
+        let mtl_path = target.with_extension("mtl");
+        let mtl_name = mtl_path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let encoded = export::encode(&self.scene, &triangles, format, &mtl_name);
+        if let Some(mtl) = &encoded.mtl {
+            if mtl_path == target || own(&mtl_path) {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "an OBJ of painted faces writes its materials to {}, which is not \
+                         free: export to another path",
+                        mtl_path.display()
+                    ),
+                ));
+            }
+            file::replace_file(&mtl_path, mtl)
+                .map_err(|e| file_error(&mtl_path.display().to_string(), e))?;
+        }
+        file::replace_file(target, &encoded.bytes).map_err(|e| file_error(path, e))
     }
 
     /// Swaps in another model: history, selection and the open context start over, and event

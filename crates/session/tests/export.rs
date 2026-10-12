@@ -374,3 +374,89 @@ fn a_face_with_a_hole_in_nested_groups_exports_whole_and_undo_still_works() {
         "undo undid the move, not an export: {top}"
     );
 }
+
+/// `two_boxes` with the first crate painted with a new material named `name` and `color`.
+fn painted_boxes(d: &mut Document, name: &str, color: [u8; 3]) {
+    two_boxes(d);
+    let out = run(
+        d,
+        json!({"type": "add_material", "name": name, "color": color}),
+    )
+    .unwrap();
+    let material = out["changes"]["materials"][0].clone();
+    let instances = ask(d, json!({"type": "entities", "kinds": ["instance"]}));
+    let first = instances["instances"][0]["id"].clone();
+    run(
+        d,
+        json!({"type": "paint", "ids": [first], "material": material}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn obj_of_painted_faces_names_a_material_library_beside_it() {
+    let mut d = doc();
+    two_boxes(&mut d);
+    let mtl = scratch("plain-boxes.mtl");
+    let obj = String::from_utf8(export(&mut d, "plain-boxes.obj")).unwrap();
+    assert!(!obj.contains("mtllib") && !obj.contains("usemtl"));
+    assert!(!mtl.exists(), "no library without painted faces");
+
+    let mut d = doc();
+    painted_boxes(&mut d, "Red brick", [255, 0, 0]);
+    let mtl = scratch("painted-boxes.mtl");
+    let obj = String::from_utf8(export(&mut d, "painted-boxes.obj")).unwrap();
+    assert!(obj.contains("mtllib painted-boxes.mtl\n"), "{obj}");
+    let uses: Vec<&str> = obj.lines().filter(|l| l.starts_with("usemtl")).collect();
+    assert_eq!(uses, ["usemtl Red_brick", "usemtl default"]);
+    assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 24);
+    let library = std::fs::read_to_string(&mtl).unwrap();
+    assert!(
+        library.contains("newmtl Red_brick\nKd 1.000000 0.000000 0.000000\n"),
+        "{library}"
+    );
+    assert!(library.contains("newmtl default\n"), "{library}");
+
+    // The library must not overwrite the OBJ itself.
+    let path = scratch("painted.mtl");
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap(), "format": "obj"}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+    assert!(!path.exists());
+}
+
+#[test]
+fn gltf_has_one_primitive_and_material_per_color() {
+    let mut d = doc();
+    painted_boxes(&mut d, "Clay", [128, 64, 255]);
+    let doc: Value = serde_json::from_slice(&export(&mut d, "painted.gltf")).unwrap();
+    let primitives = doc["meshes"][0]["primitives"].as_array().unwrap();
+    assert_eq!(primitives.len(), 2);
+    assert_eq!(doc["materials"][0]["name"], "Clay");
+    assert_eq!(doc["materials"][1]["name"], "default");
+    assert!(doc["materials"][1]["pbrMetallicRoughness"]["baseColorFactor"].is_null());
+    // glTF colors are linear: sRGB 128 is about 0.216.
+    let factor = doc["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"].clone();
+    let f: Vec<f64> = factor
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect();
+    assert!(
+        (f[0] - 0.2158).abs() < 1e-3 && (f[1] - 0.0513).abs() < 1e-3,
+        "{f:?}"
+    );
+    assert_eq!((f[2], f[3]), (1.0, 1.0));
+    for (k, p) in primitives.iter().enumerate() {
+        assert_eq!(p["material"], k);
+        let pos = &doc["accessors"][p["attributes"]["POSITION"].as_u64().unwrap() as usize];
+        assert_eq!(pos["count"], 36);
+        assert_eq!(pos["byteOffset"], 36 * 12 * k);
+    }
+    // The second box (the unpainted one) is the default primitive: x from 3 to 5.
+    assert_eq!(doc["accessors"][2]["min"][0], 3.0);
+}

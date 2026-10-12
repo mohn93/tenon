@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec3};
-use kernel::{EntityId, Guide, InstanceId, MeshId, Scene};
+use kernel::{EntityId, Guide, InstanceId, MaterialId, MeshId, Scene};
 
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
@@ -16,6 +16,21 @@ pub struct FaceVertex {
     pub normal: [f32; 3],
     /// 1 for selected faces, 0 otherwise.
     pub selected: f32,
+    /// The colors of the front and back sides.
+    pub front: [f32; 3],
+    pub back: [f32; 3],
+}
+
+/// The default material's color on a face's front.
+pub const DEFAULT_FRONT: [f32; 3] = [0.93, 0.93, 0.90];
+/// The default material's color on a face's back.
+pub const DEFAULT_BACK: [f32; 3] = [0.60, 0.65, 0.76];
+
+/// The color a side shows: its material's (sRGB, as the targets store it), or `default`.
+fn side_color(scene: &Scene, material: Option<MaterialId>, default: [f32; 3]) -> [f32; 3] {
+    material
+        .and_then(|m| scene.material(m))
+        .map_or(default, |m| m.color.map(|c| f32::from(c) / 255.0))
 }
 
 pub const EDGE_COLOR: [f32; 4] = [0.08, 0.08, 0.08, 1.0];
@@ -39,7 +54,8 @@ pub struct ModelGeometry {
 /// `context` is the path of open instances (see `session::Document::context`) and `selection`
 /// holds ids of the open context: selected entities there are highlighted, and a selected
 /// instance highlights everything it places. While an instance is open, edges and guides
-/// outside it are faded and its bounding box is outlined.
+/// outside it are faded and its bounding box is outlined. Each face side gets its material's
+/// color, or else that of the nearest painted instance placing it, or else the default.
 pub fn scene_geometry(
     scene: &Scene,
     context: &[InstanceId],
@@ -53,7 +69,7 @@ pub fn scene_geometry(
         path: Vec::new(),
         g: &mut g,
     };
-    walk.mesh(MeshId::Root, DAffine3::IDENTITY, false);
+    walk.mesh(MeshId::Root, DAffine3::IDENTITY, false, None);
     if !context.is_empty()
         && let Some((mesh, t)) = scene.resolve(context)
         && let Some([lo, hi]) = scene.bounds(mesh)
@@ -104,8 +120,9 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Adds a mesh placed by `t`; `lit` highlights all of it (it is inside a selected instance).
-    fn mesh(&mut self, id: MeshId, t: DAffine3, lit: bool) {
+    /// Adds a mesh placed by `t`; `lit` highlights all of it (it is inside a selected instance)
+    /// and `inherited` is the material of the nearest painted instance placing it.
+    fn mesh(&mut self, id: MeshId, t: DAffine3, lit: bool, inherited: Option<MaterialId>) {
         let Some(model) = self.scene.mesh(id) else {
             return;
         };
@@ -124,12 +141,16 @@ impl Walk<'_> {
             } else {
                 0.0
             };
+            let front = side_color(self.scene, face.front.or(inherited), DEFAULT_FRONT);
+            let back = side_color(self.scene, face.back.or(inherited), DEFAULT_BACK);
             for tri in model.triangulate(fid).unwrap_or_default() {
                 for p in tri {
                     self.g.faces.push(FaceVertex {
                         pos: t.transform_point3(p).as_vec3().to_array(),
                         normal,
                         selected: flag,
+                        front,
+                        back,
                     });
                 }
             }
@@ -177,6 +198,7 @@ impl Walk<'_> {
                 MeshId::Definition(instance.definition),
                 t * instance.transform,
                 lit,
+                instance.material.or(inherited),
             );
             self.path.pop();
         }
@@ -267,6 +289,45 @@ mod tests {
         let all: BTreeSet<EntityId> = m.edges().map(|(e, _)| EntityId::Edge(e)).collect();
         let g = geometry(m, &all);
         assert_eq!(g.edges.len(), 2 * 6, "the two rims, selected or not");
+    }
+
+    #[test]
+    fn faces_take_their_material_colors_or_the_nearest_painted_instance() {
+        let (mut s, first, second) = two_squares();
+        let (red, _) = s.add_material("Red", [255, 0, 0]).unwrap();
+        let (blue, _) = s.add_material("Blue", [0, 0, 255]).unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert!(
+            g.faces
+                .iter()
+                .all(|v| v.front == DEFAULT_FRONT && v.back == DEFAULT_BACK)
+        );
+        // The first square's instance is blue; the component's face is red on its back only.
+        s.paint(MeshId::Root, &[], &[first], kernel::Side::Front, Some(blue))
+            .unwrap();
+        let d = s.root().instance(first).unwrap().definition;
+        let face = s.definition(d).unwrap().mesh.faces().next().unwrap().0;
+        s.paint(
+            MeshId::Definition(d),
+            &[face],
+            &[],
+            kernel::Side::Back,
+            Some(red),
+        )
+        .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        let (one, two): (Vec<&FaceVertex>, Vec<&FaceVertex>) =
+            g.faces.iter().partition(|v| v.pos[0] <= 1.0);
+        assert!(
+            one.iter()
+                .all(|v| v.front == [0.0, 0.0, 1.0] && v.back == [1.0, 0.0, 0.0])
+        );
+        assert!(
+            two.iter()
+                .all(|v| v.front == DEFAULT_FRONT && v.back == [1.0, 0.0, 0.0]),
+            "the second placement shares the face but not the instance's blue"
+        );
+        let _ = second;
     }
 
     #[test]
