@@ -11,8 +11,8 @@ use crate::camera::Camera;
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 use crate::query::{
-    ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind, Query,
-    QueryResult, VertexInfo,
+    ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind,
+    Query, QueryResult, VertexInfo,
 };
 use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
@@ -475,7 +475,7 @@ impl Document {
             segments.unwrap_or(DEFAULT_CIRCLE_SEGMENTS),
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
-        self.edit_mesh(|m| m.add_polygon(&points))
+        self.edit_mesh(|m| m.add_curve(&points, true))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
@@ -957,6 +957,7 @@ impl Document {
                     ),
                 }
             }
+            Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
             Query::Camera => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),
@@ -1066,13 +1067,58 @@ impl Document {
     }
 
     fn edge_info(&self, id: EdgeId) -> EdgeInfo {
-        let [a, b] = self.model().edge(id).unwrap().v;
+        let e = self.model().edge(id).unwrap();
+        let [a, b] = e.v;
         EdgeInfo {
             id: EntityId::Edge(id),
             vertices: [EntityId::Vertex(a), EntityId::Vertex(b)],
             start: self.model().position(a).unwrap().to_array(),
             end: self.model().position(b).unwrap().to_array(),
+            curve: e.curve.map(|c| c.to_string()),
+            soft: e.soft,
         }
+    }
+
+    /// The curve an edge of the open context is part of.
+    fn curve_info(&self, id: EntityId) -> Result<CurveInfo, CommandError> {
+        let EntityId::Edge(e) = id else {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "the curve query needs an edge id",
+            )
+            .with_ids(vec![id]));
+        };
+        if self.model().edge(e).is_none() {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, format!("no entity {id}"))
+                    .with_ids(vec![id]),
+            );
+        }
+        let Some(curve) = self.model().curve_of(e) else {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("{id} is not part of a curve"),
+            )
+            .with_ids(vec![id]));
+        };
+        let kind = curve.kind();
+        let circle = curve.circle;
+        Ok(CurveInfo {
+            id: curve.id.to_string(),
+            kind,
+            edges: curve.edges.iter().map(|e| EntityId::Edge(*e)).collect(),
+            vertices: curve
+                .vertices
+                .iter()
+                .map(|v| EntityId::Vertex(*v))
+                .collect(),
+            segments: curve.segments,
+            length: curve.length,
+            center: circle.map(|c| c.center.to_array()),
+            normal: circle.map(|c| c.normal.to_array()),
+            radius: circle.map(|c| c.radius),
+            angle: circle.map(|c| c.angle.to_degrees()),
+        })
     }
 
     fn guide_info(&self, id: GuideId) -> GuideInfo {

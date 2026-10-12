@@ -18,6 +18,14 @@ id_type!(EdgeId);
 id_type!(FaceId);
 id_type!(InstanceId);
 id_type!(GuideId);
+id_type!(CurveId);
+
+/// Shown as "c12". A curve is not an entity: it names the chain of edges tagged with it.
+impl fmt::Display for CurveId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "c{}", self.0)
+    }
+}
 
 /// Any kernel entity. Serialized as a short string: "v12", "e3", "f7", "i4", "g9".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

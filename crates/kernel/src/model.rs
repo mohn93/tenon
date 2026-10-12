@@ -5,7 +5,7 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
-use crate::ids::{DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
+use crate::ids::{CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
 use crate::index::Index;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -16,6 +16,25 @@ pub struct Vertex {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     pub v: [VertexId; 2],
+    /// The curve (a circle or arc drawn as segments) this edge is part of. The edges sharing a
+    /// curve id always form one chain; see `Model::curve`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<CurveId>,
+    /// A soft edge is hidden between two faces that form one smooth surface (the sides of a
+    /// pulled circle). It always bounds at least two faces.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub soft: bool,
+}
+
+impl Edge {
+    /// A plain edge: not part of a curve, not soft.
+    pub fn new(a: VertexId, b: VertexId) -> Edge {
+        Edge {
+            v: [a, b],
+            curve: None,
+            soft: false,
+        }
+    }
 }
 
 /// A planar face. `outer` winds counter-clockwise around `normal`; each hole winds clockwise.
@@ -74,6 +93,8 @@ pub enum Op {
     RemoveVertex(VertexId, Vertex),
     AddEdge(EdgeId, Edge),
     RemoveEdge(EdgeId, Edge),
+    /// An edge's curve or soft flag changed from the first to the second (same vertices).
+    ChangeEdge(EdgeId, Edge, Edge),
     AddFace(FaceId, Face),
     RemoveFace(FaceId, Face),
     /// A vertex moved from the first position to the second.
@@ -93,6 +114,7 @@ impl Op {
             Op::RemoveVertex(id, v) => Op::AddVertex(id, v),
             Op::AddEdge(id, e) => Op::RemoveEdge(id, e),
             Op::RemoveEdge(id, e) => Op::AddEdge(id, e),
+            Op::ChangeEdge(id, from, to) => Op::ChangeEdge(id, to, from),
             Op::AddFace(id, f) => Op::RemoveFace(id, f),
             Op::RemoveFace(id, f) => Op::AddFace(id, f),
             Op::MoveVertex(id, from, to) => Op::MoveVertex(id, to, from),
@@ -112,6 +134,7 @@ impl Op {
             Op::MoveVertex(id, _, _) => (EntityId::Vertex(*id), true, true),
             Op::AddEdge(id, _) => (EntityId::Edge(*id), false, true),
             Op::RemoveEdge(id, _) => (EntityId::Edge(*id), true, false),
+            Op::ChangeEdge(id, _, _) => (EntityId::Edge(*id), true, true),
             Op::AddFace(id, _) => (EntityId::Face(*id), false, true),
             Op::RemoveFace(id, _) => (EntityId::Face(*id), true, false),
             Op::AddInstance(id, _) => (EntityId::Instance(*id), false, true),
@@ -213,6 +236,7 @@ impl Model {
             .keys()
             .map(|k| k.0)
             .chain(edges.keys().map(|k| k.0))
+            .chain(edges.values().filter_map(|e| e.curve.map(|c| c.0)))
             .chain(faces.keys().map(|k| k.0))
             .chain(instances.keys().map(|k| k.0))
             .chain(guides.keys().map(|k| k.0))
@@ -321,8 +345,10 @@ impl Model {
 
     // ---- change tracking ----
 
-    /// Ends the current edit and returns everything recorded since the last call.
+    /// Ends the current edit and returns everything recorded since the last call. Curves and
+    /// soft edges the edit touched are brought back in line first (see `upkeep`).
     pub fn take_changes(&mut self) -> ChangeSet {
+        self.upkeep();
         ChangeSet {
             ops: std::mem::take(&mut self.pending),
         }
@@ -347,10 +373,21 @@ impl Model {
             }
             Op::AddEdge(id, e) => {
                 self.bump(id.0);
+                if let Some(c) = e.curve {
+                    self.bump(c.0);
+                }
                 self.edges.insert(id, e);
             }
             Op::RemoveEdge(id, _) => {
                 self.edges.remove(&id);
+            }
+            Op::ChangeEdge(id, _, to) => {
+                if let Some(c) = to.curve {
+                    self.bump(c.0);
+                }
+                if let Some(e) = self.edges.get_mut(&id) {
+                    *e = to;
+                }
             }
             Op::AddFace(id, f) => {
                 self.bump(id.0);
@@ -401,6 +438,11 @@ impl Model {
         self.next_id = self.next_id.max(first);
     }
 
+    /// The ops recorded since the last `take_changes`.
+    pub(crate) fn pending(&self) -> &[Op] {
+        &self.pending
+    }
+
     fn record(&mut self, op: Op) {
         self.apply_op(op.clone());
         self.pending.push(op);
@@ -432,9 +474,45 @@ impl Model {
     }
 
     pub(crate) fn insert_edge(&mut self, a: VertexId, b: VertexId) -> EdgeId {
+        self.insert_edge_like(a, b, None, false)
+    }
+
+    /// Adds the edge a-b on `curve` and with `soft` (the attributes of an edge it replaces).
+    pub(crate) fn insert_edge_like(
+        &mut self,
+        a: VertexId,
+        b: VertexId,
+        curve: Option<CurveId>,
+        soft: bool,
+    ) -> EdgeId {
         let id = EdgeId(self.alloc());
-        self.record(Op::AddEdge(id, Edge { v: [a, b] }));
+        let edge = Edge {
+            v: [a, b],
+            curve,
+            soft,
+        };
+        self.record(Op::AddEdge(id, edge));
         id
+    }
+
+    /// Puts an edge on `curve` (or none) and sets its soft flag, recording a change only when
+    /// something differs.
+    pub(crate) fn set_edge(&mut self, id: EdgeId, curve: Option<CurveId>, soft: bool) {
+        let from = self.edges[&id].clone();
+        if from.curve == curve && from.soft == soft {
+            return;
+        }
+        let to = Edge {
+            v: from.v,
+            curve,
+            soft,
+        };
+        self.record(Op::ChangeEdge(id, from, to));
+    }
+
+    /// A new curve id, unique like entity ids.
+    pub(crate) fn new_curve(&mut self) -> CurveId {
+        CurveId(self.alloc())
     }
 
     pub(crate) fn remove_edge(&mut self, id: EdgeId) -> Edge {
@@ -616,7 +694,7 @@ impl Model {
                 }
             }
         }
-        Ok(())
+        self.validate_curves()
     }
 }
 

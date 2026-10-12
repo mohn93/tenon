@@ -1,6 +1,6 @@
 //! Moving and copying geometry.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec3};
 
@@ -8,7 +8,7 @@ use crate::edit::KernelError;
 use crate::geom::{
     LENGTH_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d, vector_area,
 };
-use crate::ids::{EdgeId, FaceId, VertexId};
+use crate::ids::{CurveId, EdgeId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
 impl Model {
@@ -190,6 +190,11 @@ impl Model {
         for e in edges.iter().filter_map(|e| self.edge(*e)) {
             sides.insert((e.v[0].min(e.v[1]), e.v[0].max(e.v[1])));
         }
+        let mark = |(a, b): &(VertexId, VertexId)| {
+            self.edge_between(*a, *b)
+                .and_then(|e| self.edge(e))
+                .map_or((None, false), |e| (e.curve, e.soft))
+        };
         let ring = |l: &[VertexId]| l.iter().map(|v| self.pos(*v)).collect::<Vec<DVec3>>();
         let mut s = Stencil::default();
         for f in faces.iter().filter_map(|f| self.face(*f)) {
@@ -218,6 +223,7 @@ impl Model {
             .iter()
             .map(|(a, b)| (self.pos(*a), self.pos(*b)))
             .collect();
+        s.marks = sides.iter().map(mark).collect();
         s
     }
 
@@ -335,6 +341,17 @@ impl Model {
         for id in extra {
             self.remove_face(id);
         }
+        // Copied curve and soft edges stay so; each placement's curves get new ids.
+        for t in places {
+            let mut renamed: BTreeMap<CurveId, CurveId> = BTreeMap::new();
+            for ((a, b), (curve, soft)) in stencil.segments.iter().zip(&stencil.marks) {
+                if curve.is_none() && !soft {
+                    continue;
+                }
+                let curve = curve.map(|c| *renamed.entry(c).or_insert_with(|| self.new_curve()));
+                self.tag_along(t.transform_point3(*a), t.transform_point3(*b), curve, *soft);
+            }
+        }
     }
 
     /// True when the face lies in the plane of `ring` and inside it.
@@ -371,6 +388,8 @@ impl Model {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stencil {
     segments: Vec<(DVec3, DVec3)>,
+    /// Each segment's curve and soft flag.
+    marks: Vec<(Option<CurveId>, bool)>,
     faces: Vec<StencilFace>,
 }
 

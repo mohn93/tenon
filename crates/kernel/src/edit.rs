@@ -111,10 +111,12 @@ impl Model {
 
     /// Splits edge e at p, inserting the new vertex into every face loop that used the edge.
     fn split_edge(&mut self, e: EdgeId, p: DVec3) -> VertexId {
-        let [a, b] = self.remove_edge(e).v;
+        let old = self.remove_edge(e);
+        let [a, b] = old.v;
         let m = self.insert_vertex(p);
-        self.insert_edge(a, m);
-        self.insert_edge(m, b);
+        // Both pieces stay on the edge's curve and keep it soft.
+        self.insert_edge_like(a, m, old.curve, old.soft);
+        self.insert_edge_like(m, b, old.curve, old.soft);
         let users: Vec<FaceId> = self
             .faces()
             .filter(|(_, f)| {
@@ -173,7 +175,7 @@ impl Model {
     }
 }
 
-fn check_segment(a: DVec3, b: DVec3) -> Result<(), KernelError> {
+pub(crate) fn check_segment(a: DVec3, b: DVec3) -> Result<(), KernelError> {
     if !a.is_finite() || !b.is_finite() {
         return Err(KernelError::NotFinite);
     }

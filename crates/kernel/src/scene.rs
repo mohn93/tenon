@@ -6,7 +6,7 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{DefinitionId, EntityId, InstanceId};
+use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId};
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
@@ -380,6 +380,7 @@ impl Scene {
     /// itself (directly or deeper), and that no id is used in two meshes.
     pub fn validate(&self) -> Result<(), String> {
         let mut seen = BTreeSet::new();
+        let mut curves_seen = BTreeSet::new();
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;
             for (id, i) in m.instances() {
@@ -390,6 +391,12 @@ impl Scene {
             for id in entity_ids(m) {
                 if !seen.insert(id) {
                     return Err(format!("{id} is used in two meshes"));
+                }
+            }
+            let curves: BTreeSet<CurveId> = m.edges().filter_map(|(_, e)| e.curve).collect();
+            for c in curves {
+                if !curves_seen.insert(c) {
+                    return Err(format!("curve {c} is used in two meshes"));
                 }
             }
         }

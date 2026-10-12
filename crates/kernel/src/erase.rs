@@ -90,9 +90,10 @@ impl Model {
             .filter(|(_, f)| loops(f).any(|l| l.contains(&v)))
             .map(|(id, f)| (id, f.clone()))
             .collect();
-        self.remove_edge(e1);
-        self.remove_edge(e2);
-        self.insert_edge(p, q);
+        let (first, second) = (self.remove_edge(e1), self.remove_edge(e2));
+        // The joined edge keeps what the two had in common: their curve, and being soft.
+        let curve = first.curve.filter(|c| second.curve == Some(*c));
+        self.insert_edge_like(p, q, curve, first.soft && second.soft);
         for (id, mut f) in users {
             f.outer.retain(|x| *x != v);
             f.holes.iter_mut().for_each(|h| h.retain(|x| *x != v));

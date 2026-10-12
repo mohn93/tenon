@@ -1,4 +1,4 @@
-use kernel::{ChangeSummary, DefinitionId, DefinitionKind, EntityId};
+use kernel::{ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,10 @@ pub enum Query {
     },
     /// One entity by id ("v3", "e7", "f2", "i4", "g9").
     Entity {
+        id: EntityId,
+    },
+    /// The curve (circle or arc) an edge is part of, given any of its edges.
+    Curve {
         id: EntityId,
     },
     Camera,
@@ -77,6 +81,41 @@ pub struct EdgeInfo {
     pub vertices: [EntityId; 2],
     pub start: [f64; 3],
     pub end: [f64; 3],
+    /// The curve the edge is part of ("c12"), absent for a plain edge. Edges with the same
+    /// curve form one circle or arc; the `curve` query describes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<String>,
+    /// True for a soft edge: hidden, between faces that form one smooth surface. Absent when
+    /// false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub soft: bool,
+}
+
+/// A curve: a chain of edges drawn as one circle or arc. Its shape is worked out from where
+/// its edges are now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct CurveInfo {
+    /// "c12": the curve id its edges report.
+    pub id: String,
+    pub kind: CurveKind,
+    /// In order along the curve, counter-clockwise around `normal` when there is one.
+    pub edges: Vec<EntityId>,
+    /// In order; a circle's first vertex is not repeated at the end.
+    pub vertices: Vec<EntityId>,
+    /// Straight segments; an edge other geometry split in two still counts once.
+    pub segments: usize,
+    /// Total length of the edges, in meters.
+    pub length: f64,
+    /// Center, unit normal (pointing up: +z, or on a vertical plane +y, else +x), radius and
+    /// swept angle in degrees (360 for a circle); absent for kind `curve`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -149,6 +188,7 @@ pub enum QueryResult {
     Face(FaceInfo),
     Instance(InstanceInfo),
     Guide(GuideInfo),
+    Curve(CurveInfo),
     Camera {
         eye: [f64; 3],
         target: [f64; 3],

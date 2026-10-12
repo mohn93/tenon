@@ -47,6 +47,7 @@ Queries:
 | `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error |
 | `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box; a guide point: its position) all lie in the box, bounds included; an instance with nothing in it and a guide line are in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
+| `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}`, `{"type": "camera"}`, `{"type": "history"}` | counts for the open context (plus the number of definitions) and revision, camera, undo/redo depth |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
@@ -72,7 +73,7 @@ Modeling commands, each one undo step:
 |---|---|
 | `{"type": "add_edge", "start": [x,y,z], "end": [x,y,z]}` | A straight edge. It merges with nearby vertices, splits edges it crosses, and closed coplanar loops become faces. |
 | `{"type": "add_rectangle", "corner": [0,0,0], "opposite": [2,3,0]}` | A rectangle with sides along the axes. Without `normal` the corners must differ in exactly two coordinates. With `"normal": [nx,ny,nz]` it lies in the plane through `corner` with that normal; `opposite` must be in that plane. Sides then run along u = `Z x normal` (horizontal; X on horizontal planes) and v = `normal x u`, so directions are fixed only up to sign: on a plane with normal +Y, u = -X and v = +Z; with normal -Y, u = +X. |
-| `{"type": "add_circle", "center": [0,0,0], "radius": 1.5}` | A circle as a regular polygon with `segments` sides (default 24, 3 to 360), in the plane through `center` with `normal` (default `[0,0,1]`). The first corner lies along the plane's u axis (as for `add_rectangle`) and the corners run counter-clockwise around the normal. The radius must be positive, and each side (2r sin(pi/segments)) must be at least 0.01 mm, ten times the merge tolerance. |
+| `{"type": "add_circle", "center": [0,0,0], "radius": 1.5}` | A circle as a regular polygon with `segments` sides (default 24, 3 to 360), in the plane through `center` with `normal` (default `[0,0,1]`). The first corner lies along the plane's u axis (as for `add_rectangle`) and the corners run counter-clockwise around the normal. The radius must be positive, and each side (2r sin(pi/segments)) must be at least 0.01 mm, ten times the merge tolerance. Its edges form one curve (see Curves). |
 | `{"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}` | Moves vertices, edges and faces (their vertices), instances and guides by `offset` (an instance must keep its bounding box, or its origin when it holds nothing, and a guide its point, within the coordinate limit; so must copies). Faces that share only some moved vertices stretch and may tilt but must stay flat: a move that would bend one is `invalid_input` naming that face. A move that would collapse an edge, turn a face over, make a face cross itself, push a hole out of its face or land a vertex on another is `invalid_input` naming the ids. Moved geometry does not merge with what it ends up touching. Unknown ids are `not_found`. |
 | `{"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 4}` | Copies edges, faces, instances and guides `count` times (default 1, at most 100); copy k is shifted by `k * offset`. Copies are drawn like new edges, so they merge with what they touch: a copy has the faces its original had, made even where their sides already exist as bare edges, plus faces it closes together with existing edges. A copy drawn on a face splits it and every piece stays a face (also under an opening of the copy); elsewhere an opening in a copied face stays open and a loop the original had no face in gets none. Copied faces keep the orientation of their originals. A copied component instance places the same definition; a copied group gets a definition of its own. Vertex ids are `invalid_input`. |
 | `{"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 90}` | Turns vertices, edges and faces (their vertices), instances and guides by `angle` degrees about the line through `center` along `axis` (default `[0,0,1]`), counter-clockwise looking down the axis (right-hand rule), under the rules of `move`: faces that share only some turned vertices must stay flat, and so on; geometry turned whole keeps its shape. Multiples of 90 degrees are exact. An instance turns with its transform. A zero `axis` and whole turns (0, 360, ..., or within 1e-9 degrees of one) are `invalid_input`. With `"copies": n` (1 to 100) the originals stay and n copies are made under the rules of `copy`, copy k turned by `k * angle` (a radial array; vertex ids are then `invalid_input`, and so is a count where a copy would complete a whole turn and land on the original, e.g. angle 90 with 4 copies). Vertices on the axis do not move, and a rotation that moves nothing changes nothing. |
@@ -104,6 +105,33 @@ pushed face, with nothing else on it inside that area: that cuts an opening (a w
 wall, a hole through a slab). The floor of a recess pushed on to the back opens the same way.
 When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
 shape too.
+
+### Curves
+
+The edges of a circle are tagged as one curve: each edge's `entity` result (and its entry in
+`entities`) has `"curve": "c12"`, the same for every edge of the curve and absent for plain
+edges. A curve is not an entity: `c` ids cannot be selected or erased. `{"type": "curve", "id":
+"e3"}` takes any edge of a curve and returns:
+
+```
+{"type": "curve", "id": "c12", "kind": "circle", "edges": ["e3", ...], "vertices": ["v1", ...],
+ "segments": 24, "length": 6.27, "center": [0,0,0], "normal": [0,0,1], "radius": 1.0, "angle": 360.0}
+```
+
+- `kind` is `circle` (a closed chain), `arc` (an open one) or `curve` (its corners no longer lie on
+  one circle, after some of its vertices were moved; then `center`, `normal`, `radius` and `angle`
+  are absent).
+- The shape is worked out from where the edges are now, so it follows moves, rotations and copies.
+  `normal` points up (+z; on a vertical plane +y, else +x); `edges` and `vertices` run
+  counter-clockwise around it, a circle starting at its oldest vertex (the first corner drawn).
+  `angle` is in degrees; `segments` counts straight segments, so an edge another line split in two
+  still counts once; `length` is the total edge length.
+- Edges split by other geometry stay on the curve, and heal back into one edge when the
+  splitting line is erased. Erasing edges of a curve leaves the rest a curve (a circle missing an
+  edge is an arc); if what is left falls apart, the oldest piece keeps the id and the others become
+  curves of their own; a single edge left over is a plain edge again.
+- Copies, groups and exploded geometry get new curve ids. A curve id is unique in the whole model.
+- A command's `changes.modified` lists edges whose curve changed (renamed pieces).
 
 ### Guides
 
@@ -155,8 +183,9 @@ whose last instance was erased, and what only it placed (one undo step).
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (2; version 1 files, written before guides, still open), the
-camera and the model with every id.
+(`"sketchup-alt"`), `schema_version` (3; version 2 files, written before curves, and version 1
+files, written before guides, still open), the camera and the model with every id, edges with
+their curve and soft flag.
 
 | Command | Effect |
 |---|---|
@@ -170,8 +199,9 @@ subscribers get a `resync` notification and should read the model again. Ids in 
 are those it was saved with, and new ids continue after the largest one ever used. A file that
 cannot be read or written gives the error kind `file`, with a message naming the path and the
 reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
-over 256 MiB, ids over 2^53, a transform that cannot be inverted, or a coordinate beyond the
-+/-1e6 m limit); the model is left as it was. `open` and `new` never drop changes the user has
+over 256 MiB, ids over 2^53, a transform that cannot be inverted, a coordinate beyond the
++/-1e6 m limit, a curve whose edges branch, fall apart or are straight, or a soft edge bounding
+fewer than two faces); the model is left as it was. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
 itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an

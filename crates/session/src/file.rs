@@ -14,9 +14,9 @@ use crate::document::MAX_COORDINATE;
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The schema version this build writes and the newest it reads. Version 2 added guides;
-/// version 1 files (no guides) still open.
-pub const SCHEMA_VERSION: u32 = 2;
+/// The schema version this build writes and the newest it reads. Version 2 added guides and
+/// version 3 curves and soft edges; older files still open.
+pub const SCHEMA_VERSION: u32 = 3;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
 /// The largest `document.json` this build reads, uncompressed.

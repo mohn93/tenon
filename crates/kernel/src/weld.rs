@@ -71,7 +71,7 @@ impl Model {
             .map(|(id, e)| (id, e.v))
             .collect();
         for (e, [a, b]) in joined {
-            self.remove_edge(e);
+            let old = self.remove_edge(e);
             let (a, b) = (to(&a), to(&b));
             if a == b {
                 continue;
@@ -112,7 +112,7 @@ impl Model {
             }
             for w in chain.windows(2) {
                 if self.edge_between(w[0], w[1]).is_none() {
-                    self.insert_edge(w[0], w[1]);
+                    self.insert_edge_like(w[0], w[1], old.curve, old.soft);
                 }
             }
         }

@@ -152,7 +152,7 @@ fn describe_lists_methods_and_schemas() {
         );
     }
     let query_schema = d["schemas"]["Query"].to_string();
-    for variant in ["events", "definitions", "context", "file"] {
+    for variant in ["events", "definitions", "context", "file", "curve"] {
         assert!(
             query_schema.contains(variant),
             "Query schema lacks {variant}"

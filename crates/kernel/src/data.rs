@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{DefinitionId, EdgeId, FaceId, GuideId, InstanceId, VertexId};
+use crate::ids::{CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, VertexId};
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
 
@@ -50,6 +50,12 @@ pub struct VertexData {
 pub struct EdgeData {
     pub id: u64,
     pub vertices: [u64; 2],
+    /// The curve the edge is part of (absent before curves existed, and for other edges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<u64>,
+    /// Absent (false) before soft edges existed, and for edges that are not soft.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub soft: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -151,6 +157,8 @@ fn mesh_data(m: &Model) -> MeshData {
             .map(|(id, e)| EdgeData {
                 id: id.0,
                 vertices: e.v.map(|v| v.0),
+                curve: e.curve.map(|c| c.0),
+                soft: e.soft,
             })
             .collect(),
         faces: m
@@ -221,8 +229,13 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
     let mut edges = BTreeMap::new();
     for e in &data.edges {
         check_id("edge e", e.id)?;
+        if let Some(c) = e.curve {
+            check_id("curve c", c)?;
+        }
         let edge = Edge {
             v: e.vertices.map(VertexId),
+            curve: e.curve.map(CurveId),
+            soft: e.soft,
         };
         if edges.insert(EdgeId(e.id), edge).is_some() {
             return Err(format!("edge e{} appears twice", e.id));

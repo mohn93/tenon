@@ -1,6 +1,7 @@
 //! Geometry kernel: vertices, edges and faces with SketchUp-style sticky geometry.
 //! No GPU or UI dependencies.
 
+mod curves;
 mod data;
 mod edit;
 mod erase;
@@ -19,12 +20,13 @@ mod transform;
 mod triangles;
 mod weld;
 
+pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MeshData, SceneData,
     VertexData,
 };
 pub use edit::KernelError;
-pub use ids::{DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
+pub use ids::{CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
 pub use index::{Index, Shape};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
