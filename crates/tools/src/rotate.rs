@@ -299,7 +299,7 @@ impl Tool for RotateTool {
             ToolEvent::Release(_) | ToolEvent::DoubleClick(_) => {}
         }
         if let Some(t) = &self.turn {
-            let radius = PROTRACTOR * ctx.camera.eye.distance(t.center);
+            let radius = PROTRACTOR * ctx.camera.eye_distance(t.center);
             out.preview = t.outline.clone();
             out.preview.extend(circle(t.center, t.axis, radius, 24));
             if let Some(from) = t.reference {
@@ -442,6 +442,19 @@ mod tests {
             vec![rotate(&["f8"], [1.0, 1.0, 0.0], 90.0, None)]
         );
         assert!(r.tool.anchor().is_none());
+    }
+
+    #[test]
+    fn the_protractor_keeps_its_screen_size_in_a_parallel_view() {
+        let mut r = Rig::new(&["f8"]);
+        r.camera.projection = session::Projection::Parallel;
+        r.camera.look_from(session::StandardView::Top);
+        // Zoomed in to half a meter from the target (the origin): the center is 1.5 m from the eye.
+        r.camera.zoom_by(r.camera.distance() / 0.5);
+        let out = r.click(DVec3::new(1.0, 1.0, 0.0));
+        let ring = &out.preview[4..4 + 24];
+        let radius = ring[0][0].distance(DVec3::new(1.0, 1.0, 0.0));
+        assert!((radius - PROTRACTOR * 0.5).abs() < 1e-9, "{radius}");
     }
 
     #[test]

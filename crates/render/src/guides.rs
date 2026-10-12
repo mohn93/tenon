@@ -46,11 +46,10 @@ pub fn guide_lines(guides: &[GuideShape], camera: &Camera) -> Vec<LineVertex> {
                 }
             }
             None => {
-                let depth = (g.point - camera.eye).dot(camera.forward());
-                if depth <= camera.near() {
+                if !camera.sees_depth(g.point) {
                     continue;
                 }
-                let size = CROSS_PX * 2.0 * depth * (camera.fov_y * 0.5).tan() / camera.viewport.y;
+                let size = CROSS_PX * camera.pixel_size(g.point);
                 let (r, u) = (camera.right() * size, camera.up() * size);
                 push(g.point - r - u, g.point + r + u, g.color);
                 push(g.point - r + u, g.point + r - u, g.color);
@@ -173,5 +172,20 @@ mod tests {
             color: GUIDE_COLOR,
         };
         assert!(guide_lines(&[off_screen], &c).is_empty());
+    }
+
+    #[test]
+    fn parallel_views_draw_guide_points_behind_the_eye_at_full_size() {
+        let mut c = cam();
+        c.projection = session::Projection::Parallel;
+        let behind = GuideShape {
+            point: c.eye - c.forward() * 5.0,
+            direction: None,
+            color: GUIDE_COLOR,
+        };
+        let v = guide_lines(&[behind], &c);
+        assert_eq!(v.len(), 4);
+        let s = |k: usize| c.project(DVec3::from(v[k].pos.map(f64::from))).unwrap();
+        assert!((s(0).distance(s(1)) - 2.0 * CROSS_PX * 2f64.sqrt()).abs() < 0.5);
     }
 }

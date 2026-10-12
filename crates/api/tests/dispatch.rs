@@ -356,6 +356,33 @@ fn render_view_returns_a_png_or_reports_no_gpu() {
 }
 
 #[test]
+fn render_view_takes_a_parallel_top_view() {
+    let mut h = HeadlessHost::new();
+    call(&mut h, "batch", json!({"commands": square()}));
+    let before = h.doc.camera.clone();
+    let top =
+        json!({"eye": [1, 1, 5], "target": [1, 1, 0], "up": [0, 1, 0], "projection": "parallel"});
+    let r = call(
+        &mut h,
+        "render_view",
+        json!({"width": 64, "height": 48, "camera": top}),
+    );
+    assert_eq!(h.doc.camera, before);
+    let vertical_up = json!({"eye": [1, 1, 5], "target": [1, 1, 0], "up": [0, 0, 1]});
+    let bad = call(
+        &mut h,
+        "render_view",
+        json!({"width": 8, "height": 8, "camera": vertical_up}),
+    );
+    assert_eq!(bad["error"]["code"], codes::COMMAND_FAILED);
+    if r["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    assert!(r["error"].is_null(), "{r}");
+}
+
+#[test]
 fn render_view_does_not_move_the_document_camera() {
     let mut h = HeadlessHost::new();
     let before = h.doc.camera.clone();

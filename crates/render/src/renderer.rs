@@ -21,7 +21,33 @@ const FACE_ATTRIBS: [wgpu::VertexAttribute; 3] =
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     view_proj: [f32; 16],
+    /// The headlight: the eye's position (w = 1), or in a parallel view the direction
+    /// toward the viewer (w = 0).
     eye: [f32; 4],
+    /// How lines are pulled toward the camera (see `line_vertex` in scene.wgsl): x scales
+    /// clip z by the line's factor (perspective), y adds a fixed depth step (parallel).
+    depth_offset: [f32; 4],
+}
+
+impl Uniforms {
+    fn new(camera: &Camera) -> Self {
+        let (eye, depth_offset) = if camera.is_parallel() {
+            let toward = (-camera.forward()).as_vec3();
+            // The step that moves a line by (factor - 1) eye-to-target distances: clip z
+            // runs from 1 to 0 over the depth range.
+            let (near, far) = camera.depth_range();
+            let unit = (camera.distance() / (far - near)) as f32;
+            ([toward.x, toward.y, toward.z, 0.0], [0.0, unit, 0.0, 0.0])
+        } else {
+            let eye = camera.eye.as_vec3();
+            ([eye.x, eye.y, eye.z, 1.0], [1.0, 0.0, 0.0, 0.0])
+        };
+        Self {
+            view_proj: camera.view_proj_f32().to_cols_array(),
+            eye,
+            depth_offset,
+        }
+    }
 }
 
 /// A rectangle of the render target in physical pixels, origin top-left.
@@ -300,11 +326,7 @@ impl Renderer {
         }
         let targets = self.targets.as_ref().expect("targets just created");
 
-        let eye = camera.eye.as_vec3();
-        let uniforms = Uniforms {
-            view_proj: camera.view_proj_f32().to_cols_array(),
-            eye: [eye.x, eye.y, eye.z, 1.0],
-        };
+        let uniforms = Uniforms::new(camera);
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
         let overlay = mesh(&self.device, "overlay", overlay);

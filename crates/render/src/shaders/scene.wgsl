@@ -1,6 +1,9 @@
 struct Uniforms {
     view_proj: mat4x4<f32>,
+    // The eye's position (w = 1), or in a parallel view the direction toward the viewer (w = 0).
     eye: vec4<f32>,
+    // x: 1 to scale clip z (perspective); y: the depth step of a parallel view.
+    depth_offset: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -13,10 +16,14 @@ struct LineOut {
 // Depth is reversed (1 = near, 0 = far), so scaling clip z by more than 1 pulls a line slightly
 // toward the camera and by less than 1 pushes it away, by a fixed fraction of its distance.
 // z is not clamped: vertices behind the camera must keep a positive z so near-plane clipping works.
+// Parallel depth is linear, so there the line moves by (depth_scale - 1) eye-to-target distances
+// wherever it is.
 fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
     var out: LineOut;
     let clip = u.view_proj * vec4<f32>(pos, 1.0);
-    out.pos = vec4<f32>(clip.xy, clip.z * depth_scale, clip.w);
+    let offset = depth_scale - 1.0;
+    let z = clip.z * (1.0 + offset * u.depth_offset.x) + offset * u.depth_offset.y;
+    out.pos = vec4<f32>(clip.xy, z, clip.w);
     out.color = color;
     return out;
 }
@@ -70,12 +77,12 @@ fn vs_face(
     return out;
 }
 
-// Front sides are light, back sides blue-gray; a headlight at the eye shades both. Selected
-// faces are tinted blue.
+// Front sides are light, back sides blue-gray; a headlight at the eye (from the viewer, in a
+// parallel view) shades both. Selected faces are tinted blue.
 @fragment
 fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
-    let to_eye = normalize(u.eye.xyz - in.world);
+    let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
     let shade = 0.6 + 0.4 * max(dot(n, to_eye), 0.0);
     let base = mix(select(BACK, FRONT, front), SELECTED, 0.5 * in.selected);
     return vec4<f32>(base * shade, 1.0);

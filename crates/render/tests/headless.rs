@@ -407,3 +407,57 @@ fn a_guide_line_is_drawn_dashed_across_the_view() {
     let breaks = along.windows(2).filter(|w| w[0] != w[1]).count();
     assert!(breaks > 20, "{breaks} dash ends");
 }
+
+/// A parallel view from the front (looking along +Y at the origin, 10 m away).
+fn parallel_front() -> Camera {
+    let mut cam = camera();
+    cam.eye = DVec3::new(0.0, -10.0, 0.0);
+    cam.target = DVec3::ZERO;
+    cam.projection = session::Projection::Parallel;
+    cam
+}
+
+/// A 4 m square upright face across the view at `y`.
+fn upright_square(m: &mut Model, y: f64) {
+    let c = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+    for i in 0..4 {
+        let (a, b) = (c[i], c[(i + 1) % 4]);
+        m.add_edge(DVec3::new(a.0, y, a.1), DVec3::new(b.0, y, b.1))
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_parallel_view_hides_an_edge_just_behind_a_face() {
+    let cam = parallel_front();
+    let mut model = Model::new();
+    upright_square(&mut model, -0.3);
+    model
+        .add_edge(DVec3::new(-1.0, 0.0, 0.5), DVec3::new(1.0, 0.0, 0.5))
+        .unwrap();
+    let Some(px) = render_scene(&cam, &model, &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, DVec3::new(0.0, 0.0, 0.5));
+    assert!(p[0] > 120, "edge behind the face shows through: {p:?}");
+    let dark = |p: [u8; 4]| p[0] < 110 && p[1] < 110 && p[2] < 110;
+    assert!(
+        near(&px, &cam, DVec3::new(2.0, -0.3, 0.5), dark),
+        "the face's own edge is drawn"
+    );
+}
+
+#[test]
+fn a_parallel_view_lights_faces_behind_the_eye_head_on() {
+    let cam = parallel_front();
+    let mut model = Model::new();
+    upright_square(&mut model, -12.0);
+    let Some(px) = render_scene(&cam, &model, &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, DVec3::new(0.5, -12.0, 0.7));
+    assert!(
+        p[0].max(p[1]).max(p[2]) > 180,
+        "a face square to the view is fully lit: {p:?}"
+    );
+}

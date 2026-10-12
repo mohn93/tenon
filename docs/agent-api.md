@@ -34,7 +34,7 @@ all commands and results.
 | `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
-| `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional) | `{width, height, png_base64}` |
+| `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are) |
 | `describe` | none | the API description |
 
@@ -281,7 +281,8 @@ Behaviors worth knowing:
 - A request without an `id` runs but gets no reply. JSON-RPC batch arrays are rejected; use the
   `batch` method.
 - Camera commands return empty changes and do not change the revision. `render_view`'s camera
-  accepts `fov_y_deg` and never moves the document camera.
+  takes the fields of `set_camera` (absent ones keep the document camera's values) and never
+  moves the document camera.
 - A failed atomic batch is rolled back but still consumes entity ids, so later ids may skip numbers.
 - An `id` that is not a string, number or null is an invalid request (`-32600`, reply id null).
 

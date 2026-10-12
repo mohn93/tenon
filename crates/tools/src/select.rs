@@ -319,11 +319,10 @@ pub(crate) fn guide_outline(ctx: &ToolContext, g: &Guide) -> Vec<[DVec3; 2]> {
         }
         Guide::Point { position } => {
             let c = ctx.camera;
-            let depth = (position - c.eye).dot(c.forward());
-            if depth <= c.near() {
+            if !c.sees_depth(position) {
                 return Vec::new();
             }
-            let size = ctx.pick_radius * 2.0 * depth * (c.fov_y * 0.5).tan() / c.viewport.y;
+            let size = ctx.pick_radius * c.pixel_size(position);
             let (r, u) = (c.right() * size, c.up() * size);
             vec![
                 [position - r - u, position + r + u],

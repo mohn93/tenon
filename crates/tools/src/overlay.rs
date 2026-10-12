@@ -62,9 +62,7 @@ pub fn overlay(
         SnapKind::OnFace => ON_FACE,
         _ => return out,
     };
-    let depth = (hit.point - camera.eye).dot(camera.forward()).max(1e-6);
-    let size =
-        MARKER_PX * scale_factor * 2.0 * depth * (camera.fov_y * 0.5).tan() / camera.viewport.y;
+    let size = MARKER_PX * scale_factor * camera.pixel_size(hit.point);
     let (r, u) = (camera.right() * size, camera.up() * size);
     let p = hit.point;
     let corners = [p - r - u, p + r - u, p + r + u, p - r + u];
@@ -144,6 +142,29 @@ mod tests {
                 (side_px - 2.0 * MARKER_PX).abs() < 0.5,
                 "marker side {side_px}px"
             );
+        }
+    }
+
+    #[test]
+    fn parallel_markers_keep_their_size_behind_the_eye_too() {
+        let mut c = cam();
+        c.projection = session::Projection::Parallel;
+        for p in [
+            c.target,
+            c.eye - c.forward() * 3.0,
+            c.target + c.forward() * 40.0,
+        ] {
+            let hit = Inference {
+                point: p,
+                kind: SnapKind::Endpoint,
+                face: None,
+            };
+            let segs = overlay(&[], Some(&hit), &c, 1.0);
+            let side_px = c
+                .project(segs[0].a)
+                .unwrap()
+                .distance(c.project(segs[0].b).unwrap());
+            assert!((side_px - 2.0 * MARKER_PX).abs() < 0.5, "{p}: {side_px}px");
         }
     }
 

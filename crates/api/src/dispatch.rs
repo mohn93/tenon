@@ -6,7 +6,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use session::{
-    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Outcome, Query, QueryResult,
+    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Outcome, Projection, Query,
+    QueryResult,
 };
 
 use crate::protocol::{RpcError, codes, failure, parse, success};
@@ -94,6 +95,8 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
         eye: [f64; 3],
         target: [f64; 3],
         fov_y_deg: Option<f64>,
+        up: Option<[f64; 3]>,
+        projection: Option<Projection>,
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -113,7 +116,7 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
     let doc = host.document();
     let camera = match p.camera {
         Some(v) => doc
-            .camera_for(v.eye, v.target, v.fov_y_deg, None, None)
+            .camera_for(v.eye, v.target, v.fov_y_deg, v.up, v.projection)
             .map_err(command_failed)?,
         None => doc.camera.clone(),
     };
@@ -156,7 +159,7 @@ pub fn describe() -> Value {
             },
             "query": {"params": "Query", "result": "QueryResult"},
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?}}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}}",
                 "result": "{width, height, png_base64}",
                 "notes": "does not move the document camera"
             },

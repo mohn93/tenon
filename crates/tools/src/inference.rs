@@ -179,13 +179,13 @@ pub fn infer_in(
         };
     }
 
-    match ray.hit_ground() {
-        Some(point) if point.distance(ray.origin) <= camera.distance() * 50.0 => Inference {
+    match camera.ground_at(cursor) {
+        Some(point) => Inference {
             point,
             kind: SnapKind::Ground,
             face,
         },
-        _ => Inference {
+        None => Inference {
             point: camera.anchor_at(cursor),
             kind: SnapKind::Free,
             face,
@@ -208,7 +208,7 @@ fn snap_point(
             .project(p)
             .map(|s| s.distance(cursor))
             .filter(|d| *d <= radius_px)
-            .filter(|_| visible(scenery, camera.eye, p))
+            .filter(|_| visible(scenery, camera, p))
     };
     let near = Near::around(scenery, camera, cursor, radius_px);
     let mut best: Option<(f64, DVec3, SnapKind)> = None;
@@ -265,7 +265,7 @@ fn snap_point(
     for (i, &(a, b)) in lines.iter().enumerate() {
         for &(c, d) in &lines[i + 1..] {
             if let Some((p, far)) = apparent_crossing(camera, (a, b), (c, d))
-                && visible(scenery, camera.eye, far)
+                && visible(scenery, camera, far)
                 && let Some(dist) = within(p)
                 && crossing.is_none_or(|(bd, _)| dist < bd)
             {
@@ -343,7 +343,7 @@ pub fn guide_under_where(
         let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
             continue;
         };
-        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera.eye, p) {
+        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera, p) {
             best = Some((d, (owner, id, g)));
         }
     }
@@ -460,7 +460,7 @@ pub fn edge_under_where(
         let Some(d) = camera.project(p).map(|s| s.distance(cursor)) else {
             continue;
         };
-        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera.eye, p) {
+        if d <= radius_px && best.is_none_or(|(bd, _)| d < bd) && visible(scenery, camera, p) {
             best = Some((d, (owner, id, a, b)));
         }
     }
@@ -481,9 +481,11 @@ impl Near {
     fn around(scenery: &Scenery, camera: &Camera, cursor: DVec2, radius_px: f64) -> Near {
         let ray = camera.ray(cursor);
         // The rays through the cursor and a point `radius_px` beside it spread apart by the
-        // cone's slope; doubling it covers the diagonal of the pixel square around the cursor.
+        // cone's slope (perspective) or lie that far apart (parallel); doubling covers the
+        // diagonal of the pixel square around the cursor.
         let beside = camera.ray(cursor + DVec2::new(radius_px, 0.0));
         let slope = 2.0 * beside.dir.distance(ray.dir);
+        let r0 = 2.0 * beside.origin.distance(ray.origin);
         let mut near = Near {
             points: Vec::new(),
             segments: Vec::new(),
@@ -497,7 +499,7 @@ impl Near {
             let at = |p: DVec3| part.place.transform_point3(p);
             part.model
                 .index()
-                .near_ray(origin, dir, 0.0, slope, |s| match *s {
+                .near_ray(origin, dir, r0, slope, |s| match *s {
                     Shape::Point(v, p) => near.points.push((k, v, at(p))),
                     Shape::Segment(e, a, b) => {
                         if part.model.edge(e).is_some_and(|edge| !edge.soft) {
@@ -513,8 +515,10 @@ impl Near {
     }
 }
 
-/// True if no face lies between the eye and `p` (faces through `p` itself do not hide it).
-fn visible(scenery: &Scenery, eye: DVec3, p: DVec3) -> bool {
+/// True if no face lies between where the camera's sight of `p` starts (the eye, in
+/// perspective) and `p` (faces through `p` itself do not hide it).
+fn visible(scenery: &Scenery, camera: &Camera, p: DVec3) -> bool {
+    let eye = camera.sight_origin(p);
     let to = p - eye;
     let dist = to.length();
     if dist < 1e-12 {
@@ -738,6 +742,68 @@ mod tests {
         level.target = DVec3::new(0.0, 0.0, 1.0);
         let sky = infer(&Model::new(), &level, DVec2::new(400.0, 0.0), None, R);
         assert_eq!(sky.kind, SnapKind::Free);
+    }
+
+    /// A parallel view from the front (looking along +Y), zoomed in so the eye is half a
+    /// meter in front of the target.
+    fn parallel_front() -> Camera {
+        let mut c = cam();
+        c.projection = session::Projection::Parallel;
+        c.target = DVec3::new(1.0, 0.0, 1.0);
+        c.eye = DVec3::new(1.0, -0.5, 1.0);
+        c
+    }
+
+    #[test]
+    fn a_parallel_view_lands_on_the_ground() {
+        let mut c = cam();
+        c.projection = session::Projection::Parallel;
+        c.look_from(session::StandardView::Top);
+        let at = DVec3::new(-3.0, 4.0, 0.0);
+        let hit = infer(&Model::new(), &c, px(&c, at), None, R);
+        assert_eq!(hit.kind, SnapKind::Ground);
+        assert!(hit.point.abs_diff_eq(at, 1e-9), "{}", hit.point);
+    }
+
+    #[test]
+    fn a_parallel_view_sees_and_hides_with_what_is_behind_the_eye() {
+        let c = parallel_front();
+        let mut m = Model::new();
+        // A wall 2 m in front of the target: behind the eye, but in view.
+        let w = [(-1.0, -1.0), (3.0, -1.0), (3.0, 3.0), (-1.0, 3.0)];
+        for i in 0..4 {
+            let (a, b) = (w[i], w[(i + 1) % 4]);
+            m.add_edge(DVec3::new(a.0, -2.0, a.1), DVec3::new(b.0, -2.0, b.1))
+                .unwrap();
+        }
+        // An edge behind the target, hidden by the wall.
+        let end = DVec3::new(0.5, 1.0, 0.5);
+        m.add_edge(end, DVec3::new(1.5, 1.0, 0.5)).unwrap();
+        let hit = infer(&m, &c, px(&c, end), None, R);
+        assert_eq!(hit.kind, SnapKind::OnFace, "{hit:?}");
+        assert!((hit.point.y + 2.0).abs() < 1e-9);
+        // The wall's own corner, behind the eye, snaps (seen 6 m wide).
+        let corner = DVec3::new(3.0, -2.0, 3.0);
+        let mut wide = c.clone();
+        wide.eye = DVec3::new(1.0, -1.5, 1.0);
+        wide.target = DVec3::new(1.0, 4.5, 1.0);
+        let hit = infer(&m, &wide, px(&wide, corner) + DVec2::new(3.0, 2.0), None, R);
+        assert_eq!((hit.kind, hit.point), (SnapKind::Endpoint, corner));
+    }
+
+    #[test]
+    fn parallel_snaps_reach_as_far_on_screen_as_perspective_ones() {
+        let mut c = cam();
+        c.projection = session::Projection::Parallel;
+        c.look_from(session::StandardView::Top);
+        // A millimeter edge: the index's box around it is far smaller than the snap radius.
+        let mut m = Model::new();
+        let end = DVec3::new(2.001, 1.0, 0.0);
+        m.add_edge(DVec3::new(2.0, 1.0, 0.0), end).unwrap();
+        let hit = infer(&m, &c, px(&c, end) + DVec2::new(6.0, -5.0), None, R);
+        assert_eq!((hit.point, hit.kind), (end, SnapKind::Endpoint));
+        let e = edge_under(&m, &c, px(&c, end) + DVec2::new(0.0, 6.0), R);
+        assert!(e.is_some());
     }
 
     #[test]
