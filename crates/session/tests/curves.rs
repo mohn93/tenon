@@ -282,12 +282,16 @@ fn bad_arcs_are_refused() {
         json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "normal": [0, 0, 0]}),
         json!({"type": "add_arc", "center": [999999, 0, 0], "start": [999999, -2, 0], "angle": 180}),
         json!({"type": "add_arc", "center": [0, 0, 0], "start": [100, 0, 0], "angle": 359.9999999}),
-        // 10 m chord with a 1.3e-5 m bulge: too flat to be tagged as a curve.
-        json!({"type": "add_arc", "center": [0, 0, 0], "start": [100, 0, 0], "angle": 0.00001}),
     ] {
         let (kind, _) = run(&mut d, bad.clone()).unwrap_err();
         assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");
     }
+    // Segments long enough but turning too little to be tagged as a curve.
+    let flat =
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [100, 0, 0], "angle": 0.0034});
+    let (kind, message) = run(&mut d, flat).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert!(message.contains("too flat"), "{message}");
     assert!(edges(&d).is_empty());
 }
 
