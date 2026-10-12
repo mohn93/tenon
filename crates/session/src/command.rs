@@ -136,6 +136,12 @@ pub enum Command {
     /// Go back to editing the context the open instance is in. Clears the selection. Not
     /// recorded in undo history.
     CloseInstance,
+    /// Make `path` the open context: instances from the root, each placed in the definition
+    /// of the one before (empty: the root), as the `outliner` query lists them. Clears the
+    /// selection unless `path` is already open. Not recorded in undo history.
+    OpenPath {
+        path: Vec<EntityId>,
+    },
     /// Rename a group or component definition. A component's name must not be empty.
     RenameDefinition {
         definition: DefinitionId,

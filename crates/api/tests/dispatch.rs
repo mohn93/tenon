@@ -140,6 +140,7 @@ fn describe_lists_methods_and_schemas() {
         "explode",
         "open_instance",
         "close_instance",
+        "open_path",
         "rename_definition",
         "purge_definitions",
         "add_material",
@@ -164,6 +165,7 @@ fn describe_lists_methods_and_schemas() {
         "file",
         "curve",
         "materials",
+        "outliner",
     ] {
         assert!(
             query_schema.contains(variant),

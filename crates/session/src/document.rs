@@ -190,6 +190,10 @@ impl Document {
                 self.close_instance()?;
                 Ok(Outcome::default())
             }
+            Command::OpenPath { path } => {
+                self.open_path(&path)?;
+                Ok(Outcome::default())
+            }
             Command::New { discard } => {
                 self.check_unsaved(discard)?;
                 self.new_model();
@@ -335,7 +339,8 @@ impl Document {
             | Command::SetProjection { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
-            | Command::CloseInstance => {
+            | Command::CloseInstance
+            | Command::OpenPath { .. } => {
                 return None;
             }
         })
@@ -1031,6 +1036,10 @@ impl Document {
                     MeshId::Root => None,
                     MeshId::Definition(d) => Some(d),
                 },
+            },
+            Query::Outliner => QueryResult::Outliner {
+                instances: self.outliner(),
+                revision: self.revision,
             },
             Query::File => QueryResult::File {
                 path: self.path.as_ref().map(|p| p.display().to_string()),

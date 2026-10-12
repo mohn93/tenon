@@ -40,6 +40,9 @@ pub enum Query {
     Materials,
     /// The open context: the path of instances being edited, from the root.
     Context,
+    /// The tree of placed groups and components: the root's instances, each with the
+    /// instances its definition places, at any depth.
+    Outliner,
     /// The file the model was last opened from or saved to, and whether it changed since.
     File,
     /// Model changes after `since` (a revision number), oldest first.
@@ -185,6 +188,30 @@ pub struct DefinitionInfo {
     pub faces: usize,
 }
 
+/// A placed group or component in the `outliner` tree. A component's contents appear under
+/// each of its instances, with the same ids; a node's path is the ids from the root down to it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OutlinerNode {
+    pub id: EntityId,
+    pub definition: DefinitionId,
+    pub kind: DefinitionKind,
+    /// The definition's name; empty for an unnamed group.
+    pub name: String,
+    /// The instance's material; absent for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialId>,
+    /// True when the node is on the open context's path (the open instance or one it is in).
+    /// Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
+    /// True when the node is an instance of the open context and is selected. Absent when
+    /// false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub selected: bool,
+    /// The instances its definition places, in id order.
+    pub children: Vec<OutlinerNode>,
+}
+
 /// A material and how much of the model uses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MaterialInfo {
@@ -257,6 +284,11 @@ pub enum QueryResult {
     Context {
         path: Vec<EntityId>,
         definition: Option<DefinitionId>,
+    },
+    /// The root's instances, in id order, each with what it places.
+    Outliner {
+        instances: Vec<OutlinerNode>,
+        revision: u64,
     },
     /// `path` is null for a model never saved. `modified` is true when the model changed
     /// since it was opened, saved or started.

@@ -2,11 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use kernel::{DefinitionKind, EntityId, KernelError, MeshId, SceneChange};
+use kernel::{DefinitionKind, EntityId, InstanceId, KernelError, MeshId, SceneChange};
 
 use super::{Document, MAX_COORDINATE, check_coordinates};
 use crate::command::{CommandError, ErrorKind};
-use crate::query::{Bounds, InstanceInfo};
+use crate::query::{Bounds, InstanceInfo, OutlinerNode};
 
 impl Document {
     /// Makes a group (`name` None) or a named component from `ids` and selects its instance.
@@ -159,6 +159,71 @@ impl Document {
         }
         self.selection.clear();
         Ok(())
+    }
+
+    /// Makes `path` the open context; the selection is cleared unless it already was.
+    pub(super) fn open_path(&mut self, path: &[EntityId]) -> Result<(), CommandError> {
+        let mut context = Vec::with_capacity(path.len());
+        let mut mesh = MeshId::Root;
+        for id in path {
+            let EntityId::Instance(i) = *id else {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    format!("{id} is not an instance: only instances can be opened"),
+                )
+                .with_ids(vec![*id]));
+            };
+            let Some(instance) = self.scene.mesh(mesh).and_then(|m| m.instance(i)) else {
+                let place = match context.last() {
+                    None => "the root".to_string(),
+                    Some(parent) => EntityId::Instance(*parent).to_string(),
+                };
+                return Err(CommandError::new(
+                    ErrorKind::NotFound,
+                    format!("no instance {id} in {place}"),
+                )
+                .with_ids(vec![*id]));
+            };
+            mesh = MeshId::Definition(instance.definition);
+            context.push(i);
+        }
+        if context != self.context {
+            self.context = context;
+            self.selection.clear();
+        }
+        Ok(())
+    }
+
+    /// The tree of placed groups and components, from the root's instances down.
+    pub fn outliner(&self) -> Vec<OutlinerNode> {
+        self.outliner_nodes(MeshId::Root, &mut Vec::new())
+    }
+
+    /// The nodes for the instances in `mesh`, which `path` (from the root) opens.
+    fn outliner_nodes(&self, mesh: MeshId, path: &mut Vec<InstanceId>) -> Vec<OutlinerNode> {
+        let Some(m) = self.scene.mesh(mesh) else {
+            return Vec::new();
+        };
+        let in_context = *path == self.context;
+        m.instances()
+            .map(|(id, i)| {
+                let d = self.scene.definition(i.definition).expect("placed");
+                path.push(id);
+                let open = self.context.starts_with(path);
+                let children = self.outliner_nodes(MeshId::Definition(i.definition), path);
+                path.pop();
+                OutlinerNode {
+                    id: EntityId::Instance(id),
+                    definition: i.definition,
+                    kind: d.kind,
+                    name: d.name.clone(),
+                    material: i.material,
+                    open,
+                    selected: in_context && self.selection.contains(&EntityId::Instance(id)),
+                    children,
+                }
+            })
+            .collect()
     }
 
     pub(super) fn instance_info(&self, id: kernel::InstanceId) -> InstanceInfo {

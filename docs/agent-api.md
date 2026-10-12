@@ -54,6 +54,7 @@ Queries:
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
+| `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 
@@ -61,7 +62,7 @@ Unknown fields in commands, queries and params are rejected with `-32602` (a typ
 of silently doing nothing).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
-`make_component`, `explode`, `open_instance`, `close_instance`, `rename_definition`,
+`make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
 `change_material`, `delete_material`, `paint`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
@@ -214,7 +215,13 @@ Commands and queries work on the open context: the root at first. `{"type": "ope
 "id": "i4"}` opens an instance of the open context for editing, and `{"type": "close_instance"}`
 goes back out one level. Neither is an undo step or changes the revision; both clear the
 selection. `open_instance` with an id that is not an instance, and `close_instance` at the root,
-are `invalid_input`. While an instance is open:
+are `invalid_input`. `{"type": "open_path", "path": ["i4", "i9"]}` opens a nested instance
+directly, from wherever the open context is: `path` lists instances from the root, each placed in
+the definition of the one before (`i9` inside `i4`'s definition), and becomes the open context;
+`[]` goes back to the root. It clears the selection, except when `path` is already the open
+context (then nothing changes). An id in `path` that is not an instance is `invalid_input`, and
+one that is not placed where the path puts it is `not_found`, both naming it. While an instance
+is open:
 
 - `entities`, `entity`, `stats` and `selection` see only the definition's entities: `entity` and
   commands give ids from elsewhere `not_found`, and `entities` leaves them out;
@@ -231,6 +238,30 @@ were made in (the instance's transform starts as the identity).
 
 A command's `changes.created` can list ids inside a new definition (`make_group`, copying a
 group): they are `not_found` from the open context until that instance is opened.
+
+`{"type": "outliner"}` returns the tree of every placed group and component, whatever instance is
+open:
+
+```
+{"type": "outliner", "revision": 7, "instances": [
+  {"id": "i55", "definition": "d54", "kind": "component", "name": "Box", "open": true,
+   "children": [{"id": "i27", "definition": "d26", "kind": "group", "name": "", "selected": true,
+                 "children": []}]},
+  {"id": "i56", "definition": "d54", "kind": "component", "name": "Box", "material": "m57",
+   "children": [{"id": "i27", "definition": "d26", "kind": "group", "name": "", "children": []}]}]}
+```
+
+- `instances` are the root's instances in id order; each node's `children` are the instances its
+  definition places, in id order, at any depth. A component's contents appear under each of its
+  instances with the same ids, so a node is named by its path: the ids from the root down to it
+  (`["i55", "i27"]` above, with `i55` open and `i27` selected in it), which is what `open_path` takes.
+- `name` is the definition's name (empty for an unnamed group; the window shows it as `Group`);
+  `material` is the instance's own (absent for none).
+- `open` (absent when false) marks the nodes on the open context's path: the open instance and
+  the ones it is inside of. `selected` (absent when false) marks selected instances of the open
+  context; the same ids under another placement are not marked.
+- To select a node elsewhere in the tree, open its parent's path, then select it:
+  `open_path` with the path minus its last id, then `select`.
 
 `{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
 undo step; a component's name must not be empty; an unknown definition is `not_found`).
