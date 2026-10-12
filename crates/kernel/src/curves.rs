@@ -82,6 +82,10 @@ impl Model {
         for i in 0..sides {
             self.draw_segment(points[i], points[(i + 1) % n]);
         }
+        // A straight polyline never becomes a curve: do not spend an id on it.
+        if !closed && corners(points, false).is_empty() {
+            return Ok(self.take_changes());
+        }
         let curve = self.new_curve();
         for i in 0..sides {
             self.tag_along(points[i], points[(i + 1) % n], Some(curve), false);

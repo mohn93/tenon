@@ -427,6 +427,16 @@ fn obj_of_painted_faces_names_a_material_library_beside_it() {
     .unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
     assert!(!path.exists());
+    // Nor when the paths differ only in case (one file on case-blind file systems).
+    let upper = scratch("painted-upper.MTL");
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "export", "path": upper.to_str().unwrap(), "format": "obj"}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+    assert!(message.contains("not free"), "{message}");
+    assert!(!upper.exists());
 }
 
 #[test]

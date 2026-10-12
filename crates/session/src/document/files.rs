@@ -111,7 +111,11 @@ impl Document {
         let encoded = export::encode(&self.scene, &triangles, format, &mtl_name)
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
         if let Some(mtl) = &encoded.mtl {
-            if mtl_path == target || own(&mtl_path) {
+            // On a case-blind file system "x.MTL" is the library's own path.
+            let same = |a: &Path, b: &Path| {
+                a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+            };
+            if same(&mtl_path, target) || own(&mtl_path) {
                 return Err(CommandError::new(
                     ErrorKind::InvalidInput,
                     format!(

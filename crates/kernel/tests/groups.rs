@@ -730,3 +730,17 @@ fn copies_placed_by_turns_keep_the_original_transform_inside() {
         "each copy is the original turned"
     );
 }
+
+#[test]
+fn copying_or_erasing_instances_of_a_missing_mesh_is_refused_without_a_panic() {
+    let mut s = box_scene(p(0.0, 0.0, 0.0));
+    let (group, _) = group_all(&mut s, DefinitionKind::Group);
+    let before = s.clone();
+    let missing = MeshId::Definition(kernel::DefinitionId(999_999));
+    assert_eq!(
+        s.copy_instances(missing, &[group], p(5.0, 0.0, 0.0), 1),
+        Err(kernel::KernelError::DefinitionNotFound)
+    );
+    assert!(s.erase_instances(missing, &[group]).is_empty());
+    assert_eq!(s, before);
+}

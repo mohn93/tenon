@@ -448,3 +448,29 @@ fn a_circle_pushed_into_a_box_makes_a_soft_walled_hole() {
     assert_eq!(soft_edges(&m).len(), 8);
     assert_eq!(curves(&m).len(), 2, "the rim and the floor of the hole");
 }
+
+#[test]
+fn a_straight_polyline_spends_no_curve_id() {
+    let mut m = Model::new();
+    let c = m
+        .add_curve(
+            &[p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(2.0, 0.0, 0.0)],
+            false,
+        )
+        .unwrap();
+    assert!(curves(&m).is_empty());
+    // Three vertices and two edges took ids 0 to 4; the next edit starts at 5.
+    assert_eq!(c.summary().created.len(), 5);
+    let next = m.add_edge(p(0.0, 5.0, 0.0), p(1.0, 5.0, 0.0)).unwrap();
+    let ids: Vec<u64> = next
+        .summary()
+        .created
+        .iter()
+        .map(|id| match id {
+            EntityId::Vertex(v) => v.0,
+            EntityId::Edge(e) => e.0,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(ids.iter().min(), Some(&5));
+}

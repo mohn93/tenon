@@ -145,7 +145,8 @@ impl Scene {
     }
 
     /// Places copies of instances of mesh `parent`, one per rigid motion in `places` (applied
-    /// after the original's transform), under the rules of `copy_instances`.
+    /// after the original's transform), under the rules of `copy_instances`. A missing mesh is
+    /// `DefinitionNotFound`.
     pub fn copy_instances_placed(
         &mut self,
         parent: MeshId,
@@ -155,7 +156,7 @@ impl Scene {
         if !places.iter().all(|t| t.is_finite()) {
             return Err(KernelError::NotFinite);
         }
-        let source = self.mesh(parent).expect("copy in a missing mesh");
+        let source = self.mesh(parent).ok_or(KernelError::DefinitionNotFound)?;
         let unique: BTreeSet<InstanceId> = instances.iter().copied().collect();
         let originals: Vec<Instance> = unique
             .iter()
@@ -232,7 +233,11 @@ impl Scene {
     }
 
     /// Removes instances from mesh `parent`. A group's definition goes with its last instance.
+    /// A missing mesh changes nothing.
     pub fn erase_instances(&mut self, parent: MeshId, instances: &[InstanceId]) -> SceneChange {
+        if self.mesh(parent).is_none() {
+            return SceneChange::default();
+        }
         let erased = self
             .edit(parent, |m| {
                 for id in instances {
