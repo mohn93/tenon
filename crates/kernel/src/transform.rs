@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use glam::{DAffine3, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 
 use crate::edit::KernelError;
 use crate::geom::{
@@ -82,8 +82,9 @@ impl Model {
         for &v in &moved {
             let to = at(self, v);
             let lands = self
-                .vertices()
-                .any(|(w, vert)| !moved.contains(&w) && vert.pos.distance(to) < LENGTH_TOL);
+                .vertices_near(to, LENGTH_TOL)
+                .iter()
+                .any(|w| !moved.contains(w));
             if lands {
                 return Err(KernelError::Squash);
             }
@@ -261,9 +262,7 @@ impl Model {
             .flat_map(|t| stencil.faces.iter().map(|f| f.placed(t)))
             .collect();
 
-        for (a, b) in &segments {
-            self.draw_segment(*a, *b);
-        }
+        self.draw_segments(&segments);
         // A face whose sides were all there already is not closed by drawing them: close it.
         for f in &placed {
             let ring: Option<Vec<VertexId>> =
@@ -292,20 +291,33 @@ impl Model {
             .map(|(id, _)| id)
             .filter(|id| !existing.contains(id))
             .collect();
-        let own = |m: &Model, id: FaceId| {
-            placed.iter().any(|f| {
-                m.face_within(id, &f.outer) && !f.openings.iter().any(|h| m.face_within(id, h))
+        // Each new face is sampled once: a face lies wholly inside or outside every ring
+        // tested here (the rings were drawn), so any point inside it decides.
+        let samples: BTreeMap<FaceId, FaceSample> = new
+            .iter()
+            .filter_map(|id| Some((*id, self.face_sample(*id)?)))
+            .collect();
+        let within =
+            |id: FaceId, ring: &Option<RingTest>| samples.get(&id).is_some_and(|s| s.within(ring));
+        let tests = |rings: &[Vec<DVec3>]| rings.iter().map(|r| RingTest::new(r)).collect();
+        let placed_tests: Vec<PlacedTest> = placed
+            .iter()
+            .map(|f| PlacedTest {
+                outer: RingTest::new(&f.outer),
+                openings: tests(&f.openings),
+                filled: tests(&f.filled),
             })
+            .collect();
+        let own = |id: FaceId| {
+            placed_tests
+                .iter()
+                .any(|f| within(id, &f.outer) && !f.openings.iter().any(|h| within(id, h)))
         };
         // Give each piece of a stencil face that face's orientation and materials.
-        for f in &placed {
+        for (f, t) in placed.iter().zip(&placed_tests) {
             for &id in &new {
-                let in_hole = f
-                    .openings
-                    .iter()
-                    .chain(&f.filled)
-                    .any(|h| self.face_within(id, h));
-                if self.face_within(id, &f.outer) && !in_hole {
+                let in_hole = t.openings.iter().chain(&t.filled).any(|h| within(id, h));
+                if within(id, &t.outer) && !in_hole {
                     self.orient(id, f.normal);
                     self.set_paint(id, f.paint);
                 }
@@ -313,10 +325,14 @@ impl Model {
         }
         // A new face within an existing face (and not within one of its holes) is a piece of
         // that face the drawing split off.
-        let split_off = |m: &Model, id: FaceId| {
-            before.iter().any(|(outer, holes)| {
-                m.face_within(id, outer) && !holes.iter().any(|h| m.face_within(id, h))
-            })
+        let before: Vec<(Option<RingTest>, Vec<Option<RingTest>>)> = before
+            .iter()
+            .map(|(outer, holes)| (RingTest::new(outer), tests(holes)))
+            .collect();
+        let split_off = |id: FaceId| {
+            before
+                .iter()
+                .any(|(outer, holes)| within(id, outer) && !holes.iter().any(|h| within(id, h)))
         };
         // Drawing the sides also closes loops the stencil has no face on (openings, a missing
         // lid); take those out. A face stays if it is the stencil's, a piece of an existing
@@ -333,11 +349,12 @@ impl Model {
             .filter(|id| {
                 let f = self.face(*id).unwrap();
                 let n = f.outer.len();
-                (0..n).all(|i| {
-                    let (a, b) = (self.pos(f.outer[i]), self.pos(f.outer[(i + 1) % n]));
-                    on_stencil(a) && on_stencil((a + b) / 2.0)
-                }) && !own(self, *id)
-                    && !split_off(self, *id)
+                !own(*id)
+                    && !split_off(*id)
+                    && (0..n).all(|i| {
+                        let (a, b) = (self.pos(f.outer[i]), self.pos(f.outer[(i + 1) % n]));
+                        on_stencil(a) && on_stencil((a + b) / 2.0)
+                    })
             })
             .collect();
         for id in extra {
@@ -356,33 +373,23 @@ impl Model {
         }
     }
 
-    /// True when the face lies in the plane of `ring` and inside it.
-    fn face_within(&self, id: FaceId, ring: &[DVec3]) -> bool {
-        let n = vector_area(ring);
-        if n.length() < LENGTH_TOL * LENGTH_TOL {
-            return false;
-        }
-        let plane = Plane::through(ring[0], n.normalize());
-        let flat = |p: DVec3| (p - ring[0]).dot(plane.normal).abs() < LENGTH_TOL;
-        let Some(face) = self.face(id) else {
-            return false;
-        };
-        if !face.outer.iter().all(|v| flat(self.pos(*v))) {
-            return false;
-        }
-        let Some([a, b, c]) = self.triangulate(id).and_then(|t| t.first().copied()) else {
-            return false;
-        };
-        let inside = (a + b + c) / 3.0;
-        let ring2: Vec<_> = ring.iter().map(|p| plane.project(*p)).collect();
-        point_in_polygon(plane.project(inside), &ring2)
+    /// A face's outer corners and a point inside it (the centre of its first triangle).
+    fn face_sample(&self, id: FaceId) -> Option<FaceSample> {
+        let face = self.face(id)?;
+        let [a, b, c] = self.triangulate(id)?.first().copied()?;
+        Some(FaceSample {
+            outer: face.outer.iter().map(|v| self.pos(*v)).collect(),
+            inside: (a + b + c) / 3.0,
+        })
     }
 
     /// The face whose outer loop is exactly these vertices.
     fn face_with_outer(&self, ids: &BTreeSet<VertexId>) -> Option<FaceId> {
-        self.faces()
-            .find(|(_, f)| f.outer.len() == ids.len() && f.outer.iter().all(|v| ids.contains(v)))
-            .map(|(id, _)| id)
+        let first = ids.first()?;
+        self.faces_at(*first).find(|id| {
+            let f = self.face(*id).unwrap();
+            f.outer.len() == ids.len() && f.outer.iter().all(|v| ids.contains(v))
+        })
     }
 }
 
@@ -431,6 +438,65 @@ impl StencilFace {
             openings: self.openings.iter().map(ring).collect(),
             filled: self.filled.iter().map(ring).collect(),
         }
+    }
+}
+
+/// A ring of points prepared for `FaceSample::within`: its plane and its outline in it.
+struct RingTest {
+    origin: DVec3,
+    plane: Plane,
+    outline: Vec<DVec2>,
+    lo: DVec2,
+    hi: DVec2,
+}
+
+impl RingTest {
+    /// None for a ring with no area.
+    fn new(ring: &[DVec3]) -> Option<RingTest> {
+        let n = vector_area(ring);
+        if n.length() < LENGTH_TOL * LENGTH_TOL {
+            return None;
+        }
+        let plane = Plane::through(ring[0], n.normalize());
+        let outline: Vec<DVec2> = ring.iter().map(|p| plane.project(*p)).collect();
+        let (lo, hi) = outline
+            .iter()
+            .fold((DVec2::MAX, DVec2::MIN), |(lo, hi), p| {
+                (lo.min(*p), hi.max(*p))
+            });
+        Some(RingTest {
+            origin: ring[0],
+            plane,
+            outline,
+            lo,
+            hi,
+        })
+    }
+}
+
+/// The rings of a placed stencil face, prepared.
+struct PlacedTest {
+    outer: Option<RingTest>,
+    openings: Vec<Option<RingTest>>,
+    filled: Vec<Option<RingTest>>,
+}
+
+/// A face's outer corners and a point inside it.
+struct FaceSample {
+    outer: Vec<DVec3>,
+    inside: DVec3,
+}
+
+impl FaceSample {
+    /// True when the face lies in the plane of `ring` and inside it.
+    fn within(&self, ring: &Option<RingTest>) -> bool {
+        let Some(r) = ring else { return false };
+        let flat = |p: &DVec3| (*p - r.origin).dot(r.plane.normal).abs() < LENGTH_TOL;
+        if !self.outer.iter().all(flat) {
+            return false;
+        }
+        let p = r.plane.project(self.inside);
+        p.cmpge(r.lo).all() && p.cmple(r.hi).all() && point_in_polygon(p, &r.outline)
     }
 }
 

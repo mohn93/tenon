@@ -1,28 +1,67 @@
 //! Automatic face creation: after edges are added, the faces of every affected plane are rebuilt
 //! from the bounded regions of that plane's edge graph.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{DVec2, DVec3};
 
-use crate::geom::{PLANE_ANGLE_TOL, Plane, point_in_polygon};
+use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, MaterialId, VertexId};
+use crate::index::Index;
 use crate::model::{Face, Model};
 use crate::regions::{PlaneGraph, Region};
 
 impl Model {
     /// Updates the faces of every plane spanned by one of `new_edges` and an edge touching it.
     pub(crate) fn create_faces(&mut self, new_edges: &[EdgeId]) {
-        let mut done: Vec<Plane> = Vec::new();
+        let mut planes = PlaneSet::default();
         for &e in new_edges {
             for plane in self.candidate_planes(e) {
-                if done.iter().any(|p| p.same_as(&plane)) {
-                    continue;
-                }
-                done.push(plane);
-                self.rebuild_plane(plane, new_edges);
+                planes.insert(plane);
             }
         }
+        // Rebuilding faces leaves the edges alone, so one edge index serves every plane. Below
+        // a few planes, scanning the edges is cheaper than building it.
+        let index = (planes.list.len() > FEW_PLANES).then(|| Index::of_edges(self));
+        let new_sides = self.sides_of(new_edges);
+        for plane in planes.list {
+            let edges = match &index {
+                Some(index) => {
+                    let mut ids = Vec::new();
+                    index.segments_near_plane(&plane, |e| ids.push(e));
+                    ids.sort();
+                    ids.into_iter()
+                        .map(|e| self.edge(e).unwrap().v)
+                        .filter(|v| {
+                            plane.contains(self.pos(v[0])) && plane.contains(self.pos(v[1]))
+                        })
+                        .collect()
+                }
+                None => self.edges_in_plane(&plane),
+            };
+            // Drawing only adds and splits edges, so every face in the plane has its sides
+            // among these edges: look for the old faces at their vertices.
+            let at: BTreeSet<FaceId> = edges
+                .iter()
+                .flatten()
+                .flat_map(|v| self.faces_at(*v))
+                .collect();
+            let old = at
+                .into_iter()
+                .map(|id| (id, self.face(id).unwrap()))
+                .filter(|(_, f)| self.face_in_plane(f, &plane))
+                .map(|(id, f)| (id, f.clone()))
+                .collect();
+            self.rebuild_plane_from(plane, &new_sides, edges, old);
+        }
+    }
+
+    /// The edges lying in `plane`, in id order.
+    fn edges_in_plane(&self, plane: &Plane) -> Vec<[VertexId; 2]> {
+        self.edges()
+            .map(|(_, e)| e.v)
+            .filter(|v| plane.contains(self.pos(v[0])) && plane.contains(self.pos(v[1])))
+            .collect()
     }
 
     /// Planes spanned by edge e and each non-collinear edge reachable from its endpoints,
@@ -63,17 +102,35 @@ impl Model {
     /// Recomputes the regions of `plane` and makes the face set match them. `plane` is in
     /// canonical orientation; regions are wound counter-clockwise around its normal.
     pub(crate) fn rebuild_plane(&mut self, plane: Plane, new_edges: &[EdgeId]) {
-        let old: Vec<(FaceId, Face)> = self
+        let edges = self.edges_in_plane(&plane);
+        // After erasing or welding, a face in the plane can have lost all its edges: scan.
+        let old = self
             .faces()
             .filter(|(_, f)| self.face_in_plane(f, &plane))
             .map(|(id, f)| (id, f.clone()))
             .collect();
+        let new_sides = self.sides_of(new_edges);
+        self.rebuild_plane_from(plane, &new_sides, edges, old);
+    }
 
-        let edges: Vec<[VertexId; 2]> = self
-            .edges()
-            .map(|(_, e)| e.v)
-            .filter(|v| plane.contains(self.pos(v[0])) && plane.contains(self.pos(v[1])))
-            .collect();
+    /// The vertex pairs (smaller id first) of these edges.
+    fn sides_of(&self, edges: &[EdgeId]) -> BTreeSet<(VertexId, VertexId)> {
+        edges
+            .iter()
+            .filter_map(|e| self.edge(*e))
+            .map(|e| side(e.v[0], e.v[1]))
+            .collect()
+    }
+
+    /// `rebuild_plane` given the edges lying in the plane and the faces in it, both in id
+    /// order.
+    fn rebuild_plane_from(
+        &mut self,
+        plane: Plane,
+        new_sides: &BTreeSet<(VertexId, VertexId)>,
+        edges: Vec<[VertexId; 2]>,
+        old: Vec<(FaceId, Face)>,
+    ) {
         let pos: BTreeMap<VertexId, DVec2> = edges
             .iter()
             .flatten()
@@ -91,11 +148,6 @@ impl Model {
                     f.holes.iter().map(|h| project(h)).collect(),
                 )
             })
-            .collect();
-        let new_sides: BTreeSet<(VertexId, VertexId)> = new_edges
-            .iter()
-            .filter_map(|e| self.edge(*e))
-            .map(|e| side(e.v[0], e.v[1]))
             .collect();
 
         let old_sides: BTreeSet<(VertexId, VertexId)> = old
@@ -198,6 +250,62 @@ impl Model {
 /// A face's front and back materials.
 type Paint = [Option<MaterialId>; 2];
 
+/// Above this many planes, `create_faces` finds each plane's edges with an index.
+const FEW_PLANES: usize = 4;
+
+/// Distinct planes in the order first inserted, where `Plane::same_as` decides what is
+/// distinct. A grid over normal and offset keeps lookups near constant time.
+#[derive(Default)]
+struct PlaneSet {
+    list: Vec<Plane>,
+    cells: HashMap<[i64; 4], Vec<usize>>,
+}
+
+/// Grid cell size for normal components and offsets.
+const PLANE_CELL: f64 = 1e-3;
+
+impl PlaneSet {
+    fn key(n: DVec3, d: f64) -> [f64; 4] {
+        [n.x, n.y, n.z, d]
+    }
+
+    /// Adds `plane` unless the same plane is in already; true when added.
+    fn insert(&mut self, plane: Plane) -> bool {
+        // `same_as` accepts normals less than PLANE_ANGLE_TOL apart (either way round) and
+        // offsets less than LENGTH_TOL apart: look in every cell within twice that.
+        let reach = [
+            2.0 * PLANE_ANGLE_TOL,
+            2.0 * PLANE_ANGLE_TOL,
+            2.0 * PLANE_ANGLE_TOL,
+            2.0 * LENGTH_TOL,
+        ];
+        let cell = |x: f64| (x / PLANE_CELL).floor() as i64;
+        for key in [
+            Self::key(plane.normal, plane.d),
+            Self::key(-plane.normal, -plane.d),
+        ] {
+            let lo: Vec<i64> = (0..4).map(|k| cell(key[k] - reach[k])).collect();
+            let hi: Vec<i64> = (0..4).map(|k| cell(key[k] + reach[k])).collect();
+            for a in lo[0]..=hi[0] {
+                for b in lo[1]..=hi[1] {
+                    for c in lo[2]..=hi[2] {
+                        for d in lo[3]..=hi[3] {
+                            let found = self.cells.get(&[a, b, c, d]).into_iter().flatten();
+                            if found.into_iter().any(|&i| self.list[i].same_as(&plane)) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let k = Self::key(plane.normal, plane.d).map(cell);
+        self.cells.entry(k).or_default().push(self.list.len());
+        self.list.push(plane);
+        true
+    }
+}
+
 fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {
     (a.min(b), a.max(b))
 }
@@ -266,6 +374,126 @@ mod tests {
         assert_eq!(m.face(outer), Some(&before));
         let small = m.faces().find(|(id, _)| *id != outer).unwrap().0;
         assert!((m.face_area(small) - 0.25).abs() < 1e-12);
+    }
+
+    /// The faces of a model by position: each outer loop's corners from the lowest, rounded
+    /// to micrometers, with the hole count and the rounded normal; sorted.
+    fn shapes(m: &Model) -> Vec<(Vec<[i64; 3]>, usize, [i64; 3])> {
+        let r = |p: DVec3| (p * 1e6).round().to_array().map(|c| c as i64);
+        let mut all: Vec<_> = m
+            .faces()
+            .map(|(_, f)| {
+                let mut ring: Vec<[i64; 3]> = f.outer.iter().map(|v| r(m.pos(*v))).collect();
+                let low = (0..ring.len()).min_by_key(|&i| ring[i]).unwrap();
+                ring.rotate_left(low);
+                (ring, f.holes.len(), r(f.normal))
+            })
+            .collect();
+        all.sort();
+        all
+    }
+
+    fn segments(points: &[(f64, f64)], closed: bool) -> Vec<(DVec3, DVec3)> {
+        let p = |(x, y): (f64, f64)| DVec3::new(x, y, 0.0);
+        let n = points.len();
+        let sides = if closed { n } else { n - 1 };
+        (0..sides)
+            .map(|i| (p(points[i]), p(points[(i + 1) % n])))
+            .collect()
+    }
+
+    #[test]
+    fn drawing_segments_in_one_batch_makes_the_faces_drawing_them_one_by_one_makes() {
+        let circle: Vec<(f64, f64)> = (0..24)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 24.0;
+                (2.0 + a.cos(), 2.0 + a.sin())
+            })
+            .collect();
+        type Case = (&'static str, Model, Vec<(DVec3, DVec3)>);
+        let cases: Vec<Case> = vec![
+            (
+                "crossing lines",
+                Model::new(),
+                [
+                    segments(&[(0.0, 1.0), (3.0, 1.0)], false),
+                    segments(&[(0.0, 2.0), (3.0, 2.0)], false),
+                    segments(&[(1.0, 0.0), (1.0, 3.0)], false),
+                    segments(&[(2.0, 0.0), (2.0, 3.0)], false),
+                    segments(&[(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)], true),
+                ]
+                .concat(),
+            ),
+            (
+                "overlapping squares",
+                Model::new(),
+                [
+                    segments(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)], true),
+                    segments(&[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)], true),
+                ]
+                .concat(),
+            ),
+            (
+                "square across a face",
+                {
+                    let mut m = Model::new();
+                    square(&mut m, 0.0, 0.0, 4.0);
+                    m
+                },
+                segments(&[(3.0, 3.0), (5.0, 3.0), (5.0, 5.0), (3.0, 5.0)], true),
+            ),
+            (
+                "circle inside a face",
+                {
+                    let mut m = Model::new();
+                    square(&mut m, 0.0, 0.0, 4.0);
+                    m
+                },
+                segments(&circle, true),
+            ),
+            (
+                "square inside an opening",
+                face_with_opening().0,
+                segments(&[(1.5, 1.5), (2.5, 1.5), (2.5, 2.5), (1.5, 2.5)], true),
+            ),
+        ];
+        for (what, start, segs) in cases {
+            let mut batch = start.clone();
+            batch.draw_segments(&segs);
+            batch.take_changes();
+            batch.validate().unwrap();
+            let mut one_by_one = start;
+            for (a, b) in &segs {
+                one_by_one.draw_segment(*a, *b);
+            }
+            one_by_one.take_changes();
+            assert_eq!(shapes(&batch), shapes(&one_by_one), "{what}");
+            assert!(!shapes(&batch).is_empty(), "{what}");
+        }
+    }
+
+    #[test]
+    fn plane_set_keeps_one_of_each_plane_in_order() {
+        let mut set = PlaneSet::default();
+        let ground = Plane::through(DVec3::ZERO, DVec3::Z);
+        assert!(set.insert(ground));
+        // The same plane within tolerance, either way round, and across a grid cell border.
+        assert!(!set.insert(Plane::through(DVec3::new(0.0, 0.0, 5e-7), DVec3::Z)));
+        assert!(!set.insert(Plane::through(DVec3::ZERO, -DVec3::Z)));
+        let tilt = DVec3::new(PLANE_CELL * 0.5e-3, 0.0, 1.0).normalize();
+        assert!(!set.insert(Plane::through(DVec3::ZERO, tilt)));
+        let wall = Plane::through(DVec3::new(PLANE_CELL, 0.0, 0.0), DVec3::X);
+        assert!(set.insert(wall));
+        let near = Plane::through(DVec3::new(PLANE_CELL + 5e-7, 0.0, 0.0), DVec3::X);
+        assert!(!set.insert(near));
+        // Apart by more than the tolerance: another plane.
+        assert!(set.insert(Plane::through(DVec3::new(0.0, 0.0, 2e-6), DVec3::Z)));
+        assert!(set.insert(Plane::through(
+            DVec3::ZERO,
+            DVec3::new(0.0, 1e-5, 1.0).normalize()
+        )));
+        assert_eq!(set.list.len(), 4);
+        assert!(set.list[0].same_as(&ground) && set.list[1].same_as(&wall));
     }
 
     #[test]

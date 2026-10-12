@@ -269,8 +269,25 @@ pub struct Model {
     guides: BTreeMap<GuideId, Guide>,
     next_id: u64,
     pending: Vec<Op>,
-    /// Built on first use after a change; see `Model::index`.
+    /// Built on first use after a change to vertices, edges or faces; see `Model::index`.
     index: OnceLock<Index>,
+    /// The edges at each vertex, kept in step by `apply_op`. Vertices without edges have no
+    /// entry.
+    vertex_edges: HashMap<VertexId, BTreeSet<EdgeId>>,
+    /// The faces whose loops use each vertex, kept in step by `apply_op`. Vertices on no face
+    /// have no entry.
+    vertex_faces: HashMap<VertexId, BTreeSet<FaceId>>,
+    /// The vertices in each cell of a `VERTEX_CELL` grid, kept in step by `apply_op`, so
+    /// lookups by position visit only the vertices nearby.
+    vertex_cells: HashMap<[i64; 3], Vec<VertexId>>,
+}
+
+/// Side of the cells of the vertex grid, in meters.
+const VERTEX_CELL: f64 = 1e-3;
+
+/// The vertex-grid cell holding `p`.
+fn vertex_cell(p: DVec3) -> [i64; 3] {
+    (p / VERTEX_CELL).floor().to_array().map(|c| c as i64)
 }
 
 /// Two models are equal when they hold the same entities under the same ids.
@@ -308,16 +325,28 @@ impl Model {
             .chain(guides.keys().map(|k| k.0))
             .max()
             .map_or(0, |m| m.saturating_add(1));
-        Model {
-            vertices,
-            edges,
-            faces,
+        let mut m = Model {
+            vertices: BTreeMap::new(),
+            edges: BTreeMap::new(),
+            faces: BTreeMap::new(),
             instances,
             guides,
             next_id,
-            pending: Vec::new(),
-            index: OnceLock::new(),
+            ..Model::default()
+        };
+        for (id, v) in &vertices {
+            m.link_vertex(*id, v.pos);
         }
+        m.vertices = vertices;
+        for (id, e) in edges {
+            m.link_edge(id, &e);
+            m.edges.insert(id, e);
+        }
+        for (id, f) in faces {
+            m.link_face(id, &f);
+            m.faces.insert(id, f);
+        }
+        m
     }
 
     // ---- read access ----
@@ -382,17 +411,59 @@ impl Model {
     }
 
     pub fn edge_between(&self, a: VertexId, b: VertexId) -> Option<EdgeId> {
-        self.edges
+        if a == b {
+            return None;
+        }
+        self.vertex_edges
+            .get(&a)?
             .iter()
-            .find(|(_, e)| e.v == [a, b] || e.v == [b, a])
-            .map(|(id, _)| *id)
+            .copied()
+            .find(|e| self.edges[e].v.contains(&b))
     }
 
+    /// The vertices within `r` of `p` (`r` small next to a meter), in id order.
+    pub(crate) fn vertices_near(&self, p: DVec3, r: f64) -> Vec<VertexId> {
+        let (lo, hi) = (
+            vertex_cell(p - DVec3::splat(r)),
+            vertex_cell(p + DVec3::splat(r)),
+        );
+        let mut found = Vec::new();
+        for x in lo[0]..=hi[0] {
+            for y in lo[1]..=hi[1] {
+                for z in lo[2]..=hi[2] {
+                    for v in self.vertex_cells.get(&[x, y, z]).into_iter().flatten() {
+                        if self.vertices[v].pos.distance(p) < r {
+                            found.push(*v);
+                        }
+                    }
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// The edges at vertex `v`, in id order.
     pub fn edges_at(&self, v: VertexId) -> Vec<EdgeId> {
-        self.edges
-            .iter()
-            .filter(|(_, e)| e.v.contains(&v))
-            .map(|(id, _)| *id)
+        self.vertex_edges
+            .get(&v)
+            .map_or_else(Vec::new, |s| s.iter().copied().collect())
+    }
+
+    /// The faces whose outer loop or a hole uses vertex `v`, in id order.
+    pub fn faces_at(&self, v: VertexId) -> impl Iterator<Item = FaceId> + '_ {
+        self.vertex_faces.get(&v).into_iter().flatten().copied()
+    }
+
+    /// The faces with a loop side a-b (either way round), in id order.
+    pub(crate) fn faces_on_side(&self, a: VertexId, b: VertexId) -> Vec<FaceId> {
+        self.faces_at(a)
+            .filter(|f| {
+                let f = &self.faces[f];
+                std::iter::once(&f.outer)
+                    .chain(&f.holes)
+                    .any(|l| crate::edit::loop_has_side(l, a, b))
+            })
             .collect()
     }
 
@@ -428,24 +499,48 @@ impl Model {
     }
 
     fn apply_op(&mut self, op: Op) {
-        self.index.take();
+        // The index holds vertex, edge and face positions only: tags, paint, instances and
+        // guides leave it valid.
+        if matches!(
+            op,
+            Op::AddVertex(..)
+                | Op::RemoveVertex(..)
+                | Op::MoveVertex(..)
+                | Op::AddEdge(..)
+                | Op::RemoveEdge(..)
+                | Op::AddFace(..)
+                | Op::RemoveFace(..)
+        ) {
+            self.index.take();
+        }
         match op {
             Op::AddVertex(id, v) => {
                 self.bump(id.0);
-                self.vertices.insert(id, v);
+                self.link_vertex(id, v.pos);
+                if let Some(old) = self.vertices.insert(id, v) {
+                    self.unlink_vertex(id, old.pos);
+                }
             }
             Op::RemoveVertex(id, _) => {
-                self.vertices.remove(&id);
+                if let Some(v) = self.vertices.remove(&id) {
+                    self.unlink_vertex(id, v.pos);
+                }
             }
             Op::AddEdge(id, e) => {
                 self.bump(id.0);
                 if let Some(c) = e.curve {
                     self.bump(c.0);
                 }
+                if let Some(old) = self.edges.remove(&id) {
+                    self.unlink_edge(id, &old);
+                }
+                self.link_edge(id, &e);
                 self.edges.insert(id, e);
             }
             Op::RemoveEdge(id, _) => {
-                self.edges.remove(&id);
+                if let Some(e) = self.edges.remove(&id) {
+                    self.unlink_edge(id, &e);
+                }
             }
             Op::ChangeEdge(id, _, to) => {
                 if let Some(c) = to.curve {
@@ -457,14 +552,22 @@ impl Model {
             }
             Op::AddFace(id, f) => {
                 self.bump(id.0);
+                if let Some(old) = self.faces.remove(&id) {
+                    self.unlink_face(id, &old);
+                }
+                self.link_face(id, &f);
                 self.faces.insert(id, f);
             }
             Op::RemoveFace(id, _) => {
-                self.faces.remove(&id);
+                if let Some(f) = self.faces.remove(&id) {
+                    self.unlink_face(id, &f);
+                }
             }
             Op::MoveVertex(id, _, to) => {
                 if let Some(v) = self.vertices.get_mut(&id) {
-                    v.pos = to;
+                    let from = std::mem::replace(&mut v.pos, to);
+                    self.unlink_vertex(id, from);
+                    self.link_vertex(id, to);
                 }
             }
             Op::AddInstance(id, i) => {
@@ -495,6 +598,57 @@ impl Model {
             Op::PaintInstance(id, _, to) => {
                 if let Some(i) = self.instances.get_mut(&id) {
                     i.material = to;
+                }
+            }
+        }
+    }
+
+    fn link_vertex(&mut self, id: VertexId, pos: DVec3) {
+        self.vertex_cells
+            .entry(vertex_cell(pos))
+            .or_default()
+            .push(id);
+    }
+
+    fn unlink_vertex(&mut self, id: VertexId, pos: DVec3) {
+        let cell = vertex_cell(pos);
+        if let Some(list) = self.vertex_cells.get_mut(&cell) {
+            list.retain(|v| *v != id);
+            if list.is_empty() {
+                self.vertex_cells.remove(&cell);
+            }
+        }
+    }
+
+    fn link_edge(&mut self, id: EdgeId, e: &Edge) {
+        for v in e.v {
+            self.vertex_edges.entry(v).or_default().insert(id);
+        }
+    }
+
+    fn unlink_edge(&mut self, id: EdgeId, e: &Edge) {
+        for v in e.v {
+            if let Some(set) = self.vertex_edges.get_mut(&v) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.vertex_edges.remove(&v);
+                }
+            }
+        }
+    }
+
+    fn link_face(&mut self, id: FaceId, f: &Face) {
+        for v in std::iter::once(&f.outer).chain(&f.holes).flatten() {
+            self.vertex_faces.entry(*v).or_default().insert(id);
+        }
+    }
+
+    fn unlink_face(&mut self, id: FaceId, f: &Face) {
+        for v in std::iter::once(&f.outer).chain(&f.holes).flatten() {
+            if let Some(set) = self.vertex_faces.get_mut(v) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.vertex_faces.remove(v);
                 }
             }
         }
@@ -691,6 +845,8 @@ impl Model {
 
     /// Checks structural invariants. Used by tests after every edit.
     pub fn validate(&self) -> Result<(), String> {
+        // The lookups first: the checks below use them.
+        self.validate_adjacency()?;
         let mut pairs = BTreeSet::new();
         for (id, e) in &self.edges {
             let [a, b] = e.v;
@@ -788,6 +944,39 @@ impl Model {
             }
         }
         self.validate_curves()
+    }
+
+    /// Checks that the vertex grid and the vertex-to-edge and vertex-to-face maps match the
+    /// vertices, edges and faces.
+    fn validate_adjacency(&self) -> Result<(), String> {
+        let gridded: usize = self.vertex_cells.values().map(Vec::len).sum();
+        let placed = self.vertices.iter().all(|(id, v)| {
+            self.vertex_cells
+                .get(&vertex_cell(v.pos))
+                .is_some_and(|l| l.contains(id))
+        });
+        if gridded != self.vertices.len() || !placed {
+            return Err("the vertex grid does not match the vertices".into());
+        }
+        let mut edges: HashMap<VertexId, BTreeSet<EdgeId>> = HashMap::new();
+        for (id, e) in &self.edges {
+            for v in e.v {
+                edges.entry(v).or_default().insert(*id);
+            }
+        }
+        if edges != self.vertex_edges {
+            return Err("the vertex-to-edge map does not match the edges".into());
+        }
+        let mut faces: HashMap<VertexId, BTreeSet<FaceId>> = HashMap::new();
+        for (id, f) in &self.faces {
+            for v in std::iter::once(&f.outer).chain(&f.holes).flatten() {
+                faces.entry(*v).or_default().insert(*id);
+            }
+        }
+        if faces != self.vertex_faces {
+            return Err("the vertex-to-face map does not match the faces".into());
+        }
+        Ok(())
     }
 }
 
@@ -896,6 +1085,107 @@ mod tests {
             m.insert_face(face);
             assert!(m.validate().is_err(), "{what} was accepted");
         }
+    }
+
+    #[test]
+    fn lookups_follow_edits_undo_and_redo() {
+        let mut m = Model::new();
+        let square = [DVec3::ZERO, DVec3::X, DVec3::new(1.0, 1.0, 0.0), DVec3::Y];
+        m.add_polygon(&square).unwrap();
+        let before = m.clone();
+        let a = m.find_vertex(DVec3::ZERO).unwrap();
+        let c = m.find_vertex(DVec3::new(1.0, 1.0, 0.0)).unwrap();
+        let face = m.faces().next().unwrap().0;
+        assert_eq!(m.edges_at(a).len(), 2);
+        assert_eq!(m.faces_at(a).collect::<Vec<_>>(), vec![face]);
+
+        // A diagonal splits the face; then the corner moves.
+        let split = m.add_edge(DVec3::ZERO, DVec3::new(1.0, 1.0, 0.0)).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.edges_at(a).len(), 3);
+        assert_eq!(m.faces_at(a).count(), 2);
+        let diagonal = m.edge_between(a, c).unwrap();
+        assert_eq!(m.edge_between(c, a), Some(diagonal));
+        assert_eq!(m.edge_between(a, a), None);
+        let moved = m
+            .move_vertices(&BTreeSet::from([c]), DVec3::new(0.5, 0.5, 0.0))
+            .unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.find_vertex(DVec3::new(1.0, 1.0, 0.0)), None);
+        assert_eq!(m.find_vertex(DVec3::new(1.5, 1.5, 0.0)), Some(c));
+
+        m.apply(&moved.inverse());
+        m.apply(&split.inverse());
+        m.validate().unwrap();
+        assert_eq!(m, before);
+        assert_eq!(m.edges_at(a).len(), 2);
+        assert_eq!(m.edge_between(a, c), None);
+        assert_eq!(m.faces_at(c).collect::<Vec<_>>(), vec![face]);
+        m.apply(&split);
+        m.apply(&moved);
+        m.validate().unwrap();
+        assert_eq!(m.find_vertex(DVec3::new(1.5, 1.5, 0.0)), Some(c));
+    }
+
+    #[test]
+    fn find_vertex_takes_the_oldest_within_tolerance_across_cells() {
+        let mut m = Model::new();
+        // Both sides of a grid cell border, closer than LENGTH_TOL to the probe.
+        let border = VERTEX_CELL * 7.0;
+        let late = m.insert_vertex(DVec3::new(border + 4e-7, 0.0, 0.0));
+        let early = m.insert_vertex(DVec3::new(border - 4e-7, 0.0, 0.0));
+        let probe = DVec3::new(border, 0.0, 0.0);
+        assert!(vertex_cell(m.pos(late)) != vertex_cell(m.pos(early)));
+        assert_eq!(m.find_vertex(probe), Some(late.min(early)));
+        assert_eq!(m.vertices_near(probe, LENGTH_TOL), vec![late, early]);
+        assert_eq!(m.find_vertex(DVec3::new(border + 2e-6, 0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn validate_catches_stale_lookups() {
+        let mut m = Model::new();
+        m.add_polygon(&[DVec3::ZERO, DVec3::X, DVec3::Y]).unwrap();
+        m.validate().unwrap();
+        let mut broken = m.clone();
+        broken.vertex_edges.clear();
+        assert!(broken.validate().unwrap_err().contains("vertex-to-edge"));
+        let mut broken = m.clone();
+        broken.vertex_faces.clear();
+        assert!(broken.validate().unwrap_err().contains("vertex-to-face"));
+        let mut broken = m.clone();
+        broken.vertex_cells.clear();
+        assert!(broken.validate().unwrap_err().contains("vertex grid"));
+    }
+
+    #[test]
+    fn only_geometry_changes_drop_the_index() {
+        let mut m = Model::new();
+        m.add_polygon(&[DVec3::ZERO, DVec3::X, DVec3::Y]).unwrap();
+        let face = m.faces().next().unwrap().0;
+        let edge = m.edges().next().unwrap().0;
+        let built = |m: &Model| m.index.get().is_some();
+        m.index();
+        assert!(built(&m));
+        m.set_paint(face, [Some(MaterialId(100)), None]);
+        m.set_edge(edge, Some(CurveId(101)), false);
+        m.insert_guide(Guide::Point { position: DVec3::Z });
+        let i = m.insert_instance(Instance::new(DefinitionId(102), DAffine3::IDENTITY));
+        m.transform_instances(&[i], DAffine3::from_translation(DVec3::X));
+        m.set_instance_material(i, Some(MaterialId(100)));
+        m.take_changes();
+        assert!(
+            built(&m),
+            "paint, tags, guides and instances keep the index"
+        );
+        let v = m.find_vertex(DVec3::X).unwrap();
+        m.move_vertex(v, DVec3::new(2.0, 0.0, 0.0));
+        assert!(!built(&m), "a moved vertex drops it");
+        assert_eq!(
+            m.index()
+                .ray_hit(DVec3::new(0.2, 0.2, 1.0), -DVec3::Z, 0.0, 9.0)
+                .map(|h| h.0),
+            Some(face)
+        );
     }
 
     #[test]

@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::edit::loop_has_side;
 use crate::geom::{ANGLE_TOL, PLANE_ANGLE_TOL, Plane};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
@@ -25,11 +24,7 @@ impl Model {
             let Some(edge) = self.edge(e) else { continue };
             let [a, b] = edge.v;
             touched.extend([a, b]);
-            let users: Vec<FaceId> = self
-                .faces()
-                .filter(|(_, f)| loops(f).any(|l| loop_has_side(l, a, b)))
-                .map(|(id, _)| id)
-                .collect();
+            let users = self.faces_on_side(a, b);
             let merge = match users[..] {
                 [f, g] => self.shared_plane(f, g),
                 _ => None,
@@ -86,9 +81,8 @@ impl Model {
             return;
         }
         let users: Vec<(FaceId, Face)> = self
-            .faces()
-            .filter(|(_, f)| loops(f).any(|l| l.contains(&v)))
-            .map(|(id, f)| (id, f.clone()))
+            .faces_at(v)
+            .map(|id| (id, self.face(id).unwrap().clone()))
             .collect();
         let (first, second) = (self.remove_edge(e1), self.remove_edge(e2));
         // The joined edge keeps what the two had in common: their curve, and being soft.
@@ -101,8 +95,4 @@ impl Model {
         }
         self.remove_vertex(v);
     }
-}
-
-fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {
-    std::iter::once(&f.outer).chain(&f.holes)
 }

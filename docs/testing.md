@@ -26,3 +26,13 @@ git diff --stat crates/render/tests/golden/
 
 A new scene needs a test calling `check("<name>", &doc)` and its name in
 `every_golden_image_has_a_test`; run with `UPDATE_GOLDEN=1` once to store its image.
+
+## Timings
+
+`crates/kernel/tests/perf.rs` times big edits (copying 30 circles three times, edits inside a
+20,000-face imported group, exploding an imported group). Its tests are ignored by default;
+run them in release, where they also check loose upper bounds:
+
+```
+cargo test --release -p kernel --test perf -- --ignored --nocapture
+```

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 
 use glam::DVec3;
@@ -102,18 +103,28 @@ impl Model {
 
     /// `add_edge` without input checks or ending the edit; the caller checked the segment.
     pub(crate) fn draw_segment(&mut self, a: DVec3, b: DVec3) {
-        let new_edges = self.insert_segment(a, b);
-        self.create_faces(&new_edges);
+        self.draw_segments(&[(a, b)]);
+    }
+
+    /// Inserts every segment (with the rules of `add_edge`), then updates the faces of each
+    /// plane the new edges reach, once. Faces come out as if the segments were drawn one by
+    /// one, except that a region closed only by these segments is never treated as an
+    /// existing face by a later one (it matters only inside an opening; see `rebuild_plane`).
+    pub(crate) fn draw_segments(&mut self, segments: &[(DVec3, DVec3)]) {
+        let mut fresh: BTreeSet<EdgeId> = BTreeSet::new();
+        for (a, b) in segments {
+            self.insert_segment(*a, *b, &mut fresh);
+        }
+        let fresh: Vec<EdgeId> = fresh.into_iter().collect();
+        self.create_faces(&fresh);
     }
 
     pub(crate) fn find_vertex(&self, p: DVec3) -> Option<VertexId> {
-        self.vertices()
-            .find(|(_, v)| v.pos.distance(p) < LENGTH_TOL)
-            .map(|(id, _)| id)
+        self.vertices_near(p, LENGTH_TOL).first().copied()
     }
 
     /// Existing vertex at p, or a new one (splitting an edge if p lies inside it).
-    fn vertex_at(&mut self, p: DVec3) -> VertexId {
+    fn vertex_at(&mut self, p: DVec3, fresh: &mut BTreeSet<EdgeId>) -> VertexId {
         if let Some(v) = self.find_vertex(p) {
             return v;
         }
@@ -122,29 +133,24 @@ impl Model {
             (dist < LENGTH_TOL && t > 0.0 && t < 1.0).then_some(id)
         });
         match hit {
-            Some(e) => self.split_edge(e, p),
+            Some(e) => self.split_edge(e, p, fresh),
             None => self.insert_vertex(p),
         }
     }
 
     /// Splits edge e at p, inserting the new vertex into every face loop that used the edge.
-    fn split_edge(&mut self, e: EdgeId, p: DVec3) -> VertexId {
+    /// When e is in `fresh` (drawn in this batch), its pieces replace it there.
+    fn split_edge(&mut self, e: EdgeId, p: DVec3, fresh: &mut BTreeSet<EdgeId>) -> VertexId {
         let old = self.remove_edge(e);
         let [a, b] = old.v;
         let m = self.insert_vertex(p);
         // Both pieces stay on the edge's curve and keep it soft.
-        self.insert_edge_like(a, m, old.curve, old.soft);
-        self.insert_edge_like(m, b, old.curve, old.soft);
-        let users: Vec<FaceId> = self
-            .faces()
-            .filter(|(_, f)| {
-                std::iter::once(&f.outer)
-                    .chain(&f.holes)
-                    .any(|l| loop_has_side(l, a, b))
-            })
-            .map(|(id, _)| id)
-            .collect();
-        for id in users {
+        let first = self.insert_edge_like(a, m, old.curve, old.soft);
+        let second = self.insert_edge_like(m, b, old.curve, old.soft);
+        if fresh.remove(&e) {
+            fresh.extend([first, second]);
+        }
+        for id in self.faces_on_side(a, b) {
             let mut f = self.face(id).unwrap().clone();
             for l in std::iter::once(&mut f.outer).chain(f.holes.iter_mut()) {
                 insert_between(l, a, b, m);
@@ -155,10 +161,10 @@ impl Model {
     }
 
     /// Inserts edges covering a-b, splitting at every vertex and edge crossing along the way.
-    /// Returns only the edges that did not exist before.
-    fn insert_segment(&mut self, a: DVec3, b: DVec3) -> Vec<EdgeId> {
-        let va = self.vertex_at(a);
-        let vb = self.vertex_at(b);
+    /// Adds the edges that did not exist before to `fresh`.
+    fn insert_segment(&mut self, a: DVec3, b: DVec3, fresh: &mut BTreeSet<EdgeId>) {
+        let va = self.vertex_at(a, fresh);
+        let vb = self.vertex_at(b, fresh);
         let (pa, pb) = (self.pos(va), self.pos(vb));
 
         let others: Vec<EdgeId> = self
@@ -169,7 +175,7 @@ impl Model {
         for e in others {
             let [p, q] = self.edge(e).unwrap().v;
             if let Some(x) = segment_crossing(self.pos(p), self.pos(q), pa, pb) {
-                self.split_edge(e, x);
+                self.split_edge(e, x, fresh);
             }
         }
 
@@ -182,14 +188,12 @@ impl Model {
             .collect();
         along.sort_by(|x, y| x.0.total_cmp(&y.0));
 
-        let mut created = Vec::new();
         for w in along.windows(2) {
             let (u, v) = (w[0].1, w[1].1);
             if self.edge_between(u, v).is_none() {
-                created.push(self.insert_edge(u, v));
+                fresh.insert(self.insert_edge(u, v));
             }
         }
-        created
     }
 }
 

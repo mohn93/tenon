@@ -100,11 +100,23 @@ impl Model {
             let tol = LENGTH_TOL / len;
             d < LENGTH_TOL && t > -tol && t < 1.0 + tol
         };
-        let along: Vec<EdgeId> = self
-            .edges()
-            .filter(|(_, e)| on(self.pos(e.v[0])) && on(self.pos(e.v[1])))
-            .map(|(id, _)| id)
-            .collect();
+        // The edges along a-b form chains reaching its ends (drawing a-b joined every vertex
+        // on it), so walk out from the vertices at the ends.
+        let mut seen: BTreeSet<VertexId> = BTreeSet::new();
+        let mut stack: Vec<VertexId> = [a, b].iter().filter_map(|p| self.find_vertex(*p)).collect();
+        let mut along: BTreeSet<EdgeId> = BTreeSet::new();
+        while let Some(v) = stack.pop() {
+            if !seen.insert(v) {
+                continue;
+            }
+            for e in self.edges_at(v) {
+                let [p, q] = self.edge(e).unwrap().v;
+                if on(self.pos(p)) && on(self.pos(q)) {
+                    along.insert(e);
+                    stack.push(if p == v { q } else { p });
+                }
+            }
+        }
         for e in along {
             self.set_edge(e, curve, soft);
         }
@@ -261,27 +273,27 @@ impl Model {
                 _ => {}
             }
         }
-        if !moved.is_empty() || !lost.is_empty() {
-            for (id, e) in self.edges() {
-                if e.v.iter().any(|v| moved.contains(v)) {
-                    curves.extend(e.curve);
-                }
-                if e.soft && lost.contains(&side(e.v[0], e.v[1])) {
-                    soft.insert(id);
-                }
+        for v in &moved {
+            for e in self.edges_at(*v) {
+                curves.extend(self.edge(e).unwrap().curve);
+            }
+        }
+        for (a, b) in &lost {
+            if let Some(e) = self.edge_between(*a, *b)
+                && self.edge(e).unwrap().soft
+            {
+                soft.insert(e);
             }
         }
         if !curves.is_empty() {
             self.mend_curves(&curves);
         }
         if !soft.is_empty() {
-            let bounding = self.face_counts();
             let hard: Vec<EdgeId> = soft
                 .into_iter()
                 .filter(|e| {
-                    self.edge(*e).is_some_and(|edge| {
-                        edge.soft && bounding.get(&side(edge.v[0], edge.v[1])).unwrap_or(&0) < &2
-                    })
+                    self.edge(*e)
+                        .is_some_and(|edge| edge.soft && self.side_uses(edge.v[0], edge.v[1]) < 2)
                 })
                 .collect();
             for e in hard {
@@ -324,6 +336,19 @@ impl Model {
     fn straight(&self, chain: &Chain) -> bool {
         let points: Vec<DVec3> = chain.vertices.iter().map(|v| self.pos(*v)).collect();
         !chain.closed && corners(&points, false).is_empty()
+    }
+
+    /// How many times the face loops use the side a-b.
+    fn side_uses(&self, a: VertexId, b: VertexId) -> usize {
+        let s = side(a, b);
+        self.faces_at(a)
+            .map(|f| {
+                face_sides(self.face(f).unwrap())
+                    .into_iter()
+                    .filter(|x| *x == s)
+                    .count()
+            })
+            .sum()
     }
 
     /// How many face loops use each side (a vertex pair, smaller id first).

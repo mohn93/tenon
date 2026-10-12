@@ -3,7 +3,7 @@
 
 use glam::DVec3;
 
-use crate::geom::LENGTH_TOL;
+use crate::geom::{LENGTH_TOL, Plane};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::Model;
 
@@ -69,6 +69,19 @@ impl Index {
                 shapes.push(Shape::Triangle(id, t));
             }
         }
+        Index::from_shapes(shapes)
+    }
+
+    /// An index over the model's edges only: cheaper to build, for `segments_near_plane`.
+    pub(crate) fn of_edges(model: &Model) -> Index {
+        let shapes = model
+            .edges()
+            .map(|(id, e)| Shape::Segment(id, model.pos(e.v[0]), model.pos(e.v[1])))
+            .collect();
+        Index::from_shapes(shapes)
+    }
+
+    fn from_shapes(shapes: Vec<Shape>) -> Index {
         let mut index = Index {
             nodes: Vec::new(),
             shapes,
@@ -191,6 +204,32 @@ impl Index {
         hits.into_iter().collect()
     }
 
+    /// Calls `visit` for every edge whose bounding box comes within `LENGTH_TOL` of `plane`
+    /// (a superset of the edges lying in it; callers test exactly).
+    pub(crate) fn segments_near_plane(&self, plane: &Plane, mut visit: impl FnMut(EdgeId)) {
+        let mut stack = vec![0];
+        while let Some(i) = stack.pop() {
+            let Some(node) = self.nodes.get(i) else {
+                break;
+            };
+            let centre = (node.min + node.max) * 0.5;
+            let reach = ((node.max - node.min) * 0.5).dot(plane.normal.abs());
+            if plane.distance(centre).abs() > reach + LENGTH_TOL {
+                continue;
+            }
+            match node.kids {
+                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Leaf(s, e) => {
+                    for shape in &self.shapes[s..e] {
+                        if let Shape::Segment(id, ..) = shape {
+                            visit(*id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Calls `visit` for every vertex and edge that may lie within `r0 + slope * t` of the ray
     /// `origin + t * dir` (unit `dir`; `t` counted from 0): a cone around the ray, such as the
     /// pixels around a cursor. Some shapes outside it are visited too; callers test exactly.
@@ -260,4 +299,52 @@ fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f
     let v = dir.dot(q) / det;
     let eps = 1e-12;
     (u >= -eps && v >= -eps && u + v <= 1.0 + eps).then(|| e2.dot(q) / det)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segments_near_plane_finds_every_edge_in_the_plane() {
+        // A box of six faces plus a tilted triangle.
+        let mut m = Model::new();
+        let p = |x: f64, y: f64, z: f64| DVec3::new(x, y, z);
+        let (lo, hi) = (p(0.0, 0.0, 0.0), p(2.0, 1.0, 3.0));
+        for axis in 0..3 {
+            for at in [lo[axis], hi[axis]] {
+                let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+                let corner = |a: f64, b: f64| {
+                    let mut q = DVec3::ZERO;
+                    q[axis] = at;
+                    q[u] = a;
+                    q[v] = b;
+                    q
+                };
+                m.add_polygon(&[
+                    corner(lo[u], lo[v]),
+                    corner(hi[u], lo[v]),
+                    corner(hi[u], hi[v]),
+                    corner(lo[u], hi[v]),
+                ])
+                .unwrap();
+            }
+        }
+        m.add_polygon(&[p(5.0, 0.0, 0.0), p(6.0, 0.0, 1.0), p(5.0, 1.0, 0.5)])
+            .unwrap();
+        let index = Index::of_edges(&m);
+        for (_, f) in m.faces() {
+            let plane = Plane::through(m.pos(f.outer[0]), f.normal);
+            let on = |e: &crate::model::Edge| {
+                plane.contains(m.pos(e.v[0])) && plane.contains(m.pos(e.v[1]))
+            };
+            let all: Vec<EdgeId> = m.edges().filter(|(_, e)| on(e)).map(|(id, _)| id).collect();
+            let mut found = Vec::new();
+            index.segments_near_plane(&plane, |e| found.push(e));
+            found.retain(|e| on(m.edge(*e).unwrap()));
+            found.sort();
+            assert_eq!(found, all);
+            assert!(all.len() >= 3);
+        }
+    }
 }

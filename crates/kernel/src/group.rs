@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use glam::{DAffine3, DVec3};
 
-use crate::edit::{KernelError, loop_has_side};
+use crate::edit::KernelError;
 use crate::geom::LENGTH_TOL;
 use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, VertexId};
 use crate::model::{Guide, Instance, Model};
@@ -293,11 +293,7 @@ impl Model {
         let mut ends: BTreeSet<VertexId> = BTreeSet::new();
         for e in sides {
             let [a, b] = self.edge(e).expect("side exists").v;
-            let bounds_a_face = self.faces().any(|(_, f)| {
-                std::iter::once(&f.outer)
-                    .chain(&f.holes)
-                    .any(|l| loop_has_side(l, a, b))
-            });
+            let bounds_a_face = !self.faces_on_side(a, b).is_empty();
             if !bounds_a_face {
                 self.remove_edge(e);
                 ends.extend([a, b]);

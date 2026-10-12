@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::edit::{insert_between, loop_has_side};
+use crate::edit::insert_between;
 use crate::geom::{LENGTH_TOL, Plane, project_on_segment, vector_area};
 use crate::ids::{EdgeId, FaceId, VertexId};
 use crate::model::{Face, Model};
@@ -19,9 +19,9 @@ impl Model {
         for &m in moved {
             let p = self.pos(m);
             let other = self
-                .vertices()
-                .find(|(v, vert)| !moved.contains(v) && vert.pos.distance(p) < LENGTH_TOL)
-                .map(|(v, _)| v);
+                .vertices_near(p, LENGTH_TOL)
+                .into_iter()
+                .find(|v| !moved.contains(v));
             if let Some(f) = other {
                 target.insert(m, f);
             }
@@ -31,10 +31,10 @@ impl Model {
         }
         let to = |v: &VertexId| *target.get(v).unwrap_or(v);
 
-        let users: Vec<(FaceId, Face)> = self
-            .faces()
-            .filter(|(_, f)| loops(f).flatten().any(|v| target.contains_key(v)))
-            .map(|(id, f)| (id, f.clone()))
+        let users: BTreeSet<FaceId> = target.keys().flat_map(|v| self.faces_at(*v)).collect();
+        let users: Vec<(FaceId, Face)> = users
+            .into_iter()
+            .map(|id| (id, self.face(id).unwrap().clone()))
             .collect();
         for (id, f) in users {
             let fix = |l: &Vec<VertexId>| -> Vec<VertexId> {
@@ -58,10 +58,10 @@ impl Model {
             self.replace_face(id, Face { outer, holes, ..f });
         }
 
-        let joined: Vec<(EdgeId, [VertexId; 2])> = self
-            .edges()
-            .filter(|(_, e)| e.v.iter().any(|v| target.contains_key(v)))
-            .map(|(id, e)| (id, e.v))
+        let joined: BTreeSet<EdgeId> = target.keys().flat_map(|v| self.edges_at(*v)).collect();
+        let joined: Vec<(EdgeId, [VertexId; 2])> = joined
+            .into_iter()
+            .map(|id| (id, self.edge(id).unwrap().v))
             .collect();
         for (e, [a, b]) in joined {
             let old = self.remove_edge(e);
@@ -88,12 +88,7 @@ impl Model {
             chain.extend(along.iter().map(|(_, v)| *v));
             chain.push(b);
             if chain.len() > 2 {
-                let users: Vec<FaceId> = self
-                    .faces()
-                    .filter(|(_, f)| loops(f).any(|l| loop_has_side(l, a, b)))
-                    .map(|(id, _)| id)
-                    .collect();
-                for id in users {
+                for id in self.faces_on_side(a, b) {
                     let mut f = self.face(id).unwrap().clone();
                     for l in std::iter::once(&mut f.outer).chain(f.holes.iter_mut()) {
                         for w in 1..chain.len() - 1 {
@@ -119,16 +114,13 @@ impl Model {
     /// the same way, merging those faces; then removes the vertices left without edges and heals
     /// those left between two collinear edges.
     pub(crate) fn merge_seams(&mut self, met: BTreeSet<VertexId>) {
-        let seams: Vec<(EdgeId, [VertexId; 2], Plane)> = self
-            .edges()
-            .filter(|(_, e)| e.v.iter().any(|v| met.contains(v)))
-            .filter_map(|(id, e)| {
+        let at_met: BTreeSet<EdgeId> = met.iter().flat_map(|v| self.edges_at(*v)).collect();
+        let seams: Vec<(EdgeId, [VertexId; 2], Plane)> = at_met
+            .into_iter()
+            .filter_map(|id| {
+                let e = self.edge(id)?;
                 let [a, b] = e.v;
-                let users: Vec<FaceId> = self
-                    .faces()
-                    .filter(|(_, f)| loops(f).any(|l| loop_has_side(l, a, b)))
-                    .map(|(f, _)| f)
-                    .collect();
+                let users = self.faces_on_side(a, b);
                 let [f, g] = users[..] else {
                     return None;
                 };
@@ -160,8 +152,4 @@ impl Model {
             }
         }
     }
-}
-
-fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {
-    std::iter::once(&f.outer).chain(&f.holes)
 }
