@@ -236,10 +236,10 @@ impl Editor {
         self.hit.take().is_some()
     }
 
-    /// The copy modifier (Ctrl) was tapped. Only the Move tool copies; elsewhere it does
-    /// nothing and returns false.
+    /// The copy modifier (Ctrl) was tapped. Only the Move and Rotate tools copy; elsewhere it
+    /// does nothing and returns false.
     pub fn toggle_copy(&mut self) -> bool {
-        if self.kind != ToolKind::Move {
+        if !copies(self.kind) {
             return false;
         }
         self.send(ToolEvent::ToggleCopy);
@@ -288,7 +288,7 @@ impl Editor {
     }
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
-    /// (or "x" in the Move tool, for arrays like "x5"); "g" makes a group and "G" (Shift+G) a
+    /// (or "x" in the Move and Rotate tools, for arrays like "x5"); "g" makes a group and "G" (Shift+G) a
     /// component of the selection; other letters are tool shortcuts. Enter submits the typed
     /// text to the tool. Escape clears the typed text, or else cancels the tool's operation
     /// (the Select tool then closes the open group). Delete, and Backspace with nothing typed,
@@ -297,7 +297,7 @@ impl Editor {
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
                 let starts_value = c.is_ascii_digit() || matches!(c, '.' | '-' | '/' | '*');
-                let starts_array = matches!(c, 'x' | 'X') && self.kind == ToolKind::Move;
+                let starts_array = matches!(c, 'x' | 'X') && copies(self.kind);
                 if starts_value || starts_array {
                     self.typed.push(c);
                     true
@@ -605,20 +605,34 @@ impl Editor {
     }
 
     /// Runs the tool's commands in order; a copy selects what it created, as in SketchUp.
-    /// The first command that fails stops the rest, and so does a copy that changes nothing
-    /// (it lands on existing geometry and leaves no undo step for an array to replace). If it
+    /// The first command that fails stops the rest, and so does a copy or rotation that changes
+    /// nothing (a copy landing on existing geometry, a rotation of what lies on its axis): it
+    /// leaves no undo step for an array or a retyped angle to replace. If it
     /// fails after an undo from the same list (an array replacing a copy), the undo is redone
     /// and the copy reselected; either way the tool drops its state.
     fn apply(&mut self, out: ToolOutput) {
         let mut undone = false;
         for command in out.commands {
             let is_undo = matches!(command, Command::Undo);
-            let is_copy = matches!(command, Command::Copy { .. });
+            let is_copy = matches!(
+                command,
+                Command::Copy { .. }
+                    | Command::Rotate {
+                        copies: Some(_),
+                        ..
+                    }
+            );
+            let is_turn = matches!(command, Command::Rotate { copies: None, .. });
             let revision = self.doc.revision();
             let outcome = self.run(command);
-            let unchanged = is_copy && outcome.is_some() && self.doc.revision() == revision;
+            let unchanged =
+                (is_copy || is_turn) && outcome.is_some() && self.doc.revision() == revision;
             if unchanged {
-                self.message = Some("Nothing new to copy".into());
+                self.message = Some(if is_copy {
+                    "Nothing new to copy".into()
+                } else {
+                    "Nothing turned: it lies on the axis".into()
+                });
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
                 if undone && let Ok(redone) = self.doc.execute(Command::Redo) {
@@ -703,6 +717,11 @@ impl Editor {
         self.preview = out.preview;
         changed
     }
+}
+
+/// True for the tools Ctrl switches to copying.
+fn copies(kind: ToolKind) -> bool {
+    matches!(kind, ToolKind::Move | ToolKind::Rotate)
 }
 
 #[cfg(test)]
@@ -1604,6 +1623,71 @@ mod tests {
             "{:?}",
             box_min(&e, group)
         );
+    }
+
+    #[test]
+    fn q_turns_a_selected_group_by_a_typed_angle() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        assert!(e.key(EditorKey::Char('q')));
+        assert!(e.status().starts_with("Rotate"), "{}", e.status());
+        click_at(&mut e, DVec3::new(10.0, 0.0, 0.0));
+        type_text(&mut e, "90");
+        assert_eq!(box_min(&e, group), DVec3::new(8.0, 0.0, 0.0));
+        assert_eq!(box_max(&e, group), DVec3::new(10.0, 2.0, 1.0));
+        type_text(&mut e, "-90");
+        assert_eq!(box_min(&e, group), DVec3::new(10.0, -2.0, 0.0));
+        e.execute(Command::Undo).unwrap();
+        assert_eq!(
+            box_min(&e, group),
+            DVec3::new(10.0, 0.0, 0.0),
+            "one undo step"
+        );
+    }
+
+    #[test]
+    fn a_rotation_that_turns_nothing_is_not_replaced_by_a_retyped_angle() {
+        let mut e = editor();
+        e.execute(Command::AddEdge {
+            start: [5.0, 5.0, 0.0],
+            end: [5.0, 5.0, 1.0],
+        })
+        .unwrap();
+        let edge = e.doc().model().edges().next().unwrap().0;
+        e.execute(Command::Select {
+            ids: vec![EntityId::Edge(edge)],
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        // An unrelated later step, which a retyped angle's undo would take back.
+        e.execute(Command::AddEdge {
+            start: [-5.0, 0.0, 0.0],
+            end: [-4.0, 0.0, 0.0],
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Rotate);
+        click_at(&mut e, DVec3::new(5.0, 5.0, 0.0));
+        type_text(&mut e, "90");
+        assert!(e.status().contains("Nothing turned"), "{}", e.status());
+        type_text(&mut e, "45");
+        assert_eq!(stats(&e), (2, 0), "the later edge was not undone");
+    }
+
+    #[test]
+    fn rotated_copies_select_the_copies_and_arrays_replace_them() {
+        let mut e = editor();
+        moved_group(&mut e);
+        e.select_tool(ToolKind::Rotate);
+        assert!(e.toggle_copy());
+        click_at(&mut e, DVec3::new(10.0, 0.0, 0.0));
+        type_text(&mut e, "90");
+        let instances = |e: &Editor| e.doc().model().instances().count();
+        assert_eq!(instances(&e), 2);
+        let copy = *e.doc().selection().first().unwrap();
+        assert_eq!(box_min(&e, copy), DVec3::new(8.0, 0.0, 0.0));
+        type_text(&mut e, "x3");
+        assert_eq!(instances(&e), 4, "a full turn of copies");
+        assert_eq!(e.doc().selection().len(), 3);
     }
 
     #[test]

@@ -77,7 +77,7 @@ impl MoveTool {
 }
 
 /// Segments outlining edges, faces and instances (their bounding boxes).
-fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
+pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
     let m = ctx.model;
     let mut out = Vec::new();
     for id in ids {

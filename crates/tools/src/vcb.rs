@@ -81,6 +81,29 @@ pub fn parse_segments(s: &str) -> Option<u32> {
         .filter(|n| *n > 0)
 }
 
+/// Parses an angle in degrees: "90", "-45", "22.5", optionally ending in "°" or "deg". None if
+/// it is not an angle.
+pub fn parse_angle(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let s = (s.strip_suffix('°'))
+        .or_else(|| s.strip_suffix("deg"))
+        .unwrap_or(s)
+        .trim_end();
+    let (sign, s) = match s.strip_prefix('-') {
+        Some(rest) => (-1.0, rest.trim_start()),
+        None => (1.0, s),
+    };
+    number(s).filter(|a| a.is_finite()).map(|a| sign * a)
+}
+
+/// An angle for display, in degrees to a tenth: "22.5°".
+pub fn format_angle(degrees: f64) -> String {
+    let s = format!("{degrees:.1}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    let s = if s == "-0" { "0" } else { s };
+    format!("{s}°")
+}
+
 /// A length for display, in meters with up to millimeter precision: "2.5 m".
 pub fn format_length(meters: f64) -> String {
     let s = format!("{meters:.3}");
@@ -186,6 +209,20 @@ mod tests {
         ] {
             assert_eq!(parse_array(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn angles_are_degrees() {
+        assert_eq!(parse_angle("90"), Some(90.0));
+        assert_eq!(parse_angle(" -45 "), Some(-45.0));
+        assert_eq!(parse_angle("22.5°"), Some(22.5));
+        assert_eq!(parse_angle("30deg"), Some(30.0));
+        for bad in ["", "deg", "abc", "1e3", "--5", "5m", "90x"] {
+            assert_eq!(parse_angle(bad), None, "{bad:?}");
+        }
+        assert_eq!(format_angle(22.5), "22.5°");
+        assert_eq!(format_angle(90.0), "90°");
+        assert_eq!(format_angle(-0.01), "0°");
     }
 
     #[test]

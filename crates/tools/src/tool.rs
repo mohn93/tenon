@@ -13,6 +13,7 @@ use crate::line::LineTool;
 use crate::move_tool::MoveTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
+use crate::rotate::RotateTool;
 use crate::scenery::Scenery;
 use crate::select::SelectTool;
 
@@ -90,18 +91,20 @@ pub enum ToolKind {
     Circle,
     PushPull,
     Move,
+    Rotate,
     Erase,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 7] = [
+    pub const ALL: [ToolKind; 8] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
         ToolKind::Circle,
         ToolKind::PushPull,
         ToolKind::Move,
+        ToolKind::Rotate,
         ToolKind::Erase,
     ];
 
@@ -113,6 +116,7 @@ impl ToolKind {
             ToolKind::Circle => Box::new(CircleTool::new()),
             ToolKind::PushPull => Box::new(PushPullTool::new()),
             ToolKind::Move => Box::new(MoveTool::new()),
+            ToolKind::Rotate => Box::new(RotateTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
         }
     }
@@ -126,6 +130,7 @@ impl ToolKind {
             ToolKind::Circle => "Circle",
             ToolKind::PushPull => "Push/Pull",
             ToolKind::Move => "Move",
+            ToolKind::Rotate => "Rotate",
             ToolKind::Erase => "Erase",
         }
     }
@@ -139,6 +144,7 @@ impl ToolKind {
             ToolKind::Circle => 'c',
             ToolKind::PushPull => 'p',
             ToolKind::Move => 'm',
+            ToolKind::Rotate => 'q',
             ToolKind::Erase => 'e',
         }
     }
