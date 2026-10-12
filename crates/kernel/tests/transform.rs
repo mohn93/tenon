@@ -458,3 +458,56 @@ fn a_face_with_an_opening_copied_onto_a_face_leaves_the_face_under_the_opening()
     assert_eq!(under.len(), 1, "no hole is punched");
     assert_eq!(m.faces().count(), 4);
 }
+
+/// A quarter turn counter-clockwise about the vertical line through (1, 1), exact.
+fn quarter_turn() -> glam::DAffine3 {
+    glam::DAffine3::from_cols(DVec3::Y, -DVec3::X, DVec3::Z, p(2.0, 0.0, 0.0))
+}
+
+#[test]
+fn turning_every_vertex_turns_a_solid_and_its_faces() {
+    let mut m = cube();
+    let east = face_with_normal(&m, DVec3::X);
+    let all = vertices_where(&m, |_| true);
+    let c = m.transform_vertices(&all, quarter_turn()).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.face(east).unwrap().normal, DVec3::Y);
+    assert!(m.vertices().all(|(_, v)| (0.0..=2.0).contains(&v.pos.x)));
+    let s = c.summary();
+    // The four sides turn; the top and bottom keep their normals.
+    assert_eq!(s.modified.len(), 8 + 4);
+    m.apply(&c.inverse());
+    assert_eq!(m.face(east).unwrap().normal, DVec3::X);
+}
+
+#[test]
+fn a_hinged_lid_stretches_its_neighbours_and_a_twist_bends_them() {
+    let mut m = cube();
+    let top = vertices_where(&m, |v| v.z == 2.0);
+    // Opening the lid a quarter turn about its edge along y = 0 (at the top).
+    let hinge = glam::DAffine3::from_cols(DVec3::X, DVec3::Z, -DVec3::Y, p(0.0, 2.0, 2.0));
+    let mut lifted = m.clone();
+    lifted.transform_vertices(&top, hinge).unwrap();
+    lifted.validate().unwrap();
+    assert!(lifted.vertices().any(|(_, v)| v.pos == p(2.0, 0.0, 4.0)));
+    // Twisting it a quarter turn about its center bends every side.
+    assert!(matches!(
+        m.transform_vertices(&top, quarter_turn()),
+        Err(KernelError::Bend(_))
+    ));
+}
+
+#[test]
+fn copies_turned_about_a_corner_meet_along_shared_sides() {
+    let mut m = Model::new();
+    let f = square(&mut m, 0.0, 0.0, 2.0);
+    let turn = |k: i32| {
+        let q = glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2 * k as f64);
+        glam::DAffine3::from_quat(q)
+    };
+    m.copy_placed(&[], &[f], &[turn(1), turn(2), turn(3)])
+        .unwrap();
+    m.validate().unwrap();
+    assert_eq!(counts(&m), (9, 12, 4));
+    assert!(m.faces().all(|(_, f)| f.normal.distance(DVec3::Z) < 1e-9));
+}

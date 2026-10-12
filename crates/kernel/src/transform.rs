@@ -27,18 +27,32 @@ impl Model {
         if offset.length() < LENGTH_TOL {
             return Err(KernelError::ZeroDistance);
         }
+        self.transform_vertices(vertices, DAffine3::from_translation(offset))
+    }
+
+    /// Moves `vertices` by the rigid motion `t` (a rotation and a translation) as one
+    /// ChangeSet, under the rules of `move_vertices`. Faces that move whole turn with `t`.
+    /// Vertices `t` leaves in place (on a rotation's axis) are not reported, and a motion that
+    /// moves nothing changes nothing.
+    pub fn transform_vertices(
+        &mut self,
+        vertices: &BTreeSet<VertexId>,
+        t: DAffine3,
+    ) -> Result<ChangeSet, KernelError> {
+        if !t.is_finite() {
+            return Err(KernelError::NotFinite);
+        }
         let moved: BTreeSet<VertexId> = vertices
             .iter()
             .copied()
             .filter(|v| self.vertex(*v).is_some())
             .collect();
         let at = |m: &Model, v: VertexId| {
-            m.pos(v)
-                + if moved.contains(&v) {
-                    offset
-                } else {
-                    DVec3::ZERO
-                }
+            if moved.contains(&v) {
+                t.transform_point3(m.pos(v))
+            } else {
+                m.pos(v)
+            }
         };
 
         for (_, e) in self.edges() {
@@ -50,7 +64,7 @@ impl Model {
             }
         }
         for &v in &moved {
-            let to = self.pos(v) + offset;
+            let to = at(self, v);
             let lands = self
                 .vertices()
                 .any(|(w, vert)| !moved.contains(&w) && vert.pos.distance(to) < LENGTH_TOL);
@@ -59,37 +73,43 @@ impl Model {
             }
         }
         // Faces that move partly get a new plane; check it and compute their new normals.
+        // Faces that move whole keep their shape and turn with `t`.
         let mut retilted: Vec<(FaceId, Face)> = Vec::new();
         for (id, f) in self.faces() {
             let all: Vec<VertexId> = loops(f).flatten().copied().collect();
             let touched = all.iter().filter(|v| moved.contains(v)).count();
-            if touched == 0 || touched == all.len() {
+            if touched == 0 {
                 continue;
             }
-            let outer: Vec<DVec3> = f.outer.iter().map(|v| at(self, *v)).collect();
-            let area = vector_area(&outer);
-            if area.dot(f.normal) <= LENGTH_TOL * LENGTH_TOL {
-                return Err(KernelError::Squash);
-            }
-            let normal = area.normalize();
-            let origin = outer[0];
-            if all
-                .iter()
-                .any(|v| (at(self, *v) - origin).dot(normal).abs() > LENGTH_TOL)
-            {
-                return Err(KernelError::Bend(id));
-            }
-            let mut rings = vec![outer];
-            for h in &f.holes {
-                let pts: Vec<DVec3> = h.iter().map(|v| at(self, *v)).collect();
-                if vector_area(&pts).dot(normal) >= 0.0 {
+            let normal = if touched == all.len() {
+                t.transform_vector3(f.normal).normalize()
+            } else {
+                let outer: Vec<DVec3> = f.outer.iter().map(|v| at(self, *v)).collect();
+                let area = vector_area(&outer);
+                if area.dot(f.normal) <= LENGTH_TOL * LENGTH_TOL {
                     return Err(KernelError::Squash);
                 }
-                rings.push(pts);
-            }
-            if !rings_are_valid(&rings, normal) {
-                return Err(KernelError::Squash);
-            }
+                let normal = area.normalize();
+                let origin = outer[0];
+                if all
+                    .iter()
+                    .any(|v| (at(self, *v) - origin).dot(normal).abs() > LENGTH_TOL)
+                {
+                    return Err(KernelError::Bend(id));
+                }
+                let mut rings = vec![outer];
+                for h in &f.holes {
+                    let pts: Vec<DVec3> = h.iter().map(|v| at(self, *v)).collect();
+                    if vector_area(&pts).dot(normal) >= 0.0 {
+                        return Err(KernelError::Squash);
+                    }
+                    rings.push(pts);
+                }
+                if !rings_are_valid(&rings, normal) {
+                    return Err(KernelError::Squash);
+                }
+                normal
+            };
             if normal.distance(f.normal) > 1e-12 {
                 let mut g = f.clone();
                 g.normal = normal;
@@ -97,8 +117,10 @@ impl Model {
             }
         }
         for &v in &moved {
-            let to = self.pos(v) + offset;
-            self.move_vertex(v, to);
+            let to = at(self, v);
+            if to != self.pos(v) {
+                self.move_vertex(v, to);
+            }
         }
         for (id, f) in retilted {
             self.replace_face(id, f);
@@ -124,11 +146,25 @@ impl Model {
         if offset.length() < LENGTH_TOL {
             return Err(KernelError::ZeroDistance);
         }
-        let stencil = self.stencil(edges, faces);
         let places: Vec<DAffine3> = (1..=count)
             .map(|k| DAffine3::from_translation(offset * k as f64))
             .collect();
-        self.draw_stencil(&stencil, &places);
+        self.copy_placed(edges, faces, &places)
+    }
+
+    /// Copies `edges` and `faces` (with their edges) once per rigid motion in `places`, as one
+    /// ChangeSet, under the rules of `copy`.
+    pub fn copy_placed(
+        &mut self,
+        edges: &[EdgeId],
+        faces: &[FaceId],
+        places: &[DAffine3],
+    ) -> Result<ChangeSet, KernelError> {
+        if !places.iter().all(|t| t.is_finite()) {
+            return Err(KernelError::NotFinite);
+        }
+        let stencil = self.stencil(edges, faces);
+        self.draw_stencil(&stencil, places);
         Ok(self.take_changes())
     }
 

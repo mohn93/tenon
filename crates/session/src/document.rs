@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    ChangeSet, EdgeId, EntityId, FaceId, InstanceId, KernelError, MeshId, Model, Scene,
+    ChangeSet, EdgeId, EntityId, FaceId, Instance, InstanceId, KernelError, MeshId, Model, Scene,
     SceneChange, VertexId,
 };
 
@@ -14,6 +14,7 @@ use crate::query::{
     ChangeEvent, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, Query, QueryResult, VertexInfo,
 };
 use crate::rectangle::rectangle_corners;
+use crate::rotate::rotation;
 
 mod files;
 mod groups;
@@ -21,7 +22,7 @@ mod groups;
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
 
-/// Most copies one `copy` command may make.
+/// Most copies one `copy` or `rotate` command may make.
 pub const MAX_COPIES: u32 = 100;
 
 /// How many recent model changes `Query::Events` can return.
@@ -222,6 +223,7 @@ impl Document {
             | Command::Erase { .. }
             | Command::Move { .. }
             | Command::Copy { .. }
+            | Command::Rotate { .. }
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
@@ -255,6 +257,13 @@ impl Document {
             Command::Copy { ids, offset, count } => {
                 self.copy_changes(ids, *offset, count.unwrap_or(1))
             }
+            Command::Rotate {
+                ids,
+                center,
+                axis,
+                angle,
+                copies,
+            } => self.rotate_changes(ids, *center, *axis, *angle, *copies),
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
@@ -501,10 +510,69 @@ impl Document {
             })
             .collect();
         let offset = DVec3::from(offset);
-        self.check_moved(&vertices, &instances, &[offset])?;
+        self.check_placed(&vertices, &instances, &[DAffine3::from_translation(offset)])?;
         self.edit_mesh(|m| {
             let mut c = m.move_vertices(&vertices, offset)?;
             c.ops.extend(m.move_instances(&instances, offset).ops);
+            Ok(c)
+        })
+        .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn rotate_changes(
+        &mut self,
+        ids: &[EntityId],
+        center: [f64; 3],
+        axis: Option<[f64; 3]>,
+        angle: f64,
+        copies: Option<u32>,
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if ids.is_empty() {
+            return Err(invalid(
+                "ids must list at least one vertex, edge, face or instance",
+            ));
+        }
+        check_coordinates(&[center, axis.unwrap_or([0.0, 0.0, 1.0])])?;
+        let Some(axis) = DVec3::from(axis.unwrap_or([0.0, 0.0, 1.0])).try_normalize() else {
+            return Err(invalid("axis must be a non-zero vector"));
+        };
+        if !angle.is_finite() {
+            return Err(invalid("angle must be finite"));
+        }
+        // Whole turns are dropped first, so copies k * angle stay finite and exact.
+        let angle = angle % 360.0;
+        if angle == 0.0 {
+            return Err(invalid("angle must not be a whole number of turns"));
+        }
+        let center = DVec3::from(center);
+        if let Some(count) = copies {
+            let parts = self.copy_parts(ids, count)?;
+            let places: Vec<DAffine3> = (1..=count)
+                .map(|k| rotation(center, axis, angle * k as f64))
+                .collect();
+            self.check_placed(&self.vertex_ids(ids), &parts.instances, &places)?;
+            return self.copy_placed_changes(ids, &parts, &places);
+        }
+        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
+        if !missing.is_empty() {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
+            );
+        }
+        let vertices = self.vertex_ids(ids);
+        let instances: Vec<InstanceId> = ids
+            .iter()
+            .filter_map(|id| match id {
+                EntityId::Instance(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        let turn = rotation(center, axis, angle);
+        self.check_placed(&vertices, &instances, &[turn])?;
+        self.edit_mesh(|m| {
+            let mut c = m.transform_vertices(&vertices, turn)?;
+            c.ops.extend(m.transform_instances(&instances, turn).ops);
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -516,6 +584,21 @@ impl Document {
         offset: [f64; 3],
         count: u32,
     ) -> Result<SceneChange, CommandError> {
+        let parts = self.copy_parts(ids, count)?;
+        check_coordinates(&[offset])?;
+        let offset = DVec3::from(offset);
+        let places: Vec<DAffine3> = (1..=count)
+            .map(|k| DAffine3::from_translation(offset * k as f64))
+            .collect();
+        self.check_placed(&self.vertex_ids(ids), &parts.instances, &places)?;
+        if offset.length() < kernel::geom::LENGTH_TOL {
+            return Err(self.kernel_error(KernelError::ZeroDistance, ids));
+        }
+        self.copy_placed_changes(ids, &parts, &places)
+    }
+
+    /// Checks the ids and count of a copy and splits the ids into edges, faces and instances.
+    fn copy_parts(&self, ids: &[EntityId], count: u32) -> Result<Parts, CommandError> {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
@@ -528,18 +611,20 @@ impl Document {
                 format!("count must be between 1 and {MAX_COPIES}"),
             ));
         }
-        let parts = self.parts(ids)?;
-        check_coordinates(&[offset])?;
-        let offset = DVec3::from(offset);
-        self.check_moved(
-            &self.vertex_ids(ids),
-            &parts.instances,
-            &[offset * count as f64],
-        )?;
+        self.parts(ids)
+    }
+
+    /// Copies `parts` (split from `ids`) once per rigid motion in `places`.
+    fn copy_placed_changes(
+        &mut self,
+        ids: &[EntityId],
+        parts: &Parts,
+        places: &[DAffine3],
+    ) -> Result<SceneChange, CommandError> {
         let geometry = if parts.edges.is_empty() && parts.faces.is_empty() {
             SceneChange::default()
         } else {
-            self.edit_mesh(|m| m.copy(&parts.edges, &parts.faces, offset, count))
+            self.edit_mesh(|m| m.copy_placed(&parts.edges, &parts.faces, places))
                 .map_err(|e| self.kernel_error(e, ids))?
         };
         let placed = if parts.instances.is_empty() {
@@ -548,7 +633,7 @@ impl Document {
             let mesh = self.active();
             match self
                 .scene
-                .copy_instances(mesh, &parts.instances, offset, count)
+                .copy_instances_placed(mesh, &parts.instances, places)
             {
                 Ok(c) => c,
                 Err(e) => {
@@ -560,28 +645,31 @@ impl Document {
         Ok(SceneChange::join([geometry, placed]))
     }
 
-    /// Rejects moves or copies that would put a vertex or an instance's bounding box (its
-    /// origin when it has nothing in it) beyond `MAX_COORDINATE`.
-    fn check_moved(
+    /// Rejects moves, rotations or copies that would put a vertex or an instance's bounding
+    /// box (its origin when it has nothing in it) beyond `MAX_COORDINATE` under any of
+    /// `places`.
+    fn check_placed(
         &self,
         vertices: &BTreeSet<VertexId>,
         instances: &[InstanceId],
-        offsets: &[DVec3],
+        places: &[DAffine3],
     ) -> Result<(), CommandError> {
-        let mut points: Vec<DVec3> = vertices
-            .iter()
-            .map(|v| self.model().position(*v).unwrap())
-            .collect();
-        for i in instances {
-            match self.instance_box(*i) {
-                Some(b) => points.extend(b),
-                None => points.extend((self.model().instance(*i)).map(|i| i.transform.translation)),
+        let m = self.model();
+        let mut moved: Vec<[f64; 3]> = Vec::new();
+        for t in places {
+            let at = |p: DVec3| t.transform_point3(p).to_array();
+            moved.extend(vertices.iter().map(|v| at(m.position(*v).unwrap())));
+            for i in instances.iter().filter_map(|i| m.instance(*i)) {
+                let placed = Instance {
+                    definition: i.definition,
+                    transform: *t * i.transform,
+                };
+                match self.scene.instance_bounds(&placed) {
+                    Some(b) => moved.extend(b.map(|p| p.to_array())),
+                    None => moved.push(placed.transform.translation.to_array()),
+                }
             }
         }
-        let moved: Vec<[f64; 3]> = points
-            .iter()
-            .flat_map(|p| offsets.iter().map(move |o| (*p + *o).to_array()))
-            .collect();
         check_coordinates(&moved)
     }
 

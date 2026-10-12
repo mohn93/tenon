@@ -126,6 +126,7 @@ fn describe_lists_methods_and_schemas() {
         "erase",
         "move",
         "copy",
+        "rotate",
         "select",
         "undo",
         "redo",

@@ -683,3 +683,50 @@ fn exploding_a_group_with_a_group_inside_reuses_its_definition() {
     assert_eq!(s.definitions().count(), 1);
     assert_eq!(s.instance_count(d), 1);
 }
+
+/// A quarter turn counter-clockwise about Z through the origin, exact.
+fn quarter_turn() -> DAffine3 {
+    DAffine3::from_cols(DVec3::Y, -DVec3::X, DVec3::Z, DVec3::ZERO)
+}
+
+#[test]
+fn turning_an_instance_turns_its_bounds_and_undoes_exactly() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Group);
+    let before = s.clone();
+    let change = s
+        .edit(MeshId::Root, |m| {
+            Ok(m.transform_instances(&[i, i], quarter_turn()))
+        })
+        .unwrap();
+    assert_eq!(s.root().instance(i).unwrap().transform, quarter_turn());
+    assert_eq!(change.summary().modified, vec![EntityId::Instance(i)]);
+    assert_eq!(
+        s.bounds(MeshId::Root),
+        Some([p(-3.0, 0.0, 0.0), p(0.0, 2.0, 1.0)])
+    );
+    s.apply(&change.inverse());
+    assert_eq!(s, before);
+}
+
+#[test]
+fn copies_placed_by_turns_keep_the_original_transform_inside() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (i, _) = group_all(&mut s, DefinitionKind::Component);
+    let shift = DAffine3::from_translation(p(1.0, 0.0, 0.0));
+    s.edit(MeshId::Root, |m| {
+        Ok(m.move_instances(&[i], p(1.0, 0.0, 0.0)))
+    })
+    .unwrap();
+    let half = quarter_turn() * quarter_turn();
+    s.copy_instances_placed(MeshId::Root, &[i], &[quarter_turn(), half])
+        .unwrap();
+    s.validate().unwrap();
+    let mut transforms: Vec<DAffine3> = s.root().instances().map(|(_, i)| i.transform).collect();
+    transforms.sort_by(|a, b| a.translation.x.total_cmp(&b.translation.x));
+    assert_eq!(
+        transforms,
+        vec![half * shift, quarter_turn() * shift, shift],
+        "each copy is the original turned"
+    );
+}

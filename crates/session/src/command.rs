@@ -68,6 +68,20 @@ pub enum Command {
         #[serde(default)]
         count: Option<u32>,
     },
+    /// Rotate vertices, edges, faces (their vertices) and instances by `angle` degrees about
+    /// the line through `center` along `axis` (default Z), counter-clockwise looking down the
+    /// axis, as one undo step. Faces that share some of the turned vertices stretch and may
+    /// tilt, but must stay flat. With `copies`, the originals stay and that many copies are
+    /// made instead, copy k turned by `k * angle`, under the rules of `Copy`.
+    Rotate {
+        ids: Vec<EntityId>,
+        center: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        angle: f64,
+        #[serde(default)]
+        copies: Option<u32>,
+    },
     /// Turn edges, faces (with their edges) and instances into a group: they move into a new
     /// definition, placed by one new instance where they were. The instance becomes the
     /// selection.

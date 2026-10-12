@@ -417,11 +417,17 @@ impl Model {
     /// Moves instances by `offset` as one ChangeSet. Each listed instance moves once; unknown
     /// ids are skipped.
     pub fn move_instances(&mut self, ids: &[InstanceId], offset: DVec3) -> ChangeSet {
+        self.transform_instances(ids, DAffine3::from_translation(offset))
+    }
+
+    /// Applies `t` after the transforms of these instances (unknown ids are skipped), as one
+    /// ChangeSet: the instances move and turn with `t` in this mesh's coordinates.
+    pub fn transform_instances(&mut self, ids: &[InstanceId], t: DAffine3) -> ChangeSet {
         let ids: BTreeSet<InstanceId> = ids.iter().copied().collect();
         for id in &ids {
             if let Some(i) = self.instances.get(id) {
                 let from = i.transform;
-                let to = DAffine3::from_translation(offset) * from;
+                let to = t * from;
                 self.record(Op::TransformInstance(*id, from, to));
             }
         }

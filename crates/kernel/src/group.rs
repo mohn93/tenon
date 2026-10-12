@@ -131,6 +131,23 @@ impl Scene {
         if offset.length() < LENGTH_TOL {
             return Err(KernelError::ZeroDistance);
         }
+        let places: Vec<DAffine3> = (1..=count)
+            .map(|k| DAffine3::from_translation(offset * k as f64))
+            .collect();
+        self.copy_instances_placed(parent, instances, &places)
+    }
+
+    /// Places copies of instances of mesh `parent`, one per rigid motion in `places` (applied
+    /// after the original's transform), under the rules of `copy_instances`.
+    pub fn copy_instances_placed(
+        &mut self,
+        parent: MeshId,
+        instances: &[InstanceId],
+        places: &[DAffine3],
+    ) -> Result<SceneChange, KernelError> {
+        if !places.iter().all(|t| t.is_finite()) {
+            return Err(KernelError::NotFinite);
+        }
         let source = self.mesh(parent).expect("copy in a missing mesh");
         let unique: BTreeSet<InstanceId> = instances.iter().copied().collect();
         let originals: Vec<Instance> = unique
@@ -140,7 +157,7 @@ impl Scene {
             .ok_or(KernelError::InstanceNotFound)?;
         let mut steps = SceneChange::default();
         let mut copies = Vec::new();
-        for k in 1..=count {
+        for place in places {
             for original in &originals {
                 let definition = match self.definition(original.definition).map(|d| d.kind) {
                     Some(DefinitionKind::Group) => {
@@ -152,7 +169,7 @@ impl Scene {
                 };
                 copies.push(Instance {
                     definition,
-                    transform: DAffine3::from_translation(offset * k as f64) * original.transform,
+                    transform: *place * original.transform,
                 });
             }
         }
