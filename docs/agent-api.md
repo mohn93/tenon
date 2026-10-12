@@ -263,6 +263,14 @@ open:
 - To select a node elsewhere in the tree, open its parent's path, then select it:
   `open_path` with the path minus its last id, then `select`.
 
+In the window, the Outliner under the Materials list shows this tree (components as `<Name>`,
+groups by name or as `Group`, selected rows highlighted, open ones bold, nodes on the open path
+expanded at first) and sends these same commands: a click selects the node, with `open_path`
+first when it is in another context; Shift-click or Cmd/Ctrl-click adds it to or removes it from
+the selection when it is in the open context (`select` with mode `toggle`); a double-click opens
+it (`open_path` with its whole path); the Model row at the top goes back to the root
+(`open_path` with `[]`).
+
 `{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
 undo step; a component's name must not be empty; an unknown definition is `not_found`).
 `{"type": "purge_definitions"}` removes every definition no instance places, such as a component

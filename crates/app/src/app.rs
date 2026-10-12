@@ -322,6 +322,12 @@ impl State {
             UiAction::RecolorMaterial(material, color) => {
                 self.editor.recolor_material(material, color);
             }
+            UiAction::OutlinerSelect { path, toggle } => {
+                self.editor.outliner_select(&path, toggle);
+            }
+            UiAction::OpenPath(path) => {
+                self.editor.open_path(path);
+            }
         }
     }
 
@@ -372,6 +378,7 @@ impl State {
                 color: m.color,
             })
             .collect();
+        let outliner = self.editor.doc().outliner();
         let panels = View {
             tool: self.editor.tool_kind(),
             status: &status,
@@ -388,6 +395,7 @@ impl State {
             projection: self.editor.doc().camera.projection,
             materials: &materials,
             material: self.editor.current_material(),
+            outliner: &outliner,
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         // Applied once the frame is presented: some open modal dialogs, which must not run

@@ -555,6 +555,45 @@ impl Editor {
         self.run_selection_command(Command::CloseInstance)
     }
 
+    /// Selects the outliner node at `path` (instance ids from the root down to it), first
+    /// opening the context it is in when that is not the open one. With `toggle` a node of the
+    /// open context is added to or removed from the selection instead. False for an empty path.
+    pub fn outliner_select(&mut self, path: &[EntityId], toggle: bool) -> bool {
+        let Some((id, parent)) = path.split_last() else {
+            return false;
+        };
+        self.reset_tool();
+        self.typed.clear();
+        self.message = None;
+        let open = self.doc.context().iter().map(|i| EntityId::Instance(*i));
+        let in_context = parent.iter().copied().eq(open);
+        if in_context
+            || self
+                .run(Command::OpenPath {
+                    path: parent.to_vec(),
+                })
+                .is_some()
+        {
+            let mode = if toggle && in_context {
+                SelectMode::Toggle
+            } else {
+                SelectMode::Replace
+            };
+            self.run(Command::Select {
+                ids: vec![*id],
+                mode,
+            });
+        }
+        self.update_hover();
+        true
+    }
+
+    /// Opens the instances along `path` (from the root; empty: the root) for editing, as a
+    /// double-click in the outliner does.
+    pub fn open_path(&mut self, path: Vec<EntityId>) -> bool {
+        self.run_selection_command(Command::OpenPath { path })
+    }
+
     /// Runs a command that works on the selection or the open context, dropping the tool's
     /// operation and any typed text first.
     fn run_selection_command(&mut self, command: Command) -> bool {
@@ -2167,6 +2206,86 @@ mod tests {
             (4, 1),
             "the square's edges and face are no group"
         );
+    }
+
+    /// `moved_group` made a "Box" component, copied 5 m along X. Returns (first component,
+    /// second component, the group inside both).
+    fn two_boxes(e: &mut Editor) -> (EntityId, EntityId, EntityId) {
+        let group = moved_group(e);
+        e.execute(Command::MakeComponent {
+            ids: vec![group],
+            name: "Box".into(),
+        })
+        .unwrap();
+        let first = *e.doc().selection().first().unwrap();
+        let out = e
+            .execute(Command::Copy {
+                ids: vec![first],
+                offset: [5.0, 0.0, 0.0],
+                count: None,
+            })
+            .unwrap();
+        let second = *out.changes.created.first().unwrap();
+        (first, second, group)
+    }
+
+    fn context_ids(e: &Editor) -> Vec<EntityId> {
+        e.doc()
+            .context()
+            .iter()
+            .map(|i| EntityId::Instance(*i))
+            .collect()
+    }
+
+    fn selected(e: &Editor) -> Vec<EntityId> {
+        e.doc().selection().iter().copied().collect()
+    }
+
+    #[test]
+    fn outliner_clicks_open_the_nodes_context_and_select_it() {
+        let mut e = editor();
+        let (first, second, group) = two_boxes(&mut e);
+        assert!(e.outliner_select(&[second, group], false));
+        assert_eq!(context_ids(&e), [second]);
+        assert_eq!(selected(&e), [group]);
+        assert!(e.outliner_select(&[first], false));
+        assert!(context_ids(&e).is_empty());
+        assert_eq!(selected(&e), [first]);
+        // Shift or Cmd adds and removes nodes of the open context.
+        assert!(e.outliner_select(&[second], true));
+        assert_eq!(selected(&e), [first, second]);
+        assert!(e.outliner_select(&[first], true));
+        assert_eq!(selected(&e), [second]);
+        // A node elsewhere is selected alone, in its own context.
+        assert!(e.outliner_select(&[first, group], true));
+        assert_eq!(context_ids(&e), [first]);
+        assert_eq!(selected(&e), [group]);
+        assert!(!e.outliner_select(&[], false));
+    }
+
+    #[test]
+    fn outliner_double_clicks_open_the_node_and_end_the_tools_operation() {
+        let mut e = editor();
+        let (_, second, group) = two_boxes(&mut e);
+        click_at(&mut e, DVec3::new(0.0, -3.0, 0.0));
+        assert!(e.tool.anchor().is_some(), "a line is started");
+        assert!(e.open_path(vec![second, group]));
+        assert!(e.tool.anchor().is_none());
+        assert_eq!(context_ids(&e), [second, group]);
+        assert!(selected(&e).is_empty());
+        assert!(e.open_path(Vec::new()));
+        assert!(context_ids(&e).is_empty());
+    }
+
+    #[test]
+    fn a_stale_outliner_path_shows_why_and_keeps_the_context() {
+        let mut e = editor();
+        let (first, _, group) = two_boxes(&mut e);
+        e.execute(Command::OpenInstance { id: first }).unwrap();
+        let gone: EntityId = "i999".parse().unwrap();
+        assert!(e.outliner_select(&[gone, group], false));
+        assert!(e.status().contains("no instance i999"), "{}", e.status());
+        assert_eq!(context_ids(&e), [first]);
     }
 
     #[test]
