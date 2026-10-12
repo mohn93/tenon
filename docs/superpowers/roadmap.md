@@ -17,7 +17,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M6b | Rotate command and tool (rotate vertices and instances about an axis; rotated placements: normals, picking, tool camera and bounds in rotated instances) | done 3d1c782..9d8e1ee |
 | M6c | Tape Measure tool: guide lines and points (session-level guides, inference snaps to them, commands to add/remove) | done 5bd8d1d..82b4e07 |
 | M6d | Curves: tag edge chains from circles (and arcs) as curves; select a whole curve, Entity Info shows it, soft side edges on pushed curves; Arc tool and command | done 76ae9e3..8b3b3d4 |
-| M7a | Camera: orbit, zoom extents, standard views and orthographic projection as commands and UI | todo |
+| M7a | Camera: orbit, zoom extents, standard views and orthographic projection as commands and UI | planned `plans/2026-10-12-m7a-camera.md` |
 | M7b | Materials: front/back face colors, Paint tool, material list in the UI, materials in `.skr` and export | todo |
 | M7c | Outliner panel (groups/components tree, select and open from it) | todo |
 | M8 | Import OBJ and STL; golden-image render tests; clean-up of deferred minors recorded in memory | todo |
