@@ -18,7 +18,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M6c | Tape Measure tool: guide lines and points (session-level guides, inference snaps to them, commands to add/remove) | done 5bd8d1d..82b4e07 |
 | M6d | Curves: tag edge chains from circles (and arcs) as curves; select a whole curve, Entity Info shows it, soft side edges on pushed curves; Arc tool and command | done 76ae9e3..8b3b3d4 |
 | M7a | Camera: orbit, zoom extents, standard views and orthographic projection as commands and UI | done 83d8f17..afd4001 |
-| M7b | Materials: front/back face colors, Paint tool, material list in the UI, materials in `.skr` and export | planned `plans/2026-10-12-m7b-materials.md` |
+| M7b | Materials: front/back face colors, Paint tool, material list in the UI, materials in `.skr` and export | done d05ff34..19429bf |
 | M7c | Outliner panel (groups/components tree, select and open from it) | todo |
 | M8 | Import OBJ and STL; golden-image render tests; clean-up of deferred minors recorded in memory | todo |
 
