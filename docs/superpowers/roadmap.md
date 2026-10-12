@@ -11,7 +11,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | Milestone | Scope | Status |
 |---|---|---|
 | M1-M5b | viewport, kernel, agent API, drawing tools, egui shell, selection, move/copy, openings, groups and components (model and tools) | done |
-| M5c | Files: `.skr` save/open/new as commands, FILE argument, File menu with native dialogs and shortcuts, unsaved-changes prompts; rename and purge definitions | planned `plans/2026-10-12-m5c-files.md` |
+| M5c | Files: `.skr` save/open/new as commands, FILE argument, File menu with native dialogs and shortcuts, unsaved-changes prompts; rename and purge definitions | done 791774f..bc88ce9 |
 | M5d | Export OBJ, STL, glTF as commands and from the File menu | todo |
 | M6a | Circle tool and command (edge chains tagged as curves, segment count); arcs if cheap | todo |
 | M6b | Rotate command and tool (rotate vertices and instances about an axis; rotated placements: normals, picking, tool camera and bounds in rotated instances) | todo |
