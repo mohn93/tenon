@@ -498,6 +498,7 @@ fn a_model_that_has_used_up_its_ids_is_not_saved() {
         json!({"type": "save", "path": path.to_str().unwrap()}),
     )
     .unwrap();
+    let saved = ask(&d, json!({"type": "stats"}));
     run(
         &mut d,
         json!({"type": "add_edge", "start": [0, -5, 0], "end": [1, -5, 0]}),
@@ -517,5 +518,10 @@ fn a_model_that_has_used_up_its_ids_is_not_saved() {
         json!({"type": "open", "path": path.to_str().unwrap()}),
     )
     .unwrap();
+    assert_eq!(ask(&again, json!({"type": "stats"})), saved);
+    assert_eq!(
+        ask(&d, json!({"type": "stats"}))["edges"].as_u64().unwrap(),
+        saved["edges"].as_u64().unwrap() + 1
+    );
     assert!(d.is_modified());
 }

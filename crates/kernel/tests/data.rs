@@ -111,7 +111,7 @@ fn broken_data_is_rejected() {
             let first = d.root.instances[0].id;
             d.root.edges[0].id = first;
         },
-        "share an id",
+        "two entities of different kinds share an id",
     );
     rejects(
         |d| {
@@ -306,22 +306,26 @@ fn no_number_is_the_id_of_two_things() {
         }
     };
     type Change = Box<dyn Fn(&mut SceneData)>;
-    let changes: Vec<(&str, Change)> = vec![
+    let changes: Vec<(&str, Change, String)> = vec![
         (
             "curve = definition",
             Box::new(move |d| recurve(d, definition)),
+            format!("d{definition} and c{definition} share an id"),
         ),
         (
             "curve = vertex in a definition",
             Box::new(move |d| recurve(d, inner_vertex)),
+            format!("c{inner_vertex} and v{inner_vertex} share an id"),
         ),
         (
             "material = face in a definition",
             Box::new(move |d| d.materials[0].id = inner_face),
+            format!("m{inner_face} and f{inner_face} share an id"),
         ),
         (
             "material = definition",
             Box::new(move |d| d.materials[0].id = definition),
+            format!("d{definition} and m{definition} share an id"),
         ),
         (
             "guide in a definition = vertex in the root",
@@ -332,13 +336,14 @@ fn no_number_is_the_id_of_two_things() {
                     direction: None,
                 })
             }),
+            format!("v{root_vertex} and g{root_vertex} share an id"),
         ),
     ];
-    for (what, change) in changes {
+    for (what, change, expected) in changes {
         let mut d = data.clone();
         change(&mut d);
         let err = Scene::from_data(&d).unwrap_err();
-        assert!(err.contains("share an id"), "{what}: {err}");
+        assert_eq!(err, expected, "{what}");
     }
 }
 

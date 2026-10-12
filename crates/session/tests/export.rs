@@ -509,7 +509,7 @@ fn the_outcome_counts_triangles_and_faces_left_out() {
     let skr = scratch("empty-face.skr");
     let document = json!({
         "format": "sketchup-alt",
-        "schema_version": 5,
+        "schema_version": session::file::SCHEMA_VERSION,
         "camera": {"eye": [5, -5, 5], "target": [0, 0, 0], "fov_y_deg": 45},
         "model": model
     });
@@ -533,4 +533,56 @@ fn the_outcome_counts_triangles_and_faces_left_out() {
     assert_eq!(out["export"], json!({"triangles": 1, "skipped_faces": 1}));
     let obj = std::fs::read_to_string(&path).unwrap();
     assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 1);
+}
+
+#[test]
+fn a_model_whose_every_face_fails_to_triangulate_says_so() {
+    let model = json!({
+        "next_id": 20,
+        "root": {
+            "vertices": [
+                {"id": 1, "position": [0, 0, 0]}, {"id": 2, "position": [1, 0, 0]},
+                {"id": 3, "position": [1, 1, 0]}, {"id": 4, "position": [0, 1, 0]}
+            ],
+            "edges": [
+                {"id": 6, "vertices": [1, 2]}, {"id": 7, "vertices": [2, 3]},
+                {"id": 8, "vertices": [3, 4]}, {"id": 9, "vertices": [4, 1]}
+            ],
+            "faces": [
+                {"id": 12, "outer": [1, 2, 3, 4], "holes": [[1, 4, 3, 2]], "normal": [0, 0, 1]}
+            ],
+            "instances": []
+        },
+        "definitions": []
+    });
+    let skr = scratch("all-left-out.skr");
+    let document = json!({
+        "format": "sketchup-alt",
+        "schema_version": session::file::SCHEMA_VERSION,
+        "camera": {"eye": [5, -5, 5], "target": [0, 0, 0], "fov_y_deg": 45},
+        "model": model
+    });
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&skr).unwrap());
+    zip.start_file("document.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    std::io::Write::write_all(&mut zip, document.to_string().as_bytes()).unwrap();
+    zip.finish().unwrap();
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "open", "path": skr.to_str().unwrap()}),
+    )
+    .unwrap();
+    let path = scratch("all-left-out.obj");
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert!(
+        message.contains("1 faces could not be triangulated"),
+        "{message}"
+    );
+    assert!(!message.contains("no faces"), "{message}");
 }

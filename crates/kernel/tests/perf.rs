@@ -77,8 +77,10 @@ fn time_thirty_circles_copied_three_times() {
     let after = m.clone();
     timed("undo the copy", || m.apply(&copy.inverse()));
     assert_eq!(m, before);
+    m.validate().unwrap();
     timed("redo the copy", || m.apply(&copy));
     assert_eq!(m, after);
+    m.validate().unwrap();
     let all: BTreeSet<VertexId> = m.vertices().map(|(id, _)| id).collect();
     timed("move all 2,880 vertices", || {
         m.move_vertices(&all, DVec3::new(0.0, 0.0, 1.0)).unwrap()

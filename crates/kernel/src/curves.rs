@@ -106,9 +106,19 @@ impl Model {
         };
         // The edges along a-b form chains reaching its ends (drawing a-b joined every vertex
         // on it), so walk out from the vertices at the ends.
-        let mut seen: BTreeSet<VertexId> = BTreeSet::new();
-        let mut stack: Vec<VertexId> = [a, b].iter().filter_map(|p| self.find_vertex(*p)).collect();
+        let ends: Vec<VertexId> = [a, b].iter().filter_map(|p| self.find_vertex(*p)).collect();
         let mut along: BTreeSet<EdgeId> = BTreeSet::new();
+        if ends.len() < 2 {
+            // An end is gone (push/pull removed strays): pieces may be cut off from it, so
+            // look at every edge.
+            for (e, edge) in self.edges() {
+                if on(self.pos(edge.v[0])) && on(self.pos(edge.v[1])) {
+                    along.insert(e);
+                }
+            }
+        }
+        let mut seen: BTreeSet<VertexId> = BTreeSet::new();
+        let mut stack = ends;
         while let Some(v) = stack.pop() {
             if !seen.insert(v) {
                 continue;

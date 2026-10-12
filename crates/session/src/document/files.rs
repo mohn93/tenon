@@ -98,10 +98,12 @@ impl Document {
         }
         let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
         if triangles.is_empty() {
-            return Err(CommandError::new(
-                ErrorKind::InvalidInput,
-                "nothing to export: the model has no faces",
-            ));
+            let message = if skipped_faces > 0 {
+                format!("nothing to export: {skipped_faces} faces could not be triangulated")
+            } else {
+                "nothing to export: the model has no faces".to_string()
+            };
+            return Err(CommandError::new(ErrorKind::InvalidInput, message));
         }
         // An OBJ with painted faces names a material library beside it: same name, `.mtl`.
         let mtl_path = target.with_extension("mtl");

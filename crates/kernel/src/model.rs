@@ -516,10 +516,11 @@ impl Model {
         match op {
             Op::AddVertex(id, v) => {
                 self.bump(id.0);
-                self.link_vertex(id, v.pos);
-                if let Some(old) = self.vertices.insert(id, v) {
+                if let Some(old) = self.vertices.remove(&id) {
                     self.unlink_vertex(id, old.pos);
                 }
+                self.link_vertex(id, v.pos);
+                self.vertices.insert(id, v);
             }
             Op::RemoveVertex(id, _) => {
                 if let Some(v) = self.vertices.remove(&id) {
@@ -547,6 +548,9 @@ impl Model {
                     self.bump(c.0);
                 }
                 if let Some(e) = self.edges.get_mut(&id) {
+                    // The adjacency maps are keyed by the end vertices: a change of ends
+                    // must go through RemoveEdge/AddEdge.
+                    debug_assert_eq!(e.v, to.v, "ChangeEdge must not change an edge's vertices");
                     *e = to;
                 }
             }
@@ -1139,6 +1143,43 @@ mod tests {
         assert_eq!(m.find_vertex(probe), Some(late.min(early)));
         assert_eq!(m.vertices_near(probe, LENGTH_TOL), vec![late, early]);
         assert_eq!(m.find_vertex(DVec3::new(border + 2e-6, 0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn add_vertex_over_an_existing_id_in_the_same_cell_keeps_it_in_the_grid() {
+        let mut m = Model::new();
+        let old = DVec3::new(VERTEX_CELL * 7.2, 0.0, 0.0);
+        let new = DVec3::new(VERTEX_CELL * 7.6, 0.0, 0.0);
+        let id = m.insert_vertex(old);
+        m.take_changes();
+        let mut to = m.vertices[&id].clone();
+        to.pos = new;
+        assert_eq!(vertex_cell(old), vertex_cell(new));
+        m.apply(&ChangeSet {
+            ops: vec![Op::AddVertex(id, to)],
+        });
+        m.validate().unwrap();
+        assert_eq!(m.find_vertex(new), Some(id));
+        assert_eq!(m.find_vertex(old), None);
+    }
+
+    #[test]
+    fn tag_along_finds_pieces_cut_off_from_both_ends() {
+        let mut m = Model::new();
+        // Two pieces of the segment 0..4 on x, with no vertex at either end.
+        let v: Vec<_> = [1.0, 2.0, 3.0]
+            .iter()
+            .map(|x| m.insert_vertex(DVec3::new(*x, 0.0, 0.0)))
+            .collect();
+        let e0 = m.insert_edge(v[0], v[1]);
+        let e1 = m.insert_edge(v[1], v[2]);
+        let off = m.insert_vertex(DVec3::new(2.0, 1.0, 0.0));
+        let e2 = m.insert_edge(v[1], off);
+        let curve = m.new_curve();
+        m.tag_along(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0), Some(curve), false);
+        assert_eq!(m.edge(e0).unwrap().curve, Some(curve));
+        assert_eq!(m.edge(e1).unwrap().curve, Some(curve));
+        assert_eq!(m.edge(e2).unwrap().curve, None);
     }
 
     #[test]
