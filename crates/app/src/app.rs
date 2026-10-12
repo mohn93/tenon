@@ -7,7 +7,7 @@ use api::{Hub, listen_unix};
 use glam::DVec2;
 use kernel::{EntityId, InstanceId};
 use render::{Renderer, Snapshotter, Viewport};
-use session::Command;
+use session::{Command, OutlinerTable};
 use tools::Axis;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -96,6 +96,8 @@ struct State {
     /// Document revision, selection and open context the renderer's model buffers were built
     /// from.
     drawn: Option<(u64, BTreeSet<EntityId>, Vec<InstanceId>)>,
+    /// The Outliner's rows and the revision they were built at.
+    outliner: Option<(u64, OutlinerTable)>,
     modifiers: ModifiersState,
     /// Where the 3D view sits in the window (physical pixels), from the last frame's layout.
     view: Viewport,
@@ -165,6 +167,7 @@ impl State {
             editor,
             gui,
             drawn: None,
+            outliner: None,
             modifiers: ModifiersState::empty(),
             view,
             cursor: DVec2::ZERO,
@@ -378,7 +381,19 @@ impl State {
                 color: m.color,
             })
             .collect();
-        let outliner = self.editor.doc().outliner();
+        // Rebuilt only when the model changes; the open and selected marks are worked out
+        // while drawing, from the context and selection.
+        let revision = self.editor.doc().revision();
+        if self.outliner.as_ref().map(|(r, _)| *r) != Some(revision) {
+            self.outliner = Some((revision, self.editor.doc().outliner_rows()));
+        }
+        let context: Vec<EntityId> = self
+            .editor
+            .doc()
+            .context()
+            .iter()
+            .map(|i| EntityId::Instance(*i))
+            .collect();
         let panels = View {
             tool: self.editor.tool_kind(),
             status: &status,
@@ -395,7 +410,9 @@ impl State {
             projection: self.editor.doc().camera.projection,
             materials: &materials,
             material: self.editor.current_material(),
-            outliner: &outliner,
+            outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
+            context: &context,
+            selection: self.editor.doc().selection(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         // Applied once the frame is presented: some open modal dialogs, which must not run

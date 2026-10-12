@@ -1,10 +1,12 @@
 //! The window's panels: toolbar, status bar with the measurements box, and on the right Entity
 //! Info, the Materials list and the Outliner.
 
+use std::collections::BTreeSet;
+
 use egui::collapsing_header::CollapsingState;
 use egui::{Align, Color32, Layout, Panel, RichText, Sense, Ui, Vec2};
 use kernel::{DefinitionKind, EntityId};
-use session::{MaterialId, OutlinerNode, Projection, StandardView};
+use session::{MaterialId, OutlinerRow, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::editor::{MATERIAL_PALETTE, Status};
@@ -36,7 +38,7 @@ pub enum UiAction {
     RenameMaterial(MaterialId, String),
     RecolorMaterial(MaterialId, [u8; 3]),
     /// Select the outliner node at `path` (instances from the root down to it); `toggle`
-    /// (Shift or Cmd/Ctrl held) adds or removes it instead of replacing the selection.
+    /// (Shift, Cmd or Ctrl held) adds or removes it instead of replacing the selection.
     OutlinerSelect {
         path: Vec<EntityId>,
         toggle: bool,
@@ -74,9 +76,23 @@ pub struct View<'a> {
     pub materials: &'a [MaterialRow],
     /// The material the Paint tool paints with (None: the default material).
     pub material: Option<MaterialId>,
-    /// The tree of placed groups and components (`Document::outliner`).
-    pub outliner: &'a [OutlinerNode],
+    /// The placed groups and components (`Document::outliner_rows`).
+    pub outliner: &'a OutlinerTable,
+    /// The open context's instances, from the root down.
+    pub context: &'a [EntityId],
+    /// The selection, in the open context.
+    pub selection: &'a BTreeSet<EntityId>,
 }
+
+/// The least height the Outliner's list keeps when the panel is short, in points.
+const OUTLINER_MIN_HEIGHT: f32 = 120.0;
+
+/// The Materials list's greatest height, in points.
+const MATERIALS_MAX_HEIGHT: f32 = 220.0;
+
+/// Room kept below the Materials list for its buttons, name field and colors, and for the
+/// Outliner's heading and minimum height, in points.
+const BELOW_MATERIALS_LIST: f32 = 140.0 + OUTLINER_MIN_HEIGHT;
 
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
 /// the 3D view, in points.
@@ -238,8 +254,11 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// chosen material its name (renamed on Enter or leaving the field) and colors to pick from.
 fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.heading("Materials");
+    // Shorter when the panel is short, so the Outliner below keeps its minimum height.
+    let max_height =
+        (ui.available_height() - BELOW_MATERIALS_LIST).clamp(48.0, MATERIALS_MAX_HEIGHT);
     egui::ScrollArea::vertical()
-        .max_height(220.0)
+        .max_height(max_height)
         .show(ui, |ui| {
             let rows = std::iter::once((None, "Default", DEFAULT_SWATCH)).chain(
                 view.materials
@@ -304,70 +323,115 @@ fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
 
 /// The Outliner: a Model row (back to the root) and the tree of groups and components, the
 /// selected ones highlighted and the open ones bold. A click selects a node, a double-click
-/// opens it.
+/// opens it. Only expanded nodes' children are laid out.
 fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.heading("Outliner");
+    expand_open_path(ui.ctx(), view.context);
+    #[cfg(test)]
+    ui.data_mut(|d| d.remove::<Vec<tests::Recorded>>(tests::recorded_id()));
     egui::ScrollArea::vertical()
         .id_salt("outliner")
         .auto_shrink([false, true])
+        .min_scrolled_height(OUTLINER_MIN_HEIGHT)
         .show(ui, |ui| {
+            let at_root = view.context.is_empty();
             let mut model = RichText::new("Model");
-            if !view.inside_instance {
+            if at_root {
                 model = model.strong();
             }
-            if row_button(ui, false, model).clicked() {
+            let row = row_button(ui, false, model);
+            #[cfg(test)]
+            tests::record(ui, &[], row.rect, false, false, at_root);
+            // Already at the root: nothing to do (and the tool keeps its operation).
+            if row.clicked() && !at_root {
                 actions.push(UiAction::OpenPath(Vec::new()));
             }
             let mut path = Vec::new();
-            for node in view.outliner {
-                outliner_node(ui, node, &mut path, actions);
+            for row in &view.outliner.roots {
+                outliner_node(ui, view, row, &mut path, actions);
             }
         });
+}
+
+/// The collapsing state's id of the node at `path`.
+fn outliner_id(path: &[EntityId]) -> egui::Id {
+    egui::Id::new(("outliner", path))
+}
+
+/// Expands the nodes along the open path when it changed since the last frame, so the open
+/// instance and its contents show.
+fn expand_open_path(ctx: &egui::Context, context: &[EntityId]) {
+    let key = egui::Id::new("outliner-context");
+    if ctx.data(|d| d.get_temp::<Vec<EntityId>>(key)).as_deref() == Some(context) {
+        return;
+    }
+    for end in 1..=context.len() {
+        let mut state =
+            CollapsingState::load_with_default_open(ctx, outliner_id(&context[..end]), true);
+        state.set_open(true);
+        state.store(ctx);
+    }
+    ctx.data_mut(|d| d.insert_temp(key, context.to_vec()));
 }
 
 /// One node and, when expanded, its children. `path` leads to the node's parent.
 fn outliner_node(
     ui: &mut Ui,
-    node: &OutlinerNode,
+    view: &View,
+    row: &OutlinerRow,
     path: &mut Vec<EntityId>,
     actions: &mut Vec<UiAction>,
 ) {
-    path.push(node.id);
-    if node.children.is_empty() {
+    let selected = path.as_slice() == view.context && view.selection.contains(&row.id);
+    path.push(row.id);
+    let open = view.context.starts_with(path);
+    let children = view.outliner.children(row.definition);
+    if children.is_empty() {
         let clicked = ui
             .horizontal(|ui| {
                 // Lined up with the names of nodes that have an expand button.
                 ui.add_space(ui.spacing().indent);
-                outliner_row(ui, node, path)
+                outliner_row(ui, row, path, selected, open)
             })
             .inner;
         actions.extend(clicked);
     } else {
-        let id = ui.make_persistent_id(("outliner", path.as_slice()));
         // Nodes on the open path start expanded.
-        let (_, header, _) = CollapsingState::load_with_default_open(ui.ctx(), id, node.open)
-            .show_header(ui, |ui| outliner_row(ui, node, path))
+        let state = CollapsingState::load_with_default_open(ui.ctx(), outliner_id(path), open);
+        let (_toggle, header, _) = state
+            .show_header(ui, |ui| outliner_row(ui, row, path, selected, open))
             .body(|ui| {
-                for child in &node.children {
-                    outliner_node(ui, child, path, actions);
+                for child in children {
+                    outliner_node(ui, view, child, path, actions);
                 }
             });
+        #[cfg(test)]
+        tests::record(ui, path, _toggle.rect, true, false, false);
         actions.extend(header.inner);
     }
     path.pop();
 }
 
 /// A node's name and what clicking it asks for. `path` leads to the node.
-fn outliner_row(ui: &mut Ui, node: &OutlinerNode, path: &[EntityId]) -> Option<UiAction> {
-    let mut text = RichText::new(outliner_label(node));
-    if node.open {
+fn outliner_row(
+    ui: &mut Ui,
+    row: &OutlinerRow,
+    path: &[EntityId],
+    selected: bool,
+    open: bool,
+) -> Option<UiAction> {
+    let mut text = RichText::new(outliner_label(row));
+    if open {
         text = text.strong();
     }
-    let row = row_button(ui, node.selected, text);
-    if row.double_clicked() {
+    let response = row_button(ui, selected, text);
+    #[cfg(test)]
+    tests::record(ui, path, response.rect, false, selected, open);
+    if response.double_clicked() {
         Some(UiAction::OpenPath(path.to_vec()))
-    } else if row.clicked() {
-        let toggle = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+    } else if response.clicked() {
+        // Cmd or Ctrl (either key on every system) or Shift.
+        let toggle = ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
         Some(UiAction::OutlinerSelect {
             path: path.to_vec(),
             toggle,
@@ -389,11 +453,11 @@ fn row_button(ui: &mut Ui, selected: bool, text: RichText) -> egui::Response {
 }
 
 /// How the Outliner names a node: a component as `<Name>`, a group by its name or as `Group`.
-fn outliner_label(node: &OutlinerNode) -> String {
-    match node.kind {
-        DefinitionKind::Component => format!("<{}>", node.name),
-        DefinitionKind::Group if node.name.is_empty() => "Group".to_string(),
-        DefinitionKind::Group => node.name.clone(),
+fn outliner_label(row: &OutlinerRow) -> String {
+    match row.kind {
+        DefinitionKind::Component => format!("<{}>", row.name),
+        DefinitionKind::Group if row.name.is_empty() => "Group".to_string(),
+        DefinitionKind::Group => row.name.clone(),
     }
 }
 
@@ -401,6 +465,12 @@ fn outliner_label(node: &OutlinerNode) -> String {
 mod tests {
     use super::*;
     use egui::{Pos2, Rect, Vec2};
+
+    static NO_ROWS: OutlinerTable = OutlinerTable {
+        roots: Vec::new(),
+        by_definition: std::collections::BTreeMap::new(),
+    };
+    static NO_SELECTION: BTreeSet<EntityId> = BTreeSet::new();
 
     fn run(ctx: &egui::Context, input: egui::RawInput, view: &View) -> (Vec<UiAction>, Rect) {
         let mut out = None;
@@ -461,7 +531,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: &[],
             material: None,
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let file = Pos2::new(14.0, central.min.y / 2.0);
@@ -542,7 +614,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: &[],
             material: None,
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         };
         // The Camera menu sits right after File and Edit.
         let clicked = menu_actions(&view, 80..140);
@@ -578,7 +652,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: &[],
             material: None,
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         };
         // The Edit button sits right after File (which ends before x = 40).
         menu_actions(&view, 40..80)
@@ -614,7 +690,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: &[],
             material: None,
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -643,7 +721,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: &[],
             material: None,
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let row = central.min.y / 2.0;
@@ -742,7 +822,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: &rows,
             material: Some(MaterialId(31)),
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         };
         // Down the panel's left part: swatches and names, Add, the name field, the palette.
         let clicked = panel_actions(&view, 1280.0 - 160.0, None);
@@ -799,7 +881,9 @@ mod tests {
             projection: Projection::Perspective,
             materials: rows,
             material: Some(MaterialId(31)),
-            outliner: &[],
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
         }
     }
 
@@ -902,33 +986,109 @@ mod tests {
         );
     }
 
-    fn node(
-        id: &str,
-        kind: DefinitionKind,
-        name: &str,
-        children: Vec<OutlinerNode>,
-    ) -> OutlinerNode {
-        OutlinerNode {
+    /// A row the Outliner laid out in the last frame: a node's name (or the Model row, with
+    /// an empty path) or a node's expand button, with the marks it was drawn with.
+    #[derive(Clone, Debug)]
+    pub(super) struct Recorded {
+        pub path: Vec<EntityId>,
+        pub rect: Rect,
+        pub toggle: bool,
+        pub selected: bool,
+        pub open: bool,
+    }
+
+    pub(super) fn recorded_id() -> egui::Id {
+        egui::Id::new("outliner-test-rows")
+    }
+
+    pub(super) fn record(
+        ui: &Ui,
+        path: &[EntityId],
+        rect: Rect,
+        toggle: bool,
+        selected: bool,
+        open: bool,
+    ) {
+        let row = Recorded {
+            path: path.to_vec(),
+            rect,
+            toggle,
+            selected,
+            open,
+        };
+        ui.data_mut(|d| {
+            d.get_temp_mut_or_default::<Vec<Recorded>>(recorded_id())
+                .push(row)
+        });
+    }
+
+    /// Lays out one frame and returns the Outliner's rows.
+    fn rows(ctx: &egui::Context, view: &View) -> Vec<Recorded> {
+        run(ctx, screen(), view);
+        ctx.data(|d| d.get_temp::<Vec<Recorded>>(recorded_id()))
+            .unwrap_or_default()
+    }
+
+    /// The name row (not the expand button) at `path`.
+    fn row<'a>(rows: &'a [Recorded], path: &[EntityId]) -> Option<&'a Recorded> {
+        rows.iter().find(|r| !r.toggle && r.path == path)
+    }
+
+    fn row_at(rows: &[Recorded], path: &[EntityId]) -> Pos2 {
+        row(rows, path)
+            .unwrap_or_else(|| panic!("a row for {path:?} in {rows:?}"))
+            .rect
+            .center()
+    }
+
+    /// One click at `pos` with `modifiers` held: press, then release in the next frame.
+    fn click_with(
+        ctx: &egui::Context,
+        view: &View,
+        pos: Pos2,
+        modifiers: egui::Modifiers,
+    ) -> Vec<UiAction> {
+        let pointer = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        let mut press = screen();
+        press.events = vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(pos),
+            pointer(true),
+        ];
+        let mut actions = run(ctx, press, view).0;
+        let mut release = screen();
+        release.events = vec![egui::Event::ModifiersChanged(modifiers), pointer(false)];
+        actions.extend(run(ctx, release, view).0);
+        actions
+    }
+
+    fn table_row(id: &str, definition: &str, kind: DefinitionKind, name: &str) -> OutlinerRow {
+        OutlinerRow {
             id: id.parse().unwrap(),
-            definition: "d1".parse().unwrap(),
+            definition: definition.parse().unwrap(),
             kind,
             name: name.into(),
             material: None,
-            open: false,
-            selected: false,
-            children,
         }
     }
 
-    /// Two "Box" components each placing the group i27; the first open, the group in it
-    /// selected.
-    fn boxes() -> Vec<OutlinerNode> {
-        let group = node("i27", DefinitionKind::Group, "", Vec::new());
-        let mut first = node("i55", DefinitionKind::Component, "Box", vec![group.clone()]);
-        first.open = true;
-        first.children[0].selected = true;
-        let second = node("i56", DefinitionKind::Component, "Box", vec![group]);
-        vec![first, second]
+    /// Two "Box" components (definition d1) each placing the group i27 (definition d2).
+    fn boxes() -> OutlinerTable {
+        let component = |id| table_row(id, "d1", DefinitionKind::Component, "Box");
+        let group = table_row("i27", "d2", DefinitionKind::Group, "");
+        OutlinerTable {
+            roots: vec![component("i55"), component("i56")],
+            by_definition: [
+                ("d1".parse().unwrap(), vec![group]),
+                ("d2".parse().unwrap(), Vec::new()),
+            ]
+            .into(),
+        }
     }
 
     fn ids(ids: &[&str]) -> Vec<EntityId> {
@@ -938,152 +1098,205 @@ mod tests {
     fn outliner_view<'a>(
         status: &'a Status,
         info: &'a [String],
-        tree: &'a [OutlinerNode],
+        table: &'a OutlinerTable,
+        context: &'a [EntityId],
+        selection: &'a BTreeSet<EntityId>,
     ) -> View<'a> {
         View {
             tool: ToolKind::Line,
             status,
             info,
-            has_selection: true,
-            has_instance_selected: true,
-            inside_instance: true,
+            has_selection: !selection.is_empty(),
+            has_instance_selected: !selection.is_empty(),
+            inside_instance: !context.is_empty(),
             has_guides: false,
             projection: Projection::Perspective,
             materials: &[],
             material: None,
-            outliner: tree,
+            outliner: table,
+            context,
+            selection,
         }
-    }
-
-    /// For each y down the right panel at `x` (every 4 points), the actions of one click
-    /// there with `modifiers` held, each in a fresh context (so no two make a double-click).
-    fn outliner_clicks(view: &View, x: f32, modifiers: egui::Modifiers) -> Vec<(f32, UiAction)> {
-        let mut found = Vec::new();
-        for y in (0..800).step_by(4) {
-            let ctx = egui::Context::default();
-            run(&ctx, screen(), view);
-            let pos = Pos2::new(x, y as f32);
-            let pointer = |pressed: bool| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers,
-            };
-            let mut press = screen();
-            press.events = vec![
-                egui::Event::ModifiersChanged(modifiers),
-                egui::Event::PointerMoved(pos),
-                pointer(true),
-            ];
-            let mut actions = run(&ctx, press, view).0;
-            let mut release = screen();
-            release.events = vec![pointer(false)];
-            actions.extend(run(&ctx, release, view).0);
-            found.extend(actions.into_iter().map(|a| (y as f32, a)));
-        }
-        found
     }
 
     #[test]
     fn outliner_labels_name_groups_and_components() {
-        let [first, _] = <[OutlinerNode; 2]>::try_from(boxes()).unwrap();
-        assert_eq!(outliner_label(&first), "<Box>");
-        assert_eq!(outliner_label(&first.children[0]), "Group");
-        let named = node("i3", DefinitionKind::Group, "Wall", Vec::new());
+        let table = boxes();
+        assert_eq!(outliner_label(&table.roots[0]), "<Box>");
+        assert_eq!(
+            outliner_label(&table.children(table.roots[0].definition)[0]),
+            "Group"
+        );
+        let named = table_row("i3", "d4", DefinitionKind::Group, "Wall");
         assert_eq!(outliner_label(&named), "Wall");
     }
 
     #[test]
-    fn outliner_rows_select_their_paths_and_the_model_row_goes_back_to_the_root() {
+    fn outliner_rows_show_the_open_path_and_the_selection_and_select_their_paths() {
         let status = status();
         let info = vec!["1 group".to_string()];
-        let tree = boxes();
-        let view = outliner_view(&status, &info, &tree);
-        let clicked: Vec<UiAction> = outliner_clicks(&view, 1280.0 - 100.0, Default::default())
-            .into_iter()
-            .map(|(_, a)| a)
+        let table = boxes();
+        let (context, selection) = (ids(&["i55"]), ids(&["i27"]).into_iter().collect());
+        let view = outliner_view(&status, &info, &table, &context, &selection);
+        let laid = rows(&egui::Context::default(), &view);
+        // The first box is open, so expanded; the second starts collapsed.
+        let names: Vec<&[EntityId]> = laid
+            .iter()
+            .filter(|r| !r.toggle)
+            .map(|r| r.path.as_slice())
             .collect();
-        for action in [
-            UiAction::OpenPath(Vec::new()),
-            UiAction::OutlinerSelect {
-                path: ids(&["i55"]),
-                toggle: false,
-            },
-            UiAction::OutlinerSelect {
-                path: ids(&["i55", "i27"]),
-                toggle: false,
-            },
-            UiAction::OutlinerSelect {
-                path: ids(&["i56"]),
-                toggle: false,
-            },
+        assert_eq!(
+            names,
+            [ids(&[]), ids(&["i55"]), ids(&["i55", "i27"]), ids(&["i56"])]
+        );
+        let marks = |path: &[&str]| {
+            let r = row(&laid, &ids(path)).unwrap();
+            (r.open, r.selected)
+        };
+        assert_eq!(marks(&["i55"]), (true, false));
+        assert_eq!(marks(&["i55", "i27"]), (false, true));
+        assert_eq!(marks(&["i56"]), (false, false));
+
+        for (path, modifiers, toggle) in [
+            (&["i55"][..], egui::Modifiers::NONE, false),
+            (&["i55", "i27"], egui::Modifiers::NONE, false),
+            (&["i56"], egui::Modifiers::NONE, false),
+            (&["i56"], egui::Modifiers::SHIFT, true),
+            (&["i56"], egui::Modifiers::COMMAND, true),
+            (&["i56"], egui::Modifiers::CTRL, true),
         ] {
-            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+            // A fresh context for each, so no two clicks make a double-click.
+            let ctx = egui::Context::default();
+            run(&ctx, screen(), &view);
+            let clicked = click_with(&ctx, &view, row_at(&laid, &ids(path)), modifiers);
+            let wanted = UiAction::OutlinerSelect {
+                path: ids(path),
+                toggle,
+            };
+            assert_eq!(clicked, [wanted], "{path:?} with {modifiers:?}");
         }
-        // The second box is not on the open path, so it starts collapsed.
-        assert!(
-            !clicked.iter().any(|a| matches!(
-                a,
-                UiAction::OutlinerSelect { path, .. } if *path == ids(&["i56", "i27"])
-            )),
-            "{clicked:?}"
-        );
-        let shifted = outliner_clicks(&view, 1280.0 - 100.0, egui::Modifiers::SHIFT);
-        assert!(
-            shifted.iter().any(|(_, a)| *a
-                == UiAction::OutlinerSelect {
-                    path: ids(&["i56"]),
-                    toggle: true,
-                }),
-            "{shifted:?}"
-        );
+    }
+
+    #[test]
+    fn the_model_row_goes_back_to_the_root_only_from_inside() {
+        let status = status();
+        let info = Vec::new();
+        let table = boxes();
+        let selection = BTreeSet::new();
+        let inside = ids(&["i55"]);
+        for (context, wanted) in [
+            (&inside[..], vec![UiAction::OpenPath(Vec::new())]),
+            (&[][..], Vec::new()),
+        ] {
+            let view = outliner_view(&status, &info, &table, context, &selection);
+            let ctx = egui::Context::default();
+            let laid = rows(&ctx, &view);
+            let model = row(&laid, &[]).unwrap();
+            assert_eq!(model.open, context.is_empty(), "bold at the root");
+            assert_eq!(click(&ctx, &view, model.rect.center()), wanted);
+        }
     }
 
     #[test]
     fn double_clicking_an_outliner_row_opens_it_and_expanding_shows_children() {
         let status = status();
-        let info = vec!["1 group".to_string()];
-        let tree = boxes();
-        let view = outliner_view(&status, &info, &tree);
-        let x = 1280.0 - 100.0;
-        let rows = outliner_clicks(&view, x, Default::default());
-        let y_of = |path: &[&str]| {
-            rows.iter()
-                .find(|(_, a)| {
-                    matches!(a, UiAction::OutlinerSelect { path: p, .. } if *p == ids(path))
-                })
-                .map(|(y, _)| *y)
-                .expect("found the row")
-        };
+        let info = Vec::new();
+        let table = boxes();
+        let (context, selection) = (ids(&["i55"]), BTreeSet::new());
+        let view = outliner_view(&status, &info, &table, &context, &selection);
         let ctx = egui::Context::default();
-        run(&ctx, screen(), &view);
-        let inner = Pos2::new(x, y_of(&["i55", "i27"]));
+        let laid = rows(&ctx, &view);
+        let inner = row_at(&laid, &ids(&["i55", "i27"]));
         let mut actions = click(&ctx, &view, inner);
         actions.extend(click(&ctx, &view, inner));
         assert!(
             actions.contains(&UiAction::OpenPath(ids(&["i55", "i27"]))),
             "{actions:?}"
         );
-        // The expand button sits left of the name: clicking it shows the second box's group.
-        let second = y_of(&["i56"]);
-        let (_, central) = run(&egui::Context::default(), screen(), &view);
+
+        // The expand button left of the second box shows its group.
+        let ctx = egui::Context::default();
+        let laid = rows(&ctx, &view);
+        let button = laid
+            .iter()
+            .find(|r| r.toggle && r.path == ids(&["i56"]))
+            .expect("the second box has an expand button");
+        assert_eq!(click(&ctx, &view, button.rect.center()), []);
+        let laid = rows(&ctx, &view);
         let wanted = UiAction::OutlinerSelect {
             path: ids(&["i56", "i27"]),
             toggle: false,
         };
-        let expanded = (0..40).step_by(2).any(|dx| {
-            let ctx = egui::Context::default();
-            run(&ctx, screen(), &view);
-            let button = click(&ctx, &view, Pos2::new(central.max.x + dx as f32, second));
-            // Wait out the opening animation, then click down the rows below.
-            for _ in 0..30 {
-                run(&ctx, screen(), &view);
-            }
-            button.is_empty()
-                && (1..16).any(|k| {
-                    click(&ctx, &view, Pos2::new(x, second + 4.0 * k as f32)).contains(&wanted)
-                })
-        });
-        assert!(expanded, "an expand button left of the second box");
+        // Let the opening animation finish before clicking the new row.
+        let laid = (0..30).fold(laid, |_, _| rows(&ctx, &view));
+        assert_eq!(
+            click(&ctx, &view, row_at(&laid, &ids(&["i56", "i27"]))),
+            [wanted]
+        );
+    }
+
+    #[test]
+    fn a_newly_opened_path_expands_its_ancestors() {
+        let status = status();
+        let info = Vec::new();
+        let table = boxes();
+        let selection = BTreeSet::new();
+        let ctx = egui::Context::default();
+        let root = outliner_view(&status, &info, &table, &[], &selection);
+        let laid = rows(&ctx, &root);
+        assert!(row(&laid, &ids(&["i56", "i27"])).is_none(), "collapsed");
+        let context = ids(&["i56", "i27"]);
+        let inside = outliner_view(&status, &info, &table, &context, &selection);
+        let laid = (0..30).fold(Vec::new(), |_, _| rows(&ctx, &inside));
+        let group = row(&laid, &context).expect("the open group shows");
+        assert!(group.open);
+        // Collapsing it by hand sticks while the context stays the same.
+        let button = laid
+            .iter()
+            .find(|r| r.toggle && r.path == ids(&["i56"]))
+            .unwrap();
+        click(&ctx, &inside, button.rect.center());
+        let laid = (0..30).fold(Vec::new(), |_, _| rows(&ctx, &inside));
+        assert!(row(&laid, &context).is_none(), "{laid:?}");
+    }
+
+    #[test]
+    fn a_short_window_leaves_the_outliner_its_minimum_height() {
+        let status = status();
+        let info = vec!["1 group".to_string()];
+        let materials: Vec<MaterialRow> = (0..40)
+            .map(|k| MaterialRow {
+                id: MaterialId(100 + k),
+                name: format!("Material {k}"),
+                color: [10, 20, 30],
+            })
+            .collect();
+        let table = OutlinerTable {
+            roots: (0..40)
+                .map(|k| table_row(&format!("i{}", 200 + k), "d1", DefinitionKind::Group, ""))
+                .collect(),
+            by_definition: Default::default(),
+        };
+        let selection = BTreeSet::new();
+        let mut view = outliner_view(&status, &info, &table, &[], &selection);
+        view.materials = &materials;
+        view.material = Some(MaterialId(100));
+        let height = 520.0;
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, height))),
+            ..Default::default()
+        };
+        run(&ctx, input(), &view);
+        run(&ctx, input(), &view);
+        let laid = ctx
+            .data(|d| d.get_temp::<Vec<Recorded>>(recorded_id()))
+            .unwrap();
+        let model = row(&laid, &[]).unwrap();
+        assert!(
+            model.rect.min.y <= height - OUTLINER_MIN_HEIGHT,
+            "the Outliner starts at {} in a {height} point window",
+            model.rect.min.y
+        );
     }
 }
