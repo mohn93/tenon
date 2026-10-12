@@ -39,6 +39,19 @@ pub enum Command {
         #[serde(default)]
         segments: Option<u32>,
     },
+    /// Draw an arc around `center` from `start`, turning `angle` degrees counter-clockwise
+    /// around `normal` (default Z; negative angles turn clockwise), as `segments` straight
+    /// edges (default 12, 2 to 360) tagged as one curve, in one undo step. `start` must lie in
+    /// the plane through `center` with that normal.
+    AddArc {
+        center: [f64; 3],
+        start: [f64; 3],
+        angle: f64,
+        #[serde(default)]
+        normal: Option<[f64; 3]>,
+        #[serde(default)]
+        segments: Option<u32>,
+    },
     /// Move a face along its normal by `distance` meters (negative: against the normal),
     /// extruding new sides or stretching the faces around it.
     PushPull {

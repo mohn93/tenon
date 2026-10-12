@@ -7,6 +7,7 @@ use kernel::{
     Model, Scene, SceneChange, VertexId,
 };
 
+use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
 use crate::camera::Camera;
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
@@ -220,6 +221,7 @@ impl Document {
             Command::AddEdge { .. }
             | Command::AddRectangle { .. }
             | Command::AddCircle { .. }
+            | Command::AddArc { .. }
             | Command::AddGuideLine { .. }
             | Command::AddGuidePoint { .. }
             | Command::DeleteGuides
@@ -255,6 +257,13 @@ impl Document {
                 normal,
                 segments,
             } => self.add_circle_changes(*center, *radius, *normal, *segments),
+            Command::AddArc {
+                center,
+                start,
+                angle,
+                normal,
+                segments,
+            } => self.add_arc_changes(*center, *start, *angle, *normal, *segments),
             Command::AddGuideLine { point, direction } => {
                 self.add_guide_line_changes(*point, *direction)
             }
@@ -476,6 +485,27 @@ impl Document {
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
         self.edit_mesh(|m| m.add_curve(&points, true))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    fn add_arc_changes(
+        &mut self,
+        center: [f64; 3],
+        start: [f64; 3],
+        angle: f64,
+        normal: Option<[f64; 3]>,
+        segments: Option<u32>,
+    ) -> Result<SceneChange, CommandError> {
+        check_coordinates(&[center, start])?;
+        let points = arc_points(
+            DVec3::from(center),
+            DVec3::from(start),
+            angle,
+            normal.map(DVec3::from),
+            segments.unwrap_or(DEFAULT_ARC_SEGMENTS),
+        )?;
+        check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
+        self.edit_mesh(|m| m.add_curve(&points, false))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 

@@ -305,3 +305,146 @@ fn curves_and_soft_flags_are_saved_and_checked_on_load() {
     let err = Scene::from_data(&soft).unwrap_err();
     assert!(err.contains("soft edge"), "{err}");
 }
+
+/// The face a change created.
+fn created_face(c: &kernel::ChangeSet) -> kernel::FaceId {
+    c.summary()
+        .created
+        .iter()
+        .find_map(|id| match id {
+            EntityId::Face(f) => Some(*f),
+            _ => None,
+        })
+        .unwrap()
+}
+
+fn soft_edges(m: &Model) -> Vec<EdgeId> {
+    m.edges()
+        .filter(|(_, e)| e.soft)
+        .map(|(id, _)| id)
+        .collect()
+}
+
+#[test]
+fn a_pulled_circle_has_soft_sides_and_a_curve_on_top() {
+    let mut m = Model::new();
+    let c = m.add_curve(&ring(DVec3::ZERO, 1.0, 12), true).unwrap();
+    let base = only_curve(&m);
+    let pulled = m.push_pull(created_face(&c), 2.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!((m.edges().count(), m.faces().count()), (36, 14));
+
+    // The twelve swept edges are soft; the rims are not.
+    let soft = soft_edges(&m);
+    assert_eq!(soft.len(), 12);
+    for e in &soft {
+        let [a, b] = m.edge(*e).unwrap().v;
+        let d = m.position(b).unwrap() - m.position(a).unwrap();
+        assert!(d.x.abs() < 1e-12 && d.y.abs() < 1e-12, "a swept edge");
+        assert!(m.edge(*e).unwrap().curve.is_none());
+    }
+    // The bottom keeps its curve; the top is a new one, 2 m up.
+    let all = curves(&m);
+    assert_eq!(all.len(), 2);
+    assert!(all.contains(&base));
+    let top = *all.iter().find(|c| **c != base).unwrap();
+    let circle = m.curve(top).unwrap().circle.unwrap();
+    assert!(close(circle.center, p(0.0, 0.0, 2.0)));
+    assert_eq!(m.curve(top).unwrap().segments, 12);
+
+    // Undo is exact.
+    let after = m.clone();
+    m.apply(&pulled.inverse());
+    assert!(soft_edges(&m).is_empty());
+    m.apply(&pulled);
+    assert_eq!(m, after);
+
+    // Pulling the top again stretches the sides; nothing changes about the curves.
+    let top_face = m
+        .faces()
+        .find(|(_, f)| f.normal.z > 0.5 && m.position(f.outer[0]).unwrap().z > 1.0)
+        .map(|(id, _)| id)
+        .unwrap();
+    m.push_pull(top_face, 1.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!((soft_edges(&m).len(), curves(&m).len()), (12, 2));
+}
+
+#[test]
+fn a_soft_edge_left_with_one_face_hardens() {
+    let mut m = Model::new();
+    let c = m.add_curve(&ring(DVec3::ZERO, 1.0, 8), true).unwrap();
+    m.push_pull(created_face(&c), 1.0).unwrap();
+    let side = m
+        .faces()
+        .find(|(_, f)| f.normal.z.abs() < 0.5)
+        .map(|(id, _)| id)
+        .unwrap();
+    let erased = m.erase(&[], &[side]);
+    m.validate().unwrap();
+    assert_eq!(
+        soft_edges(&m).len(),
+        6,
+        "the two edges beside the hole harden"
+    );
+    assert_eq!(erased.summary().modified.len(), 2);
+}
+
+#[test]
+fn an_arc_closed_by_a_line_pulls_up_with_hard_ends() {
+    let mut m = Model::new();
+    // A half circle from (1, 0) over the top to (-1, 0), closed by its diameter.
+    m.add_curve(&arc(DVec3::ZERO, 1.0, TAU / 2.0, 6), false)
+        .unwrap();
+    let c = m.add_edge(p(-1.0, 0.0, 0.0), p(1.0, 0.0, 0.0)).unwrap();
+    m.validate().unwrap();
+    let face = created_face(&c);
+    m.push_pull(face, 1.0).unwrap();
+    m.validate().unwrap();
+    // Five soft edges between the six arc sides; the two at the arc's ends stay hard.
+    assert_eq!(soft_edges(&m).len(), 5);
+    let ends = [p(1.0, 0.0, 0.0), p(-1.0, 0.0, 0.0)];
+    for e in soft_edges(&m) {
+        let a = m.position(m.edge(e).unwrap().v[0]).unwrap();
+        assert!(ends.iter().all(|q| (a - *q).truncate().length() > 1e-9));
+    }
+    let top: Vec<_> = curves(&m)
+        .iter()
+        .map(|c| m.curve(*c).unwrap())
+        .filter(|c| c.circle.unwrap().center.z > 0.5)
+        .collect();
+    assert_eq!(top.len(), 1);
+    assert!((top[0].circle.unwrap().angle - TAU / 2.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_circle_pushed_into_a_box_makes_a_soft_walled_hole() {
+    let mut m = Model::new();
+    let c = m
+        .add_polygon(&[
+            p(-2.0, -2.0, 0.0),
+            p(2.0, -2.0, 0.0),
+            p(2.0, 2.0, 0.0),
+            p(-2.0, 2.0, 0.0),
+        ])
+        .unwrap();
+    m.push_pull(created_face(&c), 2.0).unwrap();
+    let mut top_ring = ring(DVec3::ZERO, 1.0, 8);
+    for q in &mut top_ring {
+        q.z = 2.0;
+    }
+    let disk = m.add_curve(&top_ring, true).unwrap();
+    let disk_face = disk
+        .summary()
+        .created
+        .iter()
+        .find_map(|id| match id {
+            EntityId::Face(f) if m.face(*f).unwrap().outer.len() == 8 => Some(*f),
+            _ => None,
+        })
+        .unwrap();
+    m.push_pull(disk_face, -1.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(soft_edges(&m).len(), 8);
+    assert_eq!(curves(&m).len(), 2, "the rim and the floor of the hole");
+}

@@ -221,3 +221,127 @@ fn curves_are_saved_and_older_files_still_open() {
     assert_eq!(kind, ErrorKind::File);
     assert!(message.contains("soft edge"), "{message}");
 }
+
+fn created(out: &Value, prefix: char) -> Vec<Value> {
+    out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| id.as_str().unwrap().starts_with(prefix))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn an_arc_is_one_curve_from_its_start_around_its_center() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_arc", "center": [1, 1, 0], "start": [3, 1, 0], "angle": 90}),
+    )
+    .unwrap();
+    let new_edges = created(&out, 'e');
+    assert_eq!(new_edges.len(), 12, "12 segments by default");
+    let c = curve(&d, &new_edges[0]);
+    assert_eq!(c["kind"], "arc");
+    assert_eq!(c["segments"], 12);
+    assert!(near(&c["center"], [1.0, 1.0, 0.0]));
+    assert!((c["radius"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+    assert!((c["angle"].as_f64().unwrap() - 90.0).abs() < 1e-9);
+    let ends = [c["vertices"][0].clone(), c["vertices"][12].clone()];
+    let at = |v: &Value| ask(&d, json!({"type": "entity", "id": v})).unwrap()["position"].clone();
+    assert!(near(&at(&ends[0]), [3.0, 1.0, 0.0]));
+    assert!(near(&at(&ends[1]), [1.0, 3.0, 0.0]));
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert!(edges(&d).is_empty());
+
+    // Clockwise, on a vertical plane, with 3 segments.
+    run(
+        &mut d,
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [0, 0, 1], "angle": -180,
+               "normal": [1, 0, 0], "segments": 3}),
+    )
+    .unwrap();
+    let c = curve(&d, &edges(&d)[0]["id"]);
+    assert_eq!(c["segments"], 3);
+    assert_eq!(c["normal"], json!([1.0, 0.0, 0.0]));
+    assert!((c["angle"].as_f64().unwrap() - 180.0).abs() < 1e-9);
+}
+
+#[test]
+fn bad_arcs_are_refused() {
+    let mut d = doc();
+    for bad in [
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 0}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 360}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": -400}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "segments": 1}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "segments": 361}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [0, 0, 0], "angle": 90}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 1], "angle": 90}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "normal": [0, 0, 0]}),
+        json!({"type": "add_arc", "center": [999999, 0, 0], "start": [999999, -2, 0], "angle": 180}),
+    ] {
+        let (kind, _) = run(&mut d, bad.clone()).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");
+    }
+    assert!(edges(&d).is_empty());
+}
+
+#[test]
+fn pulled_curves_have_soft_sides_that_groups_and_files_keep() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "segments": 10}),
+    )
+    .unwrap();
+    let face = created(&out, 'f')[0].clone();
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": face, "distance": 2.0}),
+    )
+    .unwrap();
+    let soft = |d: &Document| edges(d).iter().filter(|e| e["soft"] == true).count();
+    let curves = |d: &Document| {
+        edges(d)
+            .iter()
+            .filter_map(|e| e["curve"].as_str().map(String::from))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
+    assert_eq!((soft(&d), curves(&d)), (10, 2));
+
+    let path = scratch("cylinder.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let marks = |d: &Document| -> Vec<(Value, Value, Value)> {
+        edges(d)
+            .iter()
+            .map(|e| (e["id"].clone(), e["curve"].clone(), e["soft"].clone()))
+            .collect()
+    };
+    assert_eq!(marks(&e), marks(&d));
+
+    let all = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]})).unwrap();
+    let ids: Vec<Value> = all["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(all["faces"].as_array().unwrap())
+        .map(|e| e["id"].clone())
+        .collect();
+    run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = ask(&d, json!({"type": "selection"})).unwrap()["ids"][0].clone();
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    assert_eq!((soft(&d), curves(&d)), (10, 2));
+}

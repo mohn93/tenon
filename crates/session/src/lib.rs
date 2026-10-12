@@ -1,5 +1,6 @@
 //! The editable document and the command/query layer every client (UI, API, tests) goes through.
 
+mod arc;
 pub mod camera;
 mod circle;
 mod command;
@@ -10,6 +11,7 @@ mod query;
 mod rectangle;
 mod rotate;
 
+pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points};
 pub use camera::{Camera, Ray};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
