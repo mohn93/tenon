@@ -48,7 +48,7 @@ impl RectangleTool {
 
 /// The plane a rectangle started at `hit` lies in: the face under the cursor if the point is
 /// on it, otherwise horizontal.
-fn plane_normal(hit: &Inference, ctx: &ToolContext) -> DVec3 {
+pub(crate) fn plane_normal(hit: &Inference, ctx: &ToolContext) -> DVec3 {
     hit.face
         .and_then(|id| ctx.model.face(id))
         .filter(|f| {
@@ -60,7 +60,12 @@ fn plane_normal(hit: &Inference, ctx: &ToolContext) -> DVec3 {
 
 /// The cursor's point on the plane through `origin` with `normal`: the inferred point if it is
 /// on the plane, otherwise where the cursor ray crosses the plane.
-fn on_plane(origin: DVec3, normal: DVec3, hit: &Inference, ctx: &ToolContext) -> Option<DVec3> {
+pub(crate) fn on_plane(
+    origin: DVec3,
+    normal: DVec3,
+    hit: &Inference,
+    ctx: &ToolContext,
+) -> Option<DVec3> {
     if (hit.point - origin).dot(normal).abs() < LENGTH_TOL {
         return Some(hit.point);
     }

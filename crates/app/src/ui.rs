@@ -90,7 +90,7 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                 (
                     view.has_selection,
                     "Make component",
-                    "C",
+                    "Shift+G",
                     UiAction::MakeComponent,
                 ),
                 (view.has_instance_selected, "Explode", "", UiAction::Explode),

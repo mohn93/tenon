@@ -6,6 +6,7 @@ use glam::{DVec2, DVec3};
 use kernel::{EntityId, Model};
 use session::{Camera, Command};
 
+use crate::circle::CircleTool;
 use crate::erase::EraseTool;
 use crate::inference::Inference;
 use crate::line::LineTool;
@@ -86,6 +87,7 @@ pub enum ToolKind {
     Select,
     Line,
     Rectangle,
+    Circle,
     PushPull,
     Move,
     Erase,
@@ -93,10 +95,11 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 6] = [
+    pub const ALL: [ToolKind; 7] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
+        ToolKind::Circle,
         ToolKind::PushPull,
         ToolKind::Move,
         ToolKind::Erase,
@@ -107,6 +110,7 @@ impl ToolKind {
             ToolKind::Select => Box::new(SelectTool::new()),
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
+            ToolKind::Circle => Box::new(CircleTool::new()),
             ToolKind::PushPull => Box::new(PushPullTool::new()),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
@@ -119,6 +123,7 @@ impl ToolKind {
             ToolKind::Select => "Select",
             ToolKind::Line => "Line",
             ToolKind::Rectangle => "Rectangle",
+            ToolKind::Circle => "Circle",
             ToolKind::PushPull => "Push/Pull",
             ToolKind::Move => "Move",
             ToolKind::Erase => "Erase",
@@ -131,6 +136,7 @@ impl ToolKind {
             ToolKind::Select => ' ',
             ToolKind::Line => 'l',
             ToolKind::Rectangle => 'r',
+            ToolKind::Circle => 'c',
             ToolKind::PushPull => 'p',
             ToolKind::Move => 'm',
             ToolKind::Erase => 'e',

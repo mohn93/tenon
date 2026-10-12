@@ -288,9 +288,9 @@ impl Editor {
     }
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
-    /// (or "x" in the Move tool, for arrays like "x5"); "g" makes a group and "c" a component
-    /// of the selection; other letters are tool shortcuts. Enter submits the typed text to the
-    /// tool. Escape clears the typed text, or else cancels the tool's operation (the Select
+    /// (or "x" in the Move tool, for arrays like "x5"); "g" makes a group and "G" (Shift+G) a
+    /// component of the selection; other letters are tool shortcuts. Enter submits the typed
+    /// text to the tool. Escape clears the typed text, or else cancels the tool's operation (the Select
     /// tool then closes the open group). Delete, and Backspace with nothing typed, erase the
     /// selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
@@ -301,9 +301,9 @@ impl Editor {
                 if starts_value || starts_array {
                     self.typed.push(c);
                     true
-                } else if c.eq_ignore_ascii_case(&'g') {
+                } else if c == 'g' {
                     self.make_group()
-                } else if c.eq_ignore_ascii_case(&'c') {
+                } else if c == 'G' {
                     self.make_component()
                 } else if let Some(kind) = ToolKind::from_shortcut(c) {
                     self.select_tool(kind);
@@ -1592,7 +1592,7 @@ mod tests {
     }
 
     #[test]
-    fn g_and_c_group_the_selection_and_explode_takes_it_apart() {
+    fn g_and_shift_g_group_the_selection_and_explode_takes_it_apart() {
         let mut e = editor();
         assert!(e.key(EditorKey::Char('g')), "the message needs a redraw");
         assert!(e.status().contains("Select geometry to make a group"));
@@ -1603,8 +1603,8 @@ mod tests {
         let group = *e.doc().selection().first().unwrap();
         assert!(matches!(group, EntityId::Instance(_)));
         assert_eq!(definition_names(&e), [""]);
-        assert!(e.key(EditorKey::Char('c')));
-        assert!(e.key(EditorKey::Char('C')));
+        assert!(e.key(EditorKey::Char('G')));
+        assert!(e.key(EditorKey::Char('G')));
         assert_eq!(
             definition_names(&e),
             ["", "Component 1", "Component 2"],
@@ -1792,5 +1792,73 @@ mod tests {
         assert!(!e.export_file(&unknown));
         assert!(e.status().contains(".obj"), "{}", e.status());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Vertices of the open context, as positions.
+    fn positions(e: &Editor) -> Vec<DVec3> {
+        e.doc().model().vertices().map(|(_, v)| v.pos).collect()
+    }
+
+    #[test]
+    fn the_circle_tool_draws_a_circle_around_the_first_click() {
+        let mut e = editor();
+        assert!(e.key(EditorKey::Char('c')));
+        assert_eq!(e.tool_kind(), ToolKind::Circle);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        click_at(&mut e, DVec3::new(3.0, 1.0, 0.0));
+        assert_eq!(stats(&e), (24, 1));
+        let center = DVec3::new(1.0, 1.0, 0.0);
+        for p in positions(&e) {
+            assert!((p.distance(center) - 2.0).abs() < 1e-6, "{p}");
+        }
+    }
+
+    #[test]
+    fn a_typed_side_count_and_radius_shape_the_circle() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Circle);
+        for c in "8s".chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+        assert!(e.status().contains("8 sides"), "{}", e.status());
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        let px = e.doc().camera.project(DVec3::new(1.0, 0.0, 0.0)).unwrap();
+        e.cursor_moved(px);
+        for c in "1.5".chars() {
+            e.key(EditorKey::Char(c));
+        }
+        e.key(EditorKey::Enter);
+        assert_eq!(stats(&e), (8, 1));
+        for p in positions(&e) {
+            assert!((p.length() - 1.5).abs() < 1e-9, "{p}");
+        }
+        // The count stays for the next circle.
+        click_at(&mut e, DVec3::new(5.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(6.0, 0.0, 0.0));
+        assert_eq!(stats(&e), (16, 2));
+    }
+
+    #[test]
+    fn a_circle_started_on_a_wall_lies_in_the_wall() {
+        let mut e = editor();
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [4.0, 0.0, 3.0],
+            normal: None,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Circle);
+        click_at(&mut e, DVec3::new(2.0, 0.0, 1.5));
+        click_at(&mut e, DVec3::new(2.5, 0.0, 1.5));
+        let circle: Vec<DVec3> = positions(&e)
+            .into_iter()
+            .filter(|p| p.distance(DVec3::new(2.0, 0.0, 1.5)) < 0.6)
+            .collect();
+        assert_eq!(circle.len(), 24);
+        assert!(
+            circle.iter().all(|p| p.y.abs() < 1e-9),
+            "in the wall's plane"
+        );
     }
 }

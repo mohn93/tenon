@@ -69,6 +69,18 @@ pub fn parse_array(s: &str) -> Option<Array> {
     count(n).map(Array::Times)
 }
 
+/// A typed side count, "24s" (any case, spaces around allowed): the number of segments for
+/// circles. None if it is not one or the count is 0.
+pub fn parse_segments(s: &str) -> Option<u32> {
+    let s = s.trim().to_ascii_lowercase();
+    let n = s.strip_suffix('s')?;
+    let digits = !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
+    digits
+        .then(|| n.parse::<u32>().ok())
+        .flatten()
+        .filter(|n| *n > 0)
+}
+
 /// A length for display, in meters with up to millimeter precision: "2.5 m".
 pub fn format_length(meters: f64) -> String {
     let s = format!("{meters:.3}");
@@ -102,6 +114,15 @@ fn unit_scale(unit: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn side_counts_end_in_s() {
+        assert_eq!(parse_segments("24s"), Some(24));
+        assert_eq!(parse_segments(" 8S "), Some(8));
+        for bad in ["s", "24", "0s", "-3s", "2 4s", "4.5s", "24ss"] {
+            assert_eq!(parse_segments(bad), None, "{bad:?}");
+        }
+    }
 
     fn close(a: Option<f64>, b: f64) -> bool {
         a.is_some_and(|a| (a - b).abs() < 1e-12)

@@ -1,6 +1,7 @@
 //! Interactive tools and inference. Tools turn pointer input into `session::Command`s; they never
 //! edit the model directly.
 
+pub mod circle;
 pub mod erase;
 pub mod inference;
 pub mod line;
@@ -13,6 +14,7 @@ pub mod select;
 pub mod tool;
 pub mod vcb;
 
+pub use circle::CircleTool;
 pub use erase::EraseTool;
 pub use inference::{
     Axis, Guides, Inference, Lock, SnapKind, edge_under, edge_under_in, face_under, face_under_in,
