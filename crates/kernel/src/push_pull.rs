@@ -19,7 +19,9 @@ impl Model {
     /// every loop, plus a cap. The original face stays as the base when it lies in a flat sheet
     /// and is removed when it is part of a solid's surface. Extruded faces point out of the solid.
     /// A push into a solid that ends exactly on a parallel face holding the whole pushed face
-    /// (the back of a wall) cuts an opening through to it.
+    /// (the back of a wall) cuts an opening through to it. Extruded faces (cap and sides) take
+    /// the face's front and back materials; a base that turns over keeps each material on the
+    /// side it was on.
     pub fn push_pull(&mut self, id: FaceId, distance: f64) -> Result<ChangeSet, KernelError> {
         let face = self.face(id).ok_or(KernelError::FaceNotFound)?.clone();
         if !distance.is_finite() {
@@ -143,7 +145,8 @@ impl Model {
     }
 
     /// Extrudes face `id` by `distance`. With `through`, the push ends on the back of the solid:
-    /// the cap and the part of the back face it covers are removed, leaving an opening.
+    /// the cap and the part of the back face it covers are removed, leaving an opening. The cap
+    /// and the side faces get the face's front and back materials.
     fn extrude(&mut self, id: FaceId, face: &Face, distance: f64, through: bool) {
         let n = face.normal;
         let offset = n * distance;
@@ -271,6 +274,7 @@ impl Model {
             }
             if in_cap {
                 self.orient(f, cap_normal);
+                self.set_paint(f, face.paint());
                 continue;
             }
             // A side face lies inside a side's swept rectangle. Other new faces in a side's
@@ -292,6 +296,8 @@ impl Model {
             let (_, _, pa, pb) = sides[i];
             let out = (pb - pa).cross(n).normalize();
             self.orient(f, if cut { -out } else { out });
+            // The sides take the pushed face's materials, as the cap does.
+            self.set_paint(f, face.paint());
         }
         if cut {
             self.remove_strays(&vertices_before, &sides, offset);
@@ -563,18 +569,14 @@ impl Model {
         true
     }
 
-    /// Flips face `id` if its normal points away from `want`.
+    /// Flips face `id` if its normal points away from `want`. Its materials stay on the sides
+    /// they were on.
     pub(crate) fn orient(&mut self, id: FaceId, want: DVec3) {
         let f = self.face(id).unwrap();
         if f.normal.dot(want) >= 0.0 {
             return;
         }
-        let reversed = |l: &Vec<VertexId>| l.iter().rev().copied().collect::<Vec<_>>();
-        let flipped = Face {
-            outer: reversed(&f.outer),
-            holes: f.holes.iter().map(reversed).collect(),
-            normal: -f.normal,
-        };
+        let flipped = f.reversed();
         self.replace_face(id, flipped);
     }
 

@@ -25,6 +25,10 @@ pub enum KernelError {
     InstanceNotFound,
     /// A definition id names no definition in the scene.
     DefinitionNotFound,
+    /// A material id names no material in the scene.
+    MaterialNotFound,
+    /// A material name is empty, too long or taken; the text says which.
+    MaterialName(String),
 }
 
 impl fmt::Display for KernelError {
@@ -52,6 +56,8 @@ impl fmt::Display for KernelError {
             ),
             KernelError::InstanceNotFound => write!(f, "no such instance"),
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
+            KernelError::MaterialNotFound => write!(f, "no such material"),
+            KernelError::MaterialName(why) => write!(f, "{why}"),
         }
     }
 }

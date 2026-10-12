@@ -41,10 +41,7 @@ impl Scene {
                 m.remove_instance(*id);
             }
             m.detach(edges, faces);
-            placed = Some(m.insert_instance(Instance {
-                definition,
-                transform: DAffine3::IDENTITY,
-            }));
+            placed = Some(m.insert_instance(Instance::new(definition, DAffine3::IDENTITY)));
             Ok(m.take_changes())
         })?;
         let filled = self.edit(MeshId::Definition(definition), |m| {
@@ -64,7 +61,8 @@ impl Scene {
     /// instance's transform and drawn like new edges, so it merges with what it touches.
     /// Instances and guides inside it come out into `parent`, with new ids; a group inside a
     /// component gets a copy of its definition. A group's definition goes with its last
-    /// instance; a component's stays.
+    /// instance; a component's stays. The instance's material passes to the face sides and
+    /// instances that come out without one.
     pub fn explode(
         &mut self,
         parent: MeshId,
@@ -82,7 +80,7 @@ impl Scene {
         // lifted out of it get copies of their definitions: a group is placed only once.
         let survives = definition.kind == DefinitionKind::Component
             || self.instance_count(placed.definition) > 1;
-        let stencil = whole(&definition.mesh);
+        let stencil = whole(&definition.mesh).painted_over(placed.material);
         let inner: Vec<Instance> = definition
             .mesh
             .instances()
@@ -107,6 +105,7 @@ impl Scene {
             children.push(Instance {
                 definition,
                 transform: placed.transform * i.transform,
+                material: i.material.or(placed.material),
             });
         }
         let exploded = self.edit(parent, |m| {
@@ -178,6 +177,7 @@ impl Scene {
                 copies.push(Instance {
                     definition,
                     transform: *place * original.transform,
+                    material: original.material,
                 });
             }
         }
@@ -212,6 +212,7 @@ impl Scene {
             placed.push(Instance {
                 definition,
                 transform: child.transform,
+                material: child.material,
             });
         }
         let (copy, added) = self.add_definition(&name, kind);

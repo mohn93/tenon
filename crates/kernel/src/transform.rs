@@ -8,7 +8,7 @@ use crate::edit::KernelError;
 use crate::geom::{
     LENGTH_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d, vector_area,
 };
-use crate::ids::{CurveId, EdgeId, FaceId, VertexId};
+use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
 impl Model {
@@ -207,6 +207,7 @@ impl Model {
             let mut face = StencilFace {
                 outer: ring(&f.outer),
                 normal: f.normal,
+                paint: f.paint(),
                 openings: Vec::new(),
                 filled: Vec::new(),
             };
@@ -296,7 +297,7 @@ impl Model {
                 m.face_within(id, &f.outer) && !f.openings.iter().any(|h| m.face_within(id, h))
             })
         };
-        // Give each piece of a stencil face that face's orientation.
+        // Give each piece of a stencil face that face's orientation and materials.
         for f in &placed {
             for &id in &new {
                 let in_hole = f
@@ -306,6 +307,7 @@ impl Model {
                     .any(|h| self.face_within(id, h));
                 if self.face_within(id, &f.outer) && !in_hole {
                     self.orient(id, f.normal);
+                    self.set_paint(id, f.paint);
                 }
             }
         }
@@ -393,11 +395,26 @@ pub(crate) struct Stencil {
     faces: Vec<StencilFace>,
 }
 
+impl Stencil {
+    /// The stencil with `material` on every face side that has no material of its own (an
+    /// exploded instance's material passing to its faces).
+    pub(crate) fn painted_over(mut self, material: Option<MaterialId>) -> Stencil {
+        for f in &mut self.faces {
+            for side in &mut f.paint {
+                *side = side.or(material);
+            }
+        }
+        self
+    }
+}
+
 /// A face captured by position.
 #[derive(Clone, Debug)]
 struct StencilFace {
     outer: Vec<DVec3>,
     normal: DVec3,
+    /// Front and back materials.
+    paint: [Option<MaterialId>; 2],
     /// Holes no face fills.
     openings: Vec<Vec<DVec3>>,
     /// Holes another face fills.
@@ -410,6 +427,7 @@ impl StencilFace {
         StencilFace {
             outer: ring(&self.outer),
             normal: t.transform_vector3(self.normal).normalize(),
+            paint: self.paint,
             openings: self.openings.iter().map(ring).collect(),
             filled: self.filled.iter().map(ring).collect(),
         }

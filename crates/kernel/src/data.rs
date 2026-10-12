@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, VertexId};
+use crate::ids::{
+    CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
+};
+use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
 
@@ -24,6 +27,18 @@ pub struct SceneData {
     pub next_id: u64,
     pub root: MeshData,
     pub definitions: Vec<DefinitionData>,
+    /// Absent in files written before materials existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<MaterialData>,
+}
+
+/// A material: `color` is sRGB red, green and blue.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialData {
+    pub id: u64,
+    pub name: String,
+    pub color: [u8; 3],
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -65,6 +80,11 @@ pub struct FaceData {
     pub outer: Vec<u64>,
     pub holes: Vec<Vec<u64>>,
     pub normal: [f64; 3],
+    /// The materials of the front and back sides (absent: the default material).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,6 +94,9 @@ pub struct InstanceData {
     pub definition: u64,
     /// Column-major 3x4: x axis, y axis, z axis, translation.
     pub transform: [f64; 12],
+    /// Absent when the instance is not painted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<u64>,
 }
 
 /// A guide line through `point` along `direction` (a unit vector), or, without `direction`, a
@@ -111,12 +134,22 @@ impl Scene {
                     mesh: mesh_data(&d.mesh),
                 })
                 .collect(),
+            materials: self
+                .materials()
+                .map(|(id, m)| MaterialData {
+                    id: id.0,
+                    name: m.name.clone(),
+                    color: m.color,
+                })
+                .collect(),
         }
     }
 
     /// Rebuilds a scene from plain data, keeping every id. Fails, naming the problem, when an
     /// id is used twice or is over [`MAX_ID`], a number is not finite, an instance's transform
-    /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]).
+    /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]:
+    /// that includes painting with a missing material and blank, overlong or repeated
+    /// material names).
     pub fn from_data(data: &SceneData) -> Result<Scene, String> {
         if data.next_id > MAX_ID {
             return Err(format!(
@@ -137,7 +170,18 @@ impl Scene {
                 return Err(format!("definition d{} appears twice", d.id));
             }
         }
-        let scene = Scene::from_meshes(root, definitions, data.next_id);
+        let mut materials = BTreeMap::new();
+        for m in &data.materials {
+            check_id("material m", m.id)?;
+            let material = Material {
+                name: m.name.clone(),
+                color: m.color,
+            };
+            if materials.insert(MaterialId(m.id), material).is_some() {
+                return Err(format!("material m{} appears twice", m.id));
+            }
+        }
+        let scene = Scene::from_meshes(root, definitions, materials, data.next_id);
         scene.validate()?;
         Ok(scene)
     }
@@ -172,6 +216,8 @@ fn mesh_data(m: &Model) -> MeshData {
                     .map(|h| h.iter().map(|v| v.0).collect())
                     .collect(),
                 normal: f.normal.to_array(),
+                front: f.front.map(|m| m.0),
+                back: f.back.map(|m| m.0),
             })
             .collect(),
         instances: m
@@ -180,6 +226,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 id: id.0,
                 definition: i.definition.0,
                 transform: i.transform.to_cols_array(),
+                material: i.material.map(|m| m.0),
             })
             .collect(),
         guides: m
@@ -250,6 +297,8 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             outer: ring(&f.outer),
             holes: f.holes.iter().map(ring).collect(),
             normal: DVec3::from(f.normal),
+            front: f.front.map(MaterialId),
+            back: f.back.map(MaterialId),
         };
         if faces.insert(FaceId(f.id), face).is_some() {
             return Err(format!("face f{} appears twice", f.id));
@@ -269,6 +318,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
         let instance = Instance {
             definition: DefinitionId(i.definition),
             transform,
+            material: i.material.map(MaterialId),
         };
         if instances.insert(InstanceId(i.id), instance).is_some() {
             return Err(format!("instance i{} appears twice", i.id));

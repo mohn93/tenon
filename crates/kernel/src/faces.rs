@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::{DVec2, DVec3};
 
 use crate::geom::{PLANE_ANGLE_TOL, Plane, point_in_polygon};
-use crate::ids::{EdgeId, FaceId, VertexId};
+use crate::ids::{EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{Face, Model};
 use crate::regions::{PlaneGraph, Region};
 
@@ -103,9 +103,10 @@ impl Model {
             .flat_map(|(_, f)| std::iter::once(&f.outer).chain(&f.holes))
             .flat_map(|l| (0..l.len()).map(|i| side(l[i], l[(i + 1) % l.len()])))
             .collect();
-        // Each wanted region with the normal it gets if it is new: that of the old face it lies
-        // in, or the plane's own normal when it lies in none.
-        let wanted: Vec<(Region, DVec3)> = graph
+        // Each wanted region with the normal and materials it gets if it is new: those of the old
+        // face it lies in (a piece of a split face keeps its paint), or the plane's own normal
+        // and no materials when it lies in none.
+        let wanted: Vec<(Region, DVec3, Paint)> = graph
             .regions()
             .into_iter()
             .filter_map(|r| {
@@ -127,7 +128,8 @@ impl Model {
                 });
                 let keep = in_old_face || (uses_new && (!in_old_hole || apart));
                 let normal = container.map_or(plane.normal, |i| old[i].1.normal);
-                keep.then_some((r, normal))
+                let paint = container.map_or([None, None], |i| old[i].1.paint());
+                keep.then_some((r, normal, paint))
             })
             .collect();
 
@@ -136,9 +138,14 @@ impl Model {
 
     /// Keeps old faces that match a wanted region, updates their holes if needed, inserts the
     /// rest, and removes old faces that match nothing. All through recorded primitives.
-    fn reconcile(&mut self, old: &[(FaceId, Face)], wanted: Vec<(Region, DVec3)>, plane: Plane) {
+    fn reconcile(
+        &mut self,
+        old: &[(FaceId, Face)],
+        wanted: Vec<(Region, DVec3, Paint)>,
+        plane: Plane,
+    ) {
         let mut matched: BTreeSet<FaceId> = BTreeSet::new();
-        for (r, normal) in wanted {
+        for (r, normal, [front, back]) in wanted {
             let outer: BTreeSet<VertexId> = r.outer.iter().copied().collect();
             // Faces in one plane may face opposite ways (push/pull flips a base face), so an
             // old face matches by vertex set and keeps its own orientation.
@@ -156,7 +163,7 @@ impl Model {
                         let face = Face {
                             outer: f.outer.clone(),
                             holes,
-                            normal: f.normal,
+                            ..f.clone()
                         };
                         self.replace_face(*id, face);
                     }
@@ -174,6 +181,8 @@ impl Model {
                         outer,
                         holes,
                         normal,
+                        front,
+                        back,
                     });
                 }
             }
@@ -185,6 +194,9 @@ impl Model {
         }
     }
 }
+
+/// A face's front and back materials.
+type Paint = [Option<MaterialId>; 2];
 
 fn side(a: VertexId, b: VertexId) -> (VertexId, VertexId) {
     (a.min(b), a.max(b))
@@ -235,14 +247,7 @@ mod tests {
             .map(|(id, f)| (id, f.clone()))
             .unwrap();
         assert_eq!(f.normal, DVec3::Z);
-        let mut outer = f.outer.clone();
-        outer.reverse();
-        let flipped = Face {
-            outer,
-            holes: vec![],
-            normal: -f.normal,
-        };
-        m.replace_face(id, flipped);
+        m.replace_face(id, f.reversed());
         m.take_changes();
         square(&mut m, 1.0, 1.0, 2.0);
         m.validate().unwrap();

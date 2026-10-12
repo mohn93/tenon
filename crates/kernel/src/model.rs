@@ -5,7 +5,9 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
-use crate::ids::{CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, VertexId};
+use crate::ids::{
+    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
+};
 use crate::index::Index;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -44,6 +46,43 @@ pub struct Face {
     pub outer: Vec<VertexId>,
     pub holes: Vec<Vec<VertexId>>,
     pub normal: DVec3,
+    /// The material of the side `normal` points to; None is the default material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<MaterialId>,
+    /// The material of the other side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<MaterialId>,
+}
+
+impl Face {
+    /// An unpainted face.
+    pub fn new(outer: Vec<VertexId>, holes: Vec<Vec<VertexId>>, normal: DVec3) -> Face {
+        Face {
+            outer,
+            holes,
+            normal,
+            front: None,
+            back: None,
+        }
+    }
+
+    /// The same face turned over: loops reversed, normal negated, and the materials swapped so
+    /// each stays on the side it was on.
+    pub fn reversed(&self) -> Face {
+        let rev = |l: &Vec<VertexId>| l.iter().rev().copied().collect::<Vec<_>>();
+        Face {
+            outer: rev(&self.outer),
+            holes: self.holes.iter().map(rev).collect(),
+            normal: -self.normal,
+            front: self.back,
+            back: self.front,
+        }
+    }
+
+    /// The front and back materials.
+    pub fn paint(&self) -> [Option<MaterialId>; 2] {
+        [self.front, self.back]
+    }
 }
 
 /// A placed copy of a definition's geometry (a group or component).
@@ -52,6 +91,21 @@ pub struct Instance {
     pub definition: DefinitionId,
     /// Maps the definition's coordinates into the coordinates of the mesh holding the instance.
     pub transform: DAffine3,
+    /// The material shown on the sides of its faces (at any depth) that have none of their
+    /// own, unless an instance nearer to them has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialId>,
+}
+
+impl Instance {
+    /// An unpainted instance.
+    pub fn new(definition: DefinitionId, transform: DAffine3) -> Instance {
+        Instance {
+            definition,
+            transform,
+            material: None,
+        }
+    }
 }
 
 /// Construction geometry drawn by the Tape Measure: not part of any face, never exported.
@@ -105,6 +159,10 @@ pub enum Op {
     TransformInstance(InstanceId, DAffine3, DAffine3),
     AddGuide(GuideId, Guide),
     RemoveGuide(GuideId, Guide),
+    /// A face's front and back materials changed from the first pair to the second.
+    PaintFace(FaceId, [Option<MaterialId>; 2], [Option<MaterialId>; 2]),
+    /// An instance's material changed from the first to the second.
+    PaintInstance(InstanceId, Option<MaterialId>, Option<MaterialId>),
 }
 
 impl Op {
@@ -123,6 +181,8 @@ impl Op {
             Op::TransformInstance(id, from, to) => Op::TransformInstance(id, to, from),
             Op::AddGuide(id, g) => Op::RemoveGuide(id, g),
             Op::RemoveGuide(id, g) => Op::AddGuide(id, g),
+            Op::PaintFace(id, from, to) => Op::PaintFace(id, to, from),
+            Op::PaintInstance(id, from, to) => Op::PaintInstance(id, to, from),
         }
     }
 
@@ -142,6 +202,8 @@ impl Op {
             Op::TransformInstance(id, _, _) => (EntityId::Instance(*id), true, true),
             Op::AddGuide(id, _) => (EntityId::Guide(*id), false, true),
             Op::RemoveGuide(id, _) => (EntityId::Guide(*id), true, false),
+            Op::PaintFace(id, _, _) => (EntityId::Face(*id), true, true),
+            Op::PaintInstance(id, _, _) => (EntityId::Instance(*id), true, true),
         }
     }
 }
@@ -159,6 +221,10 @@ pub struct ChangeSummary {
     pub created: Vec<EntityId>,
     pub deleted: Vec<EntityId>,
     pub modified: Vec<EntityId>,
+    /// Materials added, removed, renamed or recolored (see `SceneChange::summary`). Absent
+    /// when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<MaterialId>,
 }
 
 impl ChangeSet {
@@ -420,6 +486,17 @@ impl Model {
             Op::RemoveGuide(id, _) => {
                 self.guides.remove(&id);
             }
+            Op::PaintFace(id, _, [front, back]) => {
+                if let Some(f) = self.faces.get_mut(&id) {
+                    f.front = front;
+                    f.back = back;
+                }
+            }
+            Op::PaintInstance(id, _, to) => {
+                if let Some(i) = self.instances.get_mut(&id) {
+                    i.material = to;
+                }
+            }
         }
     }
 
@@ -586,6 +663,22 @@ impl Model {
             }
         }
         self.take_changes()
+    }
+
+    /// Sets a face's front and back materials, recording a change only when they differ.
+    pub(crate) fn set_paint(&mut self, id: FaceId, paint: [Option<MaterialId>; 2]) {
+        let from = self.faces[&id].paint();
+        if from != paint {
+            self.record(Op::PaintFace(id, from, paint));
+        }
+    }
+
+    /// Sets an instance's material, recording a change only when it differs.
+    pub(crate) fn set_instance_material(&mut self, id: InstanceId, material: Option<MaterialId>) {
+        let from = self.instances[&id].material;
+        if from != material {
+            self.record(Op::PaintInstance(id, from, material));
+        }
     }
 
     /// Replaces a face's data, keeping its id.
@@ -783,45 +876,19 @@ mod tests {
         };
 
         let (mut m, a, b, c) = base();
-        m.insert_face(Face {
-            outer: vec![a, b, c],
-            holes: vec![],
-            normal: DVec3::Z,
-        });
+        m.insert_face(Face::new(vec![a, b, c], vec![], DVec3::Z));
         assert!(m.validate().is_ok());
 
         let bad_faces: Vec<(&str, Face)> = vec![
-            (
-                "empty outer loop",
-                Face {
-                    outer: vec![],
-                    holes: vec![],
-                    normal: DVec3::Z,
-                },
-            ),
+            ("empty outer loop", Face::new(vec![], vec![], DVec3::Z)),
             (
                 "missing vertex",
-                Face {
-                    outer: vec![a, b, VertexId(999)],
-                    holes: vec![],
-                    normal: DVec3::Z,
-                },
+                Face::new(vec![a, b, VertexId(999)], vec![], DVec3::Z),
             ),
-            (
-                "wrong winding",
-                Face {
-                    outer: vec![a, c, b],
-                    holes: vec![],
-                    normal: DVec3::Z,
-                },
-            ),
+            ("wrong winding", Face::new(vec![a, c, b], vec![], DVec3::Z)),
             (
                 "non-unit normal",
-                Face {
-                    outer: vec![a, b, c],
-                    holes: vec![],
-                    normal: DVec3::new(0.0, 0.0, 2.0),
-                },
+                Face::new(vec![a, b, c], vec![], DVec3::new(0.0, 0.0, 2.0)),
             ),
         ];
         for (what, face) in bad_faces {

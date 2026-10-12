@@ -55,14 +55,7 @@ impl Model {
                 continue;
             }
             let holes = f.holes.iter().map(fix).filter(|h| !flat(h)).collect();
-            self.replace_face(
-                id,
-                Face {
-                    outer,
-                    holes,
-                    normal: f.normal,
-                },
-            );
+            self.replace_face(id, Face { outer, holes, ..f });
         }
 
         let joined: Vec<(EdgeId, [VertexId; 2])> = self

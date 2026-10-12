@@ -163,6 +163,57 @@ impl TryFrom<String> for DefinitionId {
     }
 }
 
+/// A material faces and instances are painted with. Serialized as "m<n>". Material ids come
+/// from the same counter as entity ids, so they never repeat one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct MaterialId(pub u64);
+
+impl fmt::Display for MaterialId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "m{}", self.0)
+    }
+}
+
+impl FromStr for MaterialId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('m', n)) => Ok(MaterialId(n)),
+            _ => Err(format!("invalid material id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for MaterialId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "MaterialId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^m(0|[1-9][0-9]*)$",
+            "description": "Material id: m<n>"
+        })
+    }
+}
+
+impl From<MaterialId> for String {
+    fn from(id: MaterialId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for MaterialId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +236,11 @@ mod tests {
         assert_eq!(DefinitionId(3).to_string(), "d3");
         for s in ["", "d", "f3", "d03", "d-1"] {
             assert!(s.parse::<DefinitionId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("m5".parse::<MaterialId>(), Ok(MaterialId(5)));
+        assert_eq!(MaterialId(5).to_string(), "m5");
+        for s in ["", "m", "d5", "m05", "m+5"] {
+            assert!(s.parse::<MaterialId>().is_err(), "{s:?} parsed");
         }
     }
 

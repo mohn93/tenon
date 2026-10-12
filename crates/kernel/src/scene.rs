@@ -6,7 +6,8 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId};
+use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId, MaterialId};
+use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
@@ -42,6 +43,10 @@ pub enum Step {
     RemoveDefinition(DefinitionId, Definition),
     /// A definition's name changed from the first to the second.
     RenameDefinition(DefinitionId, String, String),
+    AddMaterial(MaterialId, Material),
+    RemoveMaterial(MaterialId, Material),
+    /// A material's name or color changed from the first to the second.
+    ChangeMaterial(MaterialId, Material, Material),
 }
 
 impl Step {
@@ -51,6 +56,9 @@ impl Step {
             Step::AddDefinition(id, d) => Step::RemoveDefinition(id, d),
             Step::RemoveDefinition(id, d) => Step::AddDefinition(id, d),
             Step::RenameDefinition(id, from, to) => Step::RenameDefinition(id, to, from),
+            Step::AddMaterial(id, m) => Step::RemoveMaterial(id, m),
+            Step::RemoveMaterial(id, m) => Step::AddMaterial(id, m),
+            Step::ChangeMaterial(id, from, to) => Step::ChangeMaterial(id, to, from),
         }
     }
 }
@@ -80,7 +88,8 @@ impl SceneChange {
     }
 
     /// Net effect per entity across all meshes (ids are unique in a scene). Definitions are not
-    /// listed; the instances that place them are.
+    /// listed; the instances that place them are. Materials added, removed or changed are
+    /// listed in `materials` (one added and removed again is not).
     pub fn summary(&self) -> ChangeSummary {
         let ops = self
             .steps
@@ -91,7 +100,24 @@ impl SceneChange {
             })
             .flatten()
             .collect();
-        ChangeSet { ops }.summary()
+        let mut summary = ChangeSet { ops }.summary();
+        // material -> (existed before, exists after)
+        let mut state: BTreeMap<MaterialId, (bool, bool)> = BTreeMap::new();
+        for step in &self.steps {
+            let (id, before, after) = match step {
+                Step::AddMaterial(id, _) => (*id, false, true),
+                Step::RemoveMaterial(id, _) => (*id, true, false),
+                Step::ChangeMaterial(id, _, _) => (*id, true, true),
+                _ => continue,
+            };
+            state.entry(id).or_insert((before, after)).1 = after;
+        }
+        summary.materials = state
+            .into_iter()
+            .filter(|(_, (before, after))| *before || *after)
+            .map(|(id, _)| id)
+            .collect();
+        summary
     }
 }
 
@@ -106,14 +132,19 @@ impl From<Step> for SceneChange {
 pub struct Scene {
     root: Model,
     definitions: BTreeMap<DefinitionId, Definition>,
+    /// The materials faces and instances may be painted with, shared by every mesh.
+    materials: BTreeMap<MaterialId, Material>,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.
     next_id: u64,
 }
 
-/// Two scenes are equal when they hold the same entities and definitions under the same ids.
+/// Two scenes are equal when they hold the same entities, definitions and materials under the
+/// same ids.
 impl PartialEq for Scene {
     fn eq(&self, other: &Self) -> bool {
-        self.root == other.root && self.definitions == other.definitions
+        self.root == other.root
+            && self.definitions == other.definitions
+            && self.materials == other.materials
     }
 }
 
@@ -128,6 +159,7 @@ impl Scene {
             next_id: model.next_id(),
             root: model,
             definitions: BTreeMap::new(),
+            materials: BTreeMap::new(),
         }
     }
 
@@ -136,17 +168,20 @@ impl Scene {
     pub(crate) fn from_meshes(
         root: Model,
         definitions: BTreeMap<DefinitionId, Definition>,
+        materials: BTreeMap<MaterialId, Material>,
         next_id: u64,
     ) -> Self {
         let used = definitions
             .iter()
             .map(|(id, d)| id.0.saturating_add(1).max(d.mesh.next_id()))
+            .chain(materials.keys().map(|id| id.0.saturating_add(1)))
             .chain([root.next_id(), next_id])
             .max()
             .unwrap_or(0);
         Scene {
             root,
             definitions,
+            materials,
             next_id: used,
         }
     }
@@ -165,6 +200,22 @@ impl Scene {
             MeshId::Root => Some(&self.root),
             MeshId::Definition(d) => self.definitions.get(&d).map(|d| &d.mesh),
         }
+    }
+
+    pub fn material(&self, id: MaterialId) -> Option<&Material> {
+        self.materials.get(&id)
+    }
+
+    /// Every material, by id.
+    pub fn materials(&self) -> impl Iterator<Item = (MaterialId, &Material)> {
+        self.materials.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// A material id for a new material, taken from the entity id counter.
+    pub(crate) fn alloc_material(&mut self) -> MaterialId {
+        let id = MaterialId(self.next_id);
+        self.next_id += 1;
+        id
     }
 
     fn mesh_mut(&mut self, id: MeshId) -> Option<&mut Model> {
@@ -300,10 +351,7 @@ impl Scene {
                     .map(|(_, g)| instance.transform.transform_point3(g.anchor())),
             );
             for (_, i) in m.instances() {
-                let placed = Instance {
-                    definition: i.definition,
-                    transform: instance.transform * i.transform,
-                };
+                let placed = Instance::new(i.definition, instance.transform * i.transform);
                 out.extend(self.instance_guide_anchors(&placed));
             }
         }
@@ -350,7 +398,7 @@ impl Scene {
         }
     }
 
-    fn apply_step(&mut self, step: &Step) {
+    pub(crate) fn apply_step(&mut self, step: &Step) {
         match step {
             Step::Edit(mesh, c) => {
                 let m = self.mesh_mut(*mesh).expect("change to a missing mesh");
@@ -373,12 +421,36 @@ impl Scene {
                     d.name = to.clone();
                 }
             }
+            Step::AddMaterial(id, m) => {
+                self.next_id = self.next_id.max(id.0.saturating_add(1));
+                self.materials.insert(*id, m.clone());
+            }
+            Step::RemoveMaterial(id, _) => {
+                self.materials.remove(id);
+            }
+            Step::ChangeMaterial(id, _, to) => {
+                if let Some(m) = self.materials.get_mut(id) {
+                    *m = to.clone();
+                }
+            }
         }
     }
 
     /// Checks every mesh, that instances place existing definitions, that no definition places
-    /// itself (directly or deeper), and that no id is used in two meshes.
+    /// itself (directly or deeper), that no id is used in two meshes, that every material
+    /// painted exists, and that material names are valid and distinct.
     pub fn validate(&self) -> Result<(), String> {
+        let mut names = BTreeSet::new();
+        for (id, m) in &self.materials {
+            crate::material::check_name(&m.name).map_err(|e| format!("material {id}: {e}"))?;
+            if !names.insert(m.name.as_str()) {
+                return Err(format!(
+                    "material {id}: two materials are named {:?}",
+                    m.name
+                ));
+            }
+        }
+        let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let mut seen = BTreeSet::new();
         let mut curves_seen = BTreeSet::new();
         for (mesh, m) in self.meshes() {
@@ -386,6 +458,16 @@ impl Scene {
             for (id, i) in m.instances() {
                 if !self.definitions.contains_key(&i.definition) {
                     return Err(format!("instance {id:?} places a missing definition"));
+                }
+                if missing(&i.material) {
+                    return Err(format!(
+                        "instance {id:?} is painted with a missing material"
+                    ));
+                }
+            }
+            for (id, f) in m.faces() {
+                if missing(&f.front) || missing(&f.back) {
+                    return Err(format!("face {id:?} is painted with a missing material"));
                 }
             }
             for id in entity_ids(m) {

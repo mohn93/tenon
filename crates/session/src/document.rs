@@ -733,10 +733,7 @@ impl Document {
             );
             for id in instances {
                 let Some(i) = m.instance(*id) else { continue };
-                let placed = Instance {
-                    definition: i.definition,
-                    transform: *t * i.transform,
-                };
+                let placed = Instance::new(i.definition, *t * i.transform);
                 let mut points: Vec<[f64; 3]> = match self.scene.instance_bounds(&placed) {
                     Some(b) => b.map(|p| p.to_array()).to_vec(),
                     None => vec![placed.transform.translation.to_array()],

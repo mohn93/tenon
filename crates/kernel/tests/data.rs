@@ -131,6 +131,7 @@ fn broken_data_is_rejected() {
                 id: 999_999,
                 definition: component,
                 transform: glam::DAffine3::IDENTITY.to_cols_array(),
+                material: None,
             });
         },
         "places itself",
@@ -186,6 +187,7 @@ fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
             ..Default::default()
         },
         definitions: vec![],
+        materials: vec![],
     }
 }
 
@@ -261,6 +263,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         id,
         definition,
         transform: glam::DAffine3::IDENTITY.to_cols_array(),
+        material: None,
     };
     let definitions = (0..n)
         .map(|k| kernel::DefinitionData {
@@ -286,6 +289,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
             ..Default::default()
         },
         definitions,
+        materials: vec![],
     }
 }
 
