@@ -16,6 +16,10 @@ pub enum UiAction {
     MakeComponent,
     Explode,
     CloseInstance,
+    NewModel,
+    OpenFile,
+    SaveFile,
+    SaveFileAs,
 }
 
 /// What the panels show.
@@ -36,6 +40,23 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     let mut actions = Vec::new();
     Panel::top("toolbar").show(ui, |ui| {
         ui.horizontal(|ui| {
+            ui.menu_button("File", |ui| {
+                let items = [
+                    ("New", "Cmd+N", UiAction::NewModel),
+                    ("Open...", "Cmd+O", UiAction::OpenFile),
+                    ("Save", "Cmd+S", UiAction::SaveFile),
+                    ("Save As...", "Shift+Cmd+S", UiAction::SaveFileAs),
+                ];
+                for (label, key, action) in items {
+                    if ui
+                        .add(egui::Button::new(label).shortcut_text(key))
+                        .clicked()
+                    {
+                        actions.push(action);
+                    }
+                }
+            });
+            ui.separator();
             for kind in ToolKind::ALL {
                 let key = match kind.shortcut() {
                     ' ' => "Space".to_string(),
@@ -147,6 +168,69 @@ mod tests {
             value: Some("2.5_".into()),
             message: Some("Not a length: x".into()),
             lock: None,
+        }
+    }
+
+    /// One frame with a primary click (press, then release in the next frame) at `pos`.
+    fn click(ctx: &egui::Context, view: &View, pos: Pos2) -> Vec<UiAction> {
+        let pointer = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut press = screen();
+        press.events = vec![egui::Event::PointerMoved(pos), pointer(true)];
+        let mut actions = run(ctx, press, view).0;
+        let mut release = screen();
+        release.events = vec![pointer(false)];
+        actions.extend(run(ctx, release, view).0);
+        actions
+    }
+
+    #[test]
+    fn the_file_menu_reports_its_items() {
+        let ctx = egui::Context::default();
+        let status = status();
+        let info = Vec::new();
+        let view = View {
+            tool: ToolKind::Line,
+            status: &status,
+            info: &info,
+            has_selection: false,
+            has_instance_selected: false,
+            inside_instance: false,
+        };
+        let (_, central) = run(&ctx, screen(), &view);
+        let file = Pos2::new(14.0, central.min.y / 2.0);
+        let mut clicked = Vec::new();
+        // Open the menu, then click one spot below it; repeat down the menu.
+        for y in (0..160).step_by(6) {
+            click(&ctx, &view, file);
+            let _ = run(&ctx, screen(), &view);
+            clicked.extend(click(
+                &ctx,
+                &view,
+                Pos2::new(40.0, central.min.y + y as f32),
+            ));
+            // Close the menu if the click missed every item.
+            let mut escape = screen();
+            escape.events = vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }];
+            let _ = run(&ctx, escape, &view);
+        }
+        for action in [
+            UiAction::NewModel,
+            UiAction::OpenFile,
+            UiAction::SaveFile,
+            UiAction::SaveFileAs,
+        ] {
+            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
         }
     }
 

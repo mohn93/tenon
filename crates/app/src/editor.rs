@@ -1,6 +1,8 @@
 //! Window-independent editing state: routes input to navigation or the active tool, runs the
 //! resulting commands on the document, and produces the overlay and status text to show.
 
+use std::path::Path;
+
 use glam::{DVec2, DVec3};
 use kernel::EntityId;
 use render::grid::LineVertex;
@@ -435,6 +437,40 @@ impl Editor {
         self.run(command);
         self.update_hover();
         true
+    }
+
+    /// Starts an empty model. Always true (the view changes).
+    pub fn new_model(&mut self) -> bool {
+        self.run_selection_command(Command::New)
+    }
+
+    /// Opens a `.skr` file. False if it cannot be opened; the status then says why.
+    pub fn open_file(&mut self, path: &Path) -> bool {
+        let revision = self.doc.revision();
+        self.run_selection_command(Command::Open {
+            path: path.display().to_string(),
+        });
+        self.doc.revision() != revision
+    }
+
+    /// Saves to `path`, or to the file last opened or saved. False if it cannot be saved; the
+    /// status then says why.
+    pub fn save_file(&mut self, path: Option<&Path>) -> bool {
+        self.message = None;
+        let saved = self
+            .run(Command::Save {
+                path: path.map(|p| p.display().to_string()),
+            })
+            .is_some();
+        if saved {
+            self.message = Some(format!(
+                "Saved {}",
+                self.doc
+                    .path()
+                    .map_or_else(String::new, |p| p.display().to_string())
+            ));
+        }
+        saved
     }
 
     pub fn undo(&mut self) -> bool {
@@ -1684,5 +1720,38 @@ mod tests {
         assert!(e.undo());
         assert!(e.doc().model().instances().next().is_some());
         assert_eq!(definition_names(&e).len(), 1);
+    }
+
+    /// A path for a test file, unique to this process.
+    fn temp_file(name: &str) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("sketchup-alt-editor-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn saving_opening_and_starting_over() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Escape);
+        assert!(!e.save_file(None), "a model never saved needs a path");
+        assert!(e.status().contains("give a path"), "{}", e.status());
+        let path = temp_file("square.skr");
+        assert!(e.save_file(Some(&path)));
+        assert!(e.status().contains("Saved"), "{}", e.status());
+        assert!(!e.doc().is_modified());
+
+        assert!(e.new_model());
+        assert_eq!(stats(&e), (0, 0));
+        assert!(e.open_file(&path));
+        assert_eq!(stats(&e), (4, 1));
+        assert_eq!(e.doc().path(), Some(path.as_path()));
+
+        let missing = temp_file("missing.skr");
+        assert!(!e.open_file(&missing));
+        assert!(e.status().contains("missing.skr"), "{}", e.status());
+        assert_eq!(stats(&e), (4, 1), "a failed open leaves the model");
+        let _ = std::fs::remove_file(&path);
     }
 }

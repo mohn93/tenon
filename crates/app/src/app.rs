@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -103,6 +103,8 @@ struct State {
     cursor: DVec2,
     /// When egui wants its next frame without any input (e.g. a tooltip delay).
     repaint_at: Option<Instant>,
+    /// The window title last set.
+    title: String,
     /// When and where the left button was last released in the view, for double-clicks.
     last_release: Option<(Instant, DVec2)>,
     /// Where the left button was last pressed in the view, so a release that ends a drag does
@@ -168,6 +170,7 @@ impl State {
             cursor: DVec2::ZERO,
             repaint_at: None,
             last_release: None,
+            title: String::new(),
             left_press: None,
         }
     }
@@ -193,8 +196,66 @@ impl State {
         }
     }
 
+    /// Before the model is replaced or the window closes: if it has unsaved changes, asks
+    /// whether to save them. True when it is fine to go on (saved, or changes discarded).
+    fn settle_changes(&mut self) -> bool {
+        let doc = self.editor.doc();
+        if !doc.is_modified() {
+            return true;
+        }
+        let name = file_name(doc.path());
+        let answer = rfd::MessageDialog::new()
+            .set_title("Unsaved changes")
+            .set_description(format!("Save the changes to {name} first?"))
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show();
+        match answer {
+            rfd::MessageDialogResult::Yes => self.save(false),
+            rfd::MessageDialogResult::No => true,
+            _ => false,
+        }
+    }
+
+    fn new_model(&mut self) {
+        if self.settle_changes() {
+            self.editor.new_model();
+        }
+    }
+
+    fn open(&mut self) {
+        if !self.settle_changes() {
+            return;
+        }
+        if let Some(path) = skr_dialog().pick_file() {
+            self.editor.open_file(&path);
+        }
+    }
+
+    /// Saves to the current file, or to one chosen in a dialog when there is none or `choose`
+    /// is set. False if cancelled or the save failed.
+    fn save(&mut self, choose: bool) -> bool {
+        let path = if choose || self.editor.doc().path().is_none() {
+            let name = file_name(self.editor.doc().path());
+            match skr_dialog().set_file_name(name).save_file() {
+                Some(path) => Some(path),
+                None => return false,
+            }
+        } else {
+            None
+        };
+        self.editor.save_file(path.as_deref())
+    }
+
     fn apply(&mut self, action: UiAction) {
         match action {
+            UiAction::NewModel => self.new_model(),
+            UiAction::OpenFile => self.open(),
+            UiAction::SaveFile => {
+                self.save(false);
+            }
+            UiAction::SaveFileAs => {
+                self.save(true);
+            }
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
                 self.editor.undo();
@@ -247,6 +308,12 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let size = (self.config.width, self.config.height);
 
+        let doc = self.editor.doc();
+        let title = window_title(doc.path(), doc.is_modified());
+        if title != self.title {
+            self.window.set_title(&title);
+            self.title = title;
+        }
         let status = self.editor.status_parts();
         let info = entity_info(self.editor.doc());
         let panels = View {
@@ -349,6 +416,41 @@ impl State {
         };
         hub.notify(&host);
     }
+}
+
+/// The letter of a Cmd/Ctrl shortcut: the layout's character when it is ASCII, else the
+/// physical key's on a US layout (so Cmd+Z works on Arabic or Cyrillic layouts, and Cmd+W on
+/// AZERTY is not Cmd+Z).
+fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
+    match logical {
+        Key::Character(c) if c.is_ascii() => c.chars().next().map(|c| c.to_ascii_lowercase()),
+        _ => match physical {
+            PhysicalKey::Code(KeyCode::KeyZ) => Some('z'),
+            PhysicalKey::Code(KeyCode::KeyN) => Some('n'),
+            PhysicalKey::Code(KeyCode::KeyO) => Some('o'),
+            PhysicalKey::Code(KeyCode::KeyS) => Some('s'),
+            _ => None,
+        },
+    }
+}
+
+/// A file dialog for `.skr` models.
+fn skr_dialog() -> rfd::FileDialog {
+    rfd::FileDialog::new().add_filter("SketchUp Alt model", &["skr"])
+}
+
+/// The file's name, or "Untitled.skr" for a model never saved.
+fn file_name(path: Option<&Path>) -> String {
+    path.and_then(|p| p.file_name()).map_or_else(
+        || "Untitled.skr".into(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// "house.skr - sketchup-alt", with "*" after the name while there are unsaved changes.
+fn window_title(path: Option<&Path>, modified: bool) -> String {
+    let star = if modified { "*" } else { "" };
+    format!("{}{star} - sketchup-alt", file_name(path))
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
@@ -516,7 +618,9 @@ impl ApplicationHandler<ApiWake> for App {
         }
         let changed = match event {
             WindowEvent::CloseRequested => {
-                event_loop.exit();
+                if s.settle_changes() {
+                    event_loop.exit();
+                }
                 false
             }
             WindowEvent::Resized(size) => {
@@ -589,16 +693,22 @@ impl ApplicationHandler<ApiWake> for App {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
                 // Use the physical Z key only when the layout's character is not ASCII (e.g.
                 // Arabic or Cyrillic), so Cmd+W on AZERTY does not undo.
-                let is_z = match &event.logical_key {
-                    Key::Character(c) if c.is_ascii() => c.eq_ignore_ascii_case("z"),
-                    _ => event.physical_key == PhysicalKey::Code(KeyCode::KeyZ),
-                };
-                if command_key && is_z {
+                let letter = shortcut_letter(&event.logical_key, event.physical_key);
+                if command_key && letter == Some('z') {
                     if s.modifiers.shift_key() {
                         s.editor.redo()
                     } else {
                         s.editor.undo()
                     }
+                } else if command_key && !event.repeat && letter == Some('n') {
+                    s.new_model();
+                    true
+                } else if command_key && !event.repeat && letter == Some('o') {
+                    s.open();
+                    true
+                } else if command_key && !event.repeat && letter == Some('s') {
+                    s.save(s.modifiers.shift_key());
+                    true
                 } else if command_key || s.modifiers.alt_key() {
                     // Alt/Option is the orbit modifier; Option+letter must not type or switch
                     // tools through its physical-key fallback.
@@ -670,6 +780,28 @@ mod tests {
         assert!(!is_click(None, at, 6.0));
         assert!(is_click(Some(at), at + DVec2::new(3.0, 3.0), 6.0));
         assert!(!is_click(Some(at), at + DVec2::new(40.0, 0.0), 6.0));
+    }
+
+    #[test]
+    fn titles_name_the_file_and_mark_unsaved_changes() {
+        assert_eq!(window_title(None, false), "Untitled.skr - sketchup-alt");
+        assert_eq!(
+            window_title(Some(Path::new("/m/house.skr")), true),
+            "house.skr* - sketchup-alt"
+        );
+    }
+
+    #[test]
+    fn shortcut_letters_follow_the_layout_unless_it_is_not_ascii() {
+        let code = |c| PhysicalKey::Code(c);
+        let ch = |s: &str| Key::Character(s.into());
+        assert_eq!(shortcut_letter(&ch("S"), code(KeyCode::KeyS)), Some('s'));
+        // AZERTY: the key in the US Z place types "w"; it must not undo.
+        assert_eq!(shortcut_letter(&ch("w"), code(KeyCode::KeyZ)), Some('w'));
+        // Arabic: the character is not ASCII, so the physical key decides.
+        assert_eq!(shortcut_letter(&ch("س"), code(KeyCode::KeyS)), Some('s'));
+        assert_eq!(shortcut_letter(&ch("ئ"), code(KeyCode::KeyZ)), Some('z'));
+        assert_eq!(shortcut_letter(&ch("ب"), code(KeyCode::KeyF)), None);
     }
 
     #[test]

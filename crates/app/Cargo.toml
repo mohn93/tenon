@@ -17,6 +17,7 @@ egui.workspace = true
 egui-wgpu.workspace = true
 egui-winit.workspace = true
 kernel = { path = "../kernel" }
+rfd.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
