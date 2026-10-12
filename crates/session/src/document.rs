@@ -436,11 +436,17 @@ impl Document {
         point: [f64; 3],
         direction: [f64; 3],
     ) -> Result<SceneChange, CommandError> {
-        check_coordinates(&[point, direction])?;
-        let Some(direction) = DVec3::from(direction).try_normalize() else {
+        check_coordinates(&[point])?;
+        // The direction is normalized, so only its finiteness and length matter.
+        let direction = DVec3::from(direction);
+        let Some(direction) = direction
+            .is_finite()
+            .then(|| direction.try_normalize())
+            .flatten()
+        else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "direction must be a non-zero vector",
+                "direction must be a finite, non-zero vector",
             ));
         };
         self.add_guide(Guide::Line {
@@ -722,15 +728,25 @@ impl Document {
                     .filter_map(|g| m.guide(*g))
                     .map(|g| at(g.anchor())),
             );
-            for i in instances.iter().filter_map(|i| m.instance(*i)) {
+            for id in instances {
+                let Some(i) = m.instance(*id) else { continue };
                 let placed = Instance {
                     definition: i.definition,
                     transform: *t * i.transform,
                 };
-                match self.scene.instance_bounds(&placed) {
-                    Some(b) => moved.extend(b.map(|p| p.to_array())),
-                    None => moved.push(placed.transform.translation.to_array()),
-                }
+                let mut points: Vec<[f64; 3]> = match self.scene.instance_bounds(&placed) {
+                    Some(b) => b.map(|p| p.to_array()).to_vec(),
+                    None => vec![placed.transform.translation.to_array()],
+                };
+                // Bounds leave guides out, so check the definition's guides too.
+                points.extend(
+                    self.scene
+                        .instance_guide_anchors(&placed)
+                        .iter()
+                        .map(|p| p.to_array()),
+                );
+                check_coordinates(&points)
+                    .map_err(|e| e.with_ids(vec![EntityId::Instance(*id)]))?;
             }
         }
         check_coordinates(&moved)

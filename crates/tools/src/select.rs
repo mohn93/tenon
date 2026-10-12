@@ -28,8 +28,9 @@ impl SelectTool {
 
 /// What a click picks: the open context's edge under the cursor, else its guide, else an
 /// instance's edge (which picks the instance), else the face under it (the open context's
-/// face, or the instance). Geometry outside the open instance hides what is behind it but is not picked,
-/// and its edges do not outrank the open context's even when they lie on top of them.
+/// face, or the instance). Geometry outside the open instance hides what is behind it but is
+/// not picked, and its edges do not outrank the open context's even when they lie on top of
+/// them.
 pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
     let edge_of = |keep: fn(Owner) -> bool| {
         edge_under_where(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius, keep)
@@ -215,7 +216,8 @@ impl Tool for SelectTool {
     fn prompt(&self) -> &'static str {
         match self.press {
             None => {
-                "Click an edge, face or group, or drag a box; Shift adds or removes; double-click a group to edit it"
+                "Click an edge, face or group, or drag a box; Shift adds or removes; \
+                 double-click a group to edit it"
             }
             Some(_) => "Release to select: drag right for inside the box, left for touching",
         }
@@ -532,5 +534,62 @@ mod tests {
         let cancelled = r.send(ToolEvent::Cancel);
         assert!(cancelled.preview.is_empty());
         assert!(r.send(ToolEvent::Release(Rig::hit())).commands.is_empty());
+    }
+
+    /// A scene whose only instance, a group holding a unit square at the origin, also holds a
+    /// guide point at (3, 1, 0).
+    fn scene_with_a_guide_in_a_group() -> kernel::Scene {
+        let mut m = Model::new();
+        let p = |x, y| DVec3::new(x, y, 0.0);
+        m.add_polygon(&[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)])
+            .unwrap();
+        let mut s = kernel::Scene::from_root(m);
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (i, _) = s
+            .make_group(
+                kernel::MeshId::Root,
+                &edges,
+                &faces,
+                &[],
+                kernel::DefinitionKind::Group,
+                "",
+            )
+            .unwrap();
+        let def = s.root().instance(i).unwrap().definition;
+        s.edit(kernel::MeshId::Definition(def), |m| {
+            m.add_guide(Guide::Point {
+                position: p(3.0, 1.0),
+            })
+        })
+        .unwrap();
+        s
+    }
+
+    #[test]
+    fn a_guide_inside_a_closed_group_is_not_picked() {
+        let scene = scene_with_a_guide_in_a_group();
+        let scenery = crate::scenery::Scenery::of(&scene, &[]).unwrap();
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let click = |p: DVec3| {
+            let ctx = ToolContext {
+                model: scene.root(),
+                scenery: &scenery,
+                camera: &camera,
+                cursor: camera.project(p).unwrap(),
+                pick_radius: 10.0,
+                drag_threshold: 4.0,
+                shift: false,
+                selection: &Default::default(),
+            };
+            pick(&ctx)
+        };
+        let picked = click(DVec3::new(3.0, 1.0, 0.0));
+        assert!(!matches!(picked, Some(EntityId::Guide(_))), "{picked:?}");
+        // The group's own geometry is still picked as the group.
+        assert!(matches!(
+            click(DVec3::new(0.5, 0.0, 0.0)),
+            Some(EntityId::Instance(_))
+        ));
     }
 }

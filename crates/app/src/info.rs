@@ -43,17 +43,19 @@ fn selection_info(doc: &Document) -> Vec<String> {
     }
     if let ([], [], [], [g]) = (&edges[..], &faces[..], &instances[..], &guides[..]) {
         let xyz = |v: glam::DVec3| v.to_array().map(number).join(", ");
+        let place = |v: glam::DVec3| v.to_array().map(format_length).join(", ");
         return match m.guide(*g) {
-            Some(Guide::Line { direction, .. }) => {
+            Some(Guide::Line { point, direction }) => {
                 vec![
                     "1 guide line".into(),
                     format!("Direction: {}", xyz(*direction)),
+                    format!("Through: {}", place(*point)),
                 ]
             }
             Some(Guide::Point { position }) => {
                 vec![
                     "1 guide point".into(),
-                    format!("Position: {}", xyz(*position)),
+                    format!("Position: {}", place(*position)),
                 ]
             }
             None => Vec::new(),
@@ -201,9 +203,19 @@ mod tests {
         })
         .unwrap();
         select(&mut d, &["g9"]);
-        assert_eq!(entity_info(&d), ["1 guide line", "Direction: 0, 1, 0"]);
+        assert_eq!(
+            entity_info(&d),
+            [
+                "1 guide line",
+                "Direction: 0, 1, 0",
+                "Through: 0 m, -1 m, 0 m"
+            ]
+        );
         select(&mut d, &["g10"]);
-        assert_eq!(entity_info(&d), ["1 guide point", "Position: 1.5, 2, 0.25"]);
+        assert_eq!(
+            entity_info(&d),
+            ["1 guide point", "Position: 1.5 m, 2 m, 0.25 m"]
+        );
         select(&mut d, &["g9", "g10", "e2"]);
         assert_eq!(entity_info(&d), ["1 edge, 2 guides"]);
     }

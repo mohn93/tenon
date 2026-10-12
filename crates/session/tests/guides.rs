@@ -292,8 +292,8 @@ fn guides_are_saved_but_not_exported_and_old_files_still_open() {
     );
 }
 
-#[test]
-fn explode_refuses_to_put_a_guide_beyond_the_coordinate_limit() {
+/// A group holding a unit square and a guide point at x = 900000, as (doc, group id).
+fn group_with_a_far_guide() -> (Document, Value) {
     let mut d = doc();
     run(
         &mut d,
@@ -309,14 +309,65 @@ fn explode_refuses_to_put_a_guide_beyond_the_coordinate_limit() {
     let face = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"][0]["id"].clone();
     run(&mut d, json!({"type": "make_group", "ids": [face, guide]})).unwrap();
     let group = ask(&d, json!({"type": "selection"}))["ids"][0].clone();
-    run(
+    (d, group)
+}
+
+#[test]
+fn placing_a_group_refuses_to_put_its_guide_beyond_the_coordinate_limit() {
+    for command in [
+        json!({"type": "move", "offset": [500000, 0, 0]}),
+        json!({"type": "copy", "offset": [500000, 0, 0]}),
+    ] {
+        let (mut d, group) = group_with_a_far_guide();
+        let mut command = command;
+        command["ids"] = json!([group]);
+        let before = ask(&d, json!({"type": "entities"}));
+        let depth = undo_depth(&d);
+        let err = run(&mut d, command.clone()).unwrap_err();
+        assert_eq!(err.0, ErrorKind::InvalidInput, "{command}");
+        assert_eq!(err.1, vec![group.as_str().unwrap().to_string()]);
+        assert_eq!(ask(&d, json!({"type": "entities"})), before);
+        assert_eq!(undo_depth(&d), depth);
+    }
+}
+
+#[test]
+fn rotating_a_group_refuses_to_swing_its_guide_beyond_the_coordinate_limit() {
+    let (mut d, group) = group_with_a_far_guide();
+    // A quarter turn about a center 900000 on the other side of the origin puts the guide
+    // at (-900000, 1.8e6, 0).
+    let err = run(
         &mut d,
-        json!({"type": "move", "ids": [group], "offset": [500000, 0, 0]}),
+        json!({"type": "rotate", "ids": [group], "center": [-900000, 0, 0], "axis": [0, 0, 1], "angle": 90}),
     )
-    .unwrap();
-    let before = ask(&d, json!({"type": "entities"}));
-    let err = run(&mut d, json!({"type": "explode", "ids": [group]})).unwrap_err();
+    .unwrap_err();
     assert_eq!(err.0, ErrorKind::InvalidInput);
     assert_eq!(err.1, vec![group.as_str().unwrap().to_string()]);
-    assert_eq!(ask(&d, json!({"type": "entities"})), before);
+}
+
+#[test]
+fn a_guide_line_direction_is_only_normalized_not_range_checked() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_guide_line", "point": [0, 1, 0], "direction": [2e6, 0, 0]}),
+    )
+    .unwrap();
+    let line = &guides(&d)[0];
+    assert_eq!(line["direction"], json!([1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn a_non_finite_guide_line_direction_is_refused() {
+    let mut d = doc();
+    for direction in [[f64::NAN, 0.0, 0.0], [1.0, f64::INFINITY, 0.0]] {
+        let err = d
+            .execute(Command::AddGuideLine {
+                point: [0.0, 0.0, 0.0],
+                direction,
+            })
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+    }
+    assert!(guides(&d).is_empty());
 }

@@ -158,7 +158,7 @@ Design rule for every milestone: the interface is one client of the command laye
 
 ### Queries
 
-Read-only, structured: list/get entities (vertices, edges, faces, groups, instances) with geometry, bounding-box and type filters, selection, camera, model stats, undo history. Agents do not need screenshots to know the model state.
+Read-only, structured: list/get entities (vertices, edges, faces, groups, instances, guides) with geometry, bounding-box and type filters, selection, camera, model stats, undo history. Agents do not need screenshots to know the model state.
 
 ### API server (`api`)
 

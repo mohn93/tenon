@@ -169,8 +169,8 @@ impl ChangeSet {
     }
 }
 
-/// The geometry of one mesh, plus the instances and guides placed in it. Every mutation is recorded as an
-/// `Op` until `take_changes`.
+/// The geometry of one mesh, plus the instances and guides placed in it. Every mutation is
+/// recorded as an `Op` until `take_changes`.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
     vertices: BTreeMap<VertexId, Vertex>,

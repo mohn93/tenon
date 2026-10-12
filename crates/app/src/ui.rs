@@ -250,8 +250,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_edit_menu_deletes_guides() {
+    /// The actions produced by opening each menu right of File and clicking just below it.
+    fn edit_menu_actions(has_guides: bool) -> Vec<UiAction> {
         let ctx = egui::Context::default();
         let status = status();
         let info = Vec::new();
@@ -262,13 +262,12 @@ mod tests {
             has_selection: false,
             has_instance_selected: false,
             inside_instance: false,
-            has_guides: true,
+            has_guides,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let row = central.min.y / 2.0;
         let mut clicked = Vec::new();
-        // Open each menu right of File in turn, then click just below it. The Edit button sits
-        // right after File (which ends before x = 40), so 40..90 reaches it.
+        // The Edit button sits right after File (which ends before x = 40), so 40..90 reaches it.
         for x in (40..90).step_by(6) {
             click(&ctx, &view, Pos2::new(x as f32, row));
             let _ = run(&ctx, screen(), &view);
@@ -287,46 +286,18 @@ mod tests {
             }];
             let _ = run(&ctx, escape, &view);
         }
+        clicked
+    }
+
+    #[test]
+    fn the_edit_menu_deletes_guides() {
+        let clicked = edit_menu_actions(true);
         assert!(clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
     }
 
     #[test]
     fn the_edit_menu_cannot_delete_guides_when_there_are_none() {
-        let ctx = egui::Context::default();
-        let status = status();
-        let info = Vec::new();
-        let view = View {
-            tool: ToolKind::Line,
-            status: &status,
-            info: &info,
-            has_selection: false,
-            has_instance_selected: false,
-            inside_instance: false,
-            has_guides: false,
-        };
-        let (_, central) = run(&ctx, screen(), &view);
-        let row = central.min.y / 2.0;
-        let mut clicked = Vec::new();
-        // Open each menu right of File in turn, then click just below it. The Edit button sits
-        // right after File (which ends before x = 40), so 40..90 reaches it.
-        for x in (40..90).step_by(6) {
-            click(&ctx, &view, Pos2::new(x as f32, row));
-            let _ = run(&ctx, screen(), &view);
-            clicked.extend(click(
-                &ctx,
-                &view,
-                Pos2::new(x as f32 + 10.0, central.min.y + 8.0),
-            ));
-            let mut escape = screen();
-            escape.events = vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }];
-            let _ = run(&ctx, escape, &view);
-        }
+        let clicked = edit_menu_actions(false);
         assert!(!clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
     }
 

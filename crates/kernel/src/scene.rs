@@ -289,6 +289,27 @@ impl Scene {
         enclose(&corners)
     }
 
+    /// The anchors of the guides inside an instance's definition, nested definitions
+    /// included, in the coordinates of the mesh holding the instance. Bounds leave guides
+    /// out; this lets callers check them.
+    pub fn instance_guide_anchors(&self, instance: &Instance) -> Vec<DVec3> {
+        let mut out = Vec::new();
+        if let Some(m) = self.mesh(MeshId::Definition(instance.definition)) {
+            out.extend(
+                m.guides()
+                    .map(|(_, g)| instance.transform.transform_point3(g.anchor())),
+            );
+            for (_, i) in m.instances() {
+                let placed = Instance {
+                    definition: i.definition,
+                    transform: instance.transform * i.transform,
+                };
+                out.extend(self.instance_guide_anchors(&placed));
+            }
+        }
+        out
+    }
+
     /// Renames a definition. An unchanged name changes nothing.
     pub fn rename_definition(
         &mut self,

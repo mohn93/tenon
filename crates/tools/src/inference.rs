@@ -114,9 +114,10 @@ pub fn infer_with(
 /// within `radius_px` of the cursor.
 ///
 /// Ranking: endpoint, midpoint, origin and guide point (nearest on screen wins) > intersection
-/// (of edges and guide lines) > on-edge > on-guide-line > directions from the anchor (axes, parallel or perpendicular to the reference edge; nearest
-/// wins) > on-face > ground > free. Points and edges hidden behind a face are skipped. With a
-/// lock, the result is always on the locked line.
+/// (of edges and guide lines) > on-edge > on-guide-line > directions from the anchor (axes,
+/// parallel or perpendicular to the reference edge; nearest wins) > on-face > ground > free.
+/// Points and edges hidden behind a face are skipped. With a lock, the result is always on
+/// the locked line.
 pub fn infer_in(
     scenery: &Scenery,
     camera: &Camera,
@@ -974,5 +975,45 @@ mod tests {
         let scenery = Scenery::single(&hidden);
         let p = px(&c, DVec3::new(2.0, 1.0, 0.0));
         assert!(guide_under_where(&scenery, &c, p, R, |_| true).is_none());
+    }
+
+    /// A scene whose only instance, a group holding a unit square at the origin, also holds a
+    /// guide point at (3, 1, 0).
+    fn scene_with_a_guide_in_a_group() -> kernel::Scene {
+        let mut m = Model::new();
+        let p = |x, y| DVec3::new(x, y, 0.0);
+        m.add_polygon(&[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)])
+            .unwrap();
+        let mut s = kernel::Scene::from_root(m);
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (i, _) = s
+            .make_group(
+                kernel::MeshId::Root,
+                &edges,
+                &faces,
+                &[],
+                kernel::DefinitionKind::Group,
+                "",
+            )
+            .unwrap();
+        let def = s.root().instance(i).unwrap().definition;
+        s.edit(kernel::MeshId::Definition(def), |m| {
+            m.add_guide(Guide::Point {
+                position: p(3.0, 1.0),
+            })
+        })
+        .unwrap();
+        s
+    }
+
+    #[test]
+    fn a_guide_inside_a_closed_group_is_snapped_to() {
+        let (c, s) = (cam(), scene_with_a_guide_in_a_group());
+        let scenery = Scenery::of(&s, &[]).unwrap();
+        let g = Guides::default();
+        let at = DVec3::new(3.0, 1.0, 0.0);
+        let hit = infer_in(&scenery, &c, px(&c, at) + DVec2::new(2.0, 2.0), &g, R);
+        assert_eq!((hit.point, hit.kind), (at, SnapKind::GuidePoint));
     }
 }
