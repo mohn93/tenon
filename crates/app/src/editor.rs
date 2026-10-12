@@ -290,9 +290,9 @@ impl Editor {
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
     /// (or "x" in the Move tool, for arrays like "x5"); "g" makes a group and "G" (Shift+G) a
     /// component of the selection; other letters are tool shortcuts. Enter submits the typed
-    /// text to the tool. Escape clears the typed text, or else cancels the tool's operation (the Select
-    /// tool then closes the open group). Delete, and Backspace with nothing typed, erase the
-    /// selection. Returns true if anything changed.
+    /// text to the tool. Escape clears the typed text, or else cancels the tool's operation
+    /// (the Select tool then closes the open group). Delete, and Backspace with nothing typed,
+    /// erase the selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {

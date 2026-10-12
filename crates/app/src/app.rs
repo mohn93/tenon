@@ -477,8 +477,9 @@ fn window_title(path: Option<&Path>, modified: bool) -> String {
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
-/// the physical key so shortcuts and digits work on any layout.
-fn editor_key(logical: &Key, physical: PhysicalKey) -> Option<EditorKey> {
+/// the physical key so shortcuts and digits work on any layout; with Shift held the physical
+/// letter is uppercased (ASCII characters already have Shift applied by the layout).
+fn editor_key(logical: &Key, physical: PhysicalKey, shift: bool) -> Option<EditorKey> {
     match logical {
         Key::Named(NamedKey::Enter) => Some(EditorKey::Enter),
         Key::Named(NamedKey::Backspace) => Some(EditorKey::Backspace),
@@ -495,7 +496,12 @@ fn editor_key(logical: &Key, physical: PhysicalKey) -> Option<EditorKey> {
             if c.is_ascii() {
                 Some(EditorKey::Char(c))
             } else {
-                physical_char(physical).map(EditorKey::Char)
+                let c = physical_char(physical)?;
+                Some(EditorKey::Char(if shift {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }))
             }
         }
         _ => None,
@@ -527,6 +533,7 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyE => 'e',
         KeyCode::KeyM => 'm',
         KeyCode::KeyG => 'g',
+        KeyCode::KeyS => 's',
         KeyCode::KeyC => 'c',
         _ => return None,
     })
@@ -749,7 +756,12 @@ impl ApplicationHandler<ApiWake> for App {
                     // tools through its physical-key fallback.
                     false
                 } else {
-                    editor_key(&event.logical_key, event.physical_key).is_some_and(|k| {
+                    editor_key(
+                        &event.logical_key,
+                        event.physical_key,
+                        s.modifiers.shift_key(),
+                    )
+                    .is_some_and(|k| {
                         if event.repeat {
                             s.editor.key_repeat(k)
                         } else {
@@ -769,6 +781,24 @@ impl ApplicationHandler<ApiWake> for App {
 
 #[cfg(test)]
 mod tests {
+    use winit::keyboard::SmolStr;
+
+    #[test]
+    fn non_ascii_layouts_fall_back_to_the_physical_key() {
+        let arabic = Key::Character(SmolStr::new("ا"));
+        let g = PhysicalKey::Code(KeyCode::KeyG);
+        let ch = |k: Option<EditorKey>| match k {
+            Some(EditorKey::Char(c)) => Some(c),
+            _ => None,
+        };
+        assert_eq!(ch(editor_key(&arabic, g, true)), Some('G'));
+        assert_eq!(ch(editor_key(&arabic, g, false)), Some('g'));
+        let s = PhysicalKey::Code(KeyCode::KeyS);
+        assert_eq!(ch(editor_key(&arabic, s, false)), Some('s'));
+        let ascii = Key::Character(SmolStr::new("g"));
+        assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
+    }
+
     use super::*;
 
     #[test]
