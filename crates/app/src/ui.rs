@@ -100,7 +100,8 @@ const BELOW_MATERIALS_LIST: f32 = 140.0 + OUTLINER_MIN_HEIGHT;
 pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     let mut actions = Vec::new();
     Panel::top("toolbar").show(ui, |ui| {
-        ui.horizontal(|ui| {
+        // Wraps onto more rows when the window is narrower than the buttons (about 1240 points).
+        ui.horizontal_wrapped(|ui| {
             ui.menu_button("File", |ui| {
                 let items = [
                     ("New", "Cmd+N", UiAction::NewModel),
@@ -481,7 +482,7 @@ mod tests {
         out.unwrap()
     }
 
-    /// The window's default size (see `app.rs`); the toolbar needs about 1200 points.
+    /// The window's default size (see `app.rs`); the toolbar fits one row of it.
     fn screen() -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
@@ -708,8 +709,17 @@ mod tests {
         assert!(rect.width() > 600.0 && rect.height() > 500.0, "{rect:?}");
     }
 
-    #[test]
-    fn clicking_a_tool_button_reports_it() {
+    /// A `width` x 800 point window.
+    fn screen_of(width: f32) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 800.0))),
+            ..Default::default()
+        }
+    }
+
+    /// Clicks over the whole toolbar of a `width`-point window, every 4 points across and 6
+    /// down. Returns the actions and the toolbar's height (the 3D view's top).
+    fn toolbar_clicks(width: f32) -> (Vec<UiAction>, f32) {
         let ctx = egui::Context::default();
         let status = status();
         let info = Vec::new();
@@ -728,37 +738,71 @@ mod tests {
             context: &[],
             selection: &NO_SELECTION,
         };
-        let (_, central) = run(&ctx, screen(), &view);
-        let row = central.min.y / 2.0;
-        // Click along the toolbar row until a press lands on the Rectangle button.
+        let (_, central) = run(&ctx, screen_of(width), &view);
         let mut clicked = Vec::new();
-        for x in (2..1280).step_by(4) {
-            let pos = Pos2::new(x as f32, row);
-            let pointer = |pressed: bool| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            };
-            let mut press = screen();
-            press.events = vec![egui::Event::PointerMoved(pos), pointer(true)];
-            let _ = run(&ctx, press, &view);
-            let mut release = screen();
-            release.events = vec![pointer(false)];
-            clicked.extend(run(&ctx, release, &view).0);
+        for y in (3..central.min.y as i32).step_by(6) {
+            for x in (2..width as i32).step_by(4) {
+                let pos = Pos2::new(x as f32, y as f32);
+                let pointer = |pressed: bool| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                let mut press = screen_of(width);
+                press.events = vec![egui::Event::PointerMoved(pos), pointer(true)];
+                let _ = run(&ctx, press, &view);
+                let mut release = screen_of(width);
+                release.events = vec![pointer(false)];
+                clicked.extend(run(&ctx, release, &view).0);
+            }
         }
-        // Paint is the last tool: the toolbar still fits a 1280-point window.
-        for kind in [ToolKind::Rectangle, ToolKind::Arc, ToolKind::Paint] {
-            assert!(clicked.contains(&UiAction::Tool(kind)), "{clicked:?}");
+        (clicked, central.min.y)
+    }
+
+    /// Every toolbar button (not the menus) is in `clicked`.
+    fn assert_every_toolbar_button(clicked: &[UiAction], width: f32) {
+        for kind in ToolKind::ALL {
+            assert!(
+                clicked.contains(&UiAction::Tool(kind)),
+                "{kind:?} at {width} points: {clicked:?}"
+            );
         }
-        assert!(clicked.contains(&UiAction::Undo));
         for action in [
+            UiAction::Undo,
+            UiAction::Redo,
             UiAction::MakeGroup,
             UiAction::MakeComponent,
             UiAction::Explode,
             UiAction::CloseInstance,
         ] {
-            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+            assert!(
+                clicked.contains(&action),
+                "{action:?} at {width} points: {clicked:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clicking_a_tool_button_reports_it() {
+        let (clicked, height) = toolbar_clicks(1280.0);
+        assert_every_toolbar_button(&clicked, 1280.0);
+        // The default window keeps the toolbar on one row, as a very wide one does.
+        let (_, wide) = toolbar_clicks(2400.0);
+        assert_eq!(height, wide, "one toolbar row at 1280 points");
+    }
+
+    #[test]
+    fn a_narrow_window_wraps_the_toolbar_and_keeps_every_button() {
+        let (_, one_row) = toolbar_clicks(2400.0);
+        for width in [900.0, 640.0] {
+            let (clicked, height) = toolbar_clicks(width);
+            assert_every_toolbar_button(&clicked, width);
+            assert!(
+                height > one_row + 10.0,
+                "the toolbar wraps at {width} points: {height} vs {one_row}"
+            );
+            assert!(height < 200.0, "{height} points of toolbar at {width}");
         }
     }
 
