@@ -429,6 +429,7 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
             PhysicalKey::Code(KeyCode::KeyN) => Some('n'),
             PhysicalKey::Code(KeyCode::KeyO) => Some('o'),
             PhysicalKey::Code(KeyCode::KeyS) => Some('s'),
+            PhysicalKey::Code(KeyCode::KeyQ) => Some('q'),
             _ => None,
         },
     }
@@ -691,8 +692,6 @@ impl ApplicationHandler<ApiWake> for App {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
-                // Use the physical Z key only when the layout's character is not ASCII (e.g.
-                // Arabic or Cyrillic), so Cmd+W on AZERTY does not undo.
                 let letter = shortcut_letter(&event.logical_key, event.physical_key);
                 if command_key && letter == Some('z') {
                     if s.modifiers.shift_key() {
@@ -709,6 +708,11 @@ impl ApplicationHandler<ApiWake> for App {
                 } else if command_key && !event.repeat && letter == Some('s') {
                     s.save(s.modifiers.shift_key());
                     true
+                } else if command_key && !event.repeat && letter == Some('q') {
+                    if s.settle_changes() {
+                        event_loop.exit();
+                    }
+                    false
                 } else if command_key || s.modifiers.alt_key() {
                     // Alt/Option is the orbit modifier; Option+letter must not type or switch
                     // tools through its physical-key fallback.
@@ -802,6 +806,8 @@ mod tests {
         assert_eq!(shortcut_letter(&ch("س"), code(KeyCode::KeyS)), Some('s'));
         assert_eq!(shortcut_letter(&ch("ئ"), code(KeyCode::KeyZ)), Some('z'));
         assert_eq!(shortcut_letter(&ch("ب"), code(KeyCode::KeyF)), None);
+        assert_eq!(shortcut_letter(&ch("ض"), code(KeyCode::KeyQ)), Some('q'));
+        assert_eq!(shortcut_letter(&ch("Q"), code(KeyCode::KeyQ)), Some('q'));
     }
 
     #[test]

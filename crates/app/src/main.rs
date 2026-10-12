@@ -42,9 +42,15 @@ fn main() {
                 }
                 _ => Some(socket),
             };
-            let event_loop = EventLoop::<app::ApiWake>::with_user_event()
-                .build()
-                .expect("create event loop");
+            let mut builder = EventLoop::<app::ApiWake>::with_user_event();
+            // The default macOS menu's Quit would exit without the unsaved-changes prompt;
+            // Cmd+Q is handled by the app instead.
+            #[cfg(target_os = "macos")]
+            winit::platform::macos::EventLoopBuilderExtMacOS::with_default_menu(
+                &mut builder,
+                false,
+            );
+            let event_loop = builder.build().expect("create event loop");
             // Redraw on demand only; the loop sleeps until input or an API request arrives.
             event_loop.set_control_flow(ControlFlow::Wait);
             let mut app = app::App::new(&event_loop, socket, file);
