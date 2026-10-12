@@ -161,12 +161,14 @@ triangles: the root's faces and every instance's, placed in root coordinates (a 
 twice is written twice), whatever instance is open. Edges without faces are not written.
 `format` (`obj`, `stl`, `glb`, `gltf`) defaults to the one the path's extension names, in any
 case; any other extension without `format` is `invalid_input`, and so is a model with no faces.
+A `.skr` path (any case) and the open model's own file are refused with `invalid_input`: export
+never overwrites a model; use `save`.
 
 | Format | Content |
 |---|---|
 | `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y) |
 | `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model |
-| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`); Y up |
+| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`) with a double-sided default material, so lone faces show from behind; Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
 
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and

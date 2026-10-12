@@ -69,3 +69,42 @@ fn instances_are_placed_and_components_repeat() {
         .fold(f64::MIN, f64::max);
     assert_eq!(max_x, 6.0);
 }
+
+#[test]
+fn a_mirrored_instance_keeps_its_triangles_wound_around_outward_normals() {
+    let mut s = Scene::from_root(box_model());
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    s.make_group(
+        MeshId::Root,
+        &edges,
+        &faces,
+        &[],
+        DefinitionKind::Component,
+        "Crate",
+    )
+    .unwrap();
+    // Mirror the instance across x and move it by (0, 0, 0): the box fills x in [-1, 0].
+    let mut data = s.to_data();
+    data.root.instances[0].transform =
+        [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    let s = Scene::from_data(&data).unwrap();
+    let tris = s.triangles();
+    assert_eq!(tris.len(), 12);
+    let centre = p(-0.5, 0.5, 0.5);
+    for t in &tris {
+        let [a, b, c] = t.corners;
+        assert!(
+            a.x <= 1e-9 && b.x <= 1e-9 && c.x <= 1e-9,
+            "mirrored into -x"
+        );
+        let winding = (b - a).cross(c - a).normalize();
+        assert!(
+            winding.abs_diff_eq(t.normal, 1e-9),
+            "wound around its normal: {winding} vs {}",
+            t.normal
+        );
+        let mid = (a + b + c) / 3.0;
+        assert!((mid - centre).dot(t.normal) > 0.0, "faces out of the box");
+    }
+}

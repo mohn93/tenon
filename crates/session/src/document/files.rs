@@ -73,6 +73,28 @@ impl Document {
                 "give a format, or a path ending in .obj, .stl, .glb or .gltf",
             ));
         };
+        let target = Path::new(path);
+        if target
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("skr"))
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "a .skr path is a model file: use save, not export",
+            ));
+        }
+        if let Some(own) = &self.path {
+            let same = match (own.canonicalize(), target.canonicalize()) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => own == target,
+            };
+            if same {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "that is the open model's own file: export to another path",
+                ));
+            }
+        }
         let triangles = self.scene.triangles();
         if triangles.is_empty() {
             return Err(CommandError::new(

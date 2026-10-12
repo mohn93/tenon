@@ -53,7 +53,8 @@ pub(crate) fn encode(triangles: &[Triangle], format: ExportFormat) -> Vec<u8> {
 
 /// Z-up model coordinates to Y-up.
 fn y_up(p: DVec3) -> DVec3 {
-    DVec3::new(p.x, p.z, -p.y)
+    // Adding 0.0 turns a negative zero into a positive one.
+    DVec3::new(p.x + 0.0, p.z + 0.0, -p.y + 0.0)
 }
 
 /// OBJ with shared positions and normals; faces are triangles.
@@ -140,7 +141,10 @@ fn gltf_parts(triangles: &[Triangle]) -> (Vec<u8>, serde_json::Value) {
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"mesh": 0, "name": "model"}],
-        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4}]}],
+        "materials": [{"name": "default", "doubleSided": true,
+                       "pbrMetallicRoughness": {"metallicFactor": 0}}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "mode": 4,
+                                    "material": 0}]}],
         "buffers": [{"byteLength": buffer.len()}],
         "bufferViews": [
             {"buffer": 0, "byteOffset": 0, "byteLength": half, "target": 34962},

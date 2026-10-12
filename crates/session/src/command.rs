@@ -2,9 +2,10 @@ use std::fmt;
 
 use kernel::{ChangeSummary, DefinitionId, EntityId};
 
-use crate::export::ExportFormat;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::export::ExportFormat;
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
@@ -136,7 +137,7 @@ pub enum Command {
 
 impl Command {
     /// True for commands that can change the model or the open context (everything except
-    /// camera, selection and saving).
+    /// camera, selection, saving and exporting).
     pub fn changes_model(&self) -> bool {
         !matches!(
             self,
