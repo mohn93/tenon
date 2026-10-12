@@ -6,7 +6,7 @@
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
-use session::{Command, DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points};
+use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points};
 
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
@@ -60,7 +60,22 @@ impl ArcTool {
         );
         let (center, angle) = arc_from_bulge(start, end, bulge, normal)
             .ok_or("Pull the arc away from the line between its ends")?;
-        arc_points(center, start, angle, Some(normal), self.segments).map_err(|e| e.message)?;
+        let within = |p: DVec3| p.is_finite() && p.abs().max_element() <= MAX_COORDINATE;
+        let too_shallow = || "Pull the arc further from the line between its ends".to_string();
+        if !within(center) {
+            return Err(too_shallow());
+        }
+        let points =
+            arc_points(center, start, angle, Some(normal), self.segments).map_err(|e| {
+                if e.message.contains("far enough") {
+                    format!("Too small for {} segments", self.segments)
+                } else {
+                    e.message
+                }
+            })?;
+        if !points.iter().all(|&p| within(p)) {
+            return Err(too_shallow());
+        }
         Ok(Command::AddArc {
             center: center.to_array(),
             start: start.to_array(),
@@ -360,5 +375,27 @@ mod tests {
         // Escape starts over.
         send(&mut tool, ToolEvent::Cancel);
         assert_eq!((tool.start, tool.end), (None, None));
+    }
+
+    #[test]
+    fn a_too_shallow_or_too_small_arc_is_refused_and_the_tool_keeps_its_ends() {
+        let mut tool = ArcTool::new();
+        send(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
+        send(&mut tool, ToolEvent::Click(ground(10_000.0, 0.0)));
+        // A 1 mm bulge on a 10 km chord has a center far outside the model limits.
+        let out = send(&mut tool, ToolEvent::Click(ground(5_000.0, 0.001)));
+        assert!(out.commands.is_empty());
+        assert!(out.message.unwrap().contains("Pull the arc further"));
+        assert!(tool.start.is_some() && tool.end.is_some(), "ends kept");
+
+        // A tiny arc cannot be split into so many segments.
+        let mut tool = ArcTool::new();
+        send(&mut tool, ToolEvent::Value("360s".into()));
+        send(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
+        send(&mut tool, ToolEvent::Click(ground(0.00002, 0.0)));
+        let out = send(&mut tool, ToolEvent::Click(ground(0.00001, 0.00001)));
+        assert!(out.commands.is_empty());
+        assert_eq!(out.message.as_deref(), Some("Too small for 360 segments"));
+        assert!(tool.start.is_some() && tool.end.is_some(), "ends kept");
     }
 }

@@ -66,6 +66,12 @@ pub(crate) fn whole_curve(model: &Model, id: EntityId) -> Vec<EntityId> {
     }
 }
 
+/// True when some, but not all, of `ids` are selected.
+fn partly_selected(ids: &[EntityId], ctx: &ToolContext) -> bool {
+    let n = ids.iter().filter(|id| ctx.selection.contains(id)).count();
+    n > 0 && n < ids.len()
+}
+
 /// The corners of an instance's bounding box (bit 0 picks x, bit 1 y, bit 2 z).
 fn box_corners(ctx: &ToolContext, id: EntityId) -> Option<[DVec3; 8]> {
     let EntityId::Instance(i) = id else {
@@ -251,15 +257,19 @@ impl Tool for SelectTool {
             ToolEvent::Click(_) => self.press = Some(ctx.cursor),
             ToolEvent::Release(_) => {
                 if let Some(start) = self.press.take() {
-                    let ids = if start.distance(ctx.cursor) < ctx.drag_threshold {
+                    let clicked = start.distance(ctx.cursor) < ctx.drag_threshold;
+                    let ids = if clicked {
                         pick(ctx).map_or(Vec::new(), |id| whole_curve(ctx.model, id))
                     } else {
                         boxed(ctx, start, ctx.cursor)
                     };
-                    let mode = if ctx.shift {
-                        SelectMode::Toggle
-                    } else {
+                    let mode = if !ctx.shift {
                         SelectMode::Replace
+                    } else if clicked && partly_selected(&ids, ctx) {
+                        // Shift-clicking a half-selected curve completes it.
+                        SelectMode::Add
+                    } else {
+                        SelectMode::Toggle
                     };
                     // Shift with nothing picked leaves the selection alone.
                     if !(ctx.shift && ids.is_empty()) {
@@ -349,6 +359,7 @@ mod tests {
         cursor: DVec2,
         drag_threshold: f64,
         shift: bool,
+        selection: std::collections::BTreeSet<EntityId>,
     }
 
     impl Rig {
@@ -368,6 +379,7 @@ mod tests {
                 cursor: DVec2::ZERO,
                 shift: false,
                 drag_threshold: 4.0,
+                selection: Default::default(),
             }
         }
 
@@ -384,7 +396,7 @@ mod tests {
                 pick_radius: 10.0,
                 drag_threshold: self.drag_threshold,
                 shift: self.shift,
-                selection: &Default::default(),
+                selection: &self.selection,
             };
             self.tool.handle(event, &ctx)
         }
@@ -654,5 +666,50 @@ mod tests {
             click(DVec3::new(0.5, 0.0, 0.0)),
             Some(EntityId::Instance(_))
         ));
+    }
+
+    #[test]
+    fn shift_click_completes_a_half_selected_curve_and_removes_a_whole_one() {
+        let mut r = Rig::new();
+        let ring: Vec<DVec3> = (0..8)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 8.0;
+                DVec3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        let mut model = Model::new();
+        model.add_curve(&ring, true).unwrap();
+        r.model = model;
+        let at = |deg: f64| {
+            let a = deg.to_radians();
+            DVec3::new(a.cos(), a.sin(), 0.0)
+        };
+        let rim = (at(225.0) + at(270.0)) / 2.0;
+        let all: Vec<EntityId> =
+            whole_curve(&r.model, EntityId::Edge(r.model.edges().next().unwrap().0));
+        assert_eq!(all.len(), 8);
+        r.shift = true;
+
+        r.selection = all[..4].iter().copied().collect();
+        let out = r.click(rim);
+        let [Command::Select { ids, mode }] = &out.commands[..] else {
+            panic!("{:?}", out.commands);
+        };
+        assert_eq!(
+            (ids.len(), *mode),
+            (8, SelectMode::Add),
+            "adds the missing edges"
+        );
+
+        r.selection = all.iter().copied().collect();
+        let out = r.click(rim);
+        let [Command::Select { ids, mode }] = &out.commands[..] else {
+            panic!("{:?}", out.commands);
+        };
+        assert_eq!(
+            (ids.len(), *mode),
+            (8, SelectMode::Toggle),
+            "removes all of it"
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! Arc geometry shared by `Command::AddArc` and the Arc tool.
 
 use glam::DVec3;
-use kernel::geom::LENGTH_TOL;
+use kernel::geom::{LENGTH_TOL, PLANE_ANGLE_TOL};
 
 use crate::circle::MAX_CIRCLE_SEGMENTS;
 use crate::command::{CommandError, ErrorKind};
@@ -13,8 +13,9 @@ pub const DEFAULT_ARC_SEGMENTS: u32 = 12;
 /// degrees counter-clockwise around `normal` (Z when absent; negative angles turn clockwise),
 /// as `segments` equal straight segments: `segments + 1` points, the first exactly `start`.
 /// `start` must lie in the plane through `center` with that normal; the angle must be between
-/// 0 and 360 degrees in size, both excluded, and each segment at least 10 times the merge
-/// tolerance long.
+/// 0 and 360 degrees in size, both excluded; each segment must be at least 10 times the merge
+/// tolerance long and turn clearly more than the kernel's corner threshold (or the edges
+/// would not be tagged as a curve), and the end must not fall on the start.
 pub fn arc_points(
     center: DVec3,
     start: DVec3,
@@ -57,7 +58,16 @@ pub fn arc_points(
             "start must be far enough from center for the segments".into(),
         ));
     }
+    if step.abs() < 10.0 * PLANE_ANGLE_TOL {
+        return Err(invalid(format!("arc is too flat for {segments} segments")));
+    }
     let across = normal.cross(r);
+    let end = center + r * (step * segments as f64).cos() + across * (step * segments as f64).sin();
+    if end.distance(start) < 10.0 * LENGTH_TOL {
+        return Err(invalid(
+            "arc would close on itself (use add_circle for a whole circle)".into(),
+        ));
+    }
     Ok((0..=segments)
         .map(|k| {
             if k == 0 {

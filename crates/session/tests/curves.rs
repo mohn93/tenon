@@ -281,6 +281,9 @@ fn bad_arcs_are_refused() {
         json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 1], "angle": 90}),
         json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "normal": [0, 0, 0]}),
         json!({"type": "add_arc", "center": [999999, 0, 0], "start": [999999, -2, 0], "angle": 180}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [100, 0, 0], "angle": 359.9999999}),
+        // 10 m chord with a 1.3e-5 m bulge: too flat to be tagged as a curve.
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [100, 0, 0], "angle": 0.00001}),
     ] {
         let (kind, _) = run(&mut d, bad.clone()).unwrap_err();
         assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");
@@ -312,6 +315,20 @@ fn pulled_curves_have_soft_sides_that_groups_and_files_keep() {
     };
     assert_eq!((soft(&d), curves(&d)), (10, 2));
 
+    // Undo takes the soft edges and the cap curve away; redo brings them back.
+    let marks = |d: &Document| -> Vec<(Value, Value, Value)> {
+        edges(d)
+            .iter()
+            .map(|e| (e["id"].clone(), e["curve"].clone(), e["soft"].clone()))
+            .collect()
+    };
+    let pulled = marks(&d);
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!((soft(&d), curves(&d)), (0, 1));
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!((soft(&d), curves(&d)), (10, 2));
+    assert_eq!(marks(&d), pulled);
+
     let path = scratch("cylinder.skr");
     run(
         &mut d,
@@ -324,12 +341,6 @@ fn pulled_curves_have_soft_sides_that_groups_and_files_keep() {
         json!({"type": "open", "path": path.to_str().unwrap()}),
     )
     .unwrap();
-    let marks = |d: &Document| -> Vec<(Value, Value, Value)> {
-        edges(d)
-            .iter()
-            .map(|e| (e["id"].clone(), e["curve"].clone(), e["soft"].clone()))
-            .collect()
-    };
     assert_eq!(marks(&e), marks(&d));
 
     let all = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]})).unwrap();

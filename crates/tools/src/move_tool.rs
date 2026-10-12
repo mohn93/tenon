@@ -8,7 +8,7 @@ use kernel::EntityId;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, MAX_COPIES};
 
-use crate::select::{box_outline, face_outline, guide_outline, pick};
+use crate::select::{box_outline, face_outline, guide_outline, pick, whole_curve};
 use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_length, parse_array, parse_length};
 
@@ -143,7 +143,7 @@ impl Tool for MoveTool {
             ToolEvent::Click(hit) => match &self.drag {
                 None => {
                     let ids: Vec<EntityId> = if ctx.selection.is_empty() {
-                        pick(ctx).into_iter().collect()
+                        pick(ctx).map_or(Vec::new(), |id| whole_curve(ctx.model, id))
                     } else {
                         ctx.selection.iter().copied().collect()
                     };
@@ -396,5 +396,62 @@ mod tests {
         r.tool.on_external_change();
         let out = r.send(ToolEvent::Value("3x".into()));
         assert!(out.commands.is_empty() && out.message.is_some());
+    }
+
+    /// An 8-sided circle of radius 1 on the ground, as the model and as a document's.
+    fn circle_rig(r: &mut Rig) -> session::Document {
+        let ring: Vec<DVec3> = (0..8)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 8.0;
+                DVec3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        let mut model = Model::new();
+        model.add_curve(&ring, true).unwrap();
+        r.model = model;
+        let mut d = session::Document::new(DVec2::new(800.0, 600.0));
+        d.execute(Command::AddCircle {
+            center: [0.0; 3],
+            radius: 1.0,
+            normal: None,
+            segments: Some(8),
+        })
+        .unwrap();
+        d
+    }
+
+    /// The middle of one rim edge.
+    fn rim() -> DVec3 {
+        let at = |deg: f64| {
+            let a = deg.to_radians();
+            DVec3::new(a.cos(), a.sin(), 0.0)
+        };
+        (at(225.0) + at(270.0)) / 2.0
+    }
+
+    fn circle_of(d: &session::Document, ids: &[EntityId]) -> kernel::CurveCircle {
+        let EntityId::Edge(e) = ids[0] else {
+            panic!("{ids:?}")
+        };
+        let c = d.model().curve_of(e).unwrap();
+        assert_eq!(c.kind(), kernel::CurveKind::Circle);
+        c.circle.unwrap()
+    }
+
+    #[test]
+    fn without_a_selection_moving_a_rim_edge_moves_the_whole_circle() {
+        let mut r = Rig::new(&[]);
+        let mut d = circle_rig(&mut r);
+        r.click(rim());
+        let out = r.click(rim() + DVec3::new(0.0, 0.0, 3.0));
+        let [Command::Move { ids, offset }] = &out.commands[..] else {
+            panic!("{:?}", out.commands);
+        };
+        assert_eq!(ids.len(), 8, "every edge of the circle");
+        assert_eq!(*offset, [0.0, 0.0, 3.0]);
+        d.execute(out.commands[0].clone()).unwrap();
+        let circle = circle_of(&d, ids);
+        assert!(circle.center.distance(DVec3::new(0.0, 0.0, 3.0)) < 1e-9);
+        assert!((circle.radius - 1.0).abs() < 1e-9);
     }
 }

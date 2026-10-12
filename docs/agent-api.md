@@ -135,14 +135,14 @@ edges. A curve is not an entity: `c` ids cannot be selected or erased. `{"type":
 - A command's `changes.modified` lists edges whose curve or soft flag changed.
 - In the window, clicking an edge of a curve with the Select tool selects the whole curve, and
   Entity Info then shows it as a circle, arc or curve with its radius, angle, segments and
-  length. A box selects only the edges inside it.
+  length. A box selects only the edges it covers.
 
 Soft edges (`"soft": true`, absent when false) are hidden edges between faces that form one
-smooth surface, such as the side of a pulled circle (see `push_pull`). The window does not draw them,
-and clicking or snapping ignores them (a click there picks the face behind; their ends still
-snap as endpoints); box selection and commands treat them like other edges. A soft edge always bounds
-at least two faces: one left bounding fewer (its neighbour face erased) becomes a plain edge
-again. Pieces of a split soft edge stay soft, and copies, groups and files keep the flag.
+smooth surface, such as the side of a pulled circle (see `push_pull`). The window does not
+draw them, and clicking or snapping ignores them (a click there picks the face behind; their ends
+still snap as endpoints); box selection and commands treat them like other edges. A soft edge
+always bounds at least two faces: one left bounding fewer (its neighbour face erased) becomes a
+plain edge again. Pieces of a split soft edge stay soft, and copies, groups and files keep the flag.
 
 ### Guides
 

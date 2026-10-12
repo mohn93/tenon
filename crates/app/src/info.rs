@@ -7,8 +7,8 @@ use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
 /// the radius, segments, angle and length of a whole curve (a circle or arc), the direction
-/// or position of a single guide, or the kind, name and rotation of a single instance. While a group or component is open, a first line
-/// says which.
+/// or position of a single guide, or the kind, name and rotation of a single instance. While a
+/// group or component is open, a first line says which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
     lines.extend(selection_info(doc));
