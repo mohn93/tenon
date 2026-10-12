@@ -561,3 +561,197 @@ fn a_face_over_the_corner_limit_is_refused() {
     assert!(message.contains("more than"), "{message}");
     assert_eq!(ask(&d, json!({"type": "stats"}))["revision"], 0);
 }
+
+#[test]
+fn colors_survive_an_export_to_a_name_with_spaces() {
+    let mut d = doc();
+    model(&mut d);
+    let path = scratch("my model.obj");
+    run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut e = doc();
+    let r = run(
+        &mut e,
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(r["import"]["materials"], 1);
+    let m = ask(&e, json!({"type": "materials"}))["materials"].clone();
+    assert_eq!(m[0]["name"], "Red");
+    assert_eq!(m[0]["color"], json!([200, 30, 20]));
+    assert_eq!(m[0]["faces"], 1);
+}
+
+#[test]
+fn a_big_library_and_many_material_names_import_fast() {
+    // A 50,000-entry library; the OBJ names 1,000 of them on distinct triangles and 20,000
+    // more names the library lacks.
+    let library = 50_000;
+    let mtl: String = (0..library)
+        .map(|i| format!("newmtl m{i}\nKd 0.5 0.5 0.5\n"))
+        .collect();
+    write("many.mtl", &mtl);
+    let mut obj = String::from("mtllib many.mtl\n");
+    for i in 0..1_000 {
+        let x = 3.0 * i as f64;
+        obj += &format!("v {x} 0 0\nv {} 0 0\nv {x} 1 0\n", x + 1.0);
+    }
+    for i in 0..1_000 {
+        obj += &format!("usemtl m{i}\nf {} {} {}\n", 3 * i + 1, 3 * i + 2, 3 * i + 3);
+    }
+    for i in 0..20_000 {
+        obj += &format!("usemtl nolib{i}\nf 1 2 3\n");
+    }
+    let path = write("many.obj", &obj);
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    let r = run(&mut d, json!({"type": "import", "path": path, "up": "z"})).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(r["import"]["faces"], 1_000);
+    assert_eq!(r["import"]["skipped"], 20_000);
+    assert_eq!(r["import"]["materials"], 1_000);
+    d.scene().validate().unwrap();
+}
+
+#[test]
+fn materials_only_skipped_polygons_use_are_not_created() {
+    write(
+        "skip.mtl",
+        "newmtl Used\nKd 1 0 0\nnewmtl Unused\nKd 0 1 0\n",
+    );
+    let path = write(
+        "skip.obj",
+        "mtllib skip.mtl\nv 0 0 0\nv 1 0 0\nv 2 0 0\nv 0 1 0\n\
+         usemtl Unused\nf 1 2 3\nusemtl Used\nf 1 2 4\n",
+    );
+    let mut d = doc();
+    let r = run(&mut d, json!({"type": "import", "path": path, "up": "z"})).unwrap();
+    assert_eq!(r["import"]["skipped"], 1);
+    assert_eq!(r["import"]["materials"], 1);
+    let m = ask(&d, json!({"type": "materials"}))["materials"].clone();
+    assert_eq!(m.as_array().unwrap().len(), 1);
+    assert_eq!(m[0]["name"], "Used");
+    // Undo leaves no material behind.
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert!(
+        ask(&d, json!({"type": "materials"}))["materials"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn more_new_materials_than_the_limit_is_a_file_error() {
+    let names = session::MAX_IMPORT_MATERIALS + 1;
+    // Distinct triangles so every name builds a face.
+    let mut obj = String::from("mtllib cap.mtl\n");
+    for i in 0..names {
+        let x = 3.0 * i as f64;
+        obj += &format!("v {x} 0 0\nv {} 0 0\nv {x} 1 0\n", x + 1.0);
+    }
+    for i in 0..names {
+        obj += &format!("usemtl m{i}\nf {} {} {}\n", 3 * i + 1, 3 * i + 2, 3 * i + 3);
+    }
+    let mtl: String = (0..names)
+        .map(|i| format!("newmtl m{i}\nKd 0.5 0.5 0.5\n"))
+        .collect();
+    write("cap.mtl", &mtl);
+    let path = write("cap.obj", &obj);
+    let mut d = doc();
+    let (kind, message) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("1024"), "{message}");
+    assert_eq!(ask(&d, json!({"type": "stats"}))["revision"], 0);
+    assert!(
+        ask(&d, json!({"type": "materials"}))["materials"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // Exactly at the limit imports.
+    let ok = names - 1;
+    let obj_ok: String = obj
+        .lines()
+        .filter(|l| !l.starts_with("usemtl") && !l.starts_with("f "))
+        .map(|l| format!("{l}\n"))
+        .chain(
+            (0..ok).map(|i| format!("usemtl m{i}\nf {} {} {}\n", 3 * i + 1, 3 * i + 2, 3 * i + 3)),
+        )
+        .collect();
+    let path = write("cap.obj", &obj_ok);
+    let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
+    assert_eq!(r["import"]["materials"], ok);
+}
+
+#[test]
+fn only_the_exact_name_default_is_the_default_material() {
+    write("case.mtl", "newmtl Default\nKd 0 0 1\n");
+    let path = write(
+        "case.obj",
+        "mtllib case.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n\
+         usemtl Default\nf 1 2 3\nusemtl default\nf 2 4 3\n",
+    );
+    let mut d = doc();
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path, "up": "z", "merge_coplanar": false}),
+    )
+    .unwrap();
+    assert_eq!(r["import"]["materials"], 1);
+    let m = ask(&d, json!({"type": "materials"}))["materials"].clone();
+    assert_eq!(m[0]["name"], "Default");
+    assert_eq!(m[0]["faces"], 1);
+}
+
+#[test]
+fn a_bent_polygon_is_cut_into_triangles_even_when_merging_is_off() {
+    // Not flat: a quad with one corner lifted becomes two triangles, never one face.
+    let path = write(
+        "bent.obj",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0.5\nv 0 1 0\nf 1 2 3 4\n",
+    );
+    let mut d = doc();
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path, "up": "z", "merge_coplanar": false}),
+    )
+    .unwrap();
+    assert_eq!(r["import"]["faces"], 2);
+    d.scene().validate().unwrap();
+}
+
+#[test]
+fn imported_geometry_survives_later_edits() {
+    let path = write(
+        "cube.obj",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\n\
+         f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\n",
+    );
+    let mut d = doc();
+    let r = run(&mut d, json!({"type": "import", "path": path, "up": "z"})).unwrap();
+    assert_eq!(r["import"]["faces"], 6);
+    let instance = r["import"]["instance"].clone();
+    run(&mut d, json!({"type": "open_instance", "id": instance})).unwrap();
+    let top = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["normal"] == json!([0.0, 0.0, 1.0]))
+        .unwrap()["id"]
+        .clone();
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": top, "distance": 0.5}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    run(&mut d, json!({"type": "explode", "ids": [instance]})).unwrap();
+    d.scene().validate().unwrap();
+    let faces = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"].clone();
+    assert_eq!(faces.as_array().unwrap().len(), 6);
+}

@@ -19,7 +19,7 @@ pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectM
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
 pub use import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
-    MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
+    MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
 };
 pub use kernel::{CurveKind, MaterialId, Side};
 pub use query::{

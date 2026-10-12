@@ -31,7 +31,7 @@ pub use edit::KernelError;
 pub use ids::{
     CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
 };
-pub use import::{MeshPolygon, MeshReport};
+pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use index::{Index, Shape};
 pub use material::{MAX_MATERIAL_NAME, Material, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};

@@ -1,21 +1,24 @@
 //! Importing OBJ and STL files as a group, a component or geometry of the open context.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
 
 use glam::DVec3;
-use kernel::{DefinitionKind, EntityId, MaterialId, MeshPolygon, SceneChange};
+use kernel::{DefinitionKind, EntityId, MaterialId, MeshId, MeshPolygon, SceneChange};
 
 use super::{Document, MAX_COORDINATE};
 use crate::command::{CommandError, ErrorKind};
 use crate::import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
-    MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
+    MAX_IMPORT_MATERIALS, MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
 };
 
 /// The name of an imported definition whose file name gives none.
 const IMPORT_NAME: &str = "Import";
+
+/// The materials an import added, each with the change that added it.
+type AddedMaterials = Vec<(MaterialId, SceneChange)>;
 
 /// Options of `Command::Import` besides the path.
 pub(crate) struct ImportOptions {
@@ -71,7 +74,7 @@ impl Document {
             )));
         }
 
-        let (materials, added) = self.import_materials(file, &read);
+        let (materials, added) = self.import_materials(file, &read).map_err(file_error)?;
         let polygon_count = read.polygons.len();
         let polygons: Vec<MeshPolygon> = std::mem::take(&mut read.polygons)
             .into_iter()
@@ -101,11 +104,23 @@ impl Document {
         let (instance, built, change) = match imported {
             Ok(done) => done,
             Err(e) => {
-                self.scene.apply(&added.inverse());
+                self.scene
+                    .apply(&SceneChange::join(added.iter().map(|(_, c)| c.clone())).inverse());
                 return Err(file_error(e.to_string()));
             }
         };
         let definition = self.model().instance(instance).map(|i| i.definition);
+        // Materials only skipped polygons named are not kept.
+        let in_use: HashSet<MaterialId> = definition
+            .and_then(|d| self.scene.mesh(MeshId::Definition(d)))
+            .map(|m| m.faces().filter_map(|(_, f)| f.front).collect())
+            .unwrap_or_default();
+        let (kept, unused): (Vec<_>, Vec<_>) =
+            added.into_iter().partition(|(id, _)| in_use.contains(id));
+        for (_, change) in unused {
+            self.scene.apply(&change.inverse());
+        }
+        let added = SceneChange::join(kept.into_iter().map(|(_, c)| c));
         let mut report = ImportReport {
             instance: Some(EntityId::Instance(instance)),
             definition,
@@ -150,52 +165,65 @@ impl Document {
         }
     }
 
-    /// The model materials the OBJ's material names stand for, and the change adding the ones
-    /// the model lacks. A name the model has already is that material (whatever its color);
-    /// a name only a library defines (with `Kd`) becomes a new material of that color; the
-    /// name `default` (any case), and names neither knows, are the default material.
+    /// The model materials the OBJ's material names stand for, and the changes adding the
+    /// ones the model lacks (one per material; the caller drops those no built face uses). A
+    /// name the model has already is that material (whatever its color); a name only a library
+    /// defines (with `Kd`) becomes a new material of that color; the name `default` exactly,
+    /// and names neither knows, are the default material. Fails when more than
+    /// `MAX_IMPORT_MATERIALS` new materials would be added.
     fn import_materials(
         &mut self,
         obj: &Path,
         read: &ReadMesh,
-    ) -> (BTreeMap<String, MaterialId>, SceneChange) {
+    ) -> Result<(BTreeMap<String, MaterialId>, AddedMaterials), String> {
         let used: BTreeSet<&String> = read
             .polygons
             .iter()
             .filter_map(|p| p.material.as_ref())
-            .filter(|m| !m.eq_ignore_ascii_case("default"))
+            .filter(|m| m.as_str() != "default")
             .collect();
-        let mut colors: BTreeMap<String, [u8; 3]> = BTreeMap::new();
+        let mut colors: HashMap<String, [u8; 3]> = HashMap::new();
         if !used.is_empty() {
             let dir = obj.parent().unwrap_or(Path::new(""));
+            let mut tried: HashSet<&String> = HashSet::new();
             for library in read
                 .libraries
                 .iter()
                 .filter(|l| !Path::new(l).is_absolute())
+                .filter(|l| tried.insert(l))
             {
                 if let Ok(bytes) = read_limited(&dir.join(library), MAX_MTL_BYTES) {
                     colors.extend(read_mtl(&bytes));
                 }
             }
         }
+        let existing: HashMap<&str, MaterialId> = self
+            .scene
+            .materials()
+            .map(|(id, m)| (m.name.as_str(), id))
+            .collect();
         let mut out = BTreeMap::new();
-        let mut changes = Vec::new();
+        let mut wanted: Vec<(&String, [u8; 3])> = Vec::new();
         for name in used {
-            let existing = self
-                .scene
-                .materials()
-                .find(|(_, m)| &m.name == name)
-                .map(|(id, _)| id);
-            if let Some(id) = existing {
-                out.insert(name.clone(), id);
-            } else if let Some(color) = colors.get(name)
-                && let Ok((id, change)) = self.scene.add_material(name, *color)
-            {
-                out.insert(name.clone(), id);
-                changes.push(change);
+            if let Some(id) = existing.get(name.as_str()) {
+                out.insert(name.clone(), *id);
+            } else if let Some(color) = colors.get(name) {
+                wanted.push((name, *color));
             }
         }
-        (out, SceneChange::join(changes))
+        if wanted.len() > MAX_IMPORT_MATERIALS {
+            return Err(format!(
+                "the file uses more than {MAX_IMPORT_MATERIALS} materials the model lacks"
+            ));
+        }
+        let mut added = Vec::new();
+        for (name, color) in wanted {
+            if let Ok((id, change)) = self.scene.add_material(name, color) {
+                out.insert(name.clone(), id);
+                added.push((id, change));
+            }
+        }
+        Ok((out, added))
     }
 }
 

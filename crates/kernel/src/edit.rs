@@ -31,6 +31,8 @@ pub enum KernelError {
     MaterialName(String),
     /// An import has no polygon that makes a face.
     NothingToImport,
+    /// An import would make more faces than `MAX_IMPORT_FACES`.
+    TooManyFaces,
 }
 
 impl fmt::Display for KernelError {
@@ -63,6 +65,11 @@ impl fmt::Display for KernelError {
             KernelError::NothingToImport => {
                 write!(f, "nothing to import: no polygon makes a face")
             }
+            KernelError::TooManyFaces => write!(
+                f,
+                "the polygons make more than {} faces",
+                crate::import::MAX_IMPORT_FACES
+            ),
         }
     }
 }

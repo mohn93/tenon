@@ -2,6 +2,7 @@
 //! file's own coordinates. `Document` turns them into a group, a component or geometry of the
 //! open context (see `Command::Import`).
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use glam::DVec3;
@@ -17,6 +18,9 @@ pub const MAX_IMPORT_POLYGONS: usize = 200_000;
 
 /// Most positions (OBJ `v` lines) one imported file may have.
 pub const MAX_IMPORT_POINTS: usize = 1_000_000;
+
+/// Most new materials one import may add from the OBJ's libraries.
+pub const MAX_IMPORT_MATERIALS: usize = 1024;
 
 /// Most faces an import into the open context (`"as": "context"`) may make: those are drawn
 /// with sticky geometry, which takes time growing with the square of the faces.
@@ -196,7 +200,16 @@ pub(crate) fn read_obj(bytes: &[u8]) -> Result<ReadMesh, String> {
                 let name = line.trim_start()["usemtl".len()..].trim();
                 material = (!name.is_empty()).then(|| name.to_string());
             }
-            Some("mtllib") => mesh.libraries.extend(tokens.map(str::to_string)),
+            Some("mtllib") => {
+                // A name with spaces (export writes the file's name as it is) is the whole
+                // rest of the line; the words alone are the fallback for several libraries.
+                let whole = line.trim_start()["mtllib".len()..].trim();
+                let words: Vec<&str> = tokens.collect();
+                if words.len() > 1 {
+                    mesh.libraries.push(whole.to_string());
+                }
+                mesh.libraries.extend(words.into_iter().map(str::to_string));
+            }
             _ => {}
         }
     }
@@ -211,29 +224,38 @@ fn number(t: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("{t:?} is not a finite number"))
 }
 
-/// The diffuse colors (`Kd`, linear) of an MTL's materials, as sRGB bytes, in file order.
-/// Materials without `Kd` are left out.
+/// The diffuse colors (`Kd`, linear) of an MTL's materials, as sRGB bytes, in the order the
+/// names first got a color; a later `Kd` of the same name replaces the color. Keywords are
+/// whole words (`newmtlX` is nothing), separated by any whitespace. Materials without `Kd`
+/// are left out.
 pub(crate) fn read_mtl(bytes: &[u8]) -> Vec<(String, [u8; 3])> {
     let text = String::from_utf8_lossy(bytes);
     let mut out: Vec<(String, [u8; 3])> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     let mut current: Option<String> = None;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
-        if let Some(name) = line.strip_prefix("newmtl") {
-            let name = name.trim();
-            current = (!name.is_empty()).then(|| name.to_string());
-        } else if let Some(rgb) = line.strip_prefix("Kd ")
-            && let Some(name) = &current
-        {
-            let values: Vec<f64> = rgb
-                .split_whitespace()
-                .take(3)
-                .filter_map(|t| number(t).ok())
-                .collect();
-            if let [r, g, b] = values[..] {
-                out.retain(|(n, _)| n != name);
-                out.push((name.clone(), [r, g, b].map(srgb_byte)));
+        let mut tokens = line.split_whitespace();
+        match tokens.next() {
+            Some("newmtl") => {
+                let name = line["newmtl".len()..].trim();
+                current = (!name.is_empty()).then(|| name.to_string());
             }
+            Some("Kd") => {
+                let Some(name) = &current else { continue };
+                let values: Vec<f64> = tokens.take(3).filter_map(|t| number(t).ok()).collect();
+                if let [r, g, b] = values[..] {
+                    let color = [r, g, b].map(srgb_byte);
+                    match at.get(name) {
+                        Some(&i) => out[i].1 = color,
+                        None => {
+                            at.insert(name.clone(), out.len());
+                            out.push((name.clone(), color));
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -365,7 +387,7 @@ mod tests {
         let mesh = read_obj(text.as_bytes()).unwrap();
         assert_eq!(mesh.points.len(), 4);
         assert_eq!(mesh.points[3], DVec3::new(0.0, 1.0, 0.0));
-        assert_eq!(mesh.libraries, ["a.mtl", "b.mtl"]);
+        assert_eq!(mesh.libraries, ["a.mtl b.mtl", "a.mtl", "b.mtl"]);
         assert_eq!(
             mesh.polygons,
             vec![
@@ -405,6 +427,30 @@ mod tests {
         }
         let text = "newmtl a\nKa 1 1 1\nnewmtl b\nKd 1 0 0\nnewmtl b\nKd 0 0 1\n";
         assert_eq!(read_mtl(text.as_bytes()), vec![("b".into(), [0, 0, 255])]);
+    }
+
+    #[test]
+    fn mtl_keywords_are_whole_words_and_any_whitespace_separates() {
+        let text = "newmtlX\nKd 1 1 1\nnewmtl\tTab Name\nKd\t1\t0\t0\nKdd 0 1 0\nKd1 0 1 0\n\
+                    newmtl Two\nKd 0 1 0\nnewmtl Tab Name\nKd 0 0 1\n";
+        assert_eq!(
+            read_mtl(text.as_bytes()),
+            vec![
+                ("Tab Name".into(), [0, 0, 255]),
+                ("Two".into(), [0, 255, 0])
+            ]
+        );
+    }
+
+    #[test]
+    fn mtl_with_many_materials_reads_quickly() {
+        let mut text = String::new();
+        for i in 0..50_000 {
+            text += &format!("newmtl m{i}\nKd 0.5 0.5 0.5\n");
+        }
+        let start = std::time::Instant::now();
+        assert_eq!(read_mtl(text.as_bytes()).len(), 50_000);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

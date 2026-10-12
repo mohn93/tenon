@@ -34,6 +34,10 @@ pub struct MeshReport {
     pub skipped: usize,
 }
 
+/// Most faces one import may make (before merging): a bent polygon is cut into a triangle
+/// per corner, so a few polygons could otherwise make far more faces than the file has.
+pub const MAX_IMPORT_FACES: usize = 200_000;
+
 /// Corners within this distance of a polygon's plane count as on it. Half the kernel's
 /// tolerance, so the faces made pass `Model::validate` with room for rounding.
 const FLAT_TOL: f64 = 0.5 * LENGTH_TOL;
@@ -69,7 +73,7 @@ impl Scene {
         {
             return Err(KernelError::MaterialNotFound);
         }
-        let built = build_mesh(points, polygons, merge);
+        let built = build_mesh(points, polygons, merge)?;
         if built.faces.is_empty() {
             return Err(KernelError::NothingToImport);
         }
@@ -145,8 +149,12 @@ pub(crate) struct BuiltFace {
 
 /// Welds the points, turns each polygon into a face (a polygon that is not flat, or whose
 /// sides cross, into triangles), drops the ones that make none, and with `merge` joins
-/// neighbouring faces in one plane.
-pub(crate) fn build_mesh(points: &[DVec3], polygons: &[MeshPolygon], merge: bool) -> Built {
+/// neighbouring faces in one plane. Fails with `TooManyFaces` past `MAX_IMPORT_FACES` faces.
+pub(crate) fn build_mesh(
+    points: &[DVec3],
+    polygons: &[MeshPolygon],
+    merge: bool,
+) -> Result<Built, KernelError> {
     let (welded, map) = weld(points);
     let mut faces: Vec<BuiltFace> = Vec::new();
     let mut seen: HashSet<Vec<usize>> = HashSet::new();
@@ -162,7 +170,11 @@ pub(crate) fn build_mesh(points: &[DVec3], polygons: &[MeshPolygon], merge: bool
             continue;
         };
         let before = faces.len();
-        for (l, normal) in pieces(&welded, corners) {
+        let cut = pieces(&welded, corners);
+        if faces.len() + cut.len() > MAX_IMPORT_FACES {
+            return Err(KernelError::TooManyFaces);
+        }
+        for (l, normal) in cut {
             let mut key = l.clone();
             key.sort_unstable();
             if seen.insert(key) {
@@ -180,11 +192,11 @@ pub(crate) fn build_mesh(points: &[DVec3], polygons: &[MeshPolygon], merge: bool
     if merge {
         faces = merge_coplanar(&welded, faces);
     }
-    Built {
+    Ok(Built {
         points: welded,
         faces,
         skipped,
-    }
+    })
 }
 
 /// Positions with points closer than `LENGTH_TOL` to an earlier kept one dropped, and for
@@ -718,6 +730,23 @@ mod tests {
     }
 
     #[test]
+    fn one_bent_polygon_cannot_make_more_faces_than_the_limit() {
+        // A ring of corners alternately a little above and below its plane: bent, so it is
+        // cut into one triangle per corner minus two.
+        let n = MAX_IMPORT_FACES + 3;
+        let p: Vec<DVec3> = (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                let z = if i % 2 == 0 { 0.01 } else { -0.01 };
+                DVec3::new(1000.0 * a.cos(), 1000.0 * a.sin(), z)
+            })
+            .collect();
+        let ring: Vec<usize> = (0..n).collect();
+        let r = build_mesh(&p, &polys(&[&ring]), false);
+        assert_eq!(r.unwrap_err(), KernelError::TooManyFaces);
+    }
+
+    #[test]
     fn a_self_crossing_flat_polygon_is_cut_into_triangles() {
         // Side 2-3 crosses side 0-1.
         let p = vec![
@@ -727,7 +756,7 @@ mod tests {
             DVec3::new(2.0, -1.0, 0.0),
             DVec3::new(0.0, 3.0, 0.0),
         ];
-        let built = build_mesh(&p, &polys(&[&[0, 1, 2, 3, 4]]), false);
+        let built = build_mesh(&p, &polys(&[&[0, 1, 2, 3, 4]]), false).unwrap();
         assert!(!built.faces.is_empty());
         assert!(built.faces.iter().all(|f| f.loops[0].len() == 3));
     }

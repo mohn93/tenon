@@ -529,6 +529,7 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
             PhysicalKey::Code(KeyCode::KeyZ) => Some('z'),
             PhysicalKey::Code(KeyCode::KeyN) => Some('n'),
             PhysicalKey::Code(KeyCode::KeyO) => Some('o'),
+            PhysicalKey::Code(KeyCode::KeyI) => Some('i'),
             PhysicalKey::Code(KeyCode::KeyS) => Some('s'),
             PhysicalKey::Code(KeyCode::KeyE) => Some('e'),
             PhysicalKey::Code(KeyCode::KeyQ) => Some('q'),
@@ -946,6 +947,7 @@ mod tests {
         assert_eq!(shortcut_letter(&ch("ئ"), code(KeyCode::KeyZ)), Some('z'));
         assert_eq!(shortcut_letter(&ch("ب"), code(KeyCode::KeyF)), None);
         assert_eq!(shortcut_letter(&ch("ض"), code(KeyCode::KeyQ)), Some('q'));
+        assert_eq!(shortcut_letter(&ch("ه"), code(KeyCode::KeyI)), Some('i'));
         assert_eq!(shortcut_letter(&ch("Q"), code(KeyCode::KeyQ)), Some('q'));
         assert_eq!(shortcut_letter(&ch("ث"), code(KeyCode::KeyE)), Some('e'));
     }

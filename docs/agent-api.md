@@ -407,8 +407,12 @@ is added the file does not have.
 OBJ materials: a material name the model already has is that material (whatever its color);
 a name that only the `mtllib` libraries (read beside the OBJ, relative to its folder; missing
 or unreadable ones are ignored) give a diffuse color (`Kd`, linear) becomes a new material of
-that color, listed in `changes.materials`; `default` (any case) and unknown names are the
-default material. Materials go on the faces' front sides.
+that color, listed in `changes.materials`; `default` (exactly that, lower case; `Default` is an
+ordinary name) and unknown names are the default material. Only materials some made face uses
+are added, and a file whose libraries give more than 1,024 new materials for the names it uses
+is a `file` error. A `mtllib` name with spaces is read as the whole rest of the line, with its
+separate words as fallbacks (several libraries on one line). Materials go on the faces' front
+sides.
 
 The outcome's `import` reports what was made:
 
@@ -430,9 +434,12 @@ Details: for `"as": "context"` the report's `faces` counts the faces built from 
 they merge with what is already in the context. A `.mtl` over 16 MiB is ignored, as is a library
 that is not a regular file or is named by an absolute path (relative paths, `..` included, are
 read); a model path that is not a regular file (a directory, a pipe) is a `file` error. A
-polygon of more than 256 corners is triangulated and merged back, so collinear points closer
-than the merge tolerance along its outline may drop. A file may have at most 1,000,000 polygon
-corners in all (OBJ `f` corners, STL vertices) and ASCII STL keywords are read in any case;
+polygon of more than 256 corners skips the crossing check and is triangulated, then merged
+back; with `merge_coplanar` false it stays triangles. Collinear points closer than the merge
+tolerance along its outline may drop. Bent or self-crossing polygons that together make more
+than 200,000 faces are a `file` error. The regular-file check happens before the read, so a path
+swapped for a pipe at that very instant could still block (local only, low risk). A file may
+have at most 1,000,000 polygon corners in all (OBJ `f` corners, STL vertices) and ASCII STL keywords are read in any case;
 vertices left without an `endloop` are a `file` error.
 
 Behaviors worth knowing:
