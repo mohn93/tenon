@@ -12,7 +12,7 @@ mod rectangle;
 mod rotate;
 
 pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points};
-pub use camera::{Camera, Ray};
+pub use camera::{Camera, Projection, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES};

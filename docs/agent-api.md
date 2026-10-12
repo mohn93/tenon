@@ -48,7 +48,8 @@ Queries:
 | `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box; a guide point: its position) all lie in the box, bounds included; an instance with nothing in it and a guide line are in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
-| `{"type": "stats"}`, `{"type": "camera"}`, `{"type": "history"}` | counts for the open context (plus the number of definitions) and revision, camera, undo/redo depth |
+| `{"type": "stats"}`, `{"type": "history"}` | counts for the open context (plus the number of definitions) and revision; undo/redo depth |
+| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
@@ -61,7 +62,8 @@ of silently doing nothing).
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `select`, `undo`,
-`redo`, `set_camera`, `new`, `open`, `save`, `export`.
+`redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
+`new`, `open`, `save`, `export`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component), `g9` (guide line or guide point). Definitions are `d5`. Ids are unique across the whole model, including inside
@@ -191,11 +193,46 @@ undo step; a component's name must not be empty; an unknown definition is `not_f
 `{"type": "purge_definitions"}` removes every definition no instance places, such as a component
 whose last instance was erased, and what only it placed (one undo step).
 
+### Camera
+
+The camera belongs to the document (it is saved with the model) and is always in root
+coordinates, whatever instance is open. Camera commands are not undo steps, return empty
+changes, do not change the revision and send no `changed` notification; inside an atomic batch a
+failure puts the camera back. Each leaves the eye and target within the coordinate limit, or
+fails with `invalid_input` and leaves the camera as it was.
+
+`{"type": "camera"}` returns:
+
+```
+{"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
+ "projection": "perspective", "view_height": 10.67}
+```
+
+- `up` is the direction pointing up the screen: always `[0,0,1]`, except in a view straight down
+  or up, where it is horizontal (`[0,1,0]` in the Top view).
+- `projection` is `perspective` or `parallel` (orthographic). In a parallel view sizes do not
+  shrink with distance, and the view is `view_height` meters tall (its width follows the
+  window's shape). `view_height` is 2 x distance x tan(fov / 2): the height of the view at the
+  target, which switching projection keeps, so the zoom of a parallel view is set by how far
+  the eye is from the target, and zooming moves the eye. A parallel view sees 100 eye-to-target
+  distances in front of and behind the target, including geometry behind the eye.
+
+| Command | Effect |
+|---|---|
+| `{"type": "set_camera", "eye": [10,-10,8], "target": [0,0,0]}` | Places the camera. Optional `fov_y_deg` (1 to 170) and `projection` keep their values when absent. A view straight down or up takes the screen's up from the horizontal part of `up` (default `[0,1,0]`; a vertical `up` is `invalid_input`); any other view has `[0,0,1]` up and ignores `up`. `eye` equal to `target` is `invalid_input`. Feeding back what the `camera` query returned restores the view. |
+| `{"type": "orbit", "yaw": 30, "pitch": 10}` | Turns the eye about the target: `yaw` degrees about the vertical (counter-clockwise seen from above), then `pitch` degrees raising the eye (negative lowers it); both default to 0. The view stops 0.01 rad (0.57 degrees) short of straight down or up. From a Top or Bottom view, `yaw` spins the view about the vertical and only a pitch that tilts toward the top of the screen moves it. |
+| `{"type": "pan", "right": 2, "up": 0.5}` | Moves the eye and target together, meters along the screen's right and up directions (each defaults to 0). |
+| `{"type": "zoom", "factor": 2}` | Moves the eye toward the target to `1/factor` of its distance (above 1 zooms in, below 1 out), never nearer than 0.01 m. `factor` must be positive. In a parallel view `view_height` shrinks the same way. |
+| `{"type": "zoom_extents"}` | Keeps the view direction and fits the whole model in the view: every vertex and placed instance of the root, in root coordinates, whatever instance is open (guides do not count). Perspective fits the sphere around the model's bounding box; parallel fits the box itself with 5% to spare. With nothing to fit, the camera stays (no error). |
+| `{"type": "standard_view", "view": "top"}` | Looks at the target from a standard direction, from the same distance: `top` (from +Z, `up` +Y), `bottom` (from -Z, `up` +Y), `front` (from -Y, looking along +Y), `back` (from +Y), `left` (from -X), `right` (from +X), `iso` (from the front left above, along (1,1,-1)). The projection does not change. |
+| `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (3; version 2 files, written before curves, and version 1
-files, written before guides, still open), the camera and the model with every id, edges with
+(`"sketchup-alt"`), `schema_version` (4; version 3 files, written before camera projections,
+open in perspective, and versions 2 and 1, written before curves and guides, still open), the
+camera (eye, target, field of view, up and projection) and the model with every id, edges with
 their curve and soft flag.
 
 | Command | Effect |
@@ -243,7 +280,7 @@ Behaviors worth knowing:
 - Replies come before the `changed` notifications they cause, and your own edits are notified too.
 - A request without an `id` runs but gets no reply. JSON-RPC batch arrays are rejected; use the
   `batch` method.
-- `set_camera` returns empty changes and does not change the revision. `render_view`'s camera
+- Camera commands return empty changes and do not change the revision. `render_view`'s camera
   accepts `fov_y_deg` and never moves the document camera.
 - A failed atomic batch is rolled back but still consumes entity ids, so later ids may skip numbers.
 - An `id` that is not a string, number or null is an invalid request (`-32600`, reply id null).

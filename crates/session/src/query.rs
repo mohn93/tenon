@@ -2,6 +2,8 @@ use kernel::{ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::camera::Projection;
+
 /// Read-only questions about the document. Entities and coordinates are those of the open
 /// context (see `Command::OpenInstance`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -189,10 +191,16 @@ pub enum QueryResult {
     Instance(InstanceInfo),
     Guide(GuideInfo),
     Curve(CurveInfo),
+    /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
+    /// up); `view_height` is the height the view spans at the target (in a parallel view, the
+    /// whole view's height).
     Camera {
         eye: [f64; 3],
         target: [f64; 3],
+        up: [f64; 3],
         fov_y_deg: f64,
+        projection: Projection,
+        view_height: f64,
     },
     /// Counts for the open context, plus the number of definitions.
     Stats {

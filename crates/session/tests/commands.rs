@@ -127,11 +127,21 @@ fn set_camera_moves_camera_without_history() {
     assert_eq!(cam["eye"], json!([10.0, 0.0, 5.0]));
     assert!((cam["fov_y_deg"].as_f64().unwrap() - 50.0).abs() < 1e-9);
     assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], 0);
-    let vertical = run(
+    let same = run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [0.0, 0.0, 5.0], "target": [0.0, 0.0, 5.0], "fov_y_deg": null}),
+    );
+    assert_eq!(same, Err(ErrorKind::InvalidInput));
+    // Straight down is a view too (M7a): +Y is then up the screen.
+    run(
         &mut d,
         json!({"type": "set_camera", "eye": [0.0, 0.0, 5.0], "target": [0.0, 0.0, 0.0], "fov_y_deg": null}),
+    )
+    .unwrap();
+    assert_eq!(
+        ask(&d, json!({"type": "camera"}))["up"],
+        json!([0.0, 1.0, 0.0])
     );
-    assert_eq!(vertical, Err(ErrorKind::InvalidInput));
 }
 
 #[test]

@@ -113,7 +113,7 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
     let doc = host.document();
     let camera = match p.camera {
         Some(v) => doc
-            .camera_for(v.eye, v.target, v.fov_y_deg)
+            .camera_for(v.eye, v.target, v.fov_y_deg, None, None)
             .map_err(command_failed)?,
         None => doc.camera.clone(),
     };

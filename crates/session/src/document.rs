@@ -18,6 +18,7 @@ use crate::query::{
 use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
 
+mod camera;
 mod files;
 mod groups;
 
@@ -170,12 +171,14 @@ impl Document {
                 self.undo.push(changes);
                 Ok(outcome)
             }
-            Command::SetCamera {
-                eye,
-                target,
-                fov_y_deg,
-            } => {
-                self.camera = self.camera_for(eye, target, fov_y_deg)?;
+            Command::SetCamera { .. }
+            | Command::Orbit { .. }
+            | Command::Pan { .. }
+            | Command::Zoom { .. }
+            | Command::ZoomExtents
+            | Command::StandardView { .. }
+            | Command::SetProjection { .. } => {
+                self.camera = self.moved_camera(&command)?;
                 Ok(Outcome::default())
             }
             Command::OpenInstance { id } => {
@@ -305,48 +308,18 @@ impl Document {
             Command::Undo
             | Command::Redo
             | Command::SetCamera { .. }
+            | Command::Orbit { .. }
+            | Command::Pan { .. }
+            | Command::Zoom { .. }
+            | Command::ZoomExtents
+            | Command::StandardView { .. }
+            | Command::SetProjection { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
             | Command::CloseInstance => {
                 return None;
             }
         })
-    }
-
-    /// The current camera moved to `eye`/`target` (and `fov_y_deg` if given), after the same
-    /// checks `SetCamera` applies. Does not change the document.
-    pub fn camera_for(
-        &self,
-        eye: [f64; 3],
-        target: [f64; 3],
-        fov_y_deg: Option<f64>,
-    ) -> Result<Camera, CommandError> {
-        check_coordinates(&[eye, target])?;
-        let (eye, target) = (DVec3::from(eye), DVec3::from(target));
-        let fov = fov_y_deg.unwrap_or(self.camera.fov_y.to_degrees());
-        if eye.distance(target) < 1e-6 {
-            return Err(CommandError::new(
-                ErrorKind::InvalidInput,
-                "eye and target must be distinct points",
-            ));
-        }
-        if (target - eye).normalize().cross(DVec3::Z).length() < 1e-9 {
-            return Err(CommandError::new(
-                ErrorKind::InvalidInput,
-                "view direction must not be vertical",
-            ));
-        }
-        if !(1.0..=170.0).contains(&fov) {
-            return Err(CommandError::new(
-                ErrorKind::InvalidInput,
-                "fov_y_deg must be between 1 and 170",
-            ));
-        }
-        let mut camera = self.camera.clone();
-        camera.eye = eye;
-        camera.target = target;
-        camera.fov_y = fov.to_radians();
-        Ok(camera)
     }
 
     /// Runs commands in order, stopping at the first error.
@@ -991,7 +964,10 @@ impl Document {
             Query::Camera => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),
+                up: self.camera.up.to_array(),
                 fov_y_deg: self.camera.fov_y.to_degrees(),
+                projection: self.camera.projection,
+                view_height: self.camera.view_height(),
             },
             Query::Stats => QueryResult::Stats {
                 vertices: m.vertices().count(),

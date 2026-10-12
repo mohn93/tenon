@@ -30,12 +30,11 @@ impl Document {
     }
 
     /// Replaces the model and view with a file's. A file whose view cannot be used (an eye
-    /// straight above its target, say) opens with the default view.
+    /// on its target, say) opens with the default view.
     pub(super) fn open_file(&mut self, path: &str) -> Result<(), CommandError> {
-        let (scene, [eye, target], fov) =
-            file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
+        let (scene, c) = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
         let camera = self
-            .camera_for(eye.to_array(), target.to_array(), Some(fov))
+            .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
             .unwrap_or_else(|_| Camera::new(self.camera.viewport));
         self.replace(scene, camera);
         self.path = Some(PathBuf::from(path));

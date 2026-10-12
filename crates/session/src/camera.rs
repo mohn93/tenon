@@ -1,9 +1,11 @@
 use glam::dcamera::rh::{proj::directx, view::look_at_mat4};
 use glam::{DAffine3, DMat4, DQuat, DVec2, DVec3, Mat4};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 
 pub const UP: DVec3 = DVec3::Z;
-/// Closest the view direction may get to straight up or down, in radians.
+/// Closest the view direction may get to straight up or down when orbiting, in radians.
 pub const MIN_POLAR: f64 = 0.01;
 pub const ORBIT_RAD_PER_PX: f64 = 0.006;
 /// Distance multiplier per zoom step (one scroll notch).
@@ -13,6 +15,14 @@ pub const MIN_ZOOM_DISTANCE: f64 = 0.01;
 pub const MAX_ANCHOR_FACTOR: f64 = 50.0;
 /// How far (in eye-to-target distances) `Camera::line_span` reaches along an infinite line.
 pub const LINE_REACH: f64 = 1000.0;
+/// How far in front of and behind the target (in eye-to-target distances) a parallel view
+/// sees. Geometry behind the eye is seen too: in a parallel view the eye only sets the zoom.
+pub const PARALLEL_DEPTH: f64 = 100.0;
+/// A view whose direction is closer than this (sine of the angle) to straight up or down is
+/// vertical: its screen's up is a horizontal direction instead of `UP`.
+pub const VERTICAL_TOLERANCE: f64 = 1e-9;
+/// Spare room zoom extents leaves around the model in a parallel view.
+pub const FIT_MARGIN: f64 = 1.05;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
@@ -34,19 +44,93 @@ impl Ray {
     }
 }
 
-/// Perspective camera looking from `eye` at `target`, with `up` (Z for the document's camera)
-/// pointing up the screen.
+/// How the camera projects the model onto the screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Projection {
+    /// Farther things look smaller; the view spans `fov_y` vertically.
+    #[default]
+    Perspective,
+    /// Parallel (orthographic): sizes do not change with distance. The view is
+    /// `Camera::view_height` tall, as tall as the perspective view is at the target, so
+    /// switching keeps what is at the target the same size.
+    Parallel,
+}
+
+/// The six views along the axes, and an isometric one from the front left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StandardView {
+    /// From above (+Z), +Y up the screen.
+    Top,
+    /// From below (-Z), +Y up the screen.
+    Bottom,
+    /// From the front (-Y), looking along +Y.
+    Front,
+    /// From the back (+Y).
+    Back,
+    /// From the left (-X), looking along +X.
+    Left,
+    /// From the right (+X).
+    Right,
+    /// From the front left above, along (1, 1, -1).
+    Iso,
+}
+
+impl StandardView {
+    pub const ALL: [StandardView; 7] = [
+        StandardView::Top,
+        StandardView::Bottom,
+        StandardView::Front,
+        StandardView::Back,
+        StandardView::Left,
+        StandardView::Right,
+        StandardView::Iso,
+    ];
+
+    /// The unit direction from the target to the eye, and the screen's up direction.
+    pub fn direction(self) -> (DVec3, DVec3) {
+        match self {
+            StandardView::Top => (DVec3::Z, DVec3::Y),
+            StandardView::Bottom => (-DVec3::Z, DVec3::Y),
+            StandardView::Front => (-DVec3::Y, UP),
+            StandardView::Back => (DVec3::Y, UP),
+            StandardView::Left => (-DVec3::X, UP),
+            StandardView::Right => (DVec3::X, UP),
+            StandardView::Iso => (DVec3::new(-1.0, -1.0, 1.0).normalize(), UP),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StandardView::Top => "Top",
+            StandardView::Bottom => "Bottom",
+            StandardView::Front => "Front",
+            StandardView::Back => "Back",
+            StandardView::Left => "Left",
+            StandardView::Right => "Right",
+            StandardView::Iso => "Iso",
+        }
+    }
+}
+
+/// Camera looking from `eye` at `target`, with `up` pointing up the screen, in perspective or
+/// parallel projection.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
     pub eye: DVec3,
     pub target: DVec3,
-    /// Which way is up: `UP`, except in a camera seen from another frame (see `placed`).
-    /// Orbiting and the ground plane always use `UP`.
+    /// Which way is up: `UP` for the document's camera, except in a vertical view (straight
+    /// down or up), where it is the horizontal direction pointing up the screen; and in a
+    /// camera seen from another frame (see `placed`). Orbiting and the ground plane always
+    /// use `UP`.
     pub up: DVec3,
-    /// Vertical field of view in radians.
+    /// Vertical field of view in radians. A parallel view keeps it, to size the view (see
+    /// `view_height`) and for switching back.
     pub fov_y: f64,
     /// Viewport size in physical pixels.
     pub viewport: DVec2,
+    pub projection: Projection,
 }
 
 impl Camera {
@@ -57,6 +141,7 @@ impl Camera {
             up: UP,
             fov_y: 35f64.to_radians(),
             viewport,
+            projection: Projection::Perspective,
         }
     }
 
@@ -80,41 +165,128 @@ impl Camera {
         self.viewport.x / self.viewport.y.max(1.0)
     }
 
+    pub fn is_parallel(&self) -> bool {
+        self.projection == Projection::Parallel
+    }
+
+    /// True when the view looks straight down or up (see `VERTICAL_TOLERANCE`).
+    pub fn is_vertical(&self) -> bool {
+        self.forward().cross(UP).length() < VERTICAL_TOLERANCE
+    }
+
+    /// Height of the view at the target, in meters: in a parallel view, of the whole view.
+    pub fn view_height(&self) -> f64 {
+        2.0 * self.distance() * (self.fov_y * 0.5).tan()
+    }
+
+    /// How far `p` lies in front of the eye along the view direction.
+    pub fn depth(&self, p: DVec3) -> f64 {
+        (p - self.eye).dot(self.forward())
+    }
+
+    /// The depths (see `depth`) between which the camera sees: from the near plane on in
+    /// perspective; `PARALLEL_DEPTH` distances either side of the target in a parallel view,
+    /// so the near end can lie behind the eye.
+    pub fn depth_range(&self) -> (f64, f64) {
+        match self.projection {
+            Projection::Perspective => (self.near(), f64::INFINITY),
+            Projection::Parallel => {
+                let d = self.distance();
+                (d - d * PARALLEL_DEPTH, d + d * PARALLEL_DEPTH)
+            }
+        }
+    }
+
+    /// True when `p` lies between the depths the camera sees.
+    pub fn sees_depth(&self, p: DVec3) -> bool {
+        let (near, far) = self.depth_range();
+        let depth = self.depth(p);
+        depth > near && depth < far
+    }
+
+    /// World length of one pixel at `p`, across the view.
+    pub fn pixel_size(&self, p: DVec3) -> f64 {
+        let depth = match self.projection {
+            Projection::Perspective => self.depth(p).max(1e-6),
+            Projection::Parallel => self.distance(),
+        };
+        2.0 * depth * (self.fov_y * 0.5).tan() / self.viewport.y
+    }
+
+    /// How far `p` is from the eye, for sizing things drawn around it on screen: in a parallel
+    /// view every point is as far as the target.
+    pub fn eye_distance(&self, p: DVec3) -> f64 {
+        match self.projection {
+            Projection::Perspective => self.eye.distance(p),
+            Projection::Parallel => self.distance(),
+        }
+    }
+
+    /// Where the line of sight to `p` starts: the eye, or in a parallel view the point behind
+    /// `p` where the view begins (see `depth_range`).
+    pub fn sight_origin(&self, p: DVec3) -> DVec3 {
+        match self.projection {
+            Projection::Perspective => self.eye,
+            Projection::Parallel => p - self.forward() * (self.depth(p) - self.depth_range().0),
+        }
+    }
+
     pub fn view(&self) -> DMat4 {
         look_at_mat4(self.eye, self.target, self.up)
     }
 
-    /// Reversed-Z perspective with an infinite far plane: depth is 1 at the near plane and
-    /// approaches 0 with distance, so nothing far away is ever clipped.
+    /// Reversed-Z projection: depth is 1 at the near plane and decreases with distance. In
+    /// perspective the far plane is infinite, so nothing far away is ever clipped; a parallel
+    /// view sees the depths of `depth_range`, linearly.
     pub fn proj(&self) -> DMat4 {
-        directx::perspective_infinite_reverse(self.fov_y, self.aspect(), self.near())
+        match self.projection {
+            Projection::Perspective => {
+                directx::perspective_infinite_reverse(self.fov_y, self.aspect(), self.near())
+            }
+            Projection::Parallel => {
+                let h = self.view_height() * 0.5;
+                let w = h * self.aspect();
+                let (near, far) = self.depth_range();
+                // Near and far swapped: reversed depth.
+                directx::orthographic(-w, w, -h, h, far, near)
+            }
+        }
     }
 
-    /// Distance from the eye to the near plane.
+    /// Distance from the eye to the perspective near plane.
     pub fn near(&self) -> f64 {
         (self.distance() * 1e-3).max(1e-5)
     }
 
     /// The part of the infinite line through `point` along `dir` worth drawing or snapping
-    /// to: in front of the near plane (with a margin), and within `LINE_REACH` eye-to-target
-    /// distances of the eye in depth and along the line. Points beyond look the same as the
-    /// end. None when no part of the line is in front of the camera (or `dir` is zero).
+    /// to: within the depths the camera sees (in perspective from just past the near plane
+    /// to `LINE_REACH` eye-to-target distances), and within `LINE_REACH` distances along the
+    /// line of the point nearest the eye (in a parallel view, nearest the line of sight
+    /// through the target). Points beyond look the same as the end. None when no part of the
+    /// line is in view in depth (or `dir` is zero).
     pub fn line_span(&self, point: DVec3, dir: DVec3) -> Option<[DVec3; 2]> {
         let dir = dir.try_normalize()?;
         let reach = self.distance() * LINE_REACH;
-        let near = self.near() * 2.0;
-        // Along the line, around the point nearest the eye.
-        let foot = (self.eye - point).dot(dir);
+        let (near, far, from) = match self.projection {
+            Projection::Perspective => (self.near() * 2.0, reach, self.eye),
+            Projection::Parallel => {
+                let (near, far) = self.depth_range();
+                let margin = (far - near) * 1e-3;
+                (near + margin, far - margin, self.target)
+            }
+        };
+        // Along the line, around the point nearest `from`.
+        let foot = (from - point).dot(dir);
         let (mut lo, mut hi) = (foot - reach, foot + reach);
-        // In depth: near <= depth0 + t * slope <= reach.
-        let depth0 = (point - self.eye).dot(self.forward());
+        // In depth: near <= depth0 + t * slope <= far.
+        let depth0 = self.depth(point);
         let slope = dir.dot(self.forward());
         if slope.abs() < 1e-12 {
-            if !(near..=reach).contains(&depth0) {
+            if !(near..=far).contains(&depth0) {
                 return None;
             }
         } else {
-            let (a, b) = ((near - depth0) / slope, (reach - depth0) / slope);
+            let (a, b) = ((near - depth0) / slope, (far - depth0) / slope);
             lo = lo.max(a.min(b));
             hi = hi.min(a.max(b));
         }
@@ -125,17 +297,35 @@ impl Camera {
         (self.proj() * self.view()).as_mat4()
     }
 
-    /// World-space ray through a pixel (origin top-left, y down).
+    /// World-space ray through a pixel (origin top-left, y down). In perspective it starts at
+    /// the eye; in a parallel view every ray runs along the view direction from where the
+    /// view begins (see `depth_range`), so it meets geometry behind the eye too.
     pub fn ray(&self, px: DVec2) -> Ray {
         let ndc_x = 2.0 * px.x / self.viewport.x - 1.0;
         let ndc_y = 1.0 - 2.0 * px.y / self.viewport.y;
         let half_h = (self.fov_y * 0.5).tan();
-        let dir = self.forward()
-            + self.right() * (ndc_x * half_h * self.aspect())
-            + self.up() * (ndc_y * half_h);
-        Ray {
-            origin: self.eye,
-            dir: dir.normalize(),
+        match self.projection {
+            Projection::Perspective => {
+                let dir = self.forward()
+                    + self.right() * (ndc_x * half_h * self.aspect())
+                    + self.up() * (ndc_y * half_h);
+                Ray {
+                    origin: self.eye,
+                    dir: dir.normalize(),
+                }
+            }
+            Projection::Parallel => {
+                let half = self.view_height() * 0.5;
+                let forward = self.forward();
+                let origin = self.eye
+                    + forward * self.depth_range().0
+                    + self.right() * (ndc_x * half * self.aspect())
+                    + self.up() * (ndc_y * half);
+                Ray {
+                    origin,
+                    dir: forward,
+                }
+            }
         }
     }
 
@@ -150,30 +340,54 @@ impl Camera {
         }
     }
 
+    /// Orbits by a mouse drag of `delta_px` (see `turn`): dragging right turns the camera
+    /// clockwise seen from above, dragging down raises the eye.
     pub fn orbit(&mut self, pivot: DVec3, delta_px: DVec2) {
-        let yaw = -delta_px.x * ORBIT_RAD_PER_PX;
+        self.turn(
+            pivot,
+            -delta_px.x * ORBIT_RAD_PER_PX,
+            -delta_px.y * ORBIT_RAD_PER_PX,
+        );
+    }
+
+    /// Turns the camera about `pivot`: by `yaw` radians about `UP` (counter-clockwise seen
+    /// from above), then by `pitch` radians tilting the view toward `UP` (negative raises the
+    /// eye). The pitch stops `MIN_POLAR` short of straight up or down, so from a vertical
+    /// view it only tilts toward the top of the screen. A view still vertical turns its
+    /// screen's up with the yaw; any other view has `UP` up.
+    pub fn turn(&mut self, pivot: DVec3, yaw: f64, pitch: f64) {
         // Rotating forward about right() by +a tilts it toward UP, reducing its polar angle by a.
         let polar = self
             .forward()
             .angle_between(UP)
             .clamp(MIN_POLAR, PI - MIN_POLAR);
-        let pitch =
-            (-delta_px.y * ORBIT_RAD_PER_PX).clamp(polar - (PI - MIN_POLAR), polar - MIN_POLAR);
-        let rot = DQuat::from_axis_angle(UP, yaw) * DQuat::from_axis_angle(self.right(), pitch);
+        let pitch = pitch.clamp(polar - (PI - MIN_POLAR), polar - MIN_POLAR);
+        let spin = DQuat::from_axis_angle(UP, yaw);
+        let rot = spin * DQuat::from_axis_angle(self.right(), pitch);
         self.eye = pivot + rot * (self.eye - pivot);
         self.target = pivot + rot * (self.target - pivot);
+        self.up = if self.is_vertical() {
+            spin * self.up
+        } else {
+            UP
+        };
     }
 
     pub fn pan(&mut self, anchor: DVec3, delta_px: DVec2) {
-        let depth = (anchor - self.eye).dot(self.forward()).max(1e-6);
-        let world_per_px = 2.0 * depth * (self.fov_y * 0.5).tan() / self.viewport.y;
+        let world_per_px = self.pixel_size(anchor);
         let offset = (self.up() * delta_px.y - self.right() * delta_px.x) * world_per_px;
         self.eye += offset;
         self.target += offset;
     }
 
+    /// Zooms `steps` scroll notches toward `anchor`, which stays where it is on screen. The
+    /// eye never gets nearer than `MIN_ZOOM_DISTANCE` to the anchor (in a parallel view, to
+    /// the target: the view height shrinks with the distance).
     pub fn zoom(&mut self, anchor: DVec3, steps: f64) {
-        let dist = (self.eye - anchor).length();
+        let dist = match self.projection {
+            Projection::Perspective => (self.eye - anchor).length(),
+            Projection::Parallel => self.distance(),
+        };
         if dist <= 0.0 {
             return;
         }
@@ -182,17 +396,84 @@ impl Camera {
         self.target = anchor + (self.target - anchor) * factor;
     }
 
-    pub fn anchor_at(&self, px: DVec2) -> DVec3 {
-        let ray = self.ray(px);
-        let max = self.distance() * MAX_ANCHOR_FACTOR;
-        match ray.hit_ground() {
-            Some(p) if (p - ray.origin).length() <= max => p,
-            _ => ray.origin + ray.dir * self.distance(),
-        }
+    /// Moves the eye along the view toward the target to `1 / factor` of its distance (no
+    /// nearer than `MIN_ZOOM_DISTANCE`): things at the target look `factor` times bigger.
+    pub fn zoom_by(&mut self, factor: f64) {
+        let d = (self.distance() / factor).max(MIN_ZOOM_DISTANCE);
+        self.eye = self.target - self.forward() * d;
     }
 
-    /// Pixel position of a world point, or None if it is behind the camera.
+    /// Looks at the target from `view`'s direction, from the same distance.
+    pub fn look_from(&mut self, view: StandardView) {
+        let (from, up) = view.direction();
+        self.eye = self.target + from * self.distance();
+        self.up = up;
+    }
+
+    /// Keeps the view direction and moves the camera so the box `lo`..`hi` fits the view
+    /// around its center: in perspective, the sphere around the box fits; in a parallel view
+    /// the box itself does, with `FIT_MARGIN` to spare.
+    pub fn fit(&mut self, lo: DVec3, hi: DVec3) {
+        let center = (lo + hi) * 0.5;
+        let half_y = self.fov_y * 0.5;
+        let d = match self.projection {
+            Projection::Perspective => {
+                let half_x = (half_y.tan() * self.aspect()).atan();
+                let radius = (hi - lo).length() * 0.5;
+                radius / half_y.min(half_x).sin()
+            }
+            Projection::Parallel => {
+                let (right, up) = (self.right(), self.up());
+                let (mut across, mut along) = (0.0f64, 0.0f64);
+                for k in 0..8 {
+                    let corner = DVec3::new(
+                        if k & 1 == 0 { lo.x } else { hi.x },
+                        if k & 2 == 0 { lo.y } else { hi.y },
+                        if k & 4 == 0 { lo.z } else { hi.z },
+                    ) - center;
+                    across = across.max(corner.dot(right).abs());
+                    along = along.max(corner.dot(up).abs());
+                }
+                let height = (2.0 * along).max(2.0 * across / self.aspect()) * FIT_MARGIN;
+                height / (2.0 * half_y.tan())
+            }
+        };
+        let forward = self.forward();
+        self.target = center;
+        self.eye = center - forward * d.max(MIN_ZOOM_DISTANCE);
+    }
+
+    /// The ground point under a pixel, if the ground is there within `MAX_ANCHOR_FACTOR`
+    /// eye-to-target distances (of the eye; in a parallel view, of the target in depth).
+    pub fn ground_at(&self, px: DVec2) -> Option<DVec3> {
+        let ray = self.ray(px);
+        let p = ray.hit_ground()?;
+        let far = match self.projection {
+            Projection::Perspective => (p - ray.origin).length(),
+            Projection::Parallel => (self.depth(p) - self.distance()).abs(),
+        };
+        (far <= self.distance() * MAX_ANCHOR_FACTOR).then_some(p)
+    }
+
+    /// The point to orbit about or zoom toward under a pixel: the ground there, else the
+    /// point as deep as the target.
+    pub fn anchor_at(&self, px: DVec2) -> DVec3 {
+        self.ground_at(px).unwrap_or_else(|| {
+            let ray = self.ray(px);
+            let along = match self.projection {
+                Projection::Perspective => self.distance(),
+                Projection::Parallel => self.distance() - self.depth_range().0,
+            };
+            ray.origin + ray.dir * along
+        })
+    }
+
+    /// Pixel position of a world point, or None if the camera does not see its depth (behind
+    /// the eye in perspective; outside `depth_range` in a parallel view).
     pub fn project(&self, p: DVec3) -> Option<DVec2> {
+        if self.is_parallel() && !self.sees_depth(p) {
+            return None;
+        }
         let clip = self.proj() * self.view() * p.extend(1.0);
         if clip.w <= 0.0 {
             return None;
@@ -399,6 +680,174 @@ mod tests {
             c.anchor_at(DVec2::new(400.0, 300.0))
                 .abs_diff_eq(DVec3::ZERO, 1e-9)
         );
+    }
+
+    fn parallel() -> Camera {
+        Camera {
+            projection: Projection::Parallel,
+            ..cam()
+        }
+    }
+
+    fn top() -> Camera {
+        let mut c = cam();
+        c.look_from(StandardView::Top);
+        c
+    }
+
+    #[test]
+    fn parallel_rays_run_along_the_view_and_hit_what_they_project_from() {
+        let c = parallel();
+        let world = DVec3::new(3.0, -2.0, 1.5);
+        let px = c.project(world).unwrap();
+        let r = c.ray(px);
+        assert!(r.dir.abs_diff_eq(c.forward(), 1e-12));
+        assert!(
+            c.ray(DVec2::new(10.0, 590.0))
+                .dir
+                .abs_diff_eq(c.forward(), 1e-12)
+        );
+        let t = (world - r.origin).dot(r.dir);
+        assert!((r.origin + r.dir * t).abs_diff_eq(world, 1e-9));
+        assert!(
+            c.project(r.origin + r.dir * 1e-3)
+                .unwrap()
+                .abs_diff_eq(px, 1e-6)
+        );
+        let center = c.ray(DVec2::new(400.0, 300.0));
+        assert!(((c.target - center.origin).length() - c.distance() * PARALLEL_DEPTH).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parallel_depth_is_reversed_and_linear_over_the_range() {
+        let c = parallel();
+        let (near, far) = c.depth_range();
+        let z = |depth: f64| {
+            let clip = c.proj() * c.view() * (c.eye + c.forward() * depth).extend(1.0);
+            clip.z / clip.w
+        };
+        assert!((z(near) - 1.0).abs() < 1e-9 && z(far).abs() < 1e-9);
+        assert!((z(c.distance()) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_parallel_view_sees_behind_the_eye_but_not_past_its_depth_range() {
+        let c = parallel();
+        let behind = c.eye - c.forward() * 5.0;
+        assert!(c.project(behind).is_some());
+        let (_, far) = c.depth_range();
+        assert!(c.project(c.eye + c.forward() * (far + 1.0)).is_none());
+        assert!(c.project(c.eye - c.forward() * (far + 1.0)).is_none());
+    }
+
+    #[test]
+    fn a_parallel_view_keeps_sizes_and_the_view_height() {
+        let c = parallel();
+        let size = c.pixel_size(c.target);
+        assert!((size - c.view_height() / 600.0).abs() < 1e-12);
+        assert_eq!(c.pixel_size(c.eye + c.forward() * 1000.0), size);
+        assert_eq!(c.eye_distance(DVec3::new(100.0, 0.0, 0.0)), c.distance());
+        // One meter across the view is as many pixels near as far.
+        let span = |p: DVec3| c.project(p + c.right()).unwrap().x - c.project(p).unwrap().x;
+        assert!((span(c.target) - span(c.target + c.forward() * 30.0)).abs() < 1e-6);
+        assert!((span(c.target) - 1.0 / size).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parallel_zoom_and_pan_keep_the_anchor_under_the_cursor() {
+        let mut c = parallel();
+        let anchor = DVec3::new(-1.0, 3.0, 0.0);
+        let px = c.project(anchor).unwrap();
+        let height = c.view_height();
+        c.zoom(anchor, 2.0);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(px, 1e-6));
+        assert!((c.view_height() - height * ZOOM_STEP.powi(2)).abs() < 1e-9);
+        let delta = DVec2::new(35.0, -20.0);
+        c.pan(anchor, delta);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(px + delta, 1e-6));
+        c.zoom(anchor, 1000.0);
+        assert!((c.distance() - MIN_ZOOM_DISTANCE).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parallel_anchors_are_the_ground_or_the_target_depth() {
+        let c = parallel();
+        assert!(
+            c.anchor_at(DVec2::new(400.0, 300.0))
+                .abs_diff_eq(DVec3::ZERO, 1e-9)
+        );
+        let mut level = parallel();
+        level.eye = DVec3::new(0.0, -10.0, 1.0);
+        level.target = DVec3::new(0.0, 0.0, 1.0);
+        let sky = level.anchor_at(DVec2::new(400.0, 0.0));
+        assert!((level.depth(sky) - level.distance()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parallel_line_spans_stay_in_the_depth_range() {
+        let c = parallel();
+        let [a, b] = c.line_span(c.target, c.right()).unwrap();
+        assert!(c.project(a).is_some() && c.project(b).is_some());
+        let [a, b] = c.line_span(c.eye, c.forward()).unwrap();
+        assert!(c.sees_depth(a) && c.sees_depth(b));
+        let (near, far) = c.depth_range();
+        assert!(c.depth(a).min(c.depth(b)) < near + (far - near) * 0.01);
+        let beyond = c.eye + c.forward() * (far * 2.0);
+        assert!(c.line_span(beyond, c.right()).is_none());
+    }
+
+    #[test]
+    fn a_top_view_has_north_up_and_east_right() {
+        let c = top();
+        assert!(c.is_vertical());
+        assert!(c.right().abs_diff_eq(DVec3::X, 1e-12) && c.up().abs_diff_eq(DVec3::Y, 1e-12));
+        let center = DVec2::new(400.0, 300.0);
+        assert!(c.project(c.target + DVec3::X).unwrap().x > center.x);
+        assert!(c.project(c.target + DVec3::Y).unwrap().y < center.y);
+        let mut bottom = cam();
+        bottom.look_from(StandardView::Bottom);
+        assert!(
+            bottom.right().abs_diff_eq(-DVec3::X, 1e-12),
+            "seen from below, mirrored"
+        );
+    }
+
+    #[test]
+    fn orbiting_a_top_view_spins_it_then_tilts_it_toward_the_top_of_the_screen() {
+        let mut c = top();
+        let d = c.distance();
+        c.orbit(c.target, DVec2::new(0.0, 100.0));
+        assert!(c.is_vertical(), "already as high as it goes");
+        c.orbit(c.target, DVec2::new(-100.0, 0.0));
+        assert!(c.is_vertical());
+        let spun = DQuat::from_axis_angle(UP, 100.0 * ORBIT_RAD_PER_PX) * DVec3::Y;
+        assert!(c.up.abs_diff_eq(spun, 1e-12));
+        let right = c.right();
+        c.orbit(c.target, DVec2::new(0.0, -100.0));
+        assert!(!c.is_vertical() && c.up == UP);
+        assert!(
+            c.right().abs_diff_eq(right, 1e-9),
+            "no flip on leaving the vertical"
+        );
+        assert!((c.distance() - d).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fit_frames_a_box_from_the_current_direction() {
+        let mut c = cam();
+        let forward = c.forward();
+        let (lo, hi) = (DVec3::new(-5.0, 0.0, 0.0), DVec3::new(5.0, 2.0, 3.0));
+        c.fit(lo, hi);
+        assert!(c.forward().abs_diff_eq(forward, 1e-12));
+        assert!(c.target.abs_diff_eq((lo + hi) * 0.5, 1e-12));
+        let mut p = parallel();
+        p.look_from(StandardView::Front);
+        p.fit(lo, hi);
+        // 10 m wide at aspect 4:3 needs 7.5 m of height; 3 m tall needs less.
+        assert!((p.view_height() - 7.5 * FIT_MARGIN).abs() < 1e-9);
+        let mut point = cam();
+        point.fit(DVec3::ONE, DVec3::ONE);
+        assert!((point.distance() - MIN_ZOOM_DISTANCE).abs() < 1e-12);
     }
 
     #[test]

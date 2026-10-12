@@ -347,12 +347,12 @@ fn render_view_returns_a_png_or_reports_no_gpu() {
 
     let bad = call(&mut h, "render_view", json!({"width": 0, "height": 48}));
     assert_eq!(bad["error"]["code"], codes::INVALID_PARAMS);
-    let vertical = call(
+    let on_target = call(
         &mut h,
         "render_view",
-        json!({"width": 8, "height": 8, "camera": {"eye": [0, 0, 5], "target": [0, 0, 0]}}),
+        json!({"width": 8, "height": 8, "camera": {"eye": [0, 0, 5], "target": [0, 0, 5]}}),
     );
-    assert_eq!(vertical["error"]["code"], codes::COMMAND_FAILED);
+    assert_eq!(on_target["error"]["code"], codes::COMMAND_FAILED);
 }
 
 #[test]

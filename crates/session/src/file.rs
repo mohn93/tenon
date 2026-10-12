@@ -4,19 +4,19 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use glam::DVec3;
 use kernel::{MeshData, Scene, SceneData};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::camera::Camera;
+use crate::camera::{Camera, Projection};
 use crate::document::MAX_COORDINATE;
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The schema version this build writes and the newest it reads. Version 2 added guides and
-/// version 3 curves and soft edges; older files still open.
-pub const SCHEMA_VERSION: u32 = 3;
+/// The schema version this build writes and the newest it reads. Version 2 added guides,
+/// version 3 curves and soft edges, and version 4 the camera's up direction and projection;
+/// older files still open.
+pub const SCHEMA_VERSION: u32 = 4;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
 /// The largest `document.json` this build reads, uncompressed.
@@ -31,12 +31,18 @@ struct Stored {
     model: SceneData,
 }
 
+/// The saved view. Files before version 4 have no `up` or `projection`: their views are
+/// never vertical, and they are perspective.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredCamera {
-    eye: [f64; 3],
-    target: [f64; 3],
-    fov_y_deg: f64,
+pub(crate) struct StoredCamera {
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
+    pub fov_y_deg: f64,
+    #[serde(default)]
+    pub up: Option<[f64; 3]>,
+    #[serde(default)]
+    pub projection: Projection,
 }
 
 /// Writes the model and camera to `path`, replacing it only once the whole file is written.
@@ -48,6 +54,8 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
             eye: camera.eye.to_array(),
             target: camera.target.to_array(),
             fov_y_deg: camera.fov_y.to_degrees(),
+            up: Some(camera.up.to_array()),
+            projection: camera.projection,
         },
         model: scene.to_data(),
     };
@@ -81,9 +89,8 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
-/// Reads a file written by [`write`]: the model and the camera's eye, target and field of view
-/// (degrees).
-pub(crate) fn read(path: &Path) -> Result<(Scene, [DVec3; 2], f64), String> {
+/// Reads a file written by [`write`]: the model and the saved view.
+pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a sketchup-alt file".to_string())?;
     let entry = zip
@@ -107,17 +114,17 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, [DVec3; 2], f64), String> {
     check_coordinates(&stored.model)?;
     let scene = Scene::from_data(&stored.model)?;
     let c = &stored.camera;
-    let camera = [DVec3::from(c.eye), DVec3::from(c.target)];
     if !c
         .eye
         .iter()
         .chain(&c.target)
         .chain([&c.fov_y_deg])
+        .chain(c.up.iter().flatten())
         .all(|x| x.is_finite())
     {
         return Err("the camera has a number that is not finite".into());
     }
-    Ok((scene, camera, c.fov_y_deg))
+    Ok((scene, stored.camera))
 }
 
 /// Reads all of `reader`, failing once it holds more than `limit` bytes.

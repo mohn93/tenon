@@ -5,6 +5,7 @@ use kernel::{ChangeSummary, DefinitionId, EntityId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::camera::{Projection, StandardView};
 use crate::export::ExportFormat;
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
@@ -179,11 +180,55 @@ pub enum Command {
     },
     Undo,
     Redo,
-    /// Place the camera. Not recorded in undo history.
+    /// Place the camera: from `eye` looking at `target`, with the vertical field of view
+    /// `fov_y_deg` (1 to 170; default: unchanged) and `projection` (default: unchanged). A
+    /// view straight down or up takes the screen's up direction from the horizontal part of
+    /// `up` (default +Y); any other view has +Z up and ignores `up`. Camera commands are not
+    /// recorded in undo history and do not change the model's revision.
     SetCamera {
         eye: [f64; 3],
         target: [f64; 3],
         fov_y_deg: Option<f64>,
+        #[serde(default)]
+        up: Option<[f64; 3]>,
+        #[serde(default)]
+        projection: Option<Projection>,
+    },
+    /// Turn the camera about its target: `yaw` degrees about the vertical (counter-clockwise
+    /// seen from above), then `pitch` degrees raising the eye (negative lowers it). The view
+    /// stops 0.01 rad short of straight down or up.
+    Orbit {
+        #[serde(default)]
+        yaw: f64,
+        #[serde(default)]
+        pitch: f64,
+    },
+    /// Move the eye and target together, `right` and `up` meters along the screen's right
+    /// and up directions.
+    Pan {
+        #[serde(default)]
+        right: f64,
+        #[serde(default)]
+        up: f64,
+    },
+    /// Move the eye toward the target to `1 / factor` of its distance (factor above 1 zooms
+    /// in, below 1 out; never nearer than 0.01 m). In a parallel view the view height shrinks
+    /// the same way.
+    Zoom {
+        factor: f64,
+    },
+    /// Keep the view direction and fit the whole model (every vertex and placed instance, in
+    /// root coordinates, whatever instance is open) in the view. Guides do not count. With
+    /// nothing to fit, the camera stays.
+    ZoomExtents,
+    /// Look at the target from a standard direction, from the same distance.
+    StandardView {
+        view: StandardView,
+    },
+    /// Switch between perspective and parallel projection. The view height at the target
+    /// stays the same.
+    SetProjection {
+        projection: Projection,
     },
 }
 
@@ -191,12 +236,24 @@ impl Command {
     /// True for commands that can change the model or the open context (everything except
     /// camera, selection, saving and exporting).
     pub fn changes_model(&self) -> bool {
-        !matches!(
+        !(self.is_camera()
+            || matches!(
+                self,
+                Command::Select { .. } | Command::Save { .. } | Command::Export { .. }
+            ))
+    }
+
+    /// True for commands that only move the camera.
+    pub fn is_camera(&self) -> bool {
+        matches!(
             self,
             Command::SetCamera { .. }
-                | Command::Select { .. }
-                | Command::Save { .. }
-                | Command::Export { .. }
+                | Command::Orbit { .. }
+                | Command::Pan { .. }
+                | Command::Zoom { .. }
+                | Command::ZoomExtents
+                | Command::StandardView { .. }
+                | Command::SetProjection { .. }
         )
     }
 }

@@ -865,6 +865,8 @@ mod tests {
             eye: [-6.0, -10.0, 6.0],
             target: [0.0, 0.0, 0.0],
             fov_y_deg: None,
+            up: None,
+            projection: None,
         })
         .unwrap();
         click_at(&mut e, DVec3::new(3.0, 1.0, 0.0));
