@@ -315,13 +315,15 @@ impl Nearby {
             Nearby::Indexed(levels) => {
                 let mut found = Vec::new();
                 for level in levels {
-                    level.index.near_segment(a, b, LENGTH_TOL, |s| {
-                        if let Shape::Point(id, _) = *s
-                            && m.vertex(id).is_some()
-                        {
-                            found.push(id);
-                        }
-                    });
+                    level
+                        .index
+                        .near_segment(a, b, LENGTH_TOL + 1e-12 * a.distance(b), |s| {
+                            if let Shape::Point(id, _) = *s
+                                && m.vertex(id).is_some()
+                            {
+                                found.push(id);
+                            }
+                        });
                 }
                 found.sort();
                 found.extend(m.vertices_in(levels.last().map_or(0, |l| l.end)..u64::MAX));

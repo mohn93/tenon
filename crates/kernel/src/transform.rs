@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec2, DVec3};
 
-use crate::edit::KernelError;
+use crate::edit::{KernelError, use_indexes};
 use crate::geom::{
     LENGTH_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d, vector_area,
 };
@@ -246,16 +246,22 @@ impl Model {
             .collect();
         // Existing faces in a plane the drawing reaches, by position: (outer ring, holes).
         let ring = |m: &Model, l: &[VertexId]| l.iter().map(|v| m.pos(*v)).collect::<Vec<_>>();
+        let indexed = use_indexes(true);
         let segment_index = Index::of_segments(&segments);
         let before: Vec<(Vec<DVec3>, Vec<Vec<DVec3>>)> = self
             .faces()
             .filter(|(_, f)| {
                 let o = self.pos(f.outer[0]);
                 let on = |p: DVec3| (p - o).dot(f.normal).abs() < LENGTH_TOL;
-                segment_index.any_near_plane(&Plane::through(o, f.normal), |k| {
+                let test = |k: EdgeId| {
                     let (a, b) = segments[k.0 as usize];
                     on(a) && on(b)
-                })
+                };
+                if indexed {
+                    segment_index.any_near_plane(&Plane::through(o, f.normal), test)
+                } else {
+                    (0..segments.len() as u64).any(|k| test(EdgeId(k)))
+                }
             })
             .map(|(_, f)| {
                 let holes = f.holes.iter().map(|h| ring(self, h)).collect();
@@ -309,6 +315,9 @@ impl Model {
         let sample_index = Index::of_points(samples.iter().map(|(id, s)| (id.0, s.inside)));
         let candidates = |ring: &Option<RingTest>| -> Vec<FaceId> {
             let Some(r) = ring else { return Vec::new() };
+            if !indexed {
+                return samples.keys().copied().collect();
+            }
             let pad = DVec3::splat(RING_BOX_PAD);
             let mut ids = Vec::new();
             sample_index.near_box(r.min - pad, r.max + pad, |shape| {
@@ -369,14 +378,20 @@ impl Model {
             .map(|(a, b)| a.distance(*b))
             .fold(0.0, f64::max);
         let on_stencil = |p: DVec3| {
+            let hit = |k: usize| {
+                let (a, b) = segments[k];
+                let (u, d) = project_on_segment(p, a, b);
+                (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL
+            };
+            if !indexed {
+                return (0..segments.len()).any(hit);
+            }
             let mut on = false;
             segment_index.near_segment(p, p, LENGTH_TOL + 1e-9 * reach, |shape| {
                 if let Shape::Segment(k, ..) = shape
                     && !on
                 {
-                    let (a, b) = segments[k.0 as usize];
-                    let (u, d) = project_on_segment(p, a, b);
-                    on = (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL;
+                    on = hit(k.0 as usize);
                 }
             });
             on

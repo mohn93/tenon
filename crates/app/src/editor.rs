@@ -225,9 +225,9 @@ impl Editor {
         result
     }
 
-    /// Switches to another tool, dropping the current tool's operation and any typed text.
-    /// Switches to the tool `kind` (a fresh one, even if it is the current tool), keeping the
-    /// settings tools remember for the session, such as circle sides.
+    /// Switches to the tool `kind` (a fresh one, even if it is the current tool), dropping the
+    /// current tool's operation and any typed text, and keeping the settings tools remember for
+    /// the session, such as circle sides.
     pub fn select_tool(&mut self, kind: ToolKind) {
         self.tool.remember(&mut self.remembered);
         self.tool = kind.make_with(&self.remembered);

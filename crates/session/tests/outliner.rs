@@ -326,6 +326,26 @@ fn a_three_level_tree_marks_the_open_path_and_the_selection_at_depth() {
 }
 
 #[test]
+fn depth_one_truncates_the_middle_of_a_three_level_chain() {
+    let mut d = doc();
+    let (group, outer, inner) = nested(&mut d);
+    let full = outliner(&d);
+    let tree = ask(&d, json!({"type": "outliner", "depth": 1}));
+    let g = &tree["instances"][0];
+    assert_eq!(g["id"], json!(group));
+    assert!(g.get("truncated").is_none());
+    let o = &g["children"][0];
+    assert_eq!(o["id"], json!(outer));
+    assert_eq!(o["children"], json!([]));
+    assert_eq!(o["truncated"], json!(true));
+    // The full tree has the deeper level the cut left out.
+    assert_eq!(
+        full["instances"][0]["children"][0]["children"][0]["id"],
+        json!(inner)
+    );
+}
+
+#[test]
 fn open_path_names_the_mid_path_parent_it_could_not_find_a_child_in() {
     let mut d = doc();
     let (group, outer, inner) = nested(&mut d);

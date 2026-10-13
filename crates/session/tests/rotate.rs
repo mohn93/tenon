@@ -277,7 +277,6 @@ fn bad_rotations_are_refused() {
     for bad in [
         rot(json!({"ids": []})),
         rot(json!({"axis": [0, 0, 0]})),
-        rot(json!({"axis": [0, 0, 2e6]})),
         rot(json!({"angle": 360})),
         rot(json!({"angle": -720})),
         rot(json!({"angle": 0})),
@@ -317,6 +316,23 @@ fn rotations_run_in_atomic_batches() {
     }
     run(&mut d, json!({"type": "undo"})).unwrap();
     assert!(positions(&d).contains(&[2.0, 2.0, 0.0]));
+}
+
+#[test]
+fn the_axis_is_a_direction_of_any_length() {
+    let turn = |axis: Option<Value>| {
+        let mut d = doc();
+        square(&mut d);
+        let mut c = json!({"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 30});
+        if let Some(a) = axis {
+            c["axis"] = a;
+        }
+        run(&mut d, c).unwrap();
+        positions(&d)
+    };
+    let z = turn(None);
+    assert_eq!(turn(Some(json!([0, 0, 2e6]))), z);
+    assert_eq!(turn(Some(json!([0, 0, 1e-200]))), z);
 }
 
 #[test]

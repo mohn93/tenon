@@ -213,6 +213,19 @@ fn set_camera_takes_vertical_views_with_a_screen_up() {
 }
 
 #[test]
+fn a_vertical_views_up_may_be_huge_or_tiny() {
+    for up in [json!([1e200, 0, 0]), json!([1e-200, 0, 0])] {
+        let mut d = doc();
+        run(
+            &mut d,
+            json!({"type": "set_camera", "eye": [1, 1, 5], "target": [1, 1, 0], "up": up}),
+        )
+        .unwrap();
+        assert!(close(view(&d).2, DVec3::X), "{up}");
+    }
+}
+
+#[test]
 fn parallel_projection_keeps_the_view_height_at_the_target() {
     let mut d = doc();
     front(&mut d);

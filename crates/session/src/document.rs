@@ -632,9 +632,9 @@ impl Document {
                 "ids must list at least one vertex, edge, face, instance or guide",
             ));
         }
-        check_coordinates(&[center, axis.unwrap_or([0.0, 0.0, 1.0])])?;
+        check_coordinates(&[center])?;
         let Some(axis) = unit_vector(DVec3::from(axis.unwrap_or([0.0, 0.0, 1.0]))) else {
-            return Err(invalid("axis must be a non-zero vector"));
+            return Err(invalid("axis must be a finite, non-zero vector"));
         };
         if !angle.is_finite() {
             return Err(invalid("angle must be finite"));

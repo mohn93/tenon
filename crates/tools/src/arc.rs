@@ -6,13 +6,14 @@
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
-use session::{
-    Command, DEFAULT_ARC_SEGMENTS, MAX_CIRCLE_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points,
-};
+use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points};
 
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
+
+/// Shown for a segment count that is not a whole number in range.
+const BAD_SEGMENTS: &str = "Segments must be a whole number from 2 to 360, like 12s";
 
 #[derive(Clone, Debug)]
 pub struct ArcTool {
@@ -177,12 +178,10 @@ impl Tool for ArcTool {
                             self.segments = n;
                             out.message = Some(format!("Arcs get {n} segments"));
                         }
-                        Err(e) => out.message = Some(e.message),
+                        Err(_) => out.message = Some(BAD_SEGMENTS.into()),
                     }
                 } else if meant_as_count(&text) {
-                    out.message = Some(format!(
-                        "Segments must be a whole number from 2 to {MAX_CIRCLE_SEGMENTS}, like 12s"
-                    ));
+                    out.message = Some(BAD_SEGMENTS.into());
                 } else {
                     match (self.start, self.end, parse_length(&text)) {
                         (None, _, _) => {
@@ -374,7 +373,15 @@ mod tests {
         let out = send(&mut tool, ToolEvent::Value("6s".into()));
         assert_eq!(out.message.as_deref(), Some("Arcs get 6 segments"));
         let refused = send(&mut tool, ToolEvent::Value("1s".into()));
-        assert!(refused.message.unwrap().contains("between 2"));
+        assert_eq!(
+            refused.message.as_deref(),
+            Some("Segments must be a whole number from 2 to 360, like 12s")
+        );
+        let refused = send(&mut tool, ToolEvent::Value("400s".into()));
+        assert_eq!(
+            refused.message.as_deref(),
+            Some("Segments must be a whole number from 2 to 360, like 12s")
+        );
         let refused = send(&mut tool, ToolEvent::Value("0s".into()));
         assert_eq!(
             refused.message.as_deref(),

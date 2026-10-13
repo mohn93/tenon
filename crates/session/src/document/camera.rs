@@ -4,7 +4,7 @@
 use glam::DVec3;
 use kernel::MeshId;
 
-use super::{Document, check_coordinates};
+use super::{Document, check_coordinates, unit_vector};
 use crate::camera::{Camera, Projection, UP, VERTICAL_TOLERANCE};
 use crate::command::{Command, CommandError, ErrorKind};
 
@@ -88,7 +88,7 @@ impl Document {
         let vertical = (target - eye).normalize().cross(UP).length() < VERTICAL_TOLERANCE;
         let up = if vertical {
             let u = DVec3::from(up.unwrap_or([0.0, 1.0, 0.0]));
-            DVec3::new(u.x, u.y, 0.0).try_normalize().ok_or_else(|| {
+            unit_vector(DVec3::new(u.x, u.y, 0.0)).ok_or_else(|| {
                 CommandError::new(
                     ErrorKind::InvalidInput,
                     "a view straight down or up needs an up direction that is not vertical",

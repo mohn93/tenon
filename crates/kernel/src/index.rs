@@ -270,7 +270,7 @@ impl Index {
             };
             let centre = (node.min + node.max) * 0.5;
             let reach = ((node.max - node.min) * 0.5).dot(plane.normal.abs());
-            if plane.distance(centre).abs() > reach + LENGTH_TOL {
+            if plane.distance(centre).abs() > reach + 2.0 * LENGTH_TOL {
                 continue;
             }
             match node.kids {

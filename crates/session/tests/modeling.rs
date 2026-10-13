@@ -85,6 +85,18 @@ fn rectangle_on_a_tilted_plane_follows_its_normal() {
 }
 
 #[test]
+fn a_rectangle_with_a_tiny_normal_is_accepted() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [0, 2, 3], "normal": [1e-10, 0, 0]}),
+    )
+    .unwrap();
+    let info = ask(&d, json!({"type": "entity", "id": created_face(&out)}));
+    assert!((info["area"].as_f64().unwrap() - 6.0).abs() < 1e-9);
+}
+
+#[test]
 fn bad_rectangles_change_nothing() {
     let mut d = doc();
     for bad in [
