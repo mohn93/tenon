@@ -1,14 +1,26 @@
 //! GPU vertex data built from a kernel scene.
+//!
+//! It comes in two layers, so that a selection change does not rebuild the scene:
+//! - `scene_base` places every face, edge and guide for an open context, with nothing selected,
+//!   and notes where each entity of the open context lies (`Spans`);
+//! - `Spans::flags` marks the vertices and guides a selection lights up.
+//!
+//! `scene_geometry` combines the two.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec3};
-use kernel::{EntityId, Guide, InstanceId, MaterialId, MeshId, Scene};
+use kernel::{
+    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene,
+};
 
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 
+/// A face corner with its selection flag, as `scene_geometry` returns it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct FaceVertex {
@@ -16,6 +28,18 @@ pub struct FaceVertex {
     pub normal: [f32; 3],
     /// 1 for selected faces, 0 otherwise.
     pub selected: f32,
+    /// The colors of the front and back sides.
+    pub front: [f32; 3],
+    pub back: [f32; 3],
+}
+
+/// A face corner as the renderer uploads it; whether it is selected comes from a separate flag
+/// buffer (see `Flags`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+pub struct BaseFaceVertex {
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
     /// The colors of the front and back sides.
     pub front: [f32; 3],
     pub back: [f32; 3],
@@ -34,6 +58,7 @@ fn side_color(scene: &Scene, material: Option<MaterialId>, default: [f32; 3]) ->
 }
 
 pub const EDGE_COLOR: [f32; 4] = [0.08, 0.08, 0.08, 1.0];
+/// Selected edges and guides. scene.wgsl repeats it as `SELECTED_EDGE`.
 pub const SELECTED_EDGE_COLOR: [f32; 4] = [0.10, 0.35, 0.95, 1.0];
 
 /// Edges outside the open instance, while one is open.
@@ -56,20 +81,176 @@ pub struct ModelGeometry {
 /// instance highlights everything it places. While an instance is open, edges and guides
 /// outside it are faded and its bounding box is outlined. Each face side gets its material's
 /// color, or else that of the nearest painted instance placing it, or else the default.
+///
+/// This is `scene_base` with `Spans::flags` applied; the renderer keeps the two apart.
 pub fn scene_geometry(
     scene: &Scene,
     context: &[InstanceId],
     selection: &BTreeSet<EntityId>,
 ) -> ModelGeometry {
-    let mut g = ModelGeometry::default();
+    let base = scene_base(scene, context);
+    let flags = base.spans.flags(selection);
+    base.with_flags(&flags)
+}
+
+/// The scene placed for one open context with nothing selected (see `scene_geometry`).
+#[derive(Debug, Default, PartialEq)]
+pub struct SceneBase {
+    pub faces: Vec<BaseFaceVertex>,
+    /// Edges in EDGE_COLOR inside the open instance and FADED_EDGE_COLOR outside it, then the
+    /// open instance's box.
+    pub edges: Vec<LineVertex>,
+    pub guides: Vec<GuideShape>,
+    /// Where the open context's entities lie in the lists above.
+    pub spans: Spans,
+}
+
+impl SceneBase {
+    /// The geometry with `flags` (from `self.spans`) shown, as `scene_geometry` returns it.
+    pub fn with_flags(&self, flags: &Flags) -> ModelGeometry {
+        let faces = self
+            .faces
+            .iter()
+            .zip(&flags.faces)
+            .map(|(v, &selected)| FaceVertex {
+                pos: v.pos,
+                normal: v.normal,
+                selected,
+                front: v.front,
+                back: v.back,
+            })
+            .collect();
+        let edges = self
+            .edges
+            .iter()
+            .zip(&flags.edges)
+            .map(|(v, &selected)| LineVertex {
+                pos: v.pos,
+                color: if selected > 0.5 {
+                    SELECTED_EDGE_COLOR
+                } else {
+                    v.color
+                },
+            })
+            .collect();
+        ModelGeometry {
+            faces,
+            edges,
+            guides: shown_guides(&self.guides, &flags.guides),
+        }
+    }
+}
+
+/// The guides of a `SceneBase` with the selected ones (`lit`, one per guide) in
+/// SELECTED_EDGE_COLOR.
+pub fn shown_guides(guides: &[GuideShape], lit: &[bool]) -> Vec<GuideShape> {
+    guides
+        .iter()
+        .zip(lit)
+        .map(|(g, &lit)| GuideShape {
+            color: if lit { SELECTED_EDGE_COLOR } else { g.color },
+            ..*g
+        })
+        .collect()
+}
+
+/// Where each selectable entity of the open context lies in a `SceneBase`'s lists, so a
+/// selection can be shown without rebuilding them. Each list is sorted by id.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Spans {
+    face_vertices: usize,
+    edge_vertices: usize,
+    guide_count: usize,
+    faces: Vec<(FaceId, Range<usize>)>,
+    edges: Vec<(EdgeId, Range<usize>)>,
+    /// Each guide's index.
+    guides: Vec<(GuideId, usize)>,
+    /// Everything an instance places, at any depth.
+    instances: Vec<(InstanceId, Placed)>,
+}
+
+/// The vertices and guides an instance places, as ranges of a `SceneBase`'s lists.
+#[derive(Clone, Debug, PartialEq)]
+struct Placed {
+    faces: Range<usize>,
+    edges: Range<usize>,
+    guides: Range<usize>,
+}
+
+/// What a selection lights up in a `SceneBase`: a flag per face vertex and per edge vertex (1
+/// selected, 0 not), as the renderer uploads them, and one per guide.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Flags {
+    pub faces: Vec<f32>,
+    pub edges: Vec<f32>,
+    pub guides: Vec<bool>,
+}
+
+impl Spans {
+    /// The flags for `selection`, ids of the open context the spans were built for. Ids not
+    /// found there, and vertices, light nothing.
+    pub fn flags(&self, selection: &BTreeSet<EntityId>) -> Flags {
+        let mut f = Flags {
+            faces: vec![0.0; self.face_vertices],
+            edges: vec![0.0; self.edge_vertices],
+            guides: vec![false; self.guide_count],
+        };
+        for id in selection {
+            match *id {
+                EntityId::Face(id) => {
+                    if let Some(r) = find(&self.faces, id) {
+                        f.faces[r.clone()].fill(1.0);
+                    }
+                }
+                EntityId::Edge(id) => {
+                    if let Some(r) = find(&self.edges, id) {
+                        f.edges[r.clone()].fill(1.0);
+                    }
+                }
+                EntityId::Guide(id) => {
+                    if let Some(&k) = find(&self.guides, id) {
+                        f.guides[k] = true;
+                    }
+                }
+                EntityId::Instance(id) => {
+                    if let Some(p) = find(&self.instances, id) {
+                        f.faces[p.faces.clone()].fill(1.0);
+                        f.edges[p.edges.clone()].fill(1.0);
+                        f.guides[p.guides.clone()].fill(true);
+                    }
+                }
+                EntityId::Vertex(_) => {}
+            }
+        }
+        f
+    }
+}
+
+/// The value stored for `id` in a list sorted by id.
+fn find<K: Ord + Copy, V>(list: &[(K, V)], id: K) -> Option<&V> {
+    list.binary_search_by_key(&id, |(k, _)| *k)
+        .ok()
+        .map(|i| &list[i].1)
+}
+
+/// The scene in root coordinates with the open instance `context` (see `scene_geometry`), with
+/// nothing selected. Each mesh is triangulated once, however often it is placed.
+pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
+    let parts = placed_parts(scene);
+    let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
     let mut walk = Walk {
         scene,
         context,
-        selection,
+        parts: &parts,
         path: Vec::new(),
-        g: &mut g,
+        base: SceneBase {
+            faces: Vec::with_capacity(faces),
+            edges: Vec::with_capacity(edges + 2 * BOX_EDGES.len()),
+            ..SceneBase::default()
+        },
     };
-    walk.mesh(MeshId::Root, DAffine3::IDENTITY, false, None);
+    walk.mesh(MeshId::Root, DAffine3::IDENTITY, None);
+    let mut base = walk.base;
     if !context.is_empty()
         && let Some((mesh, t)) = scene.resolve(context)
         && let Some([lo, hi]) = scene.bounds(mesh)
@@ -84,14 +265,23 @@ pub fn scene_geometry(
         };
         for (a, b) in BOX_EDGES {
             for k in [a, b] {
-                g.edges.push(LineVertex {
+                base.edges.push(LineVertex {
                     pos: corner(k),
                     color: CONTEXT_BOX_COLOR,
                 });
             }
         }
     }
-    g
+    let spans = &mut base.spans;
+    spans.face_vertices = base.faces.len();
+    spans.edge_vertices = base.edges.len();
+    spans.guide_count = base.guides.len();
+    // `Spans::flags` finds ids by binary search; meshes list their entities in id order.
+    debug_assert!(spans.faces.is_sorted_by_key(|(id, _)| *id));
+    debug_assert!(spans.edges.is_sorted_by_key(|(id, _)| *id));
+    debug_assert!(spans.guides.is_sorted_by_key(|(id, _)| *id));
+    debug_assert!(spans.instances.is_sorted_by_key(|(id, _)| *id));
+    base
 }
 
 /// Corner pairs of a box's edges; corner k has bit 0 for x, bit 1 for y, bit 2 for z.
@@ -110,103 +300,258 @@ const BOX_EDGES: [(usize, usize); 12] = [
     (3, 7),
 ];
 
+/// What a mesh draws wherever it is placed, in its own coordinates.
+struct MeshParts {
+    /// The triangles of every face, three corners each, wound counter-clockwise around the
+    /// face's normal.
+    corners: Vec<DVec3>,
+    faces: Vec<FacePart>,
+    /// The ends of the hard edges (soft edges are not drawn).
+    ends: Vec<DVec3>,
+    edges: Vec<(EdgeId, Range<usize>)>,
+}
+
+struct FacePart {
+    id: FaceId,
+    /// The face's triangle corners in `MeshParts::corners`.
+    corners: Range<usize>,
+    normal: DVec3,
+    /// The colors of the sides painted on the face itself; unpainted sides take the color of
+    /// the nearest painted instance placing them.
+    front: Option<[f32; 3]>,
+    back: Option<[f32; 3]>,
+}
+
+impl MeshParts {
+    fn of(scene: &Scene, model: &Model) -> Self {
+        // A face of n loop corners and h holes has n + 2h - 2 triangles.
+        let (mut face_count, mut triangles) = (0, 0);
+        for (_, f) in model.faces() {
+            let n: usize = f.outer.len() + f.holes.iter().map(Vec::len).sum::<usize>();
+            face_count += 1;
+            triangles += (n + 2 * f.holes.len()).saturating_sub(2);
+        }
+        let mut corners = Vec::with_capacity(3 * triangles);
+        let mut faces = Vec::with_capacity(face_count);
+        for (id, face) in model.faces() {
+            let start = corners.len();
+            for tri in model.triangulate(id).unwrap_or_default() {
+                corners.extend(tri);
+            }
+            faces.push(FacePart {
+                id,
+                corners: start..corners.len(),
+                normal: face.normal,
+                front: face
+                    .front
+                    .map(|m| side_color(scene, Some(m), DEFAULT_FRONT)),
+                back: face.back.map(|m| side_color(scene, Some(m), DEFAULT_BACK)),
+            });
+        }
+        let hard = model.edges().filter(|(_, e)| !e.soft).count();
+        let mut ends = Vec::with_capacity(2 * hard);
+        let mut edges = Vec::with_capacity(hard);
+        // Soft edges are hidden, selected or not: the faces around them read as one surface.
+        for (id, edge) in model.edges().filter(|(_, e)| !e.soft) {
+            let start = ends.len();
+            ends.extend(edge.v.iter().filter_map(|v| model.position(*v)));
+            edges.push((id, start..ends.len()));
+        }
+        MeshParts {
+            corners,
+            faces,
+            ends,
+            edges,
+        }
+    }
+}
+
+/// Below this many faces in the placed meshes, their parts are worked out on this thread alone.
+const PARALLEL_FACES: usize = 1000;
+
+/// Most threads that work out mesh parts.
+const MAX_THREADS: usize = 8;
+
+/// The parts of every mesh placed from the root, the root included. With many faces, the meshes
+/// are shared out among a few threads; the parts are the same either way.
+fn placed_parts(scene: &Scene) -> HashMap<MeshId, MeshParts> {
+    let mut meshes = vec![MeshId::Root];
+    let mut seen = HashSet::from([MeshId::Root]);
+    let mut k = 0;
+    while let Some(&id) = meshes.get(k) {
+        if let Some(model) = scene.mesh(id) {
+            for (_, instance) in model.instances() {
+                let def = MeshId::Definition(instance.definition);
+                if seen.insert(def) {
+                    meshes.push(def);
+                }
+            }
+        }
+        k += 1;
+    }
+    let models: Vec<(MeshId, &Model)> = meshes
+        .into_iter()
+        .filter_map(|id| Some((id, scene.mesh(id)?)))
+        .collect();
+    let faces: usize = models.iter().map(|(_, m)| m.faces().count()).sum();
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(MAX_THREADS)
+        .min(models.len());
+    if faces < PARALLEL_FACES || threads < 2 {
+        return models
+            .into_iter()
+            .map(|(id, m)| (id, MeshParts::of(scene, m)))
+            .collect();
+    }
+    // Each thread takes the next mesh nobody has taken, so big meshes do not hold one up.
+    let next = AtomicUsize::new(0);
+    let work = || {
+        let mut done = Vec::new();
+        while let Some(&(id, m)) = models.get(next.fetch_add(1, Ordering::Relaxed)) {
+            done.push((id, MeshParts::of(scene, m)));
+        }
+        done
+    };
+    std::thread::scope(|s| {
+        // A helper that cannot be started leaves its share to the others and to this thread.
+        let helpers: Vec<_> = (1..threads)
+            .filter_map(|_| std::thread::Builder::new().spawn_scoped(s, work).ok())
+            .collect();
+        let mut parts: HashMap<MeshId, MeshParts> = work().into_iter().collect();
+        for h in helpers {
+            parts.extend(h.join().expect("a mesh parts thread panicked"));
+        }
+        parts
+    })
+}
+
+/// How many face corners and edge ends one placement of mesh `id` draws, nested instances
+/// included; `memo` holds the meshes counted so far.
+fn drawn_count(
+    scene: &Scene,
+    parts: &HashMap<MeshId, MeshParts>,
+    id: MeshId,
+    memo: &mut HashMap<MeshId, (usize, usize)>,
+) -> (usize, usize) {
+    if let Some(&n) = memo.get(&id) {
+        return n;
+    }
+    let (Some(model), Some(p)) = (scene.mesh(id), parts.get(&id)) else {
+        return (0, 0);
+    };
+    let (mut faces, mut edges) = (p.corners.len(), p.ends.len());
+    for (_, instance) in model.instances() {
+        let (f, e) = drawn_count(scene, parts, MeshId::Definition(instance.definition), memo);
+        faces += f;
+        edges += e;
+    }
+    memo.insert(id, (faces, edges));
+    (faces, edges)
+}
+
 struct Walk<'a> {
     scene: &'a Scene,
     context: &'a [InstanceId],
-    selection: &'a BTreeSet<EntityId>,
+    /// Every placed mesh's parts.
+    parts: &'a HashMap<MeshId, MeshParts>,
     /// Instances from the root down to the mesh being walked.
     path: Vec<InstanceId>,
-    g: &'a mut ModelGeometry,
+    base: SceneBase,
 }
 
 impl Walk<'_> {
-    /// Adds a mesh placed by `t`; `lit` highlights all of it (it is inside a selected instance)
-    /// and `inherited` is the material of the nearest painted instance placing it.
-    fn mesh(&mut self, id: MeshId, t: DAffine3, lit: bool, inherited: Option<MaterialId>) {
-        let Some(model) = self.scene.mesh(id) else {
+    /// Adds a mesh placed by `t`; `inherited` is the material of the nearest painted instance
+    /// placing it.
+    fn mesh(&mut self, id: MeshId, t: DAffine3, inherited: Option<MaterialId>) {
+        let (Some(model), Some(parts)) = (self.scene.mesh(id), self.parts.get(&id)) else {
             return;
         };
         // Selection ids refer to the open context's placement only, not to other placements
         // of the same component.
         let open = self.path == self.context;
         let inside = self.path.starts_with(self.context);
-        let selected = |e: EntityId| lit || (open && self.selection.contains(&e));
         // Normals follow the inverse transpose, right for any linear map (placements turn and
         // move, so it is the rotation itself for now).
         let normal_map = t.matrix3.inverse().transpose();
         // A mirroring placement turns triangles inside out; swapping two corners restores the
         // winding, so the front side (and the headlight) stay right.
         let mirrored = t.matrix3.determinant() < 0.0;
-        for (fid, face) in model.faces() {
+        let front = side_color(self.scene, inherited, DEFAULT_FRONT);
+        let back = side_color(self.scene, inherited, DEFAULT_BACK);
+        let base = &mut self.base;
+        for face in &parts.faces {
+            let start = base.faces.len();
             let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
-            let flag = if selected(EntityId::Face(fid)) {
-                1.0
-            } else {
-                0.0
+            let front = face.front.unwrap_or(front);
+            let back = face.back.unwrap_or(back);
+            let corner = |p: DVec3| BaseFaceVertex {
+                pos: t.transform_point3(p).as_vec3().to_array(),
+                normal,
+                front,
+                back,
             };
-            let front = side_color(self.scene, face.front.or(inherited), DEFAULT_FRONT);
-            let back = side_color(self.scene, face.back.or(inherited), DEFAULT_BACK);
-            for mut tri in model.triangulate(fid).unwrap_or_default() {
-                if mirrored {
-                    tri.swap(1, 2);
-                }
-                for p in tri {
-                    self.g.faces.push(FaceVertex {
-                        pos: t.transform_point3(p).as_vec3().to_array(),
-                        normal,
-                        selected: flag,
-                        front,
-                        back,
-                    });
-                }
+            let (tris, _) = parts.corners[face.corners.clone()].as_chunks::<3>();
+            for &[a, b, c] in tris {
+                let tri = if mirrored { [a, c, b] } else { [a, b, c] };
+                base.faces.extend(tri.map(corner));
+            }
+            if open {
+                base.spans.faces.push((face.id, start..base.faces.len()));
             }
         }
-        // Soft edges are hidden, selected or not: the faces around them read as one surface.
-        for (eid, edge) in model.edges().filter(|(_, e)| !e.soft) {
-            let color = if selected(EntityId::Edge(eid)) {
-                SELECTED_EDGE_COLOR
-            } else if inside {
-                EDGE_COLOR
-            } else {
-                FADED_EDGE_COLOR
-            };
-            for v in edge.v {
-                if let Some(p) = model.position(v) {
-                    self.g.edges.push(LineVertex {
-                        pos: t.transform_point3(p).as_vec3().to_array(),
-                        color,
-                    });
-                }
+        let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
+        for (eid, ends) in &parts.edges {
+            let start = base.edges.len();
+            base.edges
+                .extend(parts.ends[ends.clone()].iter().map(|p| LineVertex {
+                    pos: t.transform_point3(*p).as_vec3().to_array(),
+                    color,
+                }));
+            if open {
+                base.spans.edges.push((*eid, start..base.edges.len()));
             }
         }
+        let color = if inside {
+            GUIDE_COLOR
+        } else {
+            FADED_GUIDE_COLOR
+        };
         for (gid, guide) in model.guides() {
-            let color = if selected(EntityId::Guide(gid)) {
-                SELECTED_EDGE_COLOR
-            } else if inside {
-                GUIDE_COLOR
-            } else {
-                FADED_GUIDE_COLOR
-            };
             let (point, direction) = match guide.transformed(t) {
                 Guide::Line { point, direction } => (point, Some(direction)),
                 Guide::Point { position } => (position, None),
             };
-            self.g.guides.push(GuideShape {
+            if open {
+                base.spans.guides.push((gid, base.guides.len()));
+            }
+            base.guides.push(GuideShape {
                 point,
                 direction,
                 color,
             });
         }
         for (iid, instance) in model.instances() {
-            let lit = selected(EntityId::Instance(iid));
+            let start = (
+                self.base.faces.len(),
+                self.base.edges.len(),
+                self.base.guides.len(),
+            );
             self.path.push(iid);
             self.mesh(
                 MeshId::Definition(instance.definition),
                 t * instance.transform,
-                lit,
                 instance.material.or(inherited),
             );
             self.path.pop();
+            if open {
+                let placed = Placed {
+                    faces: start.0..self.base.faces.len(),
+                    edges: start.1..self.base.edges.len(),
+                    guides: start.2..self.base.guides.len(),
+                };
+                self.base.spans.instances.push((iid, placed));
+            }
         }
     }
 }
@@ -511,5 +856,497 @@ mod tests {
         assert_eq!(count(EDGE_COLOR), 8, "the open square's edges");
         assert_eq!(count(FADED_EDGE_COLOR), 8, "the other square's edges");
         assert_eq!(count(CONTEXT_BOX_COLOR), 24, "twelve box edges");
+    }
+
+    /// The single pass `scene_geometry` made before the base and the selection flags were
+    /// split, kept to check that the split changes nothing.
+    mod single_pass {
+        use super::super::*;
+
+        pub fn scene_geometry(
+            scene: &Scene,
+            context: &[InstanceId],
+            selection: &BTreeSet<EntityId>,
+        ) -> ModelGeometry {
+            let mut g = ModelGeometry::default();
+            let mut walk = Walk {
+                scene,
+                context,
+                selection,
+                path: Vec::new(),
+                g: &mut g,
+            };
+            walk.mesh(MeshId::Root, DAffine3::IDENTITY, false, None);
+            if !context.is_empty()
+                && let Some((mesh, t)) = scene.resolve(context)
+                && let Some([lo, hi]) = scene.bounds(mesh)
+            {
+                let corner = |k: usize| {
+                    let c = DVec3::new(
+                        if k & 1 == 0 { lo.x } else { hi.x },
+                        if k & 2 == 0 { lo.y } else { hi.y },
+                        if k & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    t.transform_point3(c).as_vec3().to_array()
+                };
+                for (a, b) in BOX_EDGES {
+                    for k in [a, b] {
+                        g.edges.push(LineVertex {
+                            pos: corner(k),
+                            color: CONTEXT_BOX_COLOR,
+                        });
+                    }
+                }
+            }
+            g
+        }
+
+        struct Walk<'a> {
+            scene: &'a Scene,
+            context: &'a [InstanceId],
+            selection: &'a BTreeSet<EntityId>,
+            path: Vec<InstanceId>,
+            g: &'a mut ModelGeometry,
+        }
+
+        impl Walk<'_> {
+            fn mesh(&mut self, id: MeshId, t: DAffine3, lit: bool, inherited: Option<MaterialId>) {
+                let Some(model) = self.scene.mesh(id) else {
+                    return;
+                };
+                let open = self.path == self.context;
+                let inside = self.path.starts_with(self.context);
+                let selected = |e: EntityId| lit || (open && self.selection.contains(&e));
+                let normal_map = t.matrix3.inverse().transpose();
+                let mirrored = t.matrix3.determinant() < 0.0;
+                for (fid, face) in model.faces() {
+                    let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
+                    let flag = if selected(EntityId::Face(fid)) {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    let front = side_color(self.scene, face.front.or(inherited), DEFAULT_FRONT);
+                    let back = side_color(self.scene, face.back.or(inherited), DEFAULT_BACK);
+                    for mut tri in model.triangulate(fid).unwrap_or_default() {
+                        if mirrored {
+                            tri.swap(1, 2);
+                        }
+                        for p in tri {
+                            self.g.faces.push(FaceVertex {
+                                pos: t.transform_point3(p).as_vec3().to_array(),
+                                normal,
+                                selected: flag,
+                                front,
+                                back,
+                            });
+                        }
+                    }
+                }
+                for (eid, edge) in model.edges().filter(|(_, e)| !e.soft) {
+                    let color = if selected(EntityId::Edge(eid)) {
+                        SELECTED_EDGE_COLOR
+                    } else if inside {
+                        EDGE_COLOR
+                    } else {
+                        FADED_EDGE_COLOR
+                    };
+                    for v in edge.v {
+                        if let Some(p) = model.position(v) {
+                            self.g.edges.push(LineVertex {
+                                pos: t.transform_point3(p).as_vec3().to_array(),
+                                color,
+                            });
+                        }
+                    }
+                }
+                for (gid, guide) in model.guides() {
+                    let color = if selected(EntityId::Guide(gid)) {
+                        SELECTED_EDGE_COLOR
+                    } else if inside {
+                        GUIDE_COLOR
+                    } else {
+                        FADED_GUIDE_COLOR
+                    };
+                    let (point, direction) = match guide.transformed(t) {
+                        Guide::Line { point, direction } => (point, Some(direction)),
+                        Guide::Point { position } => (position, None),
+                    };
+                    self.g.guides.push(GuideShape {
+                        point,
+                        direction,
+                        color,
+                    });
+                }
+                for (iid, instance) in model.instances() {
+                    let lit = selected(EntityId::Instance(iid));
+                    self.path.push(iid);
+                    self.mesh(
+                        MeshId::Definition(instance.definition),
+                        t * instance.transform,
+                        lit,
+                        instance.material.or(inherited),
+                    );
+                    self.path.pop();
+                }
+            }
+        }
+    }
+
+    fn created<T>(c: &kernel::SceneChange, pick: impl Fn(EntityId) -> Option<T>) -> Vec<T> {
+        c.summary()
+            .created
+            .iter()
+            .filter_map(|e| pick(*e))
+            .collect()
+    }
+
+    /// The instance in `mesh` that is not one of `old`.
+    fn new_instance(s: &Scene, mesh: MeshId, old: &[InstanceId]) -> InstanceId {
+        s.mesh(mesh)
+            .unwrap()
+            .instances()
+            .map(|(id, _)| id)
+            .find(|id| !old.contains(id))
+            .unwrap()
+    }
+
+    /// A box component placed four times (turned, mirrored and scaled, painted), two of them
+    /// inside a "tree" component that also holds a face with a hole, a curved (soft-edged) solid,
+    /// a guide and a group; the tree is placed three times (turned, and mirrored and painted).
+    /// Returns the scene and the contexts to look from.
+    fn forest() -> (Scene, Vec<Vec<InstanceId>>) {
+        let mut root = Model::new();
+        let base = [DVec3::ZERO, DVec3::X, DVec3::new(1.0, 1.0, 0.0), DVec3::Y];
+        root.add_polygon(&base).unwrap();
+        let bottom = root.faces().next().unwrap().0;
+        root.push_pull(bottom, -1.0).unwrap();
+        let mut s = Scene::from_root(root);
+        let (red, _) = s.add_material("Red", [200, 30, 30]).unwrap();
+        let (green, _) = s.add_material("Green", [30, 160, 40]).unwrap();
+        let (blue, _) = s.add_material("Blue", [40, 60, 220]).unwrap();
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (leaf, _) = s
+            .make_group(
+                MeshId::Root,
+                &edges,
+                &faces,
+                &[],
+                DefinitionKind::Component,
+                "Leaf",
+            )
+            .unwrap();
+        let leaf_def = MeshId::Definition(s.root().instance(leaf).unwrap().definition);
+        let top = s
+            .mesh(leaf_def)
+            .unwrap()
+            .faces()
+            .find(|(_, f)| f.normal.z > 0.5)
+            .unwrap()
+            .0;
+        s.paint(leaf_def, &[top], &[], kernel::Side::Front, Some(red))
+            .unwrap();
+        s.edit(leaf_def, |m| {
+            m.add_guide(Guide::Point {
+                position: DVec3::new(0.5, 0.5, 0.5),
+            })
+        })
+        .unwrap();
+        // Two more leaves, one turned and one mirrored and stretched.
+        s.copy_instances(MeshId::Root, &[leaf], DVec3::new(3.0, 0.0, 0.0), 1)
+            .unwrap();
+        let turned = new_instance(&s, MeshId::Root, &[leaf]);
+        let turn = DAffine3::from_translation(DVec3::new(3.0, 0.0, 0.0))
+            * DAffine3::from_rotation_z(0.6)
+            * DAffine3::from_rotation_x(0.3)
+            * DAffine3::from_translation(DVec3::new(-3.0, 0.0, 0.0));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[turned], turn)))
+            .unwrap();
+        s.copy_instances(MeshId::Root, &[leaf], DVec3::new(0.0, 3.0, 0.0), 1)
+            .unwrap();
+        let mirrored = new_instance(&s, MeshId::Root, &[leaf, turned]);
+        let mirror = DAffine3::from_translation(DVec3::new(0.0, 3.0, 0.0))
+            * DAffine3::from_scale(DVec3::new(-1.0, 1.5, 1.0))
+            * DAffine3::from_translation(DVec3::new(0.0, -3.0, 0.0));
+        s.edit(MeshId::Root, |m| {
+            Ok(m.transform_instances(&[mirrored], mirror))
+        })
+        .unwrap();
+        // A ground face with a hole, a curved solid (soft sides) and a guide line.
+        let at = |x: f64, y: f64| DVec3::new(x, y, 0.0);
+        s.edit(MeshId::Root, |m| {
+            m.add_polygon(&[at(5.0, 0.0), at(9.0, 0.0), at(9.0, 4.0), at(5.0, 4.0)])
+        })
+        .unwrap();
+        s.edit(MeshId::Root, |m| {
+            m.add_polygon(&[at(6.0, 1.0), at(8.0, 1.0), at(8.0, 3.0), at(6.0, 3.0)])
+        })
+        .unwrap();
+        let curve = s
+            .edit(MeshId::Root, |m| {
+                m.add_curve(&[at(5.0, 6.0), at(6.0, 6.0), at(5.5, 6.8)], true)
+            })
+            .unwrap();
+        let cap = created(&curve, |e| match e {
+            EntityId::Face(f) => Some(f),
+            _ => None,
+        })[0];
+        s.edit(MeshId::Root, |m| m.push_pull(cap, 1.0)).unwrap();
+        s.edit(MeshId::Root, |m| {
+            m.add_guide(Guide::Line {
+                point: at(0.0, -1.0),
+                direction: DVec3::X,
+            })
+        })
+        .unwrap();
+        assert!(s.root().faces().any(|(_, f)| f.holes.len() == 1));
+        assert!(s.root().edges().any(|(_, e)| e.soft));
+        // The ground pieces become a group inside the tree.
+        let ground: Vec<_> = s
+            .root()
+            .faces()
+            .filter(|(_, f)| f.normal.z.abs() > 0.5)
+            .filter(|(id, _)| {
+                s.root().face(*id).unwrap().outer.iter().all(|v| {
+                    s.root()
+                        .position(*v)
+                        .is_some_and(|p| p.x > 4.5 && p.y < 4.5)
+                })
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let ground_edges: Vec<_> = s
+            .root()
+            .edges()
+            .filter(|(_, e)| {
+                e.v.iter().all(|v| {
+                    s.root()
+                        .position(*v)
+                        .is_some_and(|p| p.x > 4.5 && p.y < 4.5)
+                })
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let (group, _) = s
+            .make_group(
+                MeshId::Root,
+                &ground_edges,
+                &ground,
+                &[],
+                DefinitionKind::Group,
+                "Ground",
+            )
+            .unwrap();
+        let rest_edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let rest_faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (tree, _) = s
+            .make_group(
+                MeshId::Root,
+                &rest_edges,
+                &rest_faces,
+                &[turned, mirrored, group],
+                DefinitionKind::Component,
+                "Tree",
+            )
+            .unwrap();
+        let tree_def = MeshId::Definition(s.root().instance(tree).unwrap().definition);
+        // One leaf stays in the root, painted; the tree is placed thrice.
+        s.copy_instances(MeshId::Root, &[leaf], DVec3::new(-3.0, 0.0, 0.0), 1)
+            .unwrap();
+        let lone = new_instance(&s, MeshId::Root, &[leaf, tree]);
+        s.paint(MeshId::Root, &[], &[lone], kernel::Side::Front, Some(green))
+            .unwrap();
+        s.copy_instances(MeshId::Root, &[tree], DVec3::new(0.0, 12.0, 0.0), 1)
+            .unwrap();
+        let tree2 = new_instance(&s, MeshId::Root, &[leaf, tree, lone]);
+        let spin = DAffine3::from_translation(DVec3::new(0.0, 12.0, 0.0))
+            * DAffine3::from_rotation_z(1.1)
+            * DAffine3::from_translation(DVec3::new(0.0, -12.0, 0.0));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[tree2], spin)))
+            .unwrap();
+        s.copy_instances(MeshId::Root, &[tree], DVec3::new(20.0, 0.0, 0.0), 1)
+            .unwrap();
+        let tree3 = new_instance(&s, MeshId::Root, &[leaf, tree, lone, tree2]);
+        let flip = DAffine3::from_translation(DVec3::new(20.0, 0.0, 0.0))
+            * DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0))
+            * DAffine3::from_translation(DVec3::new(-20.0, 0.0, 0.0));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[tree3], flip)))
+            .unwrap();
+        s.paint(MeshId::Root, &[], &[tree3], kernel::Side::Front, Some(blue))
+            .unwrap();
+        s.validate().unwrap();
+        let inner: Vec<_> = s
+            .mesh(tree_def)
+            .unwrap()
+            .instances()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(inner.len(), 3, "two leaves and the group");
+        let contexts = vec![
+            vec![],
+            vec![tree],
+            vec![tree2],
+            vec![tree3],
+            vec![lone],
+            vec![tree, inner[0]],
+            vec![tree3, inner[1]],
+            vec![tree2, inner[2]],
+            vec![InstanceId(u64::MAX)],
+        ];
+        (s, contexts)
+    }
+
+    /// Selections to try in `context`: none, everything, parts of each kind, each instance
+    /// alone, and ids that are not in the open mesh.
+    fn selections(s: &Scene, context: &[InstanceId]) -> Vec<BTreeSet<EntityId>> {
+        let mesh = s.resolve(context).map_or(MeshId::Root, |(m, _)| m);
+        let m = s.mesh(mesh).unwrap();
+        let all: BTreeSet<EntityId> = m
+            .vertices()
+            .map(|(id, _)| EntityId::Vertex(id))
+            .chain(m.edges().map(|(id, _)| EntityId::Edge(id)))
+            .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
+            .chain(m.instances().map(|(id, _)| EntityId::Instance(id)))
+            .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
+            .collect();
+        let mut some: BTreeSet<EntityId> = m
+            .faces()
+            .step_by(2)
+            .map(|(id, _)| EntityId::Face(id))
+            .collect();
+        some.extend(m.edges().step_by(3).map(|(id, _)| EntityId::Edge(id)));
+        some.extend(m.guides().map(|(id, _)| EntityId::Guide(id)));
+        let mut out = vec![BTreeSet::new(), all, some];
+        out.extend(
+            m.instances()
+                .map(|(id, _)| BTreeSet::from([EntityId::Instance(id)])),
+        );
+        // The root's ids, stale unless the root is open, plus ids nothing has.
+        let mut elsewhere: BTreeSet<EntityId> = s
+            .root()
+            .faces()
+            .map(|(id, _)| EntityId::Face(id))
+            .chain(s.root().instances().map(|(id, _)| EntityId::Instance(id)))
+            .collect();
+        elsewhere.extend([
+            EntityId::Face(FaceId(u64::MAX)),
+            EntityId::Edge(EdgeId(u64::MAX)),
+            EntityId::Instance(InstanceId(u64::MAX)),
+            EntityId::Guide(GuideId(u64::MAX)),
+        ]);
+        out.push(elsewhere);
+        out
+    }
+
+    #[test]
+    fn base_and_selection_flags_match_the_single_pass() {
+        let (s, contexts) = forest();
+        let mut lit_any = 0;
+        for context in &contexts {
+            let base = scene_base(&s, context);
+            for selection in selections(&s, context) {
+                let expected = single_pass::scene_geometry(&s, context, &selection);
+                let flags = base.spans.flags(&selection);
+                assert_eq!(
+                    base.with_flags(&flags),
+                    expected,
+                    "context {context:?}, selection {selection:?}"
+                );
+                assert_eq!(scene_geometry(&s, context, &selection), expected);
+                if flags.faces.contains(&1.0) {
+                    lit_any += 1;
+                }
+            }
+        }
+        assert!(lit_any > 20, "selections lit something: {lit_any}");
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        let (cos_tilt, n) = (0.3f64.cos() as f32, g.faces.len());
+        assert!(n > 400, "every placement drawn: {n} corners");
+        assert!(
+            g.faces
+                .iter()
+                .any(|v| (v.normal[2] - cos_tilt).abs() < 1e-6),
+            "the tilted leaf's top tilts"
+        );
+        for color in [[200, 30, 30], [30, 160, 40], [40, 60, 220]] {
+            let c = color.map(|c| f32::from(c as u8) / 255.0);
+            assert!(g.faces.iter().any(|v| v.front == c), "{color:?} is shown");
+        }
+    }
+
+    #[test]
+    fn meshes_shared_out_among_threads_give_the_same_geometry() {
+        // 24 groups of a pulled 48-gon, 50 faces each: enough faces for helper threads. A copy
+        // of a group gets a mesh of its own.
+        let ring: Vec<DVec3> = (0..48)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 48.0;
+                DVec3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        let mut s = Scene::new();
+        let made = s.edit(MeshId::Root, |m| m.add_curve(&ring, true)).unwrap();
+        let cap = created(&made, |e| match e {
+            EntityId::Face(f) => Some(f),
+            _ => None,
+        })[0];
+        s.edit(MeshId::Root, |m| m.push_pull(cap, 1.5)).unwrap();
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (post, _) = s
+            .make_group(
+                MeshId::Root,
+                &edges,
+                &faces,
+                &[],
+                DefinitionKind::Group,
+                "Post",
+            )
+            .unwrap();
+        s.copy_instances(MeshId::Root, &[post], DVec3::new(3.0, 0.5, 0.0), 23)
+            .unwrap();
+        assert_eq!(s.definitions().count(), 24);
+        let faces: usize = s.meshes().map(|(_, m)| m.faces().count()).sum();
+        assert!(faces >= PARALLEL_FACES, "{faces} faces");
+        let posts: Vec<InstanceId> = s.root().instances().map(|(id, _)| id).collect();
+        let picked = BTreeSet::from([EntityId::Instance(posts[3]), EntityId::Instance(posts[17])]);
+        for context in [vec![], vec![posts[5]]] {
+            for selection in [BTreeSet::new(), picked.clone()] {
+                assert_eq!(
+                    scene_geometry(&s, &context, &selection),
+                    single_pass::scene_geometry(&s, &context, &selection),
+                    "context {context:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flags_ignore_vertices_and_ids_outside_the_open_mesh() {
+        let (s, contexts) = forest();
+        let tree = &contexts[1];
+        let base = scene_base(&s, tree);
+        let root_ids: BTreeSet<EntityId> = s
+            .root()
+            .faces()
+            .map(|(id, _)| EntityId::Face(id))
+            .chain(s.root().instances().map(|(id, _)| EntityId::Instance(id)))
+            .collect();
+        assert!(!root_ids.is_empty());
+        let none = base.spans.flags(&BTreeSet::new());
+        assert_eq!(base.spans.flags(&root_ids), none);
+        let (mesh, _) = s.resolve(tree).unwrap();
+        let vertices: BTreeSet<EntityId> = s
+            .mesh(mesh)
+            .unwrap()
+            .vertices()
+            .map(|(id, _)| EntityId::Vertex(id))
+            .collect();
+        assert_eq!(base.spans.flags(&vertices), none);
+        assert_eq!(none.faces.len(), base.faces.len());
+        assert_eq!(none.edges.len(), base.edges.len());
+        assert_eq!(none.guides.len(), base.guides.len());
+        assert!(none.faces.iter().chain(&none.edges).all(|f| *f == 0.0));
     }
 }

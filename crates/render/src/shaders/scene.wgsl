@@ -28,10 +28,24 @@ fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
     return out;
 }
 
+// SELECTED_EDGE_COLOR in scene.rs.
+const SELECTED_EDGE: vec4<f32> = vec4<f32>(0.10, 0.35, 0.95, 1.0);
+
 // Model edges: pulled toward the camera by 0.05% of clip depth, enough to win against the faces
-// they bound at this depth precision without showing through faces in front of them.
+// they bound at this depth precision without showing through faces in front of them. A
+// selected edge (flag 1, from the second vertex buffer) is drawn in SELECTED_EDGE.
 @vertex
-fn vs_edge(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
+fn vs_edge(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) selected: f32,
+) -> LineOut {
+    return line_vertex(pos, select(color, SELECTED_EDGE, selected > 0.5), 1.0005);
+}
+
+// Guides: pulled toward the camera like model edges; their color already shows the selection.
+@vertex
+fn vs_guide(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
     return line_vertex(pos, color, 1.0005);
 }
 
@@ -63,6 +77,7 @@ struct FaceOut {
 
 const SELECTED: vec3<f32> = vec3<f32>(0.25, 0.45, 0.95);
 
+// `selected` (1 or 0) comes from the second vertex buffer.
 @vertex
 fn vs_face(
     @location(0) pos: vec3<f32>,

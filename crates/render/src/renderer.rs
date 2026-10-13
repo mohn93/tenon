@@ -6,14 +6,18 @@ use wgpu::util::DeviceExt;
 
 use crate::grid::{BACKGROUND, LineVertex, flat_ground_lines, vertical_axis_lines};
 use crate::guides::{GuideShape, guide_lines};
-use crate::scene::{FaceVertex, scene_geometry};
+use crate::scene::{BaseFaceVertex, Spans, scene_base, shown_guides};
 
 pub const SAMPLE_COUNT: u32 = 4;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-const FACE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Float32x3, 4 => Float32x3];
+const FACE_ATTRIBS: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3];
+/// The selection flag of a face or edge vertex, from a second vertex buffer (see
+/// `scene::Flags`).
+const FLAG_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Float32];
 
 /// Camera data shared by every pipeline (matches `Uniforms` in scene.wgsl).
 #[repr(C)]
@@ -77,10 +81,12 @@ struct Targets {
     depth: wgpu::TextureView,
 }
 
-/// A vertex buffer and how many vertices it holds.
+/// A vertex buffer and how many vertices it holds, with, for model faces and edges, a second
+/// buffer holding each vertex's selection flag.
 struct Mesh {
     buffer: wgpu::Buffer,
     count: u32,
+    flags: Option<wgpu::Buffer>,
 }
 
 pub struct Renderer {
@@ -91,6 +97,7 @@ pub struct Renderer {
     ground_pipeline: wgpu::RenderPipeline,
     face_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
+    guide_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -98,7 +105,12 @@ pub struct Renderer {
     vertical_axis: Mesh,
     faces: Option<Mesh>,
     edges: Option<Mesh>,
-    /// Guides in root coordinates; their lines depend on the camera, so they are built per frame.
+    /// Where the open context's entities lie in `faces`, `edges` and `base_guides`.
+    spans: Spans,
+    /// Guides in root coordinates with nothing selected.
+    base_guides: Vec<GuideShape>,
+    /// The guides with the selection shown; their lines depend on the camera, so they are
+    /// built per frame.
     guides: Vec<GuideShape>,
     targets: Option<Targets>,
 }
@@ -137,10 +149,18 @@ impl Renderer {
             attributes: &LINE_ATTRIBS,
         };
         let face_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<FaceVertex>() as u64,
+            array_stride: std::mem::size_of::<BaseFaceVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &FACE_ATTRIBS,
         };
+        let flag_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<f32>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &FLAG_ATTRIBS,
+        };
+        let lines_only = [Some(line_layout.clone())];
+        let flagged_faces = [Some(face_layout), Some(flag_layout.clone())];
+        let flagged_lines = [Some(line_layout), Some(flag_layout)];
         let tested = DepthUse {
             write: true,
             compare: wgpu::CompareFunction::GreaterEqual,
@@ -148,7 +168,7 @@ impl Renderer {
         let pipeline = |label: &str,
                         vertex_entry: &str,
                         fragment_entry: &str,
-                        buffer: &wgpu::VertexBufferLayout,
+                        buffers: &[Option<wgpu::VertexBufferLayout>],
                         topology: wgpu::PrimitiveTopology,
                         depth: DepthUse| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -158,7 +178,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(vertex_entry),
                     compilation_options: Default::default(),
-                    buffers: &[Some(buffer.clone())],
+                    buffers,
                 },
                 primitive: wgpu::PrimitiveState {
                     topology,
@@ -195,26 +215,20 @@ impl Renderer {
             "flat ground",
             "vs_overlay",
             "fs_line",
-            &line_layout,
+            &lines_only,
             lines,
             DepthUse {
                 write: false,
                 compare: wgpu::CompareFunction::Always,
             },
         );
-        let ground_pipeline = pipeline(
-            "ground",
-            "vs_ground",
-            "fs_line",
-            &line_layout,
-            lines,
-            tested,
-        );
+        let ground_pipeline =
+            pipeline("ground", "vs_ground", "fs_line", &lines_only, lines, tested);
         let face_pipeline = pipeline(
             "faces",
             "vs_face",
             "fs_face",
-            &face_layout,
+            &flagged_faces,
             wgpu::PrimitiveTopology::TriangleList,
             DepthUse {
                 write: true,
@@ -225,7 +239,18 @@ impl Renderer {
             "edges",
             "vs_edge",
             "fs_line",
-            &line_layout,
+            &flagged_lines,
+            lines,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::GreaterEqual,
+            },
+        );
+        let guide_pipeline = pipeline(
+            "guides",
+            "vs_guide",
+            "fs_line",
+            &lines_only,
             lines,
             DepthUse {
                 write: true,
@@ -236,7 +261,7 @@ impl Renderer {
             "overlay",
             "vs_overlay",
             "fs_line",
-            &line_layout,
+            &lines_only,
             lines,
             DepthUse {
                 write: false,
@@ -271,6 +296,7 @@ impl Renderer {
             ground_pipeline,
             face_pipeline,
             edge_pipeline,
+            guide_pipeline,
             overlay_pipeline,
             uniforms,
             bind_group,
@@ -278,24 +304,47 @@ impl Renderer {
             vertical_axis,
             faces: None,
             edges: None,
+            spans: Spans::default(),
+            base_guides: Vec::new(),
             guides: Vec::new(),
             targets: None,
         }
     }
 
     /// Rebuilds the face and edge buffers from the scene, with the open context `context` and
-    /// `selection` shown (see `scene_geometry`). Call when the model, the open context or the
-    /// selection changes.
+    /// `selection` shown (see `scene::scene_geometry`): `set_model` then `set_selection`.
     pub fn set_scene(
         &mut self,
         scene: &Scene,
         context: &[InstanceId],
         selection: &BTreeSet<EntityId>,
     ) {
-        let g = scene_geometry(scene, context, selection);
-        self.faces = mesh(&self.device, "faces", &g.faces);
-        self.edges = mesh(&self.device, "edges", &g.edges);
-        self.guides = g.guides;
+        self.set_model(scene, context);
+        self.set_selection(selection);
+    }
+
+    /// Rebuilds the face and edge buffers from the scene with the open context `context`, with
+    /// nothing selected until `set_selection`. Call when the model or the open context changes.
+    pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
+        let base = scene_base(scene, context);
+        self.faces = flagged_mesh(&self.device, "faces", &base.faces);
+        self.edges = flagged_mesh(&self.device, "edges", &base.edges);
+        self.spans = base.spans;
+        self.guides = base.guides.clone();
+        self.base_guides = base.guides;
+    }
+
+    /// Shows `selection`, ids of the open context given to the last `set_model`, by rewriting
+    /// the selection flags only. Call when just the selection changes.
+    pub fn set_selection(&mut self, selection: &BTreeSet<EntityId>) {
+        let flags = self.spans.flags(selection);
+        for (mesh, flags) in [(&self.faces, &flags.faces), (&self.edges, &flags.edges)] {
+            if let Some(buffer) = mesh.as_ref().and_then(|m| m.flags.as_ref()) {
+                self.queue
+                    .write_buffer(buffer, 0, bytemuck::cast_slice(flags));
+            }
+        }
+        self.guides = shown_guides(&self.base_guides, &flags.guides);
     }
 
     /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything) over the
@@ -374,13 +423,16 @@ impl Renderer {
                     (&self.ground_pipeline, Some(&self.vertical_axis)),
                     (&self.face_pipeline, self.faces.as_ref()),
                     (&self.edge_pipeline, self.edges.as_ref()),
-                    (&self.edge_pipeline, guides.as_ref()),
+                    (&self.guide_pipeline, guides.as_ref()),
                     (&self.overlay_pipeline, overlay.as_ref()),
                 ];
                 for (pipeline, mesh) in layers {
                     if let Some(mesh) = mesh {
                         pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, mesh.buffer.slice(..));
+                        if let Some(flags) = &mesh.flags {
+                            pass.set_vertex_buffer(1, flags.slice(..));
+                        }
                         pass.draw(0..mesh.count, 0..1);
                     }
                 }
@@ -429,5 +481,23 @@ fn mesh<T: bytemuck::Pod>(device: &wgpu::Device, label: &str, vertices: &[T]) ->
     Some(Mesh {
         buffer,
         count: vertices.len() as u32,
+        flags: None,
     })
+}
+
+/// Uploads vertices with a flag buffer beside them, every flag 0 (wgpu zeroes new buffers),
+/// or None when there are none to draw.
+fn flagged_mesh<T: bytemuck::Pod>(
+    device: &wgpu::Device,
+    label: &str,
+    vertices: &[T],
+) -> Option<Mesh> {
+    let mut mesh = mesh(device, label, vertices)?;
+    mesh.flags = Some(device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (vertices.len() * std::mem::size_of::<f32>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    }));
+    Some(mesh)
 }

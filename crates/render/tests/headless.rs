@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
-use kernel::{EntityId, MeshId, Model, Scene, Side};
+use kernel::{DefinitionKind, EntityId, InstanceId, MeshId, Model, Scene, Side};
 use render::grid::{BACKGROUND, LineVertex};
 use render::{Renderer, Viewport};
 use session::Camera;
@@ -52,72 +52,109 @@ fn render_scene_with(
     viewport: Viewport,
     overlay: &[LineVertex],
 ) -> Option<Vec<u8>> {
-    let Some((device, queue)) = gpu() else {
+    let Some(screen) = Offscreen::new() else {
         eprintln!("no GPU adapter, skipping");
         return None;
     };
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("offscreen"),
-        size: wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut renderer = Renderer::new(&device, &queue, format);
+    let mut renderer = screen.renderer();
     renderer.set_scene(scene, &[], selection);
-    renderer.render_in(&view, (W, H), viewport, camera, overlay);
+    Some(screen.draw(&mut renderer, camera, viewport, overlay))
+}
 
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback"),
-        size: (W * H * 4) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(W * 4),
-                rows_per_image: Some(H),
+/// A W x H texture to render into and read back.
+struct Offscreen {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+impl Offscreen {
+    /// None without a GPU.
+    fn new() -> Option<Self> {
+        let (device, queue) = gpu()?;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen"),
+            size: wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
             },
-        },
-        wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit([encoder.finish()]);
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("poll");
-    let pixels = buffer
-        .slice(..)
-        .get_mapped_range()
-        .expect("mapped range")
-        .to_vec();
-    Some(pixels)
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Some(Self {
+            device,
+            queue,
+            texture,
+            view,
+        })
+    }
+
+    fn renderer(&self) -> Renderer {
+        Renderer::new(&self.device, &self.queue, FORMAT)
+    }
+
+    /// Draws a frame with `renderer` and returns tightly packed RGBA8 pixels.
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        camera: &Camera,
+        viewport: Viewport,
+        overlay: &[LineVertex],
+    ) -> Vec<u8> {
+        let (device, queue, texture) = (&self.device, &self.queue, &self.texture);
+        renderer.render_in(&self.view, (W, H), viewport, camera, overlay);
+
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: (W * H * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(W * 4),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped range")
+            .to_vec()
+    }
 }
 
 fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -512,4 +549,115 @@ fn a_parallel_view_lights_faces_behind_the_eye_head_on() {
         p[0].max(p[1]).max(p[2]) > 180,
         "a face square to the view is fully lit: {p:?}"
     );
+}
+
+/// A diamond on the ground made a component (its edges run across its bounding box, so the
+/// open instance's box does not cover them), placed again 1 m higher and turned a little.
+/// Returns the scene and both instances.
+fn stacked_diamonds() -> (Scene, InstanceId, InstanceId) {
+    let mut m = Model::new();
+    let c = [(2.0, 0.0), (0.0, 2.0), (-2.0, 0.0), (0.0, -2.0)];
+    for i in 0..4 {
+        let (a, b) = (c[i], c[(i + 1) % 4]);
+        m.add_edge(DVec3::new(a.0, a.1, 0.0), DVec3::new(b.0, b.1, 0.0))
+            .unwrap();
+    }
+    let mut s = Scene::from_root(m);
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (low, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &faces,
+            &[],
+            DefinitionKind::Component,
+            "Tile",
+        )
+        .unwrap();
+    s.copy_instances(MeshId::Root, &[low], DVec3::new(0.5, 0.5, 1.0), 1)
+        .unwrap();
+    let high = s
+        .root()
+        .instances()
+        .map(|(id, _)| id)
+        .find(|id| *id != low)
+        .unwrap();
+    let turn = glam::DAffine3::from_rotation_z(0.2);
+    s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[high], turn)))
+        .unwrap();
+    (s, low, high)
+}
+
+#[test]
+fn changing_only_the_selection_draws_what_a_rebuild_draws() {
+    let (scene, low, high) = stacked_diamonds();
+    let def = MeshId::Definition(scene.root().instance(low).unwrap().definition);
+    let tile = scene.mesh(def).unwrap();
+    let face = EntityId::Face(tile.faces().next().unwrap().0);
+    let edges: Vec<EntityId> = tile.edges().map(|(id, _)| EntityId::Edge(id)).collect();
+    let set = |ids: &[EntityId]| ids.iter().copied().collect::<BTreeSet<_>>();
+    let (lows, highs) = (EntityId::Instance(low), EntityId::Instance(high));
+    let cases = [
+        (
+            vec![],
+            vec![
+                set(&[lows]),
+                set(&[]),
+                set(&[highs]),
+                set(&[lows, highs]),
+                set(&[]),
+            ],
+        ),
+        (
+            vec![high],
+            vec![
+                set(&[face]),
+                set(&[edges[0], edges[2]]),
+                set(&[]),
+                set(&[face, edges[1], edges[3]]),
+            ],
+        ),
+    ];
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut cam = camera();
+    cam.eye = DVec3::new(6.0, -8.0, 7.0);
+    let full = Viewport::full((W, H));
+    let mut kept = screen.renderer();
+    for (context, selections) in &cases {
+        kept.set_model(&scene, context);
+        for selection in selections {
+            kept.set_selection(selection);
+            let changed = screen.draw(&mut kept, &cam, full, &[]);
+            let mut fresh = screen.renderer();
+            fresh.set_scene(&scene, context, selection);
+            let rebuilt = screen.draw(&mut fresh, &cam, full, &[]);
+            assert!(
+                changed == rebuilt,
+                "context {context:?}, selection {selection:?}: the frames differ"
+            );
+        }
+    }
+    // The flags show on their own: selected edges turn blue and a selected face is tinted.
+    kept.set_model(&scene, &[high]);
+    let plain = screen.draw(&mut kept, &cam, full, &[]);
+    kept.set_selection(&set(&edges));
+    let edges_lit = screen.draw(&mut kept, &cam, full, &[]);
+    kept.set_selection(&set(&[face]));
+    let face_lit = screen.draw(&mut kept, &cam, full, &[]);
+    // Pixels that turned bluer (blue less red up by at least `by`) than in `plain`.
+    let bluer = |px: &[u8], by: i32| {
+        let blue = |p: &[u8]| i32::from(p[2]) - i32::from(p[0]);
+        px.chunks(4)
+            .zip(plain.chunks(4))
+            .filter(|(p, q)| blue(p) >= blue(q) + by)
+            .count()
+    };
+    let n = bluer(&edges_lit, 60);
+    assert!(n > 100, "selected edges turn blue: {n} pixels");
+    let n = bluer(&face_lit, 40);
+    assert!(n > 2000, "a selected face is tinted: {n} pixels");
 }
