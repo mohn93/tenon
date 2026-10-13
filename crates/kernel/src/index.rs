@@ -50,6 +50,37 @@ struct Node {
 /// Most shapes in a leaf.
 const LEAF: usize = 4;
 
+/// The nodes a depth-first walk of the tree has yet to visit, kept on the call stack. Each
+/// split halves its shapes, so no node lies more than 62 splits below the root for any number
+/// of shapes a `usize` can count, and a walk that pushes both halves of each node it opens
+/// holds at most one node more than that.
+struct Walk {
+    nodes: [usize; 64],
+    len: usize,
+}
+
+impl Walk {
+    /// A walk starting at the root.
+    fn new() -> Walk {
+        Walk {
+            nodes: [0; 64],
+            len: 1,
+        }
+    }
+
+    fn pop(&mut self) -> Option<usize> {
+        self.len = self.len.checked_sub(1)?;
+        Some(self.nodes[self.len])
+    }
+
+    /// Queues both halves of a node; `r` is visited first.
+    fn push(&mut self, l: usize, r: usize) {
+        self.nodes[self.len] = l;
+        self.nodes[self.len + 1] = r;
+        self.len += 2;
+    }
+}
+
 /// Spatial index over a model's geometry. Get it with [`Model::index`].
 #[derive(Clone, Debug, Default)]
 pub struct Index {
@@ -180,8 +211,8 @@ impl Index {
         max_t: f64,
     ) -> Option<(FaceId, f64)> {
         let mut best: Option<(FaceId, f64)> = None;
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
+        let mut walk = Walk::new();
+        while let Some(i) = walk.pop() {
             let Some(node) = self.nodes.get(i) else {
                 break;
             };
@@ -190,7 +221,7 @@ impl Index {
                 continue;
             }
             match node.kids {
-                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Inner(l, r) => walk.push(l, r),
                 Kids::Leaf(s, e) => {
                     for shape in &self.shapes[s..e] {
                         if let Shape::Triangle(f, tri) = *shape
@@ -218,8 +249,8 @@ impl Index {
         max_t: f64,
     ) -> Vec<(FaceId, f64)> {
         let mut hits: std::collections::BTreeMap<FaceId, f64> = Default::default();
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
+        let mut walk = Walk::new();
+        while let Some(i) = walk.pop() {
             let Some(node) = self.nodes.get(i) else {
                 break;
             };
@@ -227,7 +258,7 @@ impl Index {
                 continue;
             }
             match node.kids {
-                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Inner(l, r) => walk.push(l, r),
                 Kids::Leaf(s, e) => {
                     for shape in &self.shapes[s..e] {
                         if let Shape::Triangle(f, tri) = *shape
@@ -263,8 +294,8 @@ impl Index {
         mut test: impl FnMut(EdgeId) -> bool,
     ) -> bool {
         let near = |p: DVec3| plane.distance(p).abs() < 2.0 * LENGTH_TOL;
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
+        let mut walk = Walk::new();
+        while let Some(i) = walk.pop() {
             let Some(node) = self.nodes.get(i) else {
                 break;
             };
@@ -274,7 +305,7 @@ impl Index {
                 continue;
             }
             match node.kids {
-                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Inner(l, r) => walk.push(l, r),
                 Kids::Leaf(s, e) => {
                     for shape in &self.shapes[s..e] {
                         if let Shape::Segment(id, a, b) = *shape
@@ -293,8 +324,8 @@ impl Index {
 
     /// Calls `visit` for every shape whose bounding box meets the box `min`..`max`.
     pub(crate) fn near_box(&self, min: DVec3, max: DVec3, mut visit: impl FnMut(&Shape)) {
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
+        let mut walk = Walk::new();
+        while let Some(i) = walk.pop() {
             let Some(node) = self.nodes.get(i) else {
                 break;
             };
@@ -302,7 +333,7 @@ impl Index {
                 continue;
             }
             match node.kids {
-                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Inner(l, r) => walk.push(l, r),
                 Kids::Leaf(s, e) => self.shapes[s..e].iter().for_each(&mut visit),
             }
         }
@@ -312,8 +343,8 @@ impl Index {
     /// (a superset of the shapes within `pad` of it; callers test exactly). `a == b` asks
     /// about one point.
     pub(crate) fn near_segment(&self, a: DVec3, b: DVec3, pad: f64, mut visit: impl FnMut(&Shape)) {
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
+        let mut walk = Walk::new();
+        while let Some(i) = walk.pop() {
             let Some(node) = self.nodes.get(i) else {
                 break;
             };
@@ -322,7 +353,7 @@ impl Index {
                 continue;
             }
             match node.kids {
-                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Inner(l, r) => walk.push(l, r),
                 Kids::Leaf(s, e) => self.shapes[s..e].iter().for_each(&mut visit),
             }
         }
@@ -339,8 +370,8 @@ impl Index {
         slope: f64,
         mut visit: impl FnMut(&Shape),
     ) {
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
+        let mut walk = Walk::new();
+        while let Some(i) = walk.pop() {
             let Some(node) = self.nodes.get(i) else {
                 break;
             };
@@ -353,7 +384,7 @@ impl Index {
                 continue;
             }
             match node.kids {
-                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Inner(l, r) => walk.push(l, r),
                 Kids::Leaf(s, e) => self.shapes[s..e]
                     .iter()
                     .filter(|s| !matches!(s, Shape::Triangle(..)))

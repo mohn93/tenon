@@ -616,10 +616,43 @@ impl Camera {
     /// Pixel position of a world point, or None if the camera does not see its depth (behind
     /// the eye in perspective; outside `depth_range` in a parallel view).
     pub fn project(&self, p: DVec3) -> Option<DVec2> {
-        if self.is_parallel() && !self.sees_depth(p) {
-            return None;
+        self.projector().project(p)
+    }
+
+    /// `project` for many points: the camera's matrices are worked out once.
+    pub fn projector(&self) -> Projector {
+        Projector {
+            clip: self.proj() * self.view(),
+            viewport: self.viewport,
+            depths: self
+                .is_parallel()
+                .then(|| (self.eye, self.forward(), self.depth_range())),
         }
-        let clip = self.proj() * self.view() * p.extend(1.0);
+    }
+}
+
+/// Projects points as the camera it was made from does (`Camera::project`), with the
+/// camera's matrices worked out once.
+#[derive(Clone, Copy, Debug)]
+pub struct Projector {
+    /// Projection times view.
+    clip: DMat4,
+    viewport: DVec2,
+    /// In a parallel view, the eye, the view direction and the depths seen (see `depth` and
+    /// `depth_range`).
+    depths: Option<(DVec3, DVec3, (f64, f64))>,
+}
+
+impl Projector {
+    /// Pixel position of a world point, or None if the camera does not see its depth.
+    pub fn project(&self, p: DVec3) -> Option<DVec2> {
+        if let Some((eye, forward, (near, far))) = self.depths {
+            let depth = (p - eye).dot(forward);
+            if !(depth > near && depth < far) {
+                return None;
+            }
+        }
+        let clip = self.clip * p.extend(1.0);
         if clip.w <= 0.0 {
             return None;
         }
