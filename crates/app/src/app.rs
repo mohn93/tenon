@@ -149,6 +149,13 @@ impl CtrlTap {
     }
 }
 
+/// True if an event egui saw needs another frame. egui asks for a repaint on every
+/// `RedrawRequested`, which would draw frames back to back forever; the frame egui itself
+/// still needs after painting comes from `Gui::paint` instead.
+fn redraws_for_egui(event: &WindowEvent, egui_repaint: bool) -> bool {
+    egui_repaint && !matches!(event, WindowEvent::RedrawRequested)
+}
+
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
 /// scrolls, pinches, focus changes and keys other than modifiers (the window reports the
 /// modifier keys themselves as key events too).
@@ -895,7 +902,8 @@ impl ApplicationHandler<ApiWake> for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
-        if s.gui.on_event(&s.window, &event) {
+        let egui_repaint = s.gui.on_event(&s.window, &event);
+        if redraws_for_egui(&event, egui_repaint) {
             s.window.request_redraw();
         }
         if interrupts_ctrl_tap(&event) {
@@ -1125,6 +1133,13 @@ mod tests {
         );
         assert!(!px(TouchPhase::Moved).1);
         assert!(!px(TouchPhase::Ended).1);
+    }
+
+    #[test]
+    fn a_drawn_frame_does_not_ask_for_another() {
+        assert!(!redraws_for_egui(&WindowEvent::RedrawRequested, true));
+        assert!(redraws_for_egui(&WindowEvent::Occluded(false), true));
+        assert!(!redraws_for_egui(&WindowEvent::Occluded(false), false));
     }
 
     #[test]
