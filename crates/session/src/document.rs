@@ -1247,13 +1247,14 @@ fn guide_ids(ids: &[EntityId]) -> Vec<GuideId> {
 }
 
 /// `v` scaled to unit length, or None when it is zero or not finite. Very long and very
-/// short vectors work too (their squared length would overflow or underflow).
+/// short vectors work too (their squared length would overflow or underflow). Vectors of
+/// ordinary length are normalized directly, so a unit vector comes back bit for bit.
 pub(crate) fn unit_vector(v: DVec3) -> Option<DVec3> {
     let largest = v.abs().max_element();
     if !v.is_finite() || largest == 0.0 {
         return None;
     }
-    (v / largest).try_normalize()
+    v.try_normalize().or_else(|| (v / largest).try_normalize())
 }
 
 /// Rejects non-finite or out-of-range coordinates before they reach the kernel or camera.
