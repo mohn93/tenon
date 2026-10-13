@@ -98,7 +98,6 @@ fn bad_circles_are_refused() {
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": -1.0}),
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1e-6, "segments": 360}),
         json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "normal": [0, 0, 0]}),
-        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "normal": [1e155, 1e155, 0]}),
         json!({"type": "add_circle", "center": [2e6, 0, 0], "radius": 1.0}),
         json!({"type": "add_circle", "center": [999999, 0, 0], "radius": 10.0}),
     ] {
@@ -106,4 +105,36 @@ fn bad_circles_are_refused() {
         assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");
     }
     assert_eq!(counts(&d), [0, 0, 0]);
+}
+
+#[test]
+fn a_normal_of_any_finite_length_is_a_direction() {
+    let circle = |normal: [f64; 3]| {
+        let mut d = doc();
+        run(
+            &mut d,
+            json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "normal": normal}),
+        )
+        .unwrap();
+        d.model().vertices().map(|(_, v)| v.pos).collect::<Vec<_>>()
+    };
+    let unit = circle([1.0, 1.0, 0.0]);
+    for normal in [
+        [1e155, 1e155, 0.0],
+        [1e300, 1e300, 0.0],
+        [1e-300, 1e-300, 0.0],
+    ] {
+        let other = circle(normal);
+        assert_eq!(other.len(), unit.len());
+        for (a, b) in other.iter().zip(&unit) {
+            assert!(a.distance(*b) < 1e-12, "{normal:?}: {a} vs {b}");
+        }
+    }
+    let mut d = doc();
+    let (_, message) = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "normal": [0, 0, 0]}),
+    )
+    .unwrap_err();
+    assert_eq!(message, "normal must be a finite, non-zero vector");
 }

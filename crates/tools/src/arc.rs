@@ -6,11 +6,13 @@
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
-use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points};
+use session::{
+    Command, DEFAULT_ARC_SEGMENTS, MAX_CIRCLE_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points,
+};
 
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length, parse_segments};
+use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
 
 #[derive(Clone, Debug)]
 pub struct ArcTool {
@@ -177,6 +179,10 @@ impl Tool for ArcTool {
                         }
                         Err(e) => out.message = Some(e.message),
                     }
+                } else if meant_as_count(&text) {
+                    out.message = Some(format!(
+                        "Segments must be a whole number from 2 to {MAX_CIRCLE_SEGMENTS}, like 12s"
+                    ));
                 } else {
                     match (self.start, self.end, parse_length(&text)) {
                         (None, _, _) => {
@@ -369,6 +375,11 @@ mod tests {
         assert_eq!(out.message.as_deref(), Some("Arcs get 6 segments"));
         let refused = send(&mut tool, ToolEvent::Value("1s".into()));
         assert!(refused.message.unwrap().contains("between 2"));
+        let refused = send(&mut tool, ToolEvent::Value("0s".into()));
+        assert_eq!(
+            refused.message.as_deref(),
+            Some("Segments must be a whole number from 2 to 360, like 12s")
+        );
         send(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
         send(&mut tool, ToolEvent::Click(ground(1.0, 0.0)));
         let out = send(&mut tool, ToolEvent::Click(ground(0.5, 0.2)));

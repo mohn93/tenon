@@ -81,6 +81,12 @@ pub fn parse_segments(s: &str) -> Option<u32> {
         .filter(|n| *n > 0)
 }
 
+/// True when typed text ends in "s" (any case) and so was meant as a side or segment count,
+/// even if it is not a valid one ("0s", "2.5s").
+pub fn meant_as_count(s: &str) -> bool {
+    s.trim().to_ascii_lowercase().ends_with('s')
+}
+
 /// Parses an angle in degrees: "90", "-45", "22.5", optionally ending in "°" or "deg". None if
 /// it is not an angle.
 pub fn parse_angle(s: &str) -> Option<f64> {

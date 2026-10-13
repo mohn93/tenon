@@ -4,6 +4,7 @@ use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 
 use crate::command::{CommandError, ErrorKind};
+use crate::document::unit_vector;
 
 /// In-plane side directions of rectangles drawn on a plane with unit normal `normal`: `u` is
 /// horizontal when the plane is not (X on horizontal planes), and `v = normal x u`.
@@ -27,8 +28,9 @@ pub fn rectangle_corners(
     let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
     let d = opposite - corner;
     let normal = match normal {
-        Some(n) if n.is_finite() && n.length() > 1e-9 => n.normalize(),
-        Some(_) => return Err(invalid("normal must be a non-zero vector")),
+        Some(n) => {
+            unit_vector(n).ok_or_else(|| invalid("normal must be a finite, non-zero vector"))?
+        }
         None => {
             let flat: Vec<DVec3> = [DVec3::X, DVec3::Y, DVec3::Z]
                 .into_iter()

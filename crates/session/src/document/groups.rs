@@ -196,10 +196,11 @@ impl Document {
 
     /// The tree of placed groups and components, from the root's instances down, with the
     /// open path and the selection marked. Built from `outliner_rows`; its size grows with
-    /// nesting, since each placement repeats its definition's subtree.
-    pub fn outliner(&self) -> Vec<OutlinerNode> {
+    /// nesting, since each placement repeats its definition's subtree; `depth` limits how
+    /// many levels below the root's instances it goes (None: all).
+    pub fn outliner(&self, depth: Option<u32>) -> Vec<OutlinerNode> {
         let table = self.outliner_rows();
-        outliner_nodes(&table, &table.roots, &mut Vec::new(), self)
+        outliner_nodes(&table, &table.roots, &mut Vec::new(), depth, self)
     }
 
     /// The outliner tree stored flat: the root's instances and the instances each definition
@@ -253,10 +254,12 @@ fn invalid(e: KernelError, ids: &[EntityId]) -> CommandError {
 }
 
 /// The nodes for `rows`, placed along `path` (instance ids from the root), with their marks.
+/// `depth` is how many levels below these nodes to include (None: all).
 fn outliner_nodes(
     table: &OutlinerTable,
     rows: &[OutlinerRow],
     path: &mut Vec<InstanceId>,
+    depth: Option<u32>,
     doc: &Document,
 ) -> Vec<OutlinerNode> {
     let in_context = *path == doc.context;
@@ -267,7 +270,14 @@ fn outliner_nodes(
             };
             path.push(id);
             let open = doc.context.starts_with(path);
-            let children = outliner_nodes(table, table.children(row.definition), path, doc);
+            let below = table.children(row.definition);
+            let (children, truncated) = match depth {
+                Some(0) => (Vec::new(), !below.is_empty()),
+                _ => {
+                    let depth = depth.map(|d| d - 1);
+                    (outliner_nodes(table, below, path, depth, doc), false)
+                }
+            };
             path.pop();
             OutlinerNode {
                 id: row.id,
@@ -278,6 +288,7 @@ fn outliner_nodes(
                 open,
                 selected: in_context && doc.selection.contains(&row.id),
                 children,
+                truncated,
             }
         })
         .collect()

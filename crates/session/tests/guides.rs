@@ -92,6 +92,21 @@ fn bad_guides_are_refused() {
 }
 
 #[test]
+fn a_direction_of_any_finite_length_is_taken() {
+    let mut d = doc();
+    for direction in [[1e200, 0.0, 0.0], [0.0, -1e-300, 0.0]] {
+        run(
+            &mut d,
+            json!({"type": "add_guide_line", "point": [0, 0, 0], "direction": direction}),
+        )
+        .unwrap();
+    }
+    let all = guides(&d);
+    assert_eq!(all[0]["direction"], json!([1.0, 0.0, 0.0]), "{all:?}");
+    assert_eq!(all[1]["direction"], json!([0.0, -1.0, 0.0]), "{all:?}");
+}
+
+#[test]
 fn guides_are_selected_erased_and_deleted_all_at_once() {
     let mut d = doc();
     two_guides(&mut d);

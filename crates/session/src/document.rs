@@ -478,12 +478,7 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         check_coordinates(&[point])?;
         // The direction is normalized, so only its finiteness and length matter.
-        let direction = DVec3::from(direction);
-        let Some(direction) = direction
-            .is_finite()
-            .then(|| direction.try_normalize())
-            .flatten()
-        else {
+        let Some(direction) = unit_vector(DVec3::from(direction)) else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 "direction must be a finite, non-zero vector",
@@ -638,7 +633,7 @@ impl Document {
             ));
         }
         check_coordinates(&[center, axis.unwrap_or([0.0, 0.0, 1.0])])?;
-        let Some(axis) = DVec3::from(axis.unwrap_or([0.0, 0.0, 1.0])).try_normalize() else {
+        let Some(axis) = unit_vector(DVec3::from(axis.unwrap_or([0.0, 0.0, 1.0]))) else {
             return Err(invalid("axis must be a non-zero vector"));
         };
         if !angle.is_finite() {
@@ -1075,8 +1070,8 @@ impl Document {
                     MeshId::Definition(d) => Some(d),
                 },
             },
-            Query::Outliner => QueryResult::Outliner {
-                instances: self.outliner(),
+            Query::Outliner { depth } => QueryResult::Outliner {
+                instances: self.outliner(*depth),
                 revision: self.revision,
             },
             Query::File => QueryResult::File {
@@ -1249,6 +1244,16 @@ fn guide_ids(ids: &[EntityId]) -> Vec<GuideId> {
             _ => None,
         })
         .collect()
+}
+
+/// `v` scaled to unit length, or None when it is zero or not finite. Very long and very
+/// short vectors work too (their squared length would overflow or underflow).
+pub(crate) fn unit_vector(v: DVec3) -> Option<DVec3> {
+    let largest = v.abs().max_element();
+    if !v.is_finite() || largest == 0.0 {
+        return None;
+    }
+    (v / largest).try_normalize()
 }
 
 /// Rejects non-finite or out-of-range coordinates before they reach the kernel or camera.

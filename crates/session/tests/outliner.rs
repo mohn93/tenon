@@ -415,3 +415,27 @@ fn the_row_table_lists_each_definitions_instances_once() {
     // One entry per definition, however many times it is placed.
     assert_eq!(table.by_definition.len(), 2);
 }
+
+#[test]
+fn depth_limits_the_tree_and_marks_what_it_left_out() {
+    let mut d = doc();
+    let (first, second, group, _) = boxes(&mut d);
+    let full = outliner(&d);
+    assert_eq!(ask(&d, json!({"type": "outliner", "depth": 1})), full);
+    assert_eq!(ask(&d, json!({"type": "outliner", "depth": 9})), full);
+    assert!(!full.to_string().contains("truncated"));
+    let top = ask(&d, json!({"type": "outliner", "depth": 0}));
+    let roots = top["instances"].as_array().unwrap();
+    assert_eq!(roots.len(), 2);
+    for (node, id) in roots.iter().zip([&first, &second]) {
+        assert_eq!(node["id"], json!(id));
+        assert_eq!(node["children"], json!([]));
+        assert_eq!(node["truncated"], json!(true));
+    }
+    assert_eq!(full["instances"][0]["children"][0]["id"], json!(group));
+    assert!(
+        full["instances"][0]["children"][0]
+            .get("truncated")
+            .is_none()
+    );
+}

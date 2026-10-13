@@ -54,7 +54,7 @@ Queries:
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
-| `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; see Groups and components below |
+| `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 
@@ -158,7 +158,7 @@ definition) and are saved with the model.
 
 | Command | Effect |
 |---|---|
-| `{"type": "add_guide_line", "point": [0, -1, 0], "direction": [1, 0, 0]}` | A guide line through `point` along `direction` (any non-zero length; stored as a unit vector). One undo step. |
+| `{"type": "add_guide_line", "point": [0, -1, 0], "direction": [1, 0, 0]}` | A guide line through `point` along `direction` (any finite, non-zero length, however long or short; stored as a unit vector). One undo step. |
 | `{"type": "add_guide_point", "position": [1, 1, 0]}` | A guide point. One undo step. |
 | `{"type": "delete_guides"}` | Erases every guide of the open context as one undo step; with none there it changes nothing (no error, no undo step). |
 
@@ -269,8 +269,11 @@ open:
   works).
 - The output grows with nesting, since each placement repeats its definition's whole subtree,
   and each nesting level adds about two levels of JSON depth (a node and its `children` array).
-  For large or deeply nested models use `definitions` to see what exists, then `open_path` and
-  `entities` to look inside one placement at a time.
+  `{"type": "outliner", "depth": n}` stops n levels below the root's instances (0: the root's
+  instances only); a node whose children were left out has `"truncated": true` (absent
+  otherwise) and empty `children`. For large or deeply nested models use a small `depth` or
+  `definitions` to see what exists, then `open_path` and `entities` to look inside one
+  placement at a time.
 
 In the window, the Outliner under the Materials list shows this tree (components as `<Name>`,
 groups by name or as `Group`, selected rows highlighted, open ones bold, nodes on the open path

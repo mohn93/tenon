@@ -43,8 +43,12 @@ pub enum Query {
     /// The open context: the path of instances being edited, from the root.
     Context,
     /// The tree of placed groups and components: the root's instances, each with the
-    /// instances its definition places, at any depth.
-    Outliner,
+    /// instances its definition places, down to `depth` levels below the root's instances
+    /// (0: the root's instances only; absent: every level).
+    Outliner {
+        #[serde(default)]
+        depth: Option<u32>,
+    },
     /// The file the model was last opened from or saved to, and whether it changed since.
     File,
     /// Model changes after `since` (a revision number), oldest first.
@@ -212,6 +216,10 @@ pub struct OutlinerNode {
     pub selected: bool,
     /// The instances its definition places, in id order.
     pub children: Vec<OutlinerNode>,
+    /// True when the query's `depth` left out this node's children (it has some). Absent
+    /// when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 /// One placed group or component in an `OutlinerTable`: what `OutlinerNode` says about it

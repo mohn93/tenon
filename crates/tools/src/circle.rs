@@ -4,11 +4,11 @@
 //! when another tool is selected in between.
 
 use glam::DVec3;
-use session::{Command, DEFAULT_CIRCLE_SEGMENTS, circle_points};
+use session::{Command, DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length, parse_segments};
+use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
 
 #[derive(Clone, Debug)]
 pub struct CircleTool {
@@ -114,6 +114,10 @@ impl Tool for CircleTool {
                         }
                         Err(e) => out.message = Some(e.message),
                     }
+                } else if meant_as_count(&text) {
+                    out.message = Some(format!(
+                        "Sides must be a whole number from 3 to {MAX_CIRCLE_SEGMENTS}, like 24s"
+                    ));
                 } else {
                     match (self.center, parse_length(&text)) {
                         (None, _) => {
@@ -268,6 +272,29 @@ mod tests {
         let message = out.message.expect("the refusal is explained");
         assert!(message.contains("radius"), "{message}");
         assert_eq!(tool.anchor(), Some(DVec3::new(1.0, 1.0, 0.0)));
+    }
+
+    #[test]
+    fn bad_side_counts_say_what_a_count_is() {
+        let mut tool = CircleTool::new();
+        let out = on_ground(&mut tool, ToolEvent::Value("400s".into()));
+        assert_eq!(
+            out.message.as_deref(),
+            Some("segments must be between 3 and 360")
+        );
+        on_ground(&mut tool, ToolEvent::Click(ground(1.0, 1.0)));
+        for text in ["0s", "2.5s", "-3s", "s"] {
+            let out = on_ground(&mut tool, ToolEvent::Value(text.into()));
+            assert_eq!(
+                out.message.as_deref(),
+                Some("Sides must be a whole number from 3 to 360, like 24s"),
+                "{text}"
+            );
+            assert!(out.commands.is_empty(), "{text}");
+        }
+        // The count did not change and the circle goes on.
+        let out = on_ground(&mut tool, ToolEvent::Value("2".into()));
+        assert_eq!(out.commands, vec![circle([1.0, 1.0, 0.0], 2.0, 24)]);
     }
 
     #[test]

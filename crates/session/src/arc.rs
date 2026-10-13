@@ -5,6 +5,7 @@ use kernel::geom::{LENGTH_TOL, PLANE_ANGLE_TOL};
 
 use crate::circle::MAX_CIRCLE_SEGMENTS;
 use crate::command::{CommandError, ErrorKind};
+use crate::document::unit_vector;
 
 /// Segments an arc gets when none are asked for, whatever its angle (as in SketchUp).
 pub const DEFAULT_ARC_SEGMENTS: u32 = 12;
@@ -26,9 +27,9 @@ pub fn arc_points(
     let invalid = |m: String| CommandError::new(ErrorKind::InvalidInput, m);
     let normal = match normal {
         None => DVec3::Z,
-        Some(n) => match n.try_normalize() {
+        Some(n) => match unit_vector(n) {
             Some(n) => n,
-            None => return Err(invalid("normal must be a non-zero vector".into())),
+            None => return Err(invalid("normal must be a finite, non-zero vector".into())),
         },
     };
     if !(2..=MAX_CIRCLE_SEGMENTS).contains(&segments) {

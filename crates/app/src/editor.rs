@@ -576,13 +576,14 @@ impl Editor {
         self.run_selection_command(Command::Explode { ids })
     }
 
-    /// Fits the whole model in the view (Shift+Z). The tool's operation goes on. Always true
-    /// (the view may change).
+    /// Fits the whole model in the view (Shift+Z). The tool's operation goes on. True if
+    /// anything visible changed (false, say, for an empty model or a view already fitted).
     pub fn zoom_extents(&mut self) -> bool {
         self.run_camera_command(Command::ZoomExtents)
     }
 
-    /// Looks at the target from a standard direction. The tool's operation goes on.
+    /// Looks at the target from a standard direction. The tool's operation goes on. True if
+    /// anything visible changed.
     pub fn standard_view(&mut self, view: StandardView) -> bool {
         self.run_camera_command(Command::StandardView { view })
     }
@@ -595,12 +596,14 @@ impl Editor {
         self.run_camera_command(Command::SetProjection { projection })
     }
 
-    /// Runs a camera command; the tool's operation and typed text stay.
+    /// Runs a camera command; the tool's operation and typed text stay. True if the camera,
+    /// the status message or the hover changed.
     fn run_camera_command(&mut self, command: Command) -> bool {
-        self.message = None;
+        let camera = self.doc.camera.clone();
+        let cleared = self.message.take().is_some();
         self.run(command);
-        self.update_hover();
-        true
+        let hover = self.update_hover();
+        self.doc.camera != camera || cleared || self.message.is_some() || hover
     }
 
     /// Erases every guide of the open context as one undo step. False if there are none.
@@ -2336,6 +2339,18 @@ mod tests {
                 .abs_diff_eq(DVec3::new(2.0, 2.0, 0.0), 1e-9)
         );
         assert!(!e.set_projection(Projection::Parallel), "already parallel");
+        assert!(!e.standard_view(StandardView::Top), "already looking down");
+        assert!(e.standard_view(StandardView::Front));
+    }
+
+    #[test]
+    fn zoom_extents_says_whether_the_view_changed() {
+        let mut e = editor();
+        e.cursor_moved(DVec2::new(10.0, 10.0));
+        assert!(!e.zoom_extents(), "nothing to fit");
+        square(&mut e);
+        assert!(e.zoom_extents());
+        assert!(!e.zoom_extents(), "already fitted");
     }
 
     #[test]
