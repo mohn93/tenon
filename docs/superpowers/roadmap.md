@@ -23,7 +23,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M8a | Import OBJ and STL as commands and from the File menu (into the open context or as a group) | done ebdf2f6..f4ac453 |
 | M8b | Golden-image render tests (headless renders compared with stored images) and toolbar wrapping | done 33e0ae5..3acc26d |
 | M8c | Clean-up of deferred correctness and performance items recorded in memory (copy/stencil speed, BVH rebuild on paint, float round trip in files, fixed tmp paths in tests, and the like) | done 8124607..ee7b754 |
-| M8d | Clean-up of deferred UX and API polish items recorded in memory | todo |
+| M8d | Clean-up of deferred UX and API polish items recorded in memory | planned `plans/2026-10-13-m8d-polish.md` |
 
 ## Rules for the loop
 
