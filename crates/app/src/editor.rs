@@ -1,10 +1,12 @@
 //! Window-independent editing state: routes input to navigation or the active tool, runs the
 //! resulting commands on the document, and produces the overlay and status text to show.
 
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
-use glam::{DVec2, DVec3};
-use kernel::{EntityId, MaterialId};
+use glam::{DAffine3, DVec2, DVec3};
+use kernel::{EntityId, InstanceId, MaterialId};
 use render::grid::LineVertex;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Outcome, Projection,
@@ -12,11 +14,14 @@ use session::{
 };
 use tools::overlay::overlay;
 use tools::{
-    Axis, Guides, Inference, Lock, Remembered, Scenery, SnapKind, Tool, ToolContext, ToolEvent,
-    ToolKind, ToolOutput, edge_under_in, face_under_in, infer_in,
+    Axis, Guides, Inference, Layout, Lock, Remembered, Scenery, SnapKind, Tool, ToolContext,
+    ToolEvent, ToolKind, ToolOutput, edge_under_in, face_under_in, infer_in,
 };
 
 use crate::navigation::{Button, Navigation, Scroll};
+
+/// A layout of the scene with the revision and open context it was made for.
+type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
 
 /// Snap radius in logical pixels (scaled to physical pixels by the display scale factor).
 const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
@@ -88,6 +93,16 @@ pub struct Editor {
     cursor: DVec2,
     hit: Option<Inference>,
     preview: Vec<[DVec3; 2]>,
+    /// The inference under the cursor, the tool preview and what the tool shows of them are
+    /// out of date. Input that may change them only sets this; they are worked out again once,
+    /// when a frame is drawn (`refresh_hover`) or before input that uses them.
+    hover_dirty: bool,
+    /// The cursor left the view since the hover was last asked for: the marker stays hidden.
+    hover_hidden: bool,
+    /// Navigation moved the camera since the last frame: the hover waits until it stops.
+    navigated: bool,
+    /// Where the scene's meshes lie seen from the open context (see `cached_layout`).
+    layout: LayoutCache,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
@@ -188,6 +203,10 @@ impl Editor {
             cursor: DVec2::ZERO,
             hit: None,
             preview: Vec::new(),
+            hover_dirty: false,
+            hover_hidden: false,
+            navigated: false,
+            layout: RefCell::new(None),
             typed: String::new(),
             message: None,
             scale_factor,
@@ -209,7 +228,7 @@ impl Editor {
             self.reset_tool();
         }
         let result = self.doc.execute(command);
-        self.update_hover();
+        self.invalidate_hover();
         result
     }
 
@@ -223,7 +242,7 @@ impl Editor {
             self.reset_tool();
         }
         let result = self.doc.execute_batch(commands, atomic);
-        self.update_hover();
+        self.invalidate_hover();
         result
     }
 
@@ -237,7 +256,7 @@ impl Editor {
         self.preview.clear();
         self.typed.clear();
         self.message = None;
-        self.update_hover();
+        self.invalidate_hover();
     }
 
     pub fn tool_kind(&self) -> ToolKind {
@@ -245,17 +264,25 @@ impl Editor {
     }
 
     pub fn resize(&mut self, viewport: DVec2) {
-        self.doc.camera.viewport = viewport;
+        if self.doc.camera.viewport != viewport {
+            self.doc.camera.viewport = viewport;
+            self.invalidate_hover();
+        }
     }
 
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
         self.nav.set_scale_factor(scale_factor);
+        self.invalidate_hover();
     }
 
     /// Pressing Shift during an operation locks the direction the cursor follows (an axis,
     /// parallel or perpendicular); releasing it unlocks. Returns true if the lock changed.
     pub fn set_modifiers(&mut self, shift: bool, alt: bool) -> bool {
+        if shift != self.shift {
+            // The lock follows what the cursor snaps to now.
+            self.flush_hover();
+        }
         let pressed = shift && !self.shift;
         let released = !shift && self.shift;
         self.shift = shift;
@@ -277,13 +304,13 @@ impl Editor {
                     kind: hit.kind,
                 });
                 self.shift_lock = true;
-                self.update_hover();
+                self.invalidate_hover();
                 return true;
             }
         } else if released && self.shift_lock {
             self.lock = None;
             self.shift_lock = false;
-            self.update_hover();
+            self.invalidate_hover();
             return true;
         }
         false
@@ -352,7 +379,7 @@ impl Editor {
     pub fn delete_material(&mut self, material: MaterialId) -> bool {
         self.message = None;
         self.run(Command::DeleteMaterial { material });
-        self.update_hover();
+        self.invalidate_hover();
         true
     }
 
@@ -362,7 +389,10 @@ impl Editor {
     pub fn focus_lost(&mut self) -> bool {
         self.shift = false;
         self.sample = false;
+        let dragged = self.nav.dragging();
         self.nav.reset();
+        // A navigation drag that ended here shows the hover again.
+        self.navigated = false;
         let cancelled = std::mem::take(&mut self.tool_pressed);
         if cancelled {
             self.send(ToolEvent::Cancel);
@@ -372,9 +402,9 @@ impl Editor {
             self.lock = None;
         }
         if unlocked || cancelled {
-            self.update_hover();
+            self.invalidate_hover();
         }
-        unlocked || cancelled
+        unlocked || cancelled || (dragged && self.hover_dirty)
     }
 
     /// A key-repeat event. Backspace only deletes typed text and Delete does nothing, so holding
@@ -390,16 +420,25 @@ impl Editor {
         }
     }
 
-    /// Returns true if anything visible changed.
+    /// Returns true if anything visible may have changed: the camera moved, or the hover may
+    /// have (it is worked out when the frame is drawn, see `refresh_hover`).
     pub fn cursor_moved(&mut self, pos: DVec2) -> bool {
+        let moved = pos != self.cursor || self.hover_hidden;
         self.cursor = pos;
         let camera_moved = self.nav.cursor_moved(&mut self.doc.camera, pos);
-        self.update_hover() || camera_moved
+        if camera_moved {
+            self.navigated = true;
+        }
+        if moved || camera_moved {
+            self.invalidate_hover();
+        }
+        moved || camera_moved
     }
 
     /// The cursor left the window: hide the inference marker.
     pub fn cursor_left(&mut self) -> bool {
-        self.hit.take().is_some()
+        self.hover_hidden = true;
+        self.hit.take().is_some() || self.hover_dirty
     }
 
     /// The copy modifier (Ctrl) was tapped. The Move and Rotate tools switch copying, the Tape
@@ -412,12 +451,21 @@ impl Editor {
         true
     }
 
+    /// A button went down or up. Returns true if anything visible may have changed.
     pub fn button(&mut self, button: Button, pressed: bool) -> bool {
-        let (doc, cursor) = (&self.doc, self.cursor);
-        if self
-            .nav
-            .button(&doc.camera, button, pressed, |c| pick(doc, c, cursor))
-        {
+        let dragged = self.nav.dragging();
+        let (doc, cursor, cache) = (&self.doc, self.cursor, &self.layout);
+        let to_root = doc.context_transform();
+        let used = self.nav.button(&doc.camera, button, pressed, |c| {
+            let layout = cached_layout(cache, doc);
+            pick(&scenery_in(&layout, doc), to_root, c, cursor)
+        });
+        if used {
+            if dragged && !self.nav.dragging() {
+                // The drag ended: the hover, put off while it moved the camera, can show.
+                self.navigated = false;
+                return self.hover_dirty;
+            }
             return false;
         }
         if button != Button::Left {
@@ -428,7 +476,7 @@ impl Editor {
         if !pressed && !std::mem::take(&mut self.tool_pressed) {
             return false;
         }
-        self.update_hover();
+        self.hover_now();
         let Some(hit) = self.hit else { return false };
         self.tool_pressed = pressed;
         self.send(if pressed {
@@ -443,7 +491,7 @@ impl Editor {
     /// tool opens the group under the cursor, or closes the open one when there is nothing of
     /// it there.
     pub fn double_click(&mut self) -> bool {
-        self.update_hover();
+        self.hover_now();
         let Some(hit) = self.hit else { return false };
         self.send(ToolEvent::DoubleClick(hit));
         true
@@ -467,7 +515,8 @@ impl Editor {
     }
 
     /// Runs a navigation step on the document camera, giving it a picker for the model point
-    /// under the cursor as any camera sees it, and refreshes the hover if the camera moved.
+    /// under the cursor as any camera sees it. If the camera moved, the hover waits for
+    /// navigation to stop (see `refresh_hover`).
     fn navigate(
         &mut self,
         step: impl FnOnce(
@@ -477,11 +526,17 @@ impl Editor {
         ) -> bool,
     ) -> bool {
         let mut camera = self.doc.camera.clone();
+        let layout = self.layout();
         let (doc, cursor) = (&self.doc, self.cursor);
-        let moved = step(&mut self.nav, &mut camera, &mut |c| pick(doc, c, cursor));
+        let to_root = doc.context_transform();
+        let scenery = scenery_in(&layout, doc);
+        let moved = step(&mut self.nav, &mut camera, &mut |c| {
+            pick(&scenery, to_root, c, cursor)
+        });
         if moved {
             self.doc.camera = camera;
-            self.update_hover();
+            self.navigated = true;
+            self.invalidate_hover();
         }
         moved
     }
@@ -494,6 +549,7 @@ impl Editor {
     /// tool's operation (the Select tool then closes the open group). Delete, and Backspace
     /// with nothing typed, erase the selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
+        self.flush_hover();
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
                 let starts_value = c.is_ascii_digit() || matches!(c, '.' | '-' | '/' | '*');
@@ -547,13 +603,13 @@ impl Editor {
                     kind: SnapKind::Axis(axis),
                 });
                 self.shift_lock = false;
-                self.update_hover();
+                self.invalidate_hover();
                 true
             }
             EditorKey::Unlock => {
                 let had = self.lock.take().is_some();
                 self.shift_lock = false;
-                self.update_hover();
+                self.invalidate_hover();
                 had
             }
         }
@@ -569,7 +625,7 @@ impl Editor {
         self.typed.clear();
         self.message = None;
         self.run(Command::Erase { ids });
-        self.update_hover();
+        self.invalidate_hover();
         true
     }
 
@@ -642,14 +698,17 @@ impl Editor {
         self.run_camera_command(Command::SetProjection { projection })
     }
 
-    /// Runs a camera command; the tool's operation and typed text stay. True if the camera,
-    /// the status message or the hover changed.
+    /// Runs a camera command; the tool's operation and typed text stay. True if the camera or
+    /// the status message changed (only a camera change can change the hover).
     fn run_camera_command(&mut self, command: Command) -> bool {
         let camera = self.doc.camera.clone();
         let cleared = self.message.take().is_some();
         self.run(command);
-        let hover = self.update_hover();
-        self.doc.camera != camera || cleared || self.message.is_some() || hover
+        let moved = self.doc.camera != camera;
+        if moved {
+            self.invalidate_hover();
+        }
+        moved || cleared || self.message.is_some()
     }
 
     /// Erases every guide of the open context as one undo step. False if there are none.
@@ -697,7 +756,7 @@ impl Editor {
                 mode,
             });
         }
-        self.update_hover();
+        self.invalidate_hover();
         true
     }
 
@@ -714,7 +773,7 @@ impl Editor {
         self.typed.clear();
         self.message = None;
         self.run(command);
-        self.update_hover();
+        self.invalidate_hover();
         true
     }
 
@@ -819,7 +878,7 @@ impl Editor {
             up: None,
             merge_coplanar: None,
         });
-        self.update_hover();
+        self.invalidate_hover();
         let Some(report) = outcome.and_then(|o| o.import) else {
             return false;
         };
@@ -845,24 +904,27 @@ impl Editor {
     pub fn undo(&mut self) -> bool {
         self.reset_tool();
         self.run(Command::Undo);
-        self.update_hover();
+        self.invalidate_hover();
         true
     }
 
     pub fn redo(&mut self) -> bool {
         self.reset_tool();
         self.run(Command::Redo);
-        self.update_hover();
+        self.invalidate_hover();
         true
     }
 
-    /// The status as one line: tool, prompt, measurement and feedback separated by bars.
+    /// The status as one line: tool, prompt, measurement and feedback separated by bars, as
+    /// the next frame shows it.
     #[cfg(test)]
-    pub fn status(&self) -> String {
+    pub fn status(&mut self) -> String {
+        self.flush_hover();
         self.status_parts().to_string()
     }
 
-    /// The tool, what to do next, the measurement and any feedback.
+    /// The tool, what to do next, the measurement and any feedback, as of the last
+    /// `refresh_hover`.
     pub fn status_parts(&self) -> Status {
         let (label, value) = self.tool.measurement();
         let value = if self.typed.is_empty() {
@@ -887,8 +949,8 @@ impl Editor {
         }
     }
 
-    /// Line pairs for the renderer's overlay pass. Tools work in the open context's
-    /// coordinates; the overlay is drawn in the root's.
+    /// Line pairs for the renderer's overlay pass, as of the last `refresh_hover`. Tools work
+    /// in the open context's coordinates; the overlay is drawn in the root's.
     pub fn overlay(&self) -> Vec<LineVertex> {
         let t = self.doc.context_transform();
         let preview: Vec<[DVec3; 2]> = self
@@ -913,6 +975,8 @@ impl Editor {
 
     /// Sends a click, release, typed value or cancel to the tool and runs what it asks for.
     fn send(&mut self, event: ToolEvent) {
+        // The tool sees where the cursor is before anything else happens.
+        self.flush_hover();
         let is_release = matches!(event, ToolEvent::Release(_));
         let out = self.handle(event);
         // A release that did nothing keeps the message from the click that preceded it.
@@ -928,7 +992,7 @@ impl Editor {
             self.message = Some(format!("Painting with {name}"));
         }
         self.apply(out);
-        self.update_hover();
+        self.invalidate_hover();
     }
 
     /// The camera in the open context's coordinates. Placements turn and move, so inside a
@@ -939,15 +1003,15 @@ impl Editor {
             .placed(self.doc.context_transform().inverse())
     }
 
-    /// Everything tools can see, in the open context's coordinates.
-    fn scenery(&self) -> Scenery<'_> {
-        Scenery::of(self.doc.scene(), self.doc.context()).expect("the open context exists")
+    /// Where the scene's meshes lie seen from the open context.
+    fn layout(&self) -> Rc<Layout> {
+        cached_layout(&self.layout, &self.doc)
     }
 
     fn handle(&mut self, event: ToolEvent) -> ToolOutput {
         let camera = self.local_camera();
-        let scenery =
-            Scenery::of(self.doc.scene(), self.doc.context()).expect("the open context exists");
+        let layout = self.layout();
+        let scenery = scenery_in(&layout, &self.doc);
         let ctx = ToolContext {
             model: self.doc.model(),
             scenery: &scenery,
@@ -1058,8 +1122,54 @@ impl Editor {
         }
     }
 
-    /// Recomputes the inference under the cursor and the tool preview. True if either changed.
+    /// Marks the hover out of date (see `hover_dirty`); it shows again even if the cursor
+    /// left the view, as it did when worked out at once.
+    fn invalidate_hover(&mut self) {
+        self.hover_dirty = true;
+        self.hover_hidden = false;
+    }
+
+    /// Works the hover out if it is out of date. True if the marker or the preview changed.
+    fn flush_hover(&mut self) -> bool {
+        if !self.hover_dirty {
+            return false;
+        }
+        self.update_hover()
+    }
+
+    /// Works the hover out now, for input that acts where the cursor is.
+    fn hover_now(&mut self) -> bool {
+        self.hover_hidden = false;
+        self.update_hover()
+    }
+
+    /// Brings the inference marker, the tool preview and the status up to date for the frame
+    /// about to be drawn. While navigation moves the camera (a drag, or scrolls and pinches
+    /// arriving) the hover waits: the marker and the preview stay where they were in the
+    /// model, and `hover_deferred` asks for another frame once navigation may have stopped.
+    /// True if the marker or the preview changed.
+    pub fn refresh_hover(&mut self) -> bool {
+        if !self.hover_dirty || self.nav.dragging() || std::mem::take(&mut self.navigated) {
+            return false;
+        }
+        self.flush_hover()
+    }
+
+    /// True when the hover is out of date (the next frame works it out).
+    pub fn hover_pending(&self) -> bool {
+        self.hover_dirty
+    }
+
+    /// True when `refresh_hover` put the hover off for navigation that has no drag holding it:
+    /// a frame drawn a little later shows it if navigation stopped.
+    pub fn hover_deferred(&self) -> bool {
+        self.hover_dirty && !self.nav.dragging()
+    }
+
+    /// Works out the inference under the cursor and the tool preview. True if either changed.
     fn update_hover(&mut self) -> bool {
+        self.hover_dirty = false;
+        self.navigated = false;
         let anchor = self.tool.anchor();
         if anchor.is_none() {
             // Locks last for one operation.
@@ -1068,7 +1178,8 @@ impl Editor {
         }
         let radius = PICK_RADIUS_LOGICAL_PX * self.scale_factor;
         let camera = self.local_camera();
-        let scenery = self.scenery();
+        let layout = self.layout();
+        let scenery = scenery_in(&layout, &self.doc);
         let guides = Guides {
             anchor,
             reference: self.reference,
@@ -1081,22 +1192,56 @@ impl Editor {
         if reference.is_some() {
             self.reference = reference;
         }
-        let out = self.handle(ToolEvent::Move(hit));
-        let changed = self.hit != Some(hit) || self.preview != out.preview;
-        self.hit = Some(hit);
+        let ctx = ToolContext {
+            model: self.doc.model(),
+            scenery: &scenery,
+            camera: &camera,
+            cursor: self.cursor,
+            pick_radius: radius,
+            drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
+            shift: self.shift,
+            selection: self.doc.selection(),
+            material: self.current_material(),
+            sample: self.sample,
+        };
+        let out = self.tool.handle(ToolEvent::Move(hit), &ctx);
+        let hit = (!self.hover_hidden).then_some(hit);
+        let changed = self.hit != hit || self.preview != out.preview;
+        self.hit = hit;
         self.preview = out.preview;
         changed
     }
 }
 
+/// Where the scene's meshes lie seen from the open context: the layout kept in `cache` while
+/// the model (its revision) and the open context stay the same, else a new one, kept there.
+fn cached_layout(cache: &LayoutCache, doc: &Document) -> Rc<Layout> {
+    let mut cache = cache.borrow_mut();
+    if let Some((revision, context, layout)) = cache.as_ref()
+        && *revision == doc.revision()
+        && context == doc.context()
+    {
+        return layout.clone();
+    }
+    let layout = Rc::new(Layout::of(doc.scene(), doc.context()).expect("the open context exists"));
+    *cache = Some((doc.revision(), doc.context().to_vec(), layout.clone()));
+    layout
+}
+
+/// The scene seen through `layout` (made for `doc`'s current model and open context).
+fn scenery_in<'a>(layout: &'a Layout, doc: &'a Document) -> Scenery<'a> {
+    Scenery::view(layout, doc.scene())
+        .or_else(|| Scenery::of(doc.scene(), doc.context()))
+        .expect("the open context exists")
+}
+
 /// The model point under `cursor` (view pixels) as `camera` (in root coordinates) sees it, in
-/// root coordinates: where the cursor's ray meets the nearest face the tools can see.
-/// Navigation centers on it.
-fn pick(doc: &Document, camera: &Camera, cursor: DVec2) -> Option<DVec3> {
-    let to_root = doc.context_transform();
+/// root coordinates: where the cursor's ray meets the nearest face the tools can see in
+/// `scenery` (the open context's, which `to_root` maps to the root's). Navigation centers on
+/// it.
+fn pick(scenery: &Scenery, to_root: DAffine3, camera: &Camera, cursor: DVec2) -> Option<DVec3> {
     let camera = camera.placed(to_root.inverse());
-    let scenery = Scenery::of(doc.scene(), doc.context())?;
-    face_under_in(&scenery, &camera, cursor).map(|(_, _, p)| to_root.transform_point3(p))
+    face_under_in(scenery, &camera, cursor).map(|(_, _, p)| to_root.transform_point3(p))
 }
 
 /// True for the tools Ctrl switches to copying.
@@ -1127,6 +1272,12 @@ mod tests {
 
     fn editor() -> Editor {
         Editor::new(DVec2::new(800.0, 600.0), 1.25)
+    }
+
+    /// The overlay the next frame draws.
+    fn shown(e: &mut Editor) -> Vec<LineVertex> {
+        e.refresh_hover();
+        e.overlay()
     }
 
     fn click_at(e: &mut Editor, p: DVec3) {
@@ -1175,10 +1326,10 @@ mod tests {
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         let px = e.doc().camera.project(DVec3::new(-2.0, 4.0, 0.0)).unwrap();
         assert!(e.cursor_moved(px));
-        assert!(!e.overlay().is_empty(), "preview line expected");
+        assert!(!shown(&mut e).is_empty(), "preview line expected");
         e.key(EditorKey::Escape);
         assert!(
-            e.overlay().is_empty(),
+            shown(&mut e).is_empty(),
             "ground hover has no marker and no preview after cancel"
         );
         assert_eq!(stats(&e), (0, 0));
@@ -1325,7 +1476,9 @@ mod tests {
         })
         .unwrap();
         let fresh = e.doc().camera.anchor_for(px, None);
-        let hit = pick(e.doc(), &e.doc().camera, px).unwrap_or(fresh);
+        let doc = e.doc();
+        let scenery = Scenery::of(doc.scene(), doc.context()).unwrap();
+        let hit = pick(&scenery, doc.context_transform(), &doc.camera, px).unwrap_or(fresh);
         let d = e.doc().camera.eye.distance(hit);
         assert!(e.scroll(Scroll::Pixels(DVec2::new(30.0, 0.0))));
         assert!((e.doc().camera.eye.distance(hit) - d).abs() < 1e-9);
@@ -1346,9 +1499,9 @@ mod tests {
         );
         assert_eq!(stats(&e), (0, 0));
         assert!(
-            e.overlay().is_empty(),
+            shown(&mut e).is_empty(),
             "no line in progress: {:?}",
-            e.overlay().len()
+            shown(&mut e).len()
         );
     }
 
@@ -1358,7 +1511,7 @@ mod tests {
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(px + DVec2::new(3.0, 0.0));
-        assert_eq!(e.overlay().len(), 8, "a 4-sided marker, no preview");
+        assert_eq!(shown(&mut e).len(), 8, "a 4-sided marker, no preview");
     }
 
     #[test]
@@ -1564,9 +1717,105 @@ mod tests {
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(px);
-        assert!(!e.overlay().is_empty());
+        assert!(!shown(&mut e).is_empty());
         assert!(e.cursor_left());
-        assert!(e.overlay().is_empty());
+        assert!(shown(&mut e).is_empty());
+        // Leaving before any frame showed the move hides it too.
+        e.cursor_moved(px + DVec2::new(1.0, 0.0));
+        assert!(e.cursor_left());
+        assert!(shown(&mut e).is_empty());
+        // Coming back shows it again.
+        assert!(e.cursor_moved(px));
+        assert!(!shown(&mut e).is_empty());
+    }
+
+    #[test]
+    fn the_hover_is_worked_out_once_per_frame() {
+        let mut e = editor();
+        square(&mut e);
+        let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
+        for k in 0..5 {
+            assert!(e.cursor_moved(px + DVec2::new(k as f64, 0.0)));
+            assert!(e.hover_pending());
+        }
+        assert!(e.refresh_hover(), "the marker appears");
+        assert!(!e.hover_pending());
+        assert!(!e.refresh_hover(), "nothing left to work out");
+        assert_eq!(e.overlay().len(), 8, "the endpoint marker");
+        assert!(!e.cursor_moved(px + DVec2::new(4.0, 0.0)), "the same spot");
+        assert!(!e.hover_pending());
+    }
+
+    #[test]
+    fn api_commands_leave_the_hover_to_the_next_frame() {
+        let mut e = editor();
+        let end = DVec3::new(2.0, 1.0, 0.0);
+        e.cursor_moved(e.doc().camera.project(end).unwrap());
+        e.refresh_hover();
+        assert_eq!(e.hit.map(|h| h.kind), Some(SnapKind::Ground));
+        e.execute(Command::AddEdge {
+            start: [0.0, 1.0, 0.0],
+            end: end.to_array(),
+        })
+        .unwrap();
+        assert!(e.hover_pending());
+        assert_eq!(e.hit.map(|h| h.kind), Some(SnapKind::Ground));
+        e.refresh_hover();
+        assert_eq!(
+            e.hit.map(|h| (h.kind, h.point)),
+            Some((SnapKind::Endpoint, end))
+        );
+    }
+
+    #[test]
+    fn navigation_puts_the_hover_off_until_it_stops() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        e.refresh_hover();
+        let before = e.hit;
+
+        // A drag holds the hover off; its release lets the next frame show it.
+        e.button(Button::Middle, true);
+        assert!(e.cursor_moved(px + DVec2::new(30.0, 10.0)));
+        assert!(!e.refresh_hover());
+        assert!(e.hover_pending() && !e.hover_deferred());
+        assert_eq!(e.hit, before, "the marker stays where it was in the model");
+        assert!(e.button(Button::Middle, false), "the release redraws");
+        assert!(e.refresh_hover());
+        assert!(!e.hover_pending());
+
+        // Scrolls put it off for one frame, which asks for another; with no more scrolling
+        // that one shows it.
+        assert!(e.scroll(Scroll::Lines(DVec2::new(0.0, 1.0))));
+        assert!(!e.refresh_hover());
+        assert!(e.hover_deferred());
+        assert!(e.scroll(Scroll::Lines(DVec2::new(0.0, 1.0))));
+        assert!(!e.refresh_hover());
+        assert!(e.hover_deferred());
+        e.refresh_hover();
+        assert!(!e.hover_pending());
+
+        // Input that acts where the cursor is does not wait: a click right after a zoom and a
+        // move, with no frame between, starts the line at what is under the cursor now.
+        e.select_tool(ToolKind::Line);
+        e.refresh_hover();
+        let stale = e.hit.unwrap().point;
+        assert!(e.scroll(Scroll::Lines(DVec2::new(0.0, 1.0))));
+        e.cursor_moved(e.cursor + DVec2::new(-25.0, 15.0));
+        let scenery = Scenery::of(e.doc().scene(), &[]).unwrap();
+        let radius = PICK_RADIUS_LOGICAL_PX * e.scale_factor;
+        let now = infer_in(
+            &scenery,
+            &e.doc().camera,
+            e.cursor,
+            &Guides::default(),
+            radius,
+        )
+        .point;
+        assert!(now.distance(stale) > 1e-3);
+        click(&mut e);
+        assert_eq!(e.tool.anchor(), Some(now));
     }
 
     #[test]
@@ -1598,6 +1847,7 @@ mod tests {
         .unwrap();
         let point = DVec3::new(1.0, 1.0, 0.0);
         e.cursor_moved(e.doc().camera.project(point).unwrap() + DVec2::new(2.0, 1.0));
+        e.refresh_hover();
         assert_eq!(
             e.hit.map(|h| (h.point, h.kind)),
             Some((point, SnapKind::GuidePoint))
@@ -1801,7 +2051,7 @@ mod tests {
         e.cursor_moved(lo);
         e.button(Button::Left, true);
         e.cursor_moved(hi);
-        assert_eq!(e.overlay().len(), 8, "the box is drawn while dragging");
+        assert_eq!(shown(&mut e).len(), 8, "the box is drawn while dragging");
         e.button(Button::Left, false);
         assert_eq!(e.doc().selection().len(), 5, "four edges and the face");
     }
@@ -2041,11 +2291,13 @@ mod tests {
         .unwrap();
         let on_edge = e.doc().camera.project(DVec3::new(1.5, 0.75, 0.0)).unwrap();
         e.cursor_moved(on_edge + DVec2::new(0.0, 2.0));
+        // A frame is drawn while the cursor rests on the edge.
+        shown(&mut e);
         click_at(&mut e, DVec3::new(0.0, 3.0, 0.0));
         let along = DVec3::new(0.0, 3.0, 0.0) + DVec3::new(2.0, 1.0, 0.0).normalize() * 2.0;
         e.cursor_moved(e.doc().camera.project(along).unwrap());
         let magenta = tools::overlay::MAGENTA;
-        assert!(e.overlay().iter().any(|v| v.color == magenta));
+        assert!(shown(&mut e).iter().any(|v| v.color == magenta));
     }
 
     #[test]
@@ -2175,7 +2427,7 @@ mod tests {
         let corner = DVec3::new(10.0, 0.0, 1.0);
         let px = e.doc().camera.project(corner).unwrap();
         e.cursor_moved(px + DVec2::new(3.0, 2.0));
-        let overlay = e.overlay();
+        let overlay = shown(&mut e);
         assert!(!overlay.is_empty());
         assert!(
             overlay

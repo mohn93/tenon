@@ -99,6 +99,11 @@ impl Navigation {
         self.command = false;
     }
 
+    /// True while a button drag orbits or pans.
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
     /// A new trackpad scroll began (fingers down, or momentum starting): the next scroll
     /// picks its pivot afresh.
     pub fn scroll_started(&mut self) {

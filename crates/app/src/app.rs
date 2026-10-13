@@ -30,6 +30,13 @@ pub struct ApiWake;
 /// Longest delayed repaint worth scheduling; egui uses huge delays to mean "never".
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(60);
 
+/// Least time between the frames drawn for agent API requests, about 30 a second. A frame waits
+/// for the display, so drawing one per request would hold every request up by a frame.
+const API_FRAME: Duration = Duration::from_millis(33);
+
+/// How long navigation must pause before the frame that shows the hover it put off.
+const HOVER_SETTLE: Duration = Duration::from_millis(50);
+
 /// What to do with the repaint egui asked for after a frame.
 #[derive(Debug, PartialEq)]
 enum Repaint {
@@ -44,6 +51,20 @@ fn schedule_repaint(now: Instant, delay: Option<Duration>) -> Repaint {
         Some(d) if d < MAX_REPAINT_DELAY => Repaint::At(now + d),
         _ => Repaint::Idle,
     }
+}
+
+/// When to draw what agent API requests changed, given when the last frame was presented: now
+/// if that was `API_FRAME` ago or more (or never), else once it is.
+fn api_repaint(now: Instant, presented: Option<Instant>) -> Repaint {
+    match presented {
+        Some(t) if now < t + API_FRAME => Repaint::At(t + API_FRAME),
+        _ => Repaint::Now,
+    }
+}
+
+/// The earlier of a pending repaint deadline and `t`.
+fn earliest(deadline: Option<Instant>, t: Instant) -> Instant {
+    deadline.map_or(t, |d| d.min(t))
 }
 
 /// What the event loop does before sleeping, given the pending repaint deadline.
@@ -179,8 +200,11 @@ struct State {
     view: Viewport,
     /// Last cursor position in window coordinates (physical pixels).
     cursor: DVec2,
-    /// When egui wants its next frame without any input (e.g. a tooltip delay).
+    /// When to draw the next frame without any input: egui's wish (e.g. a tooltip delay),
+    /// API changes waiting for their frame, or a hover put off by navigation.
     repaint_at: Option<Instant>,
+    /// When the last frame was presented.
+    presented: Option<Instant>,
     /// The window title last set.
     title: String,
     /// When and where the left button was last released in the view, for double-clicks.
@@ -249,6 +273,7 @@ impl State {
             view,
             cursor: DVec2::ZERO,
             repaint_at: None,
+            presented: None,
             last_release: None,
             title: String::new(),
             left_press: None,
@@ -463,6 +488,8 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let size = (self.config.width, self.config.height);
 
+        // The hover is worked out once per frame, not per event.
+        self.editor.refresh_hover();
         let doc = self.editor.doc();
         let title = window_title(doc.path(), doc.is_modified());
         if title != self.title {
@@ -556,11 +583,16 @@ impl State {
         );
         self.window.pre_present_notify();
         self.queue.present(frame);
+        let now = Instant::now();
+        self.presented = Some(now);
         self.repaint_at = None;
-        match schedule_repaint(Instant::now(), again) {
+        match schedule_repaint(now, again) {
             Repaint::Now => self.window.request_redraw(),
             Repaint::At(t) => self.repaint_at = Some(t),
             Repaint::Idle => {}
+        }
+        if self.editor.hover_deferred() {
+            self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
         }
         for action in actions {
             self.apply(action);
@@ -571,30 +603,32 @@ impl State {
         acted
     }
 
-    /// Handles waiting API requests; redraws if they changed the model, selection, open
-    /// context or camera.
+    /// Handles waiting API requests, answering each at once. If they changed the model,
+    /// selection, open context or camera, or may have changed the hover, a frame shows it:
+    /// at most about 30 a second while requests keep coming (see `api_repaint`).
     fn process_api(&mut self, hub: &mut Hub) {
         let before = (
             self.editor.doc().revision(),
             self.editor.doc().selection().clone(),
             self.editor.doc().context().to_vec(),
             self.editor.doc().camera.clone(),
-            self.editor.overlay(),
         );
         let mut host = WindowHost {
             editor: &mut self.editor,
             snapshotter: &mut self.snapshotter,
         };
         hub.process(&mut host);
-        if (
+        let after = (
             self.editor.doc().revision(),
             self.editor.doc().selection().clone(),
             self.editor.doc().context().to_vec(),
             self.editor.doc().camera.clone(),
-            self.editor.overlay(),
-        ) != before
-        {
-            self.window.request_redraw();
+        );
+        if after != before || self.editor.hover_pending() {
+            match api_repaint(Instant::now(), self.presented) {
+                Repaint::At(t) => self.repaint_at = Some(earliest(self.repaint_at, t)),
+                _ => self.window.request_redraw(),
+            }
         }
     }
 
@@ -1123,6 +1157,22 @@ mod tests {
         assert_eq!(shortcut_letter(&ch("ه"), code(KeyCode::KeyI)), Some('i'));
         assert_eq!(shortcut_letter(&ch("Q"), code(KeyCode::KeyQ)), Some('q'));
         assert_eq!(shortcut_letter(&ch("ث"), code(KeyCode::KeyE)), Some('e'));
+    }
+
+    #[test]
+    fn api_frames_come_at_most_every_api_frame() {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        assert_eq!(api_repaint(now, None), Repaint::Now);
+        assert_eq!(api_repaint(now, Some(now - ms(40))), Repaint::Now);
+        assert_eq!(api_repaint(now, Some(now - API_FRAME)), Repaint::Now);
+        assert_eq!(
+            api_repaint(now, Some(now - ms(10))),
+            Repaint::At(now - ms(10) + API_FRAME)
+        );
+        assert_eq!(earliest(None, now), now);
+        assert_eq!(earliest(Some(now + ms(5)), now + ms(9)), now + ms(5));
+        assert_eq!(earliest(Some(now + ms(9)), now + ms(5)), now + ms(5));
     }
 
     #[test]
