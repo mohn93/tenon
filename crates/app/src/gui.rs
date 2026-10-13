@@ -48,9 +48,13 @@ impl Gui {
         self.state.on_window_event(window, event).repaint
     }
 
-    /// True while the pointer is over a panel or egui is using it (e.g. a button press).
-    pub fn wants_pointer(&self) -> bool {
-        self.ctx.is_pointer_over_egui() || self.ctx.egui_is_using_pointer()
+    /// True if egui wants a press or scroll at `pos` (physical window pixels): it is using
+    /// the pointer (e.g. dragging a widget), or one of its windows, menus or popups lies
+    /// there. Panels around the view are not counted; check the view's rectangle for those.
+    /// It tests `pos` itself rather than the pointer position egui saw in its last frame,
+    /// which lags when a press or scroll arrives in the same batch as the move before it.
+    pub fn wants_pointer_at(&self, pos: glam::DVec2) -> bool {
+        wants_pointer_at(&self.ctx, pos)
     }
 
     /// True while a text field has focus (a focused button must not swallow editor keys).
@@ -136,5 +140,52 @@ impl Gui {
             .get(&ViewportId::ROOT)
             .map(|v| v.repaint_delay)
             .filter(|d| *d < Duration::MAX)
+    }
+}
+
+/// See `Gui::wants_pointer_at`.
+fn wants_pointer_at(ctx: &egui::Context, pos: glam::DVec2) -> bool {
+    if ctx.egui_is_using_pointer() {
+        return true;
+    }
+    let ppp = ctx.pixels_per_point() as f64;
+    let at = egui::pos2((pos.x / ppp) as f32, (pos.y / ppp) as f32);
+    ctx.layer_id_at(at)
+        .is_some_and(|layer| layer.order != egui::Order::Background)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Pos2, Rect, Vec2};
+    use glam::DVec2;
+
+    #[test]
+    fn the_pointer_test_uses_the_position_given_not_the_last_frame() {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(2.0);
+        let frame = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let ui = |ui: &mut egui::Ui| {
+            egui::Window::new("popup")
+                .fixed_pos(Pos2::new(100.0, 100.0))
+                .fixed_size(Vec2::new(150.0, 100.0))
+                .show(ui.ctx(), |ui| ui.label("over the view"));
+        };
+        // egui last saw the pointer over the window.
+        let over = Pos2::new(150.0, 150.0);
+        for _ in 0..2 {
+            ctx.run_ui(frame(vec![egui::Event::PointerMoved(over)]), ui)
+                .drop_without_applying_deltas();
+        }
+        // Physical pixels at 2x: the window spans 200..500 across.
+        assert!(wants_pointer_at(&ctx, DVec2::new(300.0, 300.0)));
+        assert!(
+            !wants_pointer_at(&ctx, DVec2::new(1200.0, 900.0)),
+            "the view beside it, though egui still has the pointer over the window"
+        );
     }
 }

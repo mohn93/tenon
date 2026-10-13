@@ -13,10 +13,10 @@ use session::{
 use tools::overlay::overlay;
 use tools::{
     Axis, Guides, Inference, Lock, Remembered, Scenery, SnapKind, Tool, ToolContext, ToolEvent,
-    ToolKind, ToolOutput, edge_under_in, infer_in,
+    ToolKind, ToolOutput, edge_under_in, face_under_in, infer_in,
 };
 
-use crate::navigation::{Button, Navigation};
+use crate::navigation::{Button, Navigation, Scroll};
 
 /// Snap radius in logical pixels (scaled to physical pixels by the display scale factor).
 const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
@@ -172,9 +172,11 @@ pub const MATERIAL_PALETTE: [[u8; 3]; 12] = [
 
 impl Editor {
     pub fn new(viewport: DVec2, scale_factor: f64) -> Self {
+        let mut nav = Navigation::default();
+        nav.set_scale_factor(scale_factor);
         Self {
             doc: Document::new(viewport),
-            nav: Navigation::default(),
+            nav,
             tool: ToolKind::Line.make(),
             kind: ToolKind::Line,
             remembered: Remembered::default(),
@@ -248,6 +250,7 @@ impl Editor {
 
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
+        self.nav.set_scale_factor(scale_factor);
     }
 
     /// Pressing Shift during an operation locks the direction the cursor follows (an axis,
@@ -288,8 +291,10 @@ impl Editor {
 
     /// Whether the sampling modifier (Cmd or Ctrl) is held: a Paint click then
     /// picks up a material instead of painting.
+    /// It also makes trackpad scrolling zoom.
     pub fn set_sample_modifier(&mut self, held: bool) {
         self.sample = held;
+        self.nav.set_command(held);
     }
 
     /// The material the Paint tool paints with; None (the default material) also when the
@@ -351,17 +356,25 @@ impl Editor {
         true
     }
 
-    /// Returns true if a Shift lock ended, so the view needs a redraw.
+    /// The window lost focus, so releases may never arrive: ends navigation, drops held
+    /// modifiers and cancels a press the tool is waiting to see released. Returns true if
+    /// anything visible may have changed (a Shift lock ended or a press was cancelled).
     pub fn focus_lost(&mut self) -> bool {
         self.shift = false;
         self.sample = false;
+        self.nav.reset();
+        let cancelled = std::mem::take(&mut self.tool_pressed);
+        if cancelled {
+            self.send(ToolEvent::Cancel);
+        }
         let unlocked = std::mem::take(&mut self.shift_lock);
         if unlocked {
             self.lock = None;
+        }
+        if unlocked || cancelled {
             self.update_hover();
         }
-        self.nav.reset();
-        unlocked
+        unlocked || cancelled
     }
 
     /// A key-repeat event. Backspace only deletes typed text and Delete does nothing, so holding
@@ -400,7 +413,11 @@ impl Editor {
     }
 
     pub fn button(&mut self, button: Button, pressed: bool) -> bool {
-        if self.nav.button(&self.doc.camera, button, pressed) {
+        let (doc, cursor) = (&self.doc, self.cursor);
+        if self
+            .nav
+            .button(&doc.camera, button, pressed, || pick(doc, cursor))
+        {
             return false;
         }
         if button != Button::Left {
@@ -432,12 +449,26 @@ impl Editor {
         true
     }
 
-    pub fn scroll(&mut self, steps: f64) -> bool {
-        let zoomed = self.nav.scroll(&mut self.doc.camera, steps);
-        if zoomed {
+    /// A scroll event: the wheel zooms, a trackpad orbits, pans or zooms (see `Navigation`).
+    /// Returns true if the camera moved.
+    pub fn scroll(&mut self, scroll: Scroll) -> bool {
+        let pick = pick(&self.doc, self.cursor);
+        let moved = self.nav.scroll(&mut self.doc.camera, scroll, pick);
+        if moved {
             self.update_hover();
         }
-        zoomed
+        moved
+    }
+
+    /// A trackpad pinch by `delta` (magnification change, positive zooms in) zooms toward
+    /// the cursor. Returns true if the camera moved.
+    pub fn pinch(&mut self, delta: f64) -> bool {
+        let pick = pick(&self.doc, self.cursor);
+        let moved = self.nav.pinch(&mut self.doc.camera, delta, pick);
+        if moved {
+            self.update_hover();
+        }
+        moved
     }
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
@@ -1043,6 +1074,15 @@ impl Editor {
     }
 }
 
+/// The model point under `cursor` (view pixels) in root coordinates: where the cursor's ray
+/// meets the nearest face the tools can see. Navigation centers on it.
+fn pick(doc: &Document, cursor: DVec2) -> Option<DVec3> {
+    let to_root = doc.context_transform();
+    let camera = doc.camera.placed(to_root.inverse());
+    let scenery = Scenery::of(doc.scene(), doc.context())?;
+    face_under_in(&scenery, &camera, cursor).map(|(_, _, p)| to_root.transform_point3(p))
+}
+
 /// True for the tools Ctrl switches to copying.
 fn copies(kind: ToolKind) -> bool {
     matches!(kind, ToolKind::Move | ToolKind::Rotate)
@@ -1150,6 +1190,101 @@ mod tests {
         e.button(Button::Left, false);
         assert_ne!(e.doc().camera, before);
         assert_eq!(stats(&e), (0, 0));
+    }
+
+    /// An editor with a 2 m square face floating 3 m above the ground, and a point on it.
+    fn raised_face() -> (Editor, DVec3) {
+        let mut e = editor();
+        e.execute(Command::AddRectangle {
+            corner: [-1.0, -1.0, 3.0],
+            opposite: [1.0, 1.0, 3.0],
+            normal: None,
+        })
+        .unwrap();
+        (e, DVec3::new(0.5, 0.25, 3.0))
+    }
+
+    #[test]
+    fn a_middle_drag_orbits_about_the_face_under_the_cursor() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        let d = e.doc().camera.eye.distance(p);
+        e.button(Button::Middle, true);
+        e.cursor_moved(px + DVec2::new(40.0, 25.0));
+        e.button(Button::Middle, false);
+        let cam = &e.doc().camera;
+        assert!(
+            (cam.eye.distance(p) - d).abs() < 1e-9,
+            "orbits about the face point"
+        );
+        assert!(cam.project(p).unwrap().abs_diff_eq(px, 1e-6));
+    }
+
+    #[test]
+    fn scrolling_zooms_toward_the_face_under_the_cursor() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        let d = e.doc().camera.eye.distance(p);
+        assert!(e.scroll(Scroll::Lines(DVec2::new(0.0, 1.0))));
+        let cam = &e.doc().camera;
+        assert!((cam.eye.distance(p) - d * session::camera::ZOOM_STEP).abs() < 1e-9);
+        assert!(cam.project(p).unwrap().abs_diff_eq(px, 1e-6));
+    }
+
+    #[test]
+    fn a_trackpad_scroll_orbits_and_a_pinch_zooms_about_the_face() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        let d = e.doc().camera.eye.distance(p);
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(30.0, 0.0))));
+        assert!((e.doc().camera.eye.distance(p) - d).abs() < 1e-9);
+        assert!(e.pinch(0.25));
+        assert!((e.doc().camera.eye.distance(p) - d / 1.25).abs() < 1e-9);
+        assert!(!e.pinch(f64::NAN));
+    }
+
+    #[test]
+    fn command_trackpad_scroll_zooms_in_the_editor() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        e.set_sample_modifier(true);
+        let forward = e.doc().camera.forward();
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(0.0, 125.0))));
+        assert!(
+            e.doc().camera.forward().abs_diff_eq(forward, 1e-12),
+            "zoom, not orbit"
+        );
+        e.focus_lost();
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(0.0, 125.0))));
+        assert!(
+            !e.doc().camera.forward().abs_diff_eq(forward, 1e-9),
+            "orbits again"
+        );
+    }
+
+    #[test]
+    fn losing_focus_cancels_a_pending_tool_press() {
+        let mut e = editor();
+        let a = e.doc().camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap();
+        let b = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
+        e.cursor_moved(a);
+        assert!(e.button(Button::Left, true));
+        e.cursor_moved(b);
+        assert!(e.focus_lost(), "the cancelled press changes the view");
+        assert!(
+            !e.button(Button::Left, false),
+            "the release no longer reaches the tool"
+        );
+        assert_eq!(stats(&e), (0, 0));
+        assert!(
+            e.overlay().is_empty(),
+            "no line in progress: {:?}",
+            e.overlay().len()
+        );
     }
 
     #[test]

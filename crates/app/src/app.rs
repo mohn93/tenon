@@ -20,7 +20,7 @@ use crate::editor::{Editor, EditorKey};
 use crate::gui::Gui;
 use crate::host::WindowHost;
 use crate::info::entity_info;
-use crate::navigation::Button;
+use crate::navigation::{Button, Scroll};
 use crate::ui::{MaterialRow, UiAction, View};
 
 /// Sent to the event loop when an agent API request arrives.
@@ -62,9 +62,6 @@ fn wake_decision(now: Instant, deadline: Option<Instant>) -> Wake {
         None => Wake::Wait,
     }
 }
-
-/// Trackpad pixel deltas per zoom step.
-const PIXELS_PER_SCROLL_STEP: f64 = 50.0;
 
 /// Longest time between the two releases of a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
@@ -176,6 +173,14 @@ impl State {
             title: String::new(),
             left_press: None,
         }
+    }
+
+    /// True if a press or scroll at the cursor goes to the 3D view: the cursor is in it, egui
+    /// is not using the pointer, and no egui window or menu lies over it. This tests the
+    /// cursor as it is now, not where egui last saw it, so input right after crossing a panel
+    /// edge goes to the side it lands on.
+    fn pointer_in_view(&self) -> bool {
+        self.in_view(self.cursor) && !self.gui.wants_pointer_at(self.cursor)
     }
 
     /// True if `p` (window coordinates) lies in the 3D view.
@@ -774,7 +779,12 @@ impl ApplicationHandler<ApiWake> for App {
                 let toggled = ctrl_pressed && s.editor.toggle_copy();
                 locked || toggled
             }
-            WindowEvent::Focused(false) => s.editor.focus_lost(),
+            WindowEvent::Focused(false) => {
+                // Releases may never arrive: no click or double-click spans the focus change.
+                s.left_press = None;
+                s.last_release = None;
+                s.editor.focus_lost()
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 s.cursor_moved(DVec2::new(position.x, position.y))
             }
@@ -783,7 +793,7 @@ impl ApplicationHandler<ApiWake> for App {
             // that ends over a panel still finishes.
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
-                if pressed && (s.gui.wants_pointer() || !s.in_view(s.cursor)) {
+                if pressed && !s.pointer_in_view() {
                     false
                 } else {
                     let handled = s.editor.button(map_button(button), pressed);
@@ -805,17 +815,17 @@ impl ApplicationHandler<ApiWake> for App {
                     handled
                 }
             }
-            WindowEvent::MouseWheel { .. } if s.gui.wants_pointer() || !s.in_view(s.cursor) => {
+            WindowEvent::MouseWheel { .. } | WindowEvent::PinchGesture { .. }
+                if !s.pointer_in_view() =>
+            {
                 false
             }
             WindowEvent::KeyboardInput { .. } if s.gui.wants_keyboard() => false,
-            WindowEvent::MouseWheel { delta, .. } => {
-                let steps = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y as f64,
-                    MouseScrollDelta::PixelDelta(p) => p.y / PIXELS_PER_SCROLL_STEP,
-                };
-                s.editor.scroll(steps)
-            }
+            WindowEvent::MouseWheel { delta, .. } => s.editor.scroll(match delta {
+                MouseScrollDelta::LineDelta(x, y) => Scroll::Lines(DVec2::new(x as f64, y as f64)),
+                MouseScrollDelta::PixelDelta(p) => Scroll::Pixels(DVec2::new(p.x, p.y)),
+            }),
+            WindowEvent::PinchGesture { delta, .. } => s.editor.pinch(delta),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
                 let letter = shortcut_letter(&event.logical_key, event.physical_key);

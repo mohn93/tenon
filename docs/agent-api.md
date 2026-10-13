@@ -326,6 +326,18 @@ fails with `invalid_input` and leaves the camera as it was.
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
 standard views and the two projections; it sends these same commands.
 
+Navigating in the window moves the same document camera, about the point under the cursor:
+the model face there, else the ground if it is within three eye-to-target distances, else the
+point as deep as the target.
+
+- Mouse: middle drag orbits, Shift+middle drag pans, Option/Alt+left drag (Shift+Option+left
+  to pan) does the same without a middle button, and the wheel zooms toward the cursor.
+- Trackpad: two-finger scroll orbits as if dragging the scene, Shift+scroll pans, Cmd/Ctrl+
+  scroll and pinch zoom toward the cursor.
+- Orbit speed is per logical pixel, the same on any display. One scroll or pinch event zooms
+  at most three wheel notches. Zooming in on a point stops 0.01 m short of it, then moves on
+  through it; zooming where nothing is under the cursor moves the eye and target together.
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`

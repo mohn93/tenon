@@ -13,6 +13,13 @@ pub const ZOOM_STEP: f64 = 0.85;
 pub const MIN_ZOOM_DISTANCE: f64 = 0.01;
 /// Ground hits farther than distance() * this are ignored as anchors.
 pub const MAX_ANCHOR_FACTOR: f64 = 50.0;
+/// Ground hits farther than distance() * this are not navigation anchors (see `surface_at`):
+/// near the horizon the ground runs off far away, and orbiting about it would fling the eye.
+pub const NAV_ANCHOR_FACTOR: f64 = 3.0;
+/// Once a zoom toward an anchor reaches `MIN_ZOOM_DISTANCE`, each step pushes the eye on
+/// past the anchor by the share of this distance (or of the anchor's, if larger) one step
+/// covers, instead of stopping there.
+pub const MIN_DOLLY_DISTANCE: f64 = 0.1;
 /// How far (in eye-to-target distances) `Camera::line_span` reaches along an infinite line.
 pub const LINE_REACH: f64 = 1000.0;
 /// How far in front of and behind the target (in eye-to-target distances) a parallel view
@@ -381,20 +388,75 @@ impl Camera {
         self.target += offset;
     }
 
-    /// Zooms `steps` scroll notches toward `anchor`, which stays where it is on screen. The
-    /// eye never gets nearer than `MIN_ZOOM_DISTANCE` to the anchor (in a parallel view, to
-    /// the target: the view height shrinks with the distance).
+    /// Zooms `steps` scroll notches toward `anchor`, a point the user points at (on the
+    /// model or the ground), which stays where it is on screen.
+    ///
+    /// In perspective the eye moves along the line to the anchor to `ZOOM_STEP^steps` of its
+    /// distance, and the target becomes the point as deep as the anchor straight ahead, so
+    /// later orbits and zooms work at the depth the user is looking at. Where that would bring
+    /// the eye nearer than `MIN_ZOOM_DISTANCE`, the eye and target move on together (see
+    /// `MIN_DOLLY_DISTANCE`): a step first stops at that distance, and the next ones pass
+    /// through the anchor, so zooming in never stops dead.
+    ///
+    /// In a parallel view the view height scales by `ZOOM_STEP^steps`, no smaller than
+    /// `MIN_ZOOM_DISTANCE` allows; the target keeps its depth.
     pub fn zoom(&mut self, anchor: DVec3, steps: f64) {
-        let dist = match self.projection {
-            Projection::Perspective => (self.eye - anchor).length(),
-            Projection::Parallel => self.distance(),
-        };
-        if dist <= 0.0 {
-            return;
+        let f = ZOOM_STEP.powf(steps);
+        let forward = self.forward();
+        match self.projection {
+            Projection::Perspective => {
+                let to = anchor - self.eye;
+                let a = to.length();
+                let ahead = to.dot(forward) > 0.0;
+                let mut f = f;
+                if !ahead || (f < 1.0 && a <= MIN_ZOOM_DISTANCE * (1.0 + 1e-9)) {
+                    // At the floor (or past the anchor): move on along the line to the anchor
+                    // while it is ahead, else straight on.
+                    let dir = if ahead { to / a } else { forward };
+                    self.dolly(dir * (1.0 - f) * a.max(MIN_DOLLY_DISTANCE));
+                    return;
+                }
+                if a * f < MIN_ZOOM_DISTANCE {
+                    // Stop at the floor first; the next step pushes on.
+                    f = MIN_ZOOM_DISTANCE / a;
+                }
+                self.eye = anchor - to * f;
+                let depth = to.dot(forward) * f;
+                self.target = self.eye + forward * depth.max(MIN_ZOOM_DISTANCE);
+            }
+            Projection::Parallel => {
+                let dist = self.distance();
+                if dist <= 0.0 {
+                    return;
+                }
+                // Zoom about the anchor's spot at the target's depth, so the target keeps it.
+                let anchor = anchor - forward * (anchor - self.target).dot(forward);
+                let factor = (dist * f).max(MIN_ZOOM_DISTANCE) / dist;
+                self.eye = anchor + (self.eye - anchor) * factor;
+                self.target = anchor + (self.target - anchor) * factor;
+            }
         }
-        let factor = (dist * ZOOM_STEP.powf(steps)).max(MIN_ZOOM_DISTANCE) / dist;
-        self.eye = anchor + (self.eye - anchor) * factor;
-        self.target = anchor + (self.target - anchor) * factor;
+    }
+
+    /// Zooms `steps` notches toward what is under pixel `px`: `pick` (a model point there,
+    /// if any) or the ground within reach (see `surface_at`) through `zoom`. With nothing
+    /// there in perspective, the eye and target move together along the ray through `px` by
+    /// the share of the target distance a step covers, so the distance (and the speed of
+    /// later zooms) stays.
+    pub fn zoom_at(&mut self, px: DVec2, pick: Option<DVec3>, steps: f64) {
+        match (self.projection, self.surface_at(px, pick)) {
+            (Projection::Perspective, None) => {
+                let step = self.distance() * (1.0 - ZOOM_STEP.powf(steps));
+                self.dolly(self.ray(px).dir * step);
+            }
+            (_, surface) => self.zoom(surface.unwrap_or_else(|| self.sky_at(px)), steps),
+        }
+    }
+
+    /// Moves the eye and target together by `offset`.
+    fn dolly(&mut self, offset: DVec3) {
+        self.eye += offset;
+        self.target += offset;
     }
 
     /// Moves the eye along the view toward the target to `1 / factor` of its distance (no
@@ -460,17 +522,41 @@ impl Camera {
         (far <= self.distance() * MAX_ANCHOR_FACTOR).then_some(p)
     }
 
-    /// The point to orbit about or zoom toward under a pixel: the ground there, else the
-    /// point as deep as the target.
-    pub fn anchor_at(&self, px: DVec2) -> DVec3 {
-        self.ground_at(px).unwrap_or_else(|| {
+    /// The point to navigate about under pixel `px`: `pick`, a model point there, when given;
+    /// else the ground there if it lies within `NAV_ANCHOR_FACTOR` eye-to-target distances
+    /// (of the eye; in a parallel view, of the target in depth).
+    pub fn surface_at(&self, px: DVec2, pick: Option<DVec3>) -> Option<DVec3> {
+        pick.or_else(|| {
             let ray = self.ray(px);
-            let along = match self.projection {
-                Projection::Perspective => self.distance(),
-                Projection::Parallel => self.distance() - self.depth_range().0,
+            let p = ray.hit_ground()?;
+            let far = match self.projection {
+                Projection::Perspective => (p - ray.origin).length(),
+                Projection::Parallel => (self.depth(p) - self.distance()).abs(),
             };
-            ray.origin + ray.dir * along
+            (far <= self.distance() * NAV_ANCHOR_FACTOR).then_some(p)
         })
+    }
+
+    /// The point to orbit about, pan with or zoom toward under a pixel: `pick` or the ground
+    /// within reach (see `surface_at`), else the point there as deep as the target.
+    pub fn anchor_for(&self, px: DVec2, pick: Option<DVec3>) -> DVec3 {
+        self.surface_at(px, pick).unwrap_or_else(|| self.sky_at(px))
+    }
+
+    /// The point to orbit about or zoom toward under a pixel when no model point is known:
+    /// the ground there within reach, else the point as deep as the target.
+    pub fn anchor_at(&self, px: DVec2) -> DVec3 {
+        self.anchor_for(px, None)
+    }
+
+    /// The point under a pixel as deep as the target.
+    fn sky_at(&self, px: DVec2) -> DVec3 {
+        let ray = self.ray(px);
+        let along = match self.projection {
+            Projection::Perspective => self.distance(),
+            Projection::Parallel => self.distance() - self.depth_range().0,
+        };
+        ray.origin + ray.dir * along
     }
 
     /// Pixel position of a world point, or None if the camera does not see its depth (behind
@@ -671,11 +757,92 @@ mod tests {
     }
 
     #[test]
-    fn zoom_never_reaches_anchor() {
+    fn zoom_steps_to_the_floor_then_pushes_on_past_the_anchor() {
         let mut c = cam();
         let anchor = c.target;
+        let forward = c.forward();
         c.zoom(anchor, 1000.0);
         assert!((c.eye - anchor).length() >= MIN_ZOOM_DISTANCE * (1.0 - 1e-9));
+        // At the floor, further steps keep moving the eye forward instead of stopping.
+        let mut last = c.depth(anchor);
+        for _ in 0..3 {
+            c.zoom(anchor, 1.0);
+            let depth = (anchor - c.eye).dot(forward);
+            assert!(depth < last - 1e-3, "{depth} after {last}");
+            last = depth;
+        }
+        assert!(last < 0.0, "the eye went past the anchor");
+        assert!(
+            c.forward().abs_diff_eq(forward, 1e-9),
+            "the view direction stays"
+        );
+        assert!(c.distance() >= MIN_ZOOM_DISTANCE * (1.0 - 1e-9));
+    }
+
+    #[test]
+    fn zoom_toward_a_point_makes_its_depth_the_target_distance() {
+        let mut c = cam();
+        // A point on a wall well in front of the target.
+        let anchor = c.eye + (c.target - c.eye) * 0.25 + DVec3::new(0.3, 0.0, 0.2);
+        let px = c.project(anchor).unwrap();
+        let forward = c.forward();
+        c.zoom(anchor, 1.0);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(px, 1e-6));
+        assert!(c.forward().abs_diff_eq(forward, 1e-12));
+        assert!((c.distance() - c.depth(anchor)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zooming_over_empty_sky_keeps_the_target_distance() {
+        let mut c = cam();
+        c.eye = DVec3::new(0.0, -20.0, 1.0);
+        c.target = DVec3::new(0.0, 0.0, 1.0);
+        let px = DVec2::new(500.0, 20.0);
+        assert!(c.surface_at(px, None).is_none());
+        let sky = c.anchor_at(px);
+        let d = c.distance();
+        c.zoom_at(px, None, 1.0);
+        assert!(
+            c.project(sky).unwrap().abs_diff_eq(px, 1e-6),
+            "stays under the cursor"
+        );
+        for _ in 1..20 {
+            c.zoom_at(px, None, 1.0);
+        }
+        assert!(
+            (c.distance() - d).abs() < 1e-9,
+            "no shrinking target distance"
+        );
+        let travelled = c.eye.distance(DVec3::new(0.0, -20.0, 1.0));
+        assert!((travelled - 20.0 * d * (1.0 - ZOOM_STEP)).abs() < 1e-9);
+        c.zoom_at(px, None, -1.0);
+        assert!((c.distance() - d).abs() < 1e-9);
+    }
+
+    #[test]
+    fn surface_prefers_the_pick_and_ignores_far_ground() {
+        let mut c = cam();
+        let pick = DVec3::new(1.0, 2.0, 3.0);
+        let center = DVec2::new(400.0, 300.0);
+        assert_eq!(c.surface_at(center, Some(pick)), Some(pick));
+        assert_eq!(c.anchor_for(center, Some(pick)), pick);
+        assert!(
+            c.surface_at(center, None)
+                .unwrap()
+                .abs_diff_eq(DVec3::ZERO, 1e-9)
+        );
+        // Eye level: just below the horizon the ground lies far beyond the target.
+        c.eye = DVec3::new(0.0, -20.0, 1.0);
+        c.target = DVec3::new(0.0, 0.0, 1.0);
+        let px = DVec2::new(400.0, 305.0);
+        let ground = c.ray(px).hit_ground().unwrap();
+        assert!(ground.distance(c.eye) > NAV_ANCHOR_FACTOR * c.distance());
+        assert!(c.surface_at(px, None).is_none());
+        let anchor = c.anchor_at(px);
+        assert!((anchor.distance(c.eye) - c.distance()).abs() < 1e-9);
+        // Ground near the eye is still an anchor.
+        let near = DVec2::new(400.0, 590.0);
+        assert!(c.surface_at(near, None).is_some());
     }
 
     #[test]
@@ -772,6 +939,20 @@ mod tests {
         assert!(c.project(anchor).unwrap().abs_diff_eq(px + delta, 1e-6));
         c.zoom(anchor, 1000.0);
         assert!((c.distance() - MIN_ZOOM_DISTANCE).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parallel_zoom_keeps_the_target_depth() {
+        let mut c = parallel();
+        // An anchor well in front of the target's depth.
+        let anchor = c.target - c.forward() * 8.0 + c.right() * 2.0;
+        let px = c.project(anchor).unwrap();
+        let target_depth = c.target.dot(c.forward());
+        let d = c.distance();
+        c.zoom(anchor, 3.0);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(px, 1e-6));
+        assert!((c.target.dot(c.forward()) - target_depth).abs() < 1e-9);
+        assert!((c.distance() - d * ZOOM_STEP.powi(3)).abs() < 1e-9);
     }
 
     #[test]
