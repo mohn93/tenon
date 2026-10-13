@@ -37,6 +37,39 @@ const API_FRAME: Duration = Duration::from_millis(33);
 /// How long navigation must pause before the frame that shows the hover it put off.
 const HOVER_SETTLE: Duration = Duration::from_millis(50);
 
+/// The document revision, selection and open context the renderer's model buffers show.
+type Drawn = (u64, BTreeSet<EntityId>, Vec<InstanceId>);
+
+/// What the renderer must redo before drawing a frame.
+#[derive(Debug, PartialEq)]
+enum SceneUpdate {
+    /// Nothing changed.
+    Keep,
+    /// Only the selection changed: rewrite the selection flags.
+    Selection,
+    /// The model or the open context changed: rebuild the buffers.
+    Model,
+}
+
+/// What changed since the renderer's buffers were built from `drawn`.
+fn scene_update(
+    drawn: Option<&Drawn>,
+    revision: u64,
+    selection: &BTreeSet<EntityId>,
+    context: &[InstanceId],
+) -> SceneUpdate {
+    match drawn {
+        Some((r, s, c)) if *r == revision && c == context => {
+            if s == selection {
+                SceneUpdate::Keep
+            } else {
+                SceneUpdate::Selection
+            }
+        }
+        _ => SceneUpdate::Model,
+    }
+}
+
 /// What to do with the repaint egui asked for after a frame.
 #[derive(Debug, PartialEq)]
 enum Repaint {
@@ -190,7 +223,7 @@ struct State {
     gui: Gui,
     /// Document revision, selection and open context the renderer's model buffers were built
     /// from.
-    drawn: Option<(u64, BTreeSet<EntityId>, Vec<InstanceId>)>,
+    drawn: Option<Drawn>,
     /// The Outliner's rows and the revision they were built at.
     outliner: Option<(u64, OutlinerTable)>,
     modifiers: ModifiersState,
@@ -556,15 +589,22 @@ impl State {
         }
 
         let doc = self.editor.doc();
-        let drawn = (
+        let update = scene_update(
+            self.drawn.as_ref(),
             doc.revision(),
-            doc.selection().clone(),
-            doc.context().to_vec(),
+            doc.selection(),
+            doc.context(),
         );
-        if self.drawn.as_ref() != Some(&drawn) {
-            self.renderer
-                .set_scene(doc.scene(), doc.context(), doc.selection());
-            self.drawn = Some(drawn);
+        if update == SceneUpdate::Model {
+            self.renderer.set_model(doc.scene(), doc.context());
+        }
+        if update != SceneUpdate::Keep {
+            self.renderer.set_selection(doc.selection());
+            self.drawn = Some((
+                doc.revision(),
+                doc.selection().clone(),
+                doc.context().to_vec(),
+            ));
         }
         self.renderer.render_in(
             &target,
@@ -1173,6 +1213,39 @@ mod tests {
         assert_eq!(earliest(None, now), now);
         assert_eq!(earliest(Some(now + ms(5)), now + ms(9)), now + ms(5));
         assert_eq!(earliest(Some(now + ms(9)), now + ms(5)), now + ms(5));
+    }
+
+    #[test]
+    fn only_a_model_or_context_change_rebuilds_the_scene() {
+        let (a, b) = (InstanceId(1), InstanceId(2));
+        let picked = BTreeSet::from([EntityId::Instance(b)]);
+        let drawn: Drawn = (7, BTreeSet::new(), vec![a]);
+        let none = BTreeSet::new();
+        assert_eq!(scene_update(None, 7, &none, &[a]), SceneUpdate::Model);
+        assert_eq!(
+            scene_update(Some(&drawn), 7, &none, &[a]),
+            SceneUpdate::Keep
+        );
+        assert_eq!(
+            scene_update(Some(&drawn), 7, &picked, &[a]),
+            SceneUpdate::Selection
+        );
+        assert_eq!(
+            scene_update(Some(&drawn), 8, &none, &[a]),
+            SceneUpdate::Model
+        );
+        assert_eq!(
+            scene_update(Some(&drawn), 8, &picked, &[a]),
+            SceneUpdate::Model
+        );
+        assert_eq!(
+            scene_update(Some(&drawn), 7, &none, &[]),
+            SceneUpdate::Model
+        );
+        assert_eq!(
+            scene_update(Some(&drawn), 7, &picked, &[a, b]),
+            SceneUpdate::Model
+        );
     }
 
     #[test]
