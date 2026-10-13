@@ -2,14 +2,14 @@
 //! out and click (or type its height). The arc lies on the face under the start click, or on a
 //! horizontal plane. Before the end click, a typed length sets the chord along the cursor's
 //! direction. Typing "12s" sets the number of segments, before or during an arc; the count is
-//! kept while the Arc tool stays selected.
+//! kept for the session, also when another tool is selected in between.
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points};
 
 use crate::rectangle::{on_plane, plane_normal};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, parse_segments};
 
 #[derive(Clone, Debug)]
@@ -37,6 +37,14 @@ impl Default for ArcTool {
 impl ArcTool {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An Arc tool drawing arcs of `segments` segments (a count `arc_points` accepts).
+    pub fn with_segments(segments: u32) -> Self {
+        ArcTool {
+            segments,
+            ..Self::default()
+        }
     }
 
     /// The unit direction across the chord, to the left of start-to-end looking down the
@@ -229,6 +237,10 @@ impl Tool for ArcTool {
         self.start = None;
         self.end = None;
         self.hover = None;
+    }
+
+    fn remember(&self, r: &mut Remembered) {
+        r.arc_segments = self.segments;
     }
 }
 

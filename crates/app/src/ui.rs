@@ -9,7 +9,7 @@ use kernel::{DefinitionKind, EntityId};
 use session::{MaterialId, OutlinerRow, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
-use crate::editor::{MATERIAL_PALETTE, Status};
+use crate::editor::{ImportUnits, MATERIAL_PALETTE, Status};
 
 /// What the user asked for through the panels this frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +27,8 @@ pub enum UiAction {
     SaveFile,
     SaveFileAs,
     ImportFile,
+    /// What one unit in an imported OBJ or STL file is.
+    SetImportUnits(ImportUnits),
     ExportFile,
     DeleteGuides,
     ZoomExtents,
@@ -73,6 +75,8 @@ pub struct View<'a> {
     pub has_guides: bool,
     /// The camera's projection, checked in the Camera menu.
     pub projection: Projection,
+    /// The unit imported files are read in, checked in File > Import Units.
+    pub import_units: ImportUnits,
     /// Every material, in id order.
     pub materials: &'a [MaterialRow],
     /// The material the Paint tool paints with (None: the default material).
@@ -94,6 +98,9 @@ const MATERIALS_MAX_HEIGHT: f32 = 220.0;
 /// Room kept below the Materials list for its buttons, name field and colors, and for the
 /// Outliner's heading and minimum height, in points.
 const BELOW_MATERIALS_LIST: f32 = 140.0 + OUTLINER_MIN_HEIGHT;
+
+/// The least height the right panel lays out its contents in; a shorter panel scrolls them.
+const PANEL_MIN_HEIGHT: f32 = 480.0;
 
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
 /// the 3D view, in points.
@@ -119,6 +126,16 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                         actions.push(action);
                     }
                 }
+                ui.menu_button("Import Units", |ui| {
+                    for units in ImportUnits::ALL {
+                        if ui
+                            .selectable_label(view.import_units == units, units.label())
+                            .clicked()
+                        {
+                            actions.push(UiAction::SetImportUnits(units));
+                        }
+                    }
+                });
             });
             ui.menu_button("Edit", |ui| {
                 let erase = egui::Button::new("Erase Selection").shortcut_text("Delete");
@@ -229,16 +246,32 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
         .resizable(false)
         .default_size(180.0)
         .show(ui, |ui| {
-            ui.heading("Entity Info");
-            for line in view.info {
-                ui.label(line);
+            if ui.available_height() >= PANEL_MIN_HEIGHT {
+                right_panel(ui, view, &mut actions);
+            } else {
+                // A short window: lay the panel out at its least height and let it scroll.
+                egui::ScrollArea::vertical()
+                    .id_salt("right-panel")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let size = Vec2::new(ui.available_width(), PANEL_MIN_HEIGHT);
+                        ui.allocate_ui(size, |ui| right_panel(ui, view, &mut actions));
+                    });
             }
-            ui.separator();
-            materials(ui, view, &mut actions);
-            ui.separator();
-            outliner(ui, view, &mut actions);
         });
     (actions, ui.available_rect_before_wrap())
+}
+
+/// Entity Info, the Materials list and the Outliner.
+fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+    ui.heading("Entity Info");
+    for line in view.info {
+        ui.label(line);
+    }
+    ui.separator();
+    materials(ui, view, actions);
+    ui.separator();
+    outliner(ui, view, actions);
 }
 
 /// A small square of `color` that can be clicked.
@@ -433,7 +466,8 @@ fn outliner_row(
     if response.double_clicked() {
         Some(UiAction::OpenPath(path.to_vec()))
     } else if response.clicked() {
-        // Cmd or Ctrl (either key on every system) or Shift.
+        // Shift, or Cmd on macOS and Ctrl elsewhere. Ctrl is accepted on macOS too, though
+        // the system may turn a Ctrl-click into a secondary click there.
         let toggle = ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
         Some(UiAction::OutlinerSelect {
             path: path.to_vec(),
@@ -532,6 +566,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
             outliner: &NO_ROWS,
@@ -616,6 +651,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
             outliner: &NO_ROWS,
@@ -654,6 +690,7 @@ mod tests {
             inside_instance: false,
             has_guides,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
             outliner: &NO_ROWS,
@@ -692,6 +729,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
             outliner: &NO_ROWS,
@@ -730,6 +768,7 @@ mod tests {
             inside_instance: true,
             has_guides: true,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
             outliner: &NO_ROWS,
@@ -887,6 +926,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &rows,
             material: Some(MaterialId(31)),
             outliner: &NO_ROWS,
@@ -946,6 +986,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: rows,
             material: Some(MaterialId(31)),
             outliner: &NO_ROWS,
@@ -1178,6 +1219,7 @@ mod tests {
             inside_instance: !context.is_empty(),
             has_guides: false,
             projection: Projection::Perspective,
+            import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
             outliner: table,
@@ -1364,6 +1406,69 @@ mod tests {
             model.rect.min.y <= height - OUTLINER_MIN_HEIGHT,
             "the Outliner starts at {} in a {height} point window",
             model.rect.min.y
+        );
+    }
+
+    #[test]
+    fn a_very_short_window_scrolls_the_right_panel() {
+        let status = status();
+        let info = vec!["1 group".to_string()];
+        let table = OutlinerTable {
+            roots: vec![table_row("i200", "d1", DefinitionKind::Group, "")],
+            by_definition: Default::default(),
+        };
+        let selection = BTreeSet::new();
+        let materials: Vec<MaterialRow> = (0..40)
+            .map(|k| MaterialRow {
+                id: MaterialId(100 + k),
+                name: format!("Material {k}"),
+                color: [10, 20, 30],
+            })
+            .collect();
+        let mut view = outliner_view(&status, &info, &table, &[], &selection);
+        view.materials = &materials;
+        view.material = Some(MaterialId(100));
+        let height = 300.0;
+        let ctx = egui::Context::default();
+        let frame = |k: f64, events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, height))),
+            time: Some(k * 0.1),
+            events,
+            ..Default::default()
+        };
+        let model_y = |ctx: &egui::Context| {
+            let laid = ctx
+                .data(|d| d.get_temp::<Vec<Recorded>>(recorded_id()))
+                .unwrap();
+            row(&laid, &[]).unwrap().rect.min.y
+        };
+        run(&ctx, frame(0.0, vec![]), &view);
+        run(&ctx, frame(1.0, vec![]), &view);
+        let before = model_y(&ctx);
+        assert!(
+            before > height,
+            "the Outliner is below the window at {before}"
+        );
+        // Scroll with the pointer over Entity Info.
+        let over = Pos2::new(1200.0, 60.0);
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(
+            &ctx,
+            frame(2.0, vec![egui::Event::PointerMoved(over), wheel]),
+            &view,
+        );
+        for k in 3..30 {
+            run(&ctx, frame(k as f64, vec![]), &view);
+        }
+        let after = model_y(&ctx);
+        assert!(
+            after < before - 100.0,
+            "the panel scrolled from {before} to {after}"
         );
     }
 }

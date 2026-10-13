@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
 use kernel::{EntityId, MaterialId, Model};
-use session::{Camera, Command};
+use session::{Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS};
 
 use crate::arc::ArcTool;
 use crate::circle::CircleTool;
@@ -91,6 +91,27 @@ pub trait Tool {
     /// The model changed outside the tool (agent edit, undo, redo): drop any operation in
     /// progress, since it may refer to geometry that no longer exists.
     fn on_external_change(&mut self);
+    /// Writes the settings this tool keeps for the session (such as a circle's side count)
+    /// into `r`, so the tool made next time starts with them.
+    fn remember(&self, _r: &mut Remembered) {}
+}
+
+/// Tool settings kept for the session, across switching tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Remembered {
+    /// Sides of the circles the Circle tool draws.
+    pub circle_sides: u32,
+    /// Segments of the arcs the Arc tool draws.
+    pub arc_segments: u32,
+}
+
+impl Default for Remembered {
+    fn default() -> Self {
+        Remembered {
+            circle_sides: DEFAULT_CIRCLE_SEGMENTS,
+            arc_segments: DEFAULT_ARC_SEGMENTS,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,13 +145,19 @@ impl ToolKind {
         ToolKind::Paint,
     ];
 
+    /// The tool with default settings.
     pub fn make(self) -> Box<dyn Tool> {
+        self.make_with(&Remembered::default())
+    }
+
+    /// The tool, starting with the settings in `r`.
+    pub fn make_with(self, r: &Remembered) -> Box<dyn Tool> {
         match self {
             ToolKind::Select => Box::new(SelectTool::new()),
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
-            ToolKind::Circle => Box::new(CircleTool::new()),
-            ToolKind::Arc => Box::new(ArcTool::new()),
+            ToolKind::Circle => Box::new(CircleTool::with_sides(r.circle_sides)),
+            ToolKind::Arc => Box::new(ArcTool::with_segments(r.arc_segments)),
             ToolKind::PushPull => Box::new(PushPullTool::new()),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),

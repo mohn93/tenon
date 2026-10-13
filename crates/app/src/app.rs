@@ -261,16 +261,18 @@ impl State {
         }
     }
 
-    /// Exports to a file chosen in a dialog; its extension picks the format.
+    /// Exports to a file chosen in a dialog; its extension picks the format. The dialog
+    /// suggests the format exported to last.
     fn export(&mut self) {
         let stem = file_name(self.editor.doc().path());
         let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
-        let chosen = rfd::FileDialog::new()
-            .add_filter("OBJ", &["obj"])
-            .add_filter("STL", &["stl"])
-            .add_filter("glTF binary", &["glb"])
-            .add_filter("glTF", &["gltf"])
-            .set_file_name(format!("{stem}.obj"))
+        let formats = self.editor.export_formats();
+        let mut dialog = rfd::FileDialog::new();
+        for (name, ext) in &formats {
+            dialog = dialog.add_filter(*name, &[*ext]);
+        }
+        let chosen = dialog
+            .set_file_name(format!("{stem}.{}", formats[0].1))
             .save_file();
         if let Some(path) = chosen {
             self.editor.export_file(&path);
@@ -288,6 +290,7 @@ impl State {
                 self.save(true);
             }
             UiAction::ImportFile => self.import(),
+            UiAction::SetImportUnits(units) => self.editor.set_import_units(units),
             UiAction::ExportFile => self.export(),
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
@@ -421,6 +424,7 @@ impl State {
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,
+            import_units: self.editor.import_units(),
             materials: &materials,
             material: self.editor.current_material(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
@@ -558,8 +562,8 @@ fn window_title(path: Option<&Path>, modified: bool) -> String {
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
-/// the physical key so shortcuts and digits work on any layout; with Shift held the physical
-/// letter is uppercased (ASCII characters already have Shift applied by the layout).
+/// the physical key so shortcuts and digits work on any layout. A letter is uppercase exactly
+/// when Shift is held, so Caps Lock does not turn "g" (make group) into "G" (make component).
 fn editor_key(logical: &Key, physical: PhysicalKey, shift: bool) -> Option<EditorKey> {
     match logical {
         Key::Named(NamedKey::Enter) => Some(EditorKey::Enter),
@@ -574,16 +578,18 @@ fn editor_key(logical: &Key, physical: PhysicalKey, shift: bool) -> Option<Edito
         Key::Named(NamedKey::Space) => Some(EditorKey::Char(' ')),
         Key::Character(text) => {
             let c = text.chars().next()?;
-            if c.is_ascii() {
-                Some(EditorKey::Char(c))
+            let c = if c.is_ascii() {
+                c
             } else {
-                let c = physical_char(physical)?;
-                Some(EditorKey::Char(if shift {
-                    c.to_ascii_uppercase()
-                } else {
-                    c
-                }))
-            }
+                physical_char(physical)?
+            };
+            Some(EditorKey::Char(if !c.is_ascii_alphabetic() {
+                c
+            } else if shift {
+                c.to_ascii_uppercase()
+            } else {
+                c.to_ascii_lowercase()
+            }))
         }
         _ => None,
     }
@@ -989,7 +995,13 @@ mod tests {
             Some('Z'),
             "Shift+Z zooms extents"
         );
-        let ascii = Key::Character(SmolStr::new("g"));
-        assert_eq!(ch(editor_key(&ascii, g, true)), Some('g'));
+        // Caps Lock changes the character the layout gives, not the shortcut.
+        let caps = Key::Character(SmolStr::new("G"));
+        assert_eq!(ch(editor_key(&caps, g, false)), Some('g'));
+        let shifted = Key::Character(SmolStr::new("g"));
+        assert_eq!(ch(editor_key(&shifted, g, true)), Some('G'));
+        let digit = Key::Character(SmolStr::new("5"));
+        let five = PhysicalKey::Code(KeyCode::Digit5);
+        assert_eq!(ch(editor_key(&digit, five, true)), Some('5'));
     }
 }

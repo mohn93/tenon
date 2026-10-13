@@ -1,12 +1,13 @@
 //! The Circle tool: click the center, then a point on the rim (or type the radius). The
 //! circle lies on the face under the center click, or on a horizontal plane. Typing "24s" sets
-//! the number of sides, before or during a circle; the count is kept while the Circle tool stays selected.
+//! the number of sides, before or during a circle; the count is kept for the session, also
+//! when another tool is selected in between.
 
 use glam::DVec3;
 use session::{Command, DEFAULT_CIRCLE_SEGMENTS, circle_points};
 
 use crate::rectangle::{on_plane, plane_normal};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, parse_segments};
 
 #[derive(Clone, Debug)]
@@ -31,6 +32,14 @@ impl Default for CircleTool {
 impl CircleTool {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A Circle tool drawing circles of `sides` sides (a count `circle_points` accepts).
+    pub fn with_sides(sides: u32) -> Self {
+        CircleTool {
+            segments: sides,
+            ..Self::default()
+        }
     }
 
     /// The radius from the center to the cursor.
@@ -133,6 +142,10 @@ impl Tool for CircleTool {
     fn on_external_change(&mut self) {
         self.center = None;
         self.hover = None;
+    }
+
+    fn remember(&self, r: &mut Remembered) {
+        r.circle_sides = self.segments;
     }
 }
 

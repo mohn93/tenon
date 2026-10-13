@@ -205,8 +205,8 @@ material as their front, so the material on the side facing the pull ends up out
 
 In the window, the Paint tool (`b`) paints the side of a face facing the viewer with the
 current material (a click on something selected paints the whole selection's faces and
-groups, a click on a group paints the group), and Cmd-click or Ctrl-click (either key, on every
-system) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
+groups, a click on a group paints the group), and Cmd-click on macOS (Ctrl-click on Windows
+and Linux) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
 current material and adds, renames, recolors and deletes materials, all through these commands.
 
 ### Groups and components
@@ -275,8 +275,8 @@ open:
 In the window, the Outliner under the Materials list shows this tree (components as `<Name>`,
 groups by name or as `Group`, selected rows highlighted, open ones bold, nodes on the open path
 expanded whenever the open context changes) and sends these same commands: a click selects the
-node, with `open_path` first when it is in another context; Shift-click, Cmd-click or Ctrl-click
-(either key on every system) adds it to or removes it from the selection when it is in the open
+node, with `open_path` first when it is in another context; Shift-click, or Cmd-click on macOS
+(Ctrl-click on Windows and Linux), adds it to or removes it from the selection when it is in the open
 context (`select` with mode `toggle`); a double-click opens it (`open_path` with its whole path);
 the Model row at the top goes back to the root (`open_path` with `[]`; nothing when already
 there).
@@ -320,8 +320,8 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "standard_view", "view": "top"}` | Looks at the target from a standard direction, from the same distance: `top` (from +Z, `up` +Y), `bottom` (from -Z, `up` +Y), `front` (from -Y, looking along +Y), `back` (from +Y), `left` (from -X), `right` (from +X), `iso` (from the front left above, along (1,1,-1)). The projection does not change. |
 | `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
 
-In the window, the Camera menu has Zoom Extents (Shift+Z), the standard views and the two
-projections; it sends these same commands.
+In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
+standard views and the two projections; it sends these same commands.
 
 ### Files
 
@@ -433,7 +433,10 @@ beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error 
 `import` is allowed in an atomic batch.
 
 In the window, File > Import... (Cmd+I) picks an OBJ or STL file and imports it as a group
-with these defaults; the status line reports the faces made and polygons skipped, or the error.
+with these defaults, except that `scale` follows File > Import Units (meters, centimeters,
+millimeters, inches or feet per file unit; meters until changed, kept for the session); the
+status line reports the faces made (and the units when not meters) and polygons skipped, or the
+error.
 
 Details: for `"as": "context"` the report's `faces` counts the faces built from the file, before
 they merge with what is already in the context. A `.mtl` over 16 MiB is ignored, as is a library

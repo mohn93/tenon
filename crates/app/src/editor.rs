@@ -12,8 +12,8 @@ use session::{
 };
 use tools::overlay::overlay;
 use tools::{
-    Axis, Guides, Inference, Lock, Scenery, SnapKind, Tool, ToolContext, ToolEvent, ToolKind,
-    ToolOutput, edge_under_in, infer_in,
+    Axis, Guides, Inference, Lock, Remembered, Scenery, SnapKind, Tool, ToolContext, ToolEvent,
+    ToolKind, ToolOutput, edge_under_in, infer_in,
 };
 
 use crate::navigation::{Button, Navigation};
@@ -73,6 +73,8 @@ pub struct Editor {
     nav: Navigation,
     tool: Box<dyn Tool>,
     kind: ToolKind,
+    /// Tool settings kept across tool switches (circle sides, arc segments).
+    remembered: Remembered,
     /// Whether Shift is held, as last reported by the window.
     shift: bool,
     /// Whether the left-button press reached the tool, so its release should too.
@@ -96,6 +98,60 @@ pub struct Editor {
     material: Option<MaterialId>,
     /// Whether the sampling modifier (Cmd or Ctrl) is held.
     sample: bool,
+    /// What one unit in an imported file is (OBJ and STL files carry no units).
+    import_units: ImportUnits,
+    /// The extension of the last file exported, which the export dialog suggests next.
+    last_export: &'static str,
+}
+
+/// The formats File > Export offers, as (filter name, extension).
+pub const EXPORT_FORMATS: [(&str, &str); 4] = [
+    ("OBJ", "obj"),
+    ("STL", "stl"),
+    ("glTF binary", "glb"),
+    ("glTF", "gltf"),
+];
+
+/// The length one unit of an imported OBJ or STL file stands for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImportUnits {
+    #[default]
+    Meters,
+    Centimeters,
+    Millimeters,
+    Inches,
+    Feet,
+}
+
+impl ImportUnits {
+    pub const ALL: [ImportUnits; 5] = [
+        ImportUnits::Meters,
+        ImportUnits::Centimeters,
+        ImportUnits::Millimeters,
+        ImportUnits::Inches,
+        ImportUnits::Feet,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ImportUnits::Meters => "Meters",
+            ImportUnits::Centimeters => "Centimeters",
+            ImportUnits::Millimeters => "Millimeters",
+            ImportUnits::Inches => "Inches",
+            ImportUnits::Feet => "Feet",
+        }
+    }
+
+    /// Meters per file unit: the import command's `scale`.
+    pub fn meters(self) -> f64 {
+        match self {
+            ImportUnits::Meters => 1.0,
+            ImportUnits::Centimeters => 0.01,
+            ImportUnits::Millimeters => 0.001,
+            ImportUnits::Inches => 0.0254,
+            ImportUnits::Feet => 0.3048,
+        }
+    }
 }
 
 /// The colors the Materials panel offers; new materials get them in turn.
@@ -121,6 +177,7 @@ impl Editor {
             nav: Navigation::default(),
             tool: ToolKind::Line.make(),
             kind: ToolKind::Line,
+            remembered: Remembered::default(),
             shift: false,
             tool_pressed: false,
             reference: None,
@@ -134,6 +191,8 @@ impl Editor {
             scale_factor,
             material: None,
             sample: false,
+            import_units: ImportUnits::Meters,
+            last_export: "obj",
         }
     }
 
@@ -167,8 +226,11 @@ impl Editor {
     }
 
     /// Switches to another tool, dropping the current tool's operation and any typed text.
+    /// Switches to the tool `kind` (a fresh one, even if it is the current tool), keeping the
+    /// settings tools remember for the session, such as circle sides.
     pub fn select_tool(&mut self, kind: ToolKind) {
-        self.tool = kind.make();
+        self.tool.remember(&mut self.remembered);
+        self.tool = kind.make_with(&self.remembered);
         self.kind = kind;
         self.preview.clear();
         self.typed.clear();
@@ -303,10 +365,12 @@ impl Editor {
     }
 
     /// A key-repeat event. Backspace only deletes typed text and Delete does nothing, so holding
-    /// them never erases the selection; other keys behave as in [`Editor::key`].
+    /// them never erases the selection; a held letter shortcut (a tool, "g", Shift+G, Shift+Z)
+    /// acts once; other keys behave as in [`Editor::key`].
     pub fn key_repeat(&mut self, key: EditorKey) -> bool {
         match key {
             EditorKey::Backspace => self.typed.pop().is_some(),
+            EditorKey::Char(_) if self.typed.is_empty() => false,
             // Holding an arrow key must not toggle the lock at the repeat rate.
             EditorKey::Delete | EditorKey::LockAxis(_) | EditorKey::Unlock => false,
             _ => self.key(key),
@@ -661,12 +725,39 @@ impl Editor {
         };
         let skipped = outcome.export.map_or(0, |r| r.skipped_faces);
         self.message = Some(export_message(path, skipped));
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+        if let Some((_, ext)) = EXPORT_FORMATS
+            .iter()
+            .find(|(_, x)| Some(*x) == ext.as_deref())
+        {
+            self.last_export = ext;
+        }
         true
     }
 
+    /// The export formats, the one exported to last first (OBJ before any export): the
+    /// export dialog lists them in this order and suggests the first one's extension.
+    pub fn export_formats(&self) -> Vec<(&'static str, &'static str)> {
+        let (last, rest): (Vec<_>, Vec<_>) = EXPORT_FORMATS
+            .iter()
+            .copied()
+            .partition(|(_, x)| *x == self.last_export);
+        [last, rest].concat()
+    }
+
+    /// The unit imported files are read in.
+    pub fn import_units(&self) -> ImportUnits {
+        self.import_units
+    }
+
+    /// Sets the unit imported files are read in, for the rest of the session.
+    pub fn set_import_units(&mut self, units: ImportUnits) {
+        self.import_units = units;
+    }
+
     /// Imports an OBJ or STL file (the format its extension names) as a group in the open
-    /// context, which becomes the selection, as one undo step. False if it cannot be
-    /// imported; the status then says why.
+    /// context, which becomes the selection, as one undo step. One file unit is one
+    /// `import_units`. False if it cannot be imported; the status then says why.
     pub fn import_file(&mut self, path: &Path) -> bool {
         self.reset_tool();
         self.typed.clear();
@@ -675,7 +766,7 @@ impl Editor {
             path: path.display().to_string(),
             format: None,
             place: ImportAs::Group,
-            scale: None,
+            scale: (self.import_units != ImportUnits::Meters).then(|| self.import_units.meters()),
             up: None,
             merge_coplanar: None,
         });
@@ -690,10 +781,14 @@ impl Editor {
             1 => "1 face".to_string(),
             n => format!("{n} faces"),
         };
+        let units = match self.import_units {
+            ImportUnits::Meters => String::new(),
+            u => format!(" in {}", u.label().to_lowercase()),
+        };
         self.message = Some(match report.skipped {
-            0 => format!("Imported {name}: {faces}"),
-            1 => format!("Imported {name}: {faces}; 1 polygon skipped"),
-            n => format!("Imported {name}: {faces}; {n} polygons skipped"),
+            0 => format!("Imported {name}{units}: {faces}"),
+            1 => format!("Imported {name}{units}: {faces}; 1 polygon skipped"),
+            n => format!("Imported {name}{units}: {faces}; {n} polygons skipped"),
         });
         true
     }
@@ -1443,6 +1538,31 @@ mod tests {
         assert_eq!(e.doc().selection().len(), 1);
         assert!(!e.key_repeat(EditorKey::Delete));
         assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
+    fn held_letter_shortcuts_act_once() {
+        let mut e = editor();
+        square(&mut e);
+        e.key(EditorKey::Char(' '));
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert!(e.key(EditorKey::Char('g')));
+        assert_eq!(e.doc().model().instances().count(), 1);
+        let camera = e.doc().camera.clone();
+        for c in ['g', 'G', 'Z', 'l'] {
+            assert!(!e.key_repeat(EditorKey::Char(c)), "{c}");
+        }
+        assert_eq!(
+            e.doc().model().instances().count(),
+            1,
+            "no group of the group"
+        );
+        assert_eq!(e.doc().camera, camera, "no zoom at the repeat rate");
+        assert_eq!(e.tool_kind(), ToolKind::Select);
+        // Typed text still repeats.
+        e.key(EditorKey::Char('1'));
+        assert!(e.key_repeat(EditorKey::Char('1')));
+        assert!(e.status().contains("11_"), "{}", e.status());
     }
 
     #[test]
@@ -2529,6 +2649,23 @@ mod tests {
     }
 
     #[test]
+    fn the_export_dialog_suggests_the_last_format_exported() {
+        let mut e = editor();
+        square(&mut e);
+        assert_eq!(e.export_formats()[0], ("OBJ", "obj"));
+        let path = temp_file("suggest.STL");
+        assert!(e.export_file(&path));
+        let formats = e.export_formats();
+        assert_eq!(formats[0], ("STL", "stl"));
+        assert_eq!(formats.len(), EXPORT_FORMATS.len());
+        assert!(formats.contains(&("OBJ", "obj")));
+        // A failed export changes nothing.
+        assert!(!e.export_file(&temp_file("suggest.skr")));
+        assert_eq!(e.export_formats()[0], ("STL", "stl"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn importing_adds_a_selected_group_and_reports_it() {
         let mut e = editor();
         let path = temp_file("tri.obj");
@@ -2551,6 +2688,41 @@ mod tests {
         let missing = temp_file("missing.stl");
         assert!(!e.import_file(&missing));
         assert!(e.status().contains("missing.stl"), "{}", e.status());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn imports_read_the_chosen_units() {
+        let mut e = editor();
+        let path = temp_file("mm.stl");
+        let triangle = "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\n\
+                        vertex 2000 0 0\nvertex 0 500 0\nendloop\nendfacet\nendsolid t\n";
+        std::fs::write(&path, triangle).unwrap();
+        let widest = |e: &Editor| {
+            let (_, i) = e.doc().model().instances().next().unwrap();
+            let mesh = e
+                .doc()
+                .scene()
+                .mesh(kernel::MeshId::Definition(i.definition))
+                .unwrap();
+            mesh.vertices().map(|(_, v)| v.pos.x).fold(0.0, f64::max)
+        };
+        assert_eq!(e.import_units(), ImportUnits::Meters);
+        assert!(e.import_file(&path));
+        assert_eq!(widest(&e), 2000.0);
+        e.undo();
+        e.set_import_units(ImportUnits::Millimeters);
+        assert!(e.import_file(&path));
+        assert!((widest(&e) - 2.0).abs() < 1e-12, "{}", widest(&e));
+        assert!(
+            e.status().contains("mm.stl in millimeters: 1 face"),
+            "{}",
+            e.status()
+        );
+        e.undo();
+        e.set_import_units(ImportUnits::Inches);
+        assert!(e.import_file(&path));
+        assert!((widest(&e) - 50.8).abs() < 1e-9, "{}", widest(&e));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -2597,6 +2769,27 @@ mod tests {
         click_at(&mut e, DVec3::new(5.0, 0.0, 0.0));
         click_at(&mut e, DVec3::new(6.0, 0.0, 0.0));
         assert_eq!(stats(&e), (16, 2));
+    }
+
+    #[test]
+    fn side_and_segment_counts_last_across_tool_switches() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Circle);
+        type_text(&mut e, "8s");
+        e.select_tool(ToolKind::Arc);
+        type_text(&mut e, "5s");
+        e.select_tool(ToolKind::Line);
+        e.select_tool(ToolKind::Circle);
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(stats(&e), (8, 1));
+        // Reselecting the tool that is in use keeps the count too.
+        e.select_tool(ToolKind::Arc);
+        e.select_tool(ToolKind::Arc);
+        click_at(&mut e, DVec3::new(4.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(6.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(5.0, 1.0, 0.0));
+        assert_eq!(e.doc().model().edges().count(), 8 + 5);
     }
 
     #[test]
