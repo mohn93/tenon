@@ -19,5 +19,9 @@ egui-winit.workspace = true
 kernel = { path = "../kernel" }
 rfd.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true

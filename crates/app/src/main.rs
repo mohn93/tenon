@@ -1,4 +1,5 @@
 mod app;
+mod awake;
 mod cli;
 mod editor;
 mod gui;

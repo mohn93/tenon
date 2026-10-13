@@ -16,6 +16,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use crate::awake::Awake;
 use crate::editor::{Editor, EditorKey};
 use crate::gui::Gui;
 use crate::host::WindowHost;
@@ -807,6 +808,8 @@ fn map_button(button: MouseButton) -> Button {
 pub struct App {
     state: Option<State>,
     hub: Hub,
+    /// Held while agents are connected, so macOS does not nap the window they drive.
+    awake: Awake,
     /// Socket the agent API listens on, removed on exit (None if listening failed).
     socket: Option<PathBuf>,
     /// A model to open once the window exists.
@@ -841,6 +844,7 @@ impl App {
         Self {
             state: None,
             hub,
+            awake: Awake::default(),
             socket,
             file,
         }
@@ -873,6 +877,7 @@ impl ApplicationHandler<ApiWake> for App {
         if let Some(s) = self.state.as_mut() {
             s.process_api(&mut self.hub);
         }
+        self.awake.set(self.hub.open_connections() > 0);
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
