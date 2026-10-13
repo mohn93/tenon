@@ -29,8 +29,9 @@ A new scene needs a test calling `check("<name>", &doc)` and its name in
 
 ## Timings
 
-`crates/kernel/tests/perf.rs` times big edits (copying 30 circles three times, edits inside a
-20,000-face imported group, exploding an imported group). Its tests are ignored by default;
+`crates/kernel/tests/perf.rs` times big edits (copying 30 circles three and a hundred times,
+copying an exploded 1,800-face terrain, edits inside a 20,000-face imported group, exploding
+imported groups of 1,800 and 20,000 faces). Its tests are ignored by default;
 run them in release, where they also check loose upper bounds:
 
 ```

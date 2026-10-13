@@ -2,10 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use glam::DVec2;
+use glam::{DVec2, DVec3};
 
 use crate::geom::{LENGTH_TOL, point_in_polygon, segment_distance_2d, signed_area2};
 use crate::ids::VertexId;
+use crate::index::{Index, Shape};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Region {
@@ -120,8 +121,9 @@ impl PlaneGraph {
     }
 
     /// A point strictly inside the region: just inside the middle of one of its sides, closer to
-    /// that side than to any other edge of the graph.
-    pub fn interior_point(&self, r: &Region) -> Option<DVec2> {
+    /// that side than to any other edge of the graph. `near` is `edge_index()`, or None to
+    /// scan the edges (same result).
+    pub fn interior_point(&self, r: &Region, near: Option<&Index>) -> Option<DVec2> {
         let outer = self.poly(&r.outer);
         let holes: Vec<Vec<DVec2>> = r.holes.iter().map(|h| self.poly(h)).collect();
         let inside =
@@ -131,13 +133,33 @@ impl PlaneGraph {
                 let (a, b) = (l[i], l[(i + 1) % l.len()]);
                 let (pa, pb) = (self.pos[&a], self.pos[&b]);
                 let mid = (pa + pb) * 0.5;
-                let clearance = self
-                    .edges
-                    .iter()
-                    .filter(|e| **e != [a, b] && **e != [b, a])
-                    .map(|e| segment_distance_2d(mid, self.pos[&e[0]], self.pos[&e[1]]))
-                    .fold(f64::INFINITY, f64::min);
                 let side = pb - pa;
+                let distance = |e: &[VertexId; 2]| {
+                    (*e != [a, b] && *e != [b, a])
+                        .then(|| segment_distance_2d(mid, self.pos[&e[0]], self.pos[&e[1]]))
+                };
+                let clearance = match near {
+                    None => self
+                        .edges
+                        .iter()
+                        .filter_map(distance)
+                        .fold(f64::INFINITY, f64::min),
+                    // Only edges nearer than twice the step can make the step shorter, so
+                    // looking within four times it gives the step a full scan gives.
+                    Some(index) => {
+                        let reach = 4e-4 * side.length();
+                        let at = mid.extend(0.0);
+                        let mut nearest = f64::INFINITY;
+                        index.near_segment(at, at, reach, |shape| {
+                            if let Shape::Segment(k, ..) = shape
+                                && let Some(d) = distance(&self.edges[k.0 as usize])
+                            {
+                                nearest = nearest.min(d);
+                            }
+                        });
+                        nearest
+                    }
+                };
                 let eps = (1e-4 * side.length()).min(0.5 * clearance);
                 // The region lies left of every side: left of a CCW outer and of a CW hole.
                 let p = mid + side.perp().normalize() * eps;
@@ -147,6 +169,17 @@ impl PlaneGraph {
             }
         }
         None
+    }
+
+    /// An index over the graph's edges (at z = 0, each under its position in `edges`), for
+    /// `interior_point`.
+    pub fn edge_index(&self) -> Index {
+        let segments: Vec<(DVec3, DVec3)> = self
+            .edges
+            .iter()
+            .map(|[a, b]| (self.pos[a].extend(0.0), self.pos[b].extend(0.0)))
+            .collect();
+        Index::of_segments(&segments)
     }
 
     pub fn poly(&self, l: &[VertexId]) -> Vec<DVec2> {
@@ -315,7 +348,9 @@ mod tests {
         let r = g.regions();
         assert_eq!(r.len(), 2);
         for region in &r {
-            let p = g.interior_point(region).unwrap();
+            let p = g.interior_point(region, None).unwrap();
+            // The edge index finds the same point.
+            assert_eq!(g.interior_point(region, Some(&g.edge_index())), Some(p));
             let in_square = point_in_polygon(p, &g.poly(&ids(&[0, 1, 2, 3])));
             assert_eq!(in_square, region.outer.len() == 4, "{p} for {region:?}");
         }
@@ -349,8 +384,45 @@ mod tests {
             outer: ids(&[0, 1, 2, 3]),
             holes: vec![ids(&[4, 5, 6, 7])],
         };
-        let p = g.interior_point(&ring).unwrap();
+        let p = g.interior_point(&ring, None).unwrap();
+        assert_eq!(g.interior_point(&ring, Some(&g.edge_index())), Some(p));
         assert!(point_in_polygon(p, &g.poly(&ring.outer)));
         assert!(!point_in_polygon(p, &g.poly(&ring.holes[0])));
+    }
+
+    #[test]
+    fn interior_points_found_with_the_edge_index_match_a_scan() {
+        // A row of squares, each with a thin sliver under its bottom side, so the step inside
+        // a side depends on the nearest other edge.
+        let mut pts = Vec::new();
+        let mut edges = Vec::new();
+        for k in 0..40 {
+            let (x, n) = (k as f64 * 12.0, pts.len() as u64);
+            let dip = 0.0001 * (1 + k % 7) as f64;
+            pts.extend([
+                (x, 0.0),
+                (x + 10.0, 0.0),
+                (x + 10.0, 10.0),
+                (x, 10.0),
+                (x + 5.0, -dip),
+            ]);
+            edges.extend([
+                (n, n + 1),
+                (n + 1, n + 2),
+                (n + 2, n + 3),
+                (n + 3, n),
+                (n, n + 4),
+            ]);
+            edges.push((n + 4, n + 1));
+        }
+        let g = graph(&pts, &edges);
+        let index = g.edge_index();
+        let regions = g.regions();
+        assert_eq!(regions.len(), 80);
+        for r in &regions {
+            let p = g.interior_point(r, None);
+            assert!(p.is_some(), "{r:?}");
+            assert_eq!(g.interior_point(r, Some(&index)), p, "{r:?}");
+        }
     }
 }

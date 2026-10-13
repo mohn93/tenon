@@ -532,8 +532,8 @@ mod tests {
             divide.commands,
             vec![Command::Undo, rotate(&["f8"], [0.0; 3], 30.0, Some(3))]
         );
-        let big = r.send(ToolEvent::Value("101x".into()));
-        assert_eq!(big.message.as_deref(), Some("At most 100 copies"));
+        let big = r.send(ToolEvent::Value("1001x".into()));
+        assert_eq!(big.message.as_deref(), Some("At most 1000 copies"));
     }
 
     #[test]

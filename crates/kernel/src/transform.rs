@@ -9,6 +9,7 @@ use crate::geom::{
     LENGTH_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d, vector_area,
 };
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
+use crate::index::{Index, Shape};
 use crate::model::{ChangeSet, Face, Model};
 
 impl Model {
@@ -245,12 +246,16 @@ impl Model {
             .collect();
         // Existing faces in a plane the drawing reaches, by position: (outer ring, holes).
         let ring = |m: &Model, l: &[VertexId]| l.iter().map(|v| m.pos(*v)).collect::<Vec<_>>();
+        let segment_index = Index::of_segments(&segments);
         let before: Vec<(Vec<DVec3>, Vec<Vec<DVec3>>)> = self
             .faces()
             .filter(|(_, f)| {
                 let o = self.pos(f.outer[0]);
                 let on = |p: DVec3| (p - o).dot(f.normal).abs() < LENGTH_TOL;
-                segments.iter().any(|(a, b)| on(*a) && on(*b))
+                segment_index.any_near_plane(&Plane::through(o, f.normal), |k| {
+                    let (a, b) = segments[k.0 as usize];
+                    on(a) && on(b)
+                })
             })
             .map(|(_, f)| {
                 let holes = f.holes.iter().map(|h| ring(self, h)).collect();
@@ -299,6 +304,21 @@ impl Model {
             .collect();
         let within =
             |id: FaceId, ring: &Option<RingTest>| samples.get(&id).is_some_and(|s| s.within(ring));
+        // The new faces a ring may hold, in id order: those whose sample point lies in the
+        // ring's box (a face within the ring has its sample there).
+        let sample_index = Index::of_points(samples.iter().map(|(id, s)| (id.0, s.inside)));
+        let candidates = |ring: &Option<RingTest>| -> Vec<FaceId> {
+            let Some(r) = ring else { return Vec::new() };
+            let pad = DVec3::splat(RING_BOX_PAD);
+            let mut ids = Vec::new();
+            sample_index.near_box(r.min - pad, r.max + pad, |shape| {
+                if let Shape::Point(n, _) = shape {
+                    ids.push(FaceId(n.0));
+                }
+            });
+            ids.sort();
+            ids
+        };
         let tests = |rings: &[Vec<DVec3>]| rings.iter().map(|r| RingTest::new(r)).collect();
         let placed_tests: Vec<PlacedTest> = placed
             .iter()
@@ -308,14 +328,17 @@ impl Model {
                 filled: tests(&f.filled),
             })
             .collect();
-        let own = |id: FaceId| {
-            placed_tests
-                .iter()
-                .any(|f| within(id, &f.outer) && !f.openings.iter().any(|h| within(id, h)))
-        };
+        let own: BTreeSet<FaceId> = placed_tests
+            .iter()
+            .flat_map(|f| {
+                candidates(&f.outer).into_iter().filter(|id| {
+                    within(*id, &f.outer) && !f.openings.iter().any(|h| within(*id, h))
+                })
+            })
+            .collect();
         // Give each piece of a stencil face that face's orientation and materials.
         for (f, t) in placed.iter().zip(&placed_tests) {
-            for &id in &new {
+            for id in candidates(&t.outer) {
                 let in_hole = t.openings.iter().chain(&t.filled).any(|h| within(id, h));
                 if within(id, &t.outer) && !in_hole {
                     self.orient(id, f.normal);
@@ -329,19 +352,34 @@ impl Model {
             .iter()
             .map(|(outer, holes)| (RingTest::new(outer), tests(holes)))
             .collect();
-        let split_off = |id: FaceId| {
-            before
-                .iter()
-                .any(|(outer, holes)| within(id, outer) && !holes.iter().any(|h| within(id, h)))
-        };
+        let split_off: BTreeSet<FaceId> = before
+            .iter()
+            .flat_map(|(outer, holes)| {
+                candidates(outer)
+                    .into_iter()
+                    .filter(|id| within(*id, outer) && !holes.iter().any(|h| within(*id, h)))
+            })
+            .collect();
         // Drawing the sides also closes loops the stencil has no face on (openings, a missing
         // lid); take those out. A face stays if it is the stencil's, a piece of an existing
         // face, or if a side of it is not on the stencil.
+        // The test below accepts points up to 1e-9 of a segment's length past its ends.
+        let reach = segments
+            .iter()
+            .map(|(a, b)| a.distance(*b))
+            .fold(0.0, f64::max);
         let on_stencil = |p: DVec3| {
-            segments.iter().any(|(a, b)| {
-                let (u, d) = project_on_segment(p, *a, *b);
-                (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL
-            })
+            let mut on = false;
+            segment_index.near_segment(p, p, LENGTH_TOL + 1e-9 * reach, |shape| {
+                if let Shape::Segment(k, ..) = shape
+                    && !on
+                {
+                    let (a, b) = segments[k.0 as usize];
+                    let (u, d) = project_on_segment(p, a, b);
+                    on = (-1e-9..=1.0 + 1e-9).contains(&u) && d < LENGTH_TOL;
+                }
+            });
+            on
         };
         let extra: Vec<FaceId> = new
             .iter()
@@ -349,8 +387,8 @@ impl Model {
             .filter(|id| {
                 let f = self.face(*id).unwrap();
                 let n = f.outer.len();
-                !own(*id)
-                    && !split_off(*id)
+                !own.contains(id)
+                    && !split_off.contains(id)
                     && (0..n).all(|i| {
                         let (a, b) = (self.pos(f.outer[i]), self.pos(f.outer[(i + 1) % n]));
                         on_stencil(a) && on_stencil((a + b) / 2.0)
@@ -448,7 +486,14 @@ struct RingTest {
     outline: Vec<DVec2>,
     lo: DVec2,
     hi: DVec2,
+    /// The ring's box in model space.
+    min: DVec3,
+    max: DVec3,
 }
+
+/// How far past a ring's box a face sample within the ring may lie (it is within
+/// `LENGTH_TOL` of the ring's plane; the rest covers rounding).
+const RING_BOX_PAD: f64 = 10.0 * LENGTH_TOL;
 
 impl RingTest {
     /// None for a ring with no area.
@@ -464,12 +509,17 @@ impl RingTest {
             .fold((DVec2::MAX, DVec2::MIN), |(lo, hi), p| {
                 (lo.min(*p), hi.max(*p))
             });
+        let (min, max) = ring.iter().fold((DVec3::MAX, DVec3::MIN), |(lo, hi), p| {
+            (lo.min(*p), hi.max(*p))
+        });
         Some(RingTest {
             origin: ring[0],
             plane,
             outline,
             lo,
             hi,
+            min,
+            max,
         })
     }
 }

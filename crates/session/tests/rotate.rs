@@ -2,7 +2,7 @@
 
 use glam::DVec2;
 use serde_json::{Value, json};
-use session::{Command, Document, ErrorKind, Query};
+use session::{Command, Document, ErrorKind, MAX_COPIES, Query};
 
 fn doc() -> Document {
     Document::new(DVec2::new(800.0, 600.0))
@@ -288,7 +288,7 @@ fn bad_rotations_are_refused() {
         rot(json!({"center": [2e6, 0, 0]})),
         rot(json!({"center": [1e6, 0, 0], "angle": 180})),
         rot(json!({"copies": 0})),
-        rot(json!({"copies": 101})),
+        rot(json!({"copies": MAX_COPIES + 1})),
         rot(json!({"ids": ["v0"], "copies": 1})),
     ] {
         let (kind, _) = run(&mut d, bad.clone()).unwrap_err();

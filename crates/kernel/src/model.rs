@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ops::Range;
 use std::sync::OnceLock;
 
 use glam::{DAffine3, DVec3};
@@ -665,6 +666,20 @@ impl Model {
     /// The id the next new entity gets.
     pub(crate) fn next_id(&self) -> u64 {
         self.next_id
+    }
+
+    /// The vertices with ids in `ids`, in id order.
+    pub(crate) fn vertices_in(&self, ids: Range<u64>) -> impl Iterator<Item = VertexId> + '_ {
+        self.vertices
+            .range(VertexId(ids.start)..VertexId(ids.end))
+            .map(|(k, _)| *k)
+    }
+
+    /// The edges with ids in `ids`, in id order.
+    pub(crate) fn edges_in(&self, ids: Range<u64>) -> impl Iterator<Item = EdgeId> + '_ {
+        self.edges
+            .range(EdgeId(ids.start)..EdgeId(ids.end))
+            .map(|(k, _)| *k)
     }
 
     /// Makes new entities get ids from `first` on (or later), so that ids stay unique across

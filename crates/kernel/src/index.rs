@@ -1,6 +1,8 @@
 //! A bounding volume hierarchy over the model's vertices, edges and face triangles, so ray
 //! picks and cursor snaps visit only the geometry near a ray instead of the whole model.
 
+use std::ops::Range;
+
 use glam::DVec3;
 
 use crate::geom::{LENGTH_TOL, Plane};
@@ -79,6 +81,45 @@ impl Index {
             .map(|(id, e)| Shape::Segment(id, model.pos(e.v[0]), model.pos(e.v[1])))
             .collect();
         Index::from_shapes(shapes)
+    }
+
+    /// An index over the model's vertices and edges with ids in `ids`, for `near_segment`.
+    pub(crate) fn of_points_and_edges(model: &Model, ids: Range<u64>) -> Index {
+        let mut shapes: Vec<Shape> = model
+            .vertices_in(ids.clone())
+            .map(|id| Shape::Point(id, model.pos(id)))
+            .collect();
+        for id in model.edges_in(ids) {
+            let [a, b] = model.edge(id).unwrap().v;
+            shapes.push(Shape::Segment(id, model.pos(a), model.pos(b)));
+        }
+        Index::from_shapes(shapes)
+    }
+
+    /// An index over loose points, each under the number given with it (held as a vertex id;
+    /// the number is the caller's, such as a face id), for `near_box`.
+    pub(crate) fn of_points(points: impl IntoIterator<Item = (u64, DVec3)>) -> Index {
+        let shapes = points
+            .into_iter()
+            .map(|(n, p)| Shape::Point(VertexId(n), p))
+            .collect();
+        Index::from_shapes(shapes)
+    }
+
+    /// An index over loose segments, each under its position in `segments` (held as an edge
+    /// id), for `near_segment` and `any_near_plane`.
+    pub(crate) fn of_segments(segments: &[(DVec3, DVec3)]) -> Index {
+        let shapes = segments
+            .iter()
+            .enumerate()
+            .map(|(k, (a, b))| Shape::Segment(EdgeId(k as u64), *a, *b))
+            .collect();
+        Index::from_shapes(shapes)
+    }
+
+    /// The number of shapes held.
+    pub(crate) fn len(&self) -> usize {
+        self.shapes.len()
     }
 
     fn from_shapes(shapes: Vec<Shape>) -> Index {
@@ -204,9 +245,24 @@ impl Index {
         hits.into_iter().collect()
     }
 
-    /// Calls `visit` for every edge whose bounding box comes within `LENGTH_TOL` of `plane`
+    /// Calls `visit` for every edge whose ends both lie within twice `LENGTH_TOL` of `plane`
     /// (a superset of the edges lying in it; callers test exactly).
     pub(crate) fn segments_near_plane(&self, plane: &Plane, mut visit: impl FnMut(EdgeId)) {
+        self.any_near_plane(plane, |e| {
+            visit(e);
+            false
+        });
+    }
+
+    /// True when `test` holds for one of the edges whose ends both lie within twice
+    /// `LENGTH_TOL` of `plane` (a superset of the edges within `LENGTH_TOL`); stops at the
+    /// first.
+    pub(crate) fn any_near_plane(
+        &self,
+        plane: &Plane,
+        mut test: impl FnMut(EdgeId) -> bool,
+    ) -> bool {
+        let near = |p: DVec3| plane.distance(p).abs() < 2.0 * LENGTH_TOL;
         let mut stack = vec![0];
         while let Some(i) = stack.pop() {
             let Some(node) = self.nodes.get(i) else {
@@ -221,11 +277,53 @@ impl Index {
                 Kids::Inner(l, r) => stack.extend([l, r]),
                 Kids::Leaf(s, e) => {
                     for shape in &self.shapes[s..e] {
-                        if let Shape::Segment(id, ..) = shape {
-                            visit(*id);
+                        if let Shape::Segment(id, a, b) = *shape
+                            && near(a)
+                            && near(b)
+                            && test(id)
+                        {
+                            return true;
                         }
                     }
                 }
+            }
+        }
+        false
+    }
+
+    /// Calls `visit` for every shape whose bounding box meets the box `min`..`max`.
+    pub(crate) fn near_box(&self, min: DVec3, max: DVec3, mut visit: impl FnMut(&Shape)) {
+        let mut stack = vec![0];
+        while let Some(i) = stack.pop() {
+            let Some(node) = self.nodes.get(i) else {
+                break;
+            };
+            if node.min.cmpgt(max).any() || node.max.cmplt(min).any() {
+                continue;
+            }
+            match node.kids {
+                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Leaf(s, e) => self.shapes[s..e].iter().for_each(&mut visit),
+            }
+        }
+    }
+
+    /// Calls `visit` for every shape whose bounding box comes within `pad` of the segment a-b
+    /// (a superset of the shapes within `pad` of it; callers test exactly). `a == b` asks
+    /// about one point.
+    pub(crate) fn near_segment(&self, a: DVec3, b: DVec3, pad: f64, mut visit: impl FnMut(&Shape)) {
+        let mut stack = vec![0];
+        while let Some(i) = stack.pop() {
+            let Some(node) = self.nodes.get(i) else {
+                break;
+            };
+            let (min, max) = (node.min - DVec3::splat(pad), node.max + DVec3::splat(pad));
+            if !ray_meets_box(a, b - a, min, max, 1.0) {
+                continue;
+            }
+            match node.kids {
+                Kids::Inner(l, r) => stack.extend([l, r]),
+                Kids::Leaf(s, e) => self.shapes[s..e].iter().for_each(&mut visit),
             }
         }
     }

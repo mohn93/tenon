@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{DVec2, DVec3};
 
+use crate::edit::use_indexes;
 use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, MaterialId, VertexId};
-use crate::index::Index;
+use crate::index::{Index, Shape};
 use crate::model::{Face, Model};
 use crate::regions::{PlaneGraph, Region};
 
@@ -158,18 +159,48 @@ impl Model {
         // Each wanted region with the normal and materials it gets if it is new: those of the old
         // face it lies in (a piece of a split face keeps its paint), or the plane's own normal
         // and no materials when it lies in none.
-        let wanted: Vec<(Region, DVec3, Paint)> = graph
-            .regions()
+        let regions = graph.regions();
+        // Many regions among many edges: find the edges near a side and the old faces around
+        // a point with indexes (same results as scanning).
+        let many = use_indexes(regions.len() * (graph.edges.len() + old.len()) > MANY_PAIRS);
+        let edge_index = many.then(|| graph.edge_index());
+        let old_boxes = many.then(|| {
+            let boxes: Vec<(DVec3, DVec3)> = old_polys
+                .iter()
+                .map(|(o, hs)| box_of(std::iter::once(o).chain(hs)))
+                .collect();
+            Index::of_segments(&boxes)
+        });
+        // The old faces whose box (over all their loops) holds p, in order: a point outside a
+        // polygon's box is outside the polygon.
+        let old_around = |p: DVec2| -> Vec<usize> {
+            match &old_boxes {
+                None => (0..old_polys.len()).collect(),
+                Some(index) => {
+                    let mut found = Vec::new();
+                    index.near_segment(p.extend(0.0), p.extend(0.0), 0.0, |shape| {
+                        if let Shape::Segment(k, ..) = shape {
+                            found.push(k.0 as usize);
+                        }
+                    });
+                    found.sort();
+                    found
+                }
+            }
+        };
+        let wanted: Vec<(Region, DVec3, Paint)> = regions
             .into_iter()
             .filter_map(|r| {
-                let p = graph.interior_point(&r)?;
-                let container = old_polys.iter().position(|(o, hs)| {
+                let p = graph.interior_point(&r, edge_index.as_ref())?;
+                let around = old_around(p);
+                let container = around.iter().copied().find(|i| {
+                    let (o, hs) = &old_polys[*i];
                     point_in_polygon(p, o) && !hs.iter().any(|h| point_in_polygon(p, h))
                 });
                 let in_old_face = container.is_some();
-                let in_old_hole = old_polys
+                let in_old_hole = around
                     .iter()
-                    .any(|(_, hs)| hs.iter().any(|h| point_in_polygon(p, h)));
+                    .any(|i| old_polys[*i].1.iter().any(|h| point_in_polygon(p, h)));
                 let uses_new = std::iter::once(&r.outer).chain(&r.holes).any(|l| {
                     (0..l.len()).any(|i| new_sides.contains(&side(l[i], l[(i + 1) % l.len()])))
                 });
@@ -252,6 +283,20 @@ type Paint = [Option<MaterialId>; 2];
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;
+
+/// Above this many (region, edge or old face) pairs, `rebuild_plane_from` looks things up with
+/// indexes instead of scanning.
+const MANY_PAIRS: usize = 4096;
+
+/// The box around 2D loops, as the diagonal of a segment at z = 0 (for `Index::of_segments`).
+fn box_of<'a>(loops: impl Iterator<Item = &'a Vec<DVec2>>) -> (DVec3, DVec3) {
+    let (lo, hi) = loops
+        .flatten()
+        .fold((DVec2::MAX, DVec2::MIN), |(lo, hi), p| {
+            (lo.min(*p), hi.max(*p))
+        });
+    (lo.extend(0.0), hi.extend(0.0))
+}
 
 /// Distinct planes in the order first inserted, where `Plane::same_as` decides what is
 /// distinct. A grid over normal and offset keeps lookups near constant time.

@@ -31,7 +31,7 @@ use import::ImportOptions;
 pub const MAX_COORDINATE: f64 = 1.0e6;
 
 /// Most copies one `copy` or `rotate` command may make.
-pub const MAX_COPIES: u32 = 100;
+pub const MAX_COPIES: u32 = 1000;
 
 /// How many recent model changes `Query::Events` can return.
 const EVENT_LOG_LEN: usize = 1024;

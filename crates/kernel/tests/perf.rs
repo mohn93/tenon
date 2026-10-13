@@ -164,3 +164,65 @@ fn time_exploding_an_imported_group() {
     scene.validate().unwrap();
     assert!(took < Duration::from_secs(3), "explode took {took:?}");
 }
+
+/// Imports an `n` x `n` terrain as a group and explodes it into the root; returns the scene
+/// and how long the explode took.
+fn exploded_terrain(n: usize) -> (Scene, Duration) {
+    let (points, polygons) = terrain(n);
+    let mut scene = Scene::new();
+    let (instance, report, _) = scene
+        .import_mesh(
+            MeshId::Root,
+            &points,
+            &polygons,
+            true,
+            DefinitionKind::Group,
+            "terrain",
+        )
+        .unwrap();
+    let (_, took) = timed(&format!("explode {} imported faces", report.faces), || {
+        scene.explode(MeshId::Root, instance).unwrap()
+    });
+    assert_eq!(scene.root().faces().count(), report.faces);
+    (scene, took)
+}
+
+#[test]
+#[ignore]
+fn time_copying_an_exploded_terrain_three_times() {
+    let (scene, _) = exploded_terrain(30);
+    let mut m = scene.root().clone();
+    let (edges, faces) = everything(&m);
+    let before = m.clone();
+    let (copy, took) = timed(&format!("copy {} faces 3 times", faces.len()), || {
+        m.copy(&edges, &faces, DVec3::new(40.0, 0.0, 0.0), 3)
+            .unwrap()
+    });
+    assert_eq!(m.faces().count(), faces.len() * 4);
+    m.validate().unwrap();
+    timed("undo the copy", || m.apply(&copy.inverse()));
+    assert_eq!(m, before);
+    assert!(took < Duration::from_secs(3), "copy took {took:?}");
+}
+
+#[test]
+#[ignore]
+fn time_exploding_a_twenty_thousand_face_import() {
+    let (scene, took) = exploded_terrain(100);
+    scene.validate().unwrap();
+    assert!(took < Duration::from_secs(15), "explode took {took:?}");
+}
+
+#[test]
+#[ignore]
+fn time_copying_thirty_circles_a_hundred_times_in_one_plane() {
+    let mut m = circles(30, 24);
+    let (edges, faces) = everything(&m);
+    let (_, took) = timed("copy 30 circles 100 times", || {
+        m.copy(&edges, &faces, DVec3::new(7.0, 0.0, 0.0), 100)
+            .unwrap()
+    });
+    assert_eq!(m.faces().count(), 30 * 101);
+    m.validate().unwrap();
+    assert!(took < Duration::from_secs(10), "copy took {took:?}");
+}

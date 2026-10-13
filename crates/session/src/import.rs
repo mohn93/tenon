@@ -23,8 +23,8 @@ pub const MAX_IMPORT_POINTS: usize = 1_000_000;
 pub const MAX_IMPORT_MATERIALS: usize = 1024;
 
 /// Most faces an import into the open context (`"as": "context"`) may make: those are drawn
-/// with sticky geometry, which takes time growing with the square of the faces.
-pub const MAX_CONTEXT_IMPORT_FACES: usize = 2_000;
+/// with sticky geometry, which takes seconds for this many in a release build.
+pub const MAX_CONTEXT_IMPORT_FACES: usize = 10_000;
 
 /// Largest material library (`.mtl`) read beside an OBJ, in bytes; a larger one is ignored.
 pub(crate) const MAX_MTL_BYTES: u64 = 16 * 1024 * 1024;

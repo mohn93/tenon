@@ -2,7 +2,7 @@
 
 use glam::DVec2;
 use serde_json::{Value, json};
-use session::{Command, Document, ErrorKind, Query};
+use session::{Command, Document, ErrorKind, MAX_COPIES, Query};
 
 fn doc() -> Document {
     Document::new(DVec2::new(800.0, 600.0))
@@ -123,7 +123,7 @@ fn bad_copies_change_nothing() {
         run(&mut d, cp(json!(["v0"]), 1)).unwrap_err(),
         (ErrorKind::InvalidInput, vec!["v0".to_string()])
     );
-    for count in [0, 101] {
+    for count in [0, MAX_COPIES + 1] {
         assert_eq!(
             run(&mut d, cp(json!(["f8"]), count)).unwrap_err().0,
             ErrorKind::InvalidInput,
