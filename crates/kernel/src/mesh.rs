@@ -17,18 +17,20 @@ impl Model {
             d: face.normal.dot(origin),
         };
 
-        let mut points = Vec::new();
-        let mut coords = Vec::new();
-        let mut hole_starts = Vec::new();
+        let (u, v) = plane.basis();
+        let n = face.outer.len() + face.holes.iter().map(Vec::len).sum::<usize>();
+        let mut points = Vec::with_capacity(n);
+        let mut coords = Vec::with_capacity(2 * n);
+        let mut hole_starts = Vec::with_capacity(face.holes.len());
         for (k, lp) in std::iter::once(&face.outer).chain(&face.holes).enumerate() {
             if k > 0 {
                 hole_starts.push(points.len());
             }
-            for v in lp {
-                let p = self.position(*v)?;
-                let q = plane.project(p);
+            for id in lp {
+                let p = self.position(*id)?;
                 points.push(p);
-                coords.extend([q.x, q.y]);
+                // As `plane.project(p)`, with the basis worked out once.
+                coords.extend([p.dot(u), p.dot(v)]);
             }
         }
 
