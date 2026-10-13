@@ -410,10 +410,14 @@ impl Camera {
                 let ahead = to.dot(forward) > 0.0;
                 let mut f = f;
                 if !ahead || (f < 1.0 && a <= MIN_ZOOM_DISTANCE * (1.0 + 1e-9)) {
-                    // At the floor (or past the anchor): move on along the line to the anchor
-                    // while it is ahead, else straight on.
-                    let dir = if ahead { to / a } else { forward };
-                    self.dolly(dir * (1.0 - f) * a.max(MIN_DOLLY_DISTANCE));
+                    // At the floor: move on along the line to the anchor. Past it: straight on,
+                    // by a step that does not grow as the anchor falls behind.
+                    let (dir, along) = if ahead {
+                        (to / a, a)
+                    } else {
+                        (forward, self.distance())
+                    };
+                    self.dolly(dir * (1.0 - f) * along.max(MIN_DOLLY_DISTANCE));
                     return;
                 }
                 if a * f < MIN_ZOOM_DISTANCE {
@@ -441,15 +445,15 @@ impl Camera {
     /// Zooms `steps` notches toward what is under pixel `px`: `pick` (a model point there,
     /// if any) or the ground within reach (see `surface_at`) through `zoom`. With nothing
     /// there in perspective, the eye and target move together along the ray through `px` by
-    /// the share of the target distance a step covers, so the distance (and the speed of
-    /// later zooms) stays.
+    /// the share of `nav_reach` a step covers, so the distance (and the speed of later zooms)
+    /// stays.
     pub fn zoom_at(&mut self, px: DVec2, pick: Option<DVec3>, steps: f64) {
         match (self.projection, self.surface_at(px, pick)) {
             (Projection::Perspective, None) => {
-                let step = self.distance() * (1.0 - ZOOM_STEP.powf(steps));
+                let step = self.nav_reach() * (1.0 - ZOOM_STEP.powf(steps));
                 self.dolly(self.ray(px).dir * step);
             }
-            (_, surface) => self.zoom(surface.unwrap_or_else(|| self.sky_at(px)), steps),
+            (_, surface) => self.zoom(surface.unwrap_or_else(|| self.nav_sky_at(px)), steps),
         }
     }
 
@@ -522,41 +526,91 @@ impl Camera {
         (far <= self.distance() * MAX_ANCHOR_FACTOR).then_some(p)
     }
 
+    /// The scale navigation works at: the target distance, but at least the eye's height
+    /// above the ground in perspective, so after zooming close to (or through) something the
+    /// ground and the sky are still within reach.
+    pub fn nav_reach(&self) -> f64 {
+        match self.projection {
+            Projection::Perspective => self.distance().max(self.eye.z.abs()),
+            Projection::Parallel => self.distance(),
+        }
+    }
+
     /// The point to navigate about under pixel `px`: `pick`, a model point there, when given;
-    /// else the ground there if it lies within `NAV_ANCHOR_FACTOR` eye-to-target distances
-    /// (of the eye; in a parallel view, of the target in depth).
+    /// else the ground there, or where the ray to it is `NAV_ANCHOR_FACTOR` reaches (see
+    /// `nav_reach`) long if the ground is farther (in a parallel view: deep, from the target),
+    /// so a ground point near the horizon cannot fling the eye. None where the ground is not
+    /// under `px`.
     pub fn surface_at(&self, px: DVec2, pick: Option<DVec3>) -> Option<DVec3> {
         pick.or_else(|| {
             let ray = self.ray(px);
             let p = ray.hit_ground()?;
-            let far = match self.projection {
-                Projection::Perspective => (p - ray.origin).length(),
-                Projection::Parallel => (self.depth(p) - self.distance()).abs(),
-            };
-            (far <= self.distance() * NAV_ANCHOR_FACTOR).then_some(p)
+            let most = self.nav_reach() * NAV_ANCHOR_FACTOR;
+            Some(match self.projection {
+                Projection::Perspective => {
+                    let t = (p - ray.origin).length();
+                    if t <= most {
+                        p
+                    } else {
+                        ray.origin + ray.dir * most
+                    }
+                }
+                Projection::Parallel => {
+                    let d = self.distance();
+                    let depth = self.depth(p).clamp(d - most, d + most);
+                    ray.origin + ray.dir * (depth - self.depth_range().0)
+                }
+            })
         })
     }
 
     /// The point to orbit about, pan with or zoom toward under a pixel: `pick` or the ground
-    /// within reach (see `surface_at`), else the point there as deep as the target.
+    /// (see `surface_at`), else the point there `nav_reach` deep.
     pub fn anchor_for(&self, px: DVec2, pick: Option<DVec3>) -> DVec3 {
-        self.surface_at(px, pick).unwrap_or_else(|| self.sky_at(px))
+        self.surface_at(px, pick)
+            .unwrap_or_else(|| self.nav_sky_at(px))
     }
 
-    /// The point to orbit about or zoom toward under a pixel when no model point is known:
-    /// the ground there within reach, else the point as deep as the target.
+    /// The point to orbit about or zoom toward under a pixel when no model point is known
+    /// (see `anchor_for`).
     pub fn anchor_at(&self, px: DVec2) -> DVec3 {
         self.anchor_for(px, None)
     }
 
+    /// After a zoom passed through something: makes the target the point straight ahead as
+    /// deep as the anchor under `px` (`pick` or the ground, see `anchor_for`) when that lies
+    /// deeper than the target, so later zooms and orbits work at the depth of what is now in
+    /// front. Perspective only; the view does not move.
+    pub fn retarget(&mut self, px: DVec2, pick: Option<DVec3>) {
+        if self.is_parallel() {
+            return;
+        }
+        let depth = self.depth(self.anchor_for(px, pick));
+        if depth > self.distance() {
+            self.target = self.eye + self.forward() * depth;
+        }
+    }
+
     /// The point under a pixel as deep as the target.
-    fn sky_at(&self, px: DVec2) -> DVec3 {
+    pub fn target_depth_at(&self, px: DVec2) -> DVec3 {
         let ray = self.ray(px);
         let along = match self.projection {
             Projection::Perspective => self.distance(),
             Projection::Parallel => self.distance() - self.depth_range().0,
         };
         ray.origin + ray.dir * along
+    }
+
+    /// Where navigation centers when nothing is under a pixel: `nav_reach` along its ray in
+    /// perspective, the target's depth in a parallel view.
+    fn nav_sky_at(&self, px: DVec2) -> DVec3 {
+        match self.projection {
+            Projection::Perspective => {
+                let ray = self.ray(px);
+                ray.origin + ray.dir * self.nav_reach()
+            }
+            Projection::Parallel => self.target_depth_at(px),
+        }
     }
 
     /// Pixel position of a world point, or None if the camera does not see its depth (behind
@@ -820,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_prefers_the_pick_and_ignores_far_ground() {
+    fn surface_prefers_the_pick_and_clamps_far_ground() {
         let mut c = cam();
         let pick = DVec3::new(1.0, 2.0, 3.0);
         let center = DVec2::new(400.0, 300.0);
@@ -837,12 +891,70 @@ mod tests {
         let px = DVec2::new(400.0, 305.0);
         let ground = c.ray(px).hit_ground().unwrap();
         assert!(ground.distance(c.eye) > NAV_ANCHOR_FACTOR * c.distance());
-        assert!(c.surface_at(px, None).is_none());
+        // Clamped along the ray, so it stays under the cursor and moves continuously.
         let anchor = c.anchor_at(px);
-        assert!((anchor.distance(c.eye) - c.distance()).abs() < 1e-9);
-        // Ground near the eye is still an anchor.
+        assert!((anchor.distance(c.eye) - NAV_ANCHOR_FACTOR * c.distance()).abs() < 1e-9);
+        assert!(c.project(anchor).unwrap().abs_diff_eq(px, 1e-6));
+        let nudged = c.anchor_at(px + DVec2::new(0.0, 1.0));
+        assert!(nudged.distance(anchor) < 0.5);
+        // Ground near the eye is the anchor itself.
         let near = DVec2::new(400.0, 590.0);
-        assert!(c.surface_at(near, None).is_some());
+        assert!(c.surface_at(near, None).unwrap().z.abs() < 1e-12);
+        // The sky has none.
+        assert!(c.surface_at(DVec2::new(400.0, 10.0), None).is_none());
+    }
+
+    #[test]
+    fn close_to_a_wall_the_ground_and_sky_stay_in_reach() {
+        // Zoomed to 0.2 m from a wall, looking a little down, the eye 3 m above the ground.
+        let mut c = cam();
+        c.eye = DVec3::new(0.0, -0.2, 3.0);
+        c.target = DVec3::new(0.0, 0.0, 2.9);
+        assert!(c.distance() * NAV_ANCHOR_FACTOR < 1.0);
+        assert!((c.nav_reach() - 3.0).abs() < 1e-12);
+        let low = DVec2::new(400.0, 590.0);
+        let ground = c.ray(low).hit_ground().unwrap();
+        assert!(ground.distance(c.eye) < NAV_ANCHOR_FACTOR * 3.0);
+        assert!(
+            c.anchor_at(low).abs_diff_eq(ground, 1e-9),
+            "the ground, not mid-air"
+        );
+        // Far ground near the top is clamped by the reach, not by the 0.2 m distance.
+        let far = c.anchor_at(DVec2::new(400.0, 10.0));
+        assert!((far.distance(c.eye) - NAV_ANCHOR_FACTOR * 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retarget_moves_the_target_to_what_lies_deeper_ahead() {
+        let mut c = cam();
+        c.eye = DVec3::new(0.0, 0.0, 2.0);
+        c.target = DVec3::new(0.0, 0.0, 1.99);
+        c.up = DVec3::Y;
+        let center = DVec2::new(400.0, 300.0);
+        let (eye, forward) = (c.eye, c.forward());
+        c.retarget(center, None);
+        assert!(c.target.abs_diff_eq(DVec3::ZERO, 1e-9), "the ground below");
+        assert_eq!((c.eye, c.forward()), (eye, forward));
+        // Something nearer than the target does not pull it back.
+        c.retarget(center, Some(DVec3::new(0.0, 0.0, 1.5)));
+        assert!(c.target.abs_diff_eq(DVec3::ZERO, 1e-9));
+    }
+
+    #[test]
+    fn pushing_on_past_an_anchor_behind_does_not_speed_up() {
+        let mut c = cam();
+        let behind = c.eye - c.forward() * 50.0;
+        let d = c.distance();
+        let mut last = c.eye;
+        for _ in 0..10 {
+            c.zoom(behind, 3.0);
+            let step = c.eye.distance(last);
+            assert!(
+                (step - d * (1.0 - ZOOM_STEP.powi(3))).abs() < 1e-9,
+                "{step}"
+            );
+            last = c.eye;
+        }
     }
 
     #[test]

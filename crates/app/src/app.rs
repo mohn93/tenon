@@ -11,7 +11,7 @@ use session::{Command, OutlinerTable};
 use tools::Axis;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -63,6 +63,83 @@ fn wake_decision(now: Instant, deadline: Option<Instant>) -> Wake {
     }
 }
 
+/// Tapping Ctrl (pressing and releasing it with no other input in between) switches copying;
+/// Ctrl held for a trackpad zoom, a click or a shortcut does not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CtrlTap {
+    armed: bool,
+}
+
+impl CtrlTap {
+    /// The modifiers changed from `was` to `now`. Returns true when that completes a tap.
+    fn modifiers(&mut self, was: ModifiersState, now: ModifiersState) -> bool {
+        let others = |m: ModifiersState| m - ModifiersState::CONTROL;
+        let ctrl = (was.control_key(), now.control_key());
+        if others(was) != others(now) {
+            self.armed = false;
+            return false;
+        }
+        match ctrl {
+            (false, true) => {
+                self.armed = true;
+                false
+            }
+            (true, false) => std::mem::take(&mut self.armed),
+            _ => false,
+        }
+    }
+
+    /// Other input arrived while Ctrl was down: no tap.
+    fn interrupt(&mut self) {
+        self.armed = false;
+    }
+}
+
+/// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
+/// scrolls, pinches, focus changes and keys other than modifiers (the window reports the
+/// modifier keys themselves as key events too).
+fn interrupts_ctrl_tap(event: &WindowEvent) -> bool {
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => !is_modifier_key(&event.logical_key),
+        _ => matches!(
+            event,
+            WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::PinchGesture { .. }
+                | WindowEvent::Focused(_)
+        ),
+    }
+}
+
+fn is_modifier_key(key: &Key) -> bool {
+    matches!(
+        key,
+        Key::Named(
+            NamedKey::Control
+                | NamedKey::Shift
+                | NamedKey::Alt
+                | NamedKey::AltGraph
+                | NamedKey::Super
+                | NamedKey::Meta
+                | NamedKey::Hyper
+                | NamedKey::Fn
+                | NamedKey::CapsLock
+        )
+    )
+}
+
+/// The editor's view of a wheel event, and whether it starts a new trackpad scroll (fingers
+/// down or momentum beginning), which picks a fresh orbit or pan pivot.
+fn scroll_input(delta: MouseScrollDelta, phase: TouchPhase) -> (Scroll, bool) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (Scroll::Lines(DVec2::new(x as f64, y as f64)), false),
+        MouseScrollDelta::PixelDelta(p) => (
+            Scroll::Pixels(DVec2::new(p.x, p.y)),
+            phase == TouchPhase::Started,
+        ),
+    }
+}
+
 /// Longest time between the two releases of a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 /// Farthest the cursor may move between them, in logical pixels.
@@ -96,6 +173,8 @@ struct State {
     /// The Outliner's rows and the revision they were built at.
     outliner: Option<(u64, OutlinerTable)>,
     modifiers: ModifiersState,
+    /// Watches for a Ctrl tap, which switches copying (see `CtrlTap`).
+    ctrl_tap: CtrlTap,
     /// Where the 3D view sits in the window (physical pixels), from the last frame's layout.
     view: Viewport,
     /// Last cursor position in window coordinates (physical pixels).
@@ -166,6 +245,7 @@ impl State {
             drawn: None,
             outliner: None,
             modifiers: ModifiersState::empty(),
+            ctrl_tap: CtrlTap::default(),
             view,
             cursor: DVec2::ZERO,
             repaint_at: None,
@@ -744,6 +824,9 @@ impl ApplicationHandler<ApiWake> for App {
         if s.gui.on_event(&s.window, &event) {
             s.window.request_redraw();
         }
+        if interrupts_ctrl_tap(&event) {
+            s.ctrl_tap.interrupt();
+        }
         let changed = match event {
             WindowEvent::CloseRequested => {
                 if s.settle_changes() {
@@ -766,7 +849,7 @@ impl ApplicationHandler<ApiWake> for App {
                 false
             }
             WindowEvent::ModifiersChanged(m) => {
-                let ctrl_pressed = m.state().control_key() && !s.modifiers.control_key();
+                let tapped = s.ctrl_tap.modifiers(s.modifiers, m.state());
                 s.modifiers = m.state();
                 let locked = s
                     .editor
@@ -776,7 +859,7 @@ impl ApplicationHandler<ApiWake> for App {
                     .set_sample_modifier(m.state().super_key() || m.state().control_key());
                 // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and
                 // copying, and the Tape Measure between adding guides and measuring only.
-                let toggled = ctrl_pressed && s.editor.toggle_copy();
+                let toggled = tapped && s.editor.toggle_copy();
                 locked || toggled
             }
             WindowEvent::Focused(false) => {
@@ -821,10 +904,13 @@ impl ApplicationHandler<ApiWake> for App {
                 false
             }
             WindowEvent::KeyboardInput { .. } if s.gui.wants_keyboard() => false,
-            WindowEvent::MouseWheel { delta, .. } => s.editor.scroll(match delta {
-                MouseScrollDelta::LineDelta(x, y) => Scroll::Lines(DVec2::new(x as f64, y as f64)),
-                MouseScrollDelta::PixelDelta(p) => Scroll::Pixels(DVec2::new(p.x, p.y)),
-            }),
+            WindowEvent::MouseWheel { delta, phase, .. } => {
+                let (scroll, started) = scroll_input(delta, phase);
+                if started {
+                    s.editor.scroll_started();
+                }
+                s.editor.scroll(scroll)
+            }
             WindowEvent::PinchGesture { delta, .. } => s.editor.pinch(delta),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
@@ -895,6 +981,77 @@ impl ApplicationHandler<ApiWake> for App {
 mod tests {
     use super::*;
     use winit::keyboard::SmolStr;
+
+    #[test]
+    fn only_a_ctrl_tap_switches_copying() {
+        let none = ModifiersState::empty();
+        let ctrl = ModifiersState::CONTROL;
+        let mut tap = CtrlTap::default();
+        assert!(!tap.modifiers(none, ctrl));
+        assert!(tap.modifiers(ctrl, none), "press and release");
+        // Ctrl held for a trackpad zoom (or a click, a key, a pinch).
+        assert!(!tap.modifiers(none, ctrl));
+        tap.interrupt();
+        assert!(!tap.modifiers(ctrl, none));
+        // Ctrl with another modifier.
+        assert!(!tap.modifiers(none, ctrl));
+        assert!(!tap.modifiers(ctrl, ctrl | ModifiersState::SHIFT));
+        assert!(!tap.modifiers(ctrl | ModifiersState::SHIFT, ModifiersState::SHIFT));
+        // A release alone is no tap.
+        assert!(!tap.modifiers(ctrl, none));
+    }
+
+    #[test]
+    fn pointer_and_key_input_interrupt_a_ctrl_tap() {
+        let id = winit::event::DeviceId::dummy();
+        let wheel = WindowEvent::MouseWheel {
+            device_id: id,
+            delta: MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(0.0, 4.0)),
+            phase: TouchPhase::Moved,
+        };
+        let pinch = WindowEvent::PinchGesture {
+            device_id: id,
+            delta: 0.01,
+            phase: TouchPhase::Moved,
+        };
+        let press = WindowEvent::MouseInput {
+            device_id: id,
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        };
+        assert!(interrupts_ctrl_tap(&wheel));
+        assert!(interrupts_ctrl_tap(&pinch));
+        assert!(interrupts_ctrl_tap(&press));
+        assert!(interrupts_ctrl_tap(&WindowEvent::Focused(false)));
+        let moved = WindowEvent::CursorMoved {
+            device_id: id,
+            position: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+        };
+        assert!(
+            !interrupts_ctrl_tap(&moved),
+            "the cursor drifts during a tap"
+        );
+        assert!(is_modifier_key(&Key::Named(NamedKey::Control)));
+        assert!(!is_modifier_key(&Key::Character("z".into())));
+    }
+
+    #[test]
+    fn wheel_events_map_to_lines_or_pixels_and_trackpad_starts() {
+        let lines = scroll_input(MouseScrollDelta::LineDelta(0.0, 2.0), TouchPhase::Started);
+        assert_eq!(lines, (Scroll::Lines(DVec2::new(0.0, 2.0)), false));
+        let px = |phase| {
+            scroll_input(
+                MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(3.0, -4.0)),
+                phase,
+            )
+        };
+        assert_eq!(
+            px(TouchPhase::Started),
+            (Scroll::Pixels(DVec2::new(3.0, -4.0)), true)
+        );
+        assert!(!px(TouchPhase::Moved).1);
+        assert!(!px(TouchPhase::Ended).1);
+    }
 
     #[test]
     fn delayed_repaints_are_scheduled() {

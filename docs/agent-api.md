@@ -327,8 +327,8 @@ In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms
 standard views and the two projections; it sends these same commands.
 
 Navigating in the window moves the same document camera, about the point under the cursor:
-the model face there, else the ground if it is within three eye-to-target distances, else the
-point as deep as the target.
+the model face there, else the ground (no farther along the cursor's ray than three times the
+larger of the eye-to-target distance and the eye's height), else the point that far along it.
 
 - Mouse: middle drag orbits, Shift+middle drag pans, Option/Alt+left drag (Shift+Option+left
   to pan) does the same without a middle button, and the wheel zooms toward the cursor.
@@ -336,7 +336,9 @@ point as deep as the target.
   scroll and pinch zoom toward the cursor.
 - Orbit speed is per logical pixel, the same on any display. One scroll or pinch event zooms
   at most three wheel notches. Zooming in on a point stops 0.01 m short of it, then moves on
-  through it; zooming where nothing is under the cursor moves the eye and target together.
+  through it toward what lies beyond; zooming where nothing is under the cursor moves the eye
+  and target together. A new two-finger scroll, or a camera change made another way, picks a
+  fresh orbit pivot.
 
 ### Files
 

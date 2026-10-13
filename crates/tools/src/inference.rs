@@ -186,7 +186,7 @@ pub fn infer_in(
             face,
         },
         None => Inference {
-            point: camera.anchor_at(cursor),
+            point: camera.target_depth_at(cursor),
             kind: SnapKind::Free,
             face,
         },

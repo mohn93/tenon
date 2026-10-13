@@ -1,6 +1,6 @@
 use glam::{DVec2, DVec3};
 use session::Camera;
-use session::camera::ZOOM_STEP;
+use session::camera::{MIN_DOLLY_DISTANCE, ZOOM_STEP};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -51,10 +51,11 @@ pub struct Navigation {
     /// Physical pixels per logical pixel.
     scale: f64,
     drag: Option<(Button, Drag)>,
-    /// The pivot or anchor of the trackpad scroll in progress. The cursor does not move while
-    /// two fingers scroll, so it holds until the cursor moves, a button or zoom acts, or the
-    /// scroll switches between orbiting and panning.
-    gesture: Option<Drag>,
+    /// The pivot or anchor of the trackpad scroll in progress, and the camera it left. The
+    /// cursor does not move while two fingers scroll, so it holds until a new scroll starts,
+    /// the cursor moves, a button or zoom acts, the scroll switches between orbiting and
+    /// panning, or the camera changes some other way (a command, a standard view).
+    gesture: Option<(Drag, Camera)>,
 }
 
 impl Default for Navigation {
@@ -98,15 +99,21 @@ impl Navigation {
         self.command = false;
     }
 
-    /// Handles a button press or release. `pick` finds the model point under the cursor; it
-    /// is called only when a drag starts. Returns true if navigation used the event, so it
-    /// must not also go to the active tool.
+    /// A new trackpad scroll began (fingers down, or momentum starting): the next scroll
+    /// picks its pivot afresh.
+    pub fn scroll_started(&mut self) {
+        self.gesture = None;
+    }
+
+    /// Handles a button press or release. `pick` finds the model point under the cursor as
+    /// the camera given sees it; it is called only when a drag starts. Returns true if
+    /// navigation used the event, so it must not also go to the active tool.
     pub fn button(
         &mut self,
         cam: &Camera,
         button: Button,
         pressed: bool,
-        pick: impl FnOnce() -> Option<DVec3>,
+        mut pick: impl FnMut(&Camera) -> Option<DVec3>,
     ) -> bool {
         if !pressed {
             if self
@@ -126,7 +133,7 @@ impl Navigation {
             return false;
         }
         self.gesture = None;
-        let point = cam.anchor_for(self.cursor, pick());
+        let point = cam.anchor_for(self.cursor, pick(cam));
         let drag = if self.shift {
             Drag::Pan { anchor: point }
         } else {
@@ -160,9 +167,14 @@ impl Navigation {
 
     /// A scroll event. A mouse wheel, or Cmd/Ctrl with a trackpad, zooms toward the cursor;
     /// otherwise trackpad scrolling orbits like a middle drag of the same delta, or pans with
-    /// Shift. `pick` is the model point under the cursor, if any. Returns true if the camera
-    /// moved.
-    pub fn scroll(&mut self, cam: &mut Camera, scroll: Scroll, pick: Option<DVec3>) -> bool {
+    /// Shift. `pick` finds the model point under the cursor as the camera given sees it.
+    /// Returns true if the camera moved.
+    pub fn scroll(
+        &mut self,
+        cam: &mut Camera,
+        scroll: Scroll,
+        mut pick: impl FnMut(&Camera) -> Option<DVec3>,
+    ) -> bool {
         let delta = match scroll {
             Scroll::Lines(lines) => return self.zoom(cam, lines.y, pick),
             Scroll::Pixels(px) if self.command => {
@@ -174,11 +186,12 @@ impl Navigation {
             return false;
         }
         let pan = self.shift;
-        let gesture = match self.gesture {
-            Some(g @ Drag::Pan { .. }) if pan => g,
-            Some(g @ Drag::Orbit { .. }) if !pan => g,
+        let held = self.gesture.take().filter(|(_, left)| left == &*cam);
+        let gesture = match held {
+            Some((g @ Drag::Pan { .. }, _)) if pan => g,
+            Some((g @ Drag::Orbit { .. }, _)) if !pan => g,
             _ => {
-                let point = cam.anchor_for(self.cursor, pick);
+                let point = cam.anchor_for(self.cursor, pick(cam));
                 if pan {
                     Drag::Pan { anchor: point }
                 } else {
@@ -186,14 +199,19 @@ impl Navigation {
                 }
             }
         };
-        self.gesture = Some(gesture);
         self.apply(cam, gesture, delta);
+        self.gesture = Some((gesture, cam.clone()));
         true
     }
 
     /// A trackpad pinch: `delta` is the change in magnification (positive zooms in). Zooms
     /// toward the cursor; ignores deltas that are not finite or would invert the view.
-    pub fn pinch(&mut self, cam: &mut Camera, delta: f64, pick: Option<DVec3>) -> bool {
+    pub fn pinch(
+        &mut self,
+        cam: &mut Camera,
+        delta: f64,
+        pick: impl FnMut(&Camera) -> Option<DVec3>,
+    ) -> bool {
         if !delta.is_finite() || delta <= -1.0 {
             return false;
         }
@@ -201,14 +219,25 @@ impl Navigation {
     }
 
     /// Zooms `steps` notches toward the cursor (at most `MAX_ZOOM_STEPS_PER_EVENT` either
-    /// way). Returns true if the camera moved.
-    pub fn zoom(&mut self, cam: &mut Camera, steps: f64, pick: Option<DVec3>) -> bool {
+    /// way). Once the zoom has come within `MIN_DOLLY_DISTANCE` of what it zooms at (and may
+    /// have passed through it), the target moves on to what now lies under the cursor, so
+    /// later zooms and orbits work at its depth. Returns true if the camera moved.
+    pub fn zoom(
+        &mut self,
+        cam: &mut Camera,
+        steps: f64,
+        mut pick: impl FnMut(&Camera) -> Option<DVec3>,
+    ) -> bool {
         if !steps.is_finite() || steps == 0.0 {
             return false;
         }
         let steps = steps.clamp(-MAX_ZOOM_STEPS_PER_EVENT, MAX_ZOOM_STEPS_PER_EVENT);
         self.gesture = None;
-        cam.zoom_at(self.cursor, pick, steps);
+        cam.zoom_at(self.cursor, pick(cam), steps);
+        if cam.distance() < MIN_DOLLY_DISTANCE {
+            let ahead = pick(cam);
+            cam.retarget(self.cursor, ahead);
+        }
         true
     }
 }
@@ -228,15 +257,15 @@ mod tests {
     fn button_reports_whether_navigation_used_it() {
         let (mut nav, cam) = setup();
         assert!(
-            !nav.button(&cam, Button::Left, true, || None),
+            !nav.button(&cam, Button::Left, true, |_| None),
             "plain left belongs to tools"
         );
-        assert!(!nav.button(&cam, Button::Left, false, || None));
-        assert!(nav.button(&cam, Button::Middle, true, || None));
-        assert!(nav.button(&cam, Button::Middle, false, || None));
+        assert!(!nav.button(&cam, Button::Left, false, |_| None));
+        assert!(nav.button(&cam, Button::Middle, true, |_| None));
+        assert!(nav.button(&cam, Button::Middle, false, |_| None));
         nav.set_modifiers(false, true);
         assert!(
-            nav.button(&cam, Button::Left, true, || None),
+            nav.button(&cam, Button::Left, true, |_| None),
             "alt+left orbits"
         );
     }
@@ -254,7 +283,7 @@ mod tests {
         let (mut nav, mut cam) = setup();
         let pivot = cam.anchor_at(DVec2::new(400.0, 300.0));
         let d = (cam.eye - pivot).length();
-        nav.button(&cam, Button::Middle, true, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
         assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
         assert!(((cam.eye - pivot).length() - d).abs() < 1e-9);
         assert!(!cam.eye.abs_diff_eq(Camera::new(cam.viewport).eye, 1e-6));
@@ -266,7 +295,7 @@ mod tests {
         let forward = cam.forward();
         let target = cam.target;
         nav.set_modifiers(true, false);
-        nav.button(&cam, Button::Middle, true, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
         assert!(nav.cursor_moved(&mut cam, DVec2::new(430.0, 280.0)));
         assert!(cam.forward().abs_diff_eq(forward, 1e-12));
         assert!(!cam.target.abs_diff_eq(target, 1e-6));
@@ -276,7 +305,7 @@ mod tests {
     fn plain_left_drag_is_left_for_tools() {
         let (mut nav, mut cam) = setup();
         let before = cam.clone();
-        nav.button(&cam, Button::Left, true, || None);
+        nav.button(&cam, Button::Left, true, |_| None);
         assert!(!nav.cursor_moved(&mut cam, DVec2::new(500.0, 350.0)));
         assert_eq!(cam, before);
     }
@@ -286,7 +315,7 @@ mod tests {
         let (mut nav, mut cam) = setup();
         let before = cam.clone();
         nav.set_modifiers(false, true);
-        nav.button(&cam, Button::Left, true, || None);
+        nav.button(&cam, Button::Left, true, |_| None);
         assert!(nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
         assert_ne!(cam, before);
     }
@@ -294,8 +323,8 @@ mod tests {
     #[test]
     fn release_ends_drag() {
         let (mut nav, mut cam) = setup();
-        nav.button(&cam, Button::Middle, true, || None);
-        nav.button(&cam, Button::Middle, false, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
+        nav.button(&cam, Button::Middle, false, |_| None);
         let before = cam.clone();
         assert!(!nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
         assert_eq!(cam, before);
@@ -304,9 +333,9 @@ mod tests {
     #[test]
     fn other_button_release_does_not_end_middle_drag() {
         let (mut nav, mut cam) = setup();
-        nav.button(&cam, Button::Middle, true, || None);
-        nav.button(&cam, Button::Left, true, || None);
-        nav.button(&cam, Button::Left, false, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
+        nav.button(&cam, Button::Left, true, |_| None);
+        nav.button(&cam, Button::Left, false, |_| None);
         let before = cam.clone();
         assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
         assert_ne!(cam, before);
@@ -315,15 +344,15 @@ mod tests {
     #[test]
     fn other_presses_during_a_drag_are_consumed() {
         let (mut nav, mut cam) = setup();
-        nav.button(&cam, Button::Middle, true, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
         assert!(
-            nav.button(&cam, Button::Left, true, || None),
+            nav.button(&cam, Button::Left, true, |_| None),
             "no stray tool click"
         );
         let before = cam.clone();
         assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
         assert_ne!(cam, before, "drag still orbits");
-        assert!(nav.button(&cam, Button::Middle, false, || None));
+        assert!(nav.button(&cam, Button::Middle, false, |_| None));
         let after = cam.clone();
         assert!(!nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
         assert_eq!(cam, after);
@@ -333,8 +362,8 @@ mod tests {
     fn middle_release_does_not_end_alt_left_orbit() {
         let (mut nav, mut cam) = setup();
         nav.set_modifiers(false, true);
-        nav.button(&cam, Button::Left, true, || None);
-        nav.button(&cam, Button::Middle, false, || None);
+        nav.button(&cam, Button::Left, true, |_| None);
+        nav.button(&cam, Button::Middle, false, |_| None);
         let before = cam.clone();
         assert!(nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
         assert_ne!(cam, before);
@@ -344,12 +373,12 @@ mod tests {
     fn reset_clears_drag_and_modifiers() {
         let (mut nav, mut cam) = setup();
         nav.set_modifiers(true, false);
-        nav.button(&cam, Button::Middle, true, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
         nav.reset();
         let before = cam.clone();
         assert!(!nav.cursor_moved(&mut cam, DVec2::new(460.0, 300.0)));
         assert_eq!(cam, before);
-        nav.button(&cam, Button::Middle, true, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
         let forward = cam.forward();
         assert!(nav.cursor_moved(&mut cam, DVec2::new(500.0, 300.0)));
         // Orbit rotates the view direction; pan would not.
@@ -361,9 +390,9 @@ mod tests {
         let (mut nav, mut cam) = setup();
         let anchor = cam.anchor_at(DVec2::new(400.0, 300.0));
         let d = (cam.eye - anchor).length();
-        assert!(nav.zoom(&mut cam, 1.0, None));
+        assert!(nav.zoom(&mut cam, 1.0, |_| None));
         assert!((cam.eye - anchor).length() < d);
-        assert!(!nav.zoom(&mut cam, 0.0, None));
+        assert!(!nav.zoom(&mut cam, 0.0, |_| None));
     }
 
     /// The angle the view direction turned through.
@@ -374,11 +403,11 @@ mod tests {
     #[test]
     fn orbit_speed_is_per_logical_pixel() {
         let (mut nav1, mut cam1) = setup();
-        nav1.button(&cam1, Button::Middle, true, || None);
+        nav1.button(&cam1, Button::Middle, true, |_| None);
         nav1.cursor_moved(&mut cam1, DVec2::new(450.0, 300.0));
         let (mut nav2, mut cam2) = setup();
         nav2.set_scale_factor(2.0);
-        nav2.button(&cam2, Button::Middle, true, || None);
+        nav2.button(&cam2, Button::Middle, true, |_| None);
         nav2.cursor_moved(&mut cam2, DVec2::new(500.0, 300.0));
         let start = setup().1;
         let (a, b) = (turned(&start, &cam1), turned(&start, &cam2));
@@ -391,7 +420,7 @@ mod tests {
         nav.set_scale_factor(2.0);
         nav.set_modifiers(true, false);
         let anchor = cam.anchor_at(DVec2::new(400.0, 300.0));
-        nav.button(&cam, Button::Middle, true, || None);
+        nav.button(&cam, Button::Middle, true, |_| None);
         nav.cursor_moved(&mut cam, DVec2::new(440.0, 270.0));
         let at = cam.project(anchor).unwrap();
         assert!(at.abs_diff_eq(DVec2::new(440.0, 270.0), 1e-6), "{at}");
@@ -402,7 +431,7 @@ mod tests {
         let (mut nav, mut cam) = setup();
         let pick = cam.eye + cam.forward() * 4.0;
         let d = cam.eye.distance(pick);
-        nav.button(&cam, Button::Middle, true, || Some(pick));
+        nav.button(&cam, Button::Middle, true, |_| Some(pick));
         nav.cursor_moved(&mut cam, DVec2::new(480.0, 330.0));
         assert!((cam.eye.distance(pick) - d).abs() < 1e-9);
         assert!(
@@ -416,7 +445,7 @@ mod tests {
     fn plain_presses_do_not_pick() {
         let (mut nav, cam) = setup();
         let mut picked = false;
-        nav.button(&cam, Button::Left, true, || {
+        nav.button(&cam, Button::Left, true, |_| {
             picked = true;
             None
         });
@@ -427,11 +456,15 @@ mod tests {
     fn trackpad_scroll_orbits_like_a_middle_drag() {
         let (mut nav, mut dragged) = setup();
         nav.set_scale_factor(2.0);
-        nav.button(&dragged, Button::Middle, true, || None);
+        nav.button(&dragged, Button::Middle, true, |_| None);
         nav.cursor_moved(&mut dragged, DVec2::new(430.0, 290.0));
         let (mut nav, mut scrolled) = setup();
         nav.set_scale_factor(2.0);
-        assert!(nav.scroll(&mut scrolled, Scroll::Pixels(DVec2::new(30.0, -10.0)), None));
+        assert!(nav.scroll(
+            &mut scrolled,
+            Scroll::Pixels(DVec2::new(30.0, -10.0)),
+            |_| None
+        ));
         assert!(scrolled.eye.abs_diff_eq(dragged.eye, 1e-9));
         assert!(scrolled.target.abs_diff_eq(dragged.target, 1e-9));
     }
@@ -440,17 +473,19 @@ mod tests {
     fn trackpad_orbit_keeps_its_pivot_until_the_cursor_moves() {
         let (mut nav, mut cam) = setup();
         let pick = cam.eye + cam.forward() * 5.0;
-        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(40.0, 0.0)), Some(pick));
+        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(40.0, 0.0)), |_| {
+            Some(pick)
+        });
         let d = cam.eye.distance(pick);
         // Later events pick something else under the cursor; the pivot holds.
         let other = Some(DVec3::new(100.0, 100.0, 0.0));
         for _ in 0..5 {
-            nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(15.0, 5.0)), other);
+            nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(15.0, 5.0)), |_| other);
             assert!((cam.eye.distance(pick) - d).abs() < 1e-9);
         }
         nav.cursor_moved(&mut cam, DVec2::new(401.0, 300.0));
         let before = cam.eye.distance(DVec3::new(100.0, 100.0, 0.0));
-        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(15.0, 0.0)), other);
+        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(15.0, 0.0)), |_| other);
         let after = cam.eye.distance(DVec3::new(100.0, 100.0, 0.0));
         assert!(
             (before - after).abs() < 1e-9,
@@ -465,8 +500,8 @@ mod tests {
         nav.set_modifiers(true, false);
         let forward = cam.forward();
         let anchor = cam.anchor_at(DVec2::new(400.0, 300.0));
-        assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(20.0, 10.0)), None));
-        assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(20.0, 10.0)), None));
+        assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(20.0, 10.0)), |_| None));
+        assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(20.0, 10.0)), |_| None));
         assert!(cam.forward().abs_diff_eq(forward, 1e-12));
         let at = cam.project(anchor).unwrap();
         assert!(at.abs_diff_eq(DVec2::new(440.0, 320.0), 1e-6), "{at}");
@@ -480,7 +515,7 @@ mod tests {
         let forward = cam.forward();
         let d = cam.distance();
         let px = 2.0 * LOGICAL_PX_PER_ZOOM_STEP;
-        assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(0.0, px)), None));
+        assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(0.0, px)), |_| None));
         assert!(cam.forward().abs_diff_eq(forward, 1e-12));
         assert!((cam.distance() - d * ZOOM_STEP).abs() < 1e-9);
     }
@@ -489,20 +524,20 @@ mod tests {
     fn wheel_zooms_and_is_clamped_per_event() {
         let (mut nav, mut cam) = setup();
         let d = cam.distance();
-        assert!(nav.scroll(&mut cam, Scroll::Lines(DVec2::new(0.0, 1.0)), None));
+        assert!(nav.scroll(&mut cam, Scroll::Lines(DVec2::new(0.0, 1.0)), |_| None));
         assert!((cam.distance() - d * ZOOM_STEP).abs() < 1e-9);
         let (mut nav, mut cam) = setup();
-        assert!(nav.scroll(&mut cam, Scroll::Lines(DVec2::new(0.0, 40.0)), None));
+        assert!(nav.scroll(&mut cam, Scroll::Lines(DVec2::new(0.0, 40.0)), |_| None));
         let most = d * ZOOM_STEP.powf(MAX_ZOOM_STEPS_PER_EVENT);
         assert!((cam.distance() - most).abs() < 1e-9);
-        assert!(!nav.scroll(&mut cam, Scroll::Lines(DVec2::ZERO), None));
+        assert!(!nav.scroll(&mut cam, Scroll::Lines(DVec2::ZERO), |_| None));
     }
 
     #[test]
     fn zoom_goes_toward_the_picked_point() {
         let (mut nav, mut cam) = setup();
         let pick = cam.eye + cam.forward() * 3.0;
-        assert!(nav.zoom(&mut cam, 1.0, Some(pick)));
+        assert!(nav.zoom(&mut cam, 1.0, |_| Some(pick)));
         assert!((cam.eye.distance(pick) - 3.0 * ZOOM_STEP).abs() < 1e-9);
     }
 
@@ -510,23 +545,129 @@ mod tests {
     fn pinch_zooms_toward_the_cursor() {
         let (mut nav, mut cam) = setup();
         let d = cam.distance();
-        assert!(nav.pinch(&mut cam, 0.1, None));
+        assert!(nav.pinch(&mut cam, 0.1, |_| None));
         assert!(
             (cam.distance() - d / 1.1).abs() < 1e-9,
             "magnifies by 1 + delta"
         );
         let d = cam.distance();
-        assert!(nav.pinch(&mut cam, -0.1, None));
+        assert!(nav.pinch(&mut cam, -0.1, |_| None));
         assert!((cam.distance() - d / 0.9).abs() < 1e-9);
         let before = cam.clone();
-        assert!(!nav.pinch(&mut cam, f64::NAN, None));
-        assert!(!nav.pinch(&mut cam, f64::INFINITY, None));
-        assert!(!nav.pinch(&mut cam, -1.0, None));
-        assert!(!nav.pinch(&mut cam, 0.0, None));
+        assert!(!nav.pinch(&mut cam, f64::NAN, |_| None));
+        assert!(!nav.pinch(&mut cam, f64::INFINITY, |_| None));
+        assert!(!nav.pinch(&mut cam, -1.0, |_| None));
+        assert!(!nav.pinch(&mut cam, 0.0, |_| None));
         assert_eq!(cam, before);
         // A huge pinch is clamped like a scroll.
-        assert!(nav.pinch(&mut cam, 50.0, None));
+        assert!(nav.pinch(&mut cam, 50.0, |_| None));
         let most = before.distance() * ZOOM_STEP.powf(MAX_ZOOM_STEPS_PER_EVENT);
         assert!((cam.distance() - most).abs() < 1e-9);
+    }
+
+    /// A picker for a large horizontal face at height `z`, seen from above.
+    fn floor_at(z: f64, cursor: DVec2) -> impl FnMut(&Camera) -> Option<DVec3> {
+        move |c: &Camera| {
+            let ray = c.ray(cursor);
+            let t = (z - ray.origin.z) / ray.dir.z;
+            (t > 0.0).then(|| ray.origin + ray.dir * t)
+        }
+    }
+
+    #[test]
+    fn zooming_through_a_face_carries_on_to_the_ground() {
+        let (mut nav, mut cam) = setup();
+        let cursor = DVec2::new(400.0, 300.0);
+        let (mut passed, mut at_ground) = (None, None);
+        for k in 0..60 {
+            let start = cam.eye;
+            assert!(nav.zoom(&mut cam, 3.0, floor_at(3.0, cursor)));
+            assert!(cam.eye.distance(start) < 10.0, "no jump");
+            if cam.eye.z < 3.0 && passed.is_none() {
+                passed = Some(k);
+            }
+            if cam.eye.z > 0.0 && cam.eye.z < 0.02 && at_ground.is_none() {
+                at_ground = Some(k);
+            }
+        }
+        let passed = passed.expect("the eye passed through the face");
+        assert!(passed < 30, "took {passed} events");
+        // Then on to the ground, at the same pace rather than a crawl.
+        let at_ground = at_ground.expect("the eye reached the ground");
+        assert!(at_ground < passed + 30, "{passed} then {at_ground}");
+        let (mut nav, mut cam) = setup();
+        for _ in 0..30 {
+            nav.zoom(&mut cam, 3.0, floor_at(3.0, cursor));
+            if cam.eye.z < 3.0 {
+                break;
+            }
+        }
+        assert!(cam.eye.z < 3.0);
+        // Past the face the ground under the cursor is the target again: orbiting turns
+        // about it rather than a point a centimeter ahead.
+        let ground = cam.ray(cursor).hit_ground().unwrap();
+        assert!(
+            cam.target.abs_diff_eq(ground, 1e-6),
+            "retargeted to the ground"
+        );
+        nav.button(&cam, Button::Middle, true, |_| None);
+        let d = cam.eye.distance(ground);
+        nav.cursor_moved(&mut cam, DVec2::new(450.0, 300.0));
+        assert!(
+            (cam.eye.distance(ground) - d).abs() < 1e-9,
+            "orbits about the ground"
+        );
+    }
+
+    #[test]
+    fn a_new_trackpad_scroll_picks_a_new_pivot() {
+        let (mut nav, mut cam) = setup();
+        let first = cam.eye + cam.forward() * 5.0;
+        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(40.0, 0.0)), |_| {
+            Some(first)
+        });
+        nav.scroll_started();
+        let second = DVec3::new(30.0, -40.0, 2.0);
+        let d = cam.eye.distance(second);
+        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(40.0, 0.0)), |_| {
+            Some(second)
+        });
+        assert!((cam.eye.distance(second) - d).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_trackpad_pivot_drops_when_the_camera_changes_elsewhere() {
+        let (mut nav, mut cam) = setup();
+        let first = cam.eye + cam.forward() * 5.0;
+        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(40.0, 0.0)), |_| {
+            Some(first)
+        });
+        // A standard view (or an API command) moves the camera; the cursor stays.
+        cam.look_from(session::StandardView::Top);
+        let second = cam.target;
+        let d = cam.eye.distance(second);
+        nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(0.0, -40.0)), |_| {
+            Some(second)
+        });
+        assert!((cam.eye.distance(second) - d).abs() < 1e-9, "a fresh pivot");
+    }
+
+    #[test]
+    fn scrolling_during_a_drag() {
+        let (mut nav, mut cam) = setup();
+        let pivot = cam.anchor_at(DVec2::new(400.0, 300.0));
+        nav.button(&cam, Button::Middle, true, |_| None);
+        nav.cursor_moved(&mut cam, DVec2::new(420.0, 300.0));
+        // Trackpad orbiting or panning would fight the drag: ignored.
+        let before = cam.clone();
+        assert!(!nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(30.0, 0.0)), |_| None));
+        assert_eq!(cam, before);
+        // A wheel zoom still works, and the drag goes on orbiting about its pivot.
+        assert!(nav.scroll(&mut cam, Scroll::Lines(DVec2::new(0.0, 1.0)), |_| None));
+        assert_ne!(cam, before);
+        let d = cam.eye.distance(pivot);
+        assert!(nav.cursor_moved(&mut cam, DVec2::new(440.0, 310.0)));
+        assert!((cam.eye.distance(pivot) - d).abs() < 1e-9);
+        assert!(nav.button(&cam, Button::Middle, false, |_| None));
     }
 }

@@ -416,7 +416,7 @@ impl Editor {
         let (doc, cursor) = (&self.doc, self.cursor);
         if self
             .nav
-            .button(&doc.camera, button, pressed, || pick(doc, cursor))
+            .button(&doc.camera, button, pressed, |c| pick(doc, c, cursor))
         {
             return false;
         }
@@ -452,20 +452,35 @@ impl Editor {
     /// A scroll event: the wheel zooms, a trackpad orbits, pans or zooms (see `Navigation`).
     /// Returns true if the camera moved.
     pub fn scroll(&mut self, scroll: Scroll) -> bool {
-        let pick = pick(&self.doc, self.cursor);
-        let moved = self.nav.scroll(&mut self.doc.camera, scroll, pick);
-        if moved {
-            self.update_hover();
-        }
-        moved
+        self.navigate(|nav, cam, pick| nav.scroll(cam, scroll, pick))
+    }
+
+    /// A new trackpad scroll began: its orbit or pan picks a fresh pivot.
+    pub fn scroll_started(&mut self) {
+        self.nav.scroll_started();
     }
 
     /// A trackpad pinch by `delta` (magnification change, positive zooms in) zooms toward
     /// the cursor. Returns true if the camera moved.
     pub fn pinch(&mut self, delta: f64) -> bool {
-        let pick = pick(&self.doc, self.cursor);
-        let moved = self.nav.pinch(&mut self.doc.camera, delta, pick);
+        self.navigate(|nav, cam, pick| nav.pinch(cam, delta, pick))
+    }
+
+    /// Runs a navigation step on the document camera, giving it a picker for the model point
+    /// under the cursor as any camera sees it, and refreshes the hover if the camera moved.
+    fn navigate(
+        &mut self,
+        step: impl FnOnce(
+            &mut Navigation,
+            &mut Camera,
+            &mut dyn FnMut(&Camera) -> Option<DVec3>,
+        ) -> bool,
+    ) -> bool {
+        let mut camera = self.doc.camera.clone();
+        let (doc, cursor) = (&self.doc, self.cursor);
+        let moved = step(&mut self.nav, &mut camera, &mut |c| pick(doc, c, cursor));
         if moved {
+            self.doc.camera = camera;
             self.update_hover();
         }
         moved
@@ -1074,11 +1089,12 @@ impl Editor {
     }
 }
 
-/// The model point under `cursor` (view pixels) in root coordinates: where the cursor's ray
-/// meets the nearest face the tools can see. Navigation centers on it.
-fn pick(doc: &Document, cursor: DVec2) -> Option<DVec3> {
+/// The model point under `cursor` (view pixels) as `camera` (in root coordinates) sees it, in
+/// root coordinates: where the cursor's ray meets the nearest face the tools can see.
+/// Navigation centers on it.
+fn pick(doc: &Document, camera: &Camera, cursor: DVec2) -> Option<DVec3> {
     let to_root = doc.context_transform();
-    let camera = doc.camera.placed(to_root.inverse());
+    let camera = camera.placed(to_root.inverse());
     let scenery = Scenery::of(doc.scene(), doc.context())?;
     face_under_in(&scenery, &camera, cursor).map(|(_, _, p)| to_root.transform_point3(p))
 }
@@ -1264,6 +1280,55 @@ mod tests {
             !e.doc().camera.forward().abs_diff_eq(forward, 1e-9),
             "orbits again"
         );
+    }
+
+    #[test]
+    fn scrolling_through_a_face_carries_on_to_the_ground() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        let mut passed = false;
+        for _ in 0..40 {
+            assert!(e.scroll(Scroll::Lines(DVec2::new(0.0, 3.0))));
+            passed |= e.doc().camera.eye.z < 3.0;
+            if passed {
+                break;
+            }
+        }
+        assert!(passed, "the eye passed the face: {}", e.doc().camera.eye);
+        let cam = &e.doc().camera;
+        // The target moved on to the ground below, not a centimeter past the face, so the
+        // next zooms and orbits work at that depth.
+        assert!(cam.distance() > 1.0, "{}", cam.distance());
+        assert!(cam.depth(cam.anchor_at(px)) >= cam.distance() - 1e-6);
+        for _ in 0..30 {
+            e.scroll(Scroll::Lines(DVec2::new(0.0, 3.0)));
+            if e.doc().camera.eye.z < 0.02 {
+                break;
+            }
+        }
+        assert!(
+            e.doc().camera.eye.z < 0.02,
+            "reached the ground: {}",
+            e.doc().camera.eye
+        );
+    }
+
+    #[test]
+    fn a_camera_command_drops_the_trackpad_pivot() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(30.0, 0.0))));
+        e.execute(Command::StandardView {
+            view: StandardView::Top,
+        })
+        .unwrap();
+        let fresh = e.doc().camera.anchor_for(px, None);
+        let hit = pick(e.doc(), &e.doc().camera, px).unwrap_or(fresh);
+        let d = e.doc().camera.eye.distance(hit);
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(30.0, 0.0))));
+        assert!((e.doc().camera.eye.distance(hit) - d).abs() < 1e-9);
     }
 
     #[test]

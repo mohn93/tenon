@@ -174,6 +174,11 @@ mod tests {
                 .fixed_pos(Pos2::new(100.0, 100.0))
                 .fixed_size(Vec2::new(150.0, 100.0))
                 .show(ui.ctx(), |ui| ui.label("over the view"));
+            // A menu or popup: a foreground area.
+            egui::Area::new(egui::Id::new("menu"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(Pos2::new(500.0, 300.0))
+                .show(ui.ctx(), |ui| ui.label("a menu item"));
         };
         // egui last saw the pointer over the window.
         let over = Pos2::new(150.0, 150.0);
@@ -186,6 +191,10 @@ mod tests {
         assert!(
             !wants_pointer_at(&ctx, DVec2::new(1200.0, 900.0)),
             "the view beside it, though egui still has the pointer over the window"
+        );
+        assert!(
+            wants_pointer_at(&ctx, DVec2::new(1010.0, 610.0)),
+            "over the menu"
         );
     }
 }
