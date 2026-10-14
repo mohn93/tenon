@@ -164,6 +164,12 @@ average of the normals of the faces around that corner it reaches through soft e
 oriented against its neighbour counted turned over), so a softened lathe or dome reads as one
 surface. glTF export writes these corner normals; OBJ and STL keep one normal per face.
 
+In the window, Edit > Soften Edges... opens a small window with an angle (0 to 180 degrees,
+20 to start with): Soften runs `soften_by_angle` with it and Harden runs `soften_edges` with
+`"soft": false`, both on the selected edges and faces, or on the whole open context when nothing
+is selected; the status line says how many edges changed. With only edges selected, Entity Info
+shows a Soft checkbox that softens or hardens them.
+
 ### Guides
 
 Guides are construction geometry, as drawn by the Tape Measure tool: guide lines (infinite) and

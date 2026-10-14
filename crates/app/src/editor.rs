@@ -22,6 +22,10 @@ use tools::{
 use crate::fly::{self, Fly, FlyKey};
 use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
 
+mod soften;
+
+use soften::SoftenWindow;
+
 /// A layout of the scene with the revision and open context it was made for.
 type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
 
@@ -123,6 +127,8 @@ pub struct Editor {
     fly: Fly,
     /// Whether fly mode is on: the mouse looks, keys move the eye, the tools rest.
     flying: bool,
+    /// The Soften Edges window.
+    soften: SoftenWindow,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -222,6 +228,7 @@ impl Editor {
             last_export: "obj",
             fly: Fly::default(),
             flying: false,
+            soften: SoftenWindow::default(),
         }
     }
 

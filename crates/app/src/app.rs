@@ -618,6 +618,21 @@ impl State {
             UiAction::ToggleFly => {
                 self.editor.toggle_fly();
             }
+            UiAction::ShowSoften(open) => {
+                self.editor.show_soften(open);
+            }
+            UiAction::SetSoftenAngle(angle) => {
+                self.editor.set_soften_angle(angle);
+            }
+            UiAction::Soften => {
+                self.editor.soften_selection();
+            }
+            UiAction::Harden => {
+                self.editor.harden_selection();
+            }
+            UiAction::SetSoft(soft) => {
+                self.editor.set_selection_soft(soft);
+            }
         }
     }
 
@@ -713,6 +728,8 @@ impl State {
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
             context: &context,
             selection: self.editor.doc().selection(),
+            soften: self.editor.soften_window(),
+            edges_soft: self.editor.selection_soft(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         gui_frame.hide_cursor = self.capture == Capture::Grabbed;

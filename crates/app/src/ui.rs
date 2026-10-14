@@ -52,6 +52,16 @@ pub enum UiAction {
     OpenPath(Vec<EntityId>),
     /// Turn fly mode on or off.
     ToggleFly,
+    /// Open or close the Soften Edges window.
+    ShowSoften(bool),
+    /// Set the Soften Edges window's angle, in degrees (0 to 180).
+    SetSoftenAngle(u8),
+    /// Soften the selection (or the open context) up to the window's angle.
+    Soften,
+    /// Harden the selection (or the open context).
+    Harden,
+    /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
+    SetSoft(bool),
 }
 
 /// A material as the Materials list shows it.
@@ -95,6 +105,10 @@ pub struct View<'a> {
     pub context: &'a [EntityId],
     /// The selection, in the open context.
     pub selection: &'a BTreeSet<EntityId>,
+    /// The Soften Edges window's angle in degrees while it is open.
+    pub soften: Option<u8>,
+    /// Whether the selected edges are all soft, when only edges are selected.
+    pub edges_soft: Option<bool>,
 }
 
 /// The fly mode controls, shown over the Camera menu's Fly mode item.
@@ -164,6 +178,10 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     .clicked()
                 {
                     actions.push(UiAction::DeleteGuides);
+                }
+                ui.separator();
+                if ui.button("Soften Edges...").clicked() {
+                    actions.push(UiAction::ShowSoften(true));
                 }
             });
             ui.menu_button("Camera", |ui| {
@@ -285,7 +303,47 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     });
             }
         });
+    if let Some(angle) = view.soften {
+        soften_window(ui, angle, &mut actions);
+    }
     (actions, ui.available_rect_before_wrap())
+}
+
+/// The Soften Edges window: an angle and the Soften and Harden buttons, which act on the
+/// selection, or on the open context when nothing is selected.
+fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>) {
+    let mut open = true;
+    egui::Window::new("Soften Edges")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ui.ctx().content_rect().center())
+        .show(ui.ctx(), |ui| {
+            let mut value = angle;
+            ui.horizontal(|ui| {
+                ui.label("Angle");
+                if ui
+                    .add(egui::Slider::new(&mut value, 0..=180).suffix("°"))
+                    .changed()
+                {
+                    actions.push(UiAction::SetSoftenAngle(value));
+                }
+            });
+            ui.label("Edges between faces meeting at up to this angle");
+            ui.horizontal(|ui| {
+                if ui.button("Soften").clicked() {
+                    actions.push(UiAction::Soften);
+                }
+                if ui.button("Harden").clicked() {
+                    actions.push(UiAction::Harden);
+                }
+            });
+            ui.label(RichText::new("Selection, or everything open when nothing is").weak());
+        });
+    if !open {
+        actions.push(UiAction::ShowSoften(false));
+    }
 }
 
 /// Entity Info, the Materials list and the Outliner.
@@ -293,6 +351,16 @@ fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.heading("Entity Info");
     for line in view.info {
         ui.label(line);
+    }
+    if let Some(soft) = view.edges_soft {
+        let mut checked = soft;
+        if ui
+            .checkbox(&mut checked, "Soft")
+            .on_hover_text("Hidden, with the faces beside it shaded as one surface")
+            .changed()
+        {
+            actions.push(UiAction::SetSoft(checked));
+        }
     }
     ui.separator();
     materials(ui, view, actions);
@@ -626,6 +694,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let file = Pos2::new(14.0, central.min.y / 2.0);
@@ -712,6 +782,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         };
         // The Camera menu sits right after File and Edit.
         let clicked = menu_actions(&view, 80..140);
@@ -753,6 +825,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         };
         // The Edit button sits right after File (which ends before x = 40).
         menu_actions(&view, 40..80)
@@ -763,6 +837,7 @@ mod tests {
         let clicked = edit_menu_actions(true, true);
         assert!(clicked.contains(&UiAction::EraseSelection), "{clicked:?}");
         assert!(clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
+        assert!(clicked.contains(&UiAction::ShowSoften(true)), "{clicked:?}");
     }
 
     #[test]
@@ -770,6 +845,106 @@ mod tests {
         let clicked = edit_menu_actions(false, false);
         assert!(!clicked.contains(&UiAction::EraseSelection), "{clicked:?}");
         assert!(!clicked.contains(&UiAction::DeleteGuides), "{clicked:?}");
+        assert!(
+            clicked.contains(&UiAction::ShowSoften(true)),
+            "Soften Edges... works on the open context: {clicked:?}"
+        );
+    }
+
+    /// A view with nothing selected, the Soften Edges window as `soften` says and the Soft
+    /// checkbox as `edges_soft` says.
+    fn soften_view<'a>(
+        status: &'a Status,
+        info: &'a [String],
+        soften: Option<u8>,
+        edges_soft: Option<bool>,
+    ) -> View<'a> {
+        View {
+            tool: ToolKind::Line,
+            status,
+            info,
+            has_selection: false,
+            has_instance_selected: false,
+            inside_instance: false,
+            has_guides: false,
+            projection: Projection::Perspective,
+            flying: false,
+            import_units: ImportUnits::Meters,
+            materials: &[],
+            material: None,
+            outliner: &NO_ROWS,
+            context: &[],
+            selection: &NO_SELECTION,
+            soften,
+            edges_soft,
+        }
+    }
+
+    #[test]
+    fn the_soften_window_sets_its_angle_softens_hardens_and_closes() {
+        let status = status();
+        let info = Vec::new();
+        let view = soften_view(&status, &info, Some(20), None);
+        let ctx = egui::Context::default();
+        let _ = run(&ctx, screen(), &view);
+        let mut clicked = Vec::new();
+        // The window opens around the middle of the 1280 x 800 window.
+        for y in (300..500).step_by(4) {
+            for x in (480..800).step_by(8) {
+                clicked.extend(click(&ctx, &view, Pos2::new(x as f32, y as f32)));
+            }
+        }
+        for action in [
+            UiAction::Soften,
+            UiAction::Harden,
+            UiAction::ShowSoften(false),
+        ] {
+            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+        }
+        let angles: Vec<u8> = clicked
+            .iter()
+            .filter_map(|a| match a {
+                UiAction::SetSoftenAngle(angle) => Some(*angle),
+                _ => None,
+            })
+            .collect();
+        assert!(angles.iter().any(|a| *a < 20), "{angles:?}");
+        assert!(angles.iter().any(|a| *a > 90), "{angles:?}");
+        assert!(angles.iter().all(|a| *a <= 180), "{angles:?}");
+
+        let closed = soften_view(&status, &info, None, None);
+        let ctx = egui::Context::default();
+        let mut clicked = Vec::new();
+        for y in (300..500).step_by(8) {
+            for x in (480..800).step_by(16) {
+                clicked.extend(click(&ctx, &closed, Pos2::new(x as f32, y as f32)));
+            }
+        }
+        assert!(
+            !clicked.iter().any(|a| matches!(
+                a,
+                UiAction::Soften | UiAction::Harden | UiAction::SetSoftenAngle(_)
+            )),
+            "{clicked:?}"
+        );
+    }
+
+    #[test]
+    fn entity_info_shows_a_soft_checkbox_for_selected_edges() {
+        let status = status();
+        let info = vec!["1 edge".to_string()];
+        let hard = soften_view(&status, &info, None, Some(false));
+        let clicked = panel_actions(&hard, 1280.0 - 160.0, None);
+        assert!(clicked.contains(&UiAction::SetSoft(true)), "{clicked:?}");
+        let soft = soften_view(&status, &info, None, Some(true));
+        let clicked = panel_actions(&soft, 1280.0 - 160.0, None);
+        assert!(clicked.contains(&UiAction::SetSoft(false)), "{clicked:?}");
+        let none = soften_view(&status, &info, None, None);
+        let clicked = panel_actions(&none, 1280.0 - 160.0, None);
+        assert!(
+            !clicked.iter().any(|a| matches!(a, UiAction::SetSoft(_))),
+            "{clicked:?}"
+        );
     }
 
     #[test]
@@ -793,6 +968,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -833,6 +1010,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         };
         f(&view)
     }
@@ -994,6 +1173,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         };
         // Down the panel's left part: swatches and names, Add, the name field, the palette.
         let clicked = panel_actions(&view, 1280.0 - 160.0, None);
@@ -1063,6 +1244,8 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            soften: None,
+            edges_soft: None,
         }
     }
 
@@ -1348,6 +1531,8 @@ mod tests {
             outliner: table,
             context,
             selection,
+            soften: None,
+            edges_soft: None,
         }
     }
 

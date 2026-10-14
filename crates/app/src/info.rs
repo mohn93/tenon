@@ -183,7 +183,8 @@ fn edge_length(m: &Model, e: kernel::EdgeId) -> f64 {
     }
 }
 
-fn count(n: usize, word: &str) -> String {
+/// "1 edge", "2 edges".
+pub(crate) fn count(n: usize, word: &str) -> String {
     if n == 1 {
         format!("1 {word}")
     } else {
