@@ -42,6 +42,12 @@ pub enum UiAction {
     RecolorMaterial(MaterialId, [u8; 3]),
     /// Set a material's opacity, in percent (0 to 100).
     SetMaterialOpacity(MaterialId, u8),
+    /// Choose an image file for a material's texture.
+    LoadTexture(MaterialId),
+    /// Take a material's texture off.
+    RemoveTexture(MaterialId),
+    /// Set the width and height a material's texture covers, in millimeters.
+    SetTextureSize(MaterialId, [u32; 2]),
     /// Select the outliner node at `path` (instances from the root down to it); `toggle`
     /// (Shift, Cmd or Ctrl held) adds or removes it instead of replacing the selection.
     OutlinerSelect {
@@ -72,6 +78,19 @@ pub struct MaterialRow {
     pub color: [u8; 3],
     /// From 0 (invisible) to 1 (opaque).
     pub opacity: f32,
+    pub texture: Option<TextureRow>,
+}
+
+/// A material's texture as the Materials list shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextureRow {
+    /// A small copy of the image for its swatch.
+    pub swatch: egui::TextureId,
+    /// The size one copy covers on the model, in meters.
+    pub width: f64,
+    pub height: f64,
+    /// The image's size in pixels.
+    pub pixels: [u32; 2],
 }
 
 /// The default material's swatch: its front color.
@@ -126,9 +145,9 @@ const OUTLINER_MIN_HEIGHT: f32 = 120.0;
 /// The Materials list's greatest height, in points.
 const MATERIALS_MAX_HEIGHT: f32 = 220.0;
 
-/// Room kept below the Materials list for its buttons, name field and colors, and for the
-/// Outliner's heading and minimum height, in points.
-const BELOW_MATERIALS_LIST: f32 = 166.0 + OUTLINER_MIN_HEIGHT;
+/// Room kept below the Materials list for its buttons, name field, colors, opacity and texture
+/// controls, and for the Outliner's heading and minimum height, in points.
+const BELOW_MATERIALS_LIST: f32 = 222.0 + OUTLINER_MIN_HEIGHT;
 
 /// The least height the right panel lays out its contents in; a shorter panel scrolls them.
 const PANEL_MIN_HEIGHT: f32 = 480.0;
@@ -375,6 +394,14 @@ fn swatch(ui: &mut Ui, color: Color32) -> egui::Response {
     response
 }
 
+/// A small square showing `image` that can be clicked.
+fn image_swatch(ui: &mut Ui, image: egui::TextureId) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+    let whole = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    ui.painter().image(image, rect, whole, Color32::WHITE);
+    response
+}
+
 fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
@@ -391,14 +418,19 @@ fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     egui::ScrollArea::vertical()
         .max_height(max_height)
         .show(ui, |ui| {
-            let rows = std::iter::once((None, "Default", DEFAULT_SWATCH)).chain(
-                view.materials
-                    .iter()
-                    .map(|m| (Some(m.id), m.name.as_str(), rgb(m.color))),
+            let rows = std::iter::once((None, "Default", DEFAULT_SWATCH, None)).chain(
+                view.materials.iter().map(|m| {
+                    let image = m.texture.as_ref().map(|t| t.swatch);
+                    (Some(m.id), m.name.as_str(), rgb(m.color), image)
+                }),
             );
-            for (id, name, color) in rows {
+            for (id, name, color, image) in rows {
                 ui.horizontal(|ui| {
-                    let picked = swatch(ui, color).clicked();
+                    let picked = match image {
+                        Some(image) => image_swatch(ui, image),
+                        None => swatch(ui, color),
+                    }
+                    .clicked();
                     let label = ui.selectable_label(view.material == id, name);
                     if picked || label.clicked() {
                         actions.push(UiAction::ChooseMaterial(id));
@@ -470,6 +502,61 @@ fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             actions.push(UiAction::SetMaterialOpacity(m.id, value));
         }
         ui.data_mut(|d| d.remove::<u8>(key));
+    }
+    texture_controls(ui, m, actions);
+}
+
+/// A material's texture controls: Texture... to load an image and Remove, then the size one copy
+/// covers (set when a drag ends or a typed value is entered).
+fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
+    ui.horizontal(|ui| {
+        if ui
+            .button("Texture...")
+            .on_hover_text("Show a PNG or JPEG image on faces painted with this material")
+            .clicked()
+        {
+            actions.push(UiAction::LoadTexture(m.id));
+        }
+        if let Some(t) = &m.texture {
+            if ui.button("Remove").clicked() {
+                actions.push(UiAction::RemoveTexture(m.id));
+            }
+            ui.label(RichText::new(format!("{} x {} px", t.pixels[0], t.pixels[1])).weak());
+        }
+    });
+    let Some(t) = &m.texture else { return };
+    // Like the opacity: the size being dragged lives in egui's memory until the drag ends.
+    let key = egui::Id::new(("texture-size", m.id.0));
+    let shown = [t.width, t.height];
+    let mut size = ui.data(|d| d.get_temp::<[f64; 2]>(key)).unwrap_or(shown);
+    let (dragged, done) = ui
+        .horizontal(|ui| {
+            ui.label("Size");
+            let field = |ui: &mut Ui, value: &mut f64| {
+                ui.add(
+                    egui::DragValue::new(value)
+                        .range(kernel::MIN_TEXTURE_SIZE..=kernel::MAX_TEXTURE_SIZE)
+                        .speed(0.01)
+                        .max_decimals(3)
+                        .suffix(" m"),
+                )
+            };
+            let w = field(ui, &mut size[0]);
+            ui.label("x");
+            let h = field(ui, &mut size[1]);
+            let dragged = w.dragged() || h.dragged();
+            let done = w.drag_stopped() || h.drag_stopped() || w.changed() || h.changed();
+            (dragged, done)
+        })
+        .inner;
+    if dragged {
+        ui.data_mut(|d| d.insert_temp(key, size));
+    } else {
+        let mm = |m: f64| (m * 1000.0).round() as u32;
+        if done && size.map(mm) != shown.map(mm) {
+            actions.push(UiAction::SetTextureSize(m.id, size.map(mm)));
+        }
+        ui.data_mut(|d| d.remove::<[f64; 2]>(key));
     }
 }
 
@@ -1149,12 +1236,14 @@ mod tests {
                 name: "Brick".into(),
                 color: [180, 60, 40],
                 opacity: 1.0,
+                texture: None,
             },
             MaterialRow {
                 id: MaterialId(32),
                 name: "Glass".into(),
                 color: [90, 170, 170],
                 opacity: 0.4,
+                texture: None,
             },
         ];
         let mut view = View {
@@ -1222,6 +1311,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_materials_list_loads_removes_and_sizes_textures() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let rows = brick();
+        let view = name_field_view(&status, &info, &rows);
+        // Without a texture: Texture... only.
+        let clicked: Vec<UiAction> = [160.0, 120.0, 80.0]
+            .into_iter()
+            .flat_map(|x| panel_actions(&view, 1280.0 - x, None))
+            .collect();
+        assert!(
+            clicked.contains(&UiAction::LoadTexture(MaterialId(31))),
+            "{clicked:?}"
+        );
+        assert!(
+            !clicked
+                .iter()
+                .any(|a| matches!(a, UiAction::RemoveTexture(_) | UiAction::SetTextureSize(..))),
+            "{clicked:?}"
+        );
+        let mut textured = brick();
+        textured[0].texture = Some(TextureRow {
+            swatch: egui::TextureId::default(),
+            width: 1.0,
+            height: 0.5,
+            pixels: [2, 1],
+        });
+        let view = name_field_view(&status, &info, &textured);
+        let clicked: Vec<UiAction> = [160.0, 120.0, 80.0]
+            .into_iter()
+            .flat_map(|x| panel_actions(&view, 1280.0 - x, None))
+            .collect();
+        for action in [
+            UiAction::ChooseMaterial(Some(MaterialId(31))),
+            UiAction::LoadTexture(MaterialId(31)),
+            UiAction::RemoveTexture(MaterialId(31)),
+        ] {
+            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+        }
+        // Typing 2 into the width field, then the height field, sets the size in millimeters.
+        let typed: Vec<UiAction> = [160.0, 120.0, 80.0]
+            .into_iter()
+            .flat_map(|x| panel_actions(&view, 1280.0 - x, Some("2")))
+            .collect();
+        for size in [[2000, 500], [1000, 2000]] {
+            let action = UiAction::SetTextureSize(MaterialId(31), size);
+            assert!(typed.contains(&action), "{action:?} in {typed:?}");
+        }
+    }
+
     /// Two materials, the first chosen, for the name-field tests.
     fn name_field_view<'a>(
         status: &'a Status,
@@ -1255,6 +1395,7 @@ mod tests {
             name: "Brick".into(),
             color: [180, 60, 40],
             opacity: 1.0,
+            texture: None,
         }]
     }
 
@@ -1687,6 +1828,7 @@ mod tests {
                 name: format!("Material {k}"),
                 color: [10, 20, 30],
                 opacity: 1.0,
+                texture: None,
             })
             .collect();
         let table = OutlinerTable {
@@ -1733,6 +1875,7 @@ mod tests {
                 name: format!("Material {k}"),
                 color: [10, 20, 30],
                 opacity: 1.0,
+                texture: None,
             })
             .collect();
         let mut view = outliner_view(&status, &info, &table, &[], &selection);

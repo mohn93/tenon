@@ -46,6 +46,11 @@ impl Gui {
         }
     }
 
+    /// The egui context, for loading images the panels show.
+    pub fn ctx(&self) -> &egui::Context {
+        &self.ctx
+    }
+
     /// Feeds a window event to egui. Returns true if egui needs a repaint.
     pub fn on_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
         self.state.on_window_event(window, event).repaint

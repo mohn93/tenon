@@ -265,7 +265,11 @@ current material (a click on something selected paints the whole selection's fac
 groups, a click on a group paints the group), and Cmd-click on macOS (Ctrl-click on Windows
 and Linux) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
 current material and adds, renames, recolors and deletes materials and sets their opacity (a
-0-100% slider; one change per drag), all through these commands.
+0-100% slider; one change per drag), all through these commands. A material with a texture
+shows a small copy of its image as its swatch; for the chosen material, Texture... loads a PNG
+or JPEG image from a file dialog (keeping the size of the texture it replaces), Remove takes the
+texture off, and the Size fields set its width and height in meters (one change per drag or
+typed value).
 
 ### Groups and components
 

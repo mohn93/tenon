@@ -11,7 +11,7 @@ use kernel::{EntityId, InstanceId, MaterialId};
 use render::grid::LineVertex;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Outcome, Projection,
-    SelectMode, StandardView,
+    SelectMode, StandardView, TextureSource,
 };
 use tools::overlay::overlay;
 use tools::{
@@ -415,6 +415,55 @@ impl Editor {
             color: None,
             opacity: Some(f32::from(percent.min(100)) / 100.0),
             texture: None,
+        });
+        true
+    }
+
+    /// Gives a material the image at `path` as its texture (keeping the size of the texture it
+    /// replaces, if any). A file that cannot be used says why in the status.
+    pub fn load_texture(&mut self, material: MaterialId, path: &Path) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: Some(Some(TextureSource {
+                path: Some(path.display().to_string()),
+                width: None,
+                height: None,
+            })),
+        });
+        true
+    }
+
+    /// Takes a material's texture off; its color stays.
+    pub fn remove_texture(&mut self, material: MaterialId) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: Some(None),
+        });
+        true
+    }
+
+    /// Sets the width and height a material's texture covers, in millimeters.
+    pub fn set_texture_size(&mut self, material: MaterialId, millimeters: [u32; 2]) -> bool {
+        self.message = None;
+        let [width, height] = millimeters.map(|mm| f64::from(mm) / 1000.0);
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: Some(Some(TextureSource {
+                path: None,
+                width: Some(width),
+                height: Some(height),
+            })),
         });
         true
     }
@@ -3564,6 +3613,68 @@ mod tests {
         assert!(e.status().contains("needs a name"), "{}", e.status());
         e.delete_material(second);
         assert_eq!(e.current_material(), None);
+    }
+
+    /// A 2 x 1 pixel PNG: a red pixel, then a blue one.
+    const RED_BLUE_PNG: [u8; 71] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0,
+        66, 255, 1, 15, 249, 3, 253, 133, 17, 153, 118, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+        130,
+    ];
+
+    #[test]
+    fn textures_load_resize_and_come_off_through_commands() {
+        let mut e = editor();
+        e.add_material();
+        let id = e.current_material().unwrap();
+        let png = std::env::temp_dir().join(format!(
+            "sketchup-alt-editor-{}-red-blue.png",
+            std::process::id()
+        ));
+        std::fs::write(&png, RED_BLUE_PNG).unwrap();
+        e.load_texture(id, &png);
+        let m = e.doc().scene().material(id).unwrap();
+        let t = m.texture.as_ref().expect("a texture");
+        assert_eq!((t.width, t.height), (1.0, 0.5));
+        assert_eq!((t.image.width, t.image.height), (2, 1));
+        assert_eq!(m.color, [128, 0, 128], "the image's average");
+
+        e.set_texture_size(id, [2000, 250]);
+        let t = e
+            .doc()
+            .scene()
+            .material(id)
+            .unwrap()
+            .texture
+            .clone()
+            .unwrap();
+        assert_eq!((t.width, t.height), (2.0, 0.25));
+        e.undo();
+        let t = e
+            .doc()
+            .scene()
+            .material(id)
+            .unwrap()
+            .texture
+            .clone()
+            .unwrap();
+        assert_eq!((t.width, t.height), (1.0, 0.5));
+
+        e.remove_texture(id);
+        assert!(e.doc().scene().material(id).unwrap().texture.is_none());
+        e.undo();
+        assert!(e.doc().scene().material(id).unwrap().texture.is_some());
+
+        // A file that is not an image leaves the material and says why.
+        let text = png.with_extension("txt");
+        std::fs::write(&text, "hello").unwrap();
+        let revision = e.doc().revision();
+        e.load_texture(id, &text);
+        assert_eq!(e.doc().revision(), revision);
+        assert!(e.status().contains("not a PNG or JPEG"), "{}", e.status());
+        let _ = std::fs::remove_file(png);
+        let _ = std::fs::remove_file(text);
     }
 
     #[test]

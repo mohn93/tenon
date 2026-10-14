@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use api::{Hub, listen_unix};
 use glam::DVec2;
-use kernel::{EntityId, InstanceId};
+use kernel::{EntityId, InstanceId, MaterialId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
 use session::{Command, OutlinerTable};
 use tools::Axis;
@@ -25,7 +25,10 @@ use crate::gui::Gui;
 use crate::host::WindowHost;
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
-use crate::ui::{MaterialRow, UiAction, View};
+use crate::ui::{MaterialRow, TextureRow, UiAction, View};
+
+/// The side of a texture's swatch image in the Materials list, in pixels.
+const SWATCH_PIXELS: u32 = 32;
 
 /// Sent to the event loop when an agent API request arrives.
 #[derive(Debug)]
@@ -299,6 +302,8 @@ struct State {
     drawn: Option<Drawn>,
     /// The Outliner's rows and the revision they were built at.
     outliner: Option<(u64, OutlinerTable)>,
+    /// Each textured material's swatch in the Materials list, with the image it shows.
+    swatches: HashMap<MaterialId, (Arc<TextureImage>, egui::TextureHandle)>,
     modifiers: ModifiersState,
     /// Watches for a Ctrl tap, which switches copying (see `CtrlTap`).
     ctrl_tap: CtrlTap,
@@ -381,6 +386,7 @@ impl State {
             gui,
             drawn: None,
             outliner: None,
+            swatches: HashMap::new(),
             modifiers: ModifiersState::empty(),
             ctrl_tap: CtrlTap::default(),
             view,
@@ -514,6 +520,65 @@ impl State {
         self.editor.save_file(path.as_deref())
     }
 
+    /// Gives a material the PNG or JPEG image chosen in a dialog as its texture.
+    fn load_texture(&mut self, material: MaterialId) {
+        let chosen = rfd::FileDialog::new()
+            .add_filter("PNG or JPEG image", &["png", "jpg", "jpeg"])
+            .pick_file();
+        if let Some(path) = chosen {
+            self.editor.load_texture(material, &path);
+        }
+    }
+
+    /// The Materials list rows, with a swatch image for each texture (made when a material's
+    /// image changes; those of materials gone are dropped).
+    fn material_rows(&mut self) -> Vec<MaterialRow> {
+        let materials: Vec<(MaterialId, kernel::Material)> = self
+            .editor
+            .doc()
+            .scene()
+            .materials()
+            .map(|(id, m)| (id, m.clone()))
+            .collect();
+        self.swatches
+            .retain(|id, _| materials.iter().any(|(m, _)| m == id));
+        materials
+            .into_iter()
+            .map(|(id, m)| MaterialRow {
+                id,
+                texture: m.texture.as_ref().map(|t| TextureRow {
+                    swatch: self.swatch(id, &t.image),
+                    width: t.width,
+                    height: t.height,
+                    pixels: [t.image.width, t.image.height],
+                }),
+                name: m.name,
+                color: m.color,
+                opacity: m.opacity,
+            })
+            .collect()
+    }
+
+    /// The swatch image of material `id`'s texture `image`.
+    fn swatch(&mut self, id: MaterialId, image: &Arc<TextureImage>) -> egui::TextureId {
+        if let Some((held, handle)) = self.swatches.get(&id)
+            && Arc::ptr_eq(held, image)
+        {
+            return handle.id();
+        }
+        let pixels =
+            render::texture::resample(&image.pixels, image.width, image.height, SWATCH_PIXELS);
+        let side = SWATCH_PIXELS as usize;
+        let handle = self.gui.ctx().load_texture(
+            format!("texture-swatch-{}", id.0),
+            egui::ColorImage::from_rgba_unmultiplied([side, side], &pixels),
+            egui::TextureOptions::LINEAR,
+        );
+        let shown = handle.id();
+        self.swatches.insert(id, (image.clone(), handle));
+        shown
+    }
+
     /// Imports an OBJ or STL file chosen in a dialog as a group in the open context.
     fn import(&mut self) {
         let chosen = rfd::FileDialog::new()
@@ -609,6 +674,13 @@ impl State {
             UiAction::SetMaterialOpacity(material, percent) => {
                 self.editor.set_material_opacity(material, percent);
             }
+            UiAction::LoadTexture(material) => self.load_texture(material),
+            UiAction::RemoveTexture(material) => {
+                self.editor.remove_texture(material);
+            }
+            UiAction::SetTextureSize(material, millimeters) => {
+                self.editor.set_texture_size(material, millimeters);
+            }
             UiAction::OutlinerSelect { path, toggle } => {
                 self.editor.outliner_select(&path, toggle);
             }
@@ -682,18 +754,7 @@ impl State {
         }
         let status = self.editor.status_parts();
         let info = entity_info(self.editor.doc());
-        let materials: Vec<MaterialRow> = self
-            .editor
-            .doc()
-            .scene()
-            .materials()
-            .map(|(id, m)| MaterialRow {
-                id,
-                name: m.name.clone(),
-                color: m.color,
-                opacity: m.opacity,
-            })
-            .collect();
+        let materials = self.material_rows();
         // Rebuilt only when the model changes; the open and selected marks are worked out
         // while drawing, from the context and selection.
         let revision = self.editor.doc().revision();
