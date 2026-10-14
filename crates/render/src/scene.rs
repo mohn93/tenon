@@ -336,6 +336,8 @@ struct MeshParts {
     /// The triangles of every face, three corners each, wound counter-clockwise around the
     /// face's normal.
     corners: Vec<DVec3>,
+    /// The normal at each corner: the face's own, or across soft edges the smooth one.
+    normals: Vec<DVec3>,
     faces: Vec<FacePart>,
     /// The ends of the hard edges (soft edges are not drawn).
     ends: Vec<DVec3>,
@@ -344,9 +346,8 @@ struct MeshParts {
 
 struct FacePart {
     id: FaceId,
-    /// The face's triangle corners in `MeshParts::corners`.
+    /// The face's triangle corners in `MeshParts::corners` and `MeshParts::normals`.
     corners: Range<usize>,
-    normal: DVec3,
     /// The looks of the sides painted on the face itself; unpainted sides take the look of
     /// the nearest painted instance placing them.
     front: Option<Look>,
@@ -363,16 +364,18 @@ impl MeshParts {
             triangles += (n + 2 * f.holes.len()).saturating_sub(2);
         }
         let mut corners = Vec::with_capacity(3 * triangles);
+        let mut normals = Vec::with_capacity(3 * triangles);
         let mut faces = Vec::with_capacity(face_count);
+        let smooth = model.smooth_normals();
         for (id, face) in model.faces() {
             let start = corners.len();
-            for tri in model.triangulate(id).unwrap_or_default() {
-                corners.extend(tri);
+            for tri in model.shaded_triangles(id, &smooth).unwrap_or_default() {
+                corners.extend(tri.corners);
+                normals.extend(tri.normals);
             }
             faces.push(FacePart {
                 id,
                 corners: start..corners.len(),
-                normal: face.normal,
                 front: face.front.map(|m| side_look(scene, Some(m), DEFAULT_FRONT)),
                 back: face.back.map(|m| side_look(scene, Some(m), DEFAULT_BACK)),
             });
@@ -388,6 +391,7 @@ impl MeshParts {
         }
         MeshParts {
             corners,
+            normals,
             faces,
             ends,
             edges,
@@ -511,19 +515,23 @@ impl Walk<'_> {
         let base = &mut self.base;
         for face in &parts.faces {
             let start = base.faces.len();
-            let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
             let (front, front_alpha) = face.front.unwrap_or(front);
             let (back, back_alpha) = face.back.unwrap_or(back);
-            let corner = |p: DVec3| BaseFaceVertex {
+            let corner = |(p, n): (DVec3, DVec3)| BaseFaceVertex {
                 pos: t.transform_point3(p).as_vec3().to_array(),
-                normal,
+                normal: (normal_map * n).normalize().as_vec3().to_array(),
                 front,
                 back,
                 alpha: [front_alpha, back_alpha],
             };
             let (tris, _) = parts.corners[face.corners.clone()].as_chunks::<3>();
-            for &[a, b, c] in tris {
-                let tri = if mirrored { [a, c, b] } else { [a, b, c] };
+            let (normals, _) = parts.normals[face.corners.clone()].as_chunks::<3>();
+            for (&[a, b, c], &[na, nb, nc]) in tris.iter().zip(normals) {
+                let tri = if mirrored {
+                    [(a, na), (c, nc), (b, nb)]
+                } else {
+                    [(a, na), (b, nb), (c, nc)]
+                };
                 base.faces.extend(tri.map(corner));
             }
             if open {
@@ -670,6 +678,53 @@ mod tests {
         let all: BTreeSet<EntityId> = m.edges().map(|(e, _)| EntityId::Edge(e)).collect();
         let g = geometry(m, &all);
         assert_eq!(g.edges.len(), 2 * 6, "the two rims, selected or not");
+    }
+
+    #[test]
+    fn faces_are_shaded_smoothly_across_soft_edges_in_any_placement() {
+        // A 12-sided cylinder, its sides soft, placed in a group turned a quarter about x and
+        // mirrored in z.
+        let mut m = Model::new();
+        let ring: Vec<DVec3> = (0..12)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 12.0;
+                DVec3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        m.add_curve(&ring, true).unwrap();
+        let (base, _) = m.faces().next().unwrap();
+        let up = m.face(base).unwrap().normal.z.signum();
+        m.push_pull(base, up).unwrap();
+        let mut s = Scene::from_root(m);
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+        let (group, _) = s
+            .make_group(MeshId::Root, &edges, &faces, &[], DefinitionKind::Group, "")
+            .unwrap();
+        let place = DAffine3::from_rotation_x(std::f64::consts::FRAC_PI_2)
+            * DAffine3::from_scale(DVec3::new(1.0, 1.0, -1.0));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[group], place)))
+            .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        let mut sides = 0;
+        for tri in g.faces.as_chunks::<3>().0 {
+            let p = tri.map(|v| glam::Vec3::from_array(v.pos));
+            let face_normal = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
+            if face_normal.y.abs() > 0.99 {
+                // A cap: flat, along the turned axis.
+                assert!(tri.iter().all(|v| v.normal == tri[0].normal));
+                continue;
+            }
+            for (v, p) in tri.iter().zip(p) {
+                // Straight out from the turned axis (y), and to the same side as the face.
+                let out = glam::Vec3::new(p.x, 0.0, p.z).normalize();
+                let n = glam::Vec3::from_array(v.normal);
+                assert!(n.distance(out) < 1e-5, "{p} {n}");
+                assert!(n.dot(face_normal) > 0.0);
+                sides += 1;
+            }
+        }
+        assert_eq!(sides, 12 * 6);
     }
 
     #[test]
@@ -994,8 +1049,8 @@ mod tests {
                 let selected = |e: EntityId| lit || (open && self.selection.contains(&e));
                 let normal_map = t.matrix3.inverse().transpose();
                 let mirrored = t.matrix3.determinant() < 0.0;
+                let smooth = model.smooth_normals();
                 for (fid, face) in model.faces() {
-                    let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
                     let flag = if selected(EntityId::Face(fid)) {
                         1.0
                     } else {
@@ -1005,14 +1060,15 @@ mod tests {
                         side_look(self.scene, face.front.or(inherited), DEFAULT_FRONT);
                     let (back, back_alpha) =
                         side_look(self.scene, face.back.or(inherited), DEFAULT_BACK);
-                    for mut tri in model.triangulate(fid).unwrap_or_default() {
+                    for tri in model.shaded_triangles(fid, &smooth).unwrap_or_default() {
+                        let mut corners = [0, 1, 2].map(|k| (tri.corners[k], tri.normals[k]));
                         if mirrored {
-                            tri.swap(1, 2);
+                            corners.swap(1, 2);
                         }
-                        for p in tri {
+                        for (p, n) in corners {
                             self.g.faces.push(FaceVertex {
                                 pos: t.transform_point3(p).as_vec3().to_array(),
-                                normal,
+                                normal: (normal_map * n).normalize().as_vec3().to_array(),
                                 selected: flag,
                                 front,
                                 back,

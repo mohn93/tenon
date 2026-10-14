@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use kernel::EntityId;
 use render::Snapshotter;
-use session::{Command, Document, MaterialId, Projection, Side, StandardView};
+use session::{Command, Document, ImportAs, MaterialId, Projection, Side, StandardView, UpAxis};
 
 const WIDTH: u32 = 160;
 const HEIGHT: u32 = 120;
@@ -519,6 +519,99 @@ fn golden_cylinder_hides_soft_edges() {
     check("soft_cylinder", &d);
 }
 
+/// OBJ text for two UV spheres of radius 1 (16 sides, 8 bands), centered at x = -1.2 and 1.2
+/// on z = 1, in meters with Z up.
+fn two_spheres_obj() -> String {
+    let (sides, bands) = (16, 8);
+    let mut out = String::new();
+    let mut count = 0;
+    for cx in [-1.2, 1.2] {
+        let first = count + 1;
+        out.push_str(&format!("v {cx} 0 2\n"));
+        for b in 1..bands {
+            let polar = std::f64::consts::PI * b as f64 / bands as f64;
+            for k in 0..sides {
+                let a = std::f64::consts::TAU * k as f64 / sides as f64;
+                let (x, y, z) = (polar.sin() * a.cos(), polar.sin() * a.sin(), polar.cos());
+                out.push_str(&format!("v {} {} {}\n", cx + x, y, 1.0 + z));
+            }
+        }
+        out.push_str(&format!("v {cx} 0 0\n"));
+        let ring = |b: usize, k: usize| first + 1 + (b - 1) * sides + k % sides;
+        let bottom = first + 1 + (bands - 1) * sides;
+        for k in 0..sides {
+            out.push_str(&format!("f {first} {} {}\n", ring(1, k), ring(1, k + 1)));
+            for b in 1..bands - 1 {
+                out.push_str(&format!(
+                    "f {} {} {} {}\n",
+                    ring(b, k),
+                    ring(b + 1, k),
+                    ring(b + 1, k + 1),
+                    ring(b, k + 1)
+                ));
+            }
+            out.push_str(&format!(
+                "f {} {bottom} {}\n",
+                ring(bands - 1, k),
+                ring(bands - 1, k + 1)
+            ));
+        }
+        count = bottom;
+    }
+    out
+}
+
+#[test]
+fn golden_smooth_sphere_beside_a_faceted_one() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("golden");
+    std::fs::create_dir_all(&dir).expect("create folder");
+    let path = dir.join(format!("spheres_{}.obj", std::process::id()));
+    std::fs::write(&path, two_spheres_obj()).expect("write spheres");
+    let mut d = doc();
+    run(
+        &mut d,
+        Command::Import {
+            path: path.to_string_lossy().into_owned(),
+            format: None,
+            place: ImportAs::Context,
+            scale: None,
+            up: Some(UpAxis::Z),
+            merge_coplanar: Some(false),
+        },
+    );
+    let _ = std::fs::remove_file(&path);
+    // What an import brings in becomes the selection.
+    run(
+        &mut d,
+        Command::Select {
+            ids: Vec::new(),
+            mode: Default::default(),
+        },
+    );
+    // Soften the sphere on the right only.
+    let model = d.model();
+    let right: Vec<EntityId> = model
+        .faces()
+        .filter(|(_, f)| {
+            f.outer
+                .iter()
+                .all(|v| model.position(*v).is_some_and(|p| p.x > 0.0))
+        })
+        .map(|(id, _)| EntityId::Face(id))
+        .collect();
+    assert_eq!(right.len(), 16 * 8);
+    let out = run(
+        &mut d,
+        Command::SoftenByAngle {
+            ids: right,
+            max_angle_deg: 30.0,
+        },
+    );
+    assert_eq!(out.soften.map(|r| r.changed), Some(16 * 15));
+    look(&mut d, [0.0, -6.0, 3.0], [0.0, 0.0, 1.0]);
+    check("smooth_sphere", &d);
+}
+
 #[test]
 fn golden_parallel_top_view() {
     let mut d = doc();
@@ -606,6 +699,7 @@ fn every_golden_image_has_a_test() {
         "rotated_component",
         "guides",
         "soft_cylinder",
+        "smooth_sphere",
         "parallel_top",
         "selection",
         "open_group",
