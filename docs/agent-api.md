@@ -258,14 +258,17 @@ once, and every group or component wherever it is placed, at any depth (a lamp c
 a room inside a house gives its own light in each placed house; the groups around it give none
 of their own). A face glows with its stronger side's material (its own, or the nearest painted
 instance's, as for color). The light sits at the area-weighted center of the glowing faces, has
-their color weighted by emission times area, and its strength is their emission times their
-area in square meters (scaled with a scaled placement). It reaches 6 x sqrt(strength) meters
+their color weighted by emission times area (a textured glowing material lights with its
+material color, its image's average unless a color was given), and its strength is their
+emission times their area in square meters (scaled with a scaled placement). It reaches 6 x sqrt(strength) meters
 and falls off smoothly to nothing there; surfaces take it by the angle they face it, with no
 shadows. Lights do not depend on the open instance. The window and `render_view` use the 128
 strongest lights as seen from the eye (strength over 1 + distance squared). By day lights add to
 the headlight and ambient light; by night those are dimmed, the background is dark, and
 unselected edges, the grid and the axes fade toward it; selection, guides and tool previews keep
 their colors.
+
+#### Painting
 
 The `entity` result of a face (and its entry in `entities`) has `front_material` and
 `back_material`, an instance's has `material`; each is absent for the default material.

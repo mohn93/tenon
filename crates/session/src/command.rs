@@ -172,9 +172,8 @@ pub enum Command {
     },
     /// Rename, recolor, change the opacity (0 to 1), the texture and/or the emission (0 to 10)
     /// of a material; absent fields stay as they are. `texture`: null removes it; an object
-    /// sets it, reading `path`
-    /// (the color becomes the image's average unless `color` is given), or without `path`
-    /// keeps the image and changes its size.
+    /// sets it, reading `path` (the color becomes the image's average unless `color` is
+    /// given), or without `path` keeps the image and changes its size.
     ChangeMaterial {
         material: MaterialId,
         #[serde(default)]

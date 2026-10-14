@@ -107,9 +107,9 @@ fn updating() -> bool {
     std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| v == "1")
 }
 
-/// Renders `doc` with its camera, lighting, selection and open context, and checks the image against
-/// `tests/golden/<name>.png` (or rewrites that file with `UPDATE_GOLDEN=1`). Skips without
-/// a GPU adapter.
+/// Renders `doc` with its camera, lighting, selection and open context, and checks the image
+/// against `tests/golden/<name>.png` (or rewrites that file with `UPDATE_GOLDEN=1`). Skips
+/// without a GPU adapter.
 fn check(name: &str, doc: &Document) {
     let Some(mut snap) = Snapshotter::new_headless() else {
         eprintln!("no GPU adapter, skipping");

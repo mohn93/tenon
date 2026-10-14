@@ -81,7 +81,8 @@ pub(crate) fn write(
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
-    let glowing = model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
+    let needs_lights_schema =
+        model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let images: Vec<(String, Arc<TextureImage>)> = model
@@ -94,7 +95,7 @@ pub(crate) fn write(
         .collect();
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if glowing {
+        schema_version: if needs_lights_schema {
             SCHEMA_VERSION
         } else if textured {
             TEXTURED_SCHEMA_VERSION
