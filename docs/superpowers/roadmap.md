@@ -24,7 +24,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M8b | Golden-image render tests (headless renders compared with stored images) and toolbar wrapping | done 33e0ae5..3acc26d |
 | M8c | Clean-up of deferred correctness and performance items recorded in memory (copy/stencil speed, BVH rebuild on paint, float round trip in files, fixed tmp paths in tests, and the like) | done 8124607..ee7b754 |
 | M8d | Clean-up of deferred UX and API polish items recorded in memory | done 3575840..7a060a9 |
-| M9a | Soften and smooth: soften_edges and soften_by_angle commands, smooth shading across soft edges, glTF smooth normals, Edit > Soften Edges... and Entity Info soft toggle | todo |
+| M9a | Soften and smooth: soften_edges and soften_by_angle commands, smooth shading across soft edges, glTF smooth normals, Edit > Soften Edges... and Entity Info soft toggle | planned docs/superpowers/plans/2026-10-14-m9a-soften.md |
 | M9b | Textures: image textures on materials (embedded in .skr), planar projection, texture-array rendering, glTF/OBJ export, Materials panel | todo |
 | M9c | Lights: glowing materials (emission), point lights from glowing instances, day/night lighting mode | todo |
 
