@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
-use glam::{DAffine3, DVec3};
+use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{Guide, GuideId, InstanceId, MeshId, Model, Scene};
 
@@ -35,6 +35,8 @@ pub struct Placed {
     /// holds (vertices, edges and face triangles). None when there is no box to go by (a mesh
     /// without vertices), so the part is never skipped.
     bounds: Option<[DVec3; 2]>,
+    /// How `back` stretches lengths.
+    stretch: Stretch,
     /// Which of the layout's meshes is placed.
     mesh: usize,
 }
@@ -60,6 +62,37 @@ impl Placed {
             let off = (rel - dir * t).length();
             off <= radius + r0 + slope * (t + radius).max(0.0)
         })
+    }
+
+    /// How `back` stretches lengths, for carrying a cone into the mesh's coordinates.
+    pub(crate) fn stretch(&self) -> Stretch {
+        self.stretch
+    }
+}
+
+/// How a linear map `B` stretches lengths. `BᵀB` is `c²` times the identity (`c²` the mean
+/// of its diagonal) plus a matrix `E` of Frobenius norm `off`, and no unit vector `w` has
+/// `|wᵀ E v|` above that for a unit `v`. So `|B w|² = c² + wᵀ E w <= most²`, `most` being
+/// `sqrt(c² + off)`, and for `w` across `v`, `B w · B v = wᵀ E v` is at most `off`. A map
+/// that turns, mirrors and scales evenly has `off` 0, but for rounding.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Stretch {
+    pub most: f64,
+    pub off: f64,
+}
+
+impl Stretch {
+    pub(crate) fn of(b: DMat3) -> Stretch {
+        let m = b.transpose() * b;
+        let mean = (m.x_axis.x + m.y_axis.y + m.z_axis.z) / 3.0;
+        let e = m - DMat3::from_diagonal(DVec3::splat(mean));
+        let off =
+            (e.x_axis.length_squared() + e.y_axis.length_squared() + e.z_axis.length_squared())
+                .sqrt();
+        Stretch {
+            most: (mean + off).sqrt(),
+            off,
+        }
     }
 }
 
@@ -182,12 +215,16 @@ impl Layout {
         let boxes: Vec<Option<[DVec3; 2]>> = models.iter().map(|m| mesh_box(m)).collect();
         let parts: Vec<Placed> = parts
             .into_iter()
-            .map(|(mesh, place, owner)| Placed {
-                place,
-                back: place.inverse(),
-                owner,
-                bounds: boxes[mesh].map(|b| placed_box(place, b)),
-                mesh,
+            .map(|(mesh, place, owner)| {
+                let back = place.inverse();
+                Placed {
+                    place,
+                    back,
+                    owner,
+                    bounds: boxes[mesh].map(|b| placed_box(place, b)),
+                    stretch: Stretch::of(back.matrix3),
+                    mesh,
+                }
             })
             .collect();
         let guides = parts
@@ -327,20 +364,6 @@ impl<'a> Scenery<'a> {
             let first = points.next()?;
             Some(points.fold([first, first], |[lo, hi], q| [lo.min(q), hi.max(q)]))
         })
-    }
-
-    /// The same scenery with no part ever skipped by its box, to check that skipping changes
-    /// nothing.
-    #[cfg(test)]
-    pub(crate) fn unculled(&self) -> Scenery<'a> {
-        let mut layout = self.layout.clone().into_owned();
-        for part in &mut layout.parts {
-            part.bounds = None;
-        }
-        Scenery {
-            models: self.models.clone(),
-            layout: Cow::Owned(layout),
-        }
     }
 }
 
