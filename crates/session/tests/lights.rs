@@ -158,3 +158,80 @@ fn glowing_materials_are_saved_as_version_8() {
     );
     assert!(document["model"]["materials"][0].get("emission").is_none());
 }
+
+#[test]
+fn lighting_is_a_view_setting_reported_with_the_camera() {
+    let mut d = doc();
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "day");
+    let history = ask(&d, json!({"type": "history"}));
+    let set: Command = serde_json::from_value(json!({"type": "set_lighting", "mode": "night"}))
+        .expect("valid command json");
+    assert!(set.is_camera() && !set.changes_model());
+    d.execute(set).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "night");
+    // Not an undo step, not a change to the model.
+    assert_eq!(ask(&d, json!({"type": "history"})), history);
+    assert!(!d.is_modified());
+    run(&mut d, json!({"type": "set_lighting", "mode": "day"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "day");
+    assert!(
+        serde_json::from_value::<Command>(json!({"type": "set_lighting", "mode": "dusk"})).is_err()
+    );
+    assert!(serde_json::from_value::<Command>(json!({"type": "set_lighting"})).is_err());
+}
+
+#[test]
+fn a_failed_atomic_batch_puts_the_lighting_back() {
+    let mut d = doc();
+    let commands: Vec<Command> = serde_json::from_value(json!([
+        {"type": "set_lighting", "mode": "night"},
+        {"type": "erase", "ids": ["e999"]}
+    ]))
+    .unwrap();
+    assert!(d.execute_batch(commands, true).unwrap_err().rolled_back);
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "day");
+}
+
+#[test]
+fn night_lighting_is_saved_with_the_camera_as_version_8() {
+    let mut d = doc();
+    run(&mut d, json!({"type": "set_lighting", "mode": "night"})).unwrap();
+    let path = scratch("night.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let document = stored(&path);
+    assert_eq!(document["schema_version"], 8);
+    assert_eq!(document["camera"]["lighting"], "night");
+
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(ask(&e, json!({"type": "camera"}))["lighting"], "night");
+    // A new model is lit by day.
+    run(&mut e, json!({"type": "new"})).unwrap();
+    assert_eq!(ask(&e, json!({"type": "camera"}))["lighting"], "day");
+
+    // By day nothing is written: the file is as before lighting existed.
+    run(&mut d, json!({"type": "set_lighting", "mode": "day"})).unwrap();
+    run(&mut d, json!({"type": "save"})).unwrap();
+    let document = stored(&path);
+    assert_eq!(
+        document["schema_version"],
+        session::file::OPAQUE_SCHEMA_VERSION
+    );
+    assert!(document["camera"].get("lighting").is_none());
+    // An older file opens lit by day, even into a document lit by night.
+    run(&mut e, json!({"type": "set_lighting", "mode": "night"})).unwrap();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(ask(&e, json!({"type": "camera"}))["lighting"], "day");
+}

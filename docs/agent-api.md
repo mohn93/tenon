@@ -49,7 +49,7 @@ Queries:
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}`, `{"type": "history"}` | counts for the open context (plus the number of definitions) and revision; undo/redo depth |
-| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`; see Camera below |
+| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
@@ -66,7 +66,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `er
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
 `change_material`, `delete_material`, `paint`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
-`new`, `open`, `save`, `export`, `import`.
+`set_lighting`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`. Ids are unique across the whole model, including inside
@@ -249,6 +249,9 @@ The `materials` query adds `"texture": {"width": 0.6, "height": 0.3, "pixel_widt
 A material with an `emission` above 0 glows. The `materials` query always includes `emission`
 (0 for a material that does not glow).
 
+The view is lit by `day` (the default) or by `night`, a view setting `set_lighting` changes and
+the `camera` query reports as `lighting`.
+
 The `entity` result of a face (and its entry in `entities`) has `front_material` and
 `back_material`, an instance's has `material`; each is absent for the default material.
 
@@ -370,7 +373,7 @@ fails with `invalid_input` and leaves the camera as it was.
 
 ```
 {"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
- "projection": "perspective", "view_height": 10.11}
+ "projection": "perspective", "view_height": 10.11, "lighting": "day"}
 ```
 
 - `up` is the direction pointing up the screen: always `[0,0,1]`, except in a view straight down
@@ -381,6 +384,7 @@ fails with `invalid_input` and leaves the camera as it was.
   target, which switching projection keeps, so the zoom of a parallel view is set by how far
   the eye is from the target, and zooming moves the eye. A parallel view sees 100 eye-to-target
   distances in front of and behind the target, including geometry behind the eye.
+- `lighting` is `day` or `night` (see Lights).
 
 | Command | Effect |
 |---|---|
@@ -391,6 +395,7 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "zoom_extents"}` | Keeps the view direction and fits the whole model in the view: every vertex and placed instance of the root, in root coordinates, whatever instance is open (guides do not count). Perspective fits the sphere around the model's bounding box; parallel fits the box itself with 5% to spare. With nothing to fit, the camera stays (no error). |
 | `{"type": "standard_view", "view": "top"}` | Looks at the target from a standard direction, from the same distance: `top` (from +Z, `up` +Y), `bottom` (from -Z, `up` +Y), `front` (from -Y, looking along +Y), `back` (from +Y), `left` (from -X), `right` (from +X), `iso` (from the front left above, along (1,1,-1)). The projection does not change. |
 | `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
+| `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day` or by `night` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
 standard views and the two projections; it sends these same commands.
@@ -436,14 +441,15 @@ lists these controls) turns it on; Esc or F turns it off.
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (8 when a material glows, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, so a model whose materials are all opaque
 and dark is saved exactly as before opacity existed and older builds still open it; version 7
 and older files open without glow; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
-of view, up and projection) and the model with every id, edges with their curve and soft flag,
+of view, up, projection, and `lighting` when it is `night`: a file without it opens lit by day,
+and `new` starts by day) and the model with every id, edges with their curve and soft flag,
 the materials and what is painted with them. Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
 `document.json` names it with its `width` and `height`.

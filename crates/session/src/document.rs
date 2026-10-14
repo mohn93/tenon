@@ -8,7 +8,7 @@ use kernel::{
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
-use crate::camera::Camera;
+use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
 use crate::import::ImportReport;
@@ -44,6 +44,8 @@ pub struct Document {
     /// The instances being edited, from the root; empty when the root is open.
     context: Vec<InstanceId>,
     pub camera: Camera,
+    /// How the view is lit; saved with the camera.
+    pub lighting: Lighting,
     selection: BTreeSet<EntityId>,
     undo: Vec<SceneChange>,
     redo: Vec<SceneChange>,
@@ -67,6 +69,7 @@ impl Document {
             scene: Scene::new(),
             context: Vec::new(),
             camera: Camera::new(viewport),
+            lighting: Lighting::Day,
             selection: BTreeSet::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -194,6 +197,10 @@ impl Document {
             | Command::StandardView { .. }
             | Command::SetProjection { .. } => {
                 self.camera = self.moved_camera(&command)?;
+                Ok(Outcome::default())
+            }
+            Command::SetLighting { mode } => {
+                self.lighting = mode;
                 Ok(Outcome::default())
             }
             Command::OpenInstance { id } => {
@@ -401,6 +408,7 @@ impl Document {
             | Command::ZoomExtents
             | Command::StandardView { .. }
             | Command::SetProjection { .. }
+            | Command::SetLighting { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
             | Command::CloseInstance
@@ -442,6 +450,7 @@ impl Document {
         }
 
         let camera_before = self.camera.clone();
+        let lighting_before = self.lighting;
         let selection_before = self.selection.clone();
         let context_before = self.context.clone();
         let mut applied: Vec<SceneChange> = Vec::new();
@@ -481,6 +490,7 @@ impl Document {
                         self.scene.apply(&c.inverse());
                     }
                     self.camera = camera_before;
+                    self.lighting = lighting_before;
                     self.selection = selection_before;
                     self.context = context_before;
                     return Err(BatchError {
@@ -1056,6 +1066,7 @@ impl Document {
                 fov_y_deg: self.camera.fov_y.to_degrees(),
                 projection: self.camera.projection,
                 view_height: self.camera.view_height(),
+                lighting: self.lighting,
             },
             Query::Stats => QueryResult::Stats {
                 vertices: m.vertices().count(),

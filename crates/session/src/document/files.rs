@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use kernel::{DefinitionId, DefinitionKind, Scene, SceneChange};
 
 use super::Document;
-use crate::camera::Camera;
+use crate::camera::{Camera, Lighting};
 use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
 use crate::file;
@@ -22,21 +22,23 @@ impl Document {
         Ok(())
     }
 
-    /// An empty model with the default view.
+    /// An empty model with the default view, lit by day.
     pub(super) fn new_model(&mut self) {
         let camera = Camera::new(self.camera.viewport);
         self.replace(Scene::new(), camera);
+        self.lighting = Lighting::Day;
         self.path = None;
     }
 
-    /// Replaces the model and view with a file's. A file whose view cannot be used (an eye
-    /// on its target, say) opens with the default view.
+    /// Replaces the model, view and lighting with a file's. A file whose view cannot be used
+    /// (an eye on its target, say) opens with the default view.
     pub(super) fn open_file(&mut self, path: &str) -> Result<(), CommandError> {
         let (scene, c) = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
         let camera = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
             .unwrap_or_else(|_| Camera::new(self.camera.viewport));
         self.replace(scene, camera);
+        self.lighting = c.lighting;
         self.path = Some(PathBuf::from(path));
         Ok(())
     }
@@ -52,7 +54,7 @@ impl Document {
                     "give a path: the model was never opened or saved",
                 )
             })?;
-        file::write(&target, &self.scene, &self.camera)
+        file::write(&target, &self.scene, &self.camera, self.lighting)
             .map_err(|e| file_error(&target.display().to_string(), e))?;
         self.path = Some(target);
         self.clean_revision = self.revision;

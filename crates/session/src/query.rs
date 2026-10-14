@@ -6,7 +6,7 @@ use kernel::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::camera::Projection;
+use crate::camera::{Lighting, Projection};
 
 /// Read-only questions about the document. Entities and coordinates are those of the open
 /// context (see `Command::OpenInstance`).
@@ -303,7 +303,7 @@ pub enum QueryResult {
     Curve(CurveInfo),
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
-    /// whole view's height).
+    /// whole view's height); `lighting` is `day` or `night`.
     Camera {
         eye: [f64; 3],
         target: [f64; 3],
@@ -311,6 +311,7 @@ pub enum QueryResult {
         fov_y_deg: f64,
         projection: Projection,
         view_height: f64,
+        lighting: Lighting,
     },
     /// Counts for the open context, plus the number of definitions.
     Stats {

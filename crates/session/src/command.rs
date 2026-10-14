@@ -5,7 +5,7 @@ use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side, SoftenRepo
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::camera::{Projection, StandardView};
+use crate::camera::{Lighting, Projection, StandardView};
 use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 
@@ -335,6 +335,13 @@ pub enum Command {
     SetProjection {
         projection: Projection,
     },
+    /// Light the view by `day` (a headlight and ambient light, glowing faces adding theirs) or
+    /// by `night` (both dimmed, a dark background: glowing faces light the scene). A view
+    /// setting like the camera's: saved with the model, but not an undo step and not a change
+    /// to the revision.
+    SetLighting {
+        mode: Lighting,
+    },
 }
 
 impl Command {
@@ -348,7 +355,7 @@ impl Command {
             ))
     }
 
-    /// True for commands that only move the camera.
+    /// True for commands that only change the view: move the camera or set the lighting.
     pub fn is_camera(&self) -> bool {
         matches!(
             self,
@@ -359,6 +366,7 @@ impl Command {
                 | Command::ZoomExtents
                 | Command::StandardView { .. }
                 | Command::SetProjection { .. }
+                | Command::SetLighting { .. }
         )
     }
 }

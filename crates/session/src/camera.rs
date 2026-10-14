@@ -64,6 +64,17 @@ pub enum Projection {
     Parallel,
 }
 
+/// How the model is lit: a view setting, saved with the camera.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Lighting {
+    /// A headlight at the eye and an even ambient light; glowing faces add their light.
+    #[default]
+    Day,
+    /// Headlight and ambient dimmed and a dark background: glowing faces light the scene.
+    Night,
+}
+
 /// The six views along the axes, and an isometric one from the front left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

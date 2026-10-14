@@ -11,18 +11,20 @@ use kernel::{MAX_ID, MAX_TEXTURES, MeshData, Scene, SceneData, TextureImage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::camera::{Camera, Projection};
+use crate::camera::{Camera, Lighting, Projection};
 use crate::document::MAX_COORDINATE;
 use crate::texture::{MAX_TEXTURE_BYTES, decode};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when a material glows.
-/// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
-/// and projection, version 5 materials, version 6 material opacity, version 7 textures and
-/// version 8 material emission; older files still open.
+/// The newest schema version this build reads, and the one it writes when a material glows or
+/// the view is lit by night. Version 2 added guides, version 3 curves and soft edges, version 4
+/// the camera's up direction and projection, version 5 materials, version 6 material opacity,
+/// version 7 textures and version 8 material emission and the lighting mode; older files still
+/// open.
 pub const SCHEMA_VERSION: u32 = 8;
-/// The version written when a material has a texture but none glows.
+/// The version written when a material has a texture but none glows and the view is lit by
+/// day.
 pub const TEXTURED_SCHEMA_VERSION: u32 = 7;
 /// The version written when a material is see-through but none has a texture or glows.
 pub const TRANSLUCENT_SCHEMA_VERSION: u32 = 6;
@@ -45,7 +47,8 @@ struct Stored {
 }
 
 /// The saved view. Files before version 4 have no `up` or `projection`: their views are
-/// never vertical, and they are perspective.
+/// never vertical, and they are perspective. `lighting` is written only at night; files before
+/// version 8 are lit by day.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoredCamera {
@@ -56,18 +59,29 @@ pub(crate) struct StoredCamera {
     pub up: Option<[f64; 3]>,
     #[serde(default)]
     pub projection: Projection,
+    #[serde(default, skip_serializing_if = "is_day")]
+    pub lighting: Lighting,
 }
 
-/// Writes the model and camera to `path`, replacing it only once the whole file is written.
-/// Fails when the model has given out ids past [`MAX_ID`], which no file can hold.
-pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), String> {
+fn is_day(lighting: &Lighting) -> bool {
+    *lighting == Lighting::Day
+}
+
+/// Writes the model, camera and lighting to `path`, replacing it only once the whole file is
+/// written. Fails when the model has given out ids past [`MAX_ID`], which no file can hold.
+pub(crate) fn write(
+    path: &Path,
+    scene: &Scene,
+    camera: &Camera,
+    lighting: Lighting,
+) -> Result<(), String> {
     let model = scene.to_data();
     if model.next_id > MAX_ID {
         return Err(format!(
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
-    let glowing = model.materials.iter().any(|m| m.emission > 0.0);
+    let glowing = model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let images: Vec<(String, Arc<TextureImage>)> = model
@@ -95,6 +109,7 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
             fov_y_deg: camera.fov_y.to_degrees(),
             up: Some(camera.up.to_array()),
             projection: camera.projection,
+            lighting,
         },
         model,
     };
