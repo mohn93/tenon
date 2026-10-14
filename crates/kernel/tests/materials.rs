@@ -46,12 +46,16 @@ fn materials_are_added_changed_and_deleted_as_exact_undo_steps() {
 
     let before = s.clone();
     let changed = s
-        .change_material(id, Some("Old brick"), Some(BLUE))
+        .change_material(id, Some("Old brick"), Some(BLUE), None)
         .unwrap();
     assert_eq!(s.material(id).unwrap().name, "Old brick");
     assert_eq!(s.material(id).unwrap().color, BLUE);
     assert_eq!(changed.summary().materials, vec![id]);
-    assert!(s.change_material(id, None, Some(BLUE)).unwrap().is_empty());
+    assert!(
+        s.change_material(id, None, Some(BLUE), None)
+            .unwrap()
+            .is_empty()
+    );
     s.apply(&changed.inverse());
     assert_eq!(s, before);
 
@@ -80,15 +84,19 @@ fn material_names_must_be_present_short_and_distinct() {
     ));
     let blue = s.add_material("Blue", BLUE).unwrap().0;
     assert!(matches!(
-        s.change_material(blue, Some("Red"), None),
+        s.change_material(blue, Some("Red"), None, None),
         Err(KernelError::MaterialName(_))
     ));
     // Keeping its own name is fine.
-    assert!(s.change_material(id, Some("Red"), None).unwrap().is_empty());
+    assert!(
+        s.change_material(id, Some("Red"), None, None)
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(s.free_material_name("Red"), "Red 2");
     assert_eq!(s.free_material_name("Green"), "Green");
     assert_eq!(
-        s.change_material(MaterialId(999), None, None),
+        s.change_material(MaterialId(999), None, None, None),
         Err(KernelError::MaterialNotFound)
     );
     assert_eq!(
@@ -519,6 +527,8 @@ fn materials_survive_files_and_bad_material_data_is_rejected() {
         "appears twice",
     );
     rejects(&|d| d.materials[0].id = u64::MAX, "too large");
+    rejects(&|d| d.materials[0].opacity = 1.5, "opacity");
+    rejects(&|d| d.materials[0].opacity = f32::NAN, "opacity");
     // A color component over 255 is not a material color.
     let bad = json.replace("[200,30,30]", "[256,30,30]");
     assert!(serde_json::from_str::<SceneData>(&bad).is_err());
@@ -557,4 +567,56 @@ fn a_sheet_pushed_against_its_normal_keeps_the_painted_side_outside() {
     for (fid, f) in m.faces().filter(|(f, _)| *f != face) {
         assert_eq!(f.front, Some(id), "{fid:?}");
     }
+}
+
+#[test]
+fn opacity_is_checked_changed_as_an_undo_step_and_kept_in_files() {
+    let (mut s, _) = square_scene();
+    let red = red(&mut s);
+    assert_eq!(s.material(red).unwrap().opacity, 1.0);
+    assert!(!s.material(red).unwrap().is_translucent());
+    for bad in [-0.1, 1.01, f32::NAN, f32::INFINITY] {
+        assert!(
+            matches!(
+                s.add_material_with_opacity("Glass", BLUE, bad),
+                Err(KernelError::MaterialOpacity(_))
+            ),
+            "{bad} accepted"
+        );
+        assert!(matches!(
+            s.change_material(red, None, None, Some(bad)),
+            Err(KernelError::MaterialOpacity(_))
+        ));
+    }
+    let (glass, _) = s.add_material_with_opacity("Glass", BLUE, 0.25).unwrap();
+    assert!(s.material(glass).unwrap().is_translucent());
+
+    let before = s.clone();
+    let changed = s.change_material(red, None, None, Some(0.5)).unwrap();
+    assert_eq!(s.material(red).unwrap().opacity, 0.5);
+    assert_eq!(changed.summary().materials, vec![red]);
+    assert!(
+        s.change_material(red, None, None, Some(0.5))
+            .unwrap()
+            .is_empty()
+    );
+    s.apply(&changed.inverse());
+    assert_eq!(s, before);
+    s.apply(&changed);
+    assert_eq!(s.material(red).unwrap().opacity, 0.5);
+
+    let json = serde_json::to_string(&s.to_data()).unwrap();
+    assert!(json.contains(r#""opacity":0.25"#), "{json}");
+    let back = Scene::from_data(&serde_json::from_str(&json).unwrap()).unwrap();
+    assert_eq!(back, s);
+}
+
+#[test]
+fn opaque_materials_write_no_opacity_and_old_data_loads_opaque() {
+    let (mut s, _) = square_scene();
+    red(&mut s);
+    let json = serde_json::to_string(&s.to_data()).unwrap();
+    assert!(!json.contains("opacity"), "{json}");
+    let back = Scene::from_data(&serde_json::from_str(&json).unwrap()).unwrap();
+    assert!(back.materials().all(|(_, m)| m.opacity == 1.0));
 }

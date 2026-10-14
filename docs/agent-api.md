@@ -52,7 +52,7 @@ Queries:
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
-| `{"type": "materials"}` | every material: `id`, `name`, `color`, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
+| `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
@@ -169,21 +169,30 @@ the `guides` list in `entities`, is `{"id": "g9", "kind": "line", "point": [...]
 
 ### Materials
 
-A material is a named color. Faces have two sides, each painted with a material or with none
+A material is a named color with an opacity. Faces have two sides, each painted with a material or with none
 (the default material: light on the front, blue-gray on the back, as in the window); instances
 can be painted too. Materials belong to the whole model, not to the open context, and are saved
 with it.
 
 | Command | Effect |
 |---|---|
-| `{"type": "add_material", "name": "Brick", "color": [180, 60, 40]}` | Adds a material. `color` is sRGB red, green and blue, whole numbers 0 to 255. Without `name` it is called `Material` (`Material 2`, ... when taken). A name must not be blank, must have at most 256 characters and must differ from every other material's (`invalid_input`). The new id is the outcome's `changes.materials`, e.g. `["m31"]`. |
-| `{"type": "change_material", "material": "m31", "name": "Old brick", "color": [150, 50, 30]}` | Renames and/or recolors a material; an absent `name` or `color` stays. |
+| `{"type": "add_material", "name": "Brick", "color": [180, 60, 40]}` | Adds a material. `color` is sRGB red, green and blue, whole numbers 0 to 255. `opacity` (optional, default 1) is a number from 0 (invisible) to 1 (opaque); anything else is `invalid_input`. Without `name` it is called `Material` (`Material 2`, ... when taken). A name must not be blank, must have at most 256 characters and must differ from every other material's (`invalid_input`). The new id is the outcome's `changes.materials`, e.g. `["m31"]`. |
+| `{"type": "change_material", "material": "m31", "name": "Old brick", "color": [150, 50, 30], "opacity": 0.4}` | Renames, recolors and/or changes the opacity of a material; an absent `name`, `color` or `opacity` stays. `opacity` must be from 0 to 1 (`invalid_input`). |
 | `{"type": "delete_material", "material": "m31"}` | Removes a material. Every face side and instance painted with it, anywhere in the model, goes back to the default material (and comes back with undo). |
 | `{"type": "paint", "ids": ["f8", "i4"], "material": "m31", "side": "front"}` | Paints faces and instances of the open context. `side` is `front` (default: the side the face's `normal` points to), `back` or `both`; it does not matter for instances. An absent or null `material` paints with the default material. Edge and guide ids are `invalid_input` (naming them), as are vertex ids and an empty list; unknown ids and an unknown material are `not_found`. Painting what is already painted so changes nothing. |
 
-Each is one undo step. A command that adds, removes, renames or recolors a material lists it in
+Each is one undo step. A command that adds, removes, renames, recolors or changes the opacity of
+a material lists it in
 its `changes.materials` (also in `changed` notifications and `events`); painting reports the
 faces and instances as `modified`. Unknown material ids are `not_found`.
+
+The `materials` query always includes `opacity` (1 for an opaque material). A face side whose
+material (its own, or the nearest painted instance's) has an opacity below 1 is see-through in
+the window and in `render_view`: such sides are drawn after everything opaque, blended over it
+back to front, and do not hide edges, guides or faces behind them. Each side of a face uses its
+own material's opacity, so a face can be glass from one side and opaque from the other. Edges
+of see-through faces (window frames, say) still draw, and a selected see-through face is tinted
+like any other.
 
 The `entity` result of a face (and its entry in `entities`) has `front_material` and
 `back_material`, an instance's has `material`; each is absent for the default material.
@@ -207,7 +216,8 @@ In the window, the Paint tool (`b`) paints the side of a face facing the viewer 
 current material (a click on something selected paints the whole selection's faces and
 groups, a click on a group paints the group), and Cmd-click on macOS (Ctrl-click on Windows
 and Linux) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
-current material and adds, renames, recolors and deletes materials, all through these commands.
+current material and adds, renames, recolors and deletes materials and sets their opacity (a
+0-100% slider; one change per drag), all through these commands.
 
 ### Groups and components
 
@@ -343,8 +353,10 @@ larger of the eye-to-target distance and the eye's height), else the point that 
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (5; version 4 files, written before materials, open
-unpainted, version 3 files, written before camera projections, open in perspective, and
+(`"sketchup-alt"`), `schema_version` (6 when a material is see-through, else 5; a material's
+`opacity` is written only when below 1, so a model whose materials are all opaque is saved
+exactly as before opacity existed and older builds still open it; version 5 files open with
+every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 of view, up and projection) and the model with every id, edges with their curve and soft flag,
 the materials and what is painted with them.
@@ -363,8 +375,8 @@ cannot be read or written gives the error kind `file`, with a message naming the
 reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
 over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
-fewer than two faces, a face or instance painted with a material the file lacks, or a material
-name that is blank, too long or used twice); the model is left as it was. `save` also fails
+fewer than two faces, a face or instance painted with a material the file lacks, a material
+name that is blank, too long or used twice, or a material opacity outside 0 to 1); the model is left as it was. `save` also fails
 when the model has given out ids past 2^53, which no file can hold. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
@@ -383,9 +395,9 @@ never overwrites a model; use `save`.
 
 | Format | Content |
 |---|---|
-| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y). When faces are painted, it names a material library (`mtllib house.mtl`) written beside it under the same name with `.mtl` (replacing a file there), and each material's triangles follow a `usemtl` line; the library gives each material its diffuse color (`Kd`, linear). Material names have spaces and other separators replaced by `_` (and a number added when two become alike); faces without a material use `default`. Without painted faces no `.mtl` is written. |
-| `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors |
-| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear), the default one is named `default`; Y up |
+| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y). When faces are painted, it names a material library (`mtllib house.mtl`) written beside it under the same name with `.mtl` (replacing a file there), and each material's triangles follow a `usemtl` line; the library gives each material its diffuse color (`Kd`, linear) and, for a see-through one, its opacity as `d` and its transparency `Tr` (1 - `d`). Material names have spaces and other separators replaced by `_` (and a number added when two become alike); faces without a material use `default`. Without painted faces no `.mtl` is written. |
+| `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors or opacity |
+| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear, with the opacity as alpha), and a see-through one `alphaMode` `BLEND`; the default one is named `default`; Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
 
 Colors come from each face's front side (its own material, else that of the nearest painted

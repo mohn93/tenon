@@ -31,6 +31,8 @@ pub struct FaceVertex {
     /// The colors of the front and back sides.
     pub front: [f32; 3],
     pub back: [f32; 3],
+    /// The opacities of the front and back sides (1: opaque).
+    pub alpha: [f32; 2],
 }
 
 /// A face corner as the renderer uploads it; whether it is selected comes from a separate flag
@@ -43,6 +45,16 @@ pub struct BaseFaceVertex {
     /// The colors of the front and back sides.
     pub front: [f32; 3],
     pub back: [f32; 3],
+    /// The opacities of the front and back sides (1: opaque). A triangle with either below 1
+    /// is drawn in the translucent pass (see `SceneBase::glass`).
+    pub alpha: [f32; 2],
+}
+
+impl BaseFaceVertex {
+    /// True when either side lets what is behind it show.
+    pub fn is_glass(&self) -> bool {
+        self.alpha[0] < 1.0 || self.alpha[1] < 1.0
+    }
 }
 
 /// The default material's color on a face's front.
@@ -50,11 +62,16 @@ pub const DEFAULT_FRONT: [f32; 3] = [0.93, 0.93, 0.90];
 /// The default material's color on a face's back.
 pub const DEFAULT_BACK: [f32; 3] = [0.60, 0.65, 0.76];
 
-/// The color a side shows: its material's (sRGB, as the targets store it), or `default`.
-fn side_color(scene: &Scene, material: Option<MaterialId>, default: [f32; 3]) -> [f32; 3] {
+/// How a side looks: its color (sRGB, as the targets store it) and opacity.
+type Look = ([f32; 3], f32);
+
+/// How a side looks: as its material, or opaque in `default`.
+fn side_look(scene: &Scene, material: Option<MaterialId>, default: [f32; 3]) -> Look {
     material
         .and_then(|m| scene.material(m))
-        .map_or(default, |m| m.color.map(|c| f32::from(c) / 255.0))
+        .map_or((default, 1.0), |m| {
+            (m.color.map(|c| f32::from(c) / 255.0), m.opacity)
+        })
 }
 
 pub const EDGE_COLOR: [f32; 4] = [0.08, 0.08, 0.08, 1.0];
@@ -106,6 +123,19 @@ pub struct SceneBase {
 }
 
 impl SceneBase {
+    /// The first vertex of each triangle with a see-through side, in `faces` order. The
+    /// renderer draws these after everything opaque.
+    pub fn glass(&self) -> Vec<u32> {
+        self.faces
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t[0].is_glass())
+            .map(|(k, _)| 3 * k as u32)
+            .collect()
+    }
+
     /// The geometry with `flags` (from `self.spans`) shown, as `scene_geometry` returns it.
     pub fn with_flags(&self, flags: &Flags) -> ModelGeometry {
         let faces = self
@@ -118,6 +148,7 @@ impl SceneBase {
                 selected,
                 front: v.front,
                 back: v.back,
+                alpha: v.alpha,
             })
             .collect();
         let edges = self
@@ -316,10 +347,10 @@ struct FacePart {
     /// The face's triangle corners in `MeshParts::corners`.
     corners: Range<usize>,
     normal: DVec3,
-    /// The colors of the sides painted on the face itself; unpainted sides take the color of
+    /// The looks of the sides painted on the face itself; unpainted sides take the look of
     /// the nearest painted instance placing them.
-    front: Option<[f32; 3]>,
-    back: Option<[f32; 3]>,
+    front: Option<Look>,
+    back: Option<Look>,
 }
 
 impl MeshParts {
@@ -342,10 +373,8 @@ impl MeshParts {
                 id,
                 corners: start..corners.len(),
                 normal: face.normal,
-                front: face
-                    .front
-                    .map(|m| side_color(scene, Some(m), DEFAULT_FRONT)),
-                back: face.back.map(|m| side_color(scene, Some(m), DEFAULT_BACK)),
+                front: face.front.map(|m| side_look(scene, Some(m), DEFAULT_FRONT)),
+                back: face.back.map(|m| side_look(scene, Some(m), DEFAULT_BACK)),
             });
         }
         let hard = model.edges().filter(|(_, e)| !e.soft).count();
@@ -477,19 +506,20 @@ impl Walk<'_> {
         // A mirroring placement turns triangles inside out; swapping two corners restores the
         // winding, so the front side (and the headlight) stay right.
         let mirrored = t.matrix3.determinant() < 0.0;
-        let front = side_color(self.scene, inherited, DEFAULT_FRONT);
-        let back = side_color(self.scene, inherited, DEFAULT_BACK);
+        let front = side_look(self.scene, inherited, DEFAULT_FRONT);
+        let back = side_look(self.scene, inherited, DEFAULT_BACK);
         let base = &mut self.base;
         for face in &parts.faces {
             let start = base.faces.len();
             let normal = (normal_map * face.normal).normalize().as_vec3().to_array();
-            let front = face.front.unwrap_or(front);
-            let back = face.back.unwrap_or(back);
+            let (front, front_alpha) = face.front.unwrap_or(front);
+            let (back, back_alpha) = face.back.unwrap_or(back);
             let corner = |p: DVec3| BaseFaceVertex {
                 pos: t.transform_point3(p).as_vec3().to_array(),
                 normal,
                 front,
                 back,
+                alpha: [front_alpha, back_alpha],
             };
             let (tris, _) = parts.corners[face.corners.clone()].as_chunks::<3>();
             for &[a, b, c] in tris {
@@ -679,6 +709,51 @@ mod tests {
             "the second placement shares the face but not the instance's blue"
         );
         let _ = second;
+    }
+
+    #[test]
+    fn see_through_sides_carry_their_opacity_and_are_listed_as_glass() {
+        let (mut s, first, _) = two_squares();
+        assert!(scene_base(&s, &[]).glass().is_empty());
+        let (glass, _) = s
+            .add_material_with_opacity("Glass", [0, 0, 255], 0.25)
+            .unwrap();
+        // The first placement is glass by its instance; the shared face is opaque on its back.
+        s.paint(
+            MeshId::Root,
+            &[],
+            &[first],
+            kernel::Side::Front,
+            Some(glass),
+        )
+        .unwrap();
+        let d = s.root().instance(first).unwrap().definition;
+        let face = s.definition(d).unwrap().mesh.faces().next().unwrap().0;
+        let (red, _) = s.add_material("Red", [255, 0, 0]).unwrap();
+        s.paint(
+            MeshId::Definition(d),
+            &[face],
+            &[],
+            kernel::Side::Back,
+            Some(red),
+        )
+        .unwrap();
+        let base = scene_base(&s, &[]);
+        let (one, two): (Vec<&BaseFaceVertex>, Vec<_>) =
+            base.faces.iter().partition(|v| v.pos[0] <= 1.0);
+        assert!(one.iter().all(|v| v.alpha == [0.25, 1.0]));
+        assert!(two.iter().all(|v| v.alpha == [1.0, 1.0]));
+        let glass_triangles = base.glass();
+        assert_eq!(glass_triangles.len(), 2);
+        for k in glass_triangles {
+            assert!(base.faces[k as usize].pos[0] <= 1.0);
+        }
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(
+            g.faces.iter().filter(|v| v.alpha[0] < 1.0).count(),
+            6,
+            "scene_geometry carries the opacity too"
+        );
     }
 
     #[test]
@@ -926,8 +1001,10 @@ mod tests {
                     } else {
                         0.0
                     };
-                    let front = side_color(self.scene, face.front.or(inherited), DEFAULT_FRONT);
-                    let back = side_color(self.scene, face.back.or(inherited), DEFAULT_BACK);
+                    let (front, front_alpha) =
+                        side_look(self.scene, face.front.or(inherited), DEFAULT_FRONT);
+                    let (back, back_alpha) =
+                        side_look(self.scene, face.back.or(inherited), DEFAULT_BACK);
                     for mut tri in model.triangulate(fid).unwrap_or_default() {
                         if mirrored {
                             tri.swap(1, 2);
@@ -939,6 +1016,7 @@ mod tests {
                                 selected: flag,
                                 front,
                                 back,
+                                alpha: [front_alpha, back_alpha],
                             });
                         }
                     }

@@ -492,6 +492,9 @@ impl State {
             UiAction::RecolorMaterial(material, color) => {
                 self.editor.recolor_material(material, color);
             }
+            UiAction::SetMaterialOpacity(material, percent) => {
+                self.editor.set_material_opacity(material, percent);
+            }
             UiAction::OutlinerSelect { path, toggle } => {
                 self.editor.outliner_select(&path, toggle);
             }
@@ -548,6 +551,7 @@ impl State {
                 id,
                 name: m.name.clone(),
                 color: m.color,
+                opacity: m.opacity,
             })
             .collect();
         // Rebuilt only when the model changes; the open and selected marks are worked out

@@ -14,13 +14,14 @@ impl Document {
         &mut self,
         name: Option<&str>,
         color: [u8; 3],
+        opacity: Option<f32>,
     ) -> Result<SceneChange, CommandError> {
         let name = match name {
             Some(n) => n.to_string(),
             None => self.scene.free_material_name(DEFAULT_MATERIAL_NAME),
         };
         self.scene
-            .add_material(&name, color)
+            .add_material_with_opacity(&name, color, opacity.unwrap_or(1.0))
             .map(|(_, change)| change)
             .map_err(|e| material_error(e, None))
     }
@@ -30,9 +31,10 @@ impl Document {
         id: MaterialId,
         name: Option<&str>,
         color: Option<[u8; 3]>,
+        opacity: Option<f32>,
     ) -> Result<SceneChange, CommandError> {
         self.scene
-            .change_material(id, name, color)
+            .change_material(id, name, color, opacity)
             .map_err(|e| material_error(e, Some(id)))
     }
 
@@ -88,6 +90,7 @@ impl Document {
                     id,
                     name: m.name.clone(),
                     color: m.color,
+                    opacity: m.opacity,
                     faces: meshes()
                         .flat_map(|mesh| mesh.faces())
                         .filter(|(_, f)| f.paint().contains(&Some(id)))

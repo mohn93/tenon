@@ -45,7 +45,7 @@ pub enum Step {
     RenameDefinition(DefinitionId, String, String),
     AddMaterial(MaterialId, Material),
     RemoveMaterial(MaterialId, Material),
-    /// A material's name or color changed from the first to the second.
+    /// A material's name, color or opacity changed from the first to the second.
     ChangeMaterial(MaterialId, Material, Material),
 }
 
@@ -439,11 +439,13 @@ impl Scene {
     /// Checks every mesh, that instances place existing definitions, that no definition places
     /// itself (directly or deeper), that no number is the id of two things (entities in any
     /// mesh, curves, definitions and materials all take ids from one counter), that every
-    /// material painted exists, and that material names are valid and distinct.
+    /// material painted exists, that material names are valid and distinct, and that material
+    /// opacities are from 0 to 1.
     pub fn validate(&self) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for (id, m) in &self.materials {
             crate::material::check_name(&m.name).map_err(|e| format!("material {id}: {e}"))?;
+            crate::material::check_opacity(m.opacity).map_err(|e| format!("material {id}: {e}"))?;
             if !names.insert(m.name.as_str()) {
                 return Err(format!(
                     "material {id}: two materials are named {:?}",

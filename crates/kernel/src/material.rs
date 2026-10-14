@@ -13,12 +13,21 @@ use crate::scene::{MeshId, Scene, SceneChange, Step};
 /// The longest material name, in characters.
 pub const MAX_MATERIAL_NAME: usize = 256;
 
-/// A named color.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A named color, possibly see-through.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Material {
     pub name: String,
     /// sRGB red, green and blue.
     pub color: [u8; 3],
+    /// How much of what is behind it the material hides: 1 is opaque, 0 invisible.
+    pub opacity: f32,
+}
+
+impl Material {
+    /// True when the material lets anything behind it show through.
+    pub fn is_translucent(&self) -> bool {
+        self.opacity < 1.0
+    }
 }
 
 /// Which side of a face to paint.
@@ -46,6 +55,17 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Fails, saying why, when an opacity is not a finite number from 0 to 1.
+pub(crate) fn check_opacity(opacity: f32) -> Result<(), String> {
+    if opacity.is_finite() && (0.0..=1.0).contains(&opacity) {
+        Ok(())
+    } else {
+        Err(format!(
+            "opacity must be a number from 0 to 1, not {opacity}"
+        ))
+    }
 }
 
 impl Model {
@@ -109,32 +129,47 @@ impl Model {
 }
 
 impl Scene {
-    /// Adds a material. The name must be valid (see [`MAX_MATERIAL_NAME`]) and not taken.
+    /// Adds an opaque material. The name must be valid (see [`MAX_MATERIAL_NAME`]) and not
+    /// taken.
     pub fn add_material(
         &mut self,
         name: &str,
         color: [u8; 3],
     ) -> Result<(MaterialId, SceneChange), KernelError> {
+        self.add_material_with_opacity(name, color, 1.0)
+    }
+
+    /// Adds a material of `opacity` (finite, 0 to 1). The name must be valid (see
+    /// [`MAX_MATERIAL_NAME`]) and not taken.
+    pub fn add_material_with_opacity(
+        &mut self,
+        name: &str,
+        color: [u8; 3],
+        opacity: f32,
+    ) -> Result<(MaterialId, SceneChange), KernelError> {
         self.check_free_name(name, None)?;
+        check_opacity(opacity).map_err(KernelError::MaterialOpacity)?;
         let id = self.alloc_material();
         let step = Step::AddMaterial(
             id,
             Material {
                 name: name.to_string(),
                 color,
+                opacity,
             },
         );
         self.apply_step(&step);
         Ok((id, step.into()))
     }
 
-    /// Renames and/or recolors a material (None keeps that part). Nothing to change changes
-    /// nothing.
+    /// Renames, recolors and/or changes the opacity of a material (None keeps that part).
+    /// Nothing to change changes nothing.
     pub fn change_material(
         &mut self,
         id: MaterialId,
         name: Option<&str>,
         color: Option<[u8; 3]>,
+        opacity: Option<f32>,
     ) -> Result<SceneChange, KernelError> {
         let from = self
             .material(id)
@@ -143,9 +178,13 @@ impl Scene {
         if let Some(name) = name {
             self.check_free_name(name, Some(id))?;
         }
+        if let Some(opacity) = opacity {
+            check_opacity(opacity).map_err(KernelError::MaterialOpacity)?;
+        }
         let to = Material {
             name: name.map_or_else(|| from.name.clone(), str::to_string),
             color: color.unwrap_or(from.color),
+            opacity: opacity.unwrap_or(from.opacity),
         };
         if to == from {
             return Ok(SceneChange::default());

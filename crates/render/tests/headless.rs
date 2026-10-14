@@ -661,3 +661,140 @@ fn changing_only_the_selection_draws_what_a_rebuild_draws() {
     let n = bluer(&face_lit, 40);
     assert!(n > 2000, "a selected face is tinted: {n} pixels");
 }
+
+/// Looking down from high above the origin (from below for a negative `z`).
+fn overhead(z: f64) -> Camera {
+    let mut cam = camera();
+    cam.eye = DVec3::new(0.3, -0.5, z);
+    cam.target = DVec3::ZERO;
+    cam
+}
+
+/// `ground_square` with a 2 x 2 pane 1 m above it; returns the scene, the ground face and the
+/// pane.
+fn square_under_pane() -> (Scene, kernel::FaceId, kernel::FaceId) {
+    let mut m = ground_square();
+    let ground = m.faces().next().unwrap().0;
+    m.add_polygon(&[
+        DVec3::new(-1.0, -1.0, 1.0),
+        DVec3::new(1.0, -1.0, 1.0),
+        DVec3::new(1.0, 1.0, 1.0),
+        DVec3::new(-1.0, 1.0, 1.0),
+    ])
+    .unwrap();
+    let pane = m
+        .faces()
+        .map(|(id, _)| id)
+        .find(|id| *id != ground)
+        .unwrap();
+    (Scene::from_root(m), ground, pane)
+}
+
+#[test]
+fn glass_shows_what_is_behind_it_tinted_and_its_frame() {
+    let (mut scene, ground, pane) = square_under_pane();
+    let (red, _) = scene.add_material("Red", [220, 20, 20]).unwrap();
+    let (glass, _) = scene
+        .add_material_with_opacity("Glass", [40, 40, 240], 0.5)
+        .unwrap();
+    scene
+        .paint(MeshId::Root, &[ground], &[], Side::Both, Some(red))
+        .unwrap();
+    let cam = overhead(12.0);
+    let full = Viewport::full((W, H));
+    // Through the pane, at a point of the ground it covers (away from the blue axis).
+    let through = DVec3::new(0.5, 0.4, 1.0);
+    let Some(bare) = render_scene_with(&cam, &scene, &BTreeSet::new(), full, &[]) else {
+        return;
+    };
+    let opaque_pane = pixel_at(&bare, &cam, through);
+    assert!(
+        opaque_pane[0] > 200,
+        "an unpainted pane is light: {opaque_pane:?}"
+    );
+    scene
+        .paint(MeshId::Root, &[pane], &[], Side::Both, Some(glass))
+        .unwrap();
+    let px = render_scene_with(&cam, &scene, &BTreeSet::new(), full, &[]).unwrap();
+    let p = pixel_at(&px, &cam, through);
+    assert!(
+        p[0] as i32 > 60 && p[2] as i32 > 60 && (p[1] as i32) < 60,
+        "red ground through blue glass is purple, got {p:?}"
+    );
+    // The frame still draws dark over the ground behind it.
+    let corner = DVec3::new(0.0, -1.0, 1.0);
+    assert!(
+        near(&px, &cam, corner, |p| p[0] < 90 && p[1] < 90 && p[2] < 90),
+        "the pane's edge should stay dark"
+    );
+    // Invisible glass shows the ground as it is.
+    let id = scene
+        .materials()
+        .find(|(_, m)| m.name == "Glass")
+        .unwrap()
+        .0;
+    scene.change_material(id, None, None, Some(0.0)).unwrap();
+    let px = render_scene_with(&cam, &scene, &BTreeSet::new(), full, &[]).unwrap();
+    let seen = pixel_at(&px, &cam, through);
+    let ground_only = pixel_at(&px, &cam, DVec3::new(0.5, 0.4, 0.0));
+    assert!(
+        seen[0] > 150 && seen[1] < 60,
+        "got {seen:?} over {ground_only:?}"
+    );
+}
+
+#[test]
+fn each_side_of_a_pane_has_its_own_opacity_and_selected_glass_is_tinted() {
+    let (mut scene, ground, pane) = square_under_pane();
+    let (red, _) = scene.add_material("Red", [220, 20, 20]).unwrap();
+    let (green, _) = scene.add_material("Green", [20, 200, 20]).unwrap();
+    let (glass, _) = scene
+        .add_material_with_opacity("Glass", [235, 235, 235], 0.3)
+        .unwrap();
+    scene
+        .paint(MeshId::Root, &[ground], &[], Side::Both, Some(red))
+        .unwrap();
+    // The pane faces up: see-through from above, opaque green from below.
+    scene
+        .paint(MeshId::Root, &[pane], &[], Side::Front, Some(glass))
+        .unwrap();
+    scene
+        .paint(MeshId::Root, &[pane], &[], Side::Back, Some(green))
+        .unwrap();
+    assert!(scene.root().face(pane).unwrap().normal.z > 0.5);
+    let cam = overhead(12.0);
+    let full = Viewport::full((W, H));
+    let through = DVec3::new(0.5, 0.4, 1.0);
+    let Some(px) = render_scene_with(&cam, &scene, &BTreeSet::new(), full, &[]) else {
+        return;
+    };
+    let p = pixel_at(&px, &cam, through);
+    assert!(
+        p[0] as i32 > p[1] as i32 + 60,
+        "from above the red ground shows through: {p:?}"
+    );
+    // From below, with the ground hidden, the pane's back is opaque green.
+    let below = overhead(-12.0);
+    let mut only_pane = scene.clone();
+    only_pane
+        .edit(MeshId::Root, |m| Ok(m.erase(&[], &[ground])))
+        .unwrap();
+    let px = render_scene_with(&below, &only_pane, &BTreeSet::new(), full, &[]).unwrap();
+    let p = pixel_at(&px, &below, through);
+    assert!(
+        p[1] as i32 > p[0] as i32 + 60 && p[1] as i32 > p[2] as i32 + 60,
+        "from below the back is green: {p:?}"
+    );
+    // Selected, the glass is tinted blue.
+    let selection = BTreeSet::from([EntityId::Face(pane)]);
+    let plain = render_scene_with(&cam, &only_pane, &BTreeSet::new(), full, &[]).unwrap();
+    let lit = render_scene_with(&cam, &only_pane, &selection, full, &[]).unwrap();
+    let (p, q) = (
+        pixel_at(&plain, &cam, through),
+        pixel_at(&lit, &cam, through),
+    );
+    assert!(
+        (q[2] as i32 - q[0] as i32) > (p[2] as i32 - p[0] as i32) + 30,
+        "selection should tint the glass: {p:?} -> {q:?}"
+    );
+}

@@ -40,6 +40,8 @@ pub enum UiAction {
     DeleteMaterial(MaterialId),
     RenameMaterial(MaterialId, String),
     RecolorMaterial(MaterialId, [u8; 3]),
+    /// Set a material's opacity, in percent (0 to 100).
+    SetMaterialOpacity(MaterialId, u8),
     /// Select the outliner node at `path` (instances from the root down to it); `toggle`
     /// (Shift, Cmd or Ctrl held) adds or removes it instead of replacing the selection.
     OutlinerSelect {
@@ -56,6 +58,8 @@ pub struct MaterialRow {
     pub id: MaterialId,
     pub name: String,
     pub color: [u8; 3],
+    /// From 0 (invisible) to 1 (opaque).
+    pub opacity: f32,
 }
 
 /// The default material's swatch: its front color.
@@ -97,7 +101,7 @@ const MATERIALS_MAX_HEIGHT: f32 = 220.0;
 
 /// Room kept below the Materials list for its buttons, name field and colors, and for the
 /// Outliner's heading and minimum height, in points.
-const BELOW_MATERIALS_LIST: f32 = 140.0 + OUTLINER_MIN_HEIGHT;
+const BELOW_MATERIALS_LIST: f32 = 166.0 + OUTLINER_MIN_HEIGHT;
 
 /// The least height the right panel lays out its contents in; a shorter panel scrolls them.
 const PANEL_MIN_HEIGHT: f32 = 480.0;
@@ -287,7 +291,8 @@ fn rgb(c: [u8; 3]) -> Color32 {
 
 /// The Materials list: the default material and every material, the one painted with
 /// highlighted (clicking one chooses it and the Paint tool); Add and Delete; and for the
-/// chosen material its name (renamed on Enter or leaving the field) and colors to pick from.
+/// chosen material its name (renamed on Enter or leaving the field), colors to pick from and
+/// its opacity (set when a drag of the slider ends).
 fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.heading("Materials");
     // Shorter when the panel is short, so the Outliner below keeps its minimum height.
@@ -355,6 +360,32 @@ fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
         }
     });
+    // The value being dragged lives in egui's memory until the drag ends, so a drag is one
+    // change (one undo step).
+    let key = egui::Id::new(("material-opacity", m.id.0));
+    let shown = percent(m.opacity);
+    let mut value = ui.data(|d| d.get_temp::<u8>(key)).unwrap_or(shown);
+    let slider = ui
+        .horizontal(|ui| {
+            ui.label("Opacity");
+            // Fit the panel: the slider takes what the label and the number leave.
+            ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(40.0);
+            ui.add(egui::Slider::new(&mut value, 0..=100).suffix("%"))
+        })
+        .inner;
+    if slider.dragged() {
+        ui.data_mut(|d| d.insert_temp(key, value));
+    } else {
+        if (slider.drag_stopped() || slider.changed()) && value != shown {
+            actions.push(UiAction::SetMaterialOpacity(m.id, value));
+        }
+        ui.data_mut(|d| d.remove::<u8>(key));
+    }
+}
+
+/// An opacity (0 to 1) in whole percent.
+fn percent(opacity: f32) -> u8 {
+    (opacity.clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
 /// The Outliner: a Model row (back to the root) and the tree of groups and components, the
@@ -910,11 +941,13 @@ mod tests {
                 id: MaterialId(31),
                 name: "Brick".into(),
                 color: [180, 60, 40],
+                opacity: 1.0,
             },
             MaterialRow {
                 id: MaterialId(32),
                 name: "Glass".into(),
                 color: [90, 170, 170],
+                opacity: 0.4,
             },
         ];
         let mut view = View {
@@ -957,6 +990,13 @@ mod tests {
             )),
             "{clicked:?}"
         );
+        // Clicking on the opacity slider sets the opacity.
+        assert!(
+            clicked
+                .iter()
+                .any(|a| matches!(a, UiAction::SetMaterialOpacity(MaterialId(31), p) if *p < 100)),
+            "{clicked:?}"
+        );
         // With the default material chosen there is nothing to delete, rename or recolor.
         view.material = None;
         let clicked = panel_actions(&view, 1280.0 - 120.0, Some("Old"));
@@ -966,6 +1006,7 @@ mod tests {
                 UiAction::DeleteMaterial(_)
                     | UiAction::RenameMaterial(..)
                     | UiAction::RecolorMaterial(..)
+                    | UiAction::SetMaterialOpacity(..)
             )),
             "{clicked:?}"
         );
@@ -1000,7 +1041,58 @@ mod tests {
             id: MaterialId(31),
             name: "Brick".into(),
             color: [180, 60, 40],
+            opacity: 1.0,
         }]
+    }
+
+    #[test]
+    fn dragging_the_opacity_slider_sets_the_opacity_once_when_it_ends() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let rows = brick();
+        let view = name_field_view(&status, &info, &rows);
+        // The slider's row: where a click near the panel's right end sets an opacity.
+        let y = (0..800)
+            .step_by(2)
+            .map(|y| y as f32)
+            .find(|y| {
+                let ctx = egui::Context::default();
+                run(&ctx, screen(), &view);
+                click(&ctx, &view, Pos2::new(1280.0 - 80.0, *y))
+                    .iter()
+                    .any(|a| matches!(a, UiAction::SetMaterialOpacity(..)))
+            })
+            .expect("found the slider")
+            + 6.0;
+        let ctx = egui::Context::default();
+        run(&ctx, screen(), &view);
+        let button = |pos: Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let start = Pos2::new(1280.0 - 82.0, y);
+        let mut actions = Vec::new();
+        let mut input = screen();
+        input.events = vec![egui::Event::PointerMoved(start), button(start, true)];
+        actions.extend(run(&ctx, input, &view).0);
+        for k in 1..=10 {
+            let mut input = screen();
+            let at = Pos2::new(start.x - 3.0 * k as f32, y);
+            input.events = vec![egui::Event::PointerMoved(at)];
+            actions.extend(run(&ctx, input, &view).0);
+        }
+        assert!(actions.is_empty(), "nothing while dragging: {actions:?}");
+        let end = Pos2::new(start.x - 30.0, y);
+        let mut input = screen();
+        input.events = vec![button(end, false)];
+        actions.extend(run(&ctx, input, &view).0);
+        actions.extend(run(&ctx, screen(), &view).0);
+        assert!(
+            matches!(actions.as_slice(), [UiAction::SetMaterialOpacity(MaterialId(31), p)] if *p < 100),
+            "{actions:?}"
+        );
     }
 
     #[test]
@@ -1378,6 +1470,7 @@ mod tests {
                 id: MaterialId(100 + k),
                 name: format!("Material {k}"),
                 color: [10, 20, 30],
+                opacity: 1.0,
             })
             .collect();
         let table = OutlinerTable {
@@ -1423,6 +1516,7 @@ mod tests {
                 id: MaterialId(100 + k),
                 name: format!("Material {k}"),
                 color: [10, 20, 30],
+                opacity: 1.0,
             })
             .collect();
         let mut view = outliner_view(&status, &info, &table, &[], &selection);

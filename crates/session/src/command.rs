@@ -153,19 +153,25 @@ pub enum Command {
     PurgeDefinitions,
     /// Add a material: a named sRGB color (each 0 to 255). Without `name` it is called
     /// "Material" (or "Material 2", ... if taken). Names must be distinct, not blank, and at
-    /// most 256 characters. The new id is in the outcome's `changes.materials`.
+    /// most 256 characters. `opacity` (default 1, opaque) is from 0 to 1; below 1 faces
+    /// painted with it are see-through. The new id is in the outcome's `changes.materials`.
     AddMaterial {
         #[serde(default)]
         name: Option<String>,
         color: [u8; 3],
+        #[serde(default)]
+        opacity: Option<f32>,
     },
-    /// Rename and/or recolor a material; absent fields stay as they are.
+    /// Rename, recolor and/or change the opacity (0 to 1) of a material; absent fields stay
+    /// as they are.
     ChangeMaterial {
         material: MaterialId,
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
         color: Option<[u8; 3]>,
+        #[serde(default)]
+        opacity: Option<f32>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.

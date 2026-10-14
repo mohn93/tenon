@@ -245,6 +245,7 @@ fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> MaterialId {
         Command::AddMaterial {
             name: Some(name.into()),
             color,
+            opacity: None,
         },
     );
     outcome.changes.materials[0]
@@ -360,6 +361,53 @@ fn golden_painted_box_front_and_back() {
     // and the floor shows the default back color.
     look(&mut d, [4.0, -3.5, 4.5], [1.0, 0.75, 0.3]);
     check("painted_box", &d);
+}
+
+#[test]
+fn golden_glass_pane_in_front_of_a_box() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let brick = add_material(&mut d, "Brick", [190, 70, 50]);
+    let faces = all_faces(&d);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: faces,
+            material: Some(brick),
+            side: Side::Front,
+        },
+    );
+    // A pale blue pane, see-through on both sides, standing between the eye and the box; its
+    // edges are the black frame.
+    let pane = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [-0.5, -1.0, 0.0],
+            opposite: [2.5, -1.0, 1.8],
+            normal: None,
+        },
+    );
+    let pane = created_face(&pane);
+    let glass = run(
+        &mut d,
+        Command::AddMaterial {
+            name: Some("Glass".into()),
+            color: [170, 210, 235],
+            opacity: Some(0.35),
+        },
+    )
+    .changes
+    .materials[0];
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![pane],
+            material: Some(glass),
+            side: Side::Both,
+        },
+    );
+    look(&mut d, [1.8, -6.0, 2.6], [1.0, 0.75, 0.5]);
+    check("glass", &d);
 }
 
 #[test]
@@ -561,6 +609,7 @@ fn every_golden_image_has_a_test() {
         "parallel_top",
         "selection",
         "open_group",
+        "glass",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

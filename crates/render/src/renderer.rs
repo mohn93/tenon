@@ -13,8 +13,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-const FACE_ATTRIBS: [wgpu::VertexAttribute; 4] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3];
+const FACE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32x2
+];
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
 const FLAG_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Float32];
@@ -89,6 +90,95 @@ struct Mesh {
     flags: Option<wgpu::Buffer>,
 }
 
+/// The triangles of `faces` with a see-through side, drawn after everything opaque.
+struct Glass {
+    /// The first vertex of each opaque triangle, for drawing them alone.
+    solid: wgpu::Buffer,
+    solid_count: u32,
+    /// The vertices of the see-through triangles, far to near as last sorted.
+    order: wgpu::Buffer,
+    /// Each see-through triangle's first vertex and center.
+    triangles: Vec<(u32, glam::Vec3)>,
+    /// The view `order` was sorted for.
+    sorted_for: Option<[f32; 4]>,
+}
+
+impl Glass {
+    /// The see-through triangles of `faces`, or None when there are none.
+    fn new(device: &wgpu::Device, faces: &[BaseFaceVertex], glass: &[u32]) -> Option<Glass> {
+        if glass.is_empty() {
+            return None;
+        }
+        let mut solid = Vec::with_capacity(faces.len() - 3 * glass.len());
+        let mut next = glass.iter().peekable();
+        for first in (0..faces.len() as u32).step_by(3) {
+            if next.next_if_eq(&&first).is_none() {
+                solid.extend([first, first + 1, first + 2]);
+            }
+        }
+        let triangles: Vec<(u32, glam::Vec3)> = glass
+            .iter()
+            .map(|&k| {
+                let corner = |i: u32| glam::Vec3::from(faces[i as usize].pos);
+                (k, (corner(k) + corner(k + 1) + corner(k + 2)) / 3.0)
+            })
+            .collect();
+        let index_buffer = |label: &str, indices: &[u32], usage: wgpu::BufferUsages| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                // An empty buffer still needs a size; nothing is drawn from it then.
+                contents: bytemuck::cast_slice(if indices.is_empty() { &[0u32] } else { indices }),
+                usage: wgpu::BufferUsages::INDEX | usage,
+            })
+        };
+        let unsorted: Vec<u32> = glass.iter().flat_map(|&k| [k, k + 1, k + 2]).collect();
+        Some(Glass {
+            solid: index_buffer("solid faces", &solid, wgpu::BufferUsages::empty()),
+            solid_count: solid.len() as u32,
+            order: index_buffer("glass faces", &unsorted, wgpu::BufferUsages::COPY_DST),
+            triangles,
+            sorted_for: None,
+        })
+    }
+
+    fn count(&self) -> u32 {
+        3 * self.triangles.len() as u32
+    }
+
+    /// Sorts the triangles far to near from `camera`, unless they already are for its view.
+    fn sort(&mut self, queue: &wgpu::Queue, camera: &Camera) {
+        let (origin, toward) = (camera.eye.as_vec3(), camera.forward().as_vec3());
+        let view = if camera.is_parallel() {
+            [toward.x, toward.y, toward.z, 0.0]
+        } else {
+            [origin.x, origin.y, origin.z, 1.0]
+        };
+        if self.sorted_for == Some(view) {
+            return;
+        }
+        let indices = back_to_front(&self.triangles, view);
+        queue.write_buffer(&self.order, 0, bytemuck::cast_slice(&indices));
+        self.sorted_for = Some(view);
+    }
+}
+
+/// The vertices of `triangles` (first vertex, center) ordered far to near for `view`: the
+/// eye's position (w = 1), or the view direction of a parallel view (w = 0).
+fn back_to_front(triangles: &[(u32, glam::Vec3)], view: [f32; 4]) -> Vec<u32> {
+    let [x, y, z, w] = view;
+    let v = glam::Vec3::new(x, y, z);
+    let depth = |c: glam::Vec3| {
+        if w == 0.0 {
+            c.dot(v)
+        } else {
+            c.distance_squared(v)
+        }
+    };
+    let mut keyed: Vec<(f32, u32)> = triangles.iter().map(|&(k, c)| (depth(c), k)).collect();
+    keyed.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+    keyed.iter().flat_map(|&(_, k)| [k, k + 1, k + 2]).collect()
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -96,6 +186,9 @@ pub struct Renderer {
     flat_ground_pipeline: wgpu::RenderPipeline,
     ground_pipeline: wgpu::RenderPipeline,
     face_pipeline: wgpu::RenderPipeline,
+    /// The opaque side of a triangle whose other side is see-through.
+    solid_side_pipeline: wgpu::RenderPipeline,
+    glass_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
@@ -104,6 +197,8 @@ pub struct Renderer {
     flat_ground: Mesh,
     vertical_axis: Mesh,
     faces: Option<Mesh>,
+    /// The see-through triangles of `faces`, if any.
+    glass: Option<Glass>,
     edges: Option<Mesh>,
     /// Where the open context's entities lie in `faces`, `edges` and `base_guides`.
     spans: Spans,
@@ -170,7 +265,8 @@ impl Renderer {
                         fragment_entry: &str,
                         buffers: &[Option<wgpu::VertexBufferLayout>],
                         topology: wgpu::PrimitiveTopology,
-                        depth: DepthUse| {
+                        depth: DepthUse,
+                        blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -201,7 +297,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: None,
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -221,9 +317,17 @@ impl Renderer {
                 write: false,
                 compare: wgpu::CompareFunction::Always,
             },
+            None,
         );
-        let ground_pipeline =
-            pipeline("ground", "vs_ground", "fs_line", &lines_only, lines, tested);
+        let ground_pipeline = pipeline(
+            "ground",
+            "vs_ground",
+            "fs_line",
+            &lines_only,
+            lines,
+            tested,
+            None,
+        );
         let face_pipeline = pipeline(
             "faces",
             "vs_face",
@@ -234,6 +338,33 @@ impl Renderer {
                 write: true,
                 compare: wgpu::CompareFunction::Greater,
             },
+            None,
+        );
+        // The opaque sides of see-through triangles join the opaque faces; their see-through
+        // sides are blended over everything opaque, tested against depth but not writing it.
+        let solid_side_pipeline = pipeline(
+            "solid sides",
+            "vs_face",
+            "fs_face_solid_side",
+            &flagged_faces,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::Greater,
+            },
+            None,
+        );
+        let glass_pipeline = pipeline(
+            "glass",
+            "vs_face",
+            "fs_glass",
+            &flagged_faces,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Greater,
+            },
+            Some(wgpu::BlendState::ALPHA_BLENDING),
         );
         let edge_pipeline = pipeline(
             "edges",
@@ -245,6 +376,7 @@ impl Renderer {
                 write: true,
                 compare: wgpu::CompareFunction::GreaterEqual,
             },
+            None,
         );
         let guide_pipeline = pipeline(
             "guides",
@@ -256,6 +388,7 @@ impl Renderer {
                 write: true,
                 compare: wgpu::CompareFunction::GreaterEqual,
             },
+            None,
         );
         let overlay_pipeline = pipeline(
             "overlay",
@@ -267,6 +400,7 @@ impl Renderer {
                 write: false,
                 compare: wgpu::CompareFunction::Always,
             },
+            None,
         );
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -295,6 +429,8 @@ impl Renderer {
             flat_ground_pipeline,
             ground_pipeline,
             face_pipeline,
+            solid_side_pipeline,
+            glass_pipeline,
             edge_pipeline,
             guide_pipeline,
             overlay_pipeline,
@@ -303,6 +439,7 @@ impl Renderer {
             flat_ground,
             vertical_axis,
             faces: None,
+            glass: None,
             edges: None,
             spans: Spans::default(),
             base_guides: Vec::new(),
@@ -328,6 +465,7 @@ impl Renderer {
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
         let base = scene_base(scene, context);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
+        self.glass = Glass::new(&self.device, &base.faces, &base.glass());
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
         self.spans = base.spans;
         self.guides = base.guides.clone();
@@ -379,6 +517,9 @@ impl Renderer {
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
         let overlay = mesh(&self.device, "overlay", overlay);
         let guides = mesh(&self.device, "guides", &guide_lines(&self.guides, camera));
+        if let Some(glass) = &mut self.glass {
+            glass.sort(&self.queue, camera);
+        }
 
         let [r, g, b, a] = BACKGROUND.map(f64::from);
         let mut encoder = self
@@ -418,24 +559,47 @@ impl Renderer {
                 pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
-                let layers = [
-                    (&self.flat_ground_pipeline, Some(&self.flat_ground)),
-                    (&self.ground_pipeline, Some(&self.vertical_axis)),
-                    (&self.face_pipeline, self.faces.as_ref()),
-                    (&self.edge_pipeline, self.edges.as_ref()),
-                    (&self.guide_pipeline, guides.as_ref()),
-                    (&self.overlay_pipeline, overlay.as_ref()),
-                ];
-                for (pipeline, mesh) in layers {
+                let bind = |pass: &mut wgpu::RenderPass, pipeline, mesh: &Mesh| {
+                    pass.set_pipeline(pipeline);
+                    pass.set_vertex_buffer(0, mesh.buffer.slice(..));
+                    if let Some(flags) = &mesh.flags {
+                        pass.set_vertex_buffer(1, flags.slice(..));
+                    }
+                };
+                let draw = |pass: &mut wgpu::RenderPass, pipeline, mesh: Option<&Mesh>| {
                     if let Some(mesh) = mesh {
-                        pass.set_pipeline(pipeline);
-                        pass.set_vertex_buffer(0, mesh.buffer.slice(..));
-                        if let Some(flags) = &mesh.flags {
-                            pass.set_vertex_buffer(1, flags.slice(..));
-                        }
+                        bind(pass, pipeline, mesh);
                         pass.draw(0..mesh.count, 0..1);
                     }
+                };
+                draw(
+                    &mut pass,
+                    &self.flat_ground_pipeline,
+                    Some(&self.flat_ground),
+                );
+                draw(&mut pass, &self.ground_pipeline, Some(&self.vertical_axis));
+                match (&self.faces, &self.glass) {
+                    (Some(faces), Some(glass)) => {
+                        if glass.solid_count > 0 {
+                            bind(&mut pass, &self.face_pipeline, faces);
+                            pass.set_index_buffer(glass.solid.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.solid_count, 0, 0..1);
+                        }
+                        bind(&mut pass, &self.solid_side_pipeline, faces);
+                        pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..glass.count(), 0, 0..1);
+                    }
+                    (faces, _) => draw(&mut pass, &self.face_pipeline, faces.as_ref()),
                 }
+                draw(&mut pass, &self.edge_pipeline, self.edges.as_ref());
+                draw(&mut pass, &self.guide_pipeline, guides.as_ref());
+                // See-through faces last but for the overlay: everything opaque shows through.
+                if let (Some(faces), Some(glass)) = (&self.faces, &self.glass) {
+                    bind(&mut pass, &self.glass_pipeline, faces);
+                    pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..glass.count(), 0, 0..1);
+                }
+                draw(&mut pass, &self.overlay_pipeline, overlay.as_ref());
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -500,4 +664,35 @@ fn flagged_mesh<T: bytemuck::Pod>(
         mapped_at_creation: false,
     }));
     Some(mesh)
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::Vec3;
+
+    use super::back_to_front;
+
+    #[test]
+    fn glass_triangles_are_ordered_far_to_near() {
+        let triangles = [
+            (0, Vec3::new(0.0, 1.0, 0.0)),
+            (3, Vec3::new(0.0, 5.0, 0.0)),
+            (6, Vec3::new(0.0, 3.0, 0.0)),
+        ];
+        // An eye at the origin: the triangle 5 m away first.
+        assert_eq!(
+            back_to_front(&triangles, [0.0, 0.0, 0.0, 1.0]),
+            [3, 4, 5, 6, 7, 8, 0, 1, 2]
+        );
+        // An eye beyond them looks the other way round.
+        assert_eq!(
+            back_to_front(&triangles, [0.0, 10.0, 0.0, 1.0]),
+            [0, 1, 2, 6, 7, 8, 3, 4, 5]
+        );
+        // A parallel view looking along -y.
+        assert_eq!(
+            back_to_front(&triangles, [0.0, -1.0, 0.0, 0.0]),
+            [0, 1, 2, 6, 7, 8, 3, 4, 5]
+        );
+    }
 }

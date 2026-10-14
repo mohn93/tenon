@@ -259,6 +259,8 @@ pub struct MaterialInfo {
     pub name: String,
     /// sRGB red, green and blue, 0 to 255.
     pub color: [u8; 3],
+    /// From 0 (invisible) to 1 (opaque). Always present.
+    pub opacity: f32,
     /// Faces painted with it on either side, in the whole model (each definition counted once).
     pub faces: usize,
     /// Instances painted with it, in the whole model.

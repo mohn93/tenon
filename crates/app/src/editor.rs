@@ -346,7 +346,11 @@ impl Editor {
         let count = self.doc.scene().materials().count();
         let color = MATERIAL_PALETTE[count % MATERIAL_PALETTE.len()];
         self.message = None;
-        let Some(outcome) = self.run(Command::AddMaterial { name: None, color }) else {
+        let Some(outcome) = self.run(Command::AddMaterial {
+            name: None,
+            color,
+            opacity: None,
+        }) else {
             return true;
         };
         let added = outcome.changes.materials.first().copied();
@@ -360,6 +364,7 @@ impl Editor {
             material,
             name: Some(name),
             color: None,
+            opacity: None,
         });
         true
     }
@@ -371,6 +376,19 @@ impl Editor {
             material,
             name: None,
             color: Some(color),
+            opacity: None,
+        });
+        true
+    }
+
+    /// Sets a material's opacity, `percent` from 0 (invisible) to 100 (opaque).
+    pub fn set_material_opacity(&mut self, material: MaterialId, percent: u8) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: Some(f32::from(percent.min(100)) / 100.0),
         });
         true
     }
@@ -3357,8 +3375,14 @@ mod tests {
         e.choose_material(Some(second));
         e.rename_material(second, "Brick".into());
         e.recolor_material(second, [1, 2, 3]);
+        e.set_material_opacity(second, 40);
         let m = e.doc().scene().material(second).unwrap();
         assert_eq!((m.name.as_str(), m.color), ("Brick", [1, 2, 3]));
+        assert_eq!(m.opacity, 0.4);
+        e.undo();
+        assert_eq!(e.doc().scene().material(second).unwrap().opacity, 1.0);
+        e.redo();
+        assert_eq!(e.doc().scene().material(second).unwrap().opacity, 0.4);
         e.rename_material(second, "  ".into());
         assert!(e.status().contains("needs a name"), "{}", e.status());
         e.delete_material(second);

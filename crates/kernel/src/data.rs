@@ -33,13 +33,25 @@ pub struct SceneData {
     pub materials: Vec<MaterialData>,
 }
 
-/// A material: `color` is sRGB red, green and blue.
+/// A material: `color` is sRGB red, green and blue; `opacity` is from 0 (invisible) to 1
+/// (opaque).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialData {
     pub id: u64,
     pub name: String,
     pub color: [u8; 3],
+    /// Absent when 1, as in files written before opacity existed.
+    #[serde(default = "opaque", skip_serializing_if = "is_opaque")]
+    pub opacity: f32,
+}
+
+fn opaque() -> f32 {
+    1.0
+}
+
+fn is_opaque(opacity: &f32) -> bool {
+    *opacity == 1.0
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -141,6 +153,7 @@ impl Scene {
                     id: id.0,
                     name: m.name.clone(),
                     color: m.color,
+                    opacity: m.opacity,
                 })
                 .collect(),
         }
@@ -178,6 +191,7 @@ impl Scene {
             let material = Material {
                 name: m.name.clone(),
                 color: m.color,
+                opacity: m.opacity,
             };
             if materials.insert(MaterialId(m.id), material).is_some() {
                 return Err(format!("material m{} appears twice", m.id));

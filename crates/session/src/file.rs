@@ -13,10 +13,14 @@ use crate::document::MAX_COORDINATE;
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The schema version this build writes and the newest it reads. Version 2 added guides,
-/// version 3 curves and soft edges, version 4 the camera's up direction and projection, and
-/// version 5 materials; older files still open.
-pub const SCHEMA_VERSION: u32 = 5;
+/// The newest schema version this build reads, and the one it writes when a material is
+/// see-through. Version 2 added guides, version 3 curves and soft edges, version 4 the
+/// camera's up direction and projection, version 5 materials, and version 6 material
+/// opacity; older files still open.
+pub const SCHEMA_VERSION: u32 = 6;
+/// The version written when every material is opaque: such a model needs nothing version 6
+/// added, so its file is the same as before opacity existed and older builds open it.
+pub const OPAQUE_SCHEMA_VERSION: u32 = 5;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
 /// The largest `document.json` this build reads, uncompressed.
@@ -54,9 +58,14 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
+    let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: SCHEMA_VERSION,
+        schema_version: if translucent {
+            SCHEMA_VERSION
+        } else {
+            OPAQUE_SCHEMA_VERSION
+        },
         camera: StoredCamera {
             eye: camera.eye.to_array(),
             target: camera.target.to_array(),

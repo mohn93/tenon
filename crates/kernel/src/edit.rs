@@ -31,6 +31,8 @@ pub enum KernelError {
     MaterialNotFound,
     /// A material name is empty, too long or taken; the text says which.
     MaterialName(String),
+    /// A material opacity is not a finite number from 0 to 1; the text says which.
+    MaterialOpacity(String),
     /// An import has no polygon that makes a face.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -63,7 +65,9 @@ impl fmt::Display for KernelError {
             KernelError::InstanceNotFound => write!(f, "no such instance"),
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
             KernelError::MaterialNotFound => write!(f, "no such material"),
-            KernelError::MaterialName(why) => write!(f, "{why}"),
+            KernelError::MaterialName(why) | KernelError::MaterialOpacity(why) => {
+                write!(f, "{why}")
+            }
             KernelError::NothingToImport => {
                 write!(f, "nothing to import: no polygon makes a face")
             }

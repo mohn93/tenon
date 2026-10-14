@@ -462,6 +462,10 @@ fn gltf_has_one_primitive_and_material_per_color() {
         "{f:?}"
     );
     assert_eq!((f[2], f[3]), (1.0, 1.0));
+    assert!(
+        doc["materials"][0]["alphaMode"].is_null(),
+        "opaque is the default mode"
+    );
     for (k, p) in primitives.iter().enumerate() {
         assert_eq!(p["material"], k);
         let pos = &doc["accessors"][p["attributes"]["POSITION"].as_u64().unwrap() as usize];
@@ -585,4 +589,59 @@ fn a_model_whose_every_face_fails_to_triangulate_says_so() {
         "{message}"
     );
     assert!(!message.contains("no faces"), "{message}");
+}
+
+/// `painted_boxes` with the material made see-through.
+fn glass_boxes(d: &mut Document) {
+    painted_boxes(d, "Glass", [255, 255, 255]);
+    let material = ask(d, json!({"type": "materials"}))["materials"][0]["id"].clone();
+    run(
+        d,
+        json!({"type": "change_material", "material": material, "opacity": 0.4}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn gltf_of_glass_blends_with_its_opacity_as_alpha() {
+    let mut d = doc();
+    glass_boxes(&mut d);
+    let doc: Value = serde_json::from_slice(&export(&mut d, "glass.gltf")).unwrap();
+    let glass = &doc["materials"][0];
+    assert_eq!(glass["name"], "Glass");
+    assert_eq!(glass["alphaMode"], "BLEND");
+    assert_eq!(
+        glass["pbrMetallicRoughness"]["baseColorFactor"],
+        json!([1.0, 1.0, 1.0, 0.4])
+    );
+    assert!(doc["materials"][1]["alphaMode"].is_null());
+    // A .glb carries the same document.
+    let glb = export(&mut d, "glass.glb");
+    let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+    let doc: Value = serde_json::from_slice(&glb[20..20 + len]).unwrap();
+    assert_eq!(doc["materials"][0]["alphaMode"], "BLEND");
+}
+
+#[test]
+fn mtl_of_glass_gives_dissolve_and_transparency() {
+    let mut d = doc();
+    glass_boxes(&mut d);
+    let mtl = scratch("glass-boxes.mtl");
+    export(&mut d, "glass-boxes.obj");
+    let library = std::fs::read_to_string(&mtl).unwrap();
+    assert!(
+        library.contains("newmtl Glass\nKd 1.000000 1.000000 1.000000\nd 0.400000\nTr 0.600000\n"),
+        "{library}"
+    );
+    assert!(library.contains("newmtl default\nKd"), "{library}");
+    assert_eq!(
+        library.matches("\nd ").count(),
+        1,
+        "opaque materials have no d"
+    );
+    // STL has no materials: the same triangles as opaque boxes.
+    let glass = export(&mut d, "glass-boxes.stl");
+    let mut plain = doc();
+    two_boxes(&mut plain);
+    assert_eq!(glass, export(&mut plain, "plain-boxes.stl"));
 }

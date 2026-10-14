@@ -323,14 +323,17 @@ impl Document {
                 self.rename_changes(*definition, name)
             }
             Command::PurgeDefinitions => Ok(self.scene.purge()),
-            Command::AddMaterial { name, color } => {
-                self.add_material_changes(name.as_deref(), *color)
-            }
+            Command::AddMaterial {
+                name,
+                color,
+                opacity,
+            } => self.add_material_changes(name.as_deref(), *color, *opacity),
             Command::ChangeMaterial {
                 material,
                 name,
                 color,
-            } => self.change_material_changes(*material, name.as_deref(), *color),
+                opacity,
+            } => self.change_material_changes(*material, name.as_deref(), *color, *opacity),
             Command::DeleteMaterial { material } => self.delete_material_changes(*material),
             Command::Paint {
                 ids,

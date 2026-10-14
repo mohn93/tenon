@@ -78,7 +78,8 @@ fn materials_are_added_renamed_recolored_and_deleted() {
     assert_eq!(listed.len(), 2);
     assert_eq!(
         listed[0],
-        json!({"id": first, "name": "Material", "color": [10, 20, 30], "faces": 0, "instances": 0})
+        json!({"id": first, "name": "Material", "color": [10, 20, 30], "opacity": 1.0, "faces": 0,
+            "instances": 0})
     );
     assert_eq!(listed[1]["id"], second);
     assert_eq!(listed[1]["name"], "Material 2");
@@ -412,6 +413,10 @@ fn materials_and_paint_are_saved_and_older_files_still_open() {
     let document: Value = serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
     assert_eq!(document["schema_version"], 5);
     assert_eq!(document["model"]["materials"][0]["name"], "Red");
+    assert!(
+        document["model"]["materials"][0].get("opacity").is_none(),
+        "an opaque material saves as before opacity existed"
+    );
 
     // The same model written by version 4, before materials: it opens unpainted.
     let mut old = document.clone();
@@ -453,4 +458,111 @@ fn materials_and_paint_are_saved_and_older_files_still_open() {
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
     assert!(message.contains("missing material"), "{message}");
+}
+
+#[test]
+fn opacity_is_added_changed_undone_and_listed() {
+    let mut d = doc();
+    let glass = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Glass", "color": [180, 220, 240], "opacity": 0.3}),
+    )
+    .unwrap()["changes"]["materials"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let opacity = |d: &Document| materials(d)[0]["opacity"].as_f64().unwrap() as f32;
+    assert_eq!(opacity(&d), 0.3);
+    let out = run(
+        &mut d,
+        json!({"type": "change_material", "material": glass, "opacity": 0.6}),
+    )
+    .unwrap();
+    assert_eq!(out["changes"]["materials"], json!([glass]));
+    assert_eq!(opacity(&d), 0.6);
+    assert_eq!(
+        materials(&d)[0]["color"],
+        json!([180, 220, 240]),
+        "color stays"
+    );
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(opacity(&d), 0.3);
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(opacity(&d), 0.6);
+    // Without opacity a material is opaque.
+    add(&mut d, "Brick", [180, 60, 40]);
+    assert_eq!(materials(&d)[1]["opacity"], 1.0);
+}
+
+#[test]
+fn bad_opacities_are_refused() {
+    let mut d = doc();
+    let red = add(&mut d, "Red", [200, 0, 0]);
+    for bad in [json!(-0.5), json!(1.5), json!(1e300)] {
+        for cmd in [
+            json!({"type": "add_material", "name": "Glass", "color": [0, 0, 0], "opacity": bad}),
+            json!({"type": "change_material", "material": red, "opacity": bad}),
+        ] {
+            let (kind, message, _) = run(&mut d, cmd.clone()).unwrap_err();
+            assert_eq!(kind, ErrorKind::InvalidInput, "{cmd}: {message}");
+            assert!(message.contains("opacity"), "{message}");
+        }
+    }
+    assert!(
+        serde_json::from_value::<Command>(
+            json!({"type": "add_material", "color": [0, 0, 0], "opacity": "half"})
+        )
+        .is_err()
+    );
+    assert_eq!(materials(&d).len(), 1);
+    assert_eq!(materials(&d)[0]["opacity"], 1.0);
+}
+
+#[test]
+fn opacity_is_saved_as_version_6_and_opaque_models_stay_version_5() {
+    let mut d = doc();
+    cube(&mut d);
+    let glass = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Glass", "color": [180, 220, 240], "opacity": 0.4}),
+    )
+    .unwrap()["changes"]["materials"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": ["f25"], "material": glass}),
+    )
+    .unwrap();
+    let path = scratch("glass.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let document: Value = serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
+    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(document["schema_version"], 6);
+    assert_eq!(document["model"]["materials"][0]["opacity"], 0.4);
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(materials(&e), materials(&d));
+
+    // Made opaque again, the model saves as version 5 with no opacity.
+    run(
+        &mut d,
+        json!({"type": "change_material", "material": glass, "opacity": 1}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "save"})).unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let document: Value = serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
+    assert_eq!(document["schema_version"], 5);
+    assert!(document["model"]["materials"][0].get("opacity").is_none());
 }

@@ -132,6 +132,8 @@ struct Group<'a> {
     name: String,
     /// sRGB, 0 to 1.
     color: [f64; 3],
+    /// 1 is opaque.
+    opacity: f32,
     triangles: Vec<&'a Triangle>,
 }
 
@@ -143,14 +145,19 @@ impl<'a> Groups<'a> {
             let i = match groups.iter().position(|g| g.material == material) {
                 Some(i) => i,
                 None => {
-                    let (name, color) = match material.and_then(|m| scene.material(m)) {
-                        Some(m) => (m.name.clone(), m.color.map(|c| f64::from(c) / 255.0)),
-                        None => ("default".to_string(), DEFAULT_COLOR),
+                    let (name, color, opacity) = match material.and_then(|m| scene.material(m)) {
+                        Some(m) => (
+                            m.name.clone(),
+                            m.color.map(|c| f64::from(c) / 255.0),
+                            m.opacity,
+                        ),
+                        None => ("default".to_string(), DEFAULT_COLOR, 1.0),
                     };
                     groups.push(Group {
                         material,
                         name,
                         color,
+                        opacity,
                         triangles: Vec::new(),
                     });
                     groups.len() - 1
@@ -178,6 +185,12 @@ pub(crate) fn linear(c: f64) -> f64 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
+}
+
+/// `x` as the f64 of its shortest decimal form, so 0.4 is written 0.4 and not
+/// 0.4000000059604645.
+fn decimal(x: f32) -> f64 {
+    x.to_string().parse().unwrap_or(f64::from(x))
 }
 
 /// Material names for OBJ and MTL: no spaces or other characters those files split on, and no
@@ -262,6 +275,11 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
         for (g, name) in groups.groups.iter().zip(&names) {
             let [r, gr, b] = g.color.map(linear);
             let _ = writeln!(mtl, "newmtl {name}\nKd {r:.6} {gr:.6} {b:.6}");
+            if g.opacity < 1.0 {
+                // `d` is the opacity; some readers take `Tr`, its complement, instead.
+                let d = f64::from(g.opacity);
+                let _ = writeln!(mtl, "d {d:.6}\nTr {:.6}", 1.0 - d);
+            }
         }
         mtl
     });
@@ -342,10 +360,14 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         let mut pbr = json!({"metallicFactor": 0});
         if g.material.is_some() {
             let [r, gr, b] = g.color.map(linear);
-            pbr["baseColorFactor"] = json!([r, gr, b, 1.0]);
+            pbr["baseColorFactor"] = json!([r, gr, b, decimal(g.opacity)]);
         }
-        materials.push(json!({"name": g.name, "doubleSided": true,
-            "pbrMetallicRoughness": pbr}));
+        let mut material = json!({"name": g.name, "doubleSided": true,
+            "pbrMetallicRoughness": pbr});
+        if g.opacity < 1.0 {
+            material["alphaMode"] = json!("BLEND");
+        }
+        materials.push(material);
         start += n;
     }
     let doc = json!({

@@ -230,7 +230,7 @@ fn a_file_is_a_zip_with_a_versioned_document() {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let doc: Value = serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
     assert_eq!(doc["format"], session::file::FORMAT);
-    assert_eq!(doc["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(doc["schema_version"], session::file::OPAQUE_SCHEMA_VERSION);
     assert_eq!(doc["model"]["definitions"].as_array().unwrap().len(), 1);
 }
 
