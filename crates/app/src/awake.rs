@@ -54,6 +54,16 @@ mod imp {
 
 pub use imp::Awake;
 
+impl Awake {
+    /// Holds the activity while `work` runs, then keeps it only if `work` returns true (agents
+    /// are still connected). `work` is given the guard, held.
+    pub fn serve(&mut self, work: impl FnOnce(&Self) -> bool) {
+        self.set(true);
+        let keep = work(self);
+        self.set(keep);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +78,26 @@ mod tests {
         awake.set(false);
         assert!(!awake.is_on());
         awake.set(false);
+        assert!(!awake.is_on());
+    }
+
+    #[test]
+    fn serving_holds_the_activity_until_the_work_is_done() {
+        let mut awake = Awake::default();
+        let mut on_during = false;
+        awake.serve(|a| {
+            on_during = a.is_on();
+            false
+        });
+        assert!(on_during);
+        assert!(!awake.is_on());
+        awake.serve(|_| true);
+        assert!(awake.is_on());
+        awake.serve(|a| {
+            on_during = a.is_on();
+            false
+        });
+        assert!(on_during);
         assert!(!awake.is_on());
     }
 }

@@ -874,10 +874,16 @@ impl ApplicationHandler<ApiWake> for App {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ApiWake) {
-        if let Some(s) = self.state.as_mut() {
-            s.process_api(&mut self.hub);
-        }
-        self.awake.set(self.hub.open_connections() > 0);
+        // Wake before the work, not after: a napped app runs a request (a save, say) many
+        // times slower, and an agent's first request often arrives with its connection.
+        let state = &mut self.state;
+        let hub = &mut self.hub;
+        self.awake.serve(|_| {
+            if let Some(s) = state.as_mut() {
+                s.process_api(hub);
+            }
+            hub.open_connections() > 0
+        });
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
