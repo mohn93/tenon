@@ -1,5 +1,6 @@
-//! Materials: named colors shared by every mesh of a scene, painted on either side of a face or
-//! on an instance (whose faces without a material of their own then show it).
+//! Materials: named colors, possibly with a texture, shared by every mesh of a scene, painted on
+//! either side of a face or on an instance (whose faces without a material of their own then
+//! show it).
 
 use std::collections::BTreeSet;
 
@@ -9,18 +10,21 @@ use crate::edit::KernelError;
 use crate::ids::{FaceId, InstanceId, MaterialId};
 use crate::model::{ChangeSet, Model};
 use crate::scene::{MeshId, Scene, SceneChange, Step};
+use crate::texture::{MAX_TEXTURES, Texture, check_texture};
 
 /// The longest material name, in characters.
 pub const MAX_MATERIAL_NAME: usize = 256;
 
-/// A named color, possibly see-through.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A named color, possibly see-through, possibly with a texture.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Material {
     pub name: String,
-    /// sRGB red, green and blue.
+    /// sRGB red, green and blue. With a texture, faces show the texture and this color stands
+    /// for it (edges, swatches, formats without textures).
     pub color: [u8; 3],
     /// How much of what is behind it the material hides: 1 is opaque, 0 invisible.
     pub opacity: f32,
+    pub texture: Option<Texture>,
 }
 
 impl Material {
@@ -147,8 +151,24 @@ impl Scene {
         color: [u8; 3],
         opacity: f32,
     ) -> Result<(MaterialId, SceneChange), KernelError> {
+        self.add_material_with_texture(name, color, opacity, None)
+    }
+
+    /// Adds a material of `opacity` (finite, 0 to 1), with `texture` if given (see
+    /// [`MAX_TEXTURES`] and [`crate::MIN_TEXTURE_SIZE`]). The name must be valid (see
+    /// [`MAX_MATERIAL_NAME`]) and not taken.
+    pub fn add_material_with_texture(
+        &mut self,
+        name: &str,
+        color: [u8; 3],
+        opacity: f32,
+        texture: Option<Texture>,
+    ) -> Result<(MaterialId, SceneChange), KernelError> {
         self.check_free_name(name, None)?;
         check_opacity(opacity).map_err(KernelError::MaterialOpacity)?;
+        if let Some(t) = &texture {
+            self.check_new_texture(t, None)?;
+        }
         let id = self.alloc_material();
         let step = Step::AddMaterial(
             id,
@@ -156,6 +176,7 @@ impl Scene {
                 name: name.to_string(),
                 color,
                 opacity,
+                texture,
             },
         );
         self.apply_step(&step);
@@ -171,6 +192,19 @@ impl Scene {
         color: Option<[u8; 3]>,
         opacity: Option<f32>,
     ) -> Result<SceneChange, KernelError> {
+        self.change_material_with_texture(id, name, color, opacity, None)
+    }
+
+    /// `change_material`, and `texture` sets (`Some(Some(_))`) or removes (`Some(None)`) the
+    /// material's texture; None keeps it. One step, so undo restores every part.
+    pub fn change_material_with_texture(
+        &mut self,
+        id: MaterialId,
+        name: Option<&str>,
+        color: Option<[u8; 3]>,
+        opacity: Option<f32>,
+        texture: Option<Option<Texture>>,
+    ) -> Result<SceneChange, KernelError> {
         let from = self
             .material(id)
             .ok_or(KernelError::MaterialNotFound)?
@@ -181,10 +215,14 @@ impl Scene {
         if let Some(opacity) = opacity {
             check_opacity(opacity).map_err(KernelError::MaterialOpacity)?;
         }
+        if let Some(Some(t)) = &texture {
+            self.check_new_texture(t, Some(id))?;
+        }
         let to = Material {
             name: name.map_or_else(|| from.name.clone(), str::to_string),
             color: color.unwrap_or(from.color),
             opacity: opacity.unwrap_or(from.opacity),
+            texture: texture.unwrap_or_else(|| from.texture.clone()),
         };
         if to == from {
             return Ok(SceneChange::default());
@@ -243,6 +281,33 @@ impl Scene {
             .map(|n| format!("{base} {n}"))
             .find(|n| !taken.contains(n.as_str()))
             .expect("a free name")
+    }
+
+    /// How many materials have a texture.
+    pub fn texture_count(&self) -> usize {
+        self.materials()
+            .filter(|(_, m)| m.texture.is_some())
+            .count()
+    }
+
+    /// Fails when `texture` is not valid, or when giving it to material `to` (None: a new one)
+    /// would make more than [`MAX_TEXTURES`] textures.
+    fn check_new_texture(
+        &self,
+        texture: &Texture,
+        to: Option<MaterialId>,
+    ) -> Result<(), KernelError> {
+        check_texture(texture).map_err(KernelError::MaterialTexture)?;
+        let others = self
+            .materials()
+            .filter(|(id, m)| Some(*id) != to && m.texture.is_some())
+            .count();
+        if others >= MAX_TEXTURES {
+            return Err(KernelError::MaterialTexture(format!(
+                "a model holds at most {MAX_TEXTURES} textures"
+            )));
+        }
+        Ok(())
     }
 
     fn check_free_name(&self, name: &str, except: Option<MaterialId>) -> Result<(), KernelError> {

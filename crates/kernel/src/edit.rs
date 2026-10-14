@@ -33,6 +33,9 @@ pub enum KernelError {
     MaterialName(String),
     /// A material opacity is not a finite number from 0 to 1; the text says which.
     MaterialOpacity(String),
+    /// A texture's size is out of range, its image is broken, or a model would hold too many;
+    /// the text says which.
+    MaterialTexture(String),
     /// An import has no polygon that makes a face.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -65,7 +68,9 @@ impl fmt::Display for KernelError {
             KernelError::InstanceNotFound => write!(f, "no such instance"),
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
             KernelError::MaterialNotFound => write!(f, "no such material"),
-            KernelError::MaterialName(why) | KernelError::MaterialOpacity(why) => {
+            KernelError::MaterialName(why)
+            | KernelError::MaterialOpacity(why)
+            | KernelError::MaterialTexture(why) => {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {

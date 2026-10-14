@@ -1,6 +1,7 @@
 //! The model as plain data, for files: every entity, definition and id as stored.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use crate::ids::{
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
+use crate::texture::{Texture, TextureImage};
 
 /// Ids in a file are below this, and its `next_id` is at most this, so every id is exact as a
 /// JSON (double) number and a scene that loads also saves and loads again.
@@ -44,6 +46,23 @@ pub struct MaterialData {
     /// Absent when 1, as in files written before opacity existed.
     #[serde(default = "opaque", skip_serializing_if = "is_opaque")]
     pub opacity: f32,
+    /// Absent without a texture, as in files written before textures existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<TextureData>,
+}
+
+/// A material's texture: the file holding its image and the size it covers on the model, in
+/// meters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextureData {
+    /// The image file's name in the model file's archive.
+    pub file: String,
+    pub width: f64,
+    pub height: f64,
+    /// The image: `to_data` fills it in, and a reader must before `from_data`. Not written.
+    #[serde(skip)]
+    pub image: Option<Arc<TextureImage>>,
 }
 
 fn opaque() -> f32 {
@@ -154,6 +173,12 @@ impl Scene {
                     name: m.name.clone(),
                     color: m.color,
                     opacity: m.opacity,
+                    texture: m.texture.as_ref().map(|t| TextureData {
+                        file: format!("textures/m{}.{}", id.0, t.image.format.extension()),
+                        width: t.width,
+                        height: t.height,
+                        image: Some(t.image.clone()),
+                    }),
                 })
                 .collect(),
         }
@@ -188,10 +213,22 @@ impl Scene {
         let mut materials = BTreeMap::new();
         for m in &data.materials {
             check_id("material m", m.id)?;
+            let texture = match &m.texture {
+                None => None,
+                Some(t) => Some(Texture {
+                    image: t
+                        .image
+                        .clone()
+                        .ok_or_else(|| format!("material m{}'s texture has no image", m.id))?,
+                    width: t.width,
+                    height: t.height,
+                }),
+            };
             let material = Material {
                 name: m.name.clone(),
                 color: m.color,
                 opacity: m.opacity,
+                texture,
             };
             if materials.insert(MaterialId(m.id), material).is_some() {
                 return Err(format!("material m{} appears twice", m.id));

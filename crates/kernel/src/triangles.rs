@@ -1,9 +1,10 @@
 //! Every face of a scene as triangles in root coordinates, for export.
 
-use glam::{DAffine3, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 
 use crate::ids::MaterialId;
 use crate::scene::{MeshId, Scene};
+use crate::texture::texture_position;
 
 /// One triangle of a face, wound counter-clockwise around `normal` (the face's front).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -13,6 +14,9 @@ pub struct Triangle {
     /// The normal at each corner: the face's own, or across soft edges the smooth one (see
     /// `Model::corner_normal`).
     pub normals: [DVec3; 3],
+    /// Where each corner lies on the face's texture, in meters (see `texture_position`): in the
+    /// plane of the face as its definition holds it, so a placed copy carries its pattern.
+    pub uvs: [DVec2; 3],
     /// The material shown on the front and on the back: the face's own, or else that of the
     /// nearest painted instance placing it; None for the default material.
     pub front: Option<MaterialId>,
@@ -68,10 +72,12 @@ impl Scene {
             for tri in tris {
                 let [a, b, c] = tri.corners.map(|p| place.transform_point3(p));
                 let [na, nb, nc] = tri.normals.map(|n| (normal_map * n).normalize());
+                let [ua, ub, uc] = tri.corners.map(|p| texture_position(face.normal, p));
                 out.push(Triangle {
                     corners: if mirrored { [a, c, b] } else { [a, b, c] },
                     normal,
                     normals: if mirrored { [na, nc, nb] } else { [na, nb, nc] },
+                    uvs: if mirrored { [ua, uc, ub] } else { [ua, ub, uc] },
                     front,
                     back,
                 });

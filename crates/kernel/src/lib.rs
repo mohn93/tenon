@@ -20,6 +20,7 @@ mod regions;
 mod scene;
 mod smooth;
 mod soften;
+mod texture;
 mod transform;
 mod triangles;
 mod weld;
@@ -27,7 +28,7 @@ mod weld;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MaterialData, MeshData,
-    SceneData, VertexData,
+    SceneData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
@@ -40,4 +41,8 @@ pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
+pub use texture::{
+    ImageFormat, MAX_TEXTURE_SIZE, MAX_TEXTURES, MIN_TEXTURE_SIZE, Texture, TextureImage,
+    texture_axes, texture_position,
+};
 pub use triangles::Triangle;
