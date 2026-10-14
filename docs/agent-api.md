@@ -31,7 +31,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below) |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below) and `soften` for `soften_edges` and `soften_by_angle` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does) | `{width, height, png_base64}` |
@@ -151,7 +151,7 @@ plain edge again. Pieces of a split soft edge stay soft, and copies, groups and 
 
 | Command | Effect |
 |---|---|
-| `{"type": "soften_edges", "ids": ["e12", "f8"], "soft": true}` | Makes the edges in `ids`, and the edges around the faces in `ids`, soft (`"soft": false`: hard again), as one undo step. Only an edge between exactly two faces can be soft; others are left as they are. Vertex, instance and guide ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. |
+| `{"type": "soften_edges", "ids": ["e12", "f8"], "soft": true}` | Makes the edges in `ids`, and the edges around the faces in `ids`, soft (`"soft": false`: hard again), as one undo step. Only an edge between exactly two faces can be soft; others are left as they are. Vertex, instance and guide ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. `soft` is required. |
 | `{"type": "soften_by_angle", "ids": [], "max_angle_deg": 20}` | Softens each edge between two faces whose normals differ by at most `max_angle_deg` (0 to 180; faces oriented against each other are compared as if turned the same way), as one undo step: among the edges in `ids` and around the faces in `ids`, or every edge of the open context when `ids` is empty or absent. Other edges, soft or hard, stay as they are. |
 
 Both report `"soften": {"changed": n, "skipped": m}` in their outcome: `changed` edges whose flag

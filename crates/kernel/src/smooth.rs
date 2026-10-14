@@ -19,8 +19,9 @@ pub struct ShadedTriangle {
     pub normals: [DVec3; 3],
 }
 
-/// The corner normals of a mesh that differ from their face's normal (corners on soft
-/// edges), worked out once for the whole mesh; see `Model::smooth_normals`.
+/// The corner normals of the faces in fans (faces that soft edges join at a vertex). An entry
+/// can equal its face's normal, as in a coplanar fan. Worked out once for the whole mesh; see
+/// `Model::smooth_normals`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SmoothNormals(HashMap<(FaceId, VertexId), DVec3>);
 
@@ -30,7 +31,7 @@ impl SmoothNormals {
         self.0.get(&(face, v)).copied()
     }
 
-    /// True when every face is shaded flat.
+    /// True when no face is in a fan.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
