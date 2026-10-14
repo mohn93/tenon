@@ -1,6 +1,6 @@
-//! Materials: named colors, possibly with a texture, shared by every mesh of a scene, painted on
-//! either side of a face or on an instance (whose faces without a material of their own then
-//! show it).
+//! Materials: named colors, possibly with a texture, possibly glowing, shared by every mesh of a
+//! scene, painted on either side of a face or on an instance (whose faces without a material of
+//! their own then show it).
 
 use std::collections::BTreeSet;
 
@@ -15,7 +15,10 @@ use crate::texture::{MAX_TEXTURES, Texture, check_texture};
 /// The longest material name, in characters.
 pub const MAX_MATERIAL_NAME: usize = 256;
 
-/// A named color, possibly see-through, possibly with a texture.
+/// The strongest a material glows (see `Material::emission`).
+pub const MAX_EMISSION: f32 = 10.0;
+
+/// A named color, possibly see-through, possibly with a texture, possibly glowing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
     pub name: String,
@@ -25,6 +28,8 @@ pub struct Material {
     /// How much of what is behind it the material hides: 1 is opaque, 0 invisible.
     pub opacity: f32,
     pub texture: Option<Texture>,
+    /// How strongly faces painted with it glow, from 0 (not at all) to `MAX_EMISSION`.
+    pub emission: f32,
 }
 
 impl Material {
@@ -32,6 +37,22 @@ impl Material {
     pub fn is_translucent(&self) -> bool {
         self.opacity < 1.0
     }
+
+    /// True when faces painted with it glow.
+    pub fn glows(&self) -> bool {
+        self.emission > 0.0
+    }
+}
+
+/// The parts of a material `Scene::change_material_with` sets; None keeps that part.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MaterialEdit<'a> {
+    pub name: Option<&'a str>,
+    pub color: Option<[u8; 3]>,
+    pub opacity: Option<f32>,
+    /// `Some(None)` removes the texture.
+    pub texture: Option<Option<Texture>>,
+    pub emission: Option<f32>,
 }
 
 /// Which side of a face to paint.
@@ -59,6 +80,17 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Fails, saying why, when an emission is not a finite number from 0 to [`MAX_EMISSION`].
+pub(crate) fn check_emission(emission: f32) -> Result<(), String> {
+    if emission.is_finite() && (0.0..=MAX_EMISSION).contains(&emission) {
+        Ok(())
+    } else {
+        Err(format!(
+            "emission must be a number from 0 to {MAX_EMISSION}, not {emission}"
+        ))
+    }
 }
 
 /// Fails, saying why, when an opacity is not a finite number from 0 to 1.
@@ -164,21 +196,30 @@ impl Scene {
         opacity: f32,
         texture: Option<Texture>,
     ) -> Result<(MaterialId, SceneChange), KernelError> {
-        self.check_free_name(name, None)?;
-        check_opacity(opacity).map_err(KernelError::MaterialOpacity)?;
-        if let Some(t) = &texture {
+        self.add_material_from(Material {
+            name: name.to_string(),
+            color,
+            opacity,
+            texture,
+            emission: 0.0,
+        })
+    }
+
+    /// Adds `material` after checking every part of it: the name (valid, see
+    /// [`MAX_MATERIAL_NAME`], and not taken), the opacity (0 to 1), the texture (see
+    /// [`MAX_TEXTURES`]) and the emission (0 to [`MAX_EMISSION`]).
+    pub fn add_material_from(
+        &mut self,
+        material: Material,
+    ) -> Result<(MaterialId, SceneChange), KernelError> {
+        self.check_free_name(&material.name, None)?;
+        check_opacity(material.opacity).map_err(KernelError::MaterialOpacity)?;
+        check_emission(material.emission).map_err(KernelError::MaterialEmission)?;
+        if let Some(t) = &material.texture {
             self.check_new_texture(t, None)?;
         }
         let id = self.alloc_material();
-        let step = Step::AddMaterial(
-            id,
-            Material {
-                name: name.to_string(),
-                color,
-                opacity,
-                texture,
-            },
-        );
+        let step = Step::AddMaterial(id, material);
         self.apply_step(&step);
         Ok((id, step.into()))
     }
@@ -205,24 +246,48 @@ impl Scene {
         opacity: Option<f32>,
         texture: Option<Option<Texture>>,
     ) -> Result<SceneChange, KernelError> {
+        self.change_material_with(
+            id,
+            MaterialEdit {
+                name,
+                color,
+                opacity,
+                texture,
+                emission: None,
+            },
+        )
+    }
+
+    /// Changes the parts of a material `edit` gives, after checking them as
+    /// `add_material_from` does. One step, so undo restores every part; nothing to change
+    /// changes nothing.
+    pub fn change_material_with(
+        &mut self,
+        id: MaterialId,
+        edit: MaterialEdit,
+    ) -> Result<SceneChange, KernelError> {
         let from = self
             .material(id)
             .ok_or(KernelError::MaterialNotFound)?
             .clone();
-        if let Some(name) = name {
+        if let Some(name) = edit.name {
             self.check_free_name(name, Some(id))?;
         }
-        if let Some(opacity) = opacity {
+        if let Some(opacity) = edit.opacity {
             check_opacity(opacity).map_err(KernelError::MaterialOpacity)?;
         }
-        if let Some(Some(t)) = &texture {
+        if let Some(emission) = edit.emission {
+            check_emission(emission).map_err(KernelError::MaterialEmission)?;
+        }
+        if let Some(Some(t)) = &edit.texture {
             self.check_new_texture(t, Some(id))?;
         }
         let to = Material {
-            name: name.map_or_else(|| from.name.clone(), str::to_string),
-            color: color.unwrap_or(from.color),
-            opacity: opacity.unwrap_or(from.opacity),
-            texture: texture.unwrap_or_else(|| from.texture.clone()),
+            name: edit.name.map_or_else(|| from.name.clone(), str::to_string),
+            color: edit.color.unwrap_or(from.color),
+            opacity: edit.opacity.unwrap_or(from.opacity),
+            texture: edit.texture.unwrap_or_else(|| from.texture.clone()),
+            emission: edit.emission.unwrap_or(from.emission),
         };
         if to == from {
             return Ok(SceneChange::default());

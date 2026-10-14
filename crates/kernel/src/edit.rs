@@ -36,6 +36,9 @@ pub enum KernelError {
     /// A texture's size is out of range, its image is broken, or a model would hold too many;
     /// the text says which.
     MaterialTexture(String),
+    /// A material emission is not a finite number from 0 to `MAX_EMISSION`; the text says
+    /// which.
+    MaterialEmission(String),
     /// An import has no polygon that makes a face.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -70,7 +73,8 @@ impl fmt::Display for KernelError {
             KernelError::MaterialNotFound => write!(f, "no such material"),
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
-            | KernelError::MaterialTexture(why) => {
+            | KernelError::MaterialTexture(why)
+            | KernelError::MaterialEmission(why) => {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {

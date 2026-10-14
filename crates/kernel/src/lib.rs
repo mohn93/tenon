@@ -36,7 +36,7 @@ pub use ids::{
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use index::{Index, Shape};
-pub use material::{MAX_MATERIAL_NAME, Material, Side};
+pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
 pub use smooth::{ShadedTriangle, SmoothNormals};

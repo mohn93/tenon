@@ -36,7 +36,7 @@ pub struct SceneData {
 }
 
 /// A material: `color` is sRGB red, green and blue; `opacity` is from 0 (invisible) to 1
-/// (opaque).
+/// (opaque); `emission` from 0 (no glow) to `MAX_EMISSION`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaterialData {
@@ -49,6 +49,9 @@ pub struct MaterialData {
     /// Absent without a texture, as in files written before textures existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TextureData>,
+    /// Absent when 0, as in files written before emission existed.
+    #[serde(default, skip_serializing_if = "is_dark")]
+    pub emission: f32,
 }
 
 /// A material's texture: the file holding its image and the size it covers on the model, in
@@ -71,6 +74,10 @@ fn opaque() -> f32 {
 
 fn is_opaque(opacity: &f32) -> bool {
     *opacity == 1.0
+}
+
+fn is_dark(emission: &f32) -> bool {
+    *emission == 0.0
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -179,6 +186,7 @@ impl Scene {
                         height: t.height,
                         image: Some(t.image.clone()),
                     }),
+                    emission: m.emission,
                 })
                 .collect(),
         }
@@ -229,6 +237,7 @@ impl Scene {
                 color: m.color,
                 opacity: m.opacity,
                 texture,
+                emission: m.emission,
             };
             if materials.insert(MaterialId(m.id), material).is_some() {
                 return Err(format!("material m{} appears twice", m.id));
