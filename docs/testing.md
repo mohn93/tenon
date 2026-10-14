@@ -31,7 +31,7 @@ A new scene needs a test calling `check("<name>", &doc)` and its name in
 
 `crates/kernel/tests/perf.rs` times big edits (copying 30 circles three and a hundred times,
 copying an exploded 1,800-face terrain, edits inside a 20,000-face imported group, exploding
-imported groups of 1,800 and 20,000 faces). Its tests are ignored by default;
+imported groups of 1,800 and 20,000 faces, softening and shading a 20,000-face terrain). Its tests are ignored by default;
 run them in release, where they also check loose upper bounds:
 
 ```

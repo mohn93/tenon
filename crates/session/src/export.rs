@@ -307,7 +307,7 @@ fn stl(triangles: &[Triangle]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// The vertex buffer (positions then normals, f32 little-endian, Y-up, each material's
+/// The vertex buffer (positions then corner normals, f32 little-endian, Y-up, each material's
 /// triangles together) and the glTF document describing it: one primitive per material, its
 /// buffer without a `uri` (a `.glb`'s own chunk).
 fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
@@ -330,9 +330,9 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         bounds.push((lo, hi));
     }
     for t in groups.triangles() {
-        let n = y_up(t.normal);
-        for _ in 0..3 {
-            for x in n.to_array() {
+        // Smooth across soft edges, so a softened curve reads as one surface.
+        for n in t.normals {
+            for x in y_up(n).to_array() {
                 buffer.extend_from_slice(&(x as f32).to_le_bytes());
             }
         }

@@ -3,13 +3,19 @@
 use glam::DVec3;
 
 use crate::geom::Plane;
-use crate::ids::FaceId;
+use crate::ids::{FaceId, VertexId};
 use crate::model::Model;
 
 impl Model {
     /// Triangles covering a face (outer loop minus holes), each wound counter-clockwise around
     /// the face normal. None if the face does not exist or cannot be triangulated.
     pub fn triangulate(&self, id: FaceId) -> Option<Vec<[DVec3; 3]>> {
+        let tris = self.triangle_vertices(id)?;
+        Some(tris.iter().map(|t| t.map(|v| self.pos(v))).collect())
+    }
+
+    /// `triangulate`, giving each corner as the face's vertex there.
+    pub fn triangle_vertices(&self, id: FaceId) -> Option<Vec<[VertexId; 3]>> {
         let face = self.face(id)?;
         let origin = self.position(*face.outer.first()?)?;
         let plane = Plane {
@@ -19,6 +25,7 @@ impl Model {
 
         let (u, v) = plane.basis();
         let n = face.outer.len() + face.holes.iter().map(Vec::len).sum::<usize>();
+        let mut ids = Vec::with_capacity(n);
         let mut points = Vec::with_capacity(n);
         let mut coords = Vec::with_capacity(2 * n);
         let mut hole_starts = Vec::with_capacity(face.holes.len());
@@ -28,6 +35,7 @@ impl Model {
             }
             for id in lp {
                 let p = self.position(*id)?;
+                ids.push(*id);
                 points.push(p);
                 // As `plane.project(p)`, with the basis worked out once.
                 coords.extend([p.dot(u), p.dot(v)]);
@@ -42,9 +50,9 @@ impl Model {
             .map(|c| {
                 let t = [points[c[0]], points[c[1]], points[c[2]]];
                 if (t[1] - t[0]).cross(t[2] - t[0]).dot(face.normal) < 0.0 {
-                    [t[0], t[2], t[1]]
+                    [ids[c[0]], ids[c[2]], ids[c[1]]]
                 } else {
-                    t
+                    [ids[c[0]], ids[c[1]], ids[c[2]]]
                 }
             })
             .collect();

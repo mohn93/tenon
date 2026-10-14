@@ -10,6 +10,9 @@ use crate::scene::{MeshId, Scene};
 pub struct Triangle {
     pub corners: [DVec3; 3],
     pub normal: DVec3,
+    /// The normal at each corner: the face's own, or across soft edges the smooth one (see
+    /// `Model::corner_normal`).
+    pub normals: [DVec3; 3],
     /// The material shown on the front and on the back: the face's own, or else that of the
     /// nearest painted instance placing it; None for the default material.
     pub front: Option<MaterialId>,
@@ -54,18 +57,21 @@ impl Scene {
         // winding. Normals follow the inverse transpose, which is right for any linear map.
         let mirrored = place.matrix3.determinant() < 0.0;
         let normal_map = place.matrix3.inverse().transpose();
+        let smooth = model.smooth_normals();
         for (fid, face) in model.faces() {
             let normal = (normal_map * face.normal).normalize();
             let (front, back) = (face.front.or(inherited), face.back.or(inherited));
-            let tris = model.triangulate(fid).unwrap_or_default();
+            let tris = model.shaded_triangles(fid, &smooth).unwrap_or_default();
             if tris.is_empty() {
                 *skipped += 1;
             }
             for tri in tris {
-                let [a, b, c] = tri.map(|p| place.transform_point3(p));
+                let [a, b, c] = tri.corners.map(|p| place.transform_point3(p));
+                let [na, nb, nc] = tri.normals.map(|n| (normal_map * n).normalize());
                 out.push(Triangle {
                     corners: if mirrored { [a, c, b] } else { [a, b, c] },
                     normal,
+                    normals: if mirrored { [na, nc, nb] } else { [na, nb, nc] },
                     front,
                     back,
                 });

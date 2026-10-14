@@ -645,3 +645,58 @@ fn mtl_of_glass_gives_dissolve_and_transparency() {
     two_boxes(&mut plain);
     assert_eq!(glass, export(&mut plain, "plain-boxes.stl"));
 }
+
+#[test]
+fn gltf_normals_are_smooth_across_soft_edges() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1, "segments": 12}),
+    )
+    .unwrap();
+    let face = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone();
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": face, "distance": -2}),
+    )
+    .unwrap();
+    let doc: Value = serde_json::from_slice(&export(&mut d, "cylinder.gltf")).unwrap();
+    let uri = doc["buffers"][0]["uri"].as_str().unwrap();
+    let data = uri
+        .strip_prefix("data:application/octet-stream;base64,")
+        .unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .unwrap();
+    let floats: Vec<f32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect();
+    let (positions, normals) = floats.split_at(floats.len() / 2);
+    let mut sides = 0;
+    let vectors = |xs: &[f32]| -> Vec<DVec3> {
+        xs.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|c| DVec3::from_array(c.map(f64::from)))
+            .collect()
+    };
+    for (p, n) in vectors(positions).into_iter().zip(vectors(normals)) {
+        if n.y.abs() > 0.999 {
+            continue; // a cap
+        }
+        // A side corner's normal points straight out from the axis (Y up) through it.
+        let out = DVec3::new(p.x, 0.0, p.z).normalize();
+        assert!(n.distance(out) < 1e-5, "{p} {n}");
+        sides += 1;
+    }
+    assert_eq!(sides, 12 * 6);
+}

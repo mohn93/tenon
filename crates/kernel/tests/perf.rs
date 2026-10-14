@@ -226,3 +226,45 @@ fn time_copying_thirty_circles_a_hundred_times_in_one_plane() {
     m.validate().unwrap();
     assert!(took < Duration::from_secs(10), "copy took {took:?}");
 }
+
+#[test]
+#[ignore]
+fn time_shading_a_softened_twenty_thousand_face_terrain() {
+    let (points, polygons) = terrain(100);
+    let mut scene = Scene::new();
+    let (instance, report, _) = scene
+        .import_mesh(
+            MeshId::Root,
+            &points,
+            &polygons,
+            true,
+            DefinitionKind::Group,
+            "terrain",
+        )
+        .unwrap();
+    assert!(report.faces > 19_000, "{report:?}");
+    let mesh = MeshId::Definition(scene.root().instance(instance).unwrap().definition);
+    let (_, took_soften) = timed("soften every edge up to 60 degrees", || {
+        scene
+            .edit(mesh, |m| {
+                let all: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+                Ok(m.soften_by_angle(&all, 60f64.to_radians()).0)
+            })
+            .unwrap()
+    });
+    let m = scene.mesh(mesh).unwrap();
+    let faces: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
+    let (count, took) = timed("shade every face", || {
+        let smooth = m.smooth_normals();
+        faces
+            .iter()
+            .map(|f| m.shaded_triangles(*f, &smooth).unwrap().len())
+            .sum::<usize>()
+    });
+    assert!(count >= faces.len());
+    assert!(
+        took_soften < Duration::from_secs(2),
+        "soften took {took_soften:?}"
+    );
+    assert!(took < Duration::from_secs(1), "shading took {took:?}");
+}

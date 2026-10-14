@@ -159,6 +159,11 @@ changed (also listed in `changes.modified`), `skipped` edges left hard (not betw
 faces, or for `soften_by_angle` meeting at more than the angle). Edges already as asked are in
 neither count. A command that changes nothing makes no undo step.
 
+Faces are shaded smoothly across soft edges: at each corner a face takes the area-weighted
+average of the normals of the faces around that corner it reaches through soft edges (a face
+oriented against its neighbour counted turned over), so a softened lathe or dome reads as one
+surface. glTF export writes these corner normals; OBJ and STL keep one normal per face.
+
 ### Guides
 
 Guides are construction geometry, as drawn by the Tape Measure tool: guide lines (infinite) and
