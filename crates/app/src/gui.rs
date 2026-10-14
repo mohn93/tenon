@@ -21,6 +21,9 @@ pub struct GuiFrame {
     pub actions: Vec<UiAction>,
     /// Where the 3D view goes, in physical pixels.
     pub viewport: Viewport,
+    /// Fly mode holds the pointer: egui keeps the cursor hidden rather than showing the icon
+    /// of what it last saw under it.
+    pub hide_cursor: bool,
     output: egui::FullOutput,
 }
 
@@ -79,6 +82,7 @@ impl Gui {
         GuiFrame {
             actions,
             viewport,
+            hide_cursor: false,
             output,
         }
     }
@@ -95,6 +99,9 @@ impl Gui {
         frame: GuiFrame,
     ) -> Option<Duration> {
         let mut output = frame.output;
+        if frame.hide_cursor {
+            output.platform_output.cursor_icon = egui::CursorIcon::None;
+        }
         self.state
             .handle_platform_output(window, output.platform_output);
         let screen = ScreenDescriptor {

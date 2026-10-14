@@ -99,6 +99,12 @@ impl Navigation {
         self.command = false;
     }
 
+    /// Ends a drag or trackpad gesture in progress, keeping the modifiers.
+    pub fn end_drag(&mut self) {
+        self.drag = None;
+        self.gesture = None;
+    }
+
     /// True while a button drag orbits or pans.
     pub fn dragging(&self) -> bool {
         self.drag.is_some()

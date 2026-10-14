@@ -11,13 +11,16 @@ use session::{Command, OutlinerTable};
 use tools::Axis;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::awake::Awake;
 use crate::editor::{Editor, EditorKey};
+use crate::fly::FlyKey;
 use crate::gui::Gui;
 use crate::host::WindowHost;
 use crate::info::entity_info;
@@ -202,6 +205,61 @@ fn scroll_input(delta: MouseScrollDelta, phase: TouchPhase) -> (Scroll, bool) {
     }
 }
 
+/// The fly mode key a physical key is, wherever the layout puts its letter.
+fn fly_move_key(key: PhysicalKey) -> Option<FlyKey> {
+    let PhysicalKey::Code(code) = key else {
+        return None;
+    };
+    Some(match code {
+        KeyCode::KeyW => FlyKey::W,
+        KeyCode::KeyA => FlyKey::A,
+        KeyCode::KeyS => FlyKey::S,
+        KeyCode::KeyD => FlyKey::D,
+        KeyCode::KeyE => FlyKey::E,
+        KeyCode::KeyQ => FlyKey::Q,
+        KeyCode::Space => FlyKey::Space,
+        KeyCode::ControlLeft | KeyCode::ControlRight => FlyKey::Ctrl,
+        _ => return None,
+    })
+}
+
+/// True if a key event goes to fly mode's movement: a moving key while flying, except a press
+/// with Cmd held, which stays a shortcut (Cmd+S saves). Releases always go, so a key let go
+/// after Cmd went down still stops.
+fn is_fly_move(flying: bool, key: PhysicalKey, pressed: bool, cmd: bool) -> Option<FlyKey> {
+    fly_move_key(key).filter(|_| flying && !(pressed && cmd))
+}
+
+/// A raw mouse motion in logical pixels. macOS reports it in points (logical pixels) already;
+/// elsewhere it comes in device pixels, taken as physical ones.
+fn look_delta(raw: (f64, f64), scale: f64) -> DVec2 {
+    let d = DVec2::new(raw.0, raw.1);
+    if cfg!(target_os = "macos") || !(scale.is_finite() && scale > 0.0) {
+        d
+    } else {
+        d / scale
+    }
+}
+
+/// How fly mode holds the pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Capture {
+    /// Not flying, or the window is not focused: the pointer is free.
+    Free,
+    /// Hidden and held in the window: mouse motion looks around.
+    Grabbed,
+    /// The window could not hold the pointer: it stays visible and looks around while the
+    /// left button is held.
+    Held,
+}
+
+/// Holds the pointer for fly mode: locked in place where the platform can (macOS), else
+/// confined to the window. True if either worked.
+fn grab_cursor(window: &Window) -> bool {
+    window.set_cursor_grab(CursorGrabMode::Locked).is_ok()
+        || window.set_cursor_grab(CursorGrabMode::Confined).is_ok()
+}
+
 /// Longest time between the two releases of a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 /// Farthest the cursor may move between them, in logical pixels.
@@ -253,6 +311,13 @@ struct State {
     /// Where the left button was last pressed in the view, so a release that ends a drag does
     /// not count as a click.
     left_press: Option<DVec2>,
+    /// Whether the window has keyboard focus.
+    focused: bool,
+    /// How fly mode holds the pointer now.
+    capture: Capture,
+    /// The left button is down in the view while flying without a grabbed pointer: mouse
+    /// motion looks around.
+    look_held: bool,
 }
 
 impl State {
@@ -318,7 +383,49 @@ impl State {
             last_release: None,
             title: String::new(),
             left_press: None,
+            focused: true,
+            capture: Capture::Free,
+            look_held: false,
         }
+    }
+
+    /// Holds or frees the pointer to match fly mode: held while flying in the focused window
+    /// (hidden and locked, or confined, else visible with left-drag looking), free otherwise,
+    /// so another app never gets a hidden or stuck pointer.
+    fn sync_fly_cursor(&mut self) {
+        let want = self.editor.flying() && self.focused;
+        match (want, self.capture) {
+            (true, Capture::Free) => {
+                self.capture = if grab_cursor(&self.window) {
+                    self.window.set_cursor_visible(false);
+                    Capture::Grabbed
+                } else {
+                    Capture::Held
+                };
+            }
+            (false, Capture::Grabbed | Capture::Held) => {
+                let _ = self.window.set_cursor_grab(CursorGrabMode::None);
+                self.window.set_cursor_visible(true);
+                self.capture = Capture::Free;
+                self.look_held = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Mouse motion while flying turns the view when the pointer is held, or while the left
+    /// button is down in the view when it could not be. True if the view turned.
+    fn fly_motion(&mut self, raw: (f64, f64)) -> bool {
+        let looks = match self.capture {
+            Capture::Grabbed => true,
+            Capture::Held => self.look_held,
+            Capture::Free => false,
+        };
+        looks
+            && self.focused
+            && self
+                .editor
+                .fly_look(look_delta(raw, self.window.scale_factor()))
     }
 
     /// True if a press or scroll at the cursor goes to the 3D view: the cursor is in it, egui
@@ -501,6 +608,9 @@ impl State {
             UiAction::OpenPath(path) => {
                 self.editor.open_path(path);
             }
+            UiAction::ToggleFly => {
+                self.editor.toggle_fly();
+            }
         }
     }
 
@@ -532,6 +642,8 @@ impl State {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let size = (self.config.width, self.config.height);
 
+        // Fly mode moves the eye by the time since the last frame.
+        let flying_on = self.editor.fly_tick(Instant::now());
         // The hover is worked out once per frame, not per event.
         self.editor.refresh_hover();
         let doc = self.editor.doc();
@@ -581,6 +693,7 @@ impl State {
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,
+            flying: self.editor.flying(),
             import_units: self.editor.import_units(),
             materials: &materials,
             material: self.editor.current_material(),
@@ -589,6 +702,7 @@ impl State {
             selection: self.editor.doc().selection(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
+        gui_frame.hide_cursor = self.capture == Capture::Grabbed;
         // Applied once the frame is presented: some open modal dialogs, which must not run
         // while this frame's surface texture is held.
         let actions = std::mem::take(&mut gui_frame.actions);
@@ -642,6 +756,9 @@ impl State {
             Repaint::Now => self.window.request_redraw(),
             Repaint::At(t) => self.repaint_at = Some(t),
             Repaint::Idle => {}
+        }
+        if flying_on {
+            self.window.request_redraw();
         }
         if self.editor.hover_deferred() {
             self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
@@ -797,6 +914,10 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
         KeyCode::KeyQ => 'q',
         KeyCode::KeyT => 't',
         KeyCode::KeyZ => 'z',
+        KeyCode::KeyF => 'f',
+        KeyCode::BracketLeft => '[',
+        KeyCode::BracketRight => ']',
+        KeyCode::Equal => '=',
         _ => return None,
     })
 }
@@ -915,6 +1036,15 @@ impl ApplicationHandler<ApiWake> for App {
         self.state = Some(state);
     }
 
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        let Some(s) = self.state.as_mut() else { return };
+        if let DeviceEvent::MouseMotion { delta } = event
+            && s.fly_motion(delta)
+        {
+            s.window.request_redraw();
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
         let egui_repaint = s.gui.on_event(&s.window, &event);
@@ -963,12 +1093,25 @@ impl ApplicationHandler<ApiWake> for App {
                 // Releases may never arrive: no click or double-click spans the focus change.
                 s.left_press = None;
                 s.last_release = None;
+                s.focused = false;
                 s.editor.focus_lost()
+            }
+            WindowEvent::Focused(true) => {
+                s.focused = true;
+                false
             }
             WindowEvent::CursorMoved { position, .. } => {
                 s.cursor_moved(DVec2::new(position.x, position.y))
             }
             WindowEvent::CursorLeft { .. } => s.editor.cursor_left(),
+            // While flying, clicks do nothing to the model; without a grabbed pointer the left
+            // button held in the view looks around.
+            WindowEvent::MouseInput { state, button, .. } if s.editor.flying() => {
+                if button == MouseButton::Left {
+                    s.look_held = state == ElementState::Pressed && s.pointer_in_view();
+                }
+                false
+            }
             // Presses go to the view only when they land in it; releases always do, so a drag
             // that ends over a panel still finishes.
             WindowEvent::MouseInput { state, button, .. } => {
@@ -995,12 +1138,23 @@ impl ApplicationHandler<ApiWake> for App {
                     handled
                 }
             }
+            // A held pointer may rest over a panel; while flying, scrolls still fly.
             WindowEvent::MouseWheel { .. } | WindowEvent::PinchGesture { .. }
-                if !s.pointer_in_view() =>
+                if !s.editor.flying() && !s.pointer_in_view() =>
             {
                 false
             }
             WindowEvent::KeyboardInput { .. } if s.gui.wants_keyboard() => false,
+            WindowEvent::KeyboardInput { event, .. }
+                if let Some(key) = is_fly_move(
+                    s.editor.flying(),
+                    event.physical_key,
+                    event.state == ElementState::Pressed,
+                    s.modifiers.super_key(),
+                ) =>
+            {
+                s.editor.fly_key(key, event.state == ElementState::Pressed)
+            }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (scroll, started) = scroll_input(delta, phase);
                 if started {
@@ -1067,6 +1221,8 @@ impl ApplicationHandler<ApiWake> for App {
             }
             _ => false,
         };
+        // Whatever turned fly mode on or off (a key, the menu, focus), the pointer follows.
+        s.sync_fly_cursor();
         if changed {
             s.window.request_redraw();
             s.notify_api(&mut self.hub);
@@ -1323,5 +1479,69 @@ mod tests {
         let digit = Key::Character(SmolStr::new("5"));
         let five = PhysicalKey::Code(KeyCode::Digit5);
         assert_eq!(ch(editor_key(&digit, five, true)), Some('5'));
+    }
+
+    #[test]
+    fn fly_keys_are_physical_and_cmd_presses_stay_shortcuts() {
+        let code = |c| PhysicalKey::Code(c);
+        assert_eq!(fly_move_key(code(KeyCode::KeyW)), Some(FlyKey::W));
+        assert_eq!(fly_move_key(code(KeyCode::KeyA)), Some(FlyKey::A));
+        assert_eq!(fly_move_key(code(KeyCode::KeyS)), Some(FlyKey::S));
+        assert_eq!(fly_move_key(code(KeyCode::KeyD)), Some(FlyKey::D));
+        assert_eq!(fly_move_key(code(KeyCode::KeyE)), Some(FlyKey::E));
+        assert_eq!(fly_move_key(code(KeyCode::KeyQ)), Some(FlyKey::Q));
+        assert_eq!(fly_move_key(code(KeyCode::Space)), Some(FlyKey::Space));
+        assert_eq!(fly_move_key(code(KeyCode::ControlLeft)), Some(FlyKey::Ctrl));
+        assert_eq!(
+            fly_move_key(code(KeyCode::ControlRight)),
+            Some(FlyKey::Ctrl)
+        );
+        assert_eq!(fly_move_key(code(KeyCode::KeyF)), None);
+        let s = code(KeyCode::KeyS);
+        assert_eq!(is_fly_move(true, s, true, false), Some(FlyKey::S));
+        assert_eq!(is_fly_move(false, s, true, false), None, "not flying");
+        assert_eq!(is_fly_move(true, s, true, true), None, "Cmd+S saves");
+        assert_eq!(
+            is_fly_move(true, s, false, true),
+            Some(FlyKey::S),
+            "a release always stops"
+        );
+    }
+
+    #[test]
+    fn fly_speed_and_exit_keys_work_on_any_layout() {
+        let ch = |k: Option<EditorKey>| match k {
+            Some(EditorKey::Char(c)) => Some(c),
+            _ => None,
+        };
+        let arabic = Key::Character(SmolStr::new("ب"));
+        let code = |c| PhysicalKey::Code(c);
+        assert_eq!(
+            ch(editor_key(&arabic, code(KeyCode::KeyF), false)),
+            Some('f')
+        );
+        assert_eq!(
+            ch(editor_key(&arabic, code(KeyCode::BracketLeft), false)),
+            Some('[')
+        );
+        assert_eq!(
+            ch(editor_key(&arabic, code(KeyCode::BracketRight), false)),
+            Some(']')
+        );
+        assert_eq!(
+            ch(editor_key(&arabic, code(KeyCode::Equal), false)),
+            Some('=')
+        );
+    }
+
+    #[test]
+    fn mouse_motion_looks_in_logical_pixels() {
+        let d = look_delta((10.0, -4.0), 2.0);
+        if cfg!(target_os = "macos") {
+            assert_eq!(d, DVec2::new(10.0, -4.0), "macOS reports points");
+        } else {
+            assert_eq!(d, DVec2::new(5.0, -2.0));
+        }
+        assert_eq!(look_delta((3.0, 1.0), f64::NAN), DVec2::new(3.0, 1.0));
     }
 }

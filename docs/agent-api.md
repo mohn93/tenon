@@ -350,6 +350,30 @@ larger of the eye-to-target distance and the eye's height), else the point that 
   and target together. A new two-finger scroll, or a camera change made another way, picks a
   fresh orbit pivot.
 
+Fly mode walks or flies through the model like a game. F (or Camera > Fly mode, whose tooltip
+lists these controls) turns it on; Esc or F turns it off.
+
+- Entering keeps the eye and its heading, levels the view to within about 1 degree of straight
+  up or down, and puts the target 1 m ahead of the eye; a parallel view switches to
+  perspective. Moving carries the eye and target together, so the `camera` query (and a saved
+  file) shows where the flyer is. The target stays 1 m ahead when fly mode ends. An agent
+  switching the view to parallel ends fly mode.
+- The pointer is hidden and held in place; moving the mouse looks around (yaw about the
+  vertical, pitch stopping short of straight up or down, at the same speed per logical pixel
+  on any display). Where the pointer cannot be held it stays visible and the view turns while
+  the left button is held in the view. Two-finger trackpad scroll also looks around, as if
+  dragging the scene.
+- W/S move forward and back along the view direction laid flat, A/D sideways, E or Space up,
+  Q or Ctrl down, by key position (any layout). Speed builds up and dies down over about
+  0.15 s.
+- The speed starts at 3 m/s and goes from 0.25 to 60 m/s in steps of x1.25: the mouse wheel,
+  `[` `]`, `-` `=`, or Cmd+trackpad scroll. Shift flies 3 times faster, Option/Alt at 0.3
+  times. The speed is kept for the session; the status bar shows it.
+- While flying, tool keys, clicks and the hover do nothing and the marker and tool previews
+  are hidden; the tool's operation waits until fly mode ends. Cmd shortcuts (save, undo and
+  the rest) still work. Switching to another window lets go of every held key and frees the
+  pointer. There is no collision with the model.
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`

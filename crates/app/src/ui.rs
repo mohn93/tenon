@@ -50,6 +50,8 @@ pub enum UiAction {
     },
     /// Open the instances along `path` for editing (empty: back to the root).
     OpenPath(Vec<EntityId>),
+    /// Turn fly mode on or off.
+    ToggleFly,
 }
 
 /// A material as the Materials list shows it.
@@ -79,6 +81,8 @@ pub struct View<'a> {
     pub has_guides: bool,
     /// The camera's projection, checked in the Camera menu.
     pub projection: Projection,
+    /// Whether fly mode is on, checked in the Camera menu.
+    pub flying: bool,
     /// The unit imported files are read in, checked in File > Import Units.
     pub import_units: ImportUnits,
     /// Every material, in id order.
@@ -92,6 +96,15 @@ pub struct View<'a> {
     /// The selection, in the open context.
     pub selection: &'a BTreeSet<EntityId>,
 }
+
+/// The fly mode controls, shown over the Camera menu's Fly mode item.
+pub const FLY_HELP: &str = "Walk or fly through the model.\n\
+    Mouse: look around (trackpad: two-finger scroll)\n\
+    W A S D: forward, left, back, right\n\
+    E or Space: up; Q or Ctrl: down\n\
+    Wheel, [ ] or - =: slower, faster (trackpad: Cmd+scroll)\n\
+    Shift: 3x faster; Option/Alt: slower\n\
+    Esc or F: leave fly mode";
 
 /// The least height the Outliner's list keeps when the panel is short, in points.
 const OUTLINER_MIN_HEIGHT: f32 = 120.0;
@@ -178,6 +191,15 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                         actions.push(UiAction::SetProjection(projection));
                     }
                 }
+                ui.separator();
+                let mut flying = view.flying;
+                if ui
+                    .checkbox(&mut flying, "Fly mode (F)")
+                    .on_hover_text(FLY_HELP)
+                    .clicked()
+                {
+                    actions.push(UiAction::ToggleFly);
+                }
             });
             ui.separator();
             for kind in ToolKind::ALL {
@@ -229,7 +251,7 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     });
     Panel::bottom("status").show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(view.status.prompt);
+            ui.label(&view.status.prompt);
             if let Some(lock) = view.status.lock {
                 ui.label(RichText::new(lock).strong());
             }
@@ -558,7 +580,7 @@ mod tests {
     fn status() -> Status {
         Status {
             tool: "Line",
-            prompt: "Click to start a line",
+            prompt: "Click to start a line".into(),
             label: "Length",
             value: Some("2.5_".into()),
             message: Some("Not a length: x".into()),
@@ -597,6 +619,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
@@ -682,6 +705,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
@@ -704,6 +728,7 @@ mod tests {
                 "{p:?} in {clicked:?}"
             );
         }
+        assert!(clicked.contains(&UiAction::ToggleFly), "{clicked:?}");
         view.projection = Projection::Parallel;
         let clicked = menu_actions(&view, 80..140);
         assert!(clicked.contains(&UiAction::SetProjection(Projection::Perspective)));
@@ -721,6 +746,7 @@ mod tests {
             inside_instance: false,
             has_guides,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
@@ -760,6 +786,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
@@ -799,6 +826,7 @@ mod tests {
             inside_instance: true,
             has_guides: true,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
             material: None,
@@ -959,6 +987,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &rows,
             material: Some(MaterialId(31)),
@@ -1027,6 +1056,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: rows,
             material: Some(MaterialId(31)),
@@ -1311,6 +1341,7 @@ mod tests {
             inside_instance: !context.is_empty(),
             has_guides: false,
             projection: Projection::Perspective,
+            flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
             material: None,

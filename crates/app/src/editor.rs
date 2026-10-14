@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Instant;
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{EntityId, InstanceId, MaterialId};
@@ -18,7 +19,8 @@ use tools::{
     ToolEvent, ToolKind, ToolOutput, edge_under_in, face_under_in, infer_in,
 };
 
-use crate::navigation::{Button, Navigation, Scroll};
+use crate::fly::{self, Fly, FlyKey};
+use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
 
 /// A layout of the scene with the revision and open context it was made for.
 type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
@@ -46,7 +48,7 @@ pub enum EditorKey {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub tool: &'static str,
-    pub prompt: &'static str,
+    pub prompt: String,
     /// The measurements box label, e.g. "Length"; empty when the tool measures nothing.
     pub label: &'static str,
     /// Typed text (with a trailing "_") while typing, otherwise the live measurement.
@@ -117,6 +119,10 @@ pub struct Editor {
     import_units: ImportUnits,
     /// The extension of the last file exported, which the export dialog suggests next.
     last_export: &'static str,
+    /// Fly mode's keys, speed and motion; the speed lasts for the session.
+    fly: Fly,
+    /// Whether fly mode is on: the mouse looks, keys move the eye, the tools rest.
+    flying: bool,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -214,6 +220,8 @@ impl Editor {
             sample: false,
             import_units: ImportUnits::Meters,
             last_export: "obj",
+            fly: Fly::default(),
+            flying: false,
         }
     }
 
@@ -279,6 +287,13 @@ impl Editor {
     /// Pressing Shift during an operation locks the direction the cursor follows (an axis,
     /// parallel or perpendicular); releasing it unlocks. Returns true if the lock changed.
     pub fn set_modifiers(&mut self, shift: bool, alt: bool) -> bool {
+        self.fly.set_modifiers(shift, alt);
+        if self.flying {
+            // Shift and Alt change the flying speed; nothing locks.
+            self.shift = shift;
+            self.nav.set_modifiers(shift, alt);
+            return false;
+        }
         if shift != self.shift {
             // The lock follows what the cursor snaps to now.
             self.flush_hover();
@@ -407,6 +422,8 @@ impl Editor {
     pub fn focus_lost(&mut self) -> bool {
         self.shift = false;
         self.sample = false;
+        // Held fly keys are let go: their releases go to another window.
+        self.fly.release_all();
         let dragged = self.nav.dragging();
         self.nav.reset();
         // A navigation drag that ended here shows the hover again.
@@ -429,6 +446,13 @@ impl Editor {
     /// them never erases the selection; a held letter shortcut (a tool, "g", Shift+G, Shift+Z)
     /// acts once; other keys behave as in [`Editor::key`].
     pub fn key_repeat(&mut self, key: EditorKey) -> bool {
+        if self.flying {
+            // Only the speed keys repeat; a held F or Escape leaves fly mode once.
+            return match key {
+                EditorKey::Char(c) if fly_speed_key(c).is_some() => self.key(key),
+                _ => false,
+            };
+        }
         match key {
             EditorKey::Backspace => self.typed.pop().is_some(),
             EditorKey::Char(_) if self.typed.is_empty() => false,
@@ -441,6 +465,11 @@ impl Editor {
     /// Returns true if anything visible may have changed: the camera moved, or the hover may
     /// have (it is worked out when the frame is drawn, see `refresh_hover`).
     pub fn cursor_moved(&mut self, pos: DVec2) -> bool {
+        if self.flying {
+            // No hover while flying; leaving fly mode works it out afresh.
+            self.cursor = pos;
+            return false;
+        }
         let moved = pos != self.cursor || self.hover_hidden;
         self.cursor = pos;
         let camera_moved = self.nav.cursor_moved(&mut self.doc.camera, pos);
@@ -462,7 +491,7 @@ impl Editor {
     /// The copy modifier (Ctrl) was tapped. The Move and Rotate tools switch copying, the Tape
     /// Measure switches guide creation; elsewhere it does nothing and returns false.
     pub fn toggle_copy(&mut self) -> bool {
-        if !copies(self.kind) && self.kind != ToolKind::TapeMeasure {
+        if self.flying || !copies(self.kind) && self.kind != ToolKind::TapeMeasure {
             return false;
         }
         self.send(ToolEvent::ToggleCopy);
@@ -471,6 +500,10 @@ impl Editor {
 
     /// A button went down or up. Returns true if anything visible may have changed.
     pub fn button(&mut self, button: Button, pressed: bool) -> bool {
+        if self.flying {
+            // Clicks do nothing to the model while flying.
+            return false;
+        }
         let dragged = self.nav.dragging();
         let (doc, cursor, cache) = (&self.doc, self.cursor, &self.layout);
         let to_root = doc.context_transform();
@@ -509,6 +542,9 @@ impl Editor {
     /// tool opens the group under the cursor, or closes the open one when there is nothing of
     /// it there.
     pub fn double_click(&mut self) -> bool {
+        if self.flying {
+            return false;
+        }
         self.hover_now();
         let Some(hit) = self.hit else { return false };
         self.send(ToolEvent::DoubleClick(hit));
@@ -518,6 +554,9 @@ impl Editor {
     /// A scroll event: the wheel zooms, a trackpad orbits, pans or zooms (see `Navigation`).
     /// Returns true if the camera moved.
     pub fn scroll(&mut self, scroll: Scroll) -> bool {
+        if self.flying {
+            return self.fly_scroll(scroll);
+        }
         self.navigate(|nav, cam, pick| nav.scroll(cam, scroll, pick))
     }
 
@@ -529,6 +568,9 @@ impl Editor {
     /// A trackpad pinch by `delta` (magnification change, positive zooms in) zooms toward
     /// the cursor. Returns true if the camera moved.
     pub fn pinch(&mut self, delta: f64) -> bool {
+        if self.flying {
+            return false;
+        }
         self.navigate(|nav, cam, pick| nav.pinch(cam, delta, pick))
     }
 
@@ -559,14 +601,110 @@ impl Editor {
         moved
     }
 
+    /// True while fly mode is on.
+    pub fn flying(&self) -> bool {
+        self.flying
+    }
+
+    /// Turns fly mode on or off (F, or Camera > Fly mode).
+    pub fn toggle_fly(&mut self) -> bool {
+        self.set_flying(!self.flying)
+    }
+
+    /// Enters or leaves fly mode. Entering switches a parallel view to perspective, ends a
+    /// navigation drag and a press the tool waits on, and puts the camera's target a meter
+    /// ahead of the eye with the view level enough to fly (see `fly::level`); the tool keeps
+    /// its operation, out of sight until fly mode ends. Leaving stops at once and shows the
+    /// hover again. Returns true if fly mode changed.
+    pub fn set_flying(&mut self, on: bool) -> bool {
+        if on == self.flying {
+            return false;
+        }
+        self.fly.stop();
+        if on {
+            if self.doc.camera.is_parallel() {
+                self.set_projection(Projection::Perspective);
+            }
+            self.nav.end_drag();
+            self.navigated = false;
+            if std::mem::take(&mut self.tool_pressed) {
+                self.send(ToolEvent::Cancel);
+            }
+            fly::level(&mut self.doc.camera);
+            self.message = None;
+            self.flying = true;
+        } else {
+            self.flying = false;
+        }
+        self.invalidate_hover();
+        true
+    }
+
+    /// A moving key (by its place on the keyboard) went down or up while flying. Returns true
+    /// if frames must start: the eye starts or stops moving.
+    pub fn fly_key(&mut self, key: FlyKey, pressed: bool) -> bool {
+        self.flying && self.fly.key(key, pressed)
+    }
+
+    /// Turns the view by a mouse move of `delta` logical pixels while flying. Returns true if
+    /// the view turned.
+    pub fn fly_look(&mut self, delta: DVec2) -> bool {
+        if !self.flying || delta == DVec2::ZERO || !delta.is_finite() {
+            return false;
+        }
+        fly::look(&mut self.doc.camera, delta);
+        true
+    }
+
+    /// Changes the flying speed by `steps` (positive faster). True if it changed.
+    pub fn fly_speed(&mut self, steps: i32) -> bool {
+        self.flying && self.fly.step_speed(steps)
+    }
+
+    /// A scroll while flying: a mouse wheel changes the speed a step a notch, and so does a
+    /// trackpad with Cmd/Ctrl held (a step per `LOGICAL_PX_PER_ZOOM_STEP`); otherwise a
+    /// trackpad scroll looks around as if dragging the scene.
+    fn fly_scroll(&mut self, scroll: Scroll) -> bool {
+        match scroll {
+            Scroll::Lines(lines) => self.fly.scroll_speed(lines.y),
+            Scroll::Pixels(px) if self.sample => self
+                .fly
+                .scroll_speed(px.y / self.scale_factor / LOGICAL_PX_PER_ZOOM_STEP),
+            Scroll::Pixels(px) => self.fly_look(-px / self.scale_factor),
+        }
+    }
+
+    /// Moves the eye for a frame drawn at `now` while flying. True while frames must keep
+    /// coming: a key is held or the eye still glides. A view switched to parallel (by an agent)
+    /// ends fly mode, which also needs a frame.
+    pub fn fly_tick(&mut self, now: Instant) -> bool {
+        if !self.flying {
+            return false;
+        }
+        if self.doc.camera.is_parallel() {
+            return self.set_flying(false);
+        }
+        self.fly.tick(&mut self.doc.camera, now)
+    }
+
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
     /// (or "x" in the Move and Rotate tools, for arrays like "x5"); "g" makes a group and
     /// "G" (Shift+G) a component of the selection; "Z" (Shift+Z) zooms to the whole model;
-    /// other letters are tool shortcuts. Enter
+    /// "f" enters fly mode; other letters are tool shortcuts. In fly mode only Escape and "f"
+    /// (leave) and the speed keys ("[" "-" slower, "]" "=" faster) do anything. Enter
     /// submits the typed text to the tool. Escape clears the typed text, or else cancels the
     /// tool's operation (the Select tool then closes the open group). Delete, and Backspace
     /// with nothing typed, erase the selection. Returns true if anything changed.
     pub fn key(&mut self, key: EditorKey) -> bool {
+        if self.flying {
+            // Only leaving and the speed keys; tool shortcuts, typing and Escape's other
+            // jobs wait until fly mode ends.
+            return match key {
+                EditorKey::Escape | EditorKey::Char('f' | 'F') => self.set_flying(false),
+                EditorKey::Char(c) => fly_speed_key(c).is_some_and(|steps| self.fly_speed(steps)),
+                _ => false,
+            };
+        }
         self.flush_hover();
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
@@ -581,6 +719,8 @@ impl Editor {
                     self.make_component()
                 } else if c == 'Z' {
                     self.zoom_extents()
+                } else if matches!(c, 'f' | 'F') {
+                    self.set_flying(true)
                 } else if let Some(kind) = ToolKind::from_shortcut(c) {
                     self.select_tool(kind);
                     true
@@ -944,6 +1084,16 @@ impl Editor {
     /// The tool, what to do next, the measurement and any feedback, as of the last
     /// `refresh_hover`.
     pub fn status_parts(&self) -> Status {
+        if self.flying {
+            return Status {
+                tool: "Fly",
+                prompt: fly::status_text(self.fly.speed()),
+                label: "",
+                value: None,
+                message: None,
+                lock: None,
+            };
+        }
         let (label, value) = self.tool.measurement();
         let value = if self.typed.is_empty() {
             value
@@ -959,7 +1109,7 @@ impl Editor {
         });
         Status {
             tool: self.tool.name(),
-            prompt: self.tool.prompt(),
+            prompt: self.tool.prompt().to_string(),
             label,
             value,
             message: self.message.clone(),
@@ -970,6 +1120,10 @@ impl Editor {
     /// Line pairs for the renderer's overlay pass, as of the last `refresh_hover`. Tools work
     /// in the open context's coordinates; the overlay is drawn in the root's.
     pub fn overlay(&self) -> Vec<LineVertex> {
+        if self.flying {
+            // No marker or tool preview while flying.
+            return Vec::new();
+        }
         let t = self.doc.context_transform();
         let preview: Vec<[DVec3; 2]> = self
             .preview
@@ -1167,6 +1321,9 @@ impl Editor {
     /// model, and `hover_deferred` asks for another frame once navigation may have stopped.
     /// True if the marker or the preview changed.
     pub fn refresh_hover(&mut self) -> bool {
+        if self.flying {
+            return false;
+        }
         if !self.hover_dirty || self.nav.dragging() || std::mem::take(&mut self.navigated) {
             return false;
         }
@@ -1181,7 +1338,7 @@ impl Editor {
     /// True when `refresh_hover` put the hover off for navigation that has no drag holding it:
     /// a frame drawn a little later shows it if navigation stopped.
     pub fn hover_deferred(&self) -> bool {
-        self.hover_dirty && !self.nav.dragging()
+        !self.flying && self.hover_dirty && !self.nav.dragging()
     }
 
     /// Works out the inference under the cursor and the tool preview. True if either changed.
@@ -1260,6 +1417,15 @@ fn scenery_in<'a>(layout: &'a Layout, doc: &'a Document) -> Scenery<'a> {
 fn pick(scenery: &Scenery, to_root: DAffine3, camera: &Camera, cursor: DVec2) -> Option<DVec3> {
     let camera = camera.placed(to_root.inverse());
     face_under_in(scenery, &camera, cursor).map(|(_, _, p)| to_root.transform_point3(p))
+}
+
+/// Speed steps a key gives in fly mode: "[" and "-" slower, "]", "=" and "+" faster.
+fn fly_speed_key(c: char) -> Option<i32> {
+    match c {
+        '[' | '-' | '_' => Some(-1),
+        ']' | '=' | '+' => Some(1),
+        _ => None,
+    }
 }
 
 /// True for the tools Ctrl switches to copying.
@@ -3413,5 +3579,209 @@ mod tests {
         let m = e.current_material();
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
         assert!(e.doc().model().faces().all(|(_, f)| f.front == m));
+    }
+
+    #[test]
+    fn f_toggles_fly_mode_and_escape_leaves_it() {
+        let mut e = editor();
+        assert!(!e.flying());
+        assert!(e.key(EditorKey::Char('f')));
+        assert!(e.flying());
+        assert!(
+            e.status().starts_with("Fly  |  Fly mode: 3.0 m/s"),
+            "{}",
+            e.status()
+        );
+        assert!(e.key(EditorKey::Char('f')));
+        assert!(!e.flying());
+        assert!(e.key(EditorKey::Char('F')), "Shift+F too");
+        assert!(e.key(EditorKey::Escape));
+        assert!(!e.flying());
+        assert_eq!(e.tool_kind(), ToolKind::Line, "the tool is back");
+        assert!(e.status().starts_with("Line"), "{}", e.status());
+        // A held F leaves once and does not come back in.
+        assert!(e.toggle_fly());
+        assert!(!e.key_repeat(EditorKey::Char('f')));
+        assert!(e.flying());
+        assert!(e.toggle_fly());
+        assert!(!e.flying());
+        // While typing a length, f is just text.
+        e.key(EditorKey::Char('2'));
+        e.key(EditorKey::Char('f'));
+        assert!(!e.flying());
+    }
+
+    #[test]
+    fn entering_fly_mode_puts_the_target_a_meter_ahead_and_uses_perspective() {
+        let mut e = editor();
+        e.set_projection(Projection::Parallel);
+        let eye = e.doc().camera.eye;
+        assert!(e.toggle_fly());
+        let cam = &e.doc().camera;
+        assert!(!cam.is_parallel(), "switched to perspective");
+        assert!(cam.eye.abs_diff_eq(eye, 1e-12), "the eye stays");
+        assert!((cam.distance() - fly::TARGET_AHEAD).abs() < 1e-9);
+        // The API's camera query reflects it.
+        match e.doc().query(&session::Query::Camera).unwrap() {
+            QueryResult::Camera { eye, target, .. } => {
+                let d = DVec3::from(target) - DVec3::from(eye);
+                assert!((d.length() - fly::TARGET_AHEAD).abs() < 1e-9);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // An agent switching to parallel ends fly mode at the next frame.
+        e.execute(Command::SetProjection {
+            projection: Projection::Parallel,
+        })
+        .unwrap();
+        assert!(e.fly_tick(Instant::now()), "a frame shows it");
+        assert!(!e.flying());
+    }
+
+    #[test]
+    fn tool_keys_and_clicks_do_nothing_while_flying() {
+        let mut e = editor();
+        // A line in progress.
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        move_to(&mut e, DVec3::new(2.0, 1.0, 0.0));
+        assert!(!shown(&mut e).is_empty());
+        let before = stats(&e);
+        e.toggle_fly();
+        assert!(
+            shown(&mut e).is_empty(),
+            "no marker or preview while flying"
+        );
+        for c in ['r', 'e', 'q', ' ', 'g', 'G', 'Z', '5', 'm'] {
+            assert!(!e.key(EditorKey::Char(c)), "{c:?}");
+        }
+        assert!(!e.key(EditorKey::Enter));
+        assert!(!e.key(EditorKey::Delete));
+        assert!(!e.key(EditorKey::Backspace));
+        assert!(!e.key(EditorKey::LockAxis(Axis::X)));
+        assert_eq!(e.tool_kind(), ToolKind::Line);
+        let cam = e.doc().camera.clone();
+        e.cursor_moved(DVec2::new(300.0, 200.0));
+        assert!(!e.button(Button::Left, true));
+        assert!(!e.button(Button::Left, false));
+        assert!(!e.double_click());
+        assert!(!e.button(Button::Middle, true), "no orbiting either");
+        e.cursor_moved(DVec2::new(350.0, 260.0));
+        assert!(!e.button(Button::Middle, false));
+        assert!(!e.pinch(0.2));
+        assert!(!e.toggle_copy());
+        assert_eq!(e.doc().camera, cam);
+        assert_eq!(stats(&e), before);
+        // Escape leaves fly mode rather than ending the line, which goes on after.
+        assert!(e.key(EditorKey::Escape));
+        click_at(&mut e, DVec3::new(3.0, 1.0, 0.0));
+        assert_eq!(stats(&e).0, before.0 + 1, "the line went on");
+    }
+
+    #[test]
+    fn cmd_shortcuts_keep_working_while_flying() {
+        let mut e = editor();
+        square(&mut e);
+        e.toggle_fly();
+        assert!(e.undo());
+        assert!(e.flying());
+        assert_eq!(stats(&e).0, 3);
+        assert!(e.redo());
+        assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
+    fn held_keys_fly_and_speed_keys_change_the_speed() {
+        let mut e = editor();
+        assert!(!e.fly_key(FlyKey::W, true), "not flying");
+        e.toggle_fly();
+        let start = e.doc().camera.clone();
+        let t = Instant::now();
+        assert!(!e.fly_tick(t), "idle stays idle");
+        assert!(e.fly_key(FlyKey::W, true));
+        assert!(!e.fly_key(FlyKey::W, true), "a repeat changes nothing");
+        assert!(e.fly_tick(t));
+        for i in 1..=30 {
+            assert!(e.fly_tick(t + std::time::Duration::from_millis(16 * i)));
+        }
+        let cam = e.doc().camera.clone();
+        let moved = cam.eye - start.eye;
+        assert!(moved.length() > 0.5, "{moved}");
+        assert!(moved.z.abs() < 1e-9, "forward stays level");
+        assert!((cam.target - cam.eye).abs_diff_eq(start.target - start.eye, 1e-9));
+        // Speed keys, repeated too.
+        assert!(e.key(EditorKey::Char(']')));
+        assert!(e.key_repeat(EditorKey::Char('=')));
+        assert!(e.key(EditorKey::Char('[')));
+        assert!(e.status().contains("3.8 m/s"), "{}", e.status());
+        assert!(e.key(EditorKey::Char('-')));
+        assert!(e.status().contains("3.0 m/s"), "{}", e.status());
+        // The wheel changes it a step a notch.
+        assert!(e.scroll(Scroll::Lines(DVec2::new(0.0, 1.0))));
+        assert!(e.status().contains("3.8 m/s"), "{}", e.status());
+        // The speed lasts for the session.
+        e.toggle_fly();
+        e.toggle_fly();
+        assert!(e.status().contains("3.8 m/s"), "{}", e.status());
+    }
+
+    #[test]
+    fn losing_focus_lets_go_of_the_fly_keys() {
+        let mut e = editor();
+        e.toggle_fly();
+        let t = Instant::now();
+        e.fly_key(FlyKey::W, true);
+        e.fly_key(FlyKey::Space, true);
+        e.fly_tick(t);
+        e.fly_tick(t + std::time::Duration::from_millis(50));
+        e.focus_lost();
+        assert!(e.flying(), "still flying");
+        let mut frames = 0;
+        let mut now = t + std::time::Duration::from_millis(50);
+        while e.fly_tick(now) {
+            now += std::time::Duration::from_millis(16);
+            frames += 1;
+            assert!(frames < 100, "glides to a stop");
+        }
+        let rest = e.doc().camera.clone();
+        assert!(!e.fly_tick(now + std::time::Duration::from_secs(1)));
+        assert_eq!(e.doc().camera, rest);
+    }
+
+    #[test]
+    fn the_mouse_and_trackpad_look_around_while_flying() {
+        let mut e = editor();
+        assert!(!e.fly_look(DVec2::new(10.0, 0.0)), "not flying");
+        e.toggle_fly();
+        let eye = e.doc().camera.eye;
+        let (yaw, _) = fly::heading(&e.doc().camera);
+        assert!(e.fly_look(DVec2::new(40.0, 0.0)));
+        let (turned, _) = fly::heading(&e.doc().camera);
+        assert!(turned < yaw, "mouse right turns right");
+        assert_eq!(e.doc().camera.eye, eye);
+        // Two-finger scroll drags the scene: fingers right turn the view left.
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(50.0, 0.0))));
+        let (back, _) = fly::heading(&e.doc().camera);
+        assert!(back > turned);
+        // With Cmd it changes the speed instead.
+        e.set_sample_modifier(true);
+        let cam = e.doc().camera.clone();
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(
+            0.0,
+            1.25 * LOGICAL_PX_PER_ZOOM_STEP
+        ))));
+        assert_eq!(e.doc().camera, cam);
+        assert!(e.status().contains("3.8 m/s"), "{}", e.status());
+    }
+
+    #[test]
+    fn shift_flies_faster_without_locking() {
+        let mut e = editor();
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        e.toggle_fly();
+        assert!(!e.set_modifiers(true, false), "no lock while flying");
+        assert!(!e.status().contains("Locked"));
+        e.set_modifiers(false, false);
+        e.toggle_fly();
+        assert!(!e.status().contains("Locked"));
     }
 }
