@@ -160,6 +160,13 @@ fn redraws_for_egui(event: &WindowEvent, egui_repaint: bool) -> bool {
     egui_repaint && !matches!(event, WindowEvent::RedrawRequested)
 }
 
+/// True if a frame skipped because the surface had no texture asks for another at once: after
+/// a timeout. A hidden window's frame waits until the window shows (`WindowEvent::Occluded`),
+/// so a hidden window stays idle.
+fn retries_at_once(skipped: &wgpu::CurrentSurfaceTexture) -> bool {
+    matches!(skipped, wgpu::CurrentSurfaceTexture::Timeout)
+}
+
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
 /// scrolls, pinches, focus changes and keys other than modifiers (the window reports the
 /// modifier keys themselves as key events too).
@@ -635,7 +642,13 @@ impl State {
                 self.window.request_redraw();
                 return false;
             }
-            _ => return false, // Timeout or occluded: skip this frame.
+            skipped => {
+                // Fly mode would otherwise freeze until the next input.
+                if retries_at_once(&skipped) {
+                    self.window.request_redraw();
+                }
+                return false;
+            }
         };
         let target = frame
             .texture
@@ -1100,6 +1113,8 @@ impl ApplicationHandler<ApiWake> for App {
                 s.focused = true;
                 false
             }
+            // The frames skipped while the window was hidden (see `retries_at_once`).
+            WindowEvent::Occluded(false) => true,
             WindowEvent::CursorMoved { position, .. } => {
                 s.cursor_moved(DVec2::new(position.x, position.y))
             }
@@ -1311,6 +1326,12 @@ mod tests {
         assert!(!redraws_for_egui(&WindowEvent::RedrawRequested, true));
         assert!(redraws_for_egui(&WindowEvent::Occluded(false), true));
         assert!(!redraws_for_egui(&WindowEvent::Occluded(false), false));
+    }
+
+    #[test]
+    fn a_skipped_frame_is_retried_after_a_timeout_but_not_while_hidden() {
+        assert!(retries_at_once(&wgpu::CurrentSurfaceTexture::Timeout));
+        assert!(!retries_at_once(&wgpu::CurrentSurfaceTexture::Occluded));
     }
 
     #[test]
