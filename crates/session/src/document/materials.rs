@@ -1,40 +1,77 @@
-//! Materials and painting.
+//! Materials, their textures, and painting.
 
-use kernel::{EntityId, KernelError, MaterialId, SceneChange, Side};
+use std::path::Path;
+use std::sync::Arc;
+
+use kernel::{EntityId, KernelError, MaterialId, SceneChange, Side, Texture};
 
 use super::Document;
-use crate::command::{CommandError, ErrorKind};
-use crate::query::MaterialInfo;
+use super::import::read_limited;
+use crate::command::{CommandError, ErrorKind, TextureSource};
+use crate::query::{MaterialInfo, TextureInfo};
+use crate::texture::{MAX_TEXTURE_BYTES, average_color, decode};
 
 /// The name `add_material` gives when none is passed (made unique with a number).
 const DEFAULT_MATERIAL_NAME: &str = "Material";
 
 impl Document {
+    /// Adds a material; without `color` it takes the texture's average color.
     pub(super) fn add_material_changes(
         &mut self,
         name: Option<&str>,
-        color: [u8; 3],
+        color: Option<[u8; 3]>,
         opacity: Option<f32>,
+        texture: Option<&TextureSource>,
     ) -> Result<SceneChange, CommandError> {
+        if texture.is_some_and(|t| t.path.is_none()) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "a new material's texture needs a path",
+            ));
+        }
+        let texture = texture.map(|t| texture_of(t, None)).transpose()?;
+        let Some(color) = color.or_else(|| texture.as_ref().map(|t| average_color(&t.image)))
+        else {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "give a material a color or a texture",
+            ));
+        };
         let name = match name {
             Some(n) => n.to_string(),
             None => self.scene.free_material_name(DEFAULT_MATERIAL_NAME),
         };
         self.scene
-            .add_material_with_opacity(&name, color, opacity.unwrap_or(1.0))
+            .add_material_with_texture(&name, color, opacity.unwrap_or(1.0), texture)
             .map(|(_, change)| change)
             .map_err(|e| material_error(e, None))
     }
 
+    /// Changes a material. `texture`: None keeps it, `Some(None)` removes it. A newly read
+    /// image sets the color to its average unless `color` is given.
     pub(super) fn change_material_changes(
         &mut self,
         id: MaterialId,
         name: Option<&str>,
         color: Option<[u8; 3]>,
         opacity: Option<f32>,
+        texture: Option<Option<&TextureSource>>,
     ) -> Result<SceneChange, CommandError> {
+        let Some(material) = self.scene.material(id) else {
+            return Err(material_error(KernelError::MaterialNotFound, Some(id)));
+        };
+        let read = matches!(texture, Some(Some(s)) if s.path.is_some());
+        let texture = match texture {
+            None => None,
+            Some(None) => Some(None),
+            Some(Some(source)) => Some(Some(texture_of(source, material.texture.as_ref())?)),
+        };
+        let color = match (&texture, color) {
+            (Some(Some(t)), None) if read => Some(average_color(&t.image)),
+            _ => color,
+        };
         self.scene
-            .change_material(id, name, color, opacity)
+            .change_material_with_texture(id, name, color, opacity, texture)
             .map_err(|e| material_error(e, Some(id)))
     }
 
@@ -91,6 +128,13 @@ impl Document {
                     name: m.name.clone(),
                     color: m.color,
                     opacity: m.opacity,
+                    texture: m.texture.as_ref().map(|t| TextureInfo {
+                        width: t.width,
+                        height: t.height,
+                        pixel_width: t.image.width,
+                        pixel_height: t.image.height,
+                        format: t.image.format,
+                    }),
                     faces: meshes()
                         .flat_map(|mesh| mesh.faces())
                         .filter(|(_, f)| f.paint().contains(&Some(id)))
@@ -103,6 +147,40 @@ impl Document {
             })
             .collect()
     }
+}
+
+/// The texture `source` asks for: the image at its path, or else `current`'s. A new image
+/// without a width is as wide as `current` (or 1 m), and without a height keeps its
+/// proportions; a kept image keeps any size not given. A file that cannot be read or decoded is
+/// a `file` error naming it.
+fn texture_of(source: &TextureSource, current: Option<&Texture>) -> Result<Texture, CommandError> {
+    let image = match &source.path {
+        Some(path) => {
+            let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
+            let bytes = read_limited(Path::new(path), MAX_TEXTURE_BYTES).map_err(file_error)?;
+            Arc::new(decode(bytes).map_err(file_error)?)
+        }
+        None => match current {
+            Some(t) => t.image.clone(),
+            None => {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "the material has no texture: give a texture path",
+                ));
+            }
+        },
+    };
+    let width = source.width.or(current.map(|t| t.width)).unwrap_or(1.0);
+    let height = match (source.height, current) {
+        (Some(h), _) => h,
+        (None, Some(t)) if source.path.is_none() => t.height,
+        _ => width * f64::from(image.height) / f64::from(image.width),
+    };
+    Ok(Texture {
+        image,
+        width,
+        height,
+    })
 }
 
 /// A kernel refusal as a command error; a missing material is `not_found`, naming `id`.

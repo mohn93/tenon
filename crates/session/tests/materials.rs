@@ -543,7 +543,10 @@ fn opacity_is_saved_as_version_6_and_opaque_models_stay_version_5() {
     .unwrap();
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let document: Value = serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
-    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(
+        document["schema_version"],
+        session::file::TRANSLUCENT_SCHEMA_VERSION
+    );
     assert_eq!(document["schema_version"], 6);
     assert_eq!(document["model"]["materials"][0]["opacity"], 0.4);
     let mut e = doc();

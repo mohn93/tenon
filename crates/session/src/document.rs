@@ -334,13 +334,21 @@ impl Document {
                 name,
                 color,
                 opacity,
-            } => self.add_material_changes(name.as_deref(), *color, *opacity),
+                texture,
+            } => self.add_material_changes(name.as_deref(), *color, *opacity, texture.as_ref()),
             Command::ChangeMaterial {
                 material,
                 name,
                 color,
                 opacity,
-            } => self.change_material_changes(*material, name.as_deref(), *color, *opacity),
+                texture,
+            } => self.change_material_changes(
+                *material,
+                name.as_deref(),
+                *color,
+                *opacity,
+                texture.as_ref().map(Option::as_ref),
+            ),
             Command::DeleteMaterial { material } => self.delete_material_changes(*material),
             Command::Paint {
                 ids,

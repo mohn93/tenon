@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use kernel::{ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, MaterialId};
+use kernel::{
+    ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, MaterialId,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -261,10 +263,23 @@ pub struct MaterialInfo {
     pub color: [u8; 3],
     /// From 0 (invisible) to 1 (opaque). Always present.
     pub opacity: f32,
+    /// The texture faces painted with it show; absent for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<TextureInfo>,
     /// Faces painted with it on either side, in the whole model (each definition counted once).
     pub faces: usize,
     /// Instances painted with it, in the whole model.
     pub instances: usize,
+}
+
+/// A material's texture: the size one copy covers on the model, in meters, and the image's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TextureInfo {
+    pub width: f64,
+    pub height: f64,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub format: ImageFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

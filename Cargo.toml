@@ -25,4 +25,5 @@ egui-winit = "=0.36.2"
 rfd = "=0.17.2"
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString", "NSObject"] }
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 zip = { version = "=9.0.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }

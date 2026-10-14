@@ -251,8 +251,9 @@ mod tests {
         let added = d
             .execute(Command::AddMaterial {
                 name: Some("Brick".into()),
-                color: [180, 60, 40],
+                color: Some([180, 60, 40]),
                 opacity: None,
+                texture: None,
             })
             .unwrap();
         let brick = added.changes.materials[0];

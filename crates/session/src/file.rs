@@ -1,8 +1,10 @@
 //! The native file format (`.skr`): a zip archive holding `document.json`, which records the
-//! format name, a schema version, the camera and the model with every id.
+//! format name, a schema version, the camera and the model with every id, and the texture
+//! images as the files they were read from (`textures/m<id>.png` or `.jpg`).
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use kernel::{MAX_ID, MeshData, Scene, SceneData};
 use serde::{Deserialize, Serialize};
@@ -10,16 +12,20 @@ use serde_json::Value;
 
 use crate::camera::{Camera, Projection};
 use crate::document::MAX_COORDINATE;
+use crate::texture::{MAX_TEXTURE_BYTES, decode};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when a material is
-/// see-through. Version 2 added guides, version 3 curves and soft edges, version 4 the
-/// camera's up direction and projection, version 5 materials, and version 6 material
-/// opacity; older files still open.
-pub const SCHEMA_VERSION: u32 = 6;
-/// The version written when every material is opaque: such a model needs nothing version 6
-/// added, so its file is the same as before opacity existed and older builds open it.
+/// The newest schema version this build reads, and the one it writes when a material has a
+/// texture. Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up
+/// direction and projection, version 5 materials, version 6 material opacity and version 7
+/// textures; older files still open.
+pub const SCHEMA_VERSION: u32 = 7;
+/// The version written when a material is see-through but none has a texture.
+pub const TRANSLUCENT_SCHEMA_VERSION: u32 = 6;
+/// The version written when every material is opaque and none has a texture: such a model
+/// needs nothing versions 6 and 7 added, so its file is the same as before and older builds
+/// open it.
 pub const OPAQUE_SCHEMA_VERSION: u32 = 5;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
@@ -58,11 +64,22 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
+    let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
+    let images: Vec<(String, Arc<kernel::TextureImage>)> = model
+        .materials
+        .iter()
+        .filter_map(|m| {
+            let t = m.texture.as_ref()?;
+            Some((t.file.clone(), t.image.clone()?))
+        })
+        .collect();
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if translucent {
+        schema_version: if textured {
             SCHEMA_VERSION
+        } else if translucent {
+            TRANSLUCENT_SCHEMA_VERSION
         } else {
             OPAQUE_SCHEMA_VERSION
         },
@@ -81,6 +98,14 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
         .compression_method(zip::CompressionMethod::Deflated);
     zip.start_file(ENTRY, options).map_err(|e| e.to_string())?;
     zip.write_all(&json).map_err(|e| e.to_string())?;
+    // PNG and JPEG files are compressed already.
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, image) in &images {
+        zip.start_file(name.as_str(), stored)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(&image.encoded).map_err(|e| e.to_string())?;
+    }
     let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
     replace_file(path, &bytes)
 }
@@ -126,8 +151,22 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
             "the file uses schema version {version}, newer than this app's {SCHEMA_VERSION}"
         ));
     }
-    let stored: Stored = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
+    let mut stored: Stored = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
     check_coordinates(&stored.model)?;
+    for m in &mut stored.model.materials {
+        let Some(t) = &mut m.texture else { continue };
+        if t.file == ENTRY {
+            return Err(format!("material m{}'s texture is not an image", m.id));
+        }
+        let entry = zip
+            .by_name(&t.file)
+            .map_err(|_| format!("material m{}'s texture {} is missing", m.id, t.file))?;
+        let bytes = read_limited(entry, MAX_TEXTURE_BYTES)
+            .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
+        let image =
+            decode(bytes).map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
+        t.image = Some(Arc::new(image));
+    }
     let scene = Scene::from_data(&stored.model)?;
     let c = &stored.camera;
     if !c

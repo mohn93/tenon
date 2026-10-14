@@ -52,7 +52,7 @@ Queries:
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
-| `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
+| `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
@@ -190,7 +190,7 @@ the `guides` list in `entities`, is `{"id": "g9", "kind": "line", "point": [...]
 
 ### Materials
 
-A material is a named color with an opacity. Faces have two sides, each painted with a material or with none
+A material is a named color with an opacity, and possibly a texture (an image). Faces have two sides, each painted with a material or with none
 (the default material: light on the front, blue-gray on the back, as in the window); instances
 can be painted too. Materials belong to the whole model, not to the open context, and are saved
 with it.
@@ -199,11 +199,13 @@ with it.
 |---|---|
 | `{"type": "add_material", "name": "Brick", "color": [180, 60, 40]}` | Adds a material. `color` is sRGB red, green and blue, whole numbers 0 to 255. `opacity` (optional, default 1) is a number from 0 (invisible) to 1 (opaque); anything else is `invalid_input`. Without `name` it is called `Material` (`Material 2`, ... when taken). A name must not be blank, must have at most 256 characters and must differ from every other material's (`invalid_input`). The new id is the outcome's `changes.materials`, e.g. `["m31"]`. |
 | `{"type": "change_material", "material": "m31", "name": "Old brick", "color": [150, 50, 30], "opacity": 0.4}` | Renames, recolors and/or changes the opacity of a material; an absent `name`, `color` or `opacity` stays. `opacity` must be from 0 to 1 (`invalid_input`). |
+| `{"type": "add_material", "name": "Tiles", "texture": {"path": "/abs/tiles.png", "width": 0.6}}` | Adds a material with a texture; see Textures below. `color` may then be left out: it is the image's average color. |
+| `{"type": "change_material", "material": "m31", "texture": {"path": "/abs/oak.jpg", "width": 1.2, "height": 0.2}}` | Gives a material a texture or replaces its image; the color becomes the image's average unless `color` is given too. Without `path` it keeps the image and changes its size (`invalid_input` when the material has none). `"texture": null` removes the texture and keeps the color. |
 | `{"type": "delete_material", "material": "m31"}` | Removes a material. Every face side and instance painted with it, anywhere in the model, goes back to the default material (and comes back with undo). |
 | `{"type": "paint", "ids": ["f8", "i4"], "material": "m31", "side": "front"}` | Paints faces and instances of the open context. `side` is `front` (default: the side the face's `normal` points to), `back` or `both`; it does not matter for instances. An absent or null `material` paints with the default material. Edge and guide ids are `invalid_input` (naming them), as are vertex ids and an empty list; unknown ids and an unknown material are `not_found`. Painting what is already painted so changes nothing. |
 
-Each is one undo step. A command that adds, removes, renames, recolors or changes the opacity of
-a material lists it in
+Each is one undo step. A command that adds, removes, renames, recolors or changes the opacity or
+texture of a material lists it in
 its `changes.materials` (also in `changed` notifications and `events`); painting reports the
 faces and instances as `modified`. Unknown material ids are `not_found`.
 
@@ -214,6 +216,31 @@ back to front, and do not hide edges, guides or faces behind them. Each side of 
 own material's opacity, so a face can be glass from one side and opaque from the other. Edges
 of see-through faces (window frames, say) still draw, and a selected see-through face is tinted
 like any other.
+
+#### Textures
+
+A texture is a PNG or JPEG file of at most 16 MiB and 4096 pixels on each side, read when the
+command runs; the model keeps its own copy (the file is saved inside `.skr`), so the file may
+change or go away later. A model holds at most 256 textures. `texture` is `{"path", "width",
+"height"}`: `width` and `height` are the meters one copy of the image covers on the model, each
+from 0.001 to 1000 (`invalid_input` otherwise). A new image without `width` is 1 m wide (or as
+wide as the texture it replaces), and without `height` keeps the image's proportions. A file
+that cannot be read, is not a PNG or JPEG, or is too large gives the error kind `file`, naming
+the path; nothing changes.
+
+A face shows its side's material's texture in place of its color, shaded like any face (the
+material's opacity still applies; the image's own transparency is ignored). The image lies flat
+in the face's plane, in the coordinates of the group or component holding the face: its width
+runs along the face's horizontal direction (`u` = z x normal, normalized; along x on a level
+face) and its height across it (`v` = normal x u, up on a wall), repeating every `width` by
+`height` meters with a copy's bottom left corner at the definition's origin. Faces in one plane
+continue each other's pattern, and a component carries its pattern with it when moved, turned or
+scaled. Both sides of a face use the same placement, so from behind the image reads mirrored.
+The material's `color` stays the color edges, the Materials list and formats without textures
+show.
+
+The `materials` query adds `"texture": {"width": 0.6, "height": 0.3, "pixel_width": 1024,
+"pixel_height": 512, "format": "png"}` (`format` `png` or `jpeg`) to a material with a texture.
 
 The `entity` result of a face (and its entry in `entities`) has `front_material` and
 `back_material`, an instance's has `material`; each is absent for the default material.
@@ -398,13 +425,16 @@ lists these controls) turns it on; Esc or F turns it off.
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (6 when a material is see-through, else 5; a material's
-`opacity` is written only when below 1, so a model whose materials are all opaque is saved
-exactly as before opacity existed and older builds still open it; version 5 files open with
+(`"sketchup-alt"`), `schema_version` (7 when a material has a texture, else 6 when a material
+is see-through, else 5; a material's `opacity` is written only when below 1, so a model whose
+materials are all opaque is saved exactly as before opacity existed and older builds still open
+it; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 of view, up and projection) and the model with every id, edges with their curve and soft flag,
-the materials and what is painted with them.
+the materials and what is painted with them. Each texture's image is stored in the archive as
+the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
+`document.json` names it with its `width` and `height`.
 
 | Command | Effect |
 |---|---|
@@ -421,7 +451,8 @@ reason (a missing file, not a sketchup-alt file, a missing or newer schema versi
 over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
 fewer than two faces, a face or instance painted with a material the file lacks, a material
-name that is blank, too long or used twice, or a material opacity outside 0 to 1); the model is left as it was. `save` also fails
+name that is blank, too long or used twice, a material opacity outside 0 to 1, or a texture
+whose image is missing, broken or too large, or whose size is out of range); the model is left as it was. `save` also fails
 when the model has given out ids past 2^53, which no file can hold. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user

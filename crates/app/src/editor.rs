@@ -370,8 +370,9 @@ impl Editor {
         self.message = None;
         let Some(outcome) = self.run(Command::AddMaterial {
             name: None,
-            color,
+            color: Some(color),
             opacity: None,
+            texture: None,
         }) else {
             return true;
         };
@@ -387,6 +388,7 @@ impl Editor {
             name: Some(name),
             color: None,
             opacity: None,
+            texture: None,
         });
         true
     }
@@ -399,6 +401,7 @@ impl Editor {
             name: None,
             color: Some(color),
             opacity: None,
+            texture: None,
         });
         true
     }
@@ -411,6 +414,7 @@ impl Editor {
             name: None,
             color: None,
             opacity: Some(f32::from(percent.min(100)) / 100.0),
+            texture: None,
         });
         true
     }

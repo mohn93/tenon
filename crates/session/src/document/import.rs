@@ -228,7 +228,7 @@ impl Document {
 }
 
 /// The whole file, failing when it holds more than `limit` bytes.
-fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     // A pipe or device could block forever (or eat the host's stdin): regular files only.
     if !std::fs::metadata(path)
         .map_err(|e| e.to_string())?

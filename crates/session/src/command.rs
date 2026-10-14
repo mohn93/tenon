@@ -154,16 +154,23 @@ pub enum Command {
     /// Add a material: a named sRGB color (each 0 to 255). Without `name` it is called
     /// "Material" (or "Material 2", ... if taken). Names must be distinct, not blank, and at
     /// most 256 characters. `opacity` (default 1, opaque) is from 0 to 1; below 1 faces
-    /// painted with it are see-through. The new id is in the outcome's `changes.materials`.
+    /// painted with it are see-through. `texture` reads a PNG or JPEG image for its faces
+    /// (`path` required); `color` may then be left out and is the image's average color. The
+    /// new id is in the outcome's `changes.materials`.
     AddMaterial {
         #[serde(default)]
         name: Option<String>,
-        color: [u8; 3],
+        #[serde(default)]
+        color: Option<[u8; 3]>,
         #[serde(default)]
         opacity: Option<f32>,
+        #[serde(default)]
+        texture: Option<TextureSource>,
     },
-    /// Rename, recolor and/or change the opacity (0 to 1) of a material; absent fields stay
-    /// as they are.
+    /// Rename, recolor, change the opacity (0 to 1) and/or the texture of a material; absent
+    /// fields stay as they are. `texture`: null removes it; an object sets it, reading `path`
+    /// (the color becomes the image's average unless `color` is given), or without `path`
+    /// keeps the image and changes its size.
     ChangeMaterial {
         material: MaterialId,
         #[serde(default)]
@@ -172,6 +179,13 @@ pub enum Command {
         color: Option<[u8; 3]>,
         #[serde(default)]
         opacity: Option<f32>,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "Option<TextureSource>")]
+        texture: Option<Option<TextureSource>>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.
@@ -341,6 +355,31 @@ impl Command {
                 | Command::SetProjection { .. }
         )
     }
+}
+
+/// A texture for `add_material` or `change_material`: an image file and the size one copy of
+/// it covers on the model, in meters (from 0.001 to 1000). A new image without `width` is 1 m
+/// wide (or as wide as the texture it replaces), and without `height` keeps the image's
+/// proportions.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TextureSource {
+    /// A PNG or JPEG file of at most 16 MiB and 4096 pixels on each side.
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub width: Option<f64>,
+    #[serde(default)]
+    pub height: Option<f64>,
+}
+
+/// A field that may be absent (None), null (`Some(None)`) or a value.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// How `Command::Select` combines `ids` with the current selection.

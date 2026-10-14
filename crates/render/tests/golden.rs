@@ -244,8 +244,9 @@ fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> MaterialId {
         doc,
         Command::AddMaterial {
             name: Some(name.into()),
-            color,
+            color: Some(color),
             opacity: None,
+            texture: None,
         },
     );
     outcome.changes.materials[0]
@@ -392,8 +393,9 @@ fn golden_glass_pane_in_front_of_a_box() {
         &mut d,
         Command::AddMaterial {
             name: Some("Glass".into()),
-            color: [170, 210, 235],
+            color: Some([170, 210, 235]),
             opacity: Some(0.35),
+            texture: None,
         },
     )
     .changes
