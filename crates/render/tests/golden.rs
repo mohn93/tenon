@@ -689,6 +689,73 @@ fn golden_open_group_fades_the_rest() {
     check("open_group", &d);
 }
 
+/// A 16 x 16 pixel PNG in four quadrants, red top left, yellow top right, green bottom left and
+/// blue bottom right, with a white line along its top and left edges; returns its path.
+fn quadrants_png() -> PathBuf {
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("golden-textures-{}", std::process::id()))
+        .join("quadrants.png");
+    let mut rgba = Vec::new();
+    for y in 0..16 {
+        for x in 0..16 {
+            let color = match (x < 8, y < 8) {
+                _ if x == 0 || y == 0 => [255, 255, 255],
+                (true, true) => [220, 40, 40],
+                (false, true) => [235, 200, 40],
+                (true, false) => [40, 170, 70],
+                (false, false) => [40, 80, 220],
+            };
+            rgba.extend(color);
+            rgba.push(255);
+        }
+    }
+    write_png(&path, &rgba, 16, 16);
+    path
+}
+
+#[test]
+fn golden_textured_box_and_ground() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    // A ground square beside the box, to show the texture on a level face.
+    run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [2.5, 0.0, 0.0],
+            opposite: [4.5, 2.0, 0.0],
+            normal: None,
+        },
+    );
+    let tiles = run(
+        &mut d,
+        Command::AddMaterial {
+            name: Some("Tiles".into()),
+            color: None,
+            opacity: None,
+            texture: Some(session::TextureSource {
+                path: Some(quadrants_png().display().to_string()),
+                width: Some(1.0),
+                height: Some(1.0),
+            }),
+        },
+    )
+    .changes
+    .materials[0];
+    let faces = all_faces(&d);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: faces,
+            material: Some(tiles),
+            side: Side::Both,
+        },
+    );
+    // Each wall shows whole 1 m copies upright (white lines along their tops and left sides);
+    // the top and the ground square show them with north up.
+    look(&mut d, [5.5, -5.0, 4.5], [2.0, 0.9, 0.3]);
+    check("textured", &d);
+}
+
 /// Every stored golden image belongs to a test here, so stale ones do not pile up.
 #[test]
 fn every_golden_image_has_a_test() {
@@ -706,6 +773,7 @@ fn every_golden_image_has_a_test() {
         "selection",
         "open_group",
         "glass",
+        "textured",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

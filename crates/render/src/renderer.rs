@@ -7,14 +7,16 @@ use wgpu::util::DeviceExt;
 use crate::grid::{BACKGROUND, LineVertex, flat_ground_lines, vertical_axis_lines};
 use crate::guides::{GuideShape, guide_lines};
 use crate::scene::{BaseFaceVertex, Spans, scene_base, shown_guides};
+use crate::texture::TextureArray;
 
 pub const SAMPLE_COUNT: u32 = 4;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-const FACE_ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-    0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32x2
+const FACE_ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+    0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32x2,
+    6 => Float32x4, 7 => Float32x2
 ];
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
@@ -193,6 +195,12 @@ pub struct Renderer {
     guide_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
+    bind_layout: wgpu::BindGroupLayout,
+    /// Repeats both ways, filtering linearly between pixels and mipmaps.
+    sampler: wgpu::Sampler,
+    /// The scene's textures, as of the last `set_model`.
+    textures: TextureArray,
+    /// The camera uniforms, the textures and the sampler.
     bind_group: wgpu::BindGroup,
     flat_ground: Mesh,
     vertical_axis: Mesh,
@@ -220,17 +228,35 @@ impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/scene.wgsl"));
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            label: Some("camera and textures"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
@@ -409,14 +435,17 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera"),
-            layout: &bind_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            }],
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material textures"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
         });
+        let textures = TextureArray::new(device, queue, &Scene::default());
+        let bind_group = bind_group(device, &bind_layout, &uniforms, &textures, &sampler);
 
         let flat_ground =
             mesh(device, "flat ground lines", &flat_ground_lines()).expect("grid is never empty");
@@ -435,6 +464,9 @@ impl Renderer {
             guide_pipeline,
             overlay_pipeline,
             uniforms,
+            bind_layout,
+            sampler,
+            textures,
             bind_group,
             flat_ground,
             vertical_axis,
@@ -463,6 +495,16 @@ impl Renderer {
     /// Rebuilds the face and edge buffers from the scene with the open context `context`, with
     /// nothing selected until `set_selection`. Call when the model or the open context changes.
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
+        if !self.textures.holds(scene) {
+            self.textures = TextureArray::new(&self.device, &self.queue, scene);
+            self.bind_group = bind_group(
+                &self.device,
+                &self.bind_layout,
+                &self.uniforms,
+                &self.textures,
+                &self.sampler,
+            );
+        }
         let base = scene_base(scene, context);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
@@ -630,6 +672,35 @@ impl Renderer {
             depth: texture("depth", DEPTH_FORMAT),
         }
     }
+}
+
+/// The bind group every pipeline uses: the camera uniforms, the material textures and their
+/// sampler.
+fn bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniforms: &wgpu::Buffer,
+    textures: &TextureArray,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("camera and textures"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&textures.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }
 
 /// Uploads vertices, or None when there are none to draw.

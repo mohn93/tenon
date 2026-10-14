@@ -12,13 +12,15 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytemuck::{Pod, Zeroable};
-use glam::{DAffine3, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene,
+    texture_position,
 };
 
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
+use crate::texture::layers;
 
 /// A face corner with its selection flag, as `scene_geometry` returns it.
 #[repr(C)]
@@ -33,6 +35,10 @@ pub struct FaceVertex {
     pub back: [f32; 3],
     /// The opacities of the front and back sides (1: opaque).
     pub alpha: [f32; 2],
+    /// The texture coordinates of the front (first two) and back sides (see `BaseFaceVertex`).
+    pub uv: [f32; 4],
+    /// The texture array layers of the front and back sides; -1 for none.
+    pub layer: [f32; 2],
 }
 
 /// A face corner as the renderer uploads it; whether it is selected comes from a separate flag
@@ -48,6 +54,13 @@ pub struct BaseFaceVertex {
     /// The opacities of the front and back sides (1: opaque). A triangle with either below 1
     /// is drawn in the translucent pass (see `SceneBase::glass`).
     pub alpha: [f32; 2],
+    /// The texture coordinates of the front (first two) and back sides: the corner's texture
+    /// position over its side's texture size, v counted down from the image's top, shifted by
+    /// whole repeats per triangle so they stay small. Zero on a side without a texture.
+    pub uv: [f32; 4],
+    /// The texture array layers of the front and back sides (see `texture::layers`); -1 for
+    /// none.
+    pub layer: [f32; 2],
 }
 
 impl BaseFaceVertex {
@@ -62,16 +75,67 @@ pub const DEFAULT_FRONT: [f32; 3] = [0.93, 0.93, 0.90];
 /// The default material's color on a face's back.
 pub const DEFAULT_BACK: [f32; 3] = [0.60, 0.65, 0.76];
 
-/// How a side looks: its color (sRGB, as the targets store it) and opacity.
-type Look = ([f32; 3], f32);
+/// How a side looks: its color (sRGB, as the targets store it), opacity, and texture (its
+/// array layer and its size in meters), which shows instead of the color.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Look {
+    color: [f32; 3],
+    alpha: f32,
+    texture: Option<(u32, DVec2)>,
+}
+
+/// The array layer of each textured material (see `texture::layers`).
+type Layers = HashMap<MaterialId, u32>;
 
 /// How a side looks: as its material, or opaque in `default`.
-fn side_look(scene: &Scene, material: Option<MaterialId>, default: [f32; 3]) -> Look {
-    material
-        .and_then(|m| scene.material(m))
-        .map_or((default, 1.0), |m| {
-            (m.color.map(|c| f32::from(c) / 255.0), m.opacity)
-        })
+fn side_look(
+    scene: &Scene,
+    layers: &Layers,
+    material: Option<MaterialId>,
+    default: [f32; 3],
+) -> Look {
+    let plain = Look {
+        color: default,
+        alpha: 1.0,
+        texture: None,
+    };
+    let Some((id, m)) = material.and_then(|id| Some((id, scene.material(id)?))) else {
+        return plain;
+    };
+    Look {
+        color: m.color.map(|c| f32::from(c) / 255.0),
+        alpha: m.opacity,
+        texture: m
+            .texture
+            .as_ref()
+            .zip(layers.get(&id))
+            .map(|(t, &layer)| (layer, DVec2::new(t.width, t.height))),
+    }
+}
+
+impl Look {
+    /// The texture array layer, or -1 without a texture.
+    fn layer(&self) -> f32 {
+        self.texture.map_or(-1.0, |(layer, _)| layer as f32)
+    }
+
+    /// A triangle's texture coordinates on this side from its corners' texture positions
+    /// (meters): over the texture's size, v counted down from the image's top, shifted by
+    /// whole repeats so f32 keeps them exact. Zero without a texture.
+    fn uv(&self, positions: [DVec2; 3]) -> [[f32; 2]; 3] {
+        let Some((_, size)) = self.texture else {
+            return [[0.0; 2]; 3];
+        };
+        let st = positions.map(|p| DVec2::new(p.x / size.x, -p.y / size.y));
+        let shift = st[0].floor();
+        st.map(|q| (q - shift).as_vec2().to_array())
+    }
+}
+
+/// The corners of a triangle with both sides' texture coordinates (see `BaseFaceVertex::uv`).
+fn both_uv(front: &Look, back: &Look, positions: [DVec2; 3]) -> [[f32; 4]; 3] {
+    let (f, b) = (front.uv(positions), back.uv(positions));
+    [0, 1, 2].map(|k| [f[k][0], f[k][1], b[k][0], b[k][1]])
 }
 
 pub const EDGE_COLOR: [f32; 4] = [0.08, 0.08, 0.08, 1.0];
@@ -149,6 +213,8 @@ impl SceneBase {
                 front: v.front,
                 back: v.back,
                 alpha: v.alpha,
+                uv: v.uv,
+                layer: v.layer,
             })
             .collect();
         let edges = self
@@ -267,11 +333,13 @@ fn find<K: Ord + Copy, V>(list: &[(K, V)], id: K) -> Option<&V> {
 /// The scene in root coordinates with the open instance `context` (see `scene_geometry`), with
 /// nothing selected. Each mesh is triangulated once, however often it is placed.
 pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
-    let parts = placed_parts(scene);
+    let layers = layers(scene);
+    let parts = placed_parts(scene, &layers);
     let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
     let mut walk = Walk {
         scene,
         context,
+        layers: &layers,
         parts: &parts,
         path: Vec::new(),
         base: SceneBase {
@@ -338,6 +406,8 @@ struct MeshParts {
     corners: Vec<DVec3>,
     /// The normal at each corner: the face's own, or across soft edges the smooth one.
     normals: Vec<DVec3>,
+    /// Each corner's position on its face's texture, in meters (see `texture_position`).
+    positions: Vec<DVec2>,
     faces: Vec<FacePart>,
     /// The ends of the hard edges (soft edges are not drawn).
     ends: Vec<DVec3>,
@@ -346,7 +416,7 @@ struct MeshParts {
 
 struct FacePart {
     id: FaceId,
-    /// The face's triangle corners in `MeshParts::corners` and `MeshParts::normals`.
+    /// The face's triangle corners in `MeshParts::corners`, `normals` and `positions`.
     corners: Range<usize>,
     /// The looks of the sides painted on the face itself; unpainted sides take the look of
     /// the nearest painted instance placing them.
@@ -355,7 +425,7 @@ struct FacePart {
 }
 
 impl MeshParts {
-    fn of(scene: &Scene, model: &Model) -> Self {
+    fn of(scene: &Scene, layers: &Layers, model: &Model) -> Self {
         // A face of n loop corners and h holes has n + 2h - 2 triangles.
         let (mut face_count, mut triangles) = (0, 0);
         for (_, f) in model.faces() {
@@ -365,6 +435,7 @@ impl MeshParts {
         }
         let mut corners = Vec::with_capacity(3 * triangles);
         let mut normals = Vec::with_capacity(3 * triangles);
+        let mut positions = Vec::with_capacity(3 * triangles);
         let mut faces = Vec::with_capacity(face_count);
         let smooth = model.smooth_normals();
         for (id, face) in model.faces() {
@@ -372,12 +443,17 @@ impl MeshParts {
             for tri in model.shaded_triangles(id, &smooth).unwrap_or_default() {
                 corners.extend(tri.corners);
                 normals.extend(tri.normals);
+                positions.extend(tri.corners.map(|p| texture_position(face.normal, p)));
             }
             faces.push(FacePart {
                 id,
                 corners: start..corners.len(),
-                front: face.front.map(|m| side_look(scene, Some(m), DEFAULT_FRONT)),
-                back: face.back.map(|m| side_look(scene, Some(m), DEFAULT_BACK)),
+                front: face
+                    .front
+                    .map(|m| side_look(scene, layers, Some(m), DEFAULT_FRONT)),
+                back: face
+                    .back
+                    .map(|m| side_look(scene, layers, Some(m), DEFAULT_BACK)),
             });
         }
         let hard = model.edges().filter(|(_, e)| !e.soft).count();
@@ -392,6 +468,7 @@ impl MeshParts {
         MeshParts {
             corners,
             normals,
+            positions,
             faces,
             ends,
             edges,
@@ -407,7 +484,7 @@ const MAX_THREADS: usize = 8;
 
 /// The parts of every mesh placed from the root, the root included. With many faces, the meshes
 /// are shared out among a few threads; the parts are the same either way.
-fn placed_parts(scene: &Scene) -> HashMap<MeshId, MeshParts> {
+fn placed_parts(scene: &Scene, layers: &Layers) -> HashMap<MeshId, MeshParts> {
     let mut meshes = vec![MeshId::Root];
     let mut seen = HashSet::from([MeshId::Root]);
     let mut k = 0;
@@ -434,7 +511,7 @@ fn placed_parts(scene: &Scene) -> HashMap<MeshId, MeshParts> {
     if faces < PARALLEL_FACES || threads < 2 {
         return models
             .into_iter()
-            .map(|(id, m)| (id, MeshParts::of(scene, m)))
+            .map(|(id, m)| (id, MeshParts::of(scene, layers, m)))
             .collect();
     }
     // Each thread takes the next mesh nobody has taken, so big meshes do not hold one up.
@@ -442,7 +519,7 @@ fn placed_parts(scene: &Scene) -> HashMap<MeshId, MeshParts> {
     let work = || {
         let mut done = Vec::new();
         while let Some(&(id, m)) = models.get(next.fetch_add(1, Ordering::Relaxed)) {
-            done.push((id, MeshParts::of(scene, m)));
+            done.push((id, MeshParts::of(scene, layers, m)));
         }
         done
     };
@@ -486,6 +563,7 @@ fn drawn_count(
 struct Walk<'a> {
     scene: &'a Scene,
     context: &'a [InstanceId],
+    layers: &'a Layers,
     /// Every placed mesh's parts.
     parts: &'a HashMap<MeshId, MeshParts>,
     /// Instances from the root down to the mesh being walked.
@@ -510,27 +588,32 @@ impl Walk<'_> {
         // A mirroring placement turns triangles inside out; swapping two corners restores the
         // winding, so the front side (and the headlight) stay right.
         let mirrored = t.matrix3.determinant() < 0.0;
-        let front = side_look(self.scene, inherited, DEFAULT_FRONT);
-        let back = side_look(self.scene, inherited, DEFAULT_BACK);
+        let front = side_look(self.scene, self.layers, inherited, DEFAULT_FRONT);
+        let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
         let base = &mut self.base;
         for face in &parts.faces {
             let start = base.faces.len();
-            let (front, front_alpha) = face.front.unwrap_or(front);
-            let (back, back_alpha) = face.back.unwrap_or(back);
-            let corner = |(p, n): (DVec3, DVec3)| BaseFaceVertex {
+            let front = face.front.unwrap_or(front);
+            let back = face.back.unwrap_or(back);
+            let corner = |(p, n, uv): (DVec3, DVec3, [f32; 4])| BaseFaceVertex {
                 pos: t.transform_point3(p).as_vec3().to_array(),
                 normal: (normal_map * n).normalize().as_vec3().to_array(),
-                front,
-                back,
-                alpha: [front_alpha, back_alpha],
+                front: front.color,
+                back: back.color,
+                alpha: [front.alpha, back.alpha],
+                uv,
+                layer: [front.layer(), back.layer()],
             };
-            let (tris, _) = parts.corners[face.corners.clone()].as_chunks::<3>();
-            let (normals, _) = parts.normals[face.corners.clone()].as_chunks::<3>();
-            for (&[a, b, c], &[na, nb, nc]) in tris.iter().zip(normals) {
+            let range = face.corners.clone();
+            let (tris, _) = parts.corners[range.clone()].as_chunks::<3>();
+            let (normals, _) = parts.normals[range.clone()].as_chunks::<3>();
+            let (positions, _) = parts.positions[range].as_chunks::<3>();
+            for ((&[a, b, c], &[na, nb, nc]), &uvs) in tris.iter().zip(normals).zip(positions) {
+                let [ua, ub, uc] = both_uv(&front, &back, uvs);
                 let tri = if mirrored {
-                    [(a, na), (c, nc), (b, nb)]
+                    [(a, na, ua), (c, nc, uc), (b, nb, ub)]
                 } else {
-                    [(a, na), (b, nb), (c, nc)]
+                    [(a, na, ua), (b, nb, ub), (c, nc, uc)]
                 };
                 base.faces.extend(tri.map(corner));
             }
@@ -988,6 +1071,70 @@ mod tests {
         assert_eq!(count(CONTEXT_BOX_COLOR), 24, "twelve box edges");
     }
 
+    fn texture(width: f64, height: f64) -> kernel::Texture {
+        kernel::Texture {
+            image: std::sync::Arc::new(kernel::TextureImage {
+                format: kernel::ImageFormat::Png,
+                encoded: Vec::new(),
+                width: 1,
+                height: 1,
+                pixels: vec![255; 4],
+            }),
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn textured_sides_name_their_layer_and_carry_texture_coordinates() {
+        // The unit square moved far out, so its texture coordinates would be large unshifted.
+        let mut m = Model::new();
+        let pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| DVec3::new(x + 1000.0, y + 2000.0, 0.0));
+        m.add_polygon(&pts).unwrap();
+        let mut s = Scene::from_root(m);
+        let face = s.root().faces().next().unwrap().0;
+        let (plain, _) = s.add_material("Plain", [10, 20, 30]).unwrap();
+        let (tiles, _) = s
+            .add_material_with_texture("Tiles", [1, 2, 3], 1.0, Some(texture(2.0, 0.5)))
+            .unwrap();
+        let (wood, _) = s
+            .add_material_with_texture("Wood", [4, 5, 6], 1.0, Some(texture(1.0, 1.0)))
+            .unwrap();
+        assert_eq!(
+            crate::texture::layers(&s),
+            HashMap::from([(tiles, 0), (wood, 1)])
+        );
+        s.paint(MeshId::Root, &[face], &[], kernel::Side::Front, Some(tiles))
+            .unwrap();
+        s.paint(MeshId::Root, &[face], &[], kernel::Side::Back, Some(plain))
+            .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(g.faces.len(), 6);
+        for v in &g.faces {
+            assert_eq!(v.layer, [0.0, -1.0]);
+            assert_eq!(v.front, [1.0, 2.0, 3.0].map(|c| c / 255.0));
+            assert_eq!(&v.uv[2..], [0.0, 0.0]);
+            // u = x / 2 and v = -y / 0.5, up to whole repeats, and small.
+            let (du, dv) = (
+                f64::from(v.uv[0]) - f64::from(v.pos[0]) / 2.0,
+                f64::from(v.uv[1]) + f64::from(v.pos[1]) / 0.5,
+            );
+            assert!((du - du.round()).abs() < 1e-4 && (dv - dv.round()).abs() < 1e-4);
+            assert!(v.uv[0].abs() <= 3.0 && v.uv[1].abs() <= 3.0, "{:?}", v.uv);
+        }
+        s.paint(MeshId::Root, &[face], &[], kernel::Side::Back, Some(wood))
+            .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert!(g.faces.iter().all(|v| v.layer == [0.0, 1.0]));
+        // Removing the first texture moves the second to layer 0.
+        s.change_material_with_texture(tiles, None, None, None, Some(None))
+            .unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert!(g.faces.iter().all(|v| v.layer == [-1.0, 0.0]));
+        assert_eq!(g, single_pass::scene_geometry(&s, &[], &BTreeSet::new()));
+    }
+
     /// The single pass `scene_geometry` made before the base and the selection flags were
     /// split, kept to check that the split changes nothing.
     mod single_pass {
@@ -999,9 +1146,11 @@ mod tests {
             selection: &BTreeSet<EntityId>,
         ) -> ModelGeometry {
             let mut g = ModelGeometry::default();
+            let layers = crate::texture::layers(scene);
             let mut walk = Walk {
                 scene,
                 context,
+                layers: &layers,
                 selection,
                 path: Vec::new(),
                 g: &mut g,
@@ -1034,6 +1183,7 @@ mod tests {
         struct Walk<'a> {
             scene: &'a Scene,
             context: &'a [InstanceId],
+            layers: &'a Layers,
             selection: &'a BTreeSet<EntityId>,
             path: Vec<InstanceId>,
             g: &'a mut ModelGeometry,
@@ -1056,23 +1206,36 @@ mod tests {
                     } else {
                         0.0
                     };
-                    let (front, front_alpha) =
-                        side_look(self.scene, face.front.or(inherited), DEFAULT_FRONT);
-                    let (back, back_alpha) =
-                        side_look(self.scene, face.back.or(inherited), DEFAULT_BACK);
+                    let front = side_look(
+                        self.scene,
+                        self.layers,
+                        face.front.or(inherited),
+                        DEFAULT_FRONT,
+                    );
+                    let back = side_look(
+                        self.scene,
+                        self.layers,
+                        face.back.or(inherited),
+                        DEFAULT_BACK,
+                    );
                     for tri in model.shaded_triangles(fid, &smooth).unwrap_or_default() {
-                        let mut corners = [0, 1, 2].map(|k| (tri.corners[k], tri.normals[k]));
+                        let positions = tri.corners.map(|p| texture_position(face.normal, p));
+                        let uv = both_uv(&front, &back, positions);
+                        let mut corners =
+                            [0, 1, 2].map(|k| (tri.corners[k], tri.normals[k], uv[k]));
                         if mirrored {
                             corners.swap(1, 2);
                         }
-                        for (p, n) in corners {
+                        for (p, n, uv) in corners {
                             self.g.faces.push(FaceVertex {
                                 pos: t.transform_point3(p).as_vec3().to_array(),
                                 normal: (normal_map * n).normalize().as_vec3().to_array(),
                                 selected: flag,
-                                front,
-                                back,
-                                alpha: [front_alpha, back_alpha],
+                                front: front.color,
+                                back: back.color,
+                                alpha: [front.alpha, back.alpha],
+                                uv,
+                                layer: [front.layer(), back.layer()],
                             });
                         }
                     }

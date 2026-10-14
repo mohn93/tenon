@@ -7,6 +7,9 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+// One layer per textured material (see texture.rs); it repeats both ways.
+@group(0) @binding(1) var textures: texture_2d_array<f32>;
+@group(0) @binding(2) var texture_sampler: sampler;
 
 struct LineOut {
     @builtin(position) pos: vec4<f32>,
@@ -75,6 +78,10 @@ struct FaceOut {
     @location(4) back_color: vec3<f32>,
     // The opacities of the front (x) and back (y) sides.
     @location(5) alpha: vec2<f32>,
+    // The texture coordinates of the front (xy) and back (zw) sides.
+    @location(6) uv: vec4<f32>,
+    // The texture layers of the front (x) and back (y) sides; -1 for none.
+    @location(7) @interpolate(flat) layer: vec2<f32>,
 };
 
 const SELECTED: vec3<f32> = vec3<f32>(0.25, 0.45, 0.95);
@@ -88,6 +95,8 @@ fn vs_face(
     @location(3) front_color: vec3<f32>,
     @location(4) back_color: vec3<f32>,
     @location(5) alpha: vec2<f32>,
+    @location(6) uv: vec4<f32>,
+    @location(7) layer: vec2<f32>,
 ) -> FaceOut {
     var out: FaceOut;
     out.pos = u.view_proj * vec4<f32>(pos, 1.0);
@@ -97,17 +106,24 @@ fn vs_face(
     out.front_color = front_color;
     out.back_color = back_color;
     out.alpha = alpha;
+    out.uv = uv;
+    out.layer = layer;
     return out;
 }
 
 // Each side shows its own color (its material's, or the default: light in front, blue-gray
-// behind); a headlight at the eye (from the viewer, in a parallel view) shades both. Selected
-// faces are tinted blue.
+// behind), or its material's texture instead; a headlight at the eye (from the viewer, in a
+// parallel view) shades both. Selected faces are tinted blue. Call it before any discard: the
+// texture lookup needs every pixel of its quad.
 fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
     let shade = 0.6 + 0.4 * max(dot(n, to_eye), 0.0);
-    let base = mix(select(in.back_color, in.front_color, front), SELECTED, 0.5 * in.selected);
+    let layer = select(in.layer.y, in.layer.x, front);
+    let uv = select(in.uv.zw, in.uv.xy, front);
+    let texel = textureSample(textures, texture_sampler, uv, i32(max(layer, 0.0))).rgb;
+    let color = select(select(in.back_color, in.front_color, front), texel, layer >= 0.0);
+    let base = mix(color, SELECTED, 0.5 * in.selected);
     return base * shade;
 }
 
@@ -121,19 +137,21 @@ fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4
 // see-through side left to `fs_glass`.
 @fragment
 fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let color = face_color(in, front);
     if select(in.alpha.y, in.alpha.x, front) < 1.0 {
         discard;
     }
-    return vec4<f32>(face_color(in, front), 1.0);
+    return vec4<f32>(color, 1.0);
 }
 
 // See-through sides, blended over everything opaque (back to front, without writing depth).
 // A selected one is made more opaque so its tint shows even when it is nearly invisible.
 @fragment
 fn fs_glass(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let color = face_color(in, front);
     let alpha = select(in.alpha.y, in.alpha.x, front);
     if alpha >= 1.0 {
         discard;
     }
-    return vec4<f32>(face_color(in, front), mix(alpha, 1.0, 0.4 * in.selected));
+    return vec4<f32>(color, mix(alpha, 1.0, 0.4 * in.selected));
 }
