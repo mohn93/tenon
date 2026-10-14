@@ -224,7 +224,8 @@ command runs; the model keeps its own copy (the file is saved inside `.skr`), so
 change or go away later. A model holds at most 256 textures. `texture` is `{"path", "width",
 "height"}`: `width` and `height` are the meters one copy of the image covers on the model, each
 from 0.001 to 1000 (`invalid_input` otherwise). A new image without `width` is 1 m wide (or as
-wide as the texture it replaces), and without `height` keeps the image's proportions. A file
+wide as the texture it replaces), and without `height` keeps the image's proportions (limited to the same 0.001 to 1000 range).
+A file
 that cannot be read, is not a PNG or JPEG, or is too large gives the error kind `file`, naming
 the path; nothing changes.
 
@@ -482,11 +483,12 @@ never overwrites a model; use `save`.
 
 Colors and textures come from each face's front side (its own material, else that of the nearest
 painted instance placing it); back-side materials are not exported. Texture coordinates follow
-the projection described under Textures. The images are written before the `.mtl`. An OBJ
-export whose `.mtl` would
-be the export path itself or the open model's file is refused with `invalid_input`. The
-`.mtl` is written before the `.obj`, so a failure writing the `.obj` can leave a new `.mtl`
-beside the old (or no) `.obj`.
+the projection described under Textures. An OBJ export whose `.mtl` would be the export path
+itself or the open model's file is refused with `invalid_input`. The image files are written
+first, then the `.mtl`, then the `.obj`, so a failure writing the `.obj` can leave new image
+files and a new `.mtl` beside the old (or no) `.obj`. A glTF material with a texture and an
+opacity below 1 uses `alphaMode` `BLEND`, so a viewer also applies the image's own alpha,
+which the window ignores.
 
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
 does not change the revision or the `file` query. Its result has `"export": {"triangles": n,

@@ -310,3 +310,74 @@ fn files_with_missing_or_broken_textures_do_not_open() {
         assert!(message.contains(expected), "{message}");
     }
 }
+
+#[test]
+fn a_derived_height_is_clamped_to_the_size_limits() {
+    let path = scratch("sliver.png");
+    image::RgbaImage::from_pixel(4096, 3, image::Rgba([9, 9, 9, 255]))
+        .save(&path)
+        .unwrap();
+    let mut d = doc();
+    let id = add_textured(&mut d, &path, 1.0);
+    let m = materials(&d)
+        .into_iter()
+        .find(|m| m["id"] == id.as_str())
+        .unwrap();
+    assert_eq!(m["texture"]["height"], 0.001);
+
+    // A given height is still checked.
+    let (kind, _) = run(
+        &mut d,
+        json!({"type": "change_material", "material": id,
+               "texture": {"height": 0.0005}}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_file_with_too_many_textured_materials_does_not_open() {
+    let png = red_blue_png("many.png");
+    let mut d = doc();
+    let id = add_textured(&mut d, &png, 1.0);
+    let path = scratch("many-good.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut document: Value =
+        serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
+    let file = format!("textures/{id}.png");
+    let mut image = Vec::new();
+    std::io::Read::read_to_end(&mut zip.by_name(&file).unwrap(), &mut image).unwrap();
+    let first = document["model"]["materials"][0].clone();
+    let materials = (1..=257)
+        .map(|k| {
+            let mut m = first.clone();
+            m["id"] = json!(k);
+            m["name"] = json!(format!("T{k}"));
+            m
+        })
+        .collect::<Vec<_>>();
+    document["model"]["materials"] = json!(materials);
+    let out = scratch("many.skr");
+    let mut w = zip::ZipWriter::new(std::fs::File::create(&out).unwrap());
+    w.start_file("document.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(&serde_json::to_vec(&document).unwrap())
+        .unwrap();
+    w.start_file(file.as_str(), zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(&image).unwrap();
+    w.finish().unwrap();
+    let mut e = doc();
+    let (kind, message) = run(
+        &mut e,
+        json!({"type": "open", "path": out.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("more than 256 materials"), "{message}");
+}

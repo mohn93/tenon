@@ -3,7 +3,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use kernel::{EntityId, KernelError, MaterialId, SceneChange, Side, Texture};
+use kernel::{
+    EntityId, KernelError, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE, MaterialId, SceneChange, Side,
+    Texture,
+};
 
 use super::Document;
 use super::import::read_limited;
@@ -174,7 +177,9 @@ fn texture_of(source: &TextureSource, current: Option<&Texture>) -> Result<Textu
     let height = match (source.height, current) {
         (Some(h), _) => h,
         (None, Some(t)) if source.path.is_none() => t.height,
-        _ => width * f64::from(image.height) / f64::from(image.width),
+        // A derived height is kept within the limits a given one must meet.
+        _ => (width * f64::from(image.height) / f64::from(image.width))
+            .clamp(MIN_TEXTURE_SIZE, MAX_TEXTURE_SIZE),
     };
     Ok(Texture {
         image,

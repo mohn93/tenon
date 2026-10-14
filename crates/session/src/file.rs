@@ -2,11 +2,12 @@
 //! format name, a schema version, the camera and the model with every id, and the texture
 //! images as the files they were read from (`textures/m<id>.png` or `.jpg`).
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use kernel::{MAX_ID, MeshData, Scene, SceneData};
+use kernel::{MAX_ID, MAX_TEXTURES, MeshData, Scene, SceneData, TextureImage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -66,7 +67,7 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
     }
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
-    let images: Vec<(String, Arc<kernel::TextureImage>)> = model
+    let images: Vec<(String, Arc<TextureImage>)> = model
         .materials
         .iter()
         .filter_map(|m| {
@@ -137,7 +138,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     let entry = zip
         .by_name(ENTRY)
         .map_err(|_| "not a sketchup-alt file".to_string())?;
-    let json = read_limited(entry, MAX_DOCUMENT_BYTES)?;
+    let json = read_limited(entry, MAX_DOCUMENT_BYTES, "the document")?;
     // Check the header first, so a newer file gets a clear message rather than a field error.
     let header: Value = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
     if header["format"] != FORMAT {
@@ -153,19 +154,41 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     }
     let mut stored: Stored = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
     check_coordinates(&stored.model)?;
+    // Refuse before decoding anything: each decode can take far more memory than its entry.
+    if stored
+        .model
+        .materials
+        .iter()
+        .filter(|m| m.texture.is_some())
+        .count()
+        > MAX_TEXTURES
+    {
+        return Err(format!("more than {MAX_TEXTURES} materials have a texture"));
+    }
+    // A shared entry is decoded once.
+    let mut decoded: HashMap<String, Arc<TextureImage>> = HashMap::new();
     for m in &mut stored.model.materials {
         let Some(t) = &mut m.texture else { continue };
         if t.file == ENTRY {
             return Err(format!("material m{}'s texture is not an image", m.id));
         }
-        let entry = zip
-            .by_name(&t.file)
-            .map_err(|_| format!("material m{}'s texture {} is missing", m.id, t.file))?;
-        let bytes = read_limited(entry, MAX_TEXTURE_BYTES)
-            .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
-        let image =
-            decode(bytes).map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
-        t.image = Some(Arc::new(image));
+        let image = match decoded.get(&t.file) {
+            Some(image) => image.clone(),
+            None => {
+                let entry = zip
+                    .by_name(&t.file)
+                    .map_err(|_| format!("material m{}'s texture {} is missing", m.id, t.file))?;
+                let bytes = read_limited(entry, MAX_TEXTURE_BYTES, &format!("texture {}", t.file))
+                    .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
+                let image = Arc::new(
+                    decode(bytes)
+                        .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?,
+                );
+                decoded.insert(t.file.clone(), image.clone());
+                image
+            }
+        };
+        t.image = Some(image);
     }
     let scene = Scene::from_data(&stored.model)?;
     let c = &stored.camera;
@@ -182,17 +205,16 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     Ok((scene, stored.camera))
 }
 
-/// Reads all of `reader`, failing once it holds more than `limit` bytes.
-fn read_limited(reader: impl Read, limit: u64) -> Result<Vec<u8>, String> {
+/// Reads all of `reader` (`what` names it in the error), failing once it holds more than
+/// `limit` bytes.
+fn read_limited(reader: impl Read, limit: u64, what: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     reader
         .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > limit {
-        return Err(format!(
-            "file too large: the document is over {limit} bytes"
-        ));
+        return Err(format!("file too large: {what} is over {limit} bytes"));
     }
     Ok(bytes)
 }
@@ -246,8 +268,11 @@ mod tests {
 
     #[test]
     fn reading_stops_past_the_limit() {
-        assert_eq!(read_limited(&b"12345"[..], 5).unwrap(), b"12345");
-        let err = read_limited(&b"123456"[..], 5).unwrap_err();
+        assert_eq!(
+            read_limited(&b"12345"[..], 5, "the document").unwrap(),
+            b"12345"
+        );
+        let err = read_limited(&b"123456"[..], 5, "the document").unwrap_err();
         assert!(err.contains("file too large"), "{err}");
     }
 }

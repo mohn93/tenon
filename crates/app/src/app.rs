@@ -566,8 +566,10 @@ impl State {
         {
             return handle.id();
         }
-        let pixels =
+        let mut pixels =
             render::texture::resample(&image.pixels, image.width, image.height, SWATCH_PIXELS);
+        // Textures render opaque, so the swatch ignores the image's alpha.
+        pixels.iter_mut().skip(3).step_by(4).for_each(|a| *a = 255);
         let side = SWATCH_PIXELS as usize;
         let handle = self.gui.ctx().load_texture(
             format!("texture-swatch-{}", id.0),
