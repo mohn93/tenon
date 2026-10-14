@@ -184,6 +184,8 @@ fn describe_lists_methods_and_schemas() {
         "change_material",
         "delete_material",
         "paint",
+        "soften_edges",
+        "soften_by_angle",
         "new",
         "open",
         "save",
@@ -627,4 +629,40 @@ fn import_reports_what_it_made_over_json_rpc() {
         json!({"type": "add_edge", "start": [5, 0, 0], "end": [6, 0, 0]}),
     );
     assert!(plain["result"].get("import").is_none());
+}
+
+#[test]
+fn soften_over_json_rpc() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1, "segments": 12}),
+    );
+    let face = created_face(&r);
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "push_pull", "face": face, "distance": -2}),
+    );
+    // The pulled cylinder's 12 side edges are soft already; the 24 rim edges meet at 90 degrees.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "soften_by_angle", "max_angle_deg": 89}),
+    );
+    assert_eq!(r["result"]["soften"], json!({"changed": 0, "skipped": 24}));
+    assert!(r["result"]["revision"].is_number());
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "soften_edges", "ids": [face], "soft": true}),
+    );
+    assert_eq!(r["result"]["soften"], json!({"changed": 12, "skipped": 0}));
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "soften_edges", "ids": [face]}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS);
 }

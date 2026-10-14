@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side};
+use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side, SoftenReport};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -189,6 +189,23 @@ pub enum Command {
         #[serde(default)]
         side: Side,
     },
+    /// Make edges of the open context soft (`soft`: true) or hard again, as one undo step: the
+    /// edges in `ids` and the edges around the faces in `ids`. A soft edge is hidden and the
+    /// faces on its sides are shaded as one smooth surface. Only an edge between exactly two
+    /// faces can be soft; others are left as they are and counted in the outcome's `soften`.
+    SoftenEdges {
+        ids: Vec<EntityId>,
+        soft: bool,
+    },
+    /// Soften each edge between two faces whose normals differ by at most `max_angle_deg`
+    /// (0 to 180), as one undo step: among the edges in `ids` and the edges around the faces
+    /// in `ids`, or among every edge of the open context when `ids` is empty or absent. Other
+    /// edges stay as they are. The outcome's `soften` counts what changed.
+    SoftenByAngle {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        max_angle_deg: f64,
+    },
     /// Start an empty model with the default view. Clears undo history; not an undo step.
     /// With changes not saved, fails (`unsaved_changes`) unless `discard` is true.
     New {
@@ -349,6 +366,10 @@ pub struct Outcome {
     /// What an `export` wrote; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub export: Option<ExportReport>,
+    /// What a `soften_edges` or `soften_by_angle` changed and skipped; absent for other
+    /// commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soften: Option<SoftenReport>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

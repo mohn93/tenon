@@ -64,7 +64,7 @@ of silently doing nothing).
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
-`change_material`, `delete_material`, `paint`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -148,6 +148,16 @@ draw them, and clicking or snapping ignores them (a click there picks the face b
 still snap as endpoints); box selection and commands treat them like other edges. A soft edge
 always bounds at least two faces: one left bounding fewer (its neighbour face erased) becomes a
 plain edge again. Pieces of a split soft edge stay soft, and copies, groups and files keep the flag.
+
+| Command | Effect |
+|---|---|
+| `{"type": "soften_edges", "ids": ["e12", "f8"], "soft": true}` | Makes the edges in `ids`, and the edges around the faces in `ids`, soft (`"soft": false`: hard again), as one undo step. Only an edge between exactly two faces can be soft; others are left as they are. Vertex, instance and guide ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. |
+| `{"type": "soften_by_angle", "ids": [], "max_angle_deg": 20}` | Softens each edge between two faces whose normals differ by at most `max_angle_deg` (0 to 180; faces oriented against each other are compared as if turned the same way), as one undo step: among the edges in `ids` and around the faces in `ids`, or every edge of the open context when `ids` is empty or absent. Other edges, soft or hard, stay as they are. |
+
+Both report `"soften": {"changed": n, "skipped": m}` in their outcome: `changed` edges whose flag
+changed (also listed in `changes.modified`), `skipped` edges left hard (not between exactly two
+faces, or for `soften_by_angle` meeting at more than the angle). Edges already as asked are in
+neither count. A command that changes nothing makes no undo step.
 
 ### Guides
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError, MeshId,
-    Model, Scene, SceneChange, VertexId,
+    Model, Scene, SceneChange, SoftenReport, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
@@ -24,6 +24,7 @@ mod files;
 mod groups;
 mod import;
 mod materials;
+mod soften;
 
 use import::ImportOptions;
 
@@ -56,6 +57,8 @@ pub struct Document {
     clean_revision: u64,
     /// What the last `import` edit made, until its outcome takes it.
     import_report: Option<ImportReport>,
+    /// What the last soften edit did, until its outcome takes it.
+    soften_report: Option<SoftenReport>,
 }
 
 impl Document {
@@ -73,6 +76,7 @@ impl Document {
             path: None,
             clean_revision: 0,
             import_report: None,
+            soften_report: None,
         }
     }
 
@@ -160,6 +164,7 @@ impl Document {
         if let Some(changes) = self.edit(&command) {
             let mut outcome = self.record(changes?);
             outcome.import = self.import_report.take();
+            outcome.soften = self.soften_report.take();
             return Ok(outcome);
         }
         match command {
@@ -259,6 +264,8 @@ impl Document {
             | Command::ChangeMaterial { .. }
             | Command::DeleteMaterial { .. }
             | Command::Paint { .. }
+            | Command::SoftenEdges { .. }
+            | Command::SoftenByAngle { .. }
             | Command::Import { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
@@ -340,6 +347,10 @@ impl Document {
                 material,
                 side,
             } => self.paint_changes(ids, *material, *side),
+            Command::SoftenEdges { ids, soft } => self.soften_changes(ids, *soft),
+            Command::SoftenByAngle { ids, max_angle_deg } => {
+                self.soften_by_angle_changes(ids, *max_angle_deg)
+            }
             Command::Import {
                 path,
                 format,
@@ -423,6 +434,7 @@ impl Document {
                         changes: summary,
                         import: self.import_report.take(),
                         export: None,
+                        soften: self.soften_report.take(),
                     }
                 }),
                 None if matches!(
@@ -944,8 +956,7 @@ impl Document {
         }
         Outcome {
             changes: summary,
-            import: None,
-            export: None,
+            ..Outcome::default()
         }
     }
 
