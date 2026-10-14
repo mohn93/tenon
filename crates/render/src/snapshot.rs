@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use kernel::{EntityId, InstanceId, Scene};
-use session::Camera;
+use session::{Camera, Lighting};
 
 use crate::Renderer;
 
@@ -37,15 +37,17 @@ impl Snapshotter {
         }
     }
 
-    /// Renders `scene` as seen by `camera` (its viewport is replaced by the image size) into
-    /// tightly packed RGBA8 pixels, top row first, with the open context and `selection` shown.
-    /// None if the GPU readback fails.
+    /// Renders `scene` as seen by `camera` (its viewport is replaced by the image size) and lit
+    /// by `lighting` into tightly packed RGBA8 pixels, top row first, with the open context and
+    /// `selection` shown. None if the GPU readback fails.
+    #[allow(clippy::too_many_arguments)]
     pub fn capture(
         &mut self,
         scene: &Scene,
         context: &[InstanceId],
         selection: &BTreeSet<EntityId>,
         camera: &Camera,
+        lighting: Lighting,
         width: u32,
         height: u32,
     ) -> Option<Vec<u8>> {
@@ -70,6 +72,7 @@ impl Snapshotter {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.set_scene(scene, context, selection);
+        self.renderer.set_lighting(lighting);
         self.renderer.render(&view, (width, height), &camera, &[]);
 
         // Texture-to-buffer copies need rows padded to a multiple of 256 bytes.

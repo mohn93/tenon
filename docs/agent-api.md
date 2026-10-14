@@ -34,7 +34,7 @@ all commands and results.
 | `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below) and `soften` for `soften_edges` and `soften_by_angle` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
-| `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does) | `{width, height, png_base64}` |
+| `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are) |
 | `describe` | none | the API description |
 
@@ -251,6 +251,21 @@ A material with an `emission` above 0 glows. The `materials` query always includ
 
 The view is lit by `day` (the default) or by `night`, a view setting `set_lighting` changes and
 the `camera` query reports as `lighting`.
+
+A glowing face side is drawn unshaded, in its material's color (or texture). Each placement of
+a mesh whose own faces glow lights its surroundings as one point light: the root's loose faces
+once, and every group or component wherever it is placed, at any depth (a lamp component inside
+a room inside a house gives its own light in each placed house; the groups around it give none
+of their own). A face glows with its stronger side's material (its own, or the nearest painted
+instance's, as for color). The light sits at the area-weighted center of the glowing faces, has
+their color weighted by emission times area, and its strength is their emission times their
+area in square meters (scaled with a scaled placement). It reaches 6 x sqrt(strength) meters
+and falls off smoothly to nothing there; surfaces take it by the angle they face it, with no
+shadows. Lights do not depend on the open instance. The window and `render_view` use the 128
+strongest lights as seen from the eye (strength over 1 + distance squared). By day lights add to
+the headlight and ambient light; by night those are dimmed, the background is dark, and
+unselected edges, the grid and the axes fade toward it; selection, guides and tool previews keep
+their colors.
 
 The `entity` result of a face (and its entry in `entities`) has `front_material` and
 `back_material`, an instance's has `material`; each is absent for the default material.
@@ -583,7 +598,7 @@ Behaviors worth knowing:
   `batch` method.
 - Camera commands return empty changes and do not change the revision. `render_view`'s camera
   takes the fields of `set_camera` (absent ones keep the document camera's values) and never
-  moves the document camera.
+  moves the document camera; its `lighting` never changes the document's.
 - A failed atomic batch is rolled back but still consumes entity ids, so later ids may skip numbers.
 - An `id` that is not a string, number or null is an invalid request (`-32600`, reply id null).
 

@@ -6,8 +6,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use session::{
-    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Outcome, Projection, Query,
-    QueryResult,
+    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Lighting, Outcome,
+    Projection, Query, QueryResult,
 };
 
 use crate::protocol::{RpcError, codes, failure, parse, success};
@@ -25,9 +25,15 @@ pub trait Host {
         commands: Vec<Command>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError>;
-    /// Renders the current model from `camera` to tightly packed RGBA8 pixels, or None when no
-    /// GPU is available.
-    fn render_view(&mut self, camera: &Camera, width: u32, height: u32) -> Option<Vec<u8>>;
+    /// Renders the current model from `camera`, lit by `lighting`, to tightly packed RGBA8
+    /// pixels, or None when no GPU is available.
+    fn render_view(
+        &mut self,
+        camera: &Camera,
+        lighting: Lighting,
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>>;
 }
 
 /// Handles one request line and returns the reply line (None for notifications).
@@ -106,6 +112,7 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
         width: u32,
         height: u32,
         camera: Option<View>,
+        lighting: Option<Lighting>,
     }
     let p: Params = params_as(params)?;
     let sides = 1..=MAX_IMAGE_SIDE;
@@ -122,8 +129,9 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
             .map_err(command_failed)?,
         None => doc.camera.clone(),
     };
+    let lighting = p.lighting.unwrap_or(doc.lighting);
     let rgba = host
-        .render_view(&camera, p.width, p.height)
+        .render_view(&camera, lighting, p.width, p.height)
         .ok_or_else(|| {
             RpcError::new(codes::RENDER_UNAVAILABLE, "no GPU available for rendering")
         })?;
@@ -164,9 +172,9 @@ pub fn describe() -> Value {
             },
             "query": {"params": "Query", "result": "QueryResult"},
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\"}",
                 "result": "{width, height, png_base64}",
-                "notes": "does not move the document camera"
+                "notes": "does not move the document camera or change its lighting"
             },
             "subscribe": {"params": null, "result": "{revision}", "notes": "connection only"},
             "describe": {"params": null, "result": "this document"}

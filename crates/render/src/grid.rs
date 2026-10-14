@@ -9,6 +9,8 @@ pub struct LineVertex {
 
 // sRGB-authored colors.
 pub const BACKGROUND: [f32; 4] = [0.96, 0.96, 0.96, 1.0];
+/// The background when the view is lit by night. scene.wgsl fades lines toward it.
+pub const NIGHT_BACKGROUND: [f32; 4] = [0.05, 0.06, 0.09, 1.0];
 pub const GRID_COLOR: [f32; 4] = [0.84, 0.84, 0.84, 1.0];
 pub const AXIS_X: [f32; 4] = [0.85, 0.15, 0.15, 1.0];
 pub const AXIS_Y: [f32; 4] = [0.15, 0.65, 0.20, 1.0];

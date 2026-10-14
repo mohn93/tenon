@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 
 use kernel::{EntityId, InstanceId, Scene};
-use session::Camera;
+use session::{Camera, Lighting};
 use wgpu::util::DeviceExt;
 
-use crate::grid::{BACKGROUND, LineVertex, flat_ground_lines, vertical_axis_lines};
+use crate::grid::{
+    BACKGROUND, LineVertex, NIGHT_BACKGROUND, flat_ground_lines, vertical_axis_lines,
+};
 use crate::guides::{GuideShape, guide_lines};
+use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{BaseFaceVertex, Spans, scene_base, shown_guides};
 use crate::texture::TextureArray;
 
@@ -14,9 +17,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-const FACE_ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+const FACE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
     0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32x2,
-    6 => Float32x4, 7 => Float32x2
+    6 => Float32x4, 7 => Float32x2, 8 => Float32x2
 ];
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
@@ -53,6 +56,64 @@ impl Uniforms {
             eye,
             depth_offset,
         }
+    }
+}
+
+/// The ambient light and the headlight's strength by day: faces are lit 0.6 seen edge-on and 1
+/// seen square-on.
+const DAY: [f32; 2] = [0.6, 0.4];
+/// The same at night, dimmed so glowing faces light the scene.
+const NIGHT: [f32; 2] = [0.08, 0.12];
+
+/// A light as scene.wgsl reads it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightUniform {
+    /// The position, and the range in w.
+    position: [f32; 4],
+    /// sRGB color in rgb; w unused.
+    color: [f32; 4],
+}
+
+/// How the scene is lit (matches `Lighting` in scene.wgsl).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightingUniforms {
+    /// x: how many lights; y: the ambient light; z: the headlight; w: 1 at night, else 0.
+    mode: [f32; 4],
+    /// The background, which lines fade toward at night.
+    background: [f32; 4],
+    lights: [LightUniform; MAX_LIGHTS],
+}
+
+impl LightingUniforms {
+    /// The lighting for `mode` with the strongest of `lights` as seen by `camera`.
+    fn new(lights: &[Light], camera: &Camera, mode: Lighting) -> Self {
+        let used = strongest(lights, camera.eye, MAX_LIGHTS);
+        let mut uniforms = Self {
+            mode: [0.0; 4],
+            background: background(mode),
+            lights: [LightUniform::default(); MAX_LIGHTS],
+        };
+        for (u, l) in uniforms.lights.iter_mut().zip(&used) {
+            let p = l.position.as_vec3();
+            u.position = [p.x, p.y, p.z, l.range() as f32];
+            u.color = [l.color[0], l.color[1], l.color[2], 0.0];
+        }
+        let ([ambient, headlight], night) = match mode {
+            Lighting::Day => (DAY, 0.0),
+            Lighting::Night => (NIGHT, 1.0),
+        };
+        uniforms.mode = [used.len() as f32, ambient, headlight, night];
+        uniforms
+    }
+}
+
+/// The color the target is cleared to.
+fn background(mode: Lighting) -> [f32; 4] {
+    match mode {
+        Lighting::Day => BACKGROUND,
+        Lighting::Night => NIGHT_BACKGROUND,
     }
 }
 
@@ -195,13 +256,19 @@ pub struct Renderer {
     guide_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
+    /// The lighting uniforms, rewritten every frame (see `LightingUniforms`).
+    lighting_uniforms: wgpu::Buffer,
     bind_layout: wgpu::BindGroupLayout,
     /// Repeats both ways, filtering linearly between pixels and mipmaps.
     sampler: wgpu::Sampler,
     /// The scene's textures, as of the last `set_model`.
     textures: TextureArray,
-    /// The camera uniforms, the textures and the sampler.
+    /// The camera uniforms, the textures, the sampler and the lighting uniforms.
     bind_group: wgpu::BindGroup,
+    /// Day or night, as of the last `set_lighting`.
+    lighting: Lighting,
+    /// The scene's lights, as of the last `set_model`.
+    lights: Vec<Light>,
     flat_ground: Mesh,
     vertical_axis: Mesh,
     faces: Option<Mesh>,
@@ -254,6 +321,16 @@ impl Renderer {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -335,7 +412,7 @@ impl Renderer {
         // Flat ground: no depth test at all, so the faces drawn after it always cover it.
         let flat_ground_pipeline = pipeline(
             "flat ground",
-            "vs_overlay",
+            "vs_flat_ground",
             "fs_line",
             &lines_only,
             lines,
@@ -435,6 +512,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let lighting_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lighting uniforms"),
+            size: std::mem::size_of::<LightingUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("material textures"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -445,7 +528,13 @@ impl Renderer {
             ..Default::default()
         });
         let textures = TextureArray::new(device, queue, &Scene::default());
-        let bind_group = bind_group(device, &bind_layout, &uniforms, &textures, &sampler);
+        let bind_group = bind_group(
+            device,
+            &bind_layout,
+            [&uniforms, &lighting_uniforms],
+            &textures,
+            &sampler,
+        );
 
         let flat_ground =
             mesh(device, "flat ground lines", &flat_ground_lines()).expect("grid is never empty");
@@ -464,10 +553,13 @@ impl Renderer {
             guide_pipeline,
             overlay_pipeline,
             uniforms,
+            lighting_uniforms,
             bind_layout,
             sampler,
             textures,
             bind_group,
+            lighting: Lighting::Day,
+            lights: Vec::new(),
             flat_ground,
             vertical_axis,
             faces: None,
@@ -500,7 +592,7 @@ impl Renderer {
             self.bind_group = bind_group(
                 &self.device,
                 &self.bind_layout,
-                &self.uniforms,
+                [&self.uniforms, &self.lighting_uniforms],
                 &self.textures,
                 &self.sampler,
             );
@@ -512,6 +604,12 @@ impl Renderer {
         self.spans = base.spans;
         self.guides = base.guides.clone();
         self.base_guides = base.guides;
+        self.lights = base.lights;
+    }
+
+    /// Lights the frames drawn from now on by day or by night.
+    pub fn set_lighting(&mut self, lighting: Lighting) {
+        self.lighting = lighting;
     }
 
     /// Shows `selection`, ids of the open context given to the last `set_model`, by rewriting
@@ -540,7 +638,7 @@ impl Renderer {
     }
 
     /// Like `render`, but the scene fills only `viewport`; the rest of the target is cleared to
-    /// the background. `camera.viewport` should match the viewport's size.
+    /// the background (dark at night). `camera.viewport` should match the viewport's size.
     pub fn render_in(
         &mut self,
         target: &wgpu::TextureView,
@@ -557,13 +655,16 @@ impl Renderer {
         let uniforms = Uniforms::new(camera);
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        let lighting = LightingUniforms::new(&self.lights, camera, self.lighting);
+        self.queue
+            .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         let overlay = mesh(&self.device, "overlay", overlay);
         let guides = mesh(&self.device, "guides", &guide_lines(&self.guides, camera));
         if let Some(glass) = &mut self.glass {
             glass.sort(&self.queue, camera);
         }
 
-        let [r, g, b, a] = BACKGROUND.map(f64::from);
+        let [r, g, b, a] = background(self.lighting).map(f64::from);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -675,11 +776,11 @@ impl Renderer {
 }
 
 /// The bind group every pipeline uses: the camera uniforms, the material textures and their
-/// sampler.
+/// sampler, and the lighting uniforms.
 fn bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    uniforms: &wgpu::Buffer,
+    [uniforms, lighting]: [&wgpu::Buffer; 2],
     textures: &TextureArray,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
@@ -698,6 +799,10 @@ fn bind_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: lighting.as_entire_binding(),
             },
         ],
     })

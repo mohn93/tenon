@@ -457,6 +457,64 @@ fn render_view_does_not_move_the_document_camera() {
     assert_eq!(h.doc.camera, before);
 }
 
+/// The first pixel of a `render_view` reply's PNG.
+fn first_pixel(reply: &Value) -> [u8; 3] {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(reply["result"]["png_base64"].as_str().unwrap())
+        .unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    reader.next_frame(&mut buf).unwrap();
+    [buf[0], buf[1], buf[2]]
+}
+
+#[test]
+fn render_view_takes_the_lighting_without_changing_the_documents() {
+    let mut h = HeadlessHost::new();
+    // Looking level, the top left pixel is sky.
+    let level = json!({"eye": [0, -6, 1.5], "target": [0, 0, 1.5]});
+    let night = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level, "lighting": "night"}),
+    );
+    assert_eq!(h.doc.lighting, session::Lighting::Day);
+    let bad = call(
+        &mut h,
+        "render_view",
+        json!({"width": 8, "height": 8, "lighting": "dusk"}),
+    );
+    assert_eq!(bad["error"]["code"], codes::INVALID_PARAMS);
+    if night["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    let day = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level}),
+    );
+    let sky = |c: [f32; 4]| c.map(|x| (x * 255.0).round() as u8);
+    let [r, g, b, _] = sky(render::grid::NIGHT_BACKGROUND);
+    assert_eq!(first_pixel(&night), [r, g, b]);
+    let [r, g, b, _] = sky(render::grid::BACKGROUND);
+    assert_eq!(first_pixel(&day), [r, g, b]);
+    // Without `lighting` it follows the document's.
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_lighting", "mode": "night"}),
+    );
+    let document_night = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level}),
+    );
+    assert_eq!(first_pixel(&document_night), first_pixel(&night));
+}
+
 #[test]
 fn misspelled_params_are_invalid_params() {
     let mut h = HeadlessHost::new();

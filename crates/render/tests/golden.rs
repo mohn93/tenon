@@ -107,7 +107,7 @@ fn updating() -> bool {
     std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| v == "1")
 }
 
-/// Renders `doc` with its camera, selection and open context, and checks the image against
+/// Renders `doc` with its camera, lighting, selection and open context, and checks the image against
 /// `tests/golden/<name>.png` (or rewrites that file with `UPDATE_GOLDEN=1`). Skips without
 /// a GPU adapter.
 fn check(name: &str, doc: &Document) {
@@ -121,6 +121,7 @@ fn check(name: &str, doc: &Document) {
             doc.context(),
             doc.selection(),
             &doc.camera,
+            doc.lighting,
             WIDTH,
             HEIGHT,
         )
@@ -759,6 +760,103 @@ fn golden_textured_box_and_ground() {
     check("textured", &d);
 }
 
+/// A material glowing at `emission`.
+fn add_lamp_material(doc: &mut Document, name: &str, color: [u8; 3], emission: f32) -> MaterialId {
+    let outcome = run(
+        doc,
+        Command::AddMaterial {
+            name: Some(name.into()),
+            color: Some(color),
+            opacity: None,
+            texture: None,
+            emission: Some(emission),
+        },
+    );
+    outcome.changes.materials[0]
+}
+
+/// The instance of the open context an outcome made (a copied group's insides are new too).
+fn created_instance(doc: &Document, outcome: &session::Outcome) -> EntityId {
+    *outcome
+        .changes
+        .created
+        .iter()
+        .find(|e| matches!(e, EntityId::Instance(i) if doc.model().instance(*i).is_some()))
+        .expect("an instance was made")
+}
+
+#[test]
+fn golden_night_lit_by_two_lamps() {
+    let mut d = doc();
+    // A floor with a box on it.
+    run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [-4.0, -3.0, 0.0],
+            opposite: [6.0, 4.0, 0.0],
+            normal: None,
+        },
+    );
+    add_box(&mut d, [0.0, 0.0]);
+    // A lamp: a level square component inside a "Fixture" group, hanging left of the box.
+    let shade = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [-1.8, -1.3, 2.2],
+            opposite: [-1.2, -0.7, 2.2],
+            normal: None,
+        },
+    );
+    let made = run(
+        &mut d,
+        Command::MakeComponent {
+            ids: vec![created_face(&shade)],
+            name: "Lamp".into(),
+        },
+    );
+    let lamp = created_instance(&d, &made);
+    let grouped = run(&mut d, Command::MakeGroup { ids: vec![lamp] });
+    let fixture = created_instance(&d, &grouped);
+    // A copy right of the box.
+    let copied = run(
+        &mut d,
+        Command::Copy {
+            ids: vec![fixture],
+            offset: [5.0, 0.0, 0.0],
+            count: None,
+        },
+    );
+    let copy = created_instance(&d, &copied);
+    // Warm on the left, cool on the right: the fixtures' paint reaches the lamps' faces.
+    let warm = add_lamp_material(&mut d, "Warm", [255, 200, 120], 6.0);
+    let cool = add_lamp_material(&mut d, "Cool", [120, 170, 255], 6.0);
+    for (instance, material) in [(fixture, warm), (copy, cool)] {
+        run(
+            &mut d,
+            Command::Paint {
+                ids: vec![instance],
+                material: Some(material),
+                side: Side::Front,
+            },
+        );
+    }
+    run(
+        &mut d,
+        Command::Select {
+            ids: Vec::new(),
+            mode: Default::default(),
+        },
+    );
+    run(
+        &mut d,
+        Command::SetLighting {
+            mode: session::Lighting::Night,
+        },
+    );
+    look(&mut d, [1.0, -7.5, 4.5], [1.0, 0.75, 0.6]);
+    check("night", &d);
+}
+
 /// Every stored golden image belongs to a test here, so stale ones do not pile up.
 #[test]
 fn every_golden_image_has_a_test() {
@@ -777,6 +875,7 @@ fn every_golden_image_has_a_test() {
         "open_group",
         "glass",
         "textured",
+        "night",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

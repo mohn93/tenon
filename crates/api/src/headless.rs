@@ -2,7 +2,7 @@
 
 use glam::DVec2;
 use render::Snapshotter;
-use session::{BatchError, Camera, Command, CommandError, Document, Outcome};
+use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
 
 use crate::dispatch::Host;
 
@@ -45,7 +45,13 @@ impl Host for HeadlessHost {
         self.doc.execute_batch(commands, atomic)
     }
 
-    fn render_view(&mut self, camera: &Camera, width: u32, height: u32) -> Option<Vec<u8>> {
+    fn render_view(
+        &mut self,
+        camera: &Camera,
+        lighting: Lighting,
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         if !self.gpu_checked {
             self.gpu_checked = true;
             self.snapshotter = Snapshotter::new_headless();
@@ -57,6 +63,7 @@ impl Host for HeadlessHost {
                 doc.context(),
                 doc.selection(),
                 camera,
+                lighting,
                 width,
                 height,
             )

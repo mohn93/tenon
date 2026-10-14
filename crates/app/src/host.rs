@@ -3,7 +3,7 @@
 
 use api::Host;
 use render::Snapshotter;
-use session::{BatchError, Camera, Command, CommandError, Document, Outcome};
+use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
 
 use crate::editor::Editor;
 
@@ -29,13 +29,20 @@ impl Host for WindowHost<'_> {
         self.editor.execute_batch(commands, atomic)
     }
 
-    fn render_view(&mut self, camera: &Camera, width: u32, height: u32) -> Option<Vec<u8>> {
+    fn render_view(
+        &mut self,
+        camera: &Camera,
+        lighting: Lighting,
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         let doc = self.editor.doc();
         self.snapshotter.capture(
             doc.scene(),
             doc.context(),
             doc.selection(),
             camera,
+            lighting,
             width,
             height,
         )

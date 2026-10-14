@@ -825,6 +825,7 @@ impl State {
                 doc.context().to_vec(),
             ));
         }
+        self.renderer.set_lighting(doc.lighting);
         self.renderer.render_in(
             &target,
             size,

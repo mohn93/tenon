@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use glam::{DVec2, DVec3};
 use kernel::{Model, Scene};
 use render::Snapshotter;
-use render::grid::BACKGROUND;
-use session::Camera;
+use render::grid::{BACKGROUND, NIGHT_BACKGROUND};
+use session::{Camera, Lighting};
 
 fn ground_square() -> Model {
     let mut m = Model::new();
@@ -35,6 +35,7 @@ fn capture_returns_tightly_packed_rows_for_any_width() {
             &[],
             &BTreeSet::new(),
             &camera,
+            Lighting::Day,
             w,
             h,
         )
@@ -77,7 +78,15 @@ fn capture_handles_padding_edge_widths() {
     // Widths around the 64-pixel (256-byte) row alignment boundary.
     for w in [1u32, 63, 64, 65] {
         let px = snap
-            .capture(&Scene::new(), &[], &BTreeSet::new(), &camera, w, h)
+            .capture(
+                &Scene::new(),
+                &[],
+                &BTreeSet::new(),
+                &camera,
+                Lighting::Day,
+                w,
+                h,
+            )
             .expect("capture");
         assert_eq!(px.len(), (w * h * 4) as usize, "width {w}");
         // At width 1 the only column is the image center, where the renderer draws the
@@ -87,4 +96,82 @@ fn capture_handles_padding_edge_widths() {
             assert_eq!(&px[i..i + 3], &sky, "top-right pixel at width {w}");
         }
     }
+}
+
+/// A 20 x 20 m ground face with a 0.5 m glowing white square hanging 1 m above (-5, 0), its
+/// both sides painted with a material glowing at 5.
+fn lamp_over_ground() -> Scene {
+    let mut m = Model::new();
+    let ground = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+    m.add_polygon(&ground.map(|(x, y)| DVec3::new(x, y, 0.0)))
+        .unwrap();
+    let lamp = [(-5.25, -0.25), (-4.75, -0.25), (-4.75, 0.25), (-5.25, 0.25)];
+    m.add_polygon(&lamp.map(|(x, y)| DVec3::new(x, y, 1.0)))
+        .unwrap();
+    let lamp_face = m
+        .faces()
+        .find(|(_, f)| m.position(f.outer[0]).unwrap().z == 1.0)
+        .unwrap()
+        .0;
+    let mut s = Scene::from_root(m);
+    let (glow, _) = s
+        .add_material_from(kernel::Material {
+            name: "Lamp".into(),
+            color: [255, 255, 255],
+            opacity: 1.0,
+            texture: None,
+            emission: 5.0,
+        })
+        .unwrap();
+    s.paint(
+        kernel::MeshId::Root,
+        &[lamp_face],
+        &[],
+        kernel::Side::Both,
+        Some(glow),
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn night_is_dark_except_near_glowing_faces_which_show_unshaded() {
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let (w, h) = (160, 120);
+    let mut camera = Camera::new(DVec2::new(w as f64, h as f64));
+    camera.eye = DVec3::new(0.0, -14.0, 12.0);
+    camera.target = DVec3::ZERO;
+    let scene = lamp_over_ground();
+    let shot = |snap: &mut Snapshotter, lighting| {
+        snap.capture(&scene, &[], &BTreeSet::new(), &camera, lighting, w, h)
+            .expect("capture")
+    };
+    let night = shot(&mut snap, Lighting::Night);
+    let day = shot(&mut snap, Lighting::Day);
+    let at = |px: &[u8], p: DVec3| {
+        let s = camera.project(p).unwrap();
+        let i = ((s.y as u32 * w + s.x as u32) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    let gray = |c: [u8; 3]| c.iter().map(|v| u32::from(*v)).sum::<u32>() / 3;
+    // Looking level, the sky is the night background.
+    let mut level = camera.clone();
+    level.eye = DVec3::new(0.0, -6.0, 1.5);
+    level.target = DVec3::new(0.0, 0.0, 1.5);
+    let sky = snap
+        .capture(&scene, &[], &BTreeSet::new(), &level, Lighting::Night, w, h)
+        .expect("capture");
+    let background = NIGHT_BACKGROUND.map(|c| (c * 255.0).round() as u8);
+    assert_eq!(&sky[..3], &background[..3]);
+    // The lamp shows its own white, unshaded.
+    assert_eq!(at(&night, DVec3::new(-5.0, 0.0, 1.0)), [255, 255, 255]);
+    // The ground under the lamp is lit; far from it, it is dark, darker than by day.
+    let near = gray(at(&night, DVec3::new(-5.0, -1.0, 0.0)));
+    let far = gray(at(&night, DVec3::new(6.0, -1.0, 0.0)));
+    assert!(near > far + 60, "near {near}, far {far}");
+    assert!(far < 60, "far {far}");
+    assert!(gray(at(&day, DVec3::new(6.0, -1.0, 0.0))) > 180);
 }
