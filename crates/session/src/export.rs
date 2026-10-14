@@ -1,15 +1,16 @@
 //! Exporting the model's faces as triangles: OBJ (with a `.mtl` beside it when faces are
-//! painted), STL, and glTF (binary `.glb` or `.gltf` with its buffer embedded). Units are
-//! meters. OBJ and glTF are Y-up (x, z, -y); STL keeps the model's Z-up coordinates. Colors are
-//! those of the faces' front sides; STL has none.
+//! painted, and texture images beside that), STL, and glTF (binary `.glb` or `.gltf` with its
+//! buffer embedded, textures included). Units are meters. OBJ and glTF are Y-up (x, z, -y); STL
+//! keeps the model's Z-up coordinates. Colors and textures are those of the faces' front sides;
+//! STL has none.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::path::Path;
 
 use base64::Engine;
-use glam::DVec3;
-use kernel::{MaterialId, Scene, Triangle};
+use glam::{DVec2, DVec3};
+use kernel::{MaterialId, Scene, Texture, Triangle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -55,10 +56,12 @@ pub struct ExportReport {
 }
 
 /// What an export writes: the file's bytes and, for an OBJ whose faces are painted, the bytes
-/// of the material library (`.mtl`) it names.
+/// of the material library (`.mtl`) it names and the texture images the library names, each
+/// with its file name (written beside the library).
 pub(crate) struct Encoded {
     pub bytes: Vec<u8>,
     pub mtl: Option<Vec<u8>>,
+    pub images: Vec<(String, Vec<u8>)>,
 }
 
 /// The bytes of `triangles` in `format`. Materials are looked up in `scene`; an OBJ refers to
@@ -72,26 +75,16 @@ pub(crate) fn encode(
     mtl_name: &str,
 ) -> Result<Encoded, String> {
     let groups = Groups::of(scene, triangles);
+    let only = |bytes| Encoded {
+        bytes,
+        mtl: None,
+        images: Vec::new(),
+    };
     Ok(match format {
-        ExportFormat::Obj => {
-            let (obj, mtl) = obj(&groups, mtl_name);
-            Encoded {
-                bytes: obj.into_bytes(),
-                mtl: mtl.map(String::into_bytes),
-            }
-        }
-        ExportFormat::Stl => Encoded {
-            bytes: stl(triangles)?,
-            mtl: None,
-        },
-        ExportFormat::Glb => Encoded {
-            bytes: glb(&groups)?,
-            mtl: None,
-        },
-        ExportFormat::Gltf => Encoded {
-            bytes: gltf(&groups).into_bytes(),
-            mtl: None,
-        },
+        ExportFormat::Obj => obj(&groups, mtl_name),
+        ExportFormat::Stl => only(stl(triangles)?),
+        ExportFormat::Glb => only(glb(&groups)?),
+        ExportFormat::Gltf => only(gltf(&groups).into_bytes()),
     })
 }
 
@@ -134,30 +127,34 @@ struct Group<'a> {
     color: [f64; 3],
     /// 1 is opaque.
     opacity: f32,
+    texture: Option<&'a Texture>,
     triangles: Vec<&'a Triangle>,
 }
 
 impl<'a> Groups<'a> {
-    fn of(scene: &Scene, triangles: &'a [Triangle]) -> Groups<'a> {
+    fn of(scene: &'a Scene, triangles: &'a [Triangle]) -> Groups<'a> {
         let mut groups: Vec<Group<'a>> = Vec::new();
         for t in triangles {
             let material = t.front.filter(|m| scene.material(*m).is_some());
             let i = match groups.iter().position(|g| g.material == material) {
                 Some(i) => i,
                 None => {
-                    let (name, color, opacity) = match material.and_then(|m| scene.material(m)) {
-                        Some(m) => (
-                            m.name.clone(),
-                            m.color.map(|c| f64::from(c) / 255.0),
-                            m.opacity,
-                        ),
-                        None => ("default".to_string(), DEFAULT_COLOR, 1.0),
-                    };
+                    let (name, color, opacity, texture) =
+                        match material.and_then(|m| scene.material(m)) {
+                            Some(m) => (
+                                m.name.clone(),
+                                m.color.map(|c| f64::from(c) / 255.0),
+                                m.opacity,
+                                m.texture.as_ref(),
+                            ),
+                            None => ("default".to_string(), DEFAULT_COLOR, 1.0, None),
+                        };
                     groups.push(Group {
                         material,
                         name,
                         color,
                         opacity,
+                        texture,
                         triangles: Vec::new(),
                     });
                     groups.len() - 1
@@ -176,6 +173,17 @@ impl<'a> Groups<'a> {
     fn triangles(&self) -> impl Iterator<Item = &&'a Triangle> {
         self.groups.iter().flat_map(|g| &g.triangles)
     }
+}
+
+/// A triangle's texture coordinates on `texture`: its corners' texture positions over the
+/// texture's size, with v counted down from the image's top (glTF's way), shifted by whole
+/// repeats so the numbers stay small.
+fn texcoords(t: &Triangle, texture: &Texture) -> [DVec2; 3] {
+    let st = t
+        .uvs
+        .map(|p| DVec2::new(p.x / texture.width, -p.y / texture.height));
+    let shift = st[0].floor();
+    st.map(|q| q - shift)
 }
 
 /// An sRGB component (0 to 1) as linear light, as glTF colors and most `.mtl` readers take it.
@@ -228,9 +236,10 @@ fn y_up(p: DVec3) -> DVec3 {
     DVec3::new(p.x + 0.0, p.z + 0.0, -p.y + 0.0)
 }
 
-/// OBJ with shared positions and normals; faces are triangles. When some faces are painted,
-/// each material's faces follow a `usemtl` line and the material library is returned too.
-fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
+/// OBJ with shared positions, normals and texture coordinates; faces are triangles. When some
+/// faces are painted, each material's faces follow a `usemtl` line and the material library is
+/// returned too, with the texture images it names (`<library stem>_<material>.png` or `.jpg`).
+fn obj(groups: &Groups, mtl_name: &str) -> Encoded {
     let mut out = String::from("# sketchup-alt export: meters, Y up\n");
     let painted = groups.painted();
     if painted {
@@ -240,6 +249,7 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
     let names = obj_names(groups);
     let mut positions: HashMap<[u64; 3], usize> = HashMap::new();
     let mut normals: HashMap<[u64; 3], usize> = HashMap::new();
+    let mut texcoords: HashMap<[u64; 2], usize> = HashMap::new();
     let mut faces = String::new();
     let key = |p: DVec3| p.to_array().map(|c| (c + 0.0).to_bits());
     for (g, name) in groups.groups.iter().zip(&names) {
@@ -247,6 +257,19 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
             let _ = writeln!(faces, "usemtl {name}");
         }
         for t in &g.triangles {
+            // OBJ counts v up from the image's bottom, so the meters divide straight.
+            let vt = g.texture.map(|tex| {
+                t.uvs.map(|p| {
+                    let st = DVec2::new(p.x / tex.width, p.y / tex.height);
+                    let next = texcoords.len() + 1;
+                    *texcoords
+                        .entry(st.to_array().map(|c| (c + 0.0).to_bits()))
+                        .or_insert_with(|| {
+                            let _ = writeln!(out, "vt {} {}", st.x + 0.0, st.y + 0.0);
+                            next
+                        })
+                })
+            });
             let n = y_up(t.normal);
             let next = normals.len() + 1;
             let ni = *normals.entry(key(n)).or_insert_with(|| {
@@ -262,15 +285,28 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
                     next
                 });
             }
-            let _ = writeln!(
-                faces,
-                "f {}//{ni} {}//{ni} {}//{ni}",
-                ids[0], ids[1], ids[2]
-            );
+            match vt {
+                Some([ta, tb, tc]) => {
+                    let _ = writeln!(
+                        faces,
+                        "f {}/{ta}/{ni} {}/{tb}/{ni} {}/{tc}/{ni}",
+                        ids[0], ids[1], ids[2]
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        faces,
+                        "f {}//{ni} {}//{ni} {}//{ni}",
+                        ids[0], ids[1], ids[2]
+                    );
+                }
+            }
         }
     }
     out.push_str(&faces);
+    let mut images = Vec::new();
     let mtl = painted.then(|| {
+        let stem = mtl_name.strip_suffix(".mtl").unwrap_or(mtl_name);
         let mut mtl = String::from("# sketchup-alt materials: diffuse colors, linear\n");
         for (g, name) in groups.groups.iter().zip(&names) {
             let [r, gr, b] = g.color.map(linear);
@@ -280,10 +316,19 @@ fn obj(groups: &Groups, mtl_name: &str) -> (String, Option<String>) {
                 let d = f64::from(g.opacity);
                 let _ = writeln!(mtl, "d {d:.6}\nTr {:.6}", 1.0 - d);
             }
+            if let Some(t) = g.texture {
+                let file = format!("{stem}_{name}.{}", t.image.format.extension());
+                let _ = writeln!(mtl, "map_Kd {file}");
+                images.push((file, t.image.encoded.clone()));
+            }
         }
         mtl
     });
-    (out, mtl)
+    Encoded {
+        bytes: out.into_bytes(),
+        mtl: mtl.map(String::into_bytes),
+        images,
+    }
 }
 
 /// Binary STL: an 80-byte header, the triangle count, then per triangle its normal, its three
@@ -307,9 +352,10 @@ fn stl(triangles: &[Triangle]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// The vertex buffer (positions then corner normals, f32 little-endian, Y-up, each material's
-/// triangles together) and the glTF document describing it: one primitive per material, its
-/// buffer without a `uri` (a `.glb`'s own chunk).
+/// The buffer (positions then corner normals, f32 little-endian, Y-up, each material's
+/// triangles together; then, when some material has a texture, the texture coordinates of
+/// those materials' triangles and each texture's image file) and the glTF document describing
+/// it: one primitive per material, its buffer without a `uri` (a `.glb`'s own chunk).
 fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
     let count: usize = groups.groups.iter().map(|g| g.triangles.len() * 3).sum();
     let mut buffer = Vec::with_capacity(count * 24);
@@ -338,6 +384,32 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         }
     }
     let half = count * 12;
+    let mut views = vec![
+        json!({"buffer": 0, "byteOffset": 0, "byteLength": half, "target": 34962}),
+        json!({"buffer": 0, "byteOffset": half, "byteLength": half, "target": 34962}),
+    ];
+    // Each textured material's first texture coordinate in the third view.
+    let mut texcoord_starts = Vec::new();
+    let mut texcoord_count = 0;
+    for g in &groups.groups {
+        texcoord_starts.push(texcoord_count);
+        if let Some(texture) = g.texture {
+            for t in &g.triangles {
+                for st in texcoords(t, texture) {
+                    for x in st.to_array() {
+                        buffer.extend_from_slice(&(x as f32).to_le_bytes());
+                    }
+                }
+            }
+            texcoord_count += g.triangles.len() * 3;
+        }
+    }
+    if texcoord_count > 0 {
+        views.push(json!({"buffer": 0, "byteOffset": 2 * half,
+            "byteLength": texcoord_count * 8, "target": 34962}));
+    }
+    let mut images = Vec::new();
+    let mut textures = Vec::new();
     let mut accessors = Vec::new();
     let mut primitives = Vec::new();
     let mut materials = Vec::new();
@@ -353,15 +425,33 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
             json!({"bufferView": 1, "byteOffset": start * 12, "componentType": 5126,
             "count": n, "type": "VEC3"}),
         );
-        primitives.push(
-            json!({"attributes": {"POSITION": 2 * k, "NORMAL": 2 * k + 1},
-            "mode": 4, "material": k}),
-        );
+        let mut attributes =
+            json!({"POSITION": accessors.len() - 2, "NORMAL": accessors.len() - 1});
         let mut pbr = json!({"metallicFactor": 0});
-        if g.material.is_some() {
+        if let Some(texture) = g.texture {
+            attributes["TEXCOORD_0"] = json!(accessors.len());
+            accessors.push(
+                json!({"bufferView": 2, "byteOffset": texcoord_starts[k] * 8,
+                "componentType": 5126, "count": n, "type": "VEC2"}),
+            );
+            // The image file as it was read, aligned to 4 bytes in the buffer.
+            while buffer.len() % 4 != 0 {
+                buffer.push(0);
+            }
+            let image = &texture.image;
+            views.push(json!({"buffer": 0, "byteOffset": buffer.len(),
+                "byteLength": image.encoded.len()}));
+            buffer.extend_from_slice(&image.encoded);
+            images.push(json!({"bufferView": views.len() - 1, "mimeType": image.format.mime()}));
+            textures.push(json!({"sampler": 0, "source": images.len() - 1}));
+            // The texture shows instead of the color; the opacity stays.
+            pbr["baseColorFactor"] = json!([1.0, 1.0, 1.0, decimal(g.opacity)]);
+            pbr["baseColorTexture"] = json!({"index": textures.len() - 1});
+        } else if g.material.is_some() {
             let [r, gr, b] = g.color.map(linear);
             pbr["baseColorFactor"] = json!([r, gr, b, decimal(g.opacity)]);
         }
+        primitives.push(json!({"attributes": attributes, "mode": 4, "material": k}));
         let mut material = json!({"name": g.name, "doubleSided": true,
             "pbrMetallicRoughness": pbr});
         if g.opacity < 1.0 {
@@ -370,7 +460,7 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         materials.push(material);
         start += n;
     }
-    let doc = json!({
+    let mut doc = json!({
         "asset": {"version": "2.0", "generator": "sketchup-alt"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
@@ -378,12 +468,16 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         "materials": materials,
         "meshes": [{"primitives": primitives}],
         "buffers": [{"byteLength": buffer.len()}],
-        "bufferViews": [
-            {"buffer": 0, "byteOffset": 0, "byteLength": half, "target": 34962},
-            {"buffer": 0, "byteOffset": half, "byteLength": half, "target": 34962}
-        ],
+        "bufferViews": views,
         "accessors": accessors
     });
+    if !textures.is_empty() {
+        // Linear filtering with mipmaps, repeating both ways.
+        doc["samplers"] =
+            json!([{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}]);
+        doc["textures"] = json!(textures);
+        doc["images"] = json!(images);
+    }
     (buffer, doc)
 }
 

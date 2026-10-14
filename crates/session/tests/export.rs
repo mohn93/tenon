@@ -700,3 +700,146 @@ fn gltf_normals_are_smooth_across_soft_edges() {
     }
     assert_eq!(sides, 12 * 6);
 }
+
+/// `two_boxes` with the first crate painted with a material whose texture is a 4 x 2 pixel PNG
+/// covering 2 x 1 m. Returns the PNG's bytes.
+fn textured_boxes(d: &mut Document, png: &str) -> Vec<u8> {
+    two_boxes(d);
+    let path = scratch(png);
+    image::RgbaImage::from_fn(4, 2, |x, _| image::Rgba([60 * x as u8, 0, 200, 255]))
+        .save(&path)
+        .unwrap();
+    let out = run(
+        d,
+        json!({"type": "add_material", "name": "Tiles",
+               "texture": {"path": path.to_str().unwrap(), "width": 2}}),
+    )
+    .unwrap();
+    let material = out["changes"]["materials"][0].clone();
+    let instances = ask(d, json!({"type": "entities", "kinds": ["instance"]}));
+    let first = instances["instances"][0]["id"].clone();
+    run(
+        d,
+        json!({"type": "paint", "ids": [first], "material": material}),
+    )
+    .unwrap();
+    std::fs::read(&path).unwrap()
+}
+
+/// The `.glb` chunks: the document and the buffer.
+fn glb_parts(bytes: &[u8]) -> (Value, Vec<u8>) {
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let json_len = word(12);
+    let doc = serde_json::from_slice(&bytes[20..20 + json_len]).unwrap();
+    let bin = 20 + json_len;
+    (doc, bytes[bin + 8..bin + 8 + word(bin)].to_vec())
+}
+
+fn floats(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
+        .collect()
+}
+
+#[test]
+fn gltf_embeds_textures_with_texture_coordinates() {
+    let mut d = doc();
+    let png = textured_boxes(&mut d, "gltf-tiles.png");
+    let (doc, buffer) = glb_parts(&export(&mut d, "textured.glb"));
+    let tiles = &doc["materials"][0];
+    assert_eq!(tiles["name"], "Tiles");
+    assert_eq!(
+        tiles["pbrMetallicRoughness"]["baseColorTexture"],
+        json!({"index": 0})
+    );
+    assert_eq!(
+        tiles["pbrMetallicRoughness"]["baseColorFactor"],
+        json!([1.0, 1.0, 1.0, 1.0])
+    );
+    assert_eq!(doc["textures"], json!([{"sampler": 0, "source": 0}]));
+    assert_eq!(doc["samplers"][0]["wrapS"], 10497);
+    assert_eq!(doc["samplers"][0]["wrapT"], 10497);
+    assert_eq!(doc["images"][0]["mimeType"], "image/png");
+    // The image is the file as read.
+    let view = &doc["bufferViews"][doc["images"][0]["bufferView"].as_u64().unwrap() as usize];
+    let at = view["byteOffset"].as_u64().unwrap() as usize;
+    let len = view["byteLength"].as_u64().unwrap() as usize;
+    assert_eq!(&buffer[at..at + len], &png[..]);
+    // The default material has no texture coordinates.
+    let primitives = doc["meshes"][0]["primitives"].as_array().unwrap();
+    assert!(primitives[1]["attributes"]["TEXCOORD_0"].is_null());
+    assert!(doc["materials"][1]["pbrMetallicRoughness"]["baseColorTexture"].is_null());
+
+    // On the crate's wall facing -y (z = 0 in Y-up) the texture runs along x and up, one copy
+    // per 2 x 1 m: s = x / 2 and t = -height, up to whole repeats.
+    let accessor = |k: &Value| {
+        let a = &doc["accessors"][k.as_u64().unwrap() as usize];
+        let view = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+        let at =
+            (view["byteOffset"].as_u64().unwrap() + a["byteOffset"].as_u64().unwrap()) as usize;
+        let width = if a["type"] == "VEC2" { 8 } else { 12 };
+        floats(&buffer[at..at + width * a["count"].as_u64().unwrap() as usize])
+    };
+    let positions = accessor(&primitives[0]["attributes"]["POSITION"]);
+    let st = accessor(&primitives[0]["attributes"]["TEXCOORD_0"]);
+    assert_eq!(st.len(), 36 * 2);
+    let mut wall = 0;
+    for (p, s) in positions
+        .as_chunks::<9>()
+        .0
+        .iter()
+        .zip(st.as_chunks::<6>().0)
+    {
+        if [p[2], p[5], p[8]].iter().any(|z| *z != 0.0) {
+            continue;
+        }
+        for k in 0..3 {
+            let (x, height) = (p[3 * k], p[3 * k + 1]);
+            let (ds, dt) = (s[2 * k] - x / 2.0, s[2 * k + 1] + height);
+            assert!((ds - ds.round()).abs() < 1e-6, "{p:?} {s:?}");
+            assert!((dt - dt.round()).abs() < 1e-6, "{p:?} {s:?}");
+            assert!(
+                s[2 * k].abs() <= 2.0 && s[2 * k + 1].abs() <= 2.0,
+                "kept small"
+            );
+        }
+        wall += 1;
+    }
+    assert_eq!(wall, 2);
+
+    // A .gltf carries the image in its embedded buffer the same way.
+    let doc: Value = serde_json::from_slice(&export(&mut d, "textured.gltf")).unwrap();
+    assert_eq!(doc["images"][0]["mimeType"], "image/png");
+    assert!(doc["images"][0]["bufferView"].is_u64());
+}
+
+#[test]
+fn obj_writes_texture_coordinates_and_images_beside_the_library() {
+    let mut d = doc();
+    let png = textured_boxes(&mut d, "obj-tiles.png");
+    let obj = String::from_utf8(export(&mut d, "tiled-boxes.obj")).unwrap();
+    assert!(obj.lines().any(|l| l.starts_with("vt ")), "{obj}");
+    let faces: Vec<&str> = obj.lines().filter(|l| l.starts_with("f ")).collect();
+    assert_eq!(faces.len(), 24);
+    // The textured crate's faces name texture coordinates; the default ones do not.
+    assert_eq!(faces.iter().filter(|f| !f.contains("//")).count(), 12);
+    let library = std::fs::read_to_string(scratch_kept("tiled-boxes.mtl")).unwrap();
+    assert!(
+        library.contains("newmtl Tiles\nKd ") && library.contains("map_Kd tiled-boxes_Tiles.png\n"),
+        "{library}"
+    );
+    assert_eq!(
+        std::fs::read(scratch_kept("tiled-boxes_Tiles.png")).unwrap(),
+        png
+    );
+}
+
+/// A path in the scratch directory, left as it is.
+fn scratch_kept(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-export-{}", std::process::id()))
+        .join(name)
+}

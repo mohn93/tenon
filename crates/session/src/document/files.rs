@@ -127,6 +127,12 @@ impl Document {
                     ),
                 ));
             }
+            // Texture images go beside the library, before it, as it names them.
+            for (name, bytes) in &encoded.images {
+                let image = mtl_path.with_file_name(name);
+                file::replace_file(&image, bytes)
+                    .map_err(|e| file_error(&image.display().to_string(), e))?;
+            }
             file::replace_file(&mtl_path, mtl)
                 .map_err(|e| file_error(&mtl_path.display().to_string(), e))?;
         }

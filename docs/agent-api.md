@@ -471,13 +471,15 @@ never overwrites a model; use `save`.
 
 | Format | Content |
 |---|---|
-| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y). When faces are painted, it names a material library (`mtllib house.mtl`) written beside it under the same name with `.mtl` (replacing a file there), and each material's triangles follow a `usemtl` line; the library gives each material its diffuse color (`Kd`, linear) and, for a see-through one, its opacity as `d` and its transparency `Tr` (1 - `d`). Material names have spaces and other separators replaced by `_` (and a number added when two become alike); faces without a material use `default`. Without painted faces no `.mtl` is written. |
+| `obj` | Text OBJ: shared `v` positions and `vn` normals, one `f` triangle per line; Y up (x, z, -y). When faces are painted, it names a material library (`mtllib house.mtl`) written beside it under the same name with `.mtl` (replacing a file there), and each material's triangles follow a `usemtl` line; the library gives each material its diffuse color (`Kd`, linear) and, for a see-through one, its opacity as `d` and its transparency `Tr` (1 - `d`). Material names have spaces and other separators replaced by `_` (and a number added when two become alike); faces without a material use `default`. Without painted faces no `.mtl` is written. A material with a texture adds `map_Kd house_Tiles.png` (the library's name, `_`, the material's name, and the image's own extension), and that image file, as it was read, is written beside the library (replacing a file there); its triangles name `vt` texture coordinates (`f v/vt/vn`), counted from the image's bottom left. |
 | `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors or opacity |
-| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear, with the opacity as alpha), and a see-through one `alphaMode` `BLEND`; the default one is named `default`; Y up |
+| `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear, with the opacity as alpha), and a see-through one `alphaMode` `BLEND`; the default one is named `default`; a material with a texture has a `TEXCOORD_0` attribute and a `baseColorTexture` (its image file, as it was read, in the buffer; a sampler with linear mipmapped filtering that repeats both ways) with a white `baseColorFactor` (and the opacity as alpha); Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
 
-Colors come from each face's front side (its own material, else that of the nearest painted
-instance placing it); back-side materials are not exported. An OBJ export whose `.mtl` would
+Colors and textures come from each face's front side (its own material, else that of the nearest
+painted instance placing it); back-side materials are not exported. Texture coordinates follow
+the projection described under Textures. The images are written before the `.mtl`. An OBJ
+export whose `.mtl` would
 be the export path itself or the open model's file is refused with `invalid_input`. The
 `.mtl` is written before the `.obj`, so a failure writing the `.obj` can leave a new `.mtl`
 beside the old (or no) `.obj`.
