@@ -843,3 +843,81 @@ fn scratch_kept(name: &str) -> PathBuf {
         .join(format!("session-export-{}", std::process::id()))
         .join(name)
 }
+
+/// `painted_boxes` with the material glowing at `emission`.
+fn glowing_boxes(d: &mut Document, emission: f64) {
+    painted_boxes(d, "Lamp", [255, 255, 255]);
+    let material = ask(d, json!({"type": "materials"}))["materials"][0]["id"].clone();
+    run(
+        d,
+        json!({"type": "change_material", "material": material, "emission": emission}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn gltf_of_glowing_materials_gives_their_emissive_color_and_strength() {
+    let mut d = doc();
+    glowing_boxes(&mut d, 0.5);
+    let doc: Value = serde_json::from_slice(&export(&mut d, "dim-lamp.gltf")).unwrap();
+    assert_eq!(
+        doc["materials"][0]["emissiveFactor"],
+        json!([0.5, 0.5, 0.5])
+    );
+    assert!(doc["materials"][0]["extensions"].is_null());
+    assert!(doc["extensionsUsed"].is_null());
+    assert!(doc["materials"][1]["emissiveFactor"].is_null(), "default");
+
+    let mut d = self::doc();
+    glowing_boxes(&mut d, 4.0);
+    let (doc, _) = glb_parts(&export(&mut d, "bright-lamp.glb"));
+    let lamp = &doc["materials"][0];
+    assert_eq!(lamp["emissiveFactor"], json!([1.0, 1.0, 1.0]));
+    assert_eq!(
+        lamp["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"],
+        4.0
+    );
+    assert_eq!(
+        doc["extensionsUsed"],
+        json!(["KHR_materials_emissive_strength"])
+    );
+}
+
+#[test]
+fn a_glowing_texture_is_its_own_emissive_texture() {
+    let mut d = doc();
+    textured_boxes(&mut d, "glow-tiles.png");
+    let tiles = ask(&d, json!({"type": "materials"}))["materials"][0]["id"].clone();
+    run(
+        &mut d,
+        json!({"type": "change_material", "material": tiles, "emission": 2}),
+    )
+    .unwrap();
+    let (doc, _) = glb_parts(&export(&mut d, "glow-tiles.glb"));
+    let tiles = &doc["materials"][0];
+    assert_eq!(tiles["emissiveTexture"], json!({"index": 0}));
+    assert_eq!(tiles["emissiveFactor"], json!([1.0, 1.0, 1.0]));
+
+    export(&mut d, "glow-tiles.obj");
+    let library = std::fs::read_to_string(scratch_kept("glow-tiles.mtl")).unwrap();
+    assert!(
+        library.contains("map_Ke glow-tiles_Tiles.png\n"),
+        "{library}"
+    );
+}
+
+#[test]
+fn mtl_of_glowing_materials_gives_their_emissive_color() {
+    let mut d = doc();
+    glowing_boxes(&mut d, 2.5);
+    export(&mut d, "lamp-boxes.obj");
+    let library = std::fs::read_to_string(scratch_kept("lamp-boxes.mtl")).unwrap();
+    assert!(
+        library.contains(
+            "newmtl Lamp\nKd 1.000000 1.000000 1.000000\nKe 2.500000 2.500000 2.500000\n"
+        ),
+        "{library}"
+    );
+    assert_eq!(library.matches("Ke ").count(), 1, "only the lamp glows");
+    assert!(!library.contains("map_Ke"), "{library}");
+}

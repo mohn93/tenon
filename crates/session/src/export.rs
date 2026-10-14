@@ -128,6 +128,8 @@ struct Group<'a> {
     /// 1 is opaque.
     opacity: f32,
     texture: Option<&'a Texture>,
+    /// 0 for a material that does not glow.
+    emission: f32,
     triangles: Vec<&'a Triangle>,
 }
 
@@ -139,15 +141,16 @@ impl<'a> Groups<'a> {
             let i = match groups.iter().position(|g| g.material == material) {
                 Some(i) => i,
                 None => {
-                    let (name, color, opacity, texture) =
+                    let (name, color, opacity, texture, emission) =
                         match material.and_then(|m| scene.material(m)) {
                             Some(m) => (
                                 m.name.clone(),
                                 m.color.map(|c| f64::from(c) / 255.0),
                                 m.opacity,
                                 m.texture.as_ref(),
+                                m.emission,
                             ),
-                            None => ("default".to_string(), DEFAULT_COLOR, 1.0, None),
+                            None => ("default".to_string(), DEFAULT_COLOR, 1.0, None, 0.0),
                         };
                     groups.push(Group {
                         material,
@@ -155,6 +158,7 @@ impl<'a> Groups<'a> {
                         color,
                         opacity,
                         texture,
+                        emission,
                         triangles: Vec::new(),
                     });
                     groups.len() - 1
@@ -316,9 +320,18 @@ fn obj(groups: &Groups, mtl_name: &str) -> Encoded {
                 let d = f64::from(g.opacity);
                 let _ = writeln!(mtl, "d {d:.6}\nTr {:.6}", 1.0 - d);
             }
+            if g.emission > 0.0 {
+                // The glow: its color (linear) times its strength.
+                let e = f64::from(g.emission);
+                let [r, gr, b] = g.color.map(|c| linear(c) * e);
+                let _ = writeln!(mtl, "Ke {r:.6} {gr:.6} {b:.6}");
+            }
             if let Some(t) = g.texture {
                 let file = format!("{stem}_{name}.{}", t.image.format.extension());
                 let _ = writeln!(mtl, "map_Kd {file}");
+                if g.emission > 0.0 {
+                    let _ = writeln!(mtl, "map_Ke {file}");
+                }
                 images.push((file, t.image.encoded.clone()));
             }
         }
@@ -413,6 +426,7 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
     let mut accessors = Vec::new();
     let mut primitives = Vec::new();
     let mut materials = Vec::new();
+    let mut emissive_strength = false;
     let mut start = 0;
     for (k, (g, (lo, hi))) in groups.groups.iter().zip(&bounds).enumerate() {
         let n = g.triangles.len() * 3;
@@ -457,6 +471,21 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
         if g.opacity < 1.0 {
             material["alphaMode"] = json!("BLEND");
         }
+        if g.emission > 0.0 {
+            // emissiveFactor stops at 1; a stronger glow goes in KHR_materials_emissive_strength.
+            let e = f64::from(g.emission.min(1.0));
+            if g.texture.is_some() {
+                material["emissiveTexture"] = pbr["baseColorTexture"].clone();
+                material["emissiveFactor"] = json!([e, e, e]);
+            } else {
+                material["emissiveFactor"] = json!(g.color.map(|c| linear(c) * e));
+            }
+            if g.emission > 1.0 {
+                material["extensions"] = json!({"KHR_materials_emissive_strength":
+                    {"emissiveStrength": decimal(g.emission)}});
+                emissive_strength = true;
+            }
+        }
         materials.push(material);
         start += n;
     }
@@ -477,6 +506,9 @@ fn gltf_parts(groups: &Groups) -> (Vec<u8>, serde_json::Value) {
             json!([{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}]);
         doc["textures"] = json!(textures);
         doc["images"] = json!(images);
+    }
+    if emissive_strength {
+        doc["extensionsUsed"] = json!(["KHR_materials_emissive_strength"]);
     }
     (buffer, doc)
 }
