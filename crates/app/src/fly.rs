@@ -179,14 +179,15 @@ impl Fly {
         self.held != 0 || self.velocity != DVec3::ZERO
     }
 
-    /// The velocity the held keys ask for: W/S along the view direction laid flat, A/D
-    /// across it, E or Space up and Q or Ctrl down, at `effective_speed` (diagonals no
-    /// faster).
+    /// The velocity the held keys ask for: W/S along the view direction (looking up flies
+    /// up), A/D level across it, E or Space straight up and Q or Ctrl straight down, at
+    /// `effective_speed` (diagonals no faster).
     pub fn wish(&self, cam: &Camera) -> DVec3 {
         let axis = |plus: bool, minus: bool| f64::from(i8::from(plus) - i8::from(minus));
-        let (yaw, _) = heading(cam);
-        let forward = DVec3::new(yaw.cos(), yaw.sin(), 0.0);
-        let right = forward.cross(UP);
+        let (yaw, pitch) = heading(cam);
+        let level = DVec3::new(yaw.cos(), yaw.sin(), 0.0);
+        let forward = level * pitch.cos() + UP * pitch.sin();
+        let right = level.cross(UP);
         let h = |k| self.holds(k);
         let dir = forward * axis(h(FlyKey::W), h(FlyKey::S))
             + right * axis(h(FlyKey::D), h(FlyKey::A))
@@ -331,17 +332,18 @@ mod tests {
     }
 
     #[test]
-    fn keys_ask_for_velocity_along_the_ground() {
+    fn keys_ask_for_velocity_where_the_view_points() {
         let mut cam = camera();
-        // Looking down a little: forward still moves level.
+        // Looking down a little: forward flies down along the view, strafing stays level.
         look(&mut cam, DVec2::new(0.0, 100.0));
         let mut fly = Fly::default();
         assert_eq!(fly.wish(&cam), DVec3::ZERO);
         fly.key(FlyKey::W, true);
         assert!(
             fly.wish(&cam)
-                .abs_diff_eq(DVec3::new(DEFAULT_SPEED, 0.0, 0.0), 1e-9)
+                .abs_diff_eq(cam.forward() * DEFAULT_SPEED, 1e-9)
         );
+        assert!(fly.wish(&cam).z < 0.0, "pointing down flies down");
         fly.key(FlyKey::W, false);
         fly.key(FlyKey::S, true);
         assert!(fly.wish(&cam).x < 0.0);

@@ -363,7 +363,7 @@ lists these controls) turns it on; Esc or F turns it off.
   on any display). Where the pointer cannot be held it stays visible and the view turns while
   the left button is held in the view. Two-finger trackpad scroll also looks around, as if
   dragging the scene.
-- W/S move forward and back along the view direction laid flat, A/D sideways, E or Space up,
+- W/S move forward and back along the view direction (look up to fly up), A/D sideways, E or Space up,
   Q or Ctrl down, by key position (any layout). Speed builds up and dies down over about
   0.15 s.
 - The speed starts at 3 m/s and goes from 0.25 to 60 m/s in steps of x1.25: the mouse wheel,

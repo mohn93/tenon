@@ -3706,7 +3706,11 @@ mod tests {
         let cam = e.doc().camera.clone();
         let moved = cam.eye - start.eye;
         assert!(moved.length() > 0.5, "{moved}");
-        assert!(moved.z.abs() < 1e-9, "forward stays level");
+        let ahead = (start.target - start.eye).normalize();
+        assert!(
+            moved.normalize().abs_diff_eq(ahead, 1e-9),
+            "forward follows the view"
+        );
         assert!((cam.target - cam.eye).abs_diff_eq(start.target - start.eye, 1e-9));
         // Speed keys, repeated too.
         assert!(e.key(EditorKey::Char(']')));
