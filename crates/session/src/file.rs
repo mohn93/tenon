@@ -17,16 +17,18 @@ use crate::texture::{MAX_TEXTURE_BYTES, decode};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when a material has a
-/// texture. Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up
-/// direction and projection, version 5 materials, version 6 material opacity and version 7
-/// textures; older files still open.
-pub const SCHEMA_VERSION: u32 = 7;
-/// The version written when a material is see-through but none has a texture.
+/// The newest schema version this build reads, and the one it writes when a material glows.
+/// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
+/// and projection, version 5 materials, version 6 material opacity, version 7 textures and
+/// version 8 material emission; older files still open.
+pub const SCHEMA_VERSION: u32 = 8;
+/// The version written when a material has a texture but none glows.
+pub const TEXTURED_SCHEMA_VERSION: u32 = 7;
+/// The version written when a material is see-through but none has a texture or glows.
 pub const TRANSLUCENT_SCHEMA_VERSION: u32 = 6;
-/// The version written when every material is opaque and none has a texture: such a model
-/// needs nothing versions 6 and 7 added, so its file is the same as before and older builds
-/// open it.
+/// The version written when every material is opaque and none has a texture or glows: such a
+/// model needs nothing versions 6 to 8 added, so its file is the same as before and older
+/// builds open it.
 pub const OPAQUE_SCHEMA_VERSION: u32 = 5;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
@@ -65,6 +67,7 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
+    let glowing = model.materials.iter().any(|m| m.emission > 0.0);
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let images: Vec<(String, Arc<TextureImage>)> = model
@@ -77,8 +80,10 @@ pub(crate) fn write(path: &Path, scene: &Scene, camera: &Camera) -> Result<(), S
         .collect();
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if textured {
+        schema_version: if glowing {
             SCHEMA_VERSION
+        } else if textured {
+            TEXTURED_SCHEMA_VERSION
         } else if translucent {
             TRANSLUCENT_SCHEMA_VERSION
         } else {

@@ -247,6 +247,7 @@ fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> MaterialId {
             color: Some(color),
             opacity: None,
             texture: None,
+            emission: None,
         },
     );
     outcome.changes.materials[0]
@@ -396,6 +397,7 @@ fn golden_glass_pane_in_front_of_a_box() {
             color: Some([170, 210, 235]),
             opacity: Some(0.35),
             texture: None,
+            emission: None,
         },
     )
     .changes
@@ -737,6 +739,7 @@ fn golden_textured_box_and_ground() {
                 width: Some(1.0),
                 height: Some(1.0),
             }),
+            emission: None,
         },
     )
     .changes

@@ -373,6 +373,7 @@ impl Editor {
             color: Some(color),
             opacity: None,
             texture: None,
+            emission: None,
         }) else {
             return true;
         };
@@ -389,6 +390,7 @@ impl Editor {
             color: None,
             opacity: None,
             texture: None,
+            emission: None,
         });
         true
     }
@@ -402,6 +404,7 @@ impl Editor {
             color: Some(color),
             opacity: None,
             texture: None,
+            emission: None,
         });
         true
     }
@@ -415,6 +418,7 @@ impl Editor {
             color: None,
             opacity: Some(f32::from(percent.min(100)) / 100.0),
             texture: None,
+            emission: None,
         });
         true
     }
@@ -433,6 +437,7 @@ impl Editor {
                 width: None,
                 height: None,
             })),
+            emission: None,
         });
         true
     }
@@ -446,6 +451,7 @@ impl Editor {
             color: None,
             opacity: None,
             texture: Some(None),
+            emission: None,
         });
         true
     }
@@ -464,6 +470,7 @@ impl Editor {
                 width: Some(width),
                 height: Some(height),
             })),
+            emission: None,
         });
         true
     }

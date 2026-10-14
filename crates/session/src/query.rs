@@ -263,6 +263,8 @@ pub struct MaterialInfo {
     pub color: [u8; 3],
     /// From 0 (invisible) to 1 (opaque). Always present.
     pub opacity: f32,
+    /// How strongly its faces glow, from 0 (not at all) to 10. Always present.
+    pub emission: f32,
     /// The texture faces painted with it show; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TextureInfo>,

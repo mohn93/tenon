@@ -254,6 +254,7 @@ mod tests {
                 color: Some([180, 60, 40]),
                 opacity: None,
                 texture: None,
+                emission: None,
             })
             .unwrap();
         let brick = added.changes.materials[0];

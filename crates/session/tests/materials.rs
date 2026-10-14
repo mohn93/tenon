@@ -78,8 +78,8 @@ fn materials_are_added_renamed_recolored_and_deleted() {
     assert_eq!(listed.len(), 2);
     assert_eq!(
         listed[0],
-        json!({"id": first, "name": "Material", "color": [10, 20, 30], "opacity": 1.0, "faces": 0,
-            "instances": 0})
+        json!({"id": first, "name": "Material", "color": [10, 20, 30], "opacity": 1.0,
+            "emission": 0.0, "faces": 0, "instances": 0})
     );
     assert_eq!(listed[1]["id"], second);
     assert_eq!(listed[1]["name"], "Material 2");

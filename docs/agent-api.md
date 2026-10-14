@@ -52,7 +52,7 @@ Queries:
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
-| `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
+| `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
@@ -201,11 +201,12 @@ with it.
 | `{"type": "change_material", "material": "m31", "name": "Old brick", "color": [150, 50, 30], "opacity": 0.4}` | Renames, recolors and/or changes the opacity of a material; an absent `name`, `color` or `opacity` stays. `opacity` must be from 0 to 1 (`invalid_input`). |
 | `{"type": "add_material", "name": "Tiles", "texture": {"path": "/abs/tiles.png", "width": 0.6}}` | Adds a material with a texture; see Textures below. `color` may then be left out: it is the image's average color. |
 | `{"type": "change_material", "material": "m31", "texture": {"path": "/abs/oak.jpg", "width": 1.2, "height": 0.2}}` | Gives a material a texture or replaces its image; the color becomes the image's average unless `color` is given too. Without `path` it keeps the image and changes its size (`invalid_input` when the material has none). `"texture": null` removes the texture and keeps the color. |
+| `{"type": "add_material", "name": "Lamp", "color": [255, 220, 160], "emission": 5}` | Adds a glowing material; see Lights below. `emission` (optional on `add_material` and `change_material`, default 0) is a number from 0 to 10 (`invalid_input` otherwise). |
 | `{"type": "delete_material", "material": "m31"}` | Removes a material. Every face side and instance painted with it, anywhere in the model, goes back to the default material (and comes back with undo). |
 | `{"type": "paint", "ids": ["f8", "i4"], "material": "m31", "side": "front"}` | Paints faces and instances of the open context. `side` is `front` (default: the side the face's `normal` points to), `back` or `both`; it does not matter for instances. An absent or null `material` paints with the default material. Edge and guide ids are `invalid_input` (naming them), as are vertex ids and an empty list; unknown ids and an unknown material are `not_found`. Painting what is already painted so changes nothing. |
 
-Each is one undo step. A command that adds, removes, renames, recolors or changes the opacity or
-texture of a material lists it in
+Each is one undo step. A command that adds, removes, renames, recolors or changes the opacity,
+texture or emission of a material lists it in
 its `changes.materials` (also in `changed` notifications and `events`); painting reports the
 faces and instances as `modified`. Unknown material ids are `not_found`.
 
@@ -242,6 +243,11 @@ show.
 
 The `materials` query adds `"texture": {"width": 0.6, "height": 0.3, "pixel_width": 1024,
 "pixel_height": 512, "format": "png"}` (`format` `png` or `jpeg`) to a material with a texture.
+
+#### Lights
+
+A material with an `emission` above 0 glows. The `materials` query always includes `emission`
+(0 for a material that does not glow).
 
 The `entity` result of a face (and its entry in `entities`) has `front_material` and
 `back_material`, an instance's has `material`; each is absent for the default material.
@@ -430,10 +436,11 @@ lists these controls) turns it on; Esc or F turns it off.
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (7 when a material has a texture, else 6 when a material
-is see-through, else 5; a material's `opacity` is written only when below 1, so a model whose
-materials are all opaque is saved exactly as before opacity existed and older builds still open
-it; version 6 and older files open without textures; version 5 files open with
+(`"sketchup-alt"`), `schema_version` (8 when a material glows, else 7 when a material has a
+texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
+when below 1 and its `emission` only when above 0, so a model whose materials are all opaque
+and dark is saved exactly as before opacity existed and older builds still open it; version 7
+and older files open without glow; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 of view, up and projection) and the model with every id, edges with their curve and soft flag,

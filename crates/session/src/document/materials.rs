@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kernel::{
-    EntityId, KernelError, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE, MaterialId, SceneChange, Side,
-    Texture,
+    EntityId, KernelError, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE, Material, MaterialEdit, MaterialId,
+    SceneChange, Side, Texture,
 };
 
 use super::Document;
@@ -25,6 +25,7 @@ impl Document {
         color: Option<[u8; 3]>,
         opacity: Option<f32>,
         texture: Option<&TextureSource>,
+        emission: Option<f32>,
     ) -> Result<SceneChange, CommandError> {
         if texture.is_some_and(|t| t.path.is_none()) {
             return Err(CommandError::new(
@@ -45,19 +46,24 @@ impl Document {
             None => self.scene.free_material_name(DEFAULT_MATERIAL_NAME),
         };
         self.scene
-            .add_material_with_texture(&name, color, opacity.unwrap_or(1.0), texture)
+            .add_material_from(Material {
+                name,
+                color,
+                opacity: opacity.unwrap_or(1.0),
+                texture,
+                emission: emission.unwrap_or(0.0),
+            })
             .map(|(_, change)| change)
             .map_err(|e| material_error(e, None))
     }
 
-    /// Changes a material. `texture`: None keeps it, `Some(None)` removes it. A newly read
-    /// image sets the color to its average unless `color` is given.
+    /// Changes the parts of a material `edit` gives (its texture aside). `texture`: None keeps
+    /// it, `Some(None)` removes it. A newly read image sets the color to its average unless
+    /// `edit` gives one.
     pub(super) fn change_material_changes(
         &mut self,
         id: MaterialId,
-        name: Option<&str>,
-        color: Option<[u8; 3]>,
-        opacity: Option<f32>,
+        mut edit: MaterialEdit,
         texture: Option<Option<&TextureSource>>,
     ) -> Result<SceneChange, CommandError> {
         let Some(material) = self.scene.material(id) else {
@@ -69,12 +75,14 @@ impl Document {
             Some(None) => Some(None),
             Some(Some(source)) => Some(Some(texture_of(source, material.texture.as_ref())?)),
         };
-        let color = match (&texture, color) {
-            (Some(Some(t)), None) if read => Some(average_color(&t.image)),
-            _ => color,
-        };
+        if let (Some(Some(t)), None) = (&texture, edit.color)
+            && read
+        {
+            edit.color = Some(average_color(&t.image));
+        }
+        edit.texture = texture;
         self.scene
-            .change_material_with_texture(id, name, color, opacity, texture)
+            .change_material_with(id, edit)
             .map_err(|e| material_error(e, Some(id)))
     }
 
@@ -131,6 +139,7 @@ impl Document {
                     name: m.name.clone(),
                     color: m.color,
                     opacity: m.opacity,
+                    emission: m.emission,
                     texture: m.texture.as_ref().map(|t| TextureInfo {
                         width: t.width,
                         height: t.height,

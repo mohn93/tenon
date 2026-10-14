@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError, MeshId,
-    Model, Scene, SceneChange, SoftenReport, VertexId,
+    ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError,
+    MaterialEdit, MeshId, Model, Scene, SceneChange, SoftenReport, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
@@ -335,18 +335,30 @@ impl Document {
                 color,
                 opacity,
                 texture,
-            } => self.add_material_changes(name.as_deref(), *color, *opacity, texture.as_ref()),
+                emission,
+            } => self.add_material_changes(
+                name.as_deref(),
+                *color,
+                *opacity,
+                texture.as_ref(),
+                *emission,
+            ),
             Command::ChangeMaterial {
                 material,
                 name,
                 color,
                 opacity,
                 texture,
+                emission,
             } => self.change_material_changes(
                 *material,
-                name.as_deref(),
-                *color,
-                *opacity,
+                MaterialEdit {
+                    name: name.as_deref(),
+                    color: *color,
+                    opacity: *opacity,
+                    texture: None,
+                    emission: *emission,
+                },
                 texture.as_ref().map(Option::as_ref),
             ),
             Command::DeleteMaterial { material } => self.delete_material_changes(*material),

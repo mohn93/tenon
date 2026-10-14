@@ -155,8 +155,9 @@ pub enum Command {
     /// "Material" (or "Material 2", ... if taken). Names must be distinct, not blank, and at
     /// most 256 characters. `opacity` (default 1, opaque) is from 0 to 1; below 1 faces
     /// painted with it are see-through. `texture` reads a PNG or JPEG image for its faces
-    /// (`path` required); `color` may then be left out and is the image's average color. The
-    /// new id is in the outcome's `changes.materials`.
+    /// (`path` required); `color` may then be left out and is the image's average color.
+    /// `emission` (default 0) from 0 to 10 makes its faces glow and light their surroundings.
+    /// The new id is in the outcome's `changes.materials`.
     AddMaterial {
         #[serde(default)]
         name: Option<String>,
@@ -166,9 +167,12 @@ pub enum Command {
         opacity: Option<f32>,
         #[serde(default)]
         texture: Option<TextureSource>,
+        #[serde(default)]
+        emission: Option<f32>,
     },
-    /// Rename, recolor, change the opacity (0 to 1) and/or the texture of a material; absent
-    /// fields stay as they are. `texture`: null removes it; an object sets it, reading `path`
+    /// Rename, recolor, change the opacity (0 to 1), the texture and/or the emission (0 to 10)
+    /// of a material; absent fields stay as they are. `texture`: null removes it; an object
+    /// sets it, reading `path`
     /// (the color becomes the image's average unless `color` is given), or without `path`
     /// keeps the image and changes its size.
     ChangeMaterial {
@@ -186,6 +190,8 @@ pub enum Command {
         )]
         #[schemars(with = "Option<TextureSource>")]
         texture: Option<Option<TextureSource>>,
+        #[serde(default)]
+        emission: Option<f32>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.

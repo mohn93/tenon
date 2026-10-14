@@ -234,7 +234,10 @@ fn textures_are_saved_inside_the_file() {
     .unwrap();
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let document: Value = serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
-    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(
+        document["schema_version"],
+        session::file::TEXTURED_SCHEMA_VERSION
+    );
     assert_eq!(document["schema_version"], 7);
     let file = format!("textures/{id}.png");
     assert_eq!(
