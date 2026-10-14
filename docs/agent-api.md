@@ -290,7 +290,8 @@ current material (a click on something selected paints the whole selection's fac
 groups, a click on a group paints the group), and Cmd-click on macOS (Ctrl-click on Windows
 and Linux) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
 current material and adds, renames, recolors and deletes materials and sets their opacity (a
-0-100% slider; one change per drag), all through these commands. A material with a texture
+0-100% slider; one change per drag) and their emission (the Glow slider, 0 to 10 in tenths; one
+change per drag), all through these commands. A material with a texture
 shows a small copy of its image as its swatch; for the chosen material, Texture... loads a PNG
 or JPEG image from a file dialog (keeping the size of the texture it replaces), Remove takes the
 texture off, and the Size fields set its width and height in meters (one change per drag or
@@ -413,7 +414,8 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day` or by `night` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
-standard views and the two projections; it sends these same commands.
+standard views, the two projections and Night lighting (checked at night; `set_lighting`); it
+sends these same commands.
 
 Navigating in the window moves the same document camera, about the point under the cursor:
 the model face there, else the ground (no farther along the cursor's ray than three times the

@@ -555,6 +555,7 @@ impl State {
                 name: m.name,
                 color: m.color,
                 opacity: m.opacity,
+                emission: m.emission,
             })
             .collect()
     }
@@ -658,6 +659,9 @@ impl State {
             UiAction::SetProjection(projection) => {
                 self.editor.set_projection(projection);
             }
+            UiAction::SetLighting(mode) => {
+                self.editor.set_lighting(mode);
+            }
             UiAction::ChooseMaterial(material) => {
                 self.editor.choose_material(material);
             }
@@ -675,6 +679,9 @@ impl State {
             }
             UiAction::SetMaterialOpacity(material, percent) => {
                 self.editor.set_material_opacity(material, percent);
+            }
+            UiAction::SetMaterialEmission(material, tenths) => {
+                self.editor.set_material_emission(material, tenths);
             }
             UiAction::LoadTexture(material) => self.load_texture(material),
             UiAction::RemoveTexture(material) => {
@@ -784,6 +791,7 @@ impl State {
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,
+            lighting: self.editor.doc().lighting,
             flying: self.editor.flying(),
             import_units: self.editor.import_units(),
             materials: &materials,
@@ -875,6 +883,7 @@ impl State {
             self.editor.doc().selection().clone(),
             self.editor.doc().context().to_vec(),
             self.editor.doc().camera.clone(),
+            self.editor.doc().lighting,
         );
         let mut host = WindowHost {
             editor: &mut self.editor,
@@ -886,6 +895,7 @@ impl State {
             self.editor.doc().selection().clone(),
             self.editor.doc().context().to_vec(),
             self.editor.doc().camera.clone(),
+            self.editor.doc().lighting,
         );
         if after != before || self.editor.hover_pending() {
             match api_repaint(Instant::now(), self.presented) {

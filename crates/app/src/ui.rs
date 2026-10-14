@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use egui::collapsing_header::CollapsingState;
 use egui::{Align, Color32, Layout, Panel, RichText, Sense, Ui, Vec2};
 use kernel::{DefinitionKind, EntityId};
-use session::{MaterialId, OutlinerRow, OutlinerTable, Projection, StandardView};
+use session::{Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::editor::{ImportUnits, MATERIAL_PALETTE, Status};
@@ -34,6 +34,8 @@ pub enum UiAction {
     ZoomExtents,
     StandardView(StandardView),
     SetProjection(Projection),
+    /// Light the view by day or by night.
+    SetLighting(Lighting),
     /// Paint with this material (None: the default material), switching to the Paint tool.
     ChooseMaterial(Option<MaterialId>),
     AddMaterial,
@@ -42,6 +44,8 @@ pub enum UiAction {
     RecolorMaterial(MaterialId, [u8; 3]),
     /// Set a material's opacity, in percent (0 to 100).
     SetMaterialOpacity(MaterialId, u8),
+    /// Set how strongly a material glows, in tenths (0 to 100: emission 0 to 10).
+    SetMaterialEmission(MaterialId, u8),
     /// Choose an image file for a material's texture.
     LoadTexture(MaterialId),
     /// Take a material's texture off.
@@ -78,6 +82,8 @@ pub struct MaterialRow {
     pub color: [u8; 3],
     /// From 0 (invisible) to 1 (opaque).
     pub opacity: f32,
+    /// From 0 (no glow) to 10.
+    pub emission: f32,
     pub texture: Option<TextureRow>,
 }
 
@@ -110,6 +116,8 @@ pub struct View<'a> {
     pub has_guides: bool,
     /// The camera's projection, checked in the Camera menu.
     pub projection: Projection,
+    /// How the view is lit; Night lighting is checked in the Camera menu at night.
+    pub lighting: Lighting,
     /// Whether fly mode is on, checked in the Camera menu.
     pub flying: bool,
     /// The unit imported files are read in, checked in File > Import Units.
@@ -145,9 +153,9 @@ const OUTLINER_MIN_HEIGHT: f32 = 120.0;
 /// The Materials list's greatest height, in points.
 const MATERIALS_MAX_HEIGHT: f32 = 220.0;
 
-/// Room kept below the Materials list for its buttons, name field, colors, opacity and texture
-/// controls, and for the Outliner's heading and minimum height, in points.
-const BELOW_MATERIALS_LIST: f32 = 222.0 + OUTLINER_MIN_HEIGHT;
+/// Room kept below the Materials list for its buttons, name field, colors, opacity, glow and
+/// texture controls, and for the Outliner's heading and minimum height, in points.
+const BELOW_MATERIALS_LIST: f32 = 246.0 + OUTLINER_MIN_HEIGHT;
 
 /// The least height the right panel lays out its contents in; a shorter panel scrolls them.
 const PANEL_MIN_HEIGHT: f32 = 480.0;
@@ -227,6 +235,16 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     {
                         actions.push(UiAction::SetProjection(projection));
                     }
+                }
+                ui.separator();
+                let mut night = view.lighting == Lighting::Night;
+                if ui.checkbox(&mut night, "Night lighting").clicked() {
+                    let mode = if night {
+                        Lighting::Night
+                    } else {
+                        Lighting::Day
+                    };
+                    actions.push(UiAction::SetLighting(mode));
                 }
                 ui.separator();
                 let mut flying = view.flying;
@@ -503,7 +521,45 @@ fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         }
         ui.data_mut(|d| d.remove::<u8>(key));
     }
+    glow_slider(ui, m, actions);
     texture_controls(ui, m, actions);
+}
+
+/// A material's Glow slider, its emission from 0 to 10 in tenths; like the opacity, one change
+/// when a drag ends.
+fn glow_slider(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
+    let key = egui::Id::new(("material-emission", m.id.0));
+    let shown = tenths(m.emission);
+    let mut value = ui
+        .data(|d| d.get_temp::<f32>(key))
+        .unwrap_or(f32::from(shown) / 10.0);
+    let slider = ui
+        .horizontal(|ui| {
+            ui.label("Glow").on_hover_text(
+                "Faces painted with a glowing material are drawn unshaded and light their \
+                 surroundings (Camera > Night lighting shows them best)",
+            );
+            ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(40.0);
+            ui.add(
+                egui::Slider::new(&mut value, 0.0..=kernel::MAX_EMISSION)
+                    .step_by(0.1)
+                    .max_decimals(1),
+            )
+        })
+        .inner;
+    if slider.dragged() {
+        ui.data_mut(|d| d.insert_temp(key, value));
+    } else {
+        if (slider.drag_stopped() || slider.changed()) && tenths(value) != shown {
+            actions.push(UiAction::SetMaterialEmission(m.id, tenths(value)));
+        }
+        ui.data_mut(|d| d.remove::<f32>(key));
+    }
+}
+
+/// An emission (0 to 10) in whole tenths.
+fn tenths(emission: f32) -> u8 {
+    (emission.clamp(0.0, kernel::MAX_EMISSION) * 10.0).round() as u8
 }
 
 /// A material's texture controls: Texture... to load an image and Remove, then the size one copy
@@ -774,6 +830,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -862,6 +919,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -888,9 +946,19 @@ mod tests {
             );
         }
         assert!(clicked.contains(&UiAction::ToggleFly), "{clicked:?}");
+        assert!(
+            clicked.contains(&UiAction::SetLighting(Lighting::Night)),
+            "{clicked:?}"
+        );
         view.projection = Projection::Parallel;
+        view.lighting = Lighting::Night;
         let clicked = menu_actions(&view, 80..140);
         assert!(clicked.contains(&UiAction::SetProjection(Projection::Perspective)));
+        // Unchecking Night lighting goes back to day.
+        assert!(
+            clicked.contains(&UiAction::SetLighting(Lighting::Day)),
+            "{clicked:?}"
+        );
     }
 
     fn edit_menu_actions(has_selection: bool, has_guides: bool) -> Vec<UiAction> {
@@ -905,6 +973,7 @@ mod tests {
             inside_instance: false,
             has_guides,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -955,6 +1024,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -1048,6 +1118,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -1090,6 +1161,7 @@ mod tests {
             inside_instance: true,
             has_guides: true,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -1236,6 +1308,7 @@ mod tests {
                 name: "Brick".into(),
                 color: [180, 60, 40],
                 opacity: 1.0,
+                emission: 0.0,
                 texture: None,
             },
             MaterialRow {
@@ -1243,6 +1316,7 @@ mod tests {
                 name: "Glass".into(),
                 color: [90, 170, 170],
                 opacity: 0.4,
+                emission: 0.0,
                 texture: None,
             },
         ];
@@ -1255,6 +1329,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &rows,
@@ -1289,11 +1364,17 @@ mod tests {
             )),
             "{clicked:?}"
         );
-        // Clicking on the opacity slider sets the opacity.
+        // Clicking on the opacity slider sets the opacity, on the Glow slider the emission.
         assert!(
             clicked
                 .iter()
                 .any(|a| matches!(a, UiAction::SetMaterialOpacity(MaterialId(31), p) if *p < 100)),
+            "{clicked:?}"
+        );
+        assert!(
+            clicked
+                .iter()
+                .any(|a| matches!(a, UiAction::SetMaterialEmission(MaterialId(31), t) if *t > 0)),
             "{clicked:?}"
         );
         // With the default material chosen there is nothing to delete, rename or recolor.
@@ -1306,6 +1387,7 @@ mod tests {
                     | UiAction::RenameMaterial(..)
                     | UiAction::RecolorMaterial(..)
                     | UiAction::SetMaterialOpacity(..)
+                    | UiAction::SetMaterialEmission(..)
             )),
             "{clicked:?}"
         );
@@ -1377,6 +1459,7 @@ mod tests {
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: rows,
@@ -1395,6 +1478,7 @@ mod tests {
             name: "Brick".into(),
             color: [180, 60, 40],
             opacity: 1.0,
+            emission: 0.0,
             texture: None,
         }]
     }
@@ -1665,6 +1749,7 @@ mod tests {
             inside_instance: !context.is_empty(),
             has_guides: false,
             projection: Projection::Perspective,
+            lighting: Lighting::Day,
             flying: false,
             import_units: ImportUnits::Meters,
             materials: &[],
@@ -1828,6 +1913,7 @@ mod tests {
                 name: format!("Material {k}"),
                 color: [10, 20, 30],
                 opacity: 1.0,
+                emission: 0.0,
                 texture: None,
             })
             .collect();
@@ -1875,6 +1961,7 @@ mod tests {
                 name: format!("Material {k}"),
                 color: [10, 20, 30],
                 opacity: 1.0,
+                emission: 0.0,
                 texture: None,
             })
             .collect();

@@ -10,8 +10,8 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::{EntityId, InstanceId, MaterialId};
 use render::grid::LineVertex;
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Outcome, Projection,
-    SelectMode, StandardView, TextureSource,
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Lighting, Outcome,
+    Projection, SelectMode, StandardView, TextureSource,
 };
 use tools::overlay::overlay;
 use tools::{
@@ -419,6 +419,20 @@ impl Editor {
             opacity: Some(f32::from(percent.min(100)) / 100.0),
             texture: None,
             emission: None,
+        });
+        true
+    }
+
+    /// Sets how strongly a material glows, in tenths (0 to 100: emission 0 to 10).
+    pub fn set_material_emission(&mut self, material: MaterialId, tenths: u8) -> bool {
+        self.message = None;
+        self.run(Command::ChangeMaterial {
+            material,
+            name: None,
+            color: None,
+            opacity: None,
+            texture: None,
+            emission: Some(f32::from(tenths.min(100)) / 10.0),
         });
         true
     }
@@ -921,6 +935,16 @@ impl Editor {
             return false;
         }
         self.run_camera_command(Command::SetProjection { projection })
+    }
+
+    /// Lights the view by day or by night; the tool's operation goes on. False if it already
+    /// is.
+    pub fn set_lighting(&mut self, mode: Lighting) -> bool {
+        if self.doc.lighting == mode {
+            return false;
+        }
+        self.run_camera_command(Command::SetLighting { mode });
+        true
     }
 
     /// Runs a camera command; the tool's operation and typed text stay. True if the camera or
@@ -3047,6 +3071,22 @@ mod tests {
     }
 
     #[test]
+    fn night_lighting_comes_from_the_editor_and_is_not_an_edit() {
+        let mut e = editor();
+        square(&mut e);
+        let before = stats(&e);
+        let revision = e.doc().revision();
+        assert!(e.set_lighting(Lighting::Night));
+        assert_eq!(e.doc().lighting, Lighting::Night);
+        assert!(!e.set_lighting(Lighting::Night), "already night");
+        assert_eq!(e.doc().revision(), revision);
+        e.undo();
+        assert_eq!(stats(&e).0, before.0 - 1, "undo skips the lighting");
+        assert_eq!(e.doc().lighting, Lighting::Night);
+        assert!(e.set_lighting(Lighting::Day));
+    }
+
+    #[test]
     fn zoom_extents_says_whether_the_view_changed() {
         let mut e = editor();
         e.cursor_moved(DVec2::new(10.0, 10.0));
@@ -3609,9 +3649,13 @@ mod tests {
         e.rename_material(second, "Brick".into());
         e.recolor_material(second, [1, 2, 3]);
         e.set_material_opacity(second, 40);
+        e.set_material_emission(second, 25);
         let m = e.doc().scene().material(second).unwrap();
         assert_eq!((m.name.as_str(), m.color), ("Brick", [1, 2, 3]));
         assert_eq!(m.opacity, 0.4);
+        assert_eq!(m.emission, 2.5);
+        e.undo();
+        assert_eq!(e.doc().scene().material(second).unwrap().emission, 0.0);
         e.undo();
         assert_eq!(e.doc().scene().material(second).unwrap().opacity, 1.0);
         e.redo();
