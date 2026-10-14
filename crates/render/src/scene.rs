@@ -5,7 +5,8 @@
 //!   and notes where each entity of the open context lies (`Spans`);
 //! - `Spans::flags` marks the vertices and guides a selection lights up.
 //!
-//! `scene_geometry` combines the two.
+//! `scene_geometry` combines the two. `scene_base` also gathers the scene's lights (see
+//! `lights`).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
@@ -20,6 +21,7 @@ use kernel::{
 
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
+use crate::lights::{Glow, Light};
 use crate::texture::layers;
 
 /// A face corner with its selection flag, as `scene_geometry` returns it.
@@ -39,6 +41,8 @@ pub struct FaceVertex {
     pub uv: [f32; 4],
     /// The texture array layers of the front and back sides; -1 for none.
     pub layer: [f32; 2],
+    /// 1 on a side whose material glows, 0 otherwise (see `BaseFaceVertex`).
+    pub glow: [f32; 2],
 }
 
 /// A face corner as the renderer uploads it; whether it is selected comes from a separate flag
@@ -61,6 +65,9 @@ pub struct BaseFaceVertex {
     /// The texture array layers of the front and back sides (see `texture::layers`); -1 for
     /// none.
     pub layer: [f32; 2],
+    /// 1 on a side whose material glows, 0 otherwise: such a side is drawn unshaded at its
+    /// color (or texture).
+    pub glow: [f32; 2],
 }
 
 impl BaseFaceVertex {
@@ -75,13 +82,14 @@ pub const DEFAULT_FRONT: [f32; 3] = [0.93, 0.93, 0.90];
 /// The default material's color on a face's back.
 pub const DEFAULT_BACK: [f32; 3] = [0.60, 0.65, 0.76];
 
-/// How a side looks: its color (sRGB, as the targets store it), opacity, and texture (its
-/// array layer and its size in meters), which shows instead of the color.
+/// How a side looks: its color (sRGB, as the targets store it), opacity, texture (its array
+/// layer and its size in meters), which shows instead of the color, and how strongly it glows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Look {
     color: [f32; 3],
     alpha: f32,
     texture: Option<(u32, DVec2)>,
+    emission: f32,
 }
 
 /// The array layer of each textured material (see `texture::layers`).
@@ -98,6 +106,7 @@ fn side_look(
         color: default,
         alpha: 1.0,
         texture: None,
+        emission: 0.0,
     };
     let Some((id, m)) = material.and_then(|id| Some((id, scene.material(id)?))) else {
         return plain;
@@ -110,6 +119,7 @@ fn side_look(
             .as_ref()
             .zip(layers.get(&id))
             .map(|(t, &layer)| (layer, DVec2::new(t.width, t.height))),
+        emission: m.emission,
     }
 }
 
@@ -117,6 +127,11 @@ impl Look {
     /// The texture array layer, or -1 without a texture.
     fn layer(&self) -> f32 {
         self.texture.map_or(-1.0, |(layer, _)| layer as f32)
+    }
+
+    /// 1 when the side glows, else 0.
+    fn glow(&self) -> f32 {
+        if self.emission > 0.0 { 1.0 } else { 0.0 }
     }
 
     /// A triangle's texture coordinates on this side from its corners' texture positions
@@ -130,6 +145,17 @@ impl Look {
         let shift = st[0].floor();
         st.map(|q| (q - shift).as_vec2().to_array())
     }
+}
+
+/// How a face with these sides glows: the stronger side's emission and color (the front's on a
+/// tie).
+fn face_glow(front: &Look, back: &Look) -> (f32, [f32; 3]) {
+    let side = if back.emission > front.emission {
+        back
+    } else {
+        front
+    };
+    (side.emission, side.color)
 }
 
 /// The corners of a triangle with both sides' texture coordinates (see `BaseFaceVertex::uv`).
@@ -184,6 +210,9 @@ pub struct SceneBase {
     pub guides: Vec<GuideShape>,
     /// Where the open context's entities lie in the lists above.
     pub spans: Spans,
+    /// A light for each placement of a mesh whose own faces glow, in root coordinates. They do
+    /// not depend on the open context.
+    pub lights: Vec<Light>,
 }
 
 impl SceneBase {
@@ -215,6 +244,7 @@ impl SceneBase {
                 alpha: v.alpha,
                 uv: v.uv,
                 layer: v.layer,
+                glow: v.glow,
             })
             .collect();
         let edges = self
@@ -341,6 +371,8 @@ pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
         context,
         layers: &layers,
         parts: &parts,
+        glowing: scene.materials().any(|(_, m)| m.glows()),
+        glows: HashMap::new(),
         path: Vec::new(),
         base: SceneBase {
             faces: Vec::with_capacity(faces),
@@ -566,6 +598,10 @@ struct Walk<'a> {
     layers: &'a Layers,
     /// Every placed mesh's parts.
     parts: &'a HashMap<MeshId, MeshParts>,
+    /// Whether any material glows; when none does, lights are not looked for.
+    glowing: bool,
+    /// What each mesh's own faces glow with, by the material it inherits, once worked out.
+    glows: HashMap<(MeshId, Option<MaterialId>), Glow>,
     /// Instances from the root down to the mesh being walked.
     path: Vec<InstanceId>,
     base: SceneBase,
@@ -590,6 +626,9 @@ impl Walk<'_> {
         let mirrored = t.matrix3.determinant() < 0.0;
         let front = side_look(self.scene, self.layers, inherited, DEFAULT_FRONT);
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
+        // The mesh's glow, when it has to be worked out (in its own coordinates).
+        let glow_key = (id, inherited);
+        let mut glow = (self.glowing && !self.glows.contains_key(&glow_key)).then(Glow::default);
         let base = &mut self.base;
         for face in &parts.faces {
             let start = base.faces.len();
@@ -603,12 +642,17 @@ impl Walk<'_> {
                 alpha: [front.alpha, back.alpha],
                 uv,
                 layer: [front.layer(), back.layer()],
+                glow: [front.glow(), back.glow()],
             };
             let range = face.corners.clone();
             let (tris, _) = parts.corners[range.clone()].as_chunks::<3>();
             let (normals, _) = parts.normals[range.clone()].as_chunks::<3>();
             let (positions, _) = parts.positions[range].as_chunks::<3>();
+            let (emission, glow_color) = face_glow(&front, &back);
             for ((&[a, b, c], &[na, nb, nc]), &uvs) in tris.iter().zip(normals).zip(positions) {
+                if let Some(g) = &mut glow {
+                    g.add_triangle([a, b, c], emission, glow_color);
+                }
                 let [ua, ub, uc] = both_uv(&front, &back, uvs);
                 let tri = if mirrored {
                     [(a, na, ua), (c, nc, uc), (b, nb, ub)]
@@ -620,6 +664,12 @@ impl Walk<'_> {
             if open {
                 base.spans.faces.push((face.id, start..base.faces.len()));
             }
+        }
+        if let Some(g) = glow {
+            self.glows.insert(glow_key, g);
+        }
+        if let Some(light) = self.glows.get(&glow_key).and_then(|g| g.placed(t)) {
+            base.lights.push(light);
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
         for (eid, ends) in &parts.edges {
@@ -892,6 +942,126 @@ mod tests {
             6,
             "scene_geometry carries the opacity too"
         );
+    }
+
+    /// A material glowing at `emission` in white.
+    fn lamp(s: &mut Scene, emission: f32) -> MaterialId {
+        s.add_material_from(kernel::Material {
+            name: "Lamp".into(),
+            color: [255, 255, 255],
+            opacity: 1.0,
+            texture: None,
+            emission,
+        })
+        .unwrap()
+        .0
+    }
+
+    /// The component's square painted with `material` in front.
+    fn paint_tile(s: &mut Scene, instance: InstanceId, material: MaterialId) {
+        let d = s.root().instance(instance).unwrap().definition;
+        let face = s.definition(d).unwrap().mesh.faces().next().unwrap().0;
+        s.paint(
+            MeshId::Definition(d),
+            &[face],
+            &[],
+            kernel::Side::Front,
+            Some(material),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn without_glowing_materials_there_are_no_lights() {
+        let (mut s, first, _) = two_squares();
+        let (red, _) = s.add_material("Red", [255, 0, 0]).unwrap();
+        paint_tile(&mut s, first, red);
+        let base = scene_base(&s, &[]);
+        assert!(base.lights.is_empty());
+        assert!(base.faces.iter().all(|v| v.glow == [0.0, 0.0]));
+    }
+
+    #[test]
+    fn each_placement_of_a_glowing_mesh_is_one_light() {
+        let (mut s, first, _) = two_squares();
+        let lamp = lamp(&mut s, 2.0);
+        paint_tile(&mut s, first, lamp);
+        let base = scene_base(&s, &[]);
+        // Both placements share the glowing face: a light at each square's center, 1 m² at 2.
+        let centers: Vec<DVec3> = base.lights.iter().map(|l| l.position).collect();
+        assert_eq!(centers.len(), 2);
+        assert!(centers[0].distance(DVec3::new(0.5, 0.5, 0.0)) < 1e-9);
+        assert!(centers[1].distance(DVec3::new(3.5, 0.5, 0.0)) < 1e-9);
+        assert!(
+            base.lights
+                .iter()
+                .all(|l| (l.strength - 2.0).abs() < 1e-9 && l.color == [1.0; 3])
+        );
+        // The glowing side is marked; the back is not.
+        assert!(base.faces.iter().all(|v| v.glow == [1.0, 0.0]));
+        assert!(
+            scene_geometry(&s, &[], &BTreeSet::new())
+                .faces
+                .iter()
+                .all(|v| v.glow == [1.0, 0.0])
+        );
+        // The open context does not change the lights.
+        assert_eq!(scene_base(&s, &[first]).lights, base.lights);
+    }
+
+    #[test]
+    fn a_painted_instance_glows_with_the_faces_it_colors() {
+        let (mut s, first, _) = two_squares();
+        let lamp = lamp(&mut s, 1.0);
+        s.paint(MeshId::Root, &[], &[first], kernel::Side::Front, Some(lamp))
+            .unwrap();
+        let base = scene_base(&s, &[]);
+        assert_eq!(base.lights.len(), 1, "only the painted placement");
+        assert!(base.lights[0].position.distance(DVec3::new(0.5, 0.5, 0.0)) < 1e-9);
+        // Its face glows on both sides, inheriting the material.
+        let glowing = base.faces.iter().filter(|v| v.glow == [1.0, 1.0]).count();
+        assert_eq!(glowing, 6);
+    }
+
+    #[test]
+    fn a_lamp_nested_in_groups_gives_its_own_light_wherever_it_is_placed() {
+        // The first tile, glowing, put in a group; the group copied 10 m along y and turned a
+        // quarter about z there. The second tile stays in the root.
+        let (mut s, first, second) = two_squares();
+        let lamp = lamp(&mut s, 3.0);
+        paint_tile(&mut s, first, lamp);
+        let (house, _) = s
+            .make_group(
+                MeshId::Root,
+                &[],
+                &[],
+                &[first],
+                DefinitionKind::Group,
+                "House",
+            )
+            .unwrap();
+        s.copy_instances(MeshId::Root, &[house], DVec3::new(0.0, 10.0, 0.0), 1)
+            .unwrap();
+        let copy = s
+            .root()
+            .instances()
+            .map(|(id, _)| id)
+            .find(|id| *id != house && *id != second)
+            .unwrap();
+        let turn = DAffine3::from_translation(DVec3::new(0.0, 10.0, 0.0))
+            * DAffine3::from_rotation_z(std::f64::consts::FRAC_PI_2)
+            * DAffine3::from_translation(DVec3::new(0.0, -10.0, 0.0));
+        s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[copy], turn)))
+            .unwrap();
+        let mut centers: Vec<[i64; 3]> = scene_base(&s, &[])
+            .lights
+            .iter()
+            .map(|l| (l.position * 1000.0).round().as_i64vec3().to_array())
+            .collect();
+        centers.sort();
+        // The groups give no light of their own; the tile does, in the root, in the house and
+        // in the turned copy, where (0.5, 0.5) lands at (-0.5, 10.5).
+        assert_eq!(centers, [[-500, 10500, 0], [500, 500, 0], [3500, 500, 0]]);
     }
 
     #[test]
@@ -1236,6 +1406,7 @@ mod tests {
                                 alpha: [front.alpha, back.alpha],
                                 uv,
                                 layer: [front.layer(), back.layer()],
+                                glow: [front.glow(), back.glow()],
                             });
                         }
                     }

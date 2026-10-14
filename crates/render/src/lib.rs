@@ -1,5 +1,6 @@
 pub mod grid;
 pub mod guides;
+pub mod lights;
 pub mod renderer;
 pub mod scene;
 pub mod snapshot;
