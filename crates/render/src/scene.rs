@@ -219,6 +219,30 @@ pub struct SceneBase {
     /// A light for each placement of a mesh whose own faces glow, in root coordinates. They do
     /// not depend on the open context.
     pub lights: Vec<Light>,
+    /// The corners of the triangles that cast shadows, in root coordinates: those of faces
+    /// with no glowing side, three a triangle.
+    pub casters: Vec<[f32; 3]>,
+    /// Where each placement's own casting triangles lie in `casters`, with their bounds, in
+    /// the order placed; placements casting nothing have none.
+    pub caster_chunks: Vec<CasterChunk>,
+}
+
+/// One placement's casting triangles in `SceneBase::casters`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CasterChunk {
+    pub vertices: Range<u32>,
+    /// The corners' bounding box.
+    pub lo: [f32; 3],
+    pub hi: [f32; 3],
+}
+
+impl CasterChunk {
+    /// Whether the box comes nearer than `range` to `center`, so a light there may be
+    /// shadowed by it.
+    pub fn reaches(&self, center: glam::Vec3, range: f32) -> bool {
+        let nearest = center.clamp(self.lo.into(), self.hi.into());
+        nearest.distance_squared(center) < range * range
+    }
 }
 
 impl SceneBase {
@@ -637,6 +661,7 @@ impl Walk<'_> {
         let glow_key = (id, inherited);
         let mut glow = (self.glowing && !self.glows.contains_key(&glow_key)).then(Glow::default);
         let base = &mut self.base;
+        let first_caster = base.casters.len();
         for face in &parts.faces {
             let start = base.faces.len();
             let front = face.front.unwrap_or(front);
@@ -656,6 +681,8 @@ impl Walk<'_> {
             let (normals, _) = parts.normals[range.clone()].as_chunks::<3>();
             let (positions, _) = parts.positions[range].as_chunks::<3>();
             let (emission, glow_color) = face_glow(&front, &back);
+            // A lamp's glowing shade does not hide its own light.
+            let casts = emission <= 0.0;
             for ((&[a, b, c], &[na, nb, nc]), &uvs) in tris.iter().zip(normals).zip(positions) {
                 if let Some(g) = &mut glow {
                     g.add_triangle([a, b, c], emission, glow_color);
@@ -667,10 +694,26 @@ impl Walk<'_> {
                     [(a, na, ua), (b, nb, ub), (c, nc, uc)]
                 };
                 base.faces.extend(tri.map(corner));
+                if casts {
+                    let placed = &base.faces[base.faces.len() - 3..];
+                    base.casters.extend(placed.iter().map(|v| v.pos));
+                }
             }
             if open {
                 base.spans.faces.push((face.id, start..base.faces.len()));
             }
+        }
+        if base.casters.len() > first_caster {
+            let corners = &base.casters[first_caster..];
+            let (lo, hi) = corners.iter().fold(
+                (glam::Vec3::INFINITY, glam::Vec3::NEG_INFINITY),
+                |(lo, hi), &p| (lo.min(p.into()), hi.max(p.into())),
+            );
+            base.caster_chunks.push(CasterChunk {
+                vertices: first_caster as u32..base.casters.len() as u32,
+                lo: lo.to_array(),
+                hi: hi.to_array(),
+            });
         }
         if let Some(g) = glow {
             self.glows.insert(glow_key, g);
@@ -1069,6 +1112,57 @@ mod tests {
         // The groups give no light of their own; the tile does, in the root, in the house and
         // in the turned copy, where (0.5, 0.5) lands at (-0.5, 10.5).
         assert_eq!(centers, [[-500, 10500, 0], [500, 500, 0], [3500, 500, 0]]);
+    }
+
+    #[test]
+    fn faces_without_a_glowing_side_cast_shadows_in_a_chunk_per_placement() {
+        let (mut s, first, _) = two_squares();
+        // Nothing glows: both tiles cast, each placement its own chunk with its bounds.
+        let base = scene_base(&s, &[]);
+        assert_eq!(base.casters.len(), 12);
+        let positions: Vec<[f32; 3]> = base.faces.iter().map(|v| v.pos).collect();
+        assert_eq!(base.casters, positions);
+        assert_eq!(base.caster_chunks.len(), 2);
+        assert_eq!(base.caster_chunks[0].vertices, 0..6);
+        assert_eq!(base.caster_chunks[1].vertices, 6..12);
+        assert_eq!(base.caster_chunks[1].lo, [3.0, 0.0, 0.0]);
+        assert_eq!(base.caster_chunks[1].hi, [4.0, 1.0, 0.0]);
+        // The first tile's definition glows in front: it casts nothing, in either placement
+        // (both place the same definition). Painting just the second instance glowing
+        // instead leaves the first casting.
+        let glowing = lamp(&mut s, 2.0);
+        paint_tile(&mut s, first, glowing);
+        let base = scene_base(&s, &[]);
+        assert!(base.casters.is_empty() && base.caster_chunks.is_empty());
+        let (mut s, _, second) = two_squares();
+        let glowing = lamp(&mut s, 1.0);
+        s.paint(
+            MeshId::Root,
+            &[],
+            &[second],
+            kernel::Side::Front,
+            Some(glowing),
+        )
+        .unwrap();
+        let base = scene_base(&s, &[]);
+        assert_eq!(base.caster_chunks.len(), 1);
+        assert_eq!(base.caster_chunks[0].hi, [1.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_chunk_reaches_a_light_whose_range_comes_near_its_box() {
+        let chunk = CasterChunk {
+            vertices: 0..3,
+            lo: [0.0, 0.0, 0.0],
+            hi: [1.0, 1.0, 1.0],
+        };
+        let at = |x: f32, y: f32, z: f32| glam::Vec3::new(x, y, z);
+        assert!(chunk.reaches(at(0.5, 0.5, 0.5), 0.1));
+        assert!(chunk.reaches(at(3.0, 0.5, 0.5), 2.5));
+        assert!(!chunk.reaches(at(3.0, 0.5, 0.5), 2.0));
+        // Corner distance sqrt(3) from (2, 2, 2).
+        assert!(chunk.reaches(at(2.0, 2.0, 2.0), 1.8));
+        assert!(!chunk.reaches(at(2.0, 2.0, 2.0), 1.7));
     }
 
     #[test]
