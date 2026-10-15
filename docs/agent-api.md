@@ -260,7 +260,9 @@ rotation 0 and scale 1 is the same as none). The position belongs to the face, w
 its sides have, and applies to both sides.
 
 Pieces of a face split by a new edge keep its position, as do copies, faces moved into a group or
-component or out of one by explode, and the faces of copied definitions. A push/pull cap keeps
+component, and the faces of copied definitions. Explode gives the painted faces of a moved,
+turned or evenly scaled instance the position that keeps their texture where the instance showed
+it (a mirrored or unevenly scaled instance's is the nearest such position). A push/pull cap keeps
 the pushed face's position (a sheet that turns over keeps what each side shows); the new sides
 and other new faces have none. Moving or turning faces keeps the numbers, so a moved face's
 pattern stays where the projection puts it.

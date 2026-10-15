@@ -2,10 +2,10 @@
 //! `position_texture` edit, what faces keep through splits, copies, groups and push/pull, and
 //! plain data.
 
-use glam::{DVec2, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     DefinitionKind, Face, FaceId, KernelError, MeshId, Model, PlacementEdit, Scene, SceneData,
-    TexturePlacement, back_texture_position, normal_angle,
+    Side, TexturePlacement, back_texture_position, normal_angle,
 };
 
 fn p(x: f64, y: f64, z: f64) -> DVec3 {
@@ -406,4 +406,79 @@ fn triangles_carry_placed_texture_positions() {
         face.texture_position(corner)
             .abs_diff_eq(DVec2::new(0.0, -1.0), 1e-12)
     );
+}
+
+/// Explodes the one instance of `m`'s face `f`, with placement `t`, after moving the instance
+/// by `moved`, and checks each corner of the exploded face shows the texture where the instance
+/// showed it.
+fn explode_keeps_texture_in_place(m: Model, f: FaceId, t: TexturePlacement, moved: DAffine3) {
+    let mut s = Scene::from_root(m);
+    s.edit(MeshId::Root, |m| Ok(m.position_texture(&[f], sets(t))?.0))
+        .unwrap();
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let (instance, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &[f],
+            &[],
+            DefinitionKind::Group,
+            "Tile",
+        )
+        .unwrap();
+    // The texture shows only on painted faces; the instance's material passes to them.
+    let (plain, _) = s.add_material("Plain", [1, 2, 3]).unwrap();
+    s.paint(MeshId::Root, &[], &[instance], Side::Front, Some(plain))
+        .unwrap();
+    s.edit(MeshId::Root, |m| {
+        Ok(m.transform_instances(&[instance], moved))
+    })
+    .unwrap();
+    let placed = s.root().instance(instance).unwrap().clone();
+    let definition = &s.definition(placed.definition).unwrap().mesh;
+    let (_, face) = definition.faces().next().unwrap();
+    let before: Vec<(DVec3, DVec2)> = face
+        .outer
+        .iter()
+        .map(|&v| {
+            let q = definition.position(v).unwrap();
+            (
+                placed.transform.transform_point3(q),
+                face.texture_position(q),
+            )
+        })
+        .collect();
+    s.explode(MeshId::Root, instance).unwrap();
+    let (_, face) = s.root().faces().next().unwrap();
+    for (world, shown) in before {
+        let now = face.texture_position(world);
+        assert!(now.abs_diff_eq(shown, 1e-9), "{world}: {now} not {shown}");
+    }
+    s.validate().unwrap();
+}
+
+#[test]
+fn explode_keeps_a_moved_and_turned_instance_texture_in_place() {
+    let t = placement([0.5, -0.25], 15.0, [2.0, 3.0]);
+    let moved = DAffine3::from_translation(p(0.3, -1.2, 0.0))
+        * DAffine3::from_rotation_z(30f64.to_radians());
+    let (m, f) = ground();
+    explode_keeps_texture_in_place(m, f, t, moved);
+    // A wall, moved and turned about z: u turns with it.
+    let mut m = Model::new();
+    m.add_polygon(&[
+        p(0.0, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(2.0, 0.0, 1.0),
+        p(0.0, 0.0, 1.0),
+    ])
+    .unwrap();
+    let f = m.faces().next().unwrap().0;
+    explode_keeps_texture_in_place(m, f, t, moved);
+    // A turn about x stands the ground face up; an even scale enlarges the texture with it.
+    let (m, f) = ground();
+    let tilted = DAffine3::from_translation(p(1.0, 2.0, 0.5))
+        * DAffine3::from_rotation_x(90f64.to_radians())
+        * DAffine3::from_scale(DVec3::splat(2.0));
+    explode_keeps_texture_in_place(m, f, t, tilted);
 }

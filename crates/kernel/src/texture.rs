@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use glam::{DVec2, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
@@ -178,6 +178,45 @@ impl TexturePlacement {
                 scale: self.scale,
             }
         }
+    }
+}
+
+impl TexturePlacement {
+    /// The placement that keeps a face's texture where it was on the model when the face, of
+    /// unit `normal`, is moved by `t`: the projection is taken anew in the moved face's plane,
+    /// so the placement takes up the move, turn and (even) scale of `t` within that plane.
+    /// A mirror or an uneven scale cannot be shown by a placement; the nearest turn and scale
+    /// are taken.
+    pub(crate) fn carried(
+        placement: Option<TexturePlacement>,
+        normal: DVec3,
+        t: &DAffine3,
+    ) -> Option<TexturePlacement> {
+        let p = placement.unwrap_or_default();
+        let moved = t.transform_vector3(normal).normalize_or_zero();
+        if moved == DVec3::ZERO {
+            return placement;
+        }
+        let (u, v) = texture_axes(normal);
+        let (u2, v2) = texture_axes(moved);
+        let (lu, lv) = (t.transform_vector3(u), t.transform_vector3(v));
+        // The plane's map from the old projection to the new: its turn and its scale.
+        let (a, b, c, d) = (lu.dot(u2), lv.dot(u2), lu.dot(v2), lv.dot(v2));
+        let k = (a * d - b * c).abs().sqrt();
+        if !(k.is_finite() && k > 0.0) {
+            return placement;
+        }
+        let turn = c.atan2(a);
+        let shift = texture_position(moved, t.translation);
+        let offset = shift + k * DVec2::from_angle(turn).rotate(DVec2::from(p.offset));
+        let clamp_offset = |x: f64| x.clamp(-MAX_TEXTURE_OFFSET, MAX_TEXTURE_OFFSET);
+        let clamp_scale = |s: f64| (s * k).clamp(MIN_TEXTURE_SCALE, MAX_TEXTURE_SCALE);
+        Some(TexturePlacement {
+            offset: [clamp_offset(offset.x) + 0.0, clamp_offset(offset.y) + 0.0],
+            rotation_deg: normal_angle(p.rotation_deg + turn.to_degrees()),
+            scale: p.scale.map(clamp_scale),
+        })
+        .filter(|q| !q.is_default())
     }
 }
 

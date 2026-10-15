@@ -470,6 +470,18 @@ impl Stencil {
         }
         self
     }
+
+    /// The stencil with each painted face's texture placement adjusted so that, drawn by
+    /// `t`, its texture stays where it was shown (an exploded instance's faces keeping their
+    /// textures in place).
+    pub(crate) fn textures_carried(mut self, t: &DAffine3) -> Stencil {
+        for f in &mut self.faces {
+            if f.paint.iter().any(Option::is_some) {
+                f.texture = TexturePlacement::carried(f.texture, f.normal, t);
+            }
+        }
+        self
+    }
 }
 
 /// A face captured by position.

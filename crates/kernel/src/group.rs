@@ -62,7 +62,8 @@ impl Scene {
     /// Instances and guides inside it come out into `parent`, with new ids; a group inside a
     /// component gets a copy of its definition. A group's definition goes with its last
     /// instance; a component's stays. The instance's material passes to the face sides and
-    /// instances that come out without one.
+    /// instances that come out without one. Painted faces' texture placements take up the
+    /// instance's transform, so their textures stay where they were.
     pub fn explode(
         &mut self,
         parent: MeshId,
@@ -80,7 +81,9 @@ impl Scene {
         // lifted out of it get copies of their definitions: a group is placed only once.
         let survives = definition.kind == DefinitionKind::Component
             || self.instance_count(placed.definition) > 1;
-        let stencil = whole(&definition.mesh).painted_over(placed.material);
+        let stencil = whole(&definition.mesh)
+            .painted_over(placed.material)
+            .textures_carried(&placed.transform);
         let inner: Vec<Instance> = definition
             .mesh
             .instances()
