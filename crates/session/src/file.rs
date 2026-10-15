@@ -157,13 +157,25 @@ pub(crate) fn write(
     replace_file(path, &bytes)
 }
 
-/// Writes `bytes` to `path`, replacing the file there only once they are all on disk.
+/// Writes `bytes` to `path`, replacing the file there only once they are all on disk. The
+/// bytes go to `<path>.partial` first: whatever is at that name (a file left by a failed
+/// write, or a link planted there) is removed, the link itself and not what it points to, and
+/// the file is created anew, so the bytes never go through a link.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut name = path.as_os_str().to_owned();
     name.push(".partial");
     let partial = Path::new(&name);
+    match std::fs::remove_file(partial) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
     let result = (|| -> Result<(), String> {
-        let mut file = std::fs::File::create(partial).map_err(|e| e.to_string())?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(partial)
+            .map_err(|e| e.to_string())?;
         file.write_all(bytes).map_err(|e| e.to_string())?;
         // The data must be on disk before the rename makes it the file.
         file.sync_all().map_err(|e| e.to_string())?;
@@ -177,6 +189,22 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
+/// A document that does not parse, said without quoting it: serde's own messages quote the
+/// file's text (a string of the wrong kind, an unknown field's name).
+fn json_error(e: serde_json::Error) -> String {
+    use serde_json::error::Category;
+    let (line, column) = (e.line(), e.column());
+    match e.classify() {
+        Category::Eof | Category::Io => "the document ends early".into(),
+        Category::Syntax => {
+            format!("the document is not valid JSON (line {line}, column {column})")
+        }
+        Category::Data => format!(
+            "the document has a value of the wrong kind or an unknown name (line {line}, column {column})"
+        ),
+    }
+}
+
 /// Reads a file written by [`write`]: the model and the saved view.
 pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -186,7 +214,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
         .map_err(|_| "not a sketchup-alt file".to_string())?;
     let json = read_limited(entry, MAX_DOCUMENT_BYTES, "the document")?;
     // Check the header first, so a newer file gets a clear message rather than a field error.
-    let header: Value = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
+    let header: Value = serde_json::from_slice(&json).map_err(json_error)?;
     if header["format"] != FORMAT {
         return Err("not a sketchup-alt file".into());
     }
@@ -198,7 +226,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
             "the file uses schema version {version}, newer than this app's {SCHEMA_VERSION}"
         ));
     }
-    let mut stored: Stored = serde_json::from_slice(&json).map_err(|e| e.to_string())?;
+    let mut stored: Stored = serde_json::from_slice(&json).map_err(json_error)?;
     check_coordinates(&stored.model)?;
     // Refuse before decoding anything: each decode can take far more memory than its entry.
     if stored
@@ -219,8 +247,8 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
             continue;
         }
         let bytes = texture_entry(&mut zip, m.id, &t.file)?;
-        let (_, width, height) = dimensions(&bytes)
-            .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
+        let (_, width, height) =
+            dimensions(&bytes).map_err(|e| format!("material m{}'s texture: {e}", m.id))?;
         sizes.insert(t.file.clone(), u64::from(width) * u64::from(height));
     }
     check_total_pixels(0, sizes.values().sum())?;
@@ -236,8 +264,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
             None => {
                 let bytes = texture_entry(&mut zip, m.id, &t.file)?;
                 let image = Arc::new(
-                    decode(bytes)
-                        .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?,
+                    decode(bytes).map_err(|e| format!("material m{}'s texture: {e}", m.id))?,
                 );
                 decoded.insert(t.file.clone(), image.clone());
                 image
@@ -268,9 +295,9 @@ fn texture_entry(
 ) -> Result<Vec<u8>, String> {
     let entry = zip
         .by_name(file)
-        .map_err(|_| format!("material m{id}'s texture {file} is missing"))?;
-    read_limited(entry, MAX_TEXTURE_BYTES, &format!("texture {file}"))
-        .map_err(|e| format!("material m{id}'s texture {file}: {e}"))
+        .map_err(|_| format!("material m{id}'s texture is missing"))?;
+    read_limited(entry, MAX_TEXTURE_BYTES, "the texture")
+        .map_err(|e| format!("material m{id}'s texture: {e}"))
 }
 
 /// Reads all of `reader` (`what` names it in the error), failing once it holds more than

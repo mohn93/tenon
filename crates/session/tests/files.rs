@@ -525,3 +525,52 @@ fn a_model_that_has_used_up_its_ids_is_not_saved() {
     );
     assert!(d.is_modified());
 }
+
+#[test]
+fn a_link_at_the_partial_name_is_not_written_through() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+    let victim = scratch("partial-victim.txt");
+    std::fs::write(&victim, "keep me").unwrap();
+    let target = scratch("partial-target.skr");
+    let partial = scratch("partial-target.skr.partial");
+    std::os::unix::fs::symlink(&victim, &partial).unwrap();
+    run(&mut d, json!({"type": "save", "path": target})).unwrap();
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+    assert!(
+        std::fs::symlink_metadata(&partial).is_err(),
+        "the link is gone"
+    );
+    let mut opened = doc();
+    run(&mut opened, json!({"type": "open", "path": target})).unwrap();
+}
+
+/// A `.skr` archive holding `document.json` with `json` as its text.
+fn skr_with(path: &Path, json: &str) {
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    zip.start_file("document.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(json.as_bytes()).unwrap();
+    zip.finish().unwrap();
+}
+
+#[test]
+fn open_errors_do_not_quote_the_file() {
+    let path = scratch("secret.skr");
+    let cases = [
+        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": "hunter2-SECRET"}"#,
+        r#"{"format": "sketchup-alt", "schema_version": 9, "hunter2-SECRET": 1}"#,
+        r#"{"format": "sketchup-alt", "schema_version": 9, "camera": {"eye": [hunter2-SECRET"#,
+    ];
+    for json in cases {
+        skr_with(&path, json);
+        let (kind, message) = run(&mut doc(), json!({"type": "open", "path": path})).unwrap_err();
+        assert_eq!(kind, ErrorKind::File);
+        assert!(!message.contains("hunter2"), "{message}");
+        assert!(message.contains("line"), "{message}");
+    }
+}

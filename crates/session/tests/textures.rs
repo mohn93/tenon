@@ -541,3 +541,17 @@ fn materials_sharing_an_image_save_it_once() {
     .unwrap();
     assert_eq!(materials(&f).len(), 2);
 }
+
+#[test]
+fn texture_errors_do_not_quote_the_file() {
+    let path = scratch("secret.png");
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(b"hunter2-SECRET hunter2-SECRET hunter2-SECRET");
+    std::fs::write(&path, &bytes).unwrap();
+    let (_, message) = run(
+        &mut doc(),
+        json!({"type": "add_material", "texture": {"path": path}}),
+    )
+    .unwrap_err();
+    assert!(!message.contains("hunter2"), "{message}");
+}

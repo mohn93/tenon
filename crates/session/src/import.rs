@@ -220,7 +220,7 @@ pub(crate) fn read_obj(bytes: &[u8]) -> Result<ReadMesh, String> {
                     let index = t.split('/').next().unwrap_or("");
                     let i: i64 = index
                         .parse()
-                        .map_err(|_| at(format!("{t:?} is not a corner index")))?;
+                        .map_err(|_| at("a corner index is not a whole number".into()))?;
                     let count = mesh.points.len() as i64;
                     let resolved = if i > 0 { i - 1 } else { count + i };
                     if i == 0 || !(0..count).contains(&resolved) {
@@ -260,12 +260,12 @@ pub(crate) fn read_obj(bytes: &[u8]) -> Result<ReadMesh, String> {
     Ok(mesh)
 }
 
-/// A finite number.
+/// A finite number. The error does not quote the text (it is the file's).
 fn number(t: &str) -> Result<f64, String> {
     t.parse::<f64>()
         .ok()
         .filter(|x| x.is_finite())
-        .ok_or_else(|| format!("{t:?} is not a finite number"))
+        .ok_or_else(|| "a coordinate is not a finite number".to_string())
 }
 
 /// The diffuse colors (`Kd`, linear) of an MTL's materials, as sRGB bytes, in the order the
@@ -455,7 +455,7 @@ mod tests {
             ("v 0 0 0\n\nf 1 2 3\n", "line 3"),
             ("v 0 0 0\nf 0 1 1\n", "names no position"),
             ("v 0 0 0\nf 1 -2 1\n", "names no position"),
-            ("v 0 0 0\nf a b c\n", "not a corner index"),
+            ("v 0 0 0\nf a b c\n", "corner index is not a whole number"),
         ] {
             let e = read_obj(text.as_bytes()).unwrap_err();
             assert!(e.contains(wanted), "{text:?}: {e}");

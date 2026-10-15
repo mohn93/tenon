@@ -757,3 +757,29 @@ fn imported_geometry_survives_later_edits() {
     let faces = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"].clone();
     assert_eq!(faces.as_array().unwrap().len(), 6);
 }
+
+#[test]
+fn import_errors_do_not_quote_the_file() {
+    let cases: [(&str, &str); 4] = [
+        ("secret1.obj", "v 0 0 0\nv hunter2-SECRET 0 0\n"),
+        (
+            "secret2.obj",
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 hunter2-SECRET\n",
+        ),
+        (
+            "secret3.stl",
+            "solid x\nfacet normal 0 0 1\nouter loop\nvertex hunter2-SECRET 0 0\n",
+        ),
+        ("secret4.obj", "hunter2-SECRET\nv nan 0 0\n"),
+    ];
+    for (name, text) in cases {
+        let path = scratch(name);
+        std::fs::write(&path, text).unwrap();
+        let (_, message) = run(&mut doc(), json!({"type": "import", "path": path})).unwrap_err();
+        assert!(!message.contains("hunter2"), "{name}: {message}");
+        assert!(
+            message.contains("line ") || message.contains("facet "),
+            "{message}"
+        );
+    }
+}

@@ -756,7 +756,8 @@ over 256 MiB, an id of 2^53 or more or one number used as the id of two things, 
 fewer than two faces, a face or instance painted with a material the file lacks, a material
 name that is blank, too long or used twice, a material opacity outside 0 to 1, a texture
 whose image is missing, broken or too large, or whose size is out of range, or a face texture
-position out of range); the model is left as it was. `save` also fails
+position out of range); error messages never quote the file's contents (a JSON fault gives its
+line and column); the model is left as it was. `save` also fails
 when the model has given out ids past 2^53, which no file can hold. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
@@ -842,6 +843,7 @@ The outcome's `import` reports what was made:
 a file that cannot be read, is over 128 MiB, has more than 200,000 polygons or 1,000,000 OBJ
 positions, has a broken line (the message names it), a number that is not finite, a position
 beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
+A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 
 In the window, File > Import... (Cmd+I) picks an OBJ or STL file and imports it as a group

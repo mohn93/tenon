@@ -25,13 +25,15 @@ pub fn dimensions(encoded: &[u8]) -> Result<(ImageFormat, u32, u32), String> {
     }
     let reader = ImageReader::new(Cursor::new(encoded))
         .with_guessed_format()
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "the image's header is broken".to_string())?;
     let format = match reader.format() {
         Some(image::ImageFormat::Png) => ImageFormat::Png,
         Some(image::ImageFormat::Jpeg) => ImageFormat::Jpeg,
         _ => return Err("not a PNG or JPEG image".into()),
     };
-    let (width, height) = reader.into_dimensions().map_err(|e| e.to_string())?;
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|_| "the image's header is broken".to_string())?;
     if width > MAX_TEXTURE_PIXELS || height > MAX_TEXTURE_PIXELS {
         return Err(format!(
             "the image is {width} x {height} pixels: a texture has at most \
@@ -59,12 +61,15 @@ pub fn decode(encoded: Vec<u8>) -> Result<TextureImage, String> {
     let (format, _, _) = dimensions(&encoded)?;
     let mut reader = ImageReader::new(Cursor::new(&encoded[..]))
         .with_guessed_format()
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "the image is broken".to_string())?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_TEXTURE_PIXELS);
     limits.max_image_height = Some(MAX_TEXTURE_PIXELS);
     reader.limits(limits);
-    let pixels = reader.decode().map_err(|e| e.to_string())?.into_rgba8();
+    let pixels = reader
+        .decode()
+        .map_err(|_| "the image is broken".to_string())?
+        .into_rgba8();
     Ok(TextureImage {
         format,
         width: pixels.width(),

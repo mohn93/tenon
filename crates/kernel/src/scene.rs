@@ -454,10 +454,7 @@ impl Scene {
                 crate::texture::check_texture(t).map_err(|e| format!("material {id}: {e}"))?;
             }
             if !names.insert(m.name.as_str()) {
-                return Err(format!(
-                    "material {id}: two materials are named {:?}",
-                    m.name
-                ));
+                return Err(format!("material {id}: two materials are named the same"));
             }
         }
         if self.texture_count() > crate::texture::MAX_TEXTURES {
