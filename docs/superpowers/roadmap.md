@@ -29,7 +29,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M9c | Lights: glowing materials (emission), point lights from glowing instances, day/night lighting mode | done 9b27327..110673a |
 | M9d | Texture positioning: per-face offset, rotation and scale (`position_texture`), back sides not mirrored, export UVs, Entity Info fields | done 726a96d..45b0d23 |
 | M9e | Light shadows: cube shadow maps for up to 64 lights, cached between frames, glowing faces cast none | done 0561d71..a7037f4 |
-| M10a | Agent sight and state: pick and infer queries, editor state query and setters, selection/camera/editor notifications, undo labels, quit | todo |
+| M10a | Agent sight and state: pick and infer queries, editor state query and setters, selection/camera/editor notifications, undo labels, quit | planned docs/superpowers/plans/2026-10-15-m10a-agent-state.md |
 | M10b | Tool driving and parity: tool_input events through the real tools and inference; orbit/zoom about a point, crossing box select, 3-point arc, relative texture rotation, undo/redo count | todo |
 | M10c | Safe agent access: connected-agent indicator and activity log, opt-in --api-root folders, overwrite guard, no file contents in errors, recovery file on discard | todo |
 
