@@ -109,6 +109,9 @@ pub struct TextureRow {
     pub pixels: [u32; 2],
 }
 
+/// The right panel's width, in points.
+const RIGHT_PANEL_WIDTH: f32 = 180.0;
+
 /// The default material's swatch: its front color.
 const DEFAULT_SWATCH: Color32 = Color32::from_rgb(237, 237, 230);
 
@@ -335,9 +338,11 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
             });
         });
     });
+    // A fixed width: egui grows a panel to fit wide content and keeps the width after, which
+    // would narrow the 3D view for good once a wide row was shown.
     Panel::right("entity_info")
         .resizable(false)
-        .default_size(180.0)
+        .exact_size(RIGHT_PANEL_WIDTH)
         .show(ui, |ui| {
             if ui.available_height() >= PANEL_MIN_HEIGHT {
                 right_panel(ui, view, &mut actions);
@@ -470,7 +475,8 @@ fn texture_position(ui: &mut Ui, t: &TexturePlacement, actions: &mut Vec<UiActio
     });
 }
 
-/// A row of `label` and one field per value, changing by `speed` per point dragged. Like the
+/// A row of `label` and one field per value, changing by `speed` per point dragged; with more
+/// than one field the label goes on a line of its own, so long values still fit the panel. Like the
 /// texture size, the values being dragged live in egui's memory under `key` until the drag
 /// ends; returns the values when a drag ends or a typed value is entered.
 fn drag_row<const N: usize>(
@@ -483,9 +489,14 @@ fn drag_row<const N: usize>(
 ) -> Option<[f64; N]> {
     let key = egui::Id::new(key);
     let mut values = ui.data(|d| d.get_temp::<[f64; N]>(key)).unwrap_or(shown);
+    if N > 1 {
+        ui.label(label);
+    }
     let (dragged, done) = ui
         .horizontal(|ui| {
-            ui.label(label);
+            if N == 1 {
+                ui.label(label);
+            }
             let (mut dragged, mut done) = (false, false);
             for value in &mut values {
                 let field = ui.add(
@@ -677,28 +688,26 @@ fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
         {
             actions.push(UiAction::LoadTexture(m.id));
         }
-        if let Some(t) = &m.texture {
-            if ui.button("Remove").clicked() {
-                actions.push(UiAction::RemoveTexture(m.id));
-            }
-            ui.label(RichText::new(format!("{} x {} px", t.pixels[0], t.pixels[1])).weak());
+        if m.texture.is_some() && ui.button("Remove").clicked() {
+            actions.push(UiAction::RemoveTexture(m.id));
         }
     });
     let Some(t) = &m.texture else { return };
+    ui.label(RichText::new(format!("{} x {} px", t.pixels[0], t.pixels[1])).weak());
     // Like the opacity: the size being dragged lives in egui's memory until the drag ends.
     let key = egui::Id::new(("texture-size", m.id.0));
     let shown = [t.width, t.height];
     let mut size = ui.data(|d| d.get_temp::<[f64; 2]>(key)).unwrap_or(shown);
+    // The label on a line of its own, so long sizes still fit the panel.
+    ui.label("Size (m)");
     let (dragged, done) = ui
         .horizontal(|ui| {
-            ui.label("Size");
             let field = |ui: &mut Ui, value: &mut f64| {
                 ui.add(
                     egui::DragValue::new(value)
                         .range(kernel::MIN_TEXTURE_SIZE..=kernel::MAX_TEXTURE_SIZE)
                         .speed(0.01)
-                        .max_decimals(3)
-                        .suffix(" m"),
+                        .max_decimals(3),
                 )
             };
             let w = field(ui, &mut size[0]);
@@ -1549,6 +1558,47 @@ mod tests {
             )),
             "{clicked:?}"
         );
+    }
+
+    #[test]
+    fn the_right_panel_keeps_its_width_with_a_texture_shown() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let plain = brick();
+        let mut textured = brick();
+        textured[0].texture = Some(TextureRow {
+            swatch: egui::TextureId::default(),
+            width: 123.456,
+            height: 789.012,
+            pixels: [4096, 4096],
+        });
+        let ctx = egui::Context::default();
+        let width = |rows: &[MaterialRow]| {
+            let view = name_field_view(&status, &info, rows);
+            let mut w = 0.0;
+            // A few frames, so egui settles any size it remembers.
+            for _ in 0..3 {
+                w = run(&ctx, screen(), &view).1.width();
+            }
+            w
+        };
+        let before = width(&plain);
+        assert_eq!(width(&textured), before, "a texture shown");
+        assert_eq!(width(&plain), before, "after the texture");
+        // Long texture position values fit too.
+        let mut view = name_field_view(&status, &info, &textured);
+        view.texture_position = Some(TexturePlacement {
+            offset: [-123456.789, -987654.321],
+            rotation_deg: 359.9,
+            scale: [999.999, 999.999],
+        });
+        for _ in 0..3 {
+            assert_eq!(
+                run(&ctx, screen(), &view).1.width(),
+                before,
+                "texture position"
+            );
+        }
     }
 
     #[test]
