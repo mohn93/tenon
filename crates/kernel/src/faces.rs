@@ -11,6 +11,7 @@ use crate::ids::{EdgeId, FaceId, MaterialId, VertexId};
 use crate::index::{Index, Shape};
 use crate::model::{Face, Model};
 use crate::regions::{PlaneGraph, Region};
+use crate::texture::TexturePlacement;
 
 impl Model {
     /// Updates the faces of every plane spanned by one of `new_edges` and an edge touching it.
@@ -211,7 +212,9 @@ impl Model {
                 });
                 let keep = in_old_face || (uses_new && (!in_old_hole || apart));
                 let normal = container.map_or(plane.normal, |i| old[i].1.normal);
-                let paint = container.map_or([None, None], |i| old[i].1.paint());
+                let paint = container.map_or(([None, None], None), |i| {
+                    (old[i].1.paint(), old[i].1.texture)
+                });
                 keep.then_some((r, normal, paint))
             })
             .collect();
@@ -228,7 +231,7 @@ impl Model {
         plane: Plane,
     ) {
         let mut matched: BTreeSet<FaceId> = BTreeSet::new();
-        for (r, normal, [front, back]) in wanted {
+        for (r, normal, ([front, back], texture)) in wanted {
             let outer: BTreeSet<VertexId> = r.outer.iter().copied().collect();
             // Faces in one plane may face opposite ways (push/pull flips a base face), so an
             // old face matches by vertex set and keeps its own orientation.
@@ -266,6 +269,7 @@ impl Model {
                         normal,
                         front,
                         back,
+                        texture,
                     });
                 }
             }
@@ -278,8 +282,9 @@ impl Model {
     }
 }
 
-/// A face's front and back materials.
-type Paint = [Option<MaterialId>; 2];
+/// A face's front and back materials and its texture placement, which the pieces split from it
+/// keep.
+type Paint = ([Option<MaterialId>; 2], Option<TexturePlacement>);
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;

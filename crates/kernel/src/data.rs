@@ -12,7 +12,7 @@ use crate::ids::{
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
-use crate::texture::{Texture, TextureImage};
+use crate::texture::{Texture, TextureImage, TexturePlacement};
 
 /// Ids in a file are below this, and its `next_id` is at most this, so every id is exact as a
 /// JSON (double) number and a scene that loads also saves and loads again.
@@ -124,6 +124,9 @@ pub struct FaceData {
     pub front: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub back: Option<u64>,
+    /// The texture placement (absent: none, as in files written before placements existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_position: Option<TexturePlacement>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -280,6 +283,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 normal: f.normal.to_array(),
                 front: f.front.map(|m| m.0),
                 back: f.back.map(|m| m.0),
+                texture_position: f.texture,
             })
             .collect(),
         instances: m
@@ -363,6 +367,8 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             normal: DVec3::from(f.normal),
             front: f.front.map(MaterialId),
             back: f.back.map(MaterialId),
+            // A default placement is the same as none.
+            texture: f.texture_position.filter(|t| !t.is_default()),
         };
         if faces.insert(FaceId(f.id), face).is_some() {
             return Err(format!("face f{} appears twice", f.id));

@@ -195,6 +195,7 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         normal: [0.0, 0.0, 1.0],
         front: None,
         back: None,
+        texture_position: None,
     };
     MeshData {
         vertices: vec![

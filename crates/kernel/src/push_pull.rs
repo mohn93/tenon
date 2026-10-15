@@ -256,10 +256,12 @@ impl Model {
         let cap_origin = points[0][0] + offset;
         // A flat sheet pulled against its normal turns over: the side facing the pull direction
         // is the one that ends up outside, so the cap and sides take the materials swapped.
-        let new_paint = if cap_normal == -n {
-            face.reversed().paint()
+        // The cap is the pushed face moved: it keeps the texture placement too.
+        let (new_paint, cap_texture) = if cap_normal == -n {
+            let r = face.reversed();
+            (r.paint(), r.texture)
         } else {
-            face.paint()
+            (face.paint(), face.texture)
         };
         let created: Vec<FaceId> = self
             .faces()
@@ -282,6 +284,7 @@ impl Model {
             if in_cap {
                 self.orient(f, cap_normal);
                 self.set_paint(f, new_paint);
+                self.set_texture(f, cap_texture);
                 continue;
             }
             // A side face lies inside a side's swept rectangle. Other new faces in a side's

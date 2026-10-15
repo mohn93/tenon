@@ -441,8 +441,8 @@ impl Scene {
     /// itself (directly or deeper), that no number is the id of two things (entities in any
     /// mesh, curves, definitions and materials all take ids from one counter), that every
     /// material painted exists, that material names are valid and distinct, that material
-    /// opacities are from 0 to 1 and emissions from 0 to `MAX_EMISSION`, and that textures are
-    /// valid and at most `MAX_TEXTURES`.
+    /// opacities are from 0 to 1 and emissions from 0 to `MAX_EMISSION`, that textures are
+    /// valid and at most `MAX_TEXTURES`, and that face texture placements are in range.
     pub fn validate(&self) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for (id, m) in &self.materials {
@@ -495,6 +495,9 @@ impl Scene {
             for (id, f) in m.faces() {
                 if missing(&f.front) || missing(&f.back) {
                     return Err(format!("face {id:?} is painted with a missing material"));
+                }
+                if let Some(t) = &f.texture {
+                    crate::texture::check_placement(t).map_err(|e| format!("face {id:?}: {e}"))?;
                 }
             }
             for id in entity_ids(m) {

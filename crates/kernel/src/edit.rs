@@ -39,6 +39,8 @@ pub enum KernelError {
     /// A material emission is not a finite number from 0 to `MAX_EMISSION`; the text says
     /// which.
     MaterialEmission(String),
+    /// A texture placement's offset, rotation or scale is out of range; the text says which.
+    TexturePlacement(String),
     /// An import has no polygon that makes a face.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -74,7 +76,8 @@ impl fmt::Display for KernelError {
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
-            | KernelError::MaterialEmission(why) => {
+            | KernelError::MaterialEmission(why)
+            | KernelError::TexturePlacement(why) => {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {

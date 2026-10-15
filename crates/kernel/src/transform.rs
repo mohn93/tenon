@@ -11,6 +11,7 @@ use crate::geom::{
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::index::{Index, Shape};
 use crate::model::{ChangeSet, Face, Model};
+use crate::texture::TexturePlacement;
 
 impl Model {
     /// Moves `vertices` by `offset` as one ChangeSet. Faces that use some of them stretch and
@@ -210,6 +211,7 @@ impl Model {
                 outer: ring(&f.outer),
                 normal: f.normal,
                 paint: f.paint(),
+                texture: f.texture,
                 openings: Vec::new(),
                 filled: Vec::new(),
             };
@@ -345,13 +347,15 @@ impl Model {
                 })
             })
             .collect();
-        // Give each piece of a stencil face that face's orientation and materials.
+        // Give each piece of a stencil face that face's orientation, materials and texture
+        // placement.
         for (f, t) in placed.iter().zip(&placed_tests) {
             for id in candidates(&t.outer) {
                 let in_hole = t.openings.iter().chain(&t.filled).any(|h| within(id, h));
                 if within(id, &t.outer) && !in_hole {
                     self.orient(id, f.normal);
                     self.set_paint(id, f.paint);
+                    self.set_texture(id, f.texture);
                 }
             }
         }
@@ -475,6 +479,8 @@ struct StencilFace {
     normal: DVec3,
     /// Front and back materials.
     paint: [Option<MaterialId>; 2],
+    /// The texture placement, kept as it is wherever the face is drawn.
+    texture: Option<TexturePlacement>,
     /// Holes no face fills.
     openings: Vec<Vec<DVec3>>,
     /// Holes another face fills.
@@ -488,6 +494,7 @@ impl StencilFace {
             outer: ring(&self.outer),
             normal: t.transform_vector3(self.normal).normalize(),
             paint: self.paint,
+            texture: self.texture,
             openings: self.openings.iter().map(ring).collect(),
             filled: self.filled.iter().map(ring).collect(),
         }

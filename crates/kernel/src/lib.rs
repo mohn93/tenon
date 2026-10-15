@@ -42,7 +42,8 @@ pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
 pub use texture::{
-    ImageFormat, MAX_TEXTURE_SIZE, MAX_TEXTURES, MIN_TEXTURE_SIZE, Texture, TextureImage,
-    texture_axes, texture_position,
+    ImageFormat, MAX_TEXTURE_OFFSET, MAX_TEXTURE_SCALE, MAX_TEXTURE_SIZE, MAX_TEXTURES,
+    MIN_TEXTURE_SCALE, MIN_TEXTURE_SIZE, PlacementEdit, Texture, TextureImage, TexturePlacement,
+    back_texture_position, normal_angle, texture_axes, texture_position,
 };
 pub use triangles::Triangle;

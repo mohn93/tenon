@@ -10,6 +10,7 @@ use crate::ids::{
     CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
 };
 use crate::index::Index;
+use crate::texture::{TexturePlacement, is_level};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Vertex {
@@ -53,6 +54,10 @@ pub struct Face {
     /// The material of the other side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub back: Option<MaterialId>,
+    /// Where the texture lies on top of the projection; None for the projection as it is.
+    /// Never the default placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<TexturePlacement>,
 }
 
 impl Face {
@@ -64,11 +69,12 @@ impl Face {
             normal,
             front: None,
             back: None,
+            texture: None,
         }
     }
 
-    /// The same face turned over: loops reversed, normal negated, and the materials swapped so
-    /// each stays on the side it was on.
+    /// The same face turned over: loops reversed, normal negated, and the materials swapped and
+    /// the texture placement turned over so each side looks as it did.
     pub fn reversed(&self) -> Face {
         let rev = |l: &Vec<VertexId>| l.iter().rev().copied().collect::<Vec<_>>();
         Face {
@@ -77,6 +83,7 @@ impl Face {
             normal: -self.normal,
             front: self.back,
             back: self.front,
+            texture: self.texture.map(|t| t.turned_over(is_level(self.normal))),
         }
     }
 
@@ -164,6 +171,8 @@ pub enum Op {
     PaintFace(FaceId, [Option<MaterialId>; 2], [Option<MaterialId>; 2]),
     /// An instance's material changed from the first to the second.
     PaintInstance(InstanceId, Option<MaterialId>, Option<MaterialId>),
+    /// A face's texture placement changed from the first to the second.
+    PlaceTexture(FaceId, Option<TexturePlacement>, Option<TexturePlacement>),
 }
 
 impl Op {
@@ -184,6 +193,7 @@ impl Op {
             Op::RemoveGuide(id, g) => Op::AddGuide(id, g),
             Op::PaintFace(id, from, to) => Op::PaintFace(id, to, from),
             Op::PaintInstance(id, from, to) => Op::PaintInstance(id, to, from),
+            Op::PlaceTexture(id, from, to) => Op::PlaceTexture(id, to, from),
         }
     }
 
@@ -205,6 +215,7 @@ impl Op {
             Op::RemoveGuide(id, _) => (EntityId::Guide(*id), true, false),
             Op::PaintFace(id, _, _) => (EntityId::Face(*id), true, true),
             Op::PaintInstance(id, _, _) => (EntityId::Instance(*id), true, true),
+            Op::PlaceTexture(id, _, _) => (EntityId::Face(*id), true, true),
         }
     }
 }
@@ -605,6 +616,11 @@ impl Model {
                     i.material = to;
                 }
             }
+            Op::PlaceTexture(id, _, to) => {
+                if let Some(f) = self.faces.get_mut(&id) {
+                    f.texture = to;
+                }
+            }
         }
     }
 
@@ -843,6 +859,16 @@ impl Model {
         let from = self.faces[&id].paint();
         if from != paint {
             self.record(Op::PaintFace(id, from, paint));
+        }
+    }
+
+    /// Sets a face's texture placement (a default placement is stored as none), recording a
+    /// change only when it differs.
+    pub(crate) fn set_texture(&mut self, id: FaceId, texture: Option<TexturePlacement>) {
+        let texture = texture.filter(|t| !t.is_default());
+        let from = self.faces[&id].texture;
+        if from != texture {
+            self.record(Op::PlaceTexture(id, from, texture));
         }
     }
 
