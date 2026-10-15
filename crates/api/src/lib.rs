@@ -5,6 +5,7 @@ mod dispatch;
 mod editor;
 mod headless;
 mod hub;
+mod input;
 mod probe;
 mod protocol;
 mod transport;
@@ -13,9 +14,13 @@ pub use dispatch::{EditorQuery, Host, describe, handle};
 pub use editor::{Dialog, EditorCommand, EditorState, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{Hub, Inbox};
+pub use input::{
+    Hover, Input, InputEvent, Issued, Key, Mods, MouseButton, Spot, ToolInput, ToolInputParams,
+    ToolInputResult,
+};
 pub use probe::{
     AxisName, InferQuery, Inferred, PickHit, PickQuery, Placed, RaySpec, ScreenBox, ScreenCommand,
-    Snap, View,
+    Snap, View, snap_name,
 };
 pub use protocol::{MAX_LINE_BYTES, codes};
 pub use transport::{listen_unix, serve_stdio, serve_stream};

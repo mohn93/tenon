@@ -348,6 +348,32 @@ pub fn pick_query(doc: &Document, q: &PickQuery) -> Result<Vec<PickHit>, Command
         .collect())
 }
 
+/// The name agents see for a snap, and the axis of an axis snap.
+pub fn snap_name(kind: SnapKind) -> (Snap, Option<AxisName>) {
+    match kind {
+        SnapKind::Endpoint => (Snap::Endpoint, None),
+        SnapKind::Midpoint => (Snap::Midpoint, None),
+        SnapKind::Origin => (Snap::Origin, None),
+        SnapKind::GuidePoint => (Snap::GuidePoint, None),
+        SnapKind::Intersection => (Snap::Intersection, None),
+        SnapKind::OnEdge => (Snap::OnEdge, None),
+        SnapKind::OnGuide => (Snap::OnGuide, None),
+        SnapKind::Axis(a) => (
+            Snap::Axis,
+            Some(match a {
+                Axis::X => AxisName::X,
+                Axis::Y => AxisName::Y,
+                Axis::Z => AxisName::Z,
+            }),
+        ),
+        SnapKind::Parallel => (Snap::Parallel, None),
+        SnapKind::Perpendicular => (Snap::Perpendicular, None),
+        SnapKind::OnFace => (Snap::OnFace, None),
+        SnapKind::Ground => (Snap::Ground, None),
+        SnapKind::Free => (Snap::Nothing, None),
+    }
+}
+
 /// Answers `infer`: what a tool's click at the pixel (or where the view shows the point)
 /// would snap to.
 pub fn infer_query(doc: &Document, q: &InferQuery) -> Result<Inferred, CommandError> {
@@ -373,28 +399,7 @@ pub fn infer_query(doc: &Document, q: &InferQuery) -> Result<Inferred, CommandEr
         ..Guides::default()
     };
     let (hit, involved) = infer_detail(&scenery, &local, cursor, &guides, radius_px);
-    let (kind, axis) = match hit.kind {
-        SnapKind::Endpoint => (Snap::Endpoint, None),
-        SnapKind::Midpoint => (Snap::Midpoint, None),
-        SnapKind::Origin => (Snap::Origin, None),
-        SnapKind::GuidePoint => (Snap::GuidePoint, None),
-        SnapKind::Intersection => (Snap::Intersection, None),
-        SnapKind::OnEdge => (Snap::OnEdge, None),
-        SnapKind::OnGuide => (Snap::OnGuide, None),
-        SnapKind::Axis(a) => (
-            Snap::Axis,
-            Some(match a {
-                Axis::X => AxisName::X,
-                Axis::Y => AxisName::Y,
-                Axis::Z => AxisName::Z,
-            }),
-        ),
-        SnapKind::Parallel => (Snap::Parallel, None),
-        SnapKind::Perpendicular => (Snap::Perpendicular, None),
-        SnapKind::OnFace => (Snap::OnFace, None),
-        SnapKind::Ground => (Snap::Ground, None),
-        SnapKind::Free => (Snap::Nothing, None),
-    };
+    let (kind, axis) = snap_name(hit.kind);
     Ok(Inferred {
         kind,
         axis,

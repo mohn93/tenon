@@ -2,7 +2,8 @@
 //! editor and against one without.
 
 use api::{
-    EditorCommand, EditorState, HeadlessHost, Host, PhaseName, ToolName, codes, describe, handle,
+    EditorCommand, EditorState, HeadlessHost, Host, Input, PhaseName, ToolInput, ToolInputResult,
+    ToolName, codes, describe, handle,
 };
 use serde_json::{Value, json};
 use session::{
@@ -14,6 +15,8 @@ struct Editing {
     inner: HeadlessHost,
     state: EditorState,
     quit: bool,
+    /// The events `tool_input` was given.
+    events: Vec<Input>,
 }
 
 impl Editing {
@@ -40,6 +43,7 @@ impl Editing {
                 dialog: None,
             },
             quit: false,
+            events: Vec::new(),
         }
     }
 }
@@ -83,6 +87,17 @@ impl Host for Editing {
             EditorCommand::SetSoftenAngle { angle } => self.state.soften_angle = angle,
         }
         Ok(())
+    }
+
+    fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, CommandError> {
+        self.events.extend(input.events);
+        Ok(ToolInputResult {
+            editor: self.state.clone(),
+            inference: None,
+            preview: Vec::new(),
+            commands: Vec::new(),
+            revision: self.document().revision(),
+        })
     }
 
     fn quit(&mut self, discard: bool) -> Result<(), CommandError> {
@@ -230,7 +245,15 @@ fn describe_lists_quit_and_the_editor_schemas() {
     for name in ["selection", "camera", "editor"] {
         assert!(d["notifications"][name].is_string(), "{name}");
     }
-    for name in ["EditorCommand", "EditorState", "EditorQuery"] {
+    assert!(d["methods"]["tool_input"].is_object());
+    for name in [
+        "EditorCommand",
+        "EditorState",
+        "EditorQuery",
+        "ToolInput",
+        "ToolInputResult",
+        "ScreenCommand",
+    ] {
         assert!(d["schemas"][name].is_object(), "{name}");
     }
 }
@@ -378,4 +401,38 @@ fn requests_after_an_accepted_quit_are_refused() {
     // A request in a later round is refused too, and so is a second quit.
     let r = call(&mut host, "quit", json!({"discard": true}));
     assert_eq!(r["error"]["message"], "the program is quitting", "{r}");
+}
+
+#[test]
+fn tool_input_reaches_the_editor_checked() {
+    let mut h = Editing::new();
+    let r = call(
+        &mut h,
+        "tool_input",
+        json!({"events": [{"type": "click", "point": [1, 2, 0]}, {"type": "type", "text": "3"}]}),
+    );
+    assert_eq!(r["result"]["editor"]["tool"], "line", "{r}");
+    assert_eq!(r["result"]["commands"], json!([]));
+    assert_eq!(h.events.len(), 2);
+    // A malformed event is -32602; one that makes no sense is invalid_input, and runs nothing.
+    let r = call(
+        &mut h,
+        "tool_input",
+        json!({"events": [{"type": "hover", "pixel": [1, 1]}]}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    let r = call(
+        &mut h,
+        "tool_input",
+        json!({"events": [{"type": "move", "pixel": [1, 1]}, {"type": "key", "key": "tab"}]}),
+    );
+    assert_eq!(r["error"]["message"], "event 1: unknown key \"tab\"", "{r}");
+    assert_eq!(h.events.len(), 2);
+    // Without an editor there is nothing to drive.
+    let r = call(
+        &mut HeadlessHost::new(),
+        "tool_input",
+        json!({"events": [{"type": "click", "pixel": [1, 1]}]}),
+    );
+    assert_eq!(r["error"]["message"], "this program has no editor", "{r}");
 }

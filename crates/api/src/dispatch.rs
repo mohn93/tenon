@@ -11,6 +11,7 @@ use session::{
 };
 
 use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
+use crate::input::{ToolInput, ToolInputParams, ToolInputResult, check};
 use crate::probe::{
     InferQuery, Inferred, PickHit, PickQuery, ScreenCommand, View, box_ids, infer_query, pick_query,
 };
@@ -44,6 +45,11 @@ pub trait Host {
     }
     /// Runs an editor command.
     fn editor_command(&mut self, _command: EditorCommand) -> Result<(), CommandError> {
+        Err(no_editor())
+    }
+    /// Feeds the active tool the events, as the window would, and reports the editor after
+    /// them and the commands they ran.
+    fn tool_input(&mut self, _input: ToolInput) -> Result<ToolInputResult, CommandError> {
         Err(no_editor())
     }
     /// Ends the program once the replies waiting are sent. Refuses with `unsaved_changes`
@@ -166,6 +172,12 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             Ok(json!(result))
         }
         "render_view" => render_view(host, params),
+        "tool_input" => {
+            let p: ToolInputParams = params_as(params)?;
+            let input = check(p).map_err(command_failed)?;
+            let result = host.tool_input(input).map_err(command_failed)?;
+            Ok(json!(result))
+        }
         "quit" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
@@ -289,6 +301,11 @@ pub fn describe() -> Value {
                 "result": "{width, height, png_base64}",
                 "notes": "does not move the document camera or change its lighting"
             },
+            "tool_input": {
+                "params": "ToolInput: {events: [InputEvent], width?, height?}",
+                "result": "ToolInputResult: {editor, inference, preview, commands: [{command, outcome?, error?}], revision}",
+                "notes": "runs the events through the window's editor and active tool (inference, locks, typed values); a model point is looked for where the view shows it at its turn; an event that cannot run stops the rest (the ones before it stay done); modifiers are let go at the end"
+            },
             "subscribe": {"params": null, "result": "{revision}", "notes": "connection only"},
             "describe": {"params": null, "result": "this document"},
             "quit": {
@@ -319,6 +336,8 @@ pub fn describe() -> Value {
             "ScreenCommand": schema_for!(ScreenCommand),
             "EditorCommand": schema_for!(EditorCommand),
             "EditorState": schema_for!(EditorState),
+            "ToolInput": schema_for!(ToolInputParams),
+            "ToolInputResult": schema_for!(ToolInputResult),
             "QueryResult": schema_for!(QueryResult),
             "Outcome": schema_for!(Outcome),
             "CommandError": schema_for!(CommandError),
