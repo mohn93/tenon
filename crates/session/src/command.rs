@@ -360,6 +360,15 @@ pub enum Command {
 }
 
 impl Command {
+    /// The command's `type` as agents write it ("add_edge", "push_pull"): the label of the undo
+    /// step it makes.
+    pub fn name(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_owned))
+            .unwrap_or_default()
+    }
+
     /// True for commands that can change the model or the open context (everything except
     /// camera, selection, saving and exporting).
     pub fn changes_model(&self) -> bool {

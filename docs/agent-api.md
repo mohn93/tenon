@@ -48,7 +48,8 @@ Queries:
 | `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box; a guide point: its position) all lie in the box, bounds included; an instance with nothing in it and a guide line are in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
-| `{"type": "stats"}`, `{"type": "history"}` | counts for the open context (plus the number of definitions) and revision; undo/redo depth |
+| `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
+| `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `revision` |
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |

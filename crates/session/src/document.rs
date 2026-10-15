@@ -38,6 +38,12 @@ pub const MAX_COPIES: u32 = 1000;
 /// How many recent model changes `Query::Events` can return.
 const EVENT_LOG_LEN: usize = 1024;
 
+/// One undo step: the model change and the label of what made it (see `Command::name`).
+struct Step {
+    label: String,
+    changes: SceneChange,
+}
+
 /// The open model plus everything needed to edit it: camera, selection, the open context and
 /// undo history.
 pub struct Document {
@@ -48,8 +54,8 @@ pub struct Document {
     /// How the view is lit; saved with the camera.
     pub lighting: Lighting,
     selection: BTreeSet<EntityId>,
-    undo: Vec<SceneChange>,
-    redo: Vec<SceneChange>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
     revision: u64,
     events: VecDeque<ChangeEvent>,
     /// Changes up to this revision are missing from `events` (the model was replaced).
@@ -169,7 +175,7 @@ impl Document {
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
         if let Some(changes) = self.edit(&command) {
-            let mut outcome = self.record(changes?);
+            let mut outcome = self.record(command.name(), changes?);
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
             outcome.positioned = self.positioned.take();
@@ -177,21 +183,21 @@ impl Document {
         }
         match command {
             Command::Undo => {
-                let changes = self.undo.pop().ok_or_else(|| {
+                let step = self.undo.pop().ok_or_else(|| {
                     CommandError::new(ErrorKind::NothingToUndo, "nothing to undo")
                 })?;
-                let inverse = changes.inverse();
+                let inverse = step.changes.inverse();
                 self.scene.apply(&inverse);
-                self.redo.push(changes);
+                self.redo.push(step);
                 Ok(self.changed(&inverse))
             }
             Command::Redo => {
-                let changes = self.redo.pop().ok_or_else(|| {
+                let step = self.redo.pop().ok_or_else(|| {
                     CommandError::new(ErrorKind::NothingToRedo, "nothing to redo")
                 })?;
-                self.scene.apply(&changes);
-                let outcome = self.changed(&changes);
-                self.undo.push(changes);
+                self.scene.apply(&step.changes);
+                let outcome = self.changed(&step.changes);
+                self.undo.push(step);
                 Ok(outcome)
             }
             Command::SetCamera { .. }
@@ -475,11 +481,14 @@ impl Document {
         let selection_before = self.selection.clone();
         let context_before = self.context.clone();
         let mut applied: Vec<SceneChange> = Vec::new();
+        // The edits' names: the step is labeled by theirs when they share one.
+        let mut names: Vec<String> = Vec::new();
         for (index, command) in commands.into_iter().enumerate() {
             let result = match self.edit(&command) {
                 Some(changes) => changes.map(|c| {
                     let summary = c.summary();
                     applied.push(c);
+                    names.push(command.name());
                     Outcome {
                         changes: summary,
                         import: self.import_report.take(),
@@ -524,7 +533,11 @@ impl Document {
                 }
             }
         }
-        self.record(SceneChange::join(applied));
+        let label = match names.first() {
+            Some(first) if names.iter().all(|n| n == first) => first.clone(),
+            _ => "batch".to_string(),
+        };
+        self.record(label, SceneChange::join(applied));
         Ok(outcomes)
     }
 
@@ -975,12 +988,13 @@ impl Document {
         }
     }
 
-    fn record(&mut self, changes: SceneChange) -> Outcome {
+    /// Records `changes` as an undo step labeled `label`, unless there are none.
+    fn record(&mut self, label: String, changes: SceneChange) -> Outcome {
         if changes.is_empty() {
             return Outcome::default();
         }
         let outcome = self.changed(&changes);
-        self.undo.push(changes);
+        self.undo.push(Step { label, changes });
         self.redo.clear();
         outcome
     }
@@ -1101,6 +1115,8 @@ impl Document {
             Query::History => QueryResult::History {
                 undo_depth: self.undo.len(),
                 redo_depth: self.redo.len(),
+                undo: self.undo.iter().rev().map(|s| s.label.clone()).collect(),
+                redo: self.redo.iter().rev().map(|s| s.label.clone()).collect(),
                 revision: self.revision,
             },
             Query::Selection => QueryResult::Selection {

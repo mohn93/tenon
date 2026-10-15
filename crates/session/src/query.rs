@@ -327,9 +327,14 @@ pub enum QueryResult {
         definitions: usize,
         revision: u64,
     },
+    /// Undo history: how many steps can be undone and redone, and their labels (the `type` of
+    /// the command that made each, or `batch` for an atomic batch of differing commands), the
+    /// next to undo or redo first.
     History {
         undo_depth: usize,
         redo_depth: usize,
+        undo: Vec<String>,
+        redo: Vec<String>,
         revision: u64,
     },
     Selection {

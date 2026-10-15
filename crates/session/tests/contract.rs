@@ -207,3 +207,55 @@ fn truncation_boundary_is_exact() {
     assert_eq!(r["truncated"], false);
     assert_eq!(r["events"].as_array().unwrap().len(), 1024);
 }
+
+#[test]
+fn history_labels_each_step_by_its_command() {
+    let mut d = doc();
+    d.execute(edge([5.0, 0.0, 0.0], [6.0, 0.0, 0.0])).unwrap();
+    // An atomic batch of one kind of command is labeled by it.
+    d.execute_batch(square(), true).unwrap();
+    d.execute(cmd(
+        json!({"type": "add_guide_point", "position": [9, 9, 0]}),
+    ))
+    .unwrap();
+    // Neither the camera nor the selection is a step.
+    d.execute(cmd(json!({"type": "orbit", "yaw": 10}))).unwrap();
+    d.execute(cmd(json!({"type": "select", "ids": []})))
+        .unwrap();
+    d.execute(Command::Undo).unwrap();
+    let h = ask(&d, json!({"type": "history"}));
+    assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
+    assert_eq!(h["redo"], json!(["add_guide_point"]));
+    assert_eq!(
+        (h["undo_depth"].clone(), h["redo_depth"].clone()),
+        (json!(2), json!(1))
+    );
+
+    // A batch of differing commands is a "batch"; a new step clears the redo list.
+    let mixed = vec![
+        edge([0.0, 5.0, 0.0], [1.0, 5.0, 0.0]),
+        cmd(json!({"type": "add_guide_point", "position": [8, 8, 0]})),
+    ];
+    d.execute_batch(mixed, true).unwrap();
+    let h = ask(&d, json!({"type": "history"}));
+    assert_eq!(h["undo"], json!(["batch", "add_edge", "add_edge"]));
+    assert_eq!(h["redo"], json!([]));
+
+    // Undo and redo carry the label across.
+    d.execute(Command::Undo).unwrap();
+    d.execute(Command::Undo).unwrap();
+    d.execute(Command::Redo).unwrap();
+    let h = ask(&d, json!({"type": "history"}));
+    assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
+    assert_eq!(h["redo"], json!(["batch"]));
+}
+
+#[test]
+fn command_names_are_their_types() {
+    assert_eq!(edge([0.0; 3], [1.0, 0.0, 0.0]).name(), "add_edge");
+    assert_eq!(Command::PurgeDefinitions.name(), "purge_definitions");
+    assert_eq!(
+        cmd(json!({"type": "push_pull", "face": "f1", "distance": 1})).name(),
+        "push_pull"
+    );
+}

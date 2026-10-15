@@ -72,7 +72,8 @@ fn undo_and_redo_walk_history() {
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 0);
     assert_eq!(
         ask(&d, json!({"type": "history"})),
-        json!({"type": "history", "undo_depth": 3, "redo_depth": 1, "revision": 5})
+        json!({"type": "history", "undo_depth": 3, "redo_depth": 1,
+               "undo": ["add_edge", "add_edge", "add_edge"], "redo": ["add_edge"], "revision": 5})
     );
     run(&mut d, json!({"type": "redo"})).unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 1);
