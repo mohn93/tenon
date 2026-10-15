@@ -78,7 +78,22 @@ pub(crate) fn write(
     camera: &Camera,
     lighting: Lighting,
 ) -> Result<(), String> {
-    let model = scene.to_data();
+    let mut model = scene.to_data();
+    // Materials sharing an image share its entry, so the file reads back within the texture
+    // pixel budget, which counts each entry once.
+    let mut entries: HashMap<*const TextureImage, String> = HashMap::new();
+    for t in model
+        .materials
+        .iter_mut()
+        .filter_map(|m| m.texture.as_mut())
+    {
+        if let Some(image) = &t.image {
+            t.file = entries
+                .entry(Arc::as_ptr(image))
+                .or_insert_with(|| t.file.clone())
+                .clone();
+        }
+    }
     if model.next_id > MAX_ID {
         return Err(format!(
             "the model has used ids past {MAX_ID}, more than a file can hold"
@@ -91,7 +106,7 @@ pub(crate) fn write(
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
-    let images: Vec<(String, Arc<TextureImage>)> = model
+    let mut images: Vec<(String, Arc<TextureImage>)> = model
         .materials
         .iter()
         .filter_map(|m| {
@@ -99,6 +114,8 @@ pub(crate) fn write(
             Some((t.file.clone(), t.image.clone()?))
         })
         .collect();
+    images.sort_by(|a, b| a.0.cmp(&b.0));
+    images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
         schema_version: if positioned {

@@ -471,3 +471,73 @@ fn a_file_whose_textures_hold_too_many_pixels_does_not_open() {
     assert_eq!(kind, ErrorKind::File);
     assert!(message.contains("too many texture pixels"), "{message}");
 }
+
+#[test]
+fn materials_sharing_an_image_save_it_once() {
+    // A file whose two materials name one texture entry opens with them sharing the image, and
+    // saves the image once, so the file reads back within the pixel budget as it was.
+    let png = red_blue_png("shared.png");
+    let mut d = doc();
+    add_textured(&mut d, &png, 1.0);
+    let path = scratch("shared-one.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut document: Value =
+        serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
+    let file = document["model"]["materials"][0]["texture"]["file"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut image = Vec::new();
+    std::io::Read::read_to_end(&mut zip.by_name(&file).unwrap(), &mut image).unwrap();
+    let mut second = document["model"]["materials"][0].clone();
+    second["id"] = json!(document["model"]["next_id"]);
+    second["name"] = json!("Tiles 2");
+    document["model"]["next_id"] = json!(document["model"]["next_id"].as_u64().unwrap() + 1);
+    document["model"]["materials"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    let shared = scratch("shared.skr");
+    let mut w = zip::ZipWriter::new(std::fs::File::create(&shared).unwrap());
+    w.start_file("document.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(&serde_json::to_vec(&document).unwrap())
+        .unwrap();
+    w.start_file(file.as_str(), zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(&image).unwrap();
+    w.finish().unwrap();
+
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": shared.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(materials(&e).len(), 2);
+    let saved = scratch("shared-saved.skr");
+    run(
+        &mut e,
+        json!({"type": "save", "path": saved.to_str().unwrap()}),
+    )
+    .unwrap();
+    let zip = zip::ZipArchive::new(std::fs::File::open(&saved).unwrap()).unwrap();
+    let entries: Vec<String> = zip
+        .file_names()
+        .map(|n| n.unwrap().to_string())
+        .filter(|n| n.starts_with("textures/"))
+        .collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let mut f = doc();
+    run(
+        &mut f,
+        json!({"type": "open", "path": saved.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(materials(&f).len(), 2);
+}
