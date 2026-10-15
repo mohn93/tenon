@@ -9,7 +9,9 @@ use crate::grid::{
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
-use crate::scene::{BaseFaceVertex, Spans, scene_base, shown_guides};
+use crate::scene::{BaseFaceVertex, CasterChunk, Spans, scene_base, shown_guides};
+use crate::shadow_maps::{Casters, ShadowMaps};
+use crate::shadows::{MAX_SHADOWS, ShadowKey};
 use crate::texture::TextureArray;
 
 pub const SAMPLE_COUNT: u32 = 4;
@@ -24,6 +26,47 @@ const FACE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
 const FLAG_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Float32];
+
+/// The limits the renderer asks of a device: the defaults, with room for a cube shadow map per
+/// shadowed light (six array layers each) where the adapter has it.
+pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let defaults = wgpu::Limits::default();
+    let wanted = (6 * MAX_SHADOWS) as u32;
+    let layers = wanted.min(adapter.limits().max_texture_array_layers);
+    wgpu::Limits {
+        max_texture_array_layers: layers.max(defaults.max_texture_array_layers),
+        ..defaults
+    }
+}
+
+/// The scene shader, with shadow lookups or without.
+fn scene_shader(device: &wgpu::Device, shadows: bool) -> wgpu::ShaderModule {
+    let lookup = if shadows {
+        include_str!("shaders/shadow_lookup.wgsl")
+    } else {
+        include_str!("shaders/no_shadows.wgsl")
+    };
+    let source = format!("{}\n{lookup}", include_str!("shaders/scene.wgsl"));
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("scene"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    })
+}
+
+/// The scene shader with shadow lookups and how many lights may cast shadows, or None when the
+/// device cannot have them: it allows no cube-map array or rejects the shader (devices without
+/// cube-map arrays do).
+fn shadowed_shader(device: &wgpu::Device) -> Option<(wgpu::ShaderModule, usize)> {
+    let max = (device.limits().max_texture_array_layers as usize / 6).min(MAX_SHADOWS);
+    if max == 0 {
+        return None;
+    }
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let shader = scene_shader(device, true);
+    pollster::block_on(scope.pop())
+        .is_none()
+        .then_some((shader, max))
+}
 
 /// Camera data shared by every pipeline (matches `Uniforms` in scene.wgsl).
 #[repr(C)]
@@ -71,7 +114,7 @@ const NIGHT: [f32; 2] = [0.08, 0.12];
 struct LightUniform {
     /// The position, and the range in w.
     position: [f32; 4],
-    /// sRGB color in rgb; w unused.
+    /// sRGB color in rgb; in w the slot of its shadow map, or -1 when it casts none.
     color: [f32; 4],
 }
 
@@ -87,18 +130,19 @@ struct LightingUniforms {
 }
 
 impl LightingUniforms {
-    /// The lighting for `mode` with the strongest of `lights` as seen by `camera`.
-    fn new(lights: &[Light], camera: &Camera, mode: Lighting) -> Self {
-        let used = strongest(lights, camera.eye, MAX_LIGHTS);
+    /// The lighting for `mode` with `used` (at most MAX_LIGHTS), each with its shadow map's
+    /// slot if it casts shadows.
+    fn new(used: &[Light], shadow_slots: &[Option<usize>], mode: Lighting) -> Self {
         let mut uniforms = Self {
             mode: [0.0; 4],
             background: background(mode),
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
-        for (u, l) in uniforms.lights.iter_mut().zip(&used) {
+        for ((u, l), slot) in uniforms.lights.iter_mut().zip(used).zip(shadow_slots) {
             let p = l.position.as_vec3();
             u.position = [p.x, p.y, p.z, l.range() as f32];
-            u.color = [l.color[0], l.color[1], l.color[2], 0.0];
+            let slot = slot.map_or(-1.0, |s| s as f32);
+            u.color = [l.color[0], l.color[1], l.color[2], slot];
         }
         let ([ambient, headlight], night) = match mode {
             Lighting::Day => (DAY, 0.0),
@@ -263,8 +307,20 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// The scene's textures, as of the last `set_model`.
     textures: TextureArray,
-    /// The camera uniforms, the textures, the sampler and the lighting uniforms.
+    /// Compares distances with the shadow maps, filtering between texels.
+    shadow_sampler: wgpu::Sampler,
+    /// The camera uniforms, the textures, the sampler, the lighting uniforms and, when the
+    /// device has them, the shadow maps and their sampler.
     bind_group: wgpu::BindGroup,
+    /// The shadow maps; None when the device cannot have them.
+    shadow_maps: Option<ShadowMaps>,
+    /// The casters' corners as of the last `set_model`, and their vertex buffer (None when
+    /// there are none).
+    caster_corners: Vec<[f32; 3]>,
+    casters: Option<wgpu::Buffer>,
+    caster_chunks: Vec<CasterChunk>,
+    /// Counts the changes of the casters, so shadow maps drawn for older ones are drawn again.
+    caster_generation: u64,
     /// Day or night, as of the last `set_lighting`.
     lighting: Lighting,
     /// The scene's lights, as of the last `set_model`.
@@ -292,48 +348,95 @@ struct DepthUse {
 }
 
 impl Renderer {
+    /// A renderer whose lights cast shadows where the device allows (see `casts_shadows`).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/scene.wgsl"));
+        Self::make(device, queue, format, true)
+    }
+
+    /// A renderer whose lights cast no shadows, as on a device without cube-map arrays.
+    pub fn without_shadows(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        Self::make(device, queue, format, false)
+    }
+
+    fn make(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        shadows: bool,
+    ) -> Self {
+        let shadowed = shadows.then(|| shadowed_shader(device)).flatten();
+        let (shader, max_shadows) = match shadowed {
+            Some((shader, max)) => (shader, Some(max)),
+            None => (scene_shader(device, false), None),
+        };
+        let shadow_entries = [
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::CubeArray,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+        ];
+        let scene_entries = [
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ];
+        let entries = if max_shadows.is_some() {
+            [&scene_entries[..], &shadow_entries[..]].concat()
+        } else {
+            scene_entries.to_vec()
+        };
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera and textures"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &entries,
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
@@ -527,13 +630,22 @@ impl Renderer {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow maps"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
         let textures = TextureArray::new(device, queue, &Scene::default());
+        let shadow_maps = max_shadows.map(|max| ShadowMaps::new(device, max));
         let bind_group = bind_group(
             device,
             &bind_layout,
             [&uniforms, &lighting_uniforms],
             &textures,
             &sampler,
+            shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
         );
 
         let flat_ground =
@@ -557,7 +669,13 @@ impl Renderer {
             bind_layout,
             sampler,
             textures,
+            shadow_sampler,
             bind_group,
+            shadow_maps,
+            caster_corners: Vec::new(),
+            casters: None,
+            caster_chunks: Vec::new(),
+            caster_generation: 0,
             lighting: Lighting::Day,
             lights: Vec::new(),
             flat_ground,
@@ -589,13 +707,7 @@ impl Renderer {
     pub fn set_model(&mut self, scene: &Scene, context: &[InstanceId]) {
         if !self.textures.holds(scene) {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
-            self.bind_group = bind_group(
-                &self.device,
-                &self.bind_layout,
-                [&self.uniforms, &self.lighting_uniforms],
-                &self.textures,
-                &self.sampler,
-            );
+            self.rebind();
         }
         let base = scene_base(scene, context);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
@@ -605,6 +717,89 @@ impl Renderer {
         self.guides = base.guides.clone();
         self.base_guides = base.guides;
         self.lights = base.lights;
+        // Shadow maps are drawn again only when the casters move, not when, say, a group is
+        // opened or a color changes.
+        if base.casters != self.caster_corners {
+            self.caster_generation += 1;
+            self.casters = (!base.casters.is_empty()).then(|| {
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("shadow casters"),
+                        contents: bytemuck::cast_slice(&base.casters),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    })
+            });
+            self.caster_corners = base.casters;
+        }
+        self.caster_chunks = base.caster_chunks;
+    }
+
+    /// Makes the bind group anew, after the textures or the shadow maps were.
+    fn rebind(&mut self) {
+        self.bind_group = bind_group(
+            &self.device,
+            &self.bind_layout,
+            [&self.uniforms, &self.lighting_uniforms],
+            &self.textures,
+            &self.sampler,
+            self.shadow_maps
+                .as_ref()
+                .map(|m| (&m.cubes, &self.shadow_sampler)),
+        );
+    }
+
+    /// Whether lights cast shadows on this device.
+    pub fn casts_shadows(&self) -> bool {
+        self.shadow_maps.is_some()
+    }
+
+    /// How many shadow-map cube faces have been drawn since the renderer was made: none while
+    /// the shadowed lights and the casters stay as they were.
+    pub fn shadow_faces_drawn(&self) -> u64 {
+        self.shadow_maps.as_ref().map_or(0, |m| m.drawn)
+    }
+
+    /// Picks the lights casting shadows among `used` (the strongest at `eye`, as many as there
+    /// are slots), records drawing the maps that are missing or stale, and returns each used
+    /// light's slot.
+    fn shadow_slots(
+        &mut self,
+        used: &[Light],
+        eye: glam::DVec3,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Vec<Option<usize>> {
+        let Some(maps) = &mut self.shadow_maps else {
+            return vec![None; used.len()];
+        };
+        let keys: Vec<ShadowKey> = strongest(used, eye, maps.max)
+            .iter()
+            .map(ShadowKey::of)
+            .collect();
+        let grown = maps.grow(&self.device, keys.len());
+        let assignment = maps.slots.assign(&keys, self.caster_generation);
+        let redraw: Vec<(usize, ShadowKey)> = assignment
+            .redraw
+            .iter()
+            .map(|&slot| {
+                let k = assignment.slots.iter().position(|&s| s == slot);
+                (slot, keys[k.expect("a redrawn slot is assigned")])
+            })
+            .collect();
+        let casters = Casters {
+            buffer: self.casters.as_ref(),
+            chunks: &self.caster_chunks,
+        };
+        maps.draw(&self.queue, encoder, &redraw, &casters);
+        if grown {
+            self.rebind();
+        }
+        used.iter()
+            .map(|l| {
+                let key = ShadowKey::of(l);
+                let k = keys.iter().position(|k| *k == key)?;
+                Some(assignment.slots[k])
+            })
+            .collect()
     }
 
     /// Lights the frames drawn from now on by day or by night.
@@ -650,14 +845,21 @@ impl Renderer {
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
-        let targets = self.targets.as_ref().expect("targets just created");
 
         let uniforms = Uniforms::new(camera);
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
-        let lighting = LightingUniforms::new(&self.lights, camera, self.lighting);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame"),
+            });
+        let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
+        let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
+        let lighting = LightingUniforms::new(&used, &shadow_slots, self.lighting);
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
+        let targets = self.targets.as_ref().expect("targets just created");
         let overlay = mesh(&self.device, "overlay", overlay);
         let guides = mesh(&self.device, "guides", &guide_lines(&self.guides, camera));
         if let Some(glass) = &mut self.glass {
@@ -665,11 +867,6 @@ impl Renderer {
         }
 
         let [r, g, b, a] = background(self.lighting).map(f64::from);
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("frame"),
-            });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -776,35 +973,47 @@ impl Renderer {
 }
 
 /// The bind group every pipeline uses: the camera uniforms, the material textures and their
-/// sampler, and the lighting uniforms.
+/// sampler, the lighting uniforms and, when there are any, the shadow maps and their sampler.
 fn bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     [uniforms, lighting]: [&wgpu::Buffer; 2],
     textures: &TextureArray,
     sampler: &wgpu::Sampler,
+    shadows: Option<(&wgpu::TextureView, &wgpu::Sampler)>,
 ) -> wgpu::BindGroup {
+    let mut entries = vec![
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniforms.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: wgpu::BindingResource::TextureView(&textures.view),
+        },
+        wgpu::BindGroupEntry {
+            binding: 2,
+            resource: wgpu::BindingResource::Sampler(sampler),
+        },
+        wgpu::BindGroupEntry {
+            binding: 3,
+            resource: lighting.as_entire_binding(),
+        },
+    ];
+    if let Some((maps, compare)) = shadows {
+        entries.push(wgpu::BindGroupEntry {
+            binding: 4,
+            resource: wgpu::BindingResource::TextureView(maps),
+        });
+        entries.push(wgpu::BindGroupEntry {
+            binding: 5,
+            resource: wgpu::BindingResource::Sampler(compare),
+        });
+    }
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera and textures"),
         layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&textures.view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: lighting.as_entire_binding(),
-            },
-        ],
+        entries: &entries,
     })
 }
 

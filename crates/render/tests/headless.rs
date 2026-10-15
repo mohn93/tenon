@@ -4,7 +4,7 @@ use glam::{DVec2, DVec3};
 use kernel::{DefinitionKind, EntityId, InstanceId, MeshId, Model, Scene, Side};
 use render::grid::{BACKGROUND, LineVertex};
 use render::{Renderer, Viewport};
-use session::Camera;
+use session::{Camera, Lighting};
 
 const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
 const H: u32 = 256;
@@ -14,7 +14,11 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .ok()?;
-    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: render::required_limits(&adapter),
+        ..Default::default()
+    }))
+    .ok()
 }
 
 /// Renders one frame and returns tightly packed RGBA8 pixels, or None without a GPU.
@@ -797,4 +801,100 @@ fn each_side_of_a_pane_has_its_own_opacity_and_selected_glass_is_tinted() {
         (q[2] as i32 - q[0] as i32) > (p[2] as i32 - p[0] as i32) + 30,
         "selection should tint the glass: {p:?} -> {q:?}"
     );
+}
+
+/// A 10 m floor, an upright wall 4 m wide and 2 m tall along y at `wall_x`, and a lamp: a 0.6 m
+/// square glowing in front, 1.6 m up at x = `lamp_x`.
+fn lamp_and_wall(wall_x: f64, lamp_x: f64) -> Scene {
+    let p = |x: f64, y: f64, z: f64| DVec3::new(x, y, z);
+    let mut m = Model::new();
+    let floor = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
+    m.add_polygon(&floor.map(|(x, y)| p(x, y, 0.0))).unwrap();
+    let wall = [(-2.0, 0.0), (2.0, 0.0), (2.0, 2.0), (-2.0, 2.0)];
+    m.add_polygon(&wall.map(|(y, z)| p(wall_x, y, z))).unwrap();
+    let before: Vec<_> = m.faces().map(|(id, _)| id).collect();
+    let shade = [(-0.3, -0.3), (0.3, -0.3), (0.3, 0.3), (-0.3, 0.3)];
+    m.add_polygon(&shade.map(|(x, y)| p(lamp_x + x, y, 1.6)))
+        .unwrap();
+    let lamp = m
+        .faces()
+        .map(|(id, _)| id)
+        .find(|id| !before.contains(id))
+        .unwrap();
+    let mut s = Scene::from_root(m);
+    let (glow, _) = s
+        .add_material_from(kernel::Material {
+            name: "Lamp".into(),
+            color: [255, 255, 255],
+            opacity: 1.0,
+            texture: None,
+            emission: 6.0,
+        })
+        .unwrap();
+    s.paint(MeshId::Root, &[lamp], &[], Side::Front, Some(glow))
+        .unwrap();
+    s
+}
+
+fn brightness(p: [u8; 4]) -> u32 {
+    p[0] as u32 + p[1] as u32 + p[2] as u32
+}
+
+#[test]
+fn a_wall_shades_the_floor_behind_it_and_shadow_maps_are_kept_between_frames() {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = screen.renderer();
+    if !r.casts_shadows() {
+        eprintln!("no cube-map arrays, skipping");
+        return;
+    }
+    let cam = overhead(16.0);
+    let full = Viewport::full((W, H));
+    r.set_lighting(Lighting::Night);
+    r.set_scene(&lamp_and_wall(0.0, -1.5), &[], &BTreeSet::new());
+    let px = screen.draw(&mut r, &cam, full, &[]);
+    // Two floor points as far from the lamp, one in the open and one behind the wall.
+    let open = brightness(pixel_at(&px, &cam, DVec3::new(-4.5, 0.0, 0.0)));
+    let behind = brightness(pixel_at(&px, &cam, DVec3::new(1.5, 0.0, 0.0)));
+    assert!(open > behind + 40, "open {open}, behind the wall {behind}");
+    // One light: its six faces drawn once, then kept while the camera moves and while the
+    // same scene is set again.
+    assert_eq!(r.shadow_faces_drawn(), 6);
+    let mut moved = cam.clone();
+    moved.eye.x += 1.0;
+    screen.draw(&mut r, &moved, full, &[]);
+    r.set_scene(&lamp_and_wall(0.0, -1.5), &[], &BTreeSet::new());
+    screen.draw(&mut r, &cam, full, &[]);
+    assert_eq!(r.shadow_faces_drawn(), 6);
+    // The wall moving or the lamp moving draws the map again.
+    r.set_scene(&lamp_and_wall(0.5, -1.5), &[], &BTreeSet::new());
+    screen.draw(&mut r, &cam, full, &[]);
+    assert_eq!(r.shadow_faces_drawn(), 12);
+    r.set_scene(&lamp_and_wall(0.5, -1.0), &[], &BTreeSet::new());
+    screen.draw(&mut r, &cam, full, &[]);
+    assert_eq!(r.shadow_faces_drawn(), 18);
+}
+
+#[test]
+fn without_shadows_the_lamp_lights_through_the_wall() {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = Renderer::without_shadows(&screen.device, &screen.queue, FORMAT);
+    assert!(!r.casts_shadows());
+    let cam = overhead(16.0);
+    r.set_lighting(Lighting::Night);
+    r.set_scene(&lamp_and_wall(0.0, -1.5), &[], &BTreeSet::new());
+    let px = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    let open = brightness(pixel_at(&px, &cam, DVec3::new(-4.5, 0.0, 0.0)));
+    let behind = brightness(pixel_at(&px, &cam, DVec3::new(1.5, 0.0, 0.0)));
+    assert!(
+        open.abs_diff(behind) < 30,
+        "open {open}, behind the wall {behind}"
+    );
+    assert_eq!(r.shadow_faces_drawn(), 0);
 }

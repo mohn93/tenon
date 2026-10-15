@@ -945,6 +945,70 @@ fn golden_night_lit_by_two_lamps() {
     check("night", &d);
 }
 
+#[test]
+fn golden_wall_shading_the_floor_from_a_lamp() {
+    let mut d = doc();
+    run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [-5.0, -4.0, 0.0],
+            opposite: [7.0, 4.0, 0.0],
+            normal: None,
+        },
+    );
+    // A wall 4 m long and 2 m tall across the floor; the lamp hangs left of it, lower than
+    // its top, so the floor right of it is dark.
+    let base = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [0.0, -2.0, 0.0],
+            opposite: [0.2, 2.0, 0.0],
+            normal: None,
+        },
+    );
+    raise(&mut d, created_face(&base), 2.0);
+    let shade = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [-1.8, -0.3, 1.6],
+            opposite: [-1.2, 0.3, 1.6],
+            normal: None,
+        },
+    );
+    let made = run(
+        &mut d,
+        Command::MakeComponent {
+            ids: vec![created_face(&shade)],
+            name: "Lamp".into(),
+        },
+    );
+    let lamp = created_instance(&d, &made);
+    let warm = add_lamp_material(&mut d, "Warm", [255, 210, 150], 6.0);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![lamp],
+            material: Some(warm),
+            side: Side::Front,
+        },
+    );
+    run(
+        &mut d,
+        Command::Select {
+            ids: Vec::new(),
+            mode: Default::default(),
+        },
+    );
+    run(
+        &mut d,
+        Command::SetLighting {
+            mode: session::Lighting::Night,
+        },
+    );
+    look(&mut d, [-5.0, -8.0, 7.0], [1.0, 0.0, 0.0]);
+    check("shadow", &d);
+}
+
 /// Every stored golden image belongs to a test here, so stale ones do not pile up.
 #[test]
 fn every_golden_image_has_a_test() {
@@ -965,6 +1029,7 @@ fn every_golden_image_has_a_test() {
         "textured",
         "night",
         "positioned",
+        "shadow",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

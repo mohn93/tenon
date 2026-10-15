@@ -23,8 +23,11 @@ impl Snapshotter {
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: crate::required_limits(&adapter),
+            ..Default::default()
+        }))
+        .ok()?;
         Some(Self::with_device(&device, &queue))
     }
 

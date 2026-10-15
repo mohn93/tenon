@@ -287,9 +287,15 @@ instance's, as for color). The light sits at the area-weighted center of the glo
 their color weighted by emission times area (a textured glowing material lights with its
 material color, its image's average unless a color was given), and its strength is their
 emission times their area in square meters (scaled with a scaled placement). It reaches 6 x sqrt(strength) meters
-and falls off smoothly to nothing there; surfaces take it by the angle they face it, with no
-shadows. Lights do not depend on the open instance. The window and `render_view` use the 128
-strongest lights as seen from the eye (strength over 1 + distance squared). By day lights add to
+and falls off smoothly to nothing there; surfaces take it by the angle they face it. Lights do
+not depend on the open instance. The window and `render_view` use the 128 strongest lights as
+seen from the eye (strength over 1 + distance squared), and the strongest 64 of those cast
+shadows: every face stops their light except glowing ones (a lamp's glowing shade does not hide
+its own light), from both sides; shadow edges are slightly soft. Faces nearer a light than 2 cm
+cast no shadow from it, and the other lights light without shadows. Shadow maps are kept while
+the camera moves and drawn again only when the model's faces move or the shadowed lights
+change, so the first frame after an edit is slower than the others. Where the GPU has no cube-map
+arrays nothing casts shadows. By day lights add to
 the headlight and ambient light; by night those are dimmed, the background is dark, and
 unselected edges, the grid and the axes fade toward it; selection, guides and tool previews keep
 their colors.

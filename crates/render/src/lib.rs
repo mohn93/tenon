@@ -3,9 +3,10 @@ pub mod guides;
 pub mod lights;
 pub mod renderer;
 pub mod scene;
+mod shadow_maps;
 pub mod shadows;
 pub mod snapshot;
 pub mod texture;
 
-pub use renderer::{Renderer, Viewport};
+pub use renderer::{Renderer, Viewport, required_limits};
 pub use snapshot::Snapshotter;

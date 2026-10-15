@@ -344,9 +344,11 @@ impl State {
             ..Default::default()
         }))
         .expect("no compatible GPU adapter");
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("request device");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: render::required_limits(&adapter),
+            ..Default::default()
+        }))
+        .expect("request device");
 
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))

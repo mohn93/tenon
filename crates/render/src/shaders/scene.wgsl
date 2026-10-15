@@ -15,7 +15,7 @@ struct Uniforms {
 struct Light {
     // xyz: where it is; w: how far it reaches.
     position: vec4<f32>,
-    // rgb: its color.
+    // rgb: its color; w: the slot of its shadow map, or -1 when it casts no shadows.
     color: vec4<f32>,
 };
 
@@ -154,7 +154,8 @@ fn vs_face(
 
 // The light glowing faces cast on a point `p` facing `n`: each light's color by Lambert's
 // cosine, falling off with distance (like 1 / (1 + d^2) over a quarter of the range) and
-// smoothly to zero at its range. No shadows.
+// smoothly to zero at its range, and stopped by casters where the light has a shadow map
+// (`shadow`, from shadow_lookup.wgsl or no_shadows.wgsl).
 fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     let count = min(u32(lighting.mode.x), MAX_LIGHTS);
@@ -170,7 +171,15 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
         let window = (1.0 - x * x) * (1.0 - x * x);
         let near = 4.0 * x;
         let falloff = window / (1.0 + near * near);
-        sum += light.color.rgb * falloff * max(dot(n, to_light / d), 0.0);
+        let facing = dot(n, to_light / d);
+        if facing <= 0.0 {
+            continue;
+        }
+        var lit = 1.0;
+        if light.color.w >= 0.0 {
+            lit = shadow(light, i32(light.color.w), p, n);
+        }
+        sum += light.color.rgb * falloff * facing * lit;
     }
     return sum;
 }
