@@ -273,7 +273,9 @@ pattern stays where the projection puts it.
 In the window, with only faces selected, Entity Info shows the first selected face's texture
 position: Offset (two fields, meters), Rotation (degrees) and Scale (two fields), each applied to
 every selected face when a drag ends or a typed value is entered (the faces selected when the
-edit began, even if the selection changed before the value was entered), and Rotate 90 (turns each
+edit began, even if the selection changed before the value was entered; if the fields go away
+first, a dragged or arrow-stepped value still applies and text still being typed is dropped),
+and Rotate 90 (turns each
 selected face's texture a further quarter counter-clockwise, as one undo step) and Reset.
 
 #### Lights

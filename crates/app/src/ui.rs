@@ -426,13 +426,67 @@ fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             actions.push(UiAction::SetSoft(checked));
         }
     }
-    if let Some(t) = &view.texture_position {
-        texture_position(ui, t, actions);
+    match &view.texture_position {
+        Some(t) => texture_position(ui, t, actions),
+        None => end_texture_position_edit(ui, actions),
     }
     ui.separator();
     materials(ui, view, actions);
     ui.separator();
     outliner(ui, view, actions);
+}
+
+/// After the texture position fields go away (the selection is no longer only faces) with an
+/// edit in progress: a value already taken (dragged, or stepped with the arrow keys) applies to
+/// the faces the edit began with; text still being typed is dropped.
+fn end_texture_position_edit(ui: &mut Ui, actions: &mut Vec<UiAction>) {
+    let faces = ui.data_mut(|d| d.remove_temp::<Vec<EntityId>>(egui::Id::new(FACES_KEY)));
+    let offset = take_row::<2>(ui, egui::Id::new(OFFSET_KEY));
+    let rotation = take_row::<1>(ui, egui::Id::new(ROTATION_KEY));
+    let scale = take_row::<2>(ui, egui::Id::new(SCALE_KEY));
+    let Some(faces) = faces else { return };
+    if let Some((start, offset)) = offset
+        && offset.map(millimeters) != start.map(millimeters)
+    {
+        actions.push(UiAction::SetTextureOffset(
+            faces.clone(),
+            offset.map(millimeters),
+        ));
+    }
+    if let Some(([start], [deg])) = rotation
+        && degree_tenths(deg) != degree_tenths(start)
+    {
+        actions.push(UiAction::SetTextureRotation(
+            faces.clone(),
+            degree_tenths(deg),
+        ));
+    }
+    if let Some((start, scale)) = scale
+        && scale.map(thousandths) != start.map(thousandths)
+    {
+        actions.push(UiAction::SetTextureScale(faces, scale.map(thousandths)));
+    }
+}
+
+/// egui memory keys of the texture position fields' edits and the faces they apply to.
+const FACES_KEY: &str = "texture-position-faces";
+const OFFSET_KEY: &str = "texture-offset";
+const ROTATION_KEY: &str = "texture-rotation";
+const SCALE_KEY: &str = "texture-scale";
+
+/// Meters in whole millimeters.
+fn millimeters(m: f64) -> i32 {
+    (m * 1000.0).round() as i32
+}
+
+/// Degrees in whole tenths.
+fn degree_tenths(deg: f64) -> i32 {
+    (deg * 10.0).round() as i32
+}
+
+/// A scale in whole thousandths.
+fn thousandths(s: f64) -> u32 {
+    (s * 1000.0).round() as u32
 }
 
 /// Entity Info's texture position for selected faces: offset, rotation and scale fields, each
@@ -442,15 +496,15 @@ fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
 fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction>) {
     ui.label("Texture position")
         .on_hover_text("Where the texture lies on the selected faces");
-    let faces_key = egui::Id::new("texture-position-faces");
+    let faces_key = egui::Id::new(FACES_KEY);
     let mut done = Vec::new();
     let mut editing = false;
     let offset_range = -kernel::MAX_TEXTURE_OFFSET..=kernel::MAX_TEXTURE_OFFSET;
-    let mm = |m: f64| (m * 1000.0).round() as i32;
+    let mm = millimeters;
     let p = &t.placement;
     let row = drag_row(
         ui,
-        egui::Id::new("texture-offset"),
+        egui::Id::new(OFFSET_KEY),
         "Offset",
         p.offset,
         offset_range,
@@ -462,10 +516,10 @@ fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction
     {
         done.push(Field::Offset(offset.map(mm)));
     }
-    let tenths = |deg: f64| (deg * 10.0).round() as i32;
+    let tenths = degree_tenths;
     let row = drag_row(
         ui,
-        egui::Id::new("texture-rotation"),
+        egui::Id::new(ROTATION_KEY),
         "Rotation",
         [p.rotation_deg],
         0.0..=360.0,
@@ -478,10 +532,9 @@ fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction
         done.push(Field::Rotation(tenths(deg)));
     }
     let scale_range = kernel::MIN_TEXTURE_SCALE..=kernel::MAX_TEXTURE_SCALE;
-    let thousandths = |s: f64| (s * 1000.0).round() as u32;
     let row = drag_row(
         ui,
-        egui::Id::new("texture-scale"),
+        egui::Id::new(SCALE_KEY),
         "Scale",
         p.scale,
         scale_range,
@@ -596,6 +649,14 @@ fn drag_row<const N: usize>(
     }
 }
 
+/// Takes what `drag_row` keeps under `key` while its edit is in progress: the values shown
+/// when it began and the values now.
+fn take_row<const N: usize>(ui: &mut Ui, key: egui::Id) -> Option<([f64; N], [f64; N])> {
+    let row = ui.data(|d| d.get_temp::<([f64; N], [f64; N])>(key));
+    ui.data_mut(|d| d.remove::<([f64; N], [f64; N])>(key));
+    row
+}
+
 /// A small square of `color` that can be clicked.
 fn swatch(ui: &mut Ui, color: Color32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
@@ -620,6 +681,7 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// chosen material its name (renamed on Enter or leaving the field), colors to pick from and
 /// its opacity (set when a drag of the slider ends).
 fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+    end_texture_size_edit(ui, view.material, actions);
     ui.heading("Materials");
     // Shorter when the panel is short, so the Outliner below keeps its minimum height.
     let max_height =
@@ -753,6 +815,33 @@ fn tenths(emission: f32) -> u8 {
     (emission.clamp(0.0, kernel::MAX_EMISSION) * 10.0).round() as u8
 }
 
+/// The egui memory key of material `id`'s texture size edit.
+fn texture_size_key(id: MaterialId) -> egui::Id {
+    egui::Id::new(("texture-size", id.0))
+}
+
+/// Ends a texture size edit left in progress when another material is chosen: a size already
+/// taken (dragged, or stepped with the arrow keys) applies to the material it was edited for.
+fn end_texture_size_edit(ui: &mut Ui, chosen: Option<MaterialId>, actions: &mut Vec<UiAction>) {
+    let owner_key = egui::Id::new("texture-size-material");
+    let owner = ui.data(|d| d.get_temp::<MaterialId>(owner_key));
+    if let Some(old) = owner
+        && Some(old) != chosen
+        && let Some((start, size)) = take_row::<2>(ui, texture_size_key(old))
+    {
+        let mm = |m: f64| (m * 1000.0).round() as u32;
+        if size.map(mm) != start.map(mm) {
+            actions.push(UiAction::SetTextureSize(old, size.map(mm)));
+        }
+    }
+    ui.data_mut(|d| match chosen {
+        Some(id) => {
+            d.insert_temp(owner_key, id);
+        }
+        None => d.remove::<MaterialId>(owner_key),
+    });
+}
+
 /// A material's texture controls: Texture... to load an image and Remove, then the size one copy
 /// covers (set when a drag ends or a typed value is entered).
 fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
@@ -773,7 +862,7 @@ fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
     // One change per drag or entered value, like the texture position fields.
     let row = drag_row(
         ui,
-        egui::Id::new(("texture-size", m.id.0)),
+        texture_size_key(m.id),
         "Size (m)",
         [t.width, t.height],
         kernel::MIN_TEXTURE_SIZE..=kernel::MAX_TEXTURE_SIZE,
@@ -1397,6 +1486,78 @@ mod tests {
         );
     }
 
+    /// A frame pressing `key`.
+    fn key_frame(key: egui::Key) -> egui::RawInput {
+        let mut frame = screen();
+        frame.events = vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }];
+        frame
+    }
+
+    #[test]
+    fn a_stepped_texture_value_applies_when_its_fields_go_away() {
+        // Stepping a field with the arrow keys on face 3, then selecting something else (the
+        // fields go away), applies the stepped value to face 3.
+        let status = status();
+        let info = vec!["1 face".to_string()];
+        let mut faces = soften_view(&status, &info, None, None);
+        let three = vec![EntityId::Face(kernel::FaceId(3))];
+        faces.texture_position = Some(TexturePosition {
+            placement: TexturePlacement::default(),
+            faces: three.clone(),
+        });
+        let other = soften_view(&status, &info, None, None);
+        let mut acted = Vec::new();
+        for x in [160.0, 120.0, 80.0] {
+            let ctx = egui::Context::default();
+            for y in (0..800).step_by(4) {
+                click(&ctx, &faces, Pos2::new(1280.0 - x, y as f32));
+                for _ in 0..2 {
+                    run(&ctx, key_frame(egui::Key::ArrowUp), &faces);
+                }
+                let mut after = run(&ctx, screen(), &other).0;
+                after.extend(run(&ctx, screen(), &other).0);
+                // Faces selected again later: nothing left over applies then.
+                let later = run(&ctx, screen(), &faces).0;
+                assert!(
+                    !later.iter().any(|a| matches!(
+                        a,
+                        UiAction::SetTextureOffset(..)
+                            | UiAction::SetTextureRotation(..)
+                            | UiAction::SetTextureScale(..)
+                    )),
+                    "{later:?}"
+                );
+                acted.extend(after.into_iter().filter(|a| {
+                    matches!(
+                        a,
+                        UiAction::SetTextureOffset(..)
+                            | UiAction::SetTextureRotation(..)
+                            | UiAction::SetTextureScale(..)
+                    )
+                }));
+            }
+        }
+        assert!(
+            acted.contains(&UiAction::SetTextureRotation(three.clone(), 5)),
+            "{acted:?}"
+        );
+        assert!(
+            acted.iter().all(|a| matches!(
+                a,
+                UiAction::SetTextureOffset(f, _)
+                    | UiAction::SetTextureRotation(f, _)
+                    | UiAction::SetTextureScale(f, _) if *f == three
+            )),
+            "{acted:?}"
+        );
+    }
+
     #[test]
     fn panels_leave_a_central_view_inside_the_window() {
         let ctx = egui::Context::default();
@@ -1714,7 +1875,7 @@ mod tests {
         let before = width(&plain);
         assert_eq!(width(&textured), before, "a texture shown");
         assert_eq!(width(&plain), before, "after the texture");
-        // Long texture position values fit too.
+        // Long texture position values do not widen it either (extreme ones are clipped).
         let mut view = name_field_view(&status, &info, &textured);
         view.texture_position = Some(TexturePosition {
             placement: TexturePlacement {
@@ -1833,6 +1994,70 @@ mod tests {
             let action = UiAction::SetTextureSize(MaterialId(31), size);
             assert!(entered.contains(&action), "{action:?} in {entered:?}");
         }
+    }
+
+    #[test]
+    fn a_dragged_texture_size_applies_to_its_material_when_another_is_chosen() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let mut textured = brick();
+        textured[0].texture = Some(TextureRow {
+            swatch: egui::TextureId::default(),
+            width: 1.0,
+            height: 0.5,
+            pixels: [2, 1],
+        });
+        let chosen = name_field_view(&status, &info, &textured);
+        let mut default = name_field_view(&status, &info, &textured);
+        default.material = None;
+        let sizes = |actions: Vec<UiAction>| {
+            actions
+                .into_iter()
+                .filter(|a| matches!(a, UiAction::SetTextureSize(..)))
+                .collect::<Vec<_>>()
+        };
+        let mut switched = Vec::new();
+        for x in [160.0, 120.0] {
+            let ctx = egui::Context::default();
+            for y in (0..800).step_by(4) {
+                // Drag a field 40 points and, still holding the button, choose another
+                // material (as the API or a shortcut might).
+                let at = Pos2::new(1280.0 - x, y as f32);
+                let mut press = screen();
+                press.events = vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ];
+                run(&ctx, press, &chosen);
+                for dx in [10.0, 20.0, 40.0] {
+                    let mut drag = screen();
+                    drag.events = vec![egui::Event::PointerMoved(at + Vec2::new(dx, 0.0))];
+                    run(&ctx, drag, &chosen);
+                }
+                switched.extend(sizes(run(&ctx, screen(), &default).0));
+                let mut release = screen();
+                release.events = vec![egui::Event::PointerButton {
+                    pos: at + Vec2::new(40.0, 0.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }];
+                run(&ctx, release, &default);
+                let later = sizes(run(&ctx, screen(), &chosen).0);
+                assert!(later.is_empty(), "{later:?}");
+            }
+        }
+        assert!(
+            switched
+                .iter()
+                .any(|a| matches!(a, UiAction::SetTextureSize(MaterialId(31), _))),
+            "{switched:?}"
+        );
     }
 
     /// Two materials, the first chosen, for the name-field tests.
