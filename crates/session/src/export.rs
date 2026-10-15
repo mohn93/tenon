@@ -206,7 +206,8 @@ fn decimal(x: f32) -> f64 {
 }
 
 /// Material names for OBJ and MTL: no spaces or other characters those files split on, and no
-/// two alike.
+/// two alike even ignoring case, as the texture image files are named after them and a
+/// case-blind file system would take "Wood" and "wood" for one file.
 fn obj_names(groups: &Groups) -> Vec<String> {
     let mut taken: BTreeSet<String> = BTreeSet::new();
     groups
@@ -226,9 +227,9 @@ fn obj_names(groups: &Groups) -> Vec<String> {
                 .collect();
             let name = std::iter::once(base.clone())
                 .chain((2..).map(|n| format!("{base}_{n}")))
-                .find(|n| !taken.contains(n))
+                .find(|n| !taken.contains(&n.to_lowercase()))
                 .expect("a free name");
-            taken.insert(name.clone());
+            taken.insert(name.to_lowercase());
             name
         })
         .collect()

@@ -837,6 +837,58 @@ fn obj_writes_texture_coordinates_and_images_beside_the_library() {
     );
 }
 
+#[test]
+fn obj_texture_images_differ_even_ignoring_case() {
+    // "Wood" and "wood" are two materials; on a case-blind file system their images must not
+    // share a file.
+    let mut d = doc();
+    two_boxes(&mut d);
+    let instances = ask(&d, json!({"type": "entities", "kinds": ["instance"]}));
+    let mut pngs = Vec::new();
+    for (k, name) in ["Wood", "wood"].into_iter().enumerate() {
+        let path = scratch(&format!("case-{k}.png"));
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 100 * k as u8, 200, 255]))
+            .save(&path)
+            .unwrap();
+        pngs.push(std::fs::read(&path).unwrap());
+        let out = run(
+            &mut d,
+            json!({"type": "add_material", "name": name,
+                   "texture": {"path": path.to_str().unwrap(), "width": 1}}),
+        )
+        .unwrap();
+        let material = out["changes"]["materials"][0].clone();
+        let instance = instances["instances"][k]["id"].clone();
+        run(
+            &mut d,
+            json!({"type": "paint", "ids": [instance], "material": material}),
+        )
+        .unwrap();
+    }
+    export(&mut d, "case-boxes.obj");
+    let library = std::fs::read_to_string(scratch_kept("case-boxes.mtl")).unwrap();
+    let maps: Vec<&str> = library
+        .lines()
+        .filter_map(|l| l.strip_prefix("map_Kd "))
+        .collect();
+    assert_eq!(maps.len(), 2, "{library}");
+    assert_ne!(maps[0].to_lowercase(), maps[1].to_lowercase(), "{library}");
+    // Each material's `newmtl` precedes its own image, which holds that material's texture.
+    for (k, name) in ["Wood", "wood_2"].into_iter().enumerate() {
+        let block = library
+            .split("newmtl ")
+            .find(|b| b.starts_with(&format!("{name}\n")));
+        let file = block
+            .and_then(|b| b.lines().find_map(|l| l.strip_prefix("map_Kd ")))
+            .unwrap_or_else(|| panic!("{name}: {library}"));
+        assert_eq!(
+            std::fs::read(scratch_kept(file)).unwrap(),
+            pngs[k],
+            "{file}"
+        );
+    }
+}
+
 /// A path in the scratch directory, left as it is.
 fn scratch_kept(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
