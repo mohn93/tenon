@@ -3,6 +3,7 @@
 use std::cell::Cell;
 
 use glam::{DVec2, DVec3};
+use kernel::geom::LENGTH_TOL;
 use kernel::{EdgeId, EntityId, FaceId, Guide, GuideId, Model, Shape, VertexId};
 use session::{Camera, Ray};
 
@@ -175,6 +176,7 @@ pub fn infer_detail(
             let p = closest_on_line_to_ray(anchor, dir, &ray, false);
             if let Some(d) = screen_dist(p).filter(|d| *d <= radius_px)
                 && p.distance(anchor) > 0.0
+                && scenery.slab().is_none_or(|s| s.holds(p))
                 && along.is_none_or(|(bd, _)| d < bd)
             {
                 along = Some((
@@ -202,6 +204,20 @@ pub fn infer_detail(
         return (hit, vec![(k, EntityId::Face(f))]);
     }
 
+    // Within a slab, the cursor stands for its point: on the ground there or in free space.
+    if let Some(slab) = scenery.slab() {
+        let kind = if slab.point.z.abs() <= LENGTH_TOL {
+            SnapKind::Ground
+        } else {
+            SnapKind::Free
+        };
+        let hit = Inference {
+            point: slab.point,
+            kind,
+            face,
+        };
+        return (hit, Vec::new());
+    }
     let hit = match camera.ground_at(cursor) {
         Some(point) => Inference {
             point,
@@ -712,8 +728,13 @@ impl<'s> Sight<'s> {
     }
 
     /// True if no face lies between where the camera's sight of `p` starts (the eye, in
-    /// perspective) and `p` (faces through `p` itself do not hide it).
+    /// perspective) and `p` (faces through `p` itself do not hide it). Within a slab, only
+    /// points in it are seen, and only faces in it hide them.
     fn sees(&self, p: DVec3) -> bool {
+        let slab = self.scenery.slab();
+        if slab.is_some_and(|s| !s.holds(p)) {
+            return false;
+        }
         let eye = self.camera.sight_origin(p);
         let to = p - eye;
         let dist = to.length();
@@ -722,6 +743,12 @@ impl<'s> Sight<'s> {
         }
         let dir = to / dist;
         let reach = dist * (1.0 - 1e-6);
+        let from = slab
+            .and_then(|s| s.span(eye, dir))
+            .map_or(0.0, |(from, _)| from);
+        if from >= reach {
+            return true;
+        }
         let hides = |part: Part| {
             part.may_meet_ray(eye, dir, reach)
                 && part
@@ -730,7 +757,7 @@ impl<'s> Sight<'s> {
                     .ray_hit(
                         part.back.transform_point3(eye),
                         part.back.transform_vector3(dir),
-                        0.0,
+                        from,
                         reach,
                     )
                     .is_some()
@@ -778,16 +805,21 @@ fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec
 
 /// [`nearest_face_hit`] giving the index of the face's part instead of its owner.
 fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVec3)> {
+    // Within a slab, only the stretch of the ray inside it meets faces.
+    let (from, to) = match scenery.slab() {
+        Some(slab) => slab.span(ray.origin, ray.dir)?,
+        None => (0.0, f64::INFINITY),
+    };
     let mut best: Option<(f64, usize, FaceId)> = None;
     for (k, part) in scenery.parts().enumerate() {
-        let reach = best.map_or(f64::INFINITY, |(t, _, _)| t);
+        let reach = best.map_or(to, |(t, _, _)| t);
         if !part.may_meet_ray(ray.origin, ray.dir, reach) {
             continue;
         }
         if let Some((f, t)) = part.model.index().ray_hit(
             part.back.transform_point3(ray.origin),
             part.back.transform_vector3(ray.dir),
-            0.0,
+            from,
             reach,
         ) && best.is_none_or(|(bt, _, _)| t < bt)
         {
@@ -800,6 +832,7 @@ fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenery::Slab;
 
     const R: f64 = 10.0;
 
@@ -818,6 +851,43 @@ mod tests {
             m.add_edge(DVec3::new(a.0, a.1, z), DVec3::new(b.0, b.1, z))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn within_a_slab_a_hidden_point_is_found_where_it_is() {
+        let c = cam();
+        let mut m = Model::new();
+        square(&mut m, 0.0);
+        let floor = m.faces().next().unwrap().0;
+        // A card between the eye and the floor's middle, square to the view.
+        let p = DVec3::new(1.0, 1.0, 0.0);
+        let mid = c.eye.lerp(p, 0.5);
+        let (r, u) = (c.right(), c.up());
+        m.add_polygon(&[mid - r - u, mid + r - u, mid + r + u, mid - r + u])
+            .unwrap();
+        let cursor = px(&c, p);
+        let open = Scenery::single(&m);
+        let hidden = infer_in(&open, &c, cursor, &Guides::default(), R);
+        assert_eq!(hidden.kind, SnapKind::OnFace);
+        assert!(hidden.point.distance(mid) < 1.5, "the card hides the floor");
+        let at = |q: DVec3| {
+            let scenery = Scenery::single(&m).within(Slab::around(&c, q, R));
+            infer_detail(&scenery, &c, px(&c, q), &Guides::default(), R)
+        };
+        let (hit, involved) = at(p);
+        assert_eq!((hit.kind, hit.face), (SnapKind::OnFace, Some(floor)));
+        assert!(hit.point.distance(p) < 1e-9);
+        assert_eq!(involved, vec![(0, EntityId::Face(floor))]);
+        // A corner of the floor behind the card snaps as an endpoint.
+        let corner = DVec3::new(2.0, 2.0, 0.0);
+        assert_eq!(at(corner).0.kind, SnapKind::Endpoint);
+        // A point in the air between the card and the floor is free space, exactly there.
+        let air = c.eye.lerp(p, 0.75);
+        let (hit, _) = at(air);
+        assert_eq!((hit.kind, hit.point), (SnapKind::Free, air));
+        // On the ground off the floor: the ground there.
+        let ground = DVec3::new(-3.0, 1.0, 0.0);
+        assert_eq!(at(ground).0.kind, SnapKind::Ground);
     }
 
     #[test]

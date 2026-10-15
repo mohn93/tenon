@@ -11,7 +11,7 @@ use session::SelectMode;
 use session::{
     Camera, CommandError, Document, ErrorKind, Projection, Ray, check_coordinates, unit_vector,
 };
-use tools::{Axis, Guides, Reach, Scenery, SnapKind, infer_detail, pick, select_box};
+use tools::{Axis, Guides, Reach, Scenery, Slab, SnapKind, infer_detail, pick, select_box};
 
 use crate::dispatch::MAX_IMAGE_SIDE;
 
@@ -397,6 +397,11 @@ pub fn infer_query(doc: &Document, q: &InferQuery) -> Result<Inferred, CommandEr
     let guides = Guides {
         anchor: q.from.map(DVec3::from),
         ..Guides::default()
+    };
+    // A point is looked for where it is, whatever hides it.
+    let scenery = match q.point {
+        Some(p) => scenery.within(Slab::around(&local, DVec3::from(p), radius_px)),
+        None => scenery,
     };
     let (hit, involved) = infer_detail(&scenery, &local, cursor, &guides, radius_px);
     let (kind, axis) = snap_name(hit.kind);

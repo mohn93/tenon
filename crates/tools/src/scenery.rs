@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{Guide, GuideId, InstanceId, MeshId, Model, Scene};
+use session::Camera;
 
 /// Whose geometry a part is, seen from the open context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +280,62 @@ pub struct Scenery<'a> {
     /// The layout's meshes, in its order.
     models: Vec<&'a Model>,
     layout: Cow<'a, Layout>,
+    /// When set, only what lies at this depth counts (see [`Slab`]).
+    slab: Option<Slab>,
+}
+
+/// The depths around a model point the cursor stands for: what lies in front of the point or
+/// behind it does not count, so the point is looked for where it is even when other geometry
+/// hides it from the camera. Faces outside the slab neither hide nor are met, and points and
+/// edges outside it do not snap.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slab {
+    /// The model point.
+    pub point: DVec3,
+    eye: DVec3,
+    forward: DVec3,
+    near: f64,
+    far: f64,
+}
+
+impl Slab {
+    /// The slab around `point` as deep either way as `radius_px` pixels are wide there, the
+    /// distance inference snaps across.
+    pub fn around(camera: &Camera, point: DVec3, radius_px: f64) -> Slab {
+        let (eye, forward) = (camera.eye, camera.forward());
+        let depth = (point - eye).dot(forward);
+        let half = radius_px * camera.pixel_size(point) + LENGTH_TOL;
+        Slab {
+            point,
+            eye,
+            forward,
+            near: depth - half,
+            far: depth + half,
+        }
+    }
+
+    /// True when `p` lies within the slab's depths.
+    pub fn holds(&self, p: DVec3) -> bool {
+        let depth = (p - self.eye).dot(self.forward);
+        depth >= self.near && depth <= self.far
+    }
+
+    /// The stretch `t0..t1` (with `t0 >= 0`) of the line `origin + t * dir` within the slab,
+    /// if any.
+    pub fn span(&self, origin: DVec3, dir: DVec3) -> Option<(f64, f64)> {
+        let depth0 = (origin - self.eye).dot(self.forward);
+        let slope = dir.dot(self.forward);
+        let (lo, hi) = if slope.abs() < 1e-12 {
+            if !(self.near..=self.far).contains(&depth0) {
+                return None;
+            }
+            (0.0, f64::INFINITY)
+        } else {
+            let (a, b) = ((self.near - depth0) / slope, (self.far - depth0) / slope);
+            (a.min(b).max(0.0), a.max(b))
+        };
+        (lo <= hi).then_some((lo, hi))
+    }
 }
 
 impl<'a> Scenery<'a> {
@@ -286,6 +343,7 @@ impl<'a> Scenery<'a> {
     pub fn single(model: &'a Model) -> Self {
         let parts = vec![(0, DAffine3::IDENTITY, Owner::Open)];
         Scenery {
+            slab: None,
             models: vec![model],
             layout: Cow::Owned(Layout::new(
                 vec![MeshId::Root],
@@ -303,6 +361,7 @@ impl<'a> Scenery<'a> {
         Some(Scenery {
             models: layout.models(scene)?,
             layout: Cow::Owned(layout),
+            slab: None,
         })
     }
 
@@ -313,7 +372,19 @@ impl<'a> Scenery<'a> {
         Some(Scenery {
             models: layout.models(scene)?,
             layout: Cow::Borrowed(layout),
+            slab: None,
         })
+    }
+
+    /// The same scenery seen only within `slab`: for a model point the cursor stands for.
+    pub fn within(mut self, slab: Slab) -> Self {
+        self.slab = Some(slab);
+        self
+    }
+
+    /// The slab the scenery is seen within, if any.
+    pub fn slab(&self) -> Option<Slab> {
+        self.slab
     }
 
     /// How many meshes are placed.
