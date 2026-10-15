@@ -336,7 +336,8 @@ current material and adds, renames, recolors and deletes materials and sets thei
 0-100% slider; one change per drag) and their emission (the Glow slider, 0 to 10 in tenths; one
 change per drag), all through these commands. A material with a texture
 shows a small copy of its image as its swatch; for the chosen material, Texture... loads a PNG
-or JPEG image from a file dialog (keeping the size of the texture it replaces), Remove takes the
+or JPEG image from a file dialog (as wide as the texture it replaces, or 1 m, and as high as the
+new image's proportions make it), Remove takes the
 texture off, and the Size fields set its width and height in meters (one change per drag or
 typed value).
 

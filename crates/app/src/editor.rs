@@ -438,8 +438,9 @@ impl Editor {
         true
     }
 
-    /// Gives a material the image at `path` as its texture (keeping the size of the texture it
-    /// replaces, if any). A file that cannot be used says why in the status.
+    /// Gives a material the image at `path` as its texture: as wide as the texture it replaces
+    /// (or 1 m), its height following the new image's proportions. A file that cannot be used
+    /// says why in the status.
     pub fn load_texture(&mut self, material: MaterialId, path: &Path) -> bool {
         self.message = None;
         self.run(Command::ChangeMaterial {
@@ -3712,6 +3713,21 @@ mod tests {
             .clone()
             .unwrap();
         assert_eq!((t.width, t.height), (1.0, 0.5));
+
+        // Loading again over a 2 x 2 m texture keeps the width; the height follows the image.
+        e.set_texture_size(id, [2000, 2000]);
+        e.load_texture(id, &png);
+        let t = e
+            .doc()
+            .scene()
+            .material(id)
+            .unwrap()
+            .texture
+            .clone()
+            .unwrap();
+        assert_eq!((t.width, t.height), (2.0, 1.0));
+        e.undo();
+        e.undo();
 
         e.remove_texture(id);
         assert!(e.doc().scene().material(id).unwrap().texture.is_none());
