@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use egui::collapsing_header::CollapsingState;
 use egui::{Align, Color32, Layout, Panel, RichText, Sense, Ui, Vec2};
-use kernel::{DefinitionKind, EntityId};
+use kernel::{DefinitionKind, EntityId, TexturePlacement};
 use session::{Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
@@ -72,6 +72,16 @@ pub enum UiAction {
     Harden,
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
+    /// Set the texture offset of the selected faces, in millimeters along u and v.
+    SetTextureOffset([i32; 2]),
+    /// Set the texture rotation of the selected faces, in tenths of a degree.
+    SetTextureRotation(i32),
+    /// Set the texture scale of the selected faces, in thousandths.
+    SetTextureScale([u32; 2]),
+    /// Turn the texture of each selected face a further quarter counter-clockwise.
+    RotateTexture90,
+    /// Clear the texture placement of the selected faces.
+    ResetTexturePosition,
 }
 
 /// A material as the Materials list shows it.
@@ -136,6 +146,8 @@ pub struct View<'a> {
     pub soften: Option<u8>,
     /// Whether the selected edges are all soft, when only edges are selected.
     pub edges_soft: Option<bool>,
+    /// The first selected face's texture placement, when only faces are selected.
+    pub texture_position: Option<TexturePlacement>,
 }
 
 /// The fly mode controls, shown over the Camera menu's Fly mode item.
@@ -399,10 +411,101 @@ fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             actions.push(UiAction::SetSoft(checked));
         }
     }
+    if let Some(t) = &view.texture_position {
+        texture_position(ui, t, actions);
+    }
     ui.separator();
     materials(ui, view, actions);
     ui.separator();
     outliner(ui, view, actions);
+}
+
+/// Entity Info's texture position for selected faces: offset, rotation and scale fields, each
+/// applied to every selected face when a drag ends or a typed value is entered, and the
+/// Rotate 90 and Reset buttons.
+fn texture_position(ui: &mut Ui, t: &TexturePlacement, actions: &mut Vec<UiAction>) {
+    ui.label("Texture position")
+        .on_hover_text("Where the texture lies on the selected faces");
+    let offset_range = -kernel::MAX_TEXTURE_OFFSET..=kernel::MAX_TEXTURE_OFFSET;
+    let mm = |m: f64| (m * 1000.0).round() as i32;
+    if let Some(offset) = drag_row(ui, "texture-offset", "Offset", t.offset, offset_range, 0.01)
+        && offset.map(mm) != t.offset.map(mm)
+    {
+        actions.push(UiAction::SetTextureOffset(offset.map(mm)));
+    }
+    let tenths = |deg: f64| (deg * 10.0).round() as i32;
+    if let Some([deg]) = drag_row(
+        ui,
+        "texture-rotation",
+        "Rotation",
+        [t.rotation_deg],
+        0.0..=360.0,
+        0.5,
+    ) && tenths(deg) != tenths(t.rotation_deg)
+    {
+        actions.push(UiAction::SetTextureRotation(tenths(deg)));
+    }
+    let scale_range = kernel::MIN_TEXTURE_SCALE..=kernel::MAX_TEXTURE_SCALE;
+    let thousandths = |s: f64| (s * 1000.0).round() as u32;
+    if let Some(scale) = drag_row(ui, "texture-scale", "Scale", t.scale, scale_range, 0.01)
+        && scale.map(thousandths) != t.scale.map(thousandths)
+    {
+        actions.push(UiAction::SetTextureScale(scale.map(thousandths)));
+    }
+    ui.horizontal(|ui| {
+        if ui
+            .button("Rotate 90")
+            .on_hover_text("Turn the texture a quarter counter-clockwise")
+            .clicked()
+        {
+            actions.push(UiAction::RotateTexture90);
+        }
+        if ui
+            .button("Reset")
+            .on_hover_text("Lay the texture as projected")
+            .clicked()
+        {
+            actions.push(UiAction::ResetTexturePosition);
+        }
+    });
+}
+
+/// A row of `label` and one field per value, changing by `speed` per point dragged. Like the
+/// texture size, the values being dragged live in egui's memory under `key` until the drag
+/// ends; returns the values when a drag ends or a typed value is entered.
+fn drag_row<const N: usize>(
+    ui: &mut Ui,
+    key: &str,
+    label: &str,
+    shown: [f64; N],
+    range: std::ops::RangeInclusive<f64>,
+    speed: f64,
+) -> Option<[f64; N]> {
+    let key = egui::Id::new(key);
+    let mut values = ui.data(|d| d.get_temp::<[f64; N]>(key)).unwrap_or(shown);
+    let (dragged, done) = ui
+        .horizontal(|ui| {
+            ui.label(label);
+            let (mut dragged, mut done) = (false, false);
+            for value in &mut values {
+                let field = ui.add(
+                    egui::DragValue::new(value)
+                        .range(range.clone())
+                        .speed(speed)
+                        .max_decimals(3),
+                );
+                dragged |= field.dragged();
+                done |= field.drag_stopped() || field.changed();
+            }
+            (dragged, done)
+        })
+        .inner;
+    if dragged {
+        ui.data_mut(|d| d.insert_temp(key, values));
+        return None;
+    }
+    ui.data_mut(|d| d.remove::<[f64; N]>(key));
+    done.then_some(values)
 }
 
 /// A small square of `color` that can be clicked.
@@ -840,6 +943,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         };
         let (_, central) = run(&ctx, screen(), &view);
         let file = Pos2::new(14.0, central.min.y / 2.0);
@@ -929,6 +1033,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         };
         // The Camera menu sits right after File and Edit.
         let clicked = menu_actions(&view, 80..140);
@@ -983,6 +1088,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         };
         // The Edit button sits right after File (which ends before x = 40).
         menu_actions(&view, 40..80)
@@ -1034,6 +1140,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften,
             edges_soft,
+            texture_position: None,
         }
     }
 
@@ -1105,6 +1212,53 @@ mod tests {
     }
 
     #[test]
+    fn entity_info_shows_texture_position_fields_for_selected_faces() {
+        let status = status();
+        let info = vec!["2 faces".to_string()];
+        let mut view = soften_view(&status, &info, None, None);
+        view.texture_position = Some(TexturePlacement::default());
+        let columns = [160.0, 120.0, 80.0];
+        let clicked: Vec<UiAction> = columns
+            .into_iter()
+            .flat_map(|x| panel_actions(&view, 1280.0 - x, None))
+            .collect();
+        for action in [UiAction::RotateTexture90, UiAction::ResetTexturePosition] {
+            assert!(clicked.contains(&action), "{action:?} in {clicked:?}");
+        }
+        // Typing 2 into each field sets that field alone, in its own units.
+        let typed: Vec<UiAction> = columns
+            .into_iter()
+            .flat_map(|x| panel_actions(&view, 1280.0 - x, Some("2")))
+            .collect();
+        for action in [
+            UiAction::SetTextureOffset([2000, 0]),
+            UiAction::SetTextureOffset([0, 2000]),
+            UiAction::SetTextureRotation(20),
+            UiAction::SetTextureScale([2000, 1000]),
+            UiAction::SetTextureScale([1000, 2000]),
+        ] {
+            assert!(typed.contains(&action), "{action:?} in {typed:?}");
+        }
+        // Without faces selected there are no texture fields.
+        view.texture_position = None;
+        let clicked: Vec<UiAction> = columns
+            .into_iter()
+            .flat_map(|x| panel_actions(&view, 1280.0 - x, Some("2")))
+            .collect();
+        assert!(
+            !clicked.iter().any(|a| matches!(
+                a,
+                UiAction::SetTextureOffset(_)
+                    | UiAction::SetTextureRotation(_)
+                    | UiAction::SetTextureScale(_)
+                    | UiAction::RotateTexture90
+                    | UiAction::ResetTexturePosition
+            )),
+            "{clicked:?}"
+        );
+    }
+
+    #[test]
     fn panels_leave_a_central_view_inside_the_window() {
         let ctx = egui::Context::default();
         let status = status();
@@ -1128,6 +1282,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         };
         let (actions, rect) = run(&ctx, screen(), &view);
         assert!(actions.is_empty());
@@ -1171,6 +1326,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         };
         f(&view)
     }
@@ -1339,6 +1495,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         };
         // Down the panel's left part: swatches and names, Add, the name field, the palette.
         let clicked = panel_actions(&view, 1280.0 - 160.0, None);
@@ -1469,6 +1626,7 @@ mod tests {
             selection: &NO_SELECTION,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         }
     }
 
@@ -1759,6 +1917,7 @@ mod tests {
             selection,
             soften: None,
             edges_soft: None,
+            texture_position: None,
         }
     }
 

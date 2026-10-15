@@ -714,6 +714,21 @@ impl State {
             UiAction::SetSoft(soft) => {
                 self.editor.set_selection_soft(soft);
             }
+            UiAction::SetTextureOffset(millimeters) => {
+                self.editor.set_texture_offset(millimeters);
+            }
+            UiAction::SetTextureRotation(tenths) => {
+                self.editor.set_texture_rotation(tenths);
+            }
+            UiAction::SetTextureScale(thousandths) => {
+                self.editor.set_texture_scale(thousandths);
+            }
+            UiAction::RotateTexture90 => {
+                self.editor.rotate_texture_90();
+            }
+            UiAction::ResetTexturePosition => {
+                self.editor.reset_texture_position();
+            }
         }
     }
 
@@ -801,6 +816,7 @@ impl State {
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
+            texture_position: self.editor.selection_texture_position(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         gui_frame.hide_cursor = self.capture == Capture::Grabbed;
