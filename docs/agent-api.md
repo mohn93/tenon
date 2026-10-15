@@ -619,8 +619,8 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 | `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
 | `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for). It never closes the open group (`close_instance` does). |
 | `{"type": "set_fly_mode", "on": true, "speed": 6}` | Turns fly mode on or off, as F does (see Camera), and sets its speed in meters a second (0.25 to 60, else `invalid_input`; absent: unchanged). In the window the pointer is held while flying. |
-| `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` closes it), as Edit > Soften Edges... and its close button do. |
-| `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180, else `invalid_input`), which its Soften button uses. |
+| `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
+| `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
 
 ### Files
 

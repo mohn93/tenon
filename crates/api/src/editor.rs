@@ -93,7 +93,7 @@ pub struct EditorState {
     pub paint_material: Option<MaterialId>,
     /// What one unit of an imported OBJ or STL file is (File > Import Units).
     pub import_units: ImportUnits,
-    /// Whether fly mode is on (the window only).
+    /// Whether fly mode is on (only the window moves the eye while flying).
     pub flying: bool,
     /// Fly mode's speed, meters a second.
     pub fly_speed: f64,
@@ -147,7 +147,7 @@ pub enum EditorCommand {
         #[serde(default)]
         speed: Option<f64>,
     },
-    /// Open (`soften_edges`) or close (null) the window shown over the view.
+    /// Open (`soften_edges`) or close (null or absent) the window shown over the view.
     SetDialog { dialog: Option<Dialog> },
     /// The Soften Edges window's angle, in whole degrees (0 to 180).
     SetSoftenAngle { angle: u32 },
