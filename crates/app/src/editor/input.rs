@@ -167,11 +167,17 @@ impl Editor {
             Input::Drag(path, button) => {
                 let button = button_of(button);
                 self.move_to(path[0], view)?;
+                let (navigating, pressed) = (self.nav.dragging(), self.tool_pressed);
                 self.button(button, true);
+                // What this drag's own press started: a navigation drag, or a press the tool saw.
+                let started = (
+                    !navigating && self.nav.dragging(),
+                    !pressed && self.tool_pressed,
+                );
                 for at in &path[1..] {
                     self.settle_hover();
                     if let Err(e) = self.move_to(*at, view) {
-                        self.let_go(button);
+                        self.let_go(button, started);
                         return Err(e);
                     }
                 }
@@ -204,11 +210,13 @@ impl Editor {
     /// Lets go of `button`, pressed by a drag that cannot go on, without its release reaching
     /// the tool: a navigation drag stops where it got to, and a press the tool saw is
     /// cancelled, as losing focus does.
-    fn let_go(&mut self, button: Button) {
-        if self.nav.dragging() {
+    /// `started` says whether its press started a navigation drag and a press the tool saw;
+    /// a press made before the drag stays.
+    fn let_go(&mut self, button: Button, started: (bool, bool)) {
+        if started.0 && self.nav.dragging() {
             self.button(button, false);
         }
-        if std::mem::take(&mut self.tool_pressed) {
+        if started.1 && std::mem::take(&mut self.tool_pressed) {
             self.send(ToolEvent::Cancel);
         }
         self.invalidate_hover();

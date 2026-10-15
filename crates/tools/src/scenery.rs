@@ -286,8 +286,9 @@ pub struct Scenery<'a> {
 
 /// The depths around a model point the cursor stands for: what lies in front of the point or
 /// behind it does not count, so the point is looked for where it is even when other geometry
-/// hides it from the camera. Faces outside the slab neither hide nor are met, and points and
-/// edges outside it do not snap.
+/// hides it from the camera. Points and edges snap only within the snap radius's depth of the
+/// point; faces count only through the point itself (within `LENGTH_TOL`), so a thin wall's
+/// front does not stand in for its back.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Slab {
     /// The model point.
@@ -296,6 +297,9 @@ pub struct Slab {
     forward: DVec3,
     near: f64,
     far: f64,
+    /// The depths faces count within.
+    face_near: f64,
+    face_far: f64,
 }
 
 impl Slab {
@@ -304,13 +308,16 @@ impl Slab {
     pub fn around(camera: &Camera, point: DVec3, radius_px: f64) -> Slab {
         let (eye, forward) = (camera.eye, camera.forward());
         let depth = (point - eye).dot(forward);
-        let half = radius_px * camera.pixel_size(point) + LENGTH_TOL;
+        let tight = LENGTH_TOL + depth.abs() * 1e-9;
+        let half = radius_px * camera.pixel_size(point) + tight;
         Slab {
             point,
             eye,
             forward,
             near: depth - half,
             far: depth + half,
+            face_near: depth - tight,
+            face_far: depth + tight,
         }
     }
 
@@ -320,18 +327,19 @@ impl Slab {
         depth >= self.near && depth <= self.far
     }
 
-    /// The stretch `t0..t1` (with `t0 >= 0`) of the line `origin + t * dir` within the slab,
-    /// if any.
-    pub fn span(&self, origin: DVec3, dir: DVec3) -> Option<(f64, f64)> {
+    /// The stretch `t0..t1` (with `t0 >= 0`) of the line `origin + t * dir` within the depths
+    /// faces count within, if any.
+    pub fn face_span(&self, origin: DVec3, dir: DVec3) -> Option<(f64, f64)> {
         let depth0 = (origin - self.eye).dot(self.forward);
         let slope = dir.dot(self.forward);
+        let (near, far) = (self.face_near, self.face_far);
         let (lo, hi) = if slope.abs() < 1e-12 {
-            if !(self.near..=self.far).contains(&depth0) {
+            if !(near..=far).contains(&depth0) {
                 return None;
             }
             (0.0, f64::INFINITY)
         } else {
-            let (a, b) = ((self.near - depth0) / slope, (self.far - depth0) / slope);
+            let (a, b) = ((near - depth0) / slope, (far - depth0) / slope);
             (a.min(b).max(0.0), a.max(b))
         };
         (lo <= hi).then_some((lo, hi))

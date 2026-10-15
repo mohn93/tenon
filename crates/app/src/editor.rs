@@ -509,8 +509,10 @@ impl Editor {
     /// anything visible may have changed (a Shift lock ended or a press was cancelled).
     pub fn focus_lost(&mut self) -> bool {
         self.user_mods = Mods::default();
-        self.shift = false;
-        self.sample = false;
+        // Keys `tool_input` holds stay held, with a Shift lock they hold.
+        let held = self.modifiers();
+        self.shift = held.shift;
+        self.sample = held.cmd;
         // Held fly keys are let go: their releases go to another window.
         self.fly.release_all();
         let dragged = self.nav.dragging();
@@ -521,15 +523,14 @@ impl Editor {
         if cancelled {
             self.send(ToolEvent::Cancel);
         }
-        let unlocked = std::mem::take(&mut self.shift_lock);
+        let unlocked = !held.shift && std::mem::take(&mut self.shift_lock);
         if unlocked {
             self.lock = None;
         }
         if unlocked || cancelled {
             self.invalidate_hover();
         }
-        // Keys `tool_input` holds stay held.
-        if self.modifiers() != Mods::default() {
+        if held != Mods::default() {
             self.apply_modifiers();
         }
         unlocked || cancelled || (dragged && self.hover_dirty)

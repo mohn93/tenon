@@ -575,7 +575,8 @@ intersection, on an edge, on a guide line, along an axis from `from`, on a face,
   (with `axis`: `x`, `y` or `z`, the axis through `from` the point is held to, which Shift would
   lock), `parallel` and `perpendicular` (to the edge the cursor last rested on, from the point
   a tool draws from; `tool_input` only), `on_face`, `ground` (z = 0 of the open context) or `nothing` (a point on the pixel's ray as
-  far from the eye as the camera's target is; in a parallel view, at the target's depth).
+  far from the eye as the camera's target is; in a parallel view, at the target's depth). For
+  a `point`, `ground` and `nothing` give the point itself (`ground` when it lies at z = 0).
 - `entities` are what it snapped to, each with its `path` as in `pick`: the vertex of an
   endpoint, the edge of a midpoint or of a point on an edge, the guide of a guide point or of a
   point on a guide line, the two edges or guide lines of an intersection (the one the point lies
@@ -677,8 +678,8 @@ Events, run in order:
   cursor goes to the pixel where the document camera shows it at the event's turn (the camera
   may have moved), and the tools look for that model point itself, even when other geometry
   hides it from the camera: what lies in front of it (or behind it) is passed over, so it
-  snaps to what is at the point (a corner or edge within the snap radius, the face it lies
-  on) or else stands for itself in free space (`nothing`, or `ground` at z = 0), and a click
+  snaps to what is at the point (a corner or edge within the snap radius and about as deep,
+  the face it lies on, even the back of a thin wall) or else stands for itself in free space (`nothing`, or `ground` at z = 0), and a click
   there acts on that face (Paint paints it, Push/Pull pulls it). Exact values come from
   typing them.
 - **Modifiers** a `modifiers` event holds stay held after the call, until a later `modifiers`

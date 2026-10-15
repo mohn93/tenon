@@ -729,7 +729,7 @@ impl<'s> Sight<'s> {
 
     /// True if no face lies between where the camera's sight of `p` starts (the eye, in
     /// perspective) and `p` (faces through `p` itself do not hide it). Within a slab, only
-    /// points in it are seen, and only faces in it hide them.
+    /// points in it are seen, and only faces through its point hide them.
     fn sees(&self, p: DVec3) -> bool {
         let slab = self.scenery.slab();
         if slab.is_some_and(|s| !s.holds(p)) {
@@ -744,7 +744,7 @@ impl<'s> Sight<'s> {
         let dir = to / dist;
         let reach = dist * (1.0 - 1e-6);
         let from = slab
-            .and_then(|s| s.span(eye, dir))
+            .and_then(|s| s.face_span(eye, dir))
             .map_or(0.0, |(from, _)| from);
         if from >= reach {
             return true;
@@ -805,9 +805,9 @@ fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec
 
 /// [`nearest_face_hit`] giving the index of the face's part instead of its owner.
 fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVec3)> {
-    // Within a slab, only the stretch of the ray inside it meets faces.
+    // Within a slab, only faces through its point are met.
     let (from, to) = match scenery.slab() {
-        Some(slab) => slab.span(ray.origin, ray.dir)?,
+        Some(slab) => slab.face_span(ray.origin, ray.dir)?,
         None => (0.0, f64::INFINITY),
     };
     let mut best: Option<(f64, usize, FaceId)> = None;
@@ -885,6 +885,25 @@ mod tests {
         let air = c.eye.lerp(p, 0.75);
         let (hit, _) = at(air);
         assert_eq!((hit.kind, hit.point), (SnapKind::Free, air));
+        // A card's back, just behind its front, is found too, not the front.
+        let back = mid + (p - c.eye).normalize() * 0.01;
+        let mut thin = Model::new();
+        for d in [0.0, 0.01] {
+            let o = mid + (p - c.eye).normalize() * d;
+            thin.add_polygon(&[o - r - u, o + r - u, o + r + u, o - r + u])
+                .unwrap();
+        }
+        let behind_face = thin
+            .faces()
+            .find(|(_, f)| {
+                let at = thin.position(f.outer[0]).unwrap();
+                (back - at).dot(f.normal).abs() < 1e-9
+            })
+            .unwrap()
+            .0;
+        let scenery = Scenery::single(&thin).within(Slab::around(&c, back, R));
+        let hit = infer_in(&scenery, &c, px(&c, back), &Guides::default(), R);
+        assert_eq!((hit.kind, hit.face), (SnapKind::OnFace, Some(behind_face)));
         // On the ground off the floor: the ground there.
         let ground = DVec3::new(-3.0, 1.0, 0.0);
         assert_eq!(at(ground).0.kind, SnapKind::Ground);

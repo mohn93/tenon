@@ -861,3 +861,72 @@ fn the_hover_waits_while_a_middle_drag_turns_the_view() {
     );
     assert_ne!(r["preview"], before, "{r}");
 }
+
+#[test]
+fn losing_focus_keeps_a_shift_lock_tool_input_holds() {
+    let mut e = editor();
+    input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [2, 0, 0]},
+            {"type": "modifiers", "shift": true},
+            {"type": "move", "point": [2, 1, 0]}
+        ]),
+    );
+    e.focus_lost();
+    let r = input(&mut e, json!([{"type": "type", "text": "3"}]));
+    assert_eq!(r["editor"]["modifiers"]["shift"], true, "{r}");
+    assert!(
+        near(&r["commands"][0]["command"]["end"], [3.0, 0.0, 0.0]),
+        "{r}"
+    );
+}
+
+#[test]
+fn the_back_of_a_thin_wall_is_found_behind_its_front() {
+    let mut e = editor();
+    // A wall 0.1 m thick; its back (y = 0.1) is hidden behind its front from the default view.
+    let r = exec(
+        &mut e,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 0.1, 0]}),
+    );
+    let floor = created(&r, 'f')[0].clone();
+    let up = ask(&mut e, json!({"type": "entity", "id": floor}))["normal"][2]
+        .as_f64()
+        .unwrap();
+    exec(
+        &mut e,
+        json!({"type": "push_pull", "face": floor, "distance": 2.0 * up.signum()}),
+    );
+    let back = face_facing(&mut e, [0.0, 1.0, 0.0]);
+    let q = ask(&mut e, json!({"type": "infer", "point": [2, 0.1, 1]}));
+    assert_eq!(q["entities"][0]["id"], back, "{q}");
+    tool(&mut e, "paint");
+    let r = input(&mut e, json!([{"type": "click", "point": [2, 0.1, 1]}]));
+    assert_eq!(r["commands"][0]["command"]["ids"], json!([back]), "{r}");
+}
+
+#[test]
+fn a_failed_drag_leaves_a_press_made_before_it() {
+    let mut e = editor();
+    square(&mut e);
+    let out = behind(&e);
+    tool(&mut e, "select");
+    input(
+        &mut e,
+        json!([
+            {"type": "down", "pixel": [100, 100]},
+            {"type": "move", "pixel": [300, 300]}
+        ]),
+    );
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [{"type": "drag", "button": "middle", "points": [[1, 1, 0], out]}]}),
+    );
+    assert_eq!(
+        r["error"]["data"]["completed"]["editor"]["phase"], "active",
+        "{r}"
+    );
+}
