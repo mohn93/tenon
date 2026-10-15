@@ -185,6 +185,9 @@ fn a_host_without_an_editor_says_so() {
 fn describe_lists_quit_and_the_editor_schemas() {
     let d = describe();
     assert!(d["methods"]["quit"].is_object());
+    for name in ["selection", "camera", "editor"] {
+        assert!(d["notifications"][name].is_string(), "{name}");
+    }
     for name in ["EditorCommand", "EditorState", "EditorQuery"] {
         assert!(d["schemas"][name].is_object(), "{name}");
     }

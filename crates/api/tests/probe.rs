@@ -124,6 +124,70 @@ fn hits_inside_a_group_carry_the_path_from_the_root() {
 }
 
 #[test]
+fn inside_a_moved_and_turned_group_points_are_the_groups_own() {
+    let mut h = boxed();
+    let all = query(
+        &mut h,
+        json!({"type": "entities", "kinds": ["edge", "face"]}),
+    );
+    let ids: Vec<Value> = ["edges", "faces"]
+        .iter()
+        .flat_map(|k| all[k].as_array().unwrap().clone())
+        .map(|e| e["id"].clone())
+        .collect();
+    let r = call(&mut h, "execute", json!({"type": "make_group", "ids": ids}));
+    let group = r["result"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('i'))
+        .unwrap()
+        .clone();
+    // Moved 10 m along x, then turned a quarter about the vertical line through (10, 0):
+    // the group's (x, y, z) is placed at (10 - y, x, z), so its box covers x 8..10, y 0..2.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "move", "ids": [group], "offset": [10, 0, 0]}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "rotate", "ids": [group], "center": [10, 0, 0], "axis": [0, 0, 1], "angle": 90}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "open_instance", "id": group}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+
+    // Looking straight down at the group's (1, 1), placed at (9, 1).
+    let camera = json!({"eye": [9, 1, 10], "target": [9, 1, 0]});
+    let r = query(
+        &mut h,
+        json!({"type": "pick", "pixel": [50, 50], "width": 100, "height": 100, "camera": camera}),
+    );
+    let top = &r["hits"][0];
+    assert!(top["id"].as_str().unwrap().starts_with('f'), "{r}");
+    assert_eq!(top["point"], json!([1.0, 1.0, 1.0]), "{r}");
+    assert_eq!(top["normal"], json!([0.0, 0.0, 1.0]), "{r}");
+    assert_eq!(top["distance"], 9.0, "{r}");
+    assert_eq!(top["path"], json!([group]));
+
+    // The group's corner (2, 2, 1), placed at (8, 2, 1), given and returned in its own terms.
+    let r = query(
+        &mut h,
+        json!({"type": "infer", "point": [1.98, 2, 1], "width": 100, "height": 100, "camera": camera}),
+    );
+    assert_eq!(r["kind"], "endpoint", "{r}");
+    assert_eq!(r["point"], json!([2.0, 2.0, 1.0]), "{r}");
+    assert_eq!(r["entities"][0]["path"], json!([group]), "{r}");
+}
+
+#[test]
 fn infer_snaps_like_a_tool_click() {
     let mut h = boxed();
     let r = query(
@@ -166,6 +230,7 @@ fn pick_and_infer_reject_what_they_cannot_use() {
         json!({"type": "pick", "ray": {"origin": [0, 0, 1], "direction": [0, 0, -1]}, "width": 10, "height": 10}),
         json!({"type": "pick", "pixel": [1, 1], "radius": -1}),
         json!({"type": "infer", "point": [0, 0, 0], "pixel": [1, 1]}),
+        json!({"type": "infer", "pixel": [1, 1], "radius": 101}),
         // Behind the default camera.
         json!({"type": "infer", "point": [-100, -150, 80]}),
     ];

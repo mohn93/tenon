@@ -270,7 +270,11 @@ pub fn describe() -> Value {
         },
         "notifications": {
             "changed": "{revision, changes: ChangeSummary} after every model change, in order",
-            "resync": "{revision}: changes were missed; re-read the model with query entities"
+            "resync": "{revision}: changes were missed; re-read the model with query entities",
+            "selection": "{ids, revision}: the selection changed (as the selection query returns)",
+            "camera": "the camera query's result without type: the camera or lighting changed",
+            "editor": "EditorState: the editor changed",
+            "note": "selection, camera and editor are coalesced to at most one of each per frame (window) or per round of requests (headless)"
         },
         "errors": {
             "-32700": "parse error", "-32600": "invalid request", "-32601": "method not found",

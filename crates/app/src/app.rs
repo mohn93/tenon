@@ -1073,11 +1073,7 @@ impl State {
     /// it: at most about 30 a second while requests keep coming (see `api_repaint`).
     fn process_api(&mut self, hub: &mut Hub) {
         let before = shown(&self.editor);
-        let mut host = AppHost {
-            editor: &mut self.editor,
-            offscreen: &mut self.offscreen,
-            quit: &mut self.quit,
-        };
+        let mut host = self.host();
         hub.process(&mut host);
         if shown(&self.editor) != before || self.editor.hover_pending() {
             match api_repaint(Instant::now(), self.presented) {
@@ -1087,24 +1083,25 @@ impl State {
         }
     }
 
-    /// Tells API subscribers about edits made in the window.
-    fn notify_api(&mut self, hub: &mut Hub) {
-        let host = AppHost {
+    /// The API's view of the window: the editor, the offscreen renderer and the quit flag.
+    fn host(&mut self) -> AppHost<'_> {
+        AppHost {
             editor: &mut self.editor,
             offscreen: &mut self.offscreen,
             quit: &mut self.quit,
-        };
+        }
+    }
+
+    /// Tells API subscribers about edits made in the window.
+    fn notify_api(&mut self, hub: &mut Hub) {
+        let host = self.host();
         hub.notify(&host);
     }
 
     /// Tells API subscribers what changed of the selection, camera and editor since the last
     /// frame, once per frame drawn.
     fn notify_frame(&mut self, hub: &mut Hub) {
-        let host = AppHost {
-            editor: &mut self.editor,
-            offscreen: &mut self.offscreen,
-            quit: &mut self.quit,
-        };
+        let host = self.host();
         hub.notify_state(&host);
     }
 }

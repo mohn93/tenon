@@ -11,7 +11,6 @@ use crate::export::{self, ExportFormat, ExportReport};
 use crate::file;
 
 impl Document {
-    /// Fails when the model has changes not saved, unless the command said to discard them.
     /// Refuses with `unsaved_changes` when the model changed since it was opened, saved or
     /// started, unless `discard`: what `new`, `open` and quitting check first.
     pub fn check_unsaved(&self, discard: bool) -> Result<(), CommandError> {

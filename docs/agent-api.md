@@ -37,7 +37,7 @@ all commands and results.
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are). Also `selection`, `camera` and `editor` notifications; see Notifications below |
 | `describe` | none | the API description |
-| `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes |
+| `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes. Requests already waiting with it (the same round) are still answered |
 
 Queries:
 
@@ -509,9 +509,10 @@ lists these controls) turns it on; Esc or F turns it off.
 ### Picking and inference
 
 `pick` and `infer` answer what an agent looking at a `render_view` image (or at the window)
-needs to act on a pixel. A pixel is `[x, y]` in pixels from the view's top left corner (x right, y
-down; the middle of the image's pixel (i, j) is `[i + 0.5, j + 0.5]`), in a view of `width` x
-`height` pixels (both or neither, 1 to 4096; default the window's 3D view, 1280 x 800 headless)
+needs to act on a pixel. A pixel is `[x, y]` in physical pixels from the view's top left corner
+(x right, y down; the middle of the image's pixel (i, j) is `[i + 0.5, j + 0.5]`), in a view of
+`width` x `height` pixels (both or neither, 1 to 4096; default the window's 3D view in physical
+pixels, which on a Retina display is twice its size in points; 1280 x 800 headless)
 seen by `camera` (`eye`, `target` and the optional `fov_y_deg`, `up` and `projection`, as
 `render_view` takes them; default the document camera, which never moves). So a pixel of a
 `render_view` image is picked by passing the same `width`, `height` and `camera`. A pixel outside
@@ -563,7 +564,7 @@ intersection, on an edge, on a guide line, along an axis from `from`, on a face,
   own state (its tool, its last point, a Shift or arrow-key lock, the edge the cursor last
   rested on for parallel snaps) is not used.
 - `radius` is how far from the pixel to snap, in pixels (default 8, the window's on a display of
-  scale 1; at most 1000).
+  scale 1; at most 100: inference pairs every line within twice the radius).
 
 ### Editor
 
@@ -594,7 +595,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
   `scale`).
 - `flying` and `fly_speed` (meters a second) are fly mode's (see Camera).
-- `viewport` is the window's 3D view in pixels (1280 x 800 headless): the view `pick` and
+- `viewport` is the window's 3D view in physical pixels (on a Retina display twice its size in
+  points; 1280 x 800 headless): the view `pick` and
   `infer` use when not given a size.
 - `status` is the status bar's line as the window shows it; `prompt`, `message` (feedback from
   the last tool action or failed command), `lock` (e.g. `Locked: red axis`) are its parts.

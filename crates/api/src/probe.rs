@@ -21,8 +21,12 @@ pub const PICK_RADIUS: f64 = 4.0;
 /// display of scale 1.
 pub const INFER_RADIUS: f64 = 8.0;
 
-/// The largest pixel radius `pick` and `infer` take.
+/// The largest pixel radius `pick` takes.
 pub const MAX_RADIUS: f64 = 1000.0;
+
+/// The largest pixel radius `infer` takes: inference pairs every line within twice the
+/// radius, so its cost grows with the square of the lines it reaches.
+pub const MAX_INFER_RADIUS: f64 = 100.0;
 
 /// A camera for one request, as `set_camera` takes it: absent fields keep the document
 /// camera's values. It never moves the document camera.
@@ -207,14 +211,14 @@ fn pixel_in(camera: &Camera, pixel: [f64; 2]) -> Result<DVec2, CommandError> {
     }
 }
 
-/// A pixel radius: `radius`, or `default` when absent.
-fn pixel_radius(radius: Option<f64>, default: f64) -> Result<f64, CommandError> {
+/// A pixel radius: `radius`, or `default` when absent, at most `max`.
+fn pixel_radius(radius: Option<f64>, default: f64, max: f64) -> Result<f64, CommandError> {
     let r = radius.unwrap_or(default);
-    if r.is_finite() && (0.0..=MAX_RADIUS).contains(&r) {
+    if r.is_finite() && (0.0..=max).contains(&r) {
         Ok(r)
     } else {
         Err(invalid(format!(
-            "radius must be between 0 and {MAX_RADIUS} pixels"
+            "radius must be between 0 and {max} pixels"
         )))
     }
 }
@@ -248,7 +252,7 @@ pub fn pick_query(doc: &Document, q: &PickQuery) -> Result<Vec<PickHit>, Command
         (Some(pixel), None) => {
             let camera = view_camera(doc, q.camera.as_ref(), q.width, q.height)?;
             let cursor = pixel_in(&camera, *pixel)?;
-            let radius_px = pixel_radius(q.radius, PICK_RADIUS)?;
+            let radius_px = pixel_radius(q.radius, PICK_RADIUS, MAX_RADIUS)?;
             let (scenery, camera) = (scenery(doc), local(doc, &camera));
             let ray = camera.ray(cursor);
             let reach = Reach::Screen {
@@ -322,7 +326,7 @@ pub fn infer_query(doc: &Document, q: &InferQuery) -> Result<Inferred, CommandEr
     if let Some(from) = q.from {
         check_coordinates(&[from])?;
     }
-    let radius_px = pixel_radius(q.radius, INFER_RADIUS)?;
+    let radius_px = pixel_radius(q.radius, INFER_RADIUS, MAX_INFER_RADIUS)?;
     let guides = Guides {
         anchor: q.from.map(DVec3::from),
         ..Guides::default()
