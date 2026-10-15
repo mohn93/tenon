@@ -24,6 +24,7 @@ use crate::fly::{self, Fly, FlyKey};
 use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
 
 mod agent;
+mod input;
 mod soften;
 mod texture_position;
 
@@ -132,6 +133,8 @@ pub struct Editor {
     flying: bool,
     /// The Soften Edges window.
     soften: SoftenWindow,
+    /// While an agent's `tool_input` runs: every command run, with its result.
+    issued: Option<Vec<(Command, Result<Outcome, CommandError>)>>,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -190,6 +193,7 @@ impl Editor {
             fly: Fly::default(),
             flying: false,
             soften: SoftenWindow::default(),
+            issued: None,
         }
     }
 
@@ -1284,7 +1288,7 @@ impl Editor {
                 });
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
-                if undone && let Ok(redone) = self.doc.execute(Command::Redo { count: None }) {
+                if undone && let Ok(redone) = self.execute_recorded(Command::Redo { count: None }) {
                     if is_copy && !redone.changes.created.is_empty() {
                         self.select_created(redone);
                     } else {
@@ -1335,9 +1339,19 @@ impl Editor {
         self.preview.clear();
     }
 
+    /// Runs a command on the document, noting it and its result while `tool_input` runs.
+    fn execute_recorded(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        let noted = self.issued.is_some().then(|| command.clone());
+        let result = self.doc.execute(command);
+        if let (Some(command), Some(issued)) = (noted, self.issued.as_mut()) {
+            issued.push((command, result.clone()));
+        }
+        result
+    }
+
     /// Runs a command; a failure becomes the status message.
     fn run(&mut self, command: Command) -> Option<Outcome> {
-        match self.doc.execute(command) {
+        match self.execute_recorded(command) {
             Ok(outcome) => Some(outcome),
             Err(e) if matches!(e.kind, ErrorKind::NothingToUndo | ErrorKind::NothingToRedo) => None,
             Err(e) => {

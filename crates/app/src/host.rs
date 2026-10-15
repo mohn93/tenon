@@ -4,7 +4,10 @@
 
 use std::time::Duration;
 
-use api::{Dialog, EditorCommand, EditorState, Host, PhaseName, ToolName};
+use api::{
+    Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput, ToolInputResult,
+    ToolName, snap_name,
+};
 use render::Snapshotter;
 use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
 use tools::Phase;
@@ -113,6 +116,43 @@ impl Host for AppHost<'_> {
         Ok(())
     }
 
+    fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, CommandError> {
+        let driven = self.editor.drive(input)?;
+        Ok(ToolInputResult {
+            editor: editor_state(self.editor),
+            inference: driven.hover.map(|h| {
+                let (kind, axis) = snap_name(h.kind);
+                Hover {
+                    kind,
+                    axis,
+                    point: h.point.to_array(),
+                }
+            }),
+            preview: driven
+                .preview
+                .iter()
+                .map(|[a, b]| [a.to_array(), b.to_array()])
+                .collect(),
+            commands: driven
+                .issued
+                .into_iter()
+                .map(|(command, result)| match result {
+                    Ok(outcome) => Issued {
+                        command,
+                        outcome: Some(outcome),
+                        error: None,
+                    },
+                    Err(error) => Issued {
+                        command,
+                        outcome: None,
+                        error: Some(error),
+                    },
+                })
+                .collect(),
+            revision: self.editor.doc().revision(),
+        })
+    }
+
     fn quit(&mut self, discard: bool) -> Result<(), CommandError> {
         self.editor.doc().check_unsaved(discard)?;
         *self.quit = true;
@@ -161,6 +201,9 @@ pub fn editor_state(editor: &Editor) -> EditorState {
         dialog: soften_open.then_some(Dialog::SoftenEdges),
     }
 }
+
+#[cfg(test)]
+mod tool_input_tests;
 
 #[cfg(test)]
 mod tests {

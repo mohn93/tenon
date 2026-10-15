@@ -36,6 +36,7 @@ all commands and results.
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are). Also `selection`, `camera` and `editor` notifications; see Notifications below |
+| `tool_input` | `{"events": [{"type": "click", "point": [0,0,0]}, {"type": "type", "text": "3"}], "width": 640, "height": 400}` (size optional) | `{editor, inference, preview, commands, revision}`: the active tool fed the events as the window feeds a user's; see Driving the tools below |
 | `describe` | none | the API description |
 | `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes. Once it is accepted, every later request, including those already waiting with it, is refused (`-32000`, `invalid_input`, "the program is quitting"), so no edit is made that would not be saved. Camera changes do not count as unsaved (see Camera), so `quit` without `discard` does not keep a view moved since the last save; `save` first to keep it. Params go by name: `[true]` is `-32602` |
 
@@ -638,6 +639,67 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 | `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
 | `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
 
+### Driving the tools
+
+`tool_input` feeds the active tool the events a user makes in the 3D view, through the same
+editor code the window runs: the same inference and snapping, Shift and arrow-key locks, typed
+values ("3", "2,3", "24s", "5x", "/5", angles), Ctrl copying, Cmd sampling and double-click
+opening. Every tool behaviour is reachable this way, in the window and headless alike.
+
+```
+{"jsonrpc": "2.0", "id": 9, "method": "tool_input", "params": {"events": [
+  {"type": "click", "point": [0, 0, 0]},
+  {"type": "move", "point": [1, 0, 0]},
+  {"type": "type", "text": "3"}]}}
+```
+
+Events, run in order:
+
+| Event | What a user does |
+|---|---|
+| `{"type": "move", "pixel": [320, 200]}` | Moves the cursor there: the inference and the tool's preview follow. |
+| `{"type": "down", "point": [1, 2, 0], "button": "left"}`, `{"type": "up", ...}` | Presses or releases a button there (`left` default, `middle`, `right`). A middle drag orbits and Shift+middle pans, as in the window; Alt+left orbits. A button left down stays down for a later call. |
+| `{"type": "click", "point": [1, 2, 0]}` | Moves there, presses and releases. |
+| `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool opens the group under it, or closes the open one when there is nothing of it there. |
+| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. |
+| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making). An uppercase letter holds Shift. With `cmd` or `ctrl` only `z` is taken (undo; with `shift` redo); the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys are `invalid_input`. With `alt` a key does nothing, as in the window. |
+| `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Cmd or Ctrl makes a Paint click sample the material. |
+| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. |
+
+- **Where**: a `pixel` is in a view of `width` x `height` (both or neither; default the 3D view,
+  `editor.viewport`, 1280 x 800 headless), scaled to the 3D view, which must have the same
+  proportions (within 1%). A `point` is in the open context's coordinates and is looked for
+  where the document camera shows it at the event's turn (the camera may have moved). Either
+  way the tool infers from that pixel, as for a click there: a point near an endpoint snaps to
+  it, as `infer` reports. Exact values come from typing them.
+- **Modifiers** held by `modifiers` are let go at the end of the call, as if the keys were
+  released (a Shift lock ends with it; arrow-key locks last until the operation ends). In the
+  window the user's own key presses also change them.
+- **Frames**: after each event the hover is worked out as a frame drawn between events would.
+- **Errors**: malformed events are `-32602`; an event that makes no sense (both or neither of
+  `pixel` and `point`, a drag of one place, an unknown key, empty text, a size out of range) is
+  `invalid_input` naming it (`event 2: ...`) and nothing runs. An event that cannot run at its
+  turn (a pixel outside the view, a point not in sight) stops the rest with `invalid_input`;
+  the events before it stay done. While flying, clicks and typing do nothing, as in the window.
+
+The result is the editor after the events:
+
+```
+{"editor": {...EditorState...},
+ "inference": {"kind": "axis", "axis": "x", "point": [3, 0, 0]},
+ "preview": [[[0, 0, 0], [3, 0, 0]]],
+ "commands": [{"command": {"type": "add_edge", "start": [0,0,0], "end": [3,0,0]},
+               "outcome": {"changes": {...}}}],
+ "revision": 1}
+```
+
+`inference` is what the cursor snaps to now (kinds as `infer` names them; `null` while flying),
+`preview` the tool's rubber-band segments (open context coordinates), and `commands` every
+command the events ran, in order, each with its `outcome` or `error` (a CommandError): the
+tool's, a copy's selection of what it made, a shortcut's (`make_group`), an undo. The window
+also shows a failed command's message in `editor.message`. Subscribers get the usual `changed`,
+`selection`, `camera` and `editor` notifications.
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
@@ -829,12 +891,12 @@ under a pixel and where a click would snap.
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z) | `undo`, `redo`; `history` lists the steps |
 | Make group (G), Make component (Shift+G), Explode, Close group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
-| Orbit, pan and zoom with the mouse or trackpad, fly mode (F, Escape) and its speed | `set_camera`, `orbit`, `pan`, `zoom` reach the same views; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
-| The toolbar's tools and their keys | `set_tool`; `editor.tool`, `editor.phase`, `editor.points` |
-| Select: click, Shift-click, box (inside or crossing), double-click to open a group | `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
-| Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
-| Inference snapping, Shift and arrow-key locks, the marker under the cursor | `infer` (with `from`; `axis` is what Shift would lock) |
-| Typing into the measurements box, Escape | the commands' explicit values; `cancel`; `editor.measurement`, `editor.typing` |
+| Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
+| The toolbar's tools and their keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
+| Select: click, Shift-click, box (inside or crossing), double-click to open a group | `tool_input` (`click`, `modifiers`, `drag`, `double_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
+| Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
+| Inference snapping, Shift and arrow-key locks, the marker under the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock) |
+| Typing into the measurements box, Escape | `tool_input` (`type`, `key`); the commands' explicit values; `cancel`; `editor.measurement`, `editor.typing` |
 | The status bar | `editor.status` (and `prompt`, `message`, `lock`) |
 | Materials list: choose (for Paint), Add, Delete, name, color, opacity, Glow, Texture..., Remove, texture size | `set_paint_material`, `add_material`, `delete_material`, `change_material` (`name`, `color`, `opacity`, `emission`, `texture`); `materials` |
 | Entity Info: what is selected, texture Offset / Rotation / Scale, Rotate 90, Reset | `entity`, `entities`, `curve`; `position_texture` (`offset`, `rotation_deg`, `rotate_by: 90`, `scale`, `reset`) |
