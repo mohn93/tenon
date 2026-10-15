@@ -22,48 +22,61 @@ impl Editor {
         first
     }
 
-    /// Sets the texture offset of the selected faces, in millimeters along u and v.
-    pub fn set_texture_offset(&mut self, millimeters: [i32; 2]) -> bool {
-        self.position_selected(Command::PositionTexture {
-            ids: Vec::new(),
-            offset: Some(millimeters.map(|mm| f64::from(mm) / 1000.0)),
-            rotation_deg: None,
-            scale: None,
-            reset: false,
-        })
+    /// Sets the texture offset of `faces`, in millimeters along u and v.
+    pub fn set_texture_offset(&mut self, faces: Vec<EntityId>, millimeters: [i32; 2]) -> bool {
+        self.position_faces(
+            faces,
+            Command::PositionTexture {
+                ids: Vec::new(),
+                offset: Some(millimeters.map(|mm| f64::from(mm) / 1000.0)),
+                rotation_deg: None,
+                scale: None,
+                reset: false,
+            },
+        )
     }
 
-    /// Sets the texture rotation of the selected faces, in tenths of a degree.
-    pub fn set_texture_rotation(&mut self, tenths: i32) -> bool {
-        self.position_selected(Command::PositionTexture {
-            ids: Vec::new(),
-            offset: None,
-            rotation_deg: Some(f64::from(tenths) / 10.0),
-            scale: None,
-            reset: false,
-        })
+    /// Sets the texture rotation of `faces`, in tenths of a degree.
+    pub fn set_texture_rotation(&mut self, faces: Vec<EntityId>, tenths: i32) -> bool {
+        self.position_faces(
+            faces,
+            Command::PositionTexture {
+                ids: Vec::new(),
+                offset: None,
+                rotation_deg: Some(f64::from(tenths) / 10.0),
+                scale: None,
+                reset: false,
+            },
+        )
     }
 
-    /// Sets the texture scale of the selected faces, in thousandths.
-    pub fn set_texture_scale(&mut self, thousandths: [u32; 2]) -> bool {
-        self.position_selected(Command::PositionTexture {
-            ids: Vec::new(),
-            offset: None,
-            rotation_deg: None,
-            scale: Some(thousandths.map(|t| f64::from(t) / 1000.0)),
-            reset: false,
-        })
+    /// Sets the texture scale of `faces`, in thousandths.
+    pub fn set_texture_scale(&mut self, faces: Vec<EntityId>, thousandths: [u32; 2]) -> bool {
+        self.position_faces(
+            faces,
+            Command::PositionTexture {
+                ids: Vec::new(),
+                offset: None,
+                rotation_deg: None,
+                scale: Some(thousandths.map(|t| f64::from(t) / 1000.0)),
+                reset: false,
+            },
+        )
     }
 
     /// Clears the texture placement of the selected faces.
     pub fn reset_texture_position(&mut self) -> bool {
-        self.position_selected(Command::PositionTexture {
-            ids: Vec::new(),
-            offset: None,
-            rotation_deg: None,
-            scale: None,
-            reset: true,
-        })
+        let faces = self.doc.selection().iter().copied().collect();
+        self.position_faces(
+            faces,
+            Command::PositionTexture {
+                ids: Vec::new(),
+                offset: None,
+                rotation_deg: None,
+                scale: None,
+                reset: true,
+            },
+        )
     }
 
     /// Turns the texture of each selected face a further quarter counter-clockwise, as one
@@ -101,14 +114,11 @@ impl Editor {
         true
     }
 
-    /// Runs a `position_texture` command on the selected faces (its `ids` filled in). False
-    /// when no face is selected.
-    fn position_selected(&mut self, mut command: Command) -> bool {
-        let faces: Vec<EntityId> = self
-            .doc
-            .selection()
-            .iter()
-            .copied()
+    /// Runs a `position_texture` command on the faces of `ids` (its `ids` filled in). False
+    /// when there are none.
+    fn position_faces(&mut self, ids: Vec<EntityId>, mut command: Command) -> bool {
+        let faces: Vec<EntityId> = ids
+            .into_iter()
             .filter(|id| matches!(id, EntityId::Face(_)))
             .collect();
         if faces.is_empty() {
@@ -178,9 +188,9 @@ mod tests {
             e.selection_texture_position(),
             Some(TexturePlacement::default())
         );
-        assert!(e.set_texture_offset([250, -500]));
-        assert!(e.set_texture_rotation(455));
-        assert!(e.set_texture_scale([2000, 500]));
+        assert!(e.set_texture_offset(faces.clone(), [250, -500]));
+        assert!(e.set_texture_rotation(faces.clone(), 455));
+        assert!(e.set_texture_scale(faces.clone(), [2000, 500]));
         let expected = TexturePlacement {
             offset: [0.25, -0.5],
             rotation_deg: 45.5,
@@ -191,7 +201,7 @@ mod tests {
         }
         assert_eq!(e.selection_texture_position(), Some(expected));
         // A bad value says why in the status and changes nothing.
-        assert!(e.set_texture_scale([0, 1000]));
+        assert!(e.set_texture_scale(faces.clone(), [0, 1000]));
         assert!(e.status_parts().message.unwrap().contains("scale"));
         assert_eq!(placement(&e, faces[0]), Some(expected));
         assert!(e.reset_texture_position());
@@ -211,6 +221,13 @@ mod tests {
         assert_eq!(e.selection_texture_position(), None);
         select(&mut e, vec![edge]);
         assert!(!e.reset_texture_position());
+        assert!(!e.set_texture_rotation(vec![edge], 10));
+
+        // The faces given are set, whatever is selected now.
+        select(&mut e, vec![faces[1]]);
+        assert!(e.set_texture_rotation(vec![faces[0]], 100));
+        assert_eq!(placement(&e, faces[0]).unwrap().rotation_deg, 10.0);
+        assert_eq!(placement(&e, faces[1]), Some(expected));
     }
 
     fn undo_depth(e: &Editor) -> usize {
@@ -225,7 +242,7 @@ mod tests {
         let mut e = editor();
         let faces = two_squares(&mut e);
         select(&mut e, vec![faces[0]]);
-        e.set_texture_rotation(300);
+        e.set_texture_rotation(vec![faces[0]], 300);
         select(&mut e, faces.clone());
         let depth = undo_depth(&e);
         assert!(e.rotate_texture_90());

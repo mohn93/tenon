@@ -25,7 +25,7 @@ use crate::gui::Gui;
 use crate::host::WindowHost;
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
-use crate::ui::{MaterialRow, TextureRow, UiAction, View};
+use crate::ui::{MaterialRow, TexturePosition, TextureRow, UiAction, View};
 
 /// The side of a texture's swatch image in the Materials list, in pixels.
 const SWATCH_PIXELS: u32 = 32;
@@ -716,14 +716,14 @@ impl State {
             UiAction::SetSoft(soft) => {
                 self.editor.set_selection_soft(soft);
             }
-            UiAction::SetTextureOffset(millimeters) => {
-                self.editor.set_texture_offset(millimeters);
+            UiAction::SetTextureOffset(faces, millimeters) => {
+                self.editor.set_texture_offset(faces, millimeters);
             }
-            UiAction::SetTextureRotation(tenths) => {
-                self.editor.set_texture_rotation(tenths);
+            UiAction::SetTextureRotation(faces, tenths) => {
+                self.editor.set_texture_rotation(faces, tenths);
             }
-            UiAction::SetTextureScale(thousandths) => {
-                self.editor.set_texture_scale(thousandths);
+            UiAction::SetTextureScale(faces, thousandths) => {
+                self.editor.set_texture_scale(faces, thousandths);
             }
             UiAction::RotateTexture90 => {
                 self.editor.rotate_texture_90();
@@ -818,7 +818,12 @@ impl State {
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
-            texture_position: self.editor.selection_texture_position(),
+            texture_position: self.editor.selection_texture_position().map(|placement| {
+                TexturePosition {
+                    placement,
+                    faces: self.editor.doc().selection().iter().copied().collect(),
+                }
+            }),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         gui_frame.hide_cursor = self.capture == Capture::Grabbed;

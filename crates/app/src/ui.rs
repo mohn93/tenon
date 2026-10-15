@@ -72,12 +72,13 @@ pub enum UiAction {
     Harden,
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
-    /// Set the texture offset of the selected faces, in millimeters along u and v.
-    SetTextureOffset([i32; 2]),
-    /// Set the texture rotation of the selected faces, in tenths of a degree.
-    SetTextureRotation(i32),
-    /// Set the texture scale of the selected faces, in thousandths.
-    SetTextureScale([u32; 2]),
+    /// Set the texture offset of the faces (those selected when the field was edited), in
+    /// millimeters along u and v.
+    SetTextureOffset(Vec<EntityId>, [i32; 2]),
+    /// Set the texture rotation of the faces, in tenths of a degree.
+    SetTextureRotation(Vec<EntityId>, i32),
+    /// Set the texture scale of the faces, in thousandths.
+    SetTextureScale(Vec<EntityId>, [u32; 2]),
     /// Turn the texture of each selected face a further quarter counter-clockwise.
     RotateTexture90,
     /// Clear the texture placement of the selected faces.
@@ -150,7 +151,16 @@ pub struct View<'a> {
     /// Whether the selected edges are all soft, when only edges are selected.
     pub edges_soft: Option<bool>,
     /// The first selected face's texture placement, when only faces are selected.
-    pub texture_position: Option<TexturePlacement>,
+    pub texture_position: Option<TexturePosition>,
+}
+
+/// What Entity Info's texture position fields show and apply to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TexturePosition {
+    /// The first selected face's placement.
+    pub placement: TexturePlacement,
+    /// The selected faces.
+    pub faces: Vec<EntityId>,
 }
 
 /// The fly mode controls, shown over the Camera menu's Fly mode item.
@@ -426,36 +436,78 @@ fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
 }
 
 /// Entity Info's texture position for selected faces: offset, rotation and scale fields, each
-/// applied to every selected face when a drag ends or a typed value is entered, and the
-/// Rotate 90 and Reset buttons.
-fn texture_position(ui: &mut Ui, t: &TexturePlacement, actions: &mut Vec<UiAction>) {
+/// applied when a drag ends or a typed value is entered, and the Rotate 90 and Reset buttons.
+/// A field applies to the faces selected when its edit began, from the values shown then, even
+/// if the selection changed before the value was entered.
+fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction>) {
     ui.label("Texture position")
         .on_hover_text("Where the texture lies on the selected faces");
+    let faces_key = egui::Id::new("texture-position-faces");
+    let mut done = Vec::new();
+    let mut editing = false;
     let offset_range = -kernel::MAX_TEXTURE_OFFSET..=kernel::MAX_TEXTURE_OFFSET;
     let mm = |m: f64| (m * 1000.0).round() as i32;
-    if let Some(offset) = drag_row(ui, "texture-offset", "Offset", t.offset, offset_range, 0.01)
-        && offset.map(mm) != t.offset.map(mm)
+    let p = &t.placement;
+    let row = drag_row(
+        ui,
+        egui::Id::new("texture-offset"),
+        "Offset",
+        p.offset,
+        offset_range,
+        0.01,
+    );
+    editing |= row.editing;
+    if let Some((start, offset)) = row.done
+        && offset.map(mm) != start.map(mm)
     {
-        actions.push(UiAction::SetTextureOffset(offset.map(mm)));
+        done.push(Field::Offset(offset.map(mm)));
     }
     let tenths = |deg: f64| (deg * 10.0).round() as i32;
-    if let Some([deg]) = drag_row(
+    let row = drag_row(
         ui,
-        "texture-rotation",
+        egui::Id::new("texture-rotation"),
         "Rotation",
-        [t.rotation_deg],
+        [p.rotation_deg],
         0.0..=360.0,
         0.5,
-    ) && tenths(deg) != tenths(t.rotation_deg)
+    );
+    editing |= row.editing;
+    if let Some(([start], [deg])) = row.done
+        && tenths(deg) != tenths(start)
     {
-        actions.push(UiAction::SetTextureRotation(tenths(deg)));
+        done.push(Field::Rotation(tenths(deg)));
     }
     let scale_range = kernel::MIN_TEXTURE_SCALE..=kernel::MAX_TEXTURE_SCALE;
     let thousandths = |s: f64| (s * 1000.0).round() as u32;
-    if let Some(scale) = drag_row(ui, "texture-scale", "Scale", t.scale, scale_range, 0.01)
-        && scale.map(thousandths) != t.scale.map(thousandths)
+    let row = drag_row(
+        ui,
+        egui::Id::new("texture-scale"),
+        "Scale",
+        p.scale,
+        scale_range,
+        0.01,
+    );
+    editing |= row.editing;
+    if let Some((start, scale)) = row.done
+        && scale.map(thousandths) != start.map(thousandths)
     {
-        actions.push(UiAction::SetTextureScale(scale.map(thousandths)));
+        done.push(Field::Scale(scale.map(thousandths)));
+    }
+    // The faces an edit applies to: those selected when it began.
+    let faces = ui
+        .data(|d| d.get_temp::<Vec<EntityId>>(faces_key))
+        .unwrap_or_else(|| t.faces.clone());
+    if editing {
+        ui.data_mut(|d| d.insert_temp(faces_key, faces.clone()));
+    } else {
+        ui.data_mut(|d| d.remove::<Vec<EntityId>>(faces_key));
+    }
+    for field in done {
+        actions.push(match field {
+            Field::Offset(v) => UiAction::SetTextureOffset(faces.clone(), v),
+            Field::Rotation(v) => UiAction::SetTextureRotation(faces.clone(), v),
+            Field::Scale(v) => UiAction::SetTextureScale(faces.clone(), v),
+        });
     }
     ui.horizontal(|ui| {
         if ui
@@ -475,29 +527,45 @@ fn texture_position(ui: &mut Ui, t: &TexturePlacement, actions: &mut Vec<UiActio
     });
 }
 
+/// A texture position field's entered value.
+enum Field {
+    Offset([i32; 2]),
+    Rotation(i32),
+    Scale([u32; 2]),
+}
+
+/// What a `drag_row` frame gave.
+struct DragRow<const N: usize> {
+    /// When a drag ended or a typed value was entered: the values shown when the edit began,
+    /// and the values now.
+    done: Option<([f64; N], [f64; N])>,
+    /// Whether a field is being dragged or typed in.
+    editing: bool,
+}
+
 /// A row of `label` and one field per value, changing by `speed` per point dragged; with more
-/// than one field the label goes on a line of its own, so long values still fit the panel. Like the
-/// texture size, the values being dragged live in egui's memory under `key` until the drag
-/// ends; returns the values when a drag ends or a typed value is entered.
+/// than one field the label goes on a line of its own, so long values still fit the panel. While a
+/// field is dragged or typed in, the values shown when the edit began, and those being dragged,
+/// live in egui's memory under `key`, so a change of what is shown meanwhile does not leak in.
 fn drag_row<const N: usize>(
     ui: &mut Ui,
-    key: &str,
+    key: egui::Id,
     label: &str,
     shown: [f64; N],
     range: std::ops::RangeInclusive<f64>,
     speed: f64,
-) -> Option<[f64; N]> {
-    let key = egui::Id::new(key);
-    let mut values = ui.data(|d| d.get_temp::<[f64; N]>(key)).unwrap_or(shown);
+) -> DragRow<N> {
+    let stored = ui.data(|d| d.get_temp::<([f64; N], [f64; N])>(key));
+    let (start, mut values) = stored.unwrap_or((shown, shown));
     if N > 1 {
         ui.label(label);
     }
-    let (dragged, done) = ui
+    let (editing, ended) = ui
         .horizontal(|ui| {
             if N == 1 {
                 ui.label(label);
             }
-            let (mut dragged, mut done) = (false, false);
+            let (mut editing, mut ended) = (false, false);
             for value in &mut values {
                 let field = ui.add(
                     egui::DragValue::new(value)
@@ -506,18 +574,26 @@ fn drag_row<const N: usize>(
                         .max_decimals(3)
                         .update_while_editing(false),
                 );
-                dragged |= field.dragged();
-                done |= field.drag_stopped() || field.changed();
+                // A field being typed in reports a change per keystroke; its value comes
+                // when it loses focus.
+                editing |= field.dragged() || field.has_focus();
+                ended |= field.drag_stopped() || field.changed();
             }
-            (dragged, done)
+            (editing, ended)
         })
         .inner;
-    if dragged {
-        ui.data_mut(|d| d.insert_temp(key, values));
-        return None;
+    if editing {
+        ui.data_mut(|d| d.insert_temp(key, (start, values)));
+        return DragRow {
+            done: None,
+            editing: true,
+        };
     }
-    ui.data_mut(|d| d.remove::<[f64; N]>(key));
-    done.then_some(values)
+    ui.data_mut(|d| d.remove::<([f64; N], [f64; N])>(key));
+    DragRow {
+        done: (ended || stored.is_some()).then_some((start, values)),
+        editing: false,
+    }
 }
 
 /// A small square of `color` that can be clicked.
@@ -694,38 +770,20 @@ fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
     });
     let Some(t) = &m.texture else { return };
     ui.label(RichText::new(format!("{} x {} px", t.pixels[0], t.pixels[1])).weak());
-    // Like the opacity: the size being dragged lives in egui's memory until the drag ends.
-    let key = egui::Id::new(("texture-size", m.id.0));
-    let shown = [t.width, t.height];
-    let mut size = ui.data(|d| d.get_temp::<[f64; 2]>(key)).unwrap_or(shown);
-    // The label on a line of its own, so long sizes still fit the panel.
-    ui.label("Size (m)");
-    let (dragged, done) = ui
-        .horizontal(|ui| {
-            let field = |ui: &mut Ui, value: &mut f64| {
-                ui.add(
-                    egui::DragValue::new(value)
-                        .range(kernel::MIN_TEXTURE_SIZE..=kernel::MAX_TEXTURE_SIZE)
-                        .speed(0.01)
-                        .max_decimals(3),
-                )
-            };
-            let w = field(ui, &mut size[0]);
-            ui.label("x");
-            let h = field(ui, &mut size[1]);
-            let dragged = w.dragged() || h.dragged();
-            let done = w.drag_stopped() || h.drag_stopped() || w.changed() || h.changed();
-            (dragged, done)
-        })
-        .inner;
-    if dragged {
-        ui.data_mut(|d| d.insert_temp(key, size));
-    } else {
-        let mm = |m: f64| (m * 1000.0).round() as u32;
-        if done && size.map(mm) != shown.map(mm) {
-            actions.push(UiAction::SetTextureSize(m.id, size.map(mm)));
-        }
-        ui.data_mut(|d| d.remove::<[f64; 2]>(key));
+    // One change per drag or entered value, like the texture position fields.
+    let row = drag_row(
+        ui,
+        egui::Id::new(("texture-size", m.id.0)),
+        "Size (m)",
+        [t.width, t.height],
+        kernel::MIN_TEXTURE_SIZE..=kernel::MAX_TEXTURE_SIZE,
+        0.01,
+    );
+    let mm = |m: f64| (m * 1000.0).round() as u32;
+    if let Some((start, size)) = row.done
+        && size.map(mm) != start.map(mm)
+    {
+        actions.push(UiAction::SetTextureSize(m.id, size.map(mm)));
     }
 }
 
@@ -1226,7 +1284,14 @@ mod tests {
         let status = status();
         let info = vec!["2 faces".to_string()];
         let mut view = soften_view(&status, &info, None, None);
-        view.texture_position = Some(TexturePlacement::default());
+        let faces = vec![
+            EntityId::Face(kernel::FaceId(3)),
+            EntityId::Face(kernel::FaceId(4)),
+        ];
+        view.texture_position = Some(TexturePosition {
+            placement: TexturePlacement::default(),
+            faces: faces.clone(),
+        });
         let columns = [160.0, 120.0, 80.0];
         let clicked: Vec<UiAction> = columns
             .into_iter()
@@ -1241,11 +1306,11 @@ mod tests {
             .flat_map(|x| panel_actions(&view, 1280.0 - x, Some("2")))
             .collect();
         for action in [
-            UiAction::SetTextureOffset([2000, 0]),
-            UiAction::SetTextureOffset([0, 2000]),
-            UiAction::SetTextureRotation(20),
-            UiAction::SetTextureScale([2000, 1000]),
-            UiAction::SetTextureScale([1000, 2000]),
+            UiAction::SetTextureOffset(faces.clone(), [2000, 0]),
+            UiAction::SetTextureOffset(faces.clone(), [0, 2000]),
+            UiAction::SetTextureRotation(faces.clone(), 20),
+            UiAction::SetTextureScale(faces.clone(), [2000, 1000]),
+            UiAction::SetTextureScale(faces.clone(), [1000, 2000]),
         ] {
             assert!(typed.contains(&action), "{action:?} in {typed:?}");
         }
@@ -1258,13 +1323,77 @@ mod tests {
         assert!(
             !clicked.iter().any(|a| matches!(
                 a,
-                UiAction::SetTextureOffset(_)
-                    | UiAction::SetTextureRotation(_)
-                    | UiAction::SetTextureScale(_)
+                UiAction::SetTextureOffset(..)
+                    | UiAction::SetTextureRotation(..)
+                    | UiAction::SetTextureScale(..)
                     | UiAction::RotateTexture90
                     | UiAction::ResetTexturePosition
             )),
             "{clicked:?}"
+        );
+    }
+
+    #[test]
+    fn a_texture_field_applies_to_the_faces_it_was_edited_for() {
+        // Typing into a field with face 3 selected, then entering it once face 4 (placed
+        // otherwise) is selected, sets face 3 from face 3's values.
+        let status = status();
+        let info = vec!["1 face".to_string()];
+        let mut before = soften_view(&status, &info, None, None);
+        let mut after = soften_view(&status, &info, None, None);
+        let (three, four) = (
+            vec![EntityId::Face(kernel::FaceId(3))],
+            vec![EntityId::Face(kernel::FaceId(4))],
+        );
+        before.texture_position = Some(TexturePosition {
+            placement: TexturePlacement::default(),
+            faces: three.clone(),
+        });
+        after.texture_position = Some(TexturePosition {
+            placement: TexturePlacement {
+                offset: [0.5, 0.75],
+                rotation_deg: 30.0,
+                scale: [3.0, 3.0],
+            },
+            faces: four.clone(),
+        });
+        let mut typed = Vec::new();
+        for x in [160.0, 120.0, 80.0] {
+            let ctx = egui::Context::default();
+            for y in (0..800).step_by(4) {
+                typed.extend(click(&ctx, &before, Pos2::new(1280.0 - x, y as f32)));
+                let mut typing = screen();
+                typing.events = vec![egui::Event::Text("2".into())];
+                typed.extend(run(&ctx, typing, &before).0);
+                let mut ending = screen();
+                ending.events = vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }];
+                typed.extend(run(&ctx, ending, &after).0);
+                typed.extend(run(&ctx, screen(), &after).0);
+            }
+        }
+        for action in [
+            UiAction::SetTextureOffset(three.clone(), [2000, 0]),
+            UiAction::SetTextureOffset(three.clone(), [0, 2000]),
+            UiAction::SetTextureRotation(three.clone(), 20),
+            UiAction::SetTextureScale(three.clone(), [2000, 1000]),
+            UiAction::SetTextureScale(three.clone(), [1000, 2000]),
+        ] {
+            assert!(typed.contains(&action), "{action:?} in {typed:?}");
+        }
+        assert!(
+            !typed.iter().any(|a| matches!(
+                a,
+                UiAction::SetTextureOffset(f, _)
+                    | UiAction::SetTextureRotation(f, _)
+                    | UiAction::SetTextureScale(f, _) if *f == four
+            )),
+            "{typed:?}"
         );
     }
 
@@ -1587,10 +1716,13 @@ mod tests {
         assert_eq!(width(&plain), before, "after the texture");
         // Long texture position values fit too.
         let mut view = name_field_view(&status, &info, &textured);
-        view.texture_position = Some(TexturePlacement {
-            offset: [-123456.789, -987654.321],
-            rotation_deg: 359.9,
-            scale: [999.999, 999.999],
+        view.texture_position = Some(TexturePosition {
+            placement: TexturePlacement {
+                offset: [-123456.789, -987654.321],
+                rotation_deg: 359.9,
+                scale: [999.999, 999.999],
+            },
+            faces: vec![EntityId::Face(kernel::FaceId(3))],
         });
         for _ in 0..3 {
             assert_eq!(
@@ -1649,6 +1781,57 @@ mod tests {
         for size in [[2000, 500], [1000, 2000]] {
             let action = UiAction::SetTextureSize(MaterialId(31), size);
             assert!(typed.contains(&action), "{action:?} in {typed:?}");
+        }
+    }
+
+    #[test]
+    fn a_typed_texture_size_is_one_change_when_entered() {
+        let status = status();
+        let info = vec!["Nothing selected".to_string()];
+        let mut textured = brick();
+        textured[0].texture = Some(TextureRow {
+            swatch: egui::TextureId::default(),
+            width: 1.0,
+            height: 0.5,
+            pixels: [2, 1],
+        });
+        let view = name_field_view(&status, &info, &textured);
+        let sizes = |actions: &[UiAction]| {
+            actions
+                .iter()
+                .filter(|a| matches!(a, UiAction::SetTextureSize(..)))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut entered = Vec::new();
+        for x in [160.0, 120.0] {
+            let ctx = egui::Context::default();
+            for y in (0..800).step_by(4) {
+                let mut typing = click(&ctx, &view, Pos2::new(1280.0 - x, y as f32));
+                for key in ["0", ".", "2", "5"] {
+                    let mut frame = screen();
+                    frame.events = vec![egui::Event::Text(key.into())];
+                    typing.extend(run(&ctx, frame, &view).0);
+                }
+                assert!(sizes(&typing).is_empty(), "while typing: {typing:?}");
+                let mut ending = screen();
+                ending.events = vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }];
+                let mut done = run(&ctx, ending, &view).0;
+                done.extend(run(&ctx, screen(), &view).0);
+                let done = sizes(&done);
+                assert!(done.len() <= 1, "{done:?}");
+                entered.extend(done);
+            }
+        }
+        for size in [[250, 500], [1000, 250]] {
+            let action = UiAction::SetTextureSize(MaterialId(31), size);
+            assert!(entered.contains(&action), "{action:?} in {entered:?}");
         }
     }
 
