@@ -1,15 +1,16 @@
 //! Method dispatch: maps JSON-RPC methods onto session commands, queries and rendering.
 
 use base64::Engine;
-use schemars::schema_for;
+use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use session::{
-    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Lighting, Outcome,
-    Projection, Query, QueryResult,
+    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Lighting, Outcome, Query,
+    QueryResult,
 };
 
+use crate::probe::{InferQuery, Inferred, PickHit, PickQuery, View, infer_query, pick_query};
 use crate::protocol::{RpcError, codes, failure, parse, success};
 
 /// Largest image side `render_view` accepts, in pixels.
@@ -34,6 +35,25 @@ pub trait Host {
         width: u32,
         height: u32,
     ) -> Option<Vec<u8>>;
+}
+
+/// Queries the API answers from the view around the document: what lies under a pixel or
+/// along a ray, and what the tools' inference would snap to there (see `probe`). Other
+/// queries are `session::Query`s.
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EditorQuery {
+    /// Every face a pixel's ray (or a given ray) meets, front to back, and the edges and
+    /// guides passing near it, each with its instance path from the root.
+    Pick(PickQuery),
+    /// What a tool's click at a pixel (or at a model point where the view shows it) would
+    /// snap to: kind, point and the entities involved.
+    Infer(InferQuery),
+}
+
+/// The `type` of a query or command, if it has one.
+fn type_of(params: &Value) -> Option<&str> {
+    params.get("type").and_then(Value::as_str)
 }
 
 /// Handles one request line and returns the reply line (None for notifications).
@@ -78,6 +98,10 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             })?;
             Ok(json!({"outcomes": outcomes, "revision": host.document().revision()}))
         }
+        "query" if matches!(type_of(&params), Some("pick" | "infer")) => {
+            let query: EditorQuery = params_as(params)?;
+            editor_query(host, query)
+        }
         "query" => {
             let query: Query = params_as(params)?;
             let result = host.document().query(&query).map_err(command_failed)?;
@@ -96,16 +120,22 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
     }
 }
 
-fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct View {
-        eye: [f64; 3],
-        target: [f64; 3],
-        fov_y_deg: Option<f64>,
-        up: Option<[f64; 3]>,
-        projection: Option<Projection>,
+fn editor_query(host: &mut dyn Host, query: EditorQuery) -> Result<Value, RpcError> {
+    let doc = host.document();
+    match query {
+        EditorQuery::Pick(q) => {
+            let hits = pick_query(doc, &q).map_err(command_failed)?;
+            Ok(json!({"type": "pick", "hits": hits}))
+        }
+        EditorQuery::Infer(q) => {
+            let mut result = json!(infer_query(doc, &q).map_err(command_failed)?);
+            result["type"] = json!("infer");
+            Ok(result)
+        }
     }
+}
+
+fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Params {
@@ -124,9 +154,7 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
     }
     let doc = host.document();
     let camera = match p.camera {
-        Some(v) => doc
-            .camera_for(v.eye, v.target, v.fov_y_deg, v.up, v.projection)
-            .map_err(command_failed)?,
+        Some(v) => v.camera(doc).map_err(command_failed)?,
         None => doc.camera.clone(),
     };
     let lighting = p.lighting.unwrap_or(doc.lighting);
@@ -170,7 +198,10 @@ pub fn describe() -> Value {
                 "result": "{outcomes: [Outcome], revision}",
                 "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed"
             },
-            "query": {"params": "Query", "result": "QueryResult"},
+            "query": {
+                "params": "Query or EditorQuery",
+                "result": "QueryResult, or for EditorQuery: pick {type, hits: [PickHit]}, infer {type, ...Inferred}"
+            },
             "render_view": {
                 "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\"}",
                 "result": "{width, height, png_base64}",
@@ -191,6 +222,9 @@ pub fn describe() -> Value {
         "schemas": {
             "Command": schema_for!(Command),
             "Query": schema_for!(Query),
+            "EditorQuery": schema_for!(EditorQuery),
+            "PickHit": schema_for!(PickHit),
+            "Inferred": schema_for!(Inferred),
             "QueryResult": schema_for!(QueryResult),
             "Outcome": schema_for!(Outcome),
             "CommandError": schema_for!(CommandError),

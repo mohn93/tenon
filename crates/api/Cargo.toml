@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 session = { path = "../session" }
+tools = { path = "../tools" }
+kernel = { path = "../kernel" }
 render = { path = "../render" }
 glam.workspace = true
 serde.workspace = true

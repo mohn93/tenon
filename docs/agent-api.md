@@ -58,6 +58,8 @@ Queries:
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
+| `{"type": "pick", "pixel": [320, 200], "width": 640, "height": 400}` | what lies under a pixel of a view, or along a `ray`: `hits`, front to back; see Picking and inference below |
+| `{"type": "infer", "pixel": [320, 200]}` | what a tool's click there would snap to: `kind`, `point` and the `entities` involved; see Picking and inference below |
 
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
 of silently doing nothing).
@@ -501,6 +503,65 @@ lists these controls) turns it on; Esc or F turns it off.
   are hidden; the tool's operation waits until fly mode ends. Cmd shortcuts (save, undo and
   the rest) still work. Switching to another window lets go of every held key and frees the
   pointer. There is no collision with the model.
+
+### Picking and inference
+
+`pick` and `infer` answer what an agent looking at a `render_view` image (or at the window)
+needs to act on a pixel. A pixel is `[x, y]` in pixels from the view's top left corner (x right, y
+down; the middle of the image's pixel (i, j) is `[i + 0.5, j + 0.5]`), in a view of `width` x
+`height` pixels (both or neither, 1 to 4096; default the window's 3D view, 1280 x 800 headless)
+seen by `camera` (`eye`, `target` and the optional `fov_y_deg`, `up` and `projection`, as
+`render_view` takes them; default the document camera, which never moves). So a pixel of a
+`render_view` image is picked by passing the same `width`, `height` and `camera`. A pixel outside
+the view is `invalid_input`. Points, rays, normals and distances are in the open context's
+coordinates, like commands; only the camera is in root coordinates.
+
+`{"type": "pick", "pixel": [x, y], ...}` or `{"type": "pick", "ray": {"origin": [...],
+"direction": [...]}}` returns every face the pixel's ray (or the given ray, any non-zero
+direction) meets in front of its origin, whatever lies in front of it, and every edge (soft
+edges are hidden and left out) and guide passing within `radius` of it, nearest first:
+
+```
+{"type": "pick", "hits": [
+  {"id": "f25", "path": [], "point": [1,1,1], "normal": [0,0,1], "side": "front", "distance": 9.0},
+  {"id": "f12", "path": ["i40"], "point": [1,1,0], "normal": [0,0,-1], "side": "back", "distance": 10.0}]}
+```
+
+- `path` lists the instances from the root down to the one whose group or component holds the
+  entity (`[]` for the root's own), whatever instance is open; `open_path` with it opens that
+  group, after which the id is the open context's.
+- `point` is where the ray meets a face, or the point of an edge or guide nearest the ray;
+  `distance` is how far along the ray it is, from its origin (the eye in perspective, the near
+  end of the view in parallel). Faces have `normal` (the direction their front faces) and `side`
+  (`front` or `back`: which side the ray meets). Vertices are not picked (`infer` finds them).
+- `radius` is in pixels on screen for a pixel (default 4, at most 1000) and in meters from the
+  ray for a ray (default 0: faces only). `camera`, `width` and `height` go with a pixel only.
+
+`{"type": "infer", "pixel": [x, y], ...}` or `{"type": "infer", "point": [x, y, z], ...}` (a
+model point, looked for where the view shows it; `invalid_input` when it is not in view) returns
+what a tool's click there would snap to, with the window's inference rules (points hidden behind
+faces are skipped; the order of preference is endpoint, midpoint, origin and guide point, then
+intersection, on an edge, on a guide line, along an axis from `from`, on a face, the ground):
+
+```
+{"type": "infer", "kind": "endpoint", "point": [2,2,1], "entities": [{"id": "v5", "path": []}]}
+```
+
+- `kind` is `endpoint`, `midpoint`, `origin`, `guide_point`, `intersection` (two edges or
+  guide lines crossing on screen; the point lies on the nearer), `on_edge`, `on_guide`, `axis`
+  (with `axis`: `x`, `y` or `z`, the axis through `from` the point is held to, which Shift would
+  lock), `on_face`, `ground` (z = 0 of the open context) or `nothing` (a point under the pixel at
+  the depth of the camera's target).
+- `entities` are what it snapped to, each with its `path` as in `pick`: the vertex of an
+  endpoint, the edge of a midpoint or of a point on an edge, the guide of a guide point or of a
+  point on a guide line, the two edges or guide lines of an intersection (the one the point lies
+  on first), the face of a point on a face; empty for the others.
+- `from` is the point a tool is drawing from, as after its first click: points along the red,
+  green and blue axes through it are offered. Without it there are no axis snaps. The editor's
+  own state (its tool, its last point, a Shift or arrow-key lock, the edge the cursor last
+  rested on for parallel snaps) is not used.
+- `radius` is how far from the pixel to snap, in pixels (default 8, the window's on a display of
+  scale 1; at most 1000).
 
 ### Files
 

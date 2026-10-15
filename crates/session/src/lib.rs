@@ -19,7 +19,7 @@ pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{
     BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode, TextureSource,
 };
-pub use document::{Document, MAX_COORDINATE, MAX_COPIES};
+pub use document::{Document, MAX_COORDINATE, MAX_COPIES, check_coordinates, unit_vector};
 pub use export::ExportReport;
 pub use import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
