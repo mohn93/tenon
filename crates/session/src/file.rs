@@ -243,8 +243,6 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     Ok((scene, stored.camera))
 }
 
-/// Reads all of `reader` (`what` names it in the error), failing once it holds more than
-/// `limit` bytes.
 /// The bytes of texture entry `file` of material `id`, within [`MAX_TEXTURE_BYTES`].
 fn texture_entry(
     zip: &mut zip::ZipArchive<std::fs::File>,
@@ -258,6 +256,8 @@ fn texture_entry(
         .map_err(|e| format!("material m{id}'s texture {file}: {e}"))
 }
 
+/// Reads all of `reader` (`what` names it in the error), failing once it holds more than
+/// `limit` bytes.
 fn read_limited(reader: impl Read, limit: u64, what: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     reader

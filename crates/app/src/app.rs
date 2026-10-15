@@ -828,9 +828,6 @@ impl State {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Lays out and draws the 3D view and the panels, then applies what was clicked in them
-    /// and asks for another frame to show the result. Returns true if a panel action ran (so
-    /// subscribers should hear about edits).
     /// Makes the device, the surface and everything drawn with them again after the device was
     /// lost. False, logged, when that fails (tried again later).
     fn recreate_gpu(&mut self) -> bool {
@@ -862,6 +859,9 @@ impl State {
         true
     }
 
+    /// Lays out and draws the 3D view and the panels, then applies what was clicked in them
+    /// and asks for another frame to show the result. Returns true if a panel action ran (so
+    /// subscribers should hear about edits).
     fn render(&mut self) -> bool {
         if self.device_lost.load(Ordering::SeqCst) && !self.recreate_gpu() {
             self.repaint_at = Some(Instant::now() + SKIPPED_RETRY);
