@@ -119,3 +119,65 @@ fn quitting_over_a_socket_answers_and_removes_the_socket() {
     assert!(!path.exists(), "the socket file is removed");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn an_agent_draws_a_box_with_the_tools_over_stdio() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_app"))
+        .args(["--headless", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start app");
+    let mut stdin = child.stdin.take().unwrap();
+    let requests = [
+        request(1, "subscribe", Value::Null),
+        request(
+            2,
+            "execute",
+            json!({"type": "set_tool", "tool": "rectangle"}),
+        ),
+        request(
+            3,
+            "tool_input",
+            json!({"events": [
+                {"type": "click", "point": [0, 0, 0]},
+                {"type": "move", "point": [1, 1, 0]},
+                {"type": "type", "text": "2,3"},
+                {"type": "key", "key": "p"},
+                {"type": "click", "point": [1, 1, 0]},
+                {"type": "move", "point": [1, 1, 0.5]},
+                {"type": "type", "text": "1"}
+            ]}),
+        ),
+        request(4, "query", json!({"type": "stats"})),
+        request(5, "quit", json!({"discard": true})),
+    ];
+    for r in &requests {
+        writeln!(stdin, "{r}").unwrap();
+    }
+    let status = exits(&mut child);
+    drop(stdin);
+    assert!(status.success(), "exit status {status}");
+    let messages: Vec<Value> = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .map(|l| serde_json::from_str(&l.unwrap()).unwrap())
+        .collect();
+    let replies: HashMap<u64, &Value> = messages
+        .iter()
+        .filter_map(|m| m["id"].as_u64().map(|id| (id, m)))
+        .collect();
+    let drawn = &replies[&3]["result"];
+    let ran: Vec<&str> = drawn["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["command"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(ran, ["add_rectangle", "push_pull"], "{drawn}");
+    assert_eq!(drawn["editor"]["tool"], "push_pull");
+    assert_eq!(replies[&4]["result"]["faces"], 6);
+    // Subscribers hear of both edits.
+    let changed = messages.iter().filter(|m| m["method"] == "changed").count();
+    assert_eq!(changed, 2, "{messages:?}");
+}

@@ -43,6 +43,10 @@ fn ask(e: &mut Editor, query: Value) -> Value {
     ok(e, "query", query)
 }
 
+fn tool(e: &mut Editor, name: &str) {
+    exec(e, json!({"type": "set_tool", "tool": name}));
+}
+
 /// The `type`s of the commands a result says were run.
 fn ran(r: &Value) -> Vec<String> {
     r["commands"]
@@ -85,6 +89,16 @@ fn square(e: &mut Editor) -> Value {
     created(&r, 'f')[0].clone()
 }
 
+fn select_all(e: &mut Editor) {
+    let all = ask(e, json!({"type": "entities"}));
+    let ids: Vec<Value> = ["edges", "faces", "instances"]
+        .iter()
+        .flat_map(|k| all[k].as_array().cloned().unwrap_or_default())
+        .map(|x| x["id"].clone())
+        .collect();
+    exec(e, json!({"type": "select", "ids": ids}));
+}
+
 fn count(e: &mut Editor, kind: &str) -> u64 {
     ask(e, json!({"type": "stats"}))[kind].as_u64().unwrap()
 }
@@ -116,6 +130,352 @@ fn the_line_tool_draws_by_clicks_and_a_typed_length() {
     assert!(near(&r["editor"]["points"][1], [3.0, 0.0, 0.0]), "{r}");
     let r = input(&mut e, json!([{"type": "key", "key": "escape"}]));
     assert_eq!(r["editor"]["phase"], "idle");
+}
+
+#[test]
+fn rectangle_and_circle_take_typed_sizes_and_sides() {
+    let mut e = editor();
+    tool(&mut e, "rectangle");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [1, 1, 0]},
+            {"type": "type", "text": "2,3"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_rectangle"]);
+    assert!(
+        near(&r["commands"][0]["command"]["opposite"], [2.0, 3.0, 0.0]),
+        "{r}"
+    );
+
+    tool(&mut e, "circle");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "type", "text": "8s"},
+            {"type": "click", "point": [6, 0, 0]},
+            {"type": "move", "point": [7, 0, 0]},
+            {"type": "type", "text": "1.5"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_circle"]);
+    let c = &r["commands"][0]["command"];
+    assert_eq!(
+        (c["radius"].clone(), c["segments"].clone()),
+        (json!(1.5), json!(8))
+    );
+    assert!(near(&c["center"], [6.0, 0.0, 0.0]));
+}
+
+#[test]
+fn the_arc_tool_takes_two_clicks_and_a_typed_bulge() {
+    let mut e = editor();
+    tool(&mut e, "arc");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [2, 0, 0]},
+            {"type": "move", "point": [1, 0.5, 0]}
+        ]),
+    );
+    assert_eq!(r["editor"]["points"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(r["editor"]["measurement_label"], "Bulge");
+    let r = input(&mut e, json!([{"type": "type", "text": "1"}]));
+    assert_eq!(ran(&r), ["add_arc"], "{r}");
+    let edges = created(&r["commands"][0]["outcome"], 'e');
+    assert_eq!(edges.len(), 12);
+    let curve = ask(&mut e, json!({"type": "curve", "id": edges[0]}));
+    assert!(
+        near(&curve["center"], [1.0, 0.0, 0.0]),
+        "a half circle: {curve}"
+    );
+    assert!((curve["angle"].as_f64().unwrap() - 180.0).abs() < 1e-9);
+}
+
+#[test]
+fn push_pull_extrudes_a_clicked_face_by_a_typed_distance() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [1, 1, 0]},
+            {"type": "move", "point": [1, 1, 0.5]},
+            {"type": "type", "text": "1.5"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["push_pull"], "{r}");
+    assert_eq!(
+        r["commands"][0]["command"]["distance"]
+            .as_f64()
+            .unwrap()
+            .abs(),
+        1.5
+    );
+    assert_eq!(count(&mut e, "faces"), 6);
+    let top = ask(
+        &mut e,
+        json!({"type": "pick", "ray": {"origin": [1, 1, 10], "direction": [0, 0, -1]}}),
+    );
+    assert_eq!(top["hits"][0]["point"], json!([1.0, 1.0, 1.5]), "{top}");
+}
+
+#[test]
+fn move_copies_after_a_ctrl_tap_and_arrays_replace_the_copy() {
+    let mut e = editor();
+    square(&mut e);
+    select_all(&mut e);
+    tool(&mut e, "move");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "key", "key": "ctrl"},
+            {"type": "move", "point": [1, 0, 0]},
+            {"type": "type", "text": "3"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["copy", "select"], "{r}");
+    assert_eq!(
+        r["commands"][0]["command"]["offset"],
+        json!([3.0, 0.0, 0.0])
+    );
+    assert_eq!(count(&mut e, "faces"), 2);
+    // "4x" makes four copies at that spacing in place of the one.
+    let r = input(&mut e, json!([{"type": "type", "text": "4x"}]));
+    assert_eq!(ran(&r), ["undo", "copy", "select"], "{r}");
+    assert_eq!(r["commands"][1]["command"]["count"], 4);
+    assert_eq!(count(&mut e, "faces"), 5);
+
+    // Ctrl again moves instead: from a corner to a point 5 m along Y.
+    select_all(&mut e);
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "key", "key": "ctrl"},
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [0, 5, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["move"], "{r}");
+    assert!(
+        near(&r["commands"][0]["command"]["offset"], [0.0, 5.0, 0.0]),
+        "{r}"
+    );
+}
+
+#[test]
+fn rotate_turns_the_selection_by_a_typed_angle_and_copies() {
+    let mut e = editor();
+    square(&mut e);
+    select_all(&mut e);
+    tool(&mut e, "rotate");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [5, 5, 0]},
+            {"type": "click", "point": [6, 5, 0]},
+            {"type": "type", "text": "90"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["rotate"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["center"], [5.0, 5.0, 0.0]), "{c}");
+    assert_eq!(c["angle"].as_f64().unwrap().abs(), 90.0);
+    // Ctrl copies; "3x" then makes a radial array of three.
+    select_all(&mut e);
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "key", "key": "ctrl"},
+            {"type": "click", "point": [5, 5, 0]},
+            {"type": "click", "point": [6, 5, 0]},
+            {"type": "type", "text": "45"},
+            {"type": "type", "text": "3x"}
+        ]),
+    );
+    assert_eq!(
+        ran(&r),
+        ["rotate", "select", "undo", "rotate", "select"],
+        "{r}"
+    );
+    assert_eq!(r["commands"][3]["command"]["copies"], 3);
+    assert_eq!(count(&mut e, "faces"), 4);
+}
+
+#[test]
+fn the_tape_measure_adds_guides_and_ctrl_only_measures() {
+    let mut e = editor();
+    exec(
+        &mut e,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [4, 0, 0]}),
+    );
+    tool(&mut e, "tape_measure");
+    // From the edge: a parallel guide line at the typed distance.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [1, 0, 0]},
+            {"type": "move", "point": [1, 1, 0]},
+            {"type": "type", "text": "1.25"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_guide_line"], "{r}");
+    assert!(
+        near(&r["commands"][0]["command"]["point"], [1.0, 1.25, 0.0]),
+        "{r}"
+    );
+    // Ctrl: measure only.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "key", "key": "ctrl"},
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [4, 0, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(r["editor"]["message"], "Distance: 4 m", "{r}");
+}
+
+#[test]
+fn erase_and_paint_act_on_what_is_clicked_and_cmd_samples() {
+    let mut e = editor();
+    let face = square(&mut e);
+    let m = exec(
+        &mut e,
+        json!({"type": "add_material", "name": "Brick", "color": [200, 80, 60]}),
+    )["changes"]["materials"][0]
+        .clone();
+    exec(&mut e, json!({"type": "set_paint_material", "material": m}));
+    tool(&mut e, "paint");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 0]}]));
+    assert_eq!(ran(&r), ["paint"], "{r}");
+    assert_eq!(r["commands"][0]["command"]["ids"], json!([face]));
+    // With Cmd held a click picks up the material clicked.
+    exec(
+        &mut e,
+        json!({"type": "set_paint_material", "material": null}),
+    );
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "modifiers", "cmd": true},
+            {"type": "click", "point": [1, 1, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new());
+    assert_eq!(r["editor"]["paint_material"], m, "{r}");
+    assert_eq!(r["editor"]["message"], "Painting with Brick");
+
+    tool(&mut e, "erase");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 0, 0]}]));
+    assert_eq!(ran(&r), ["erase"], "{r}");
+    assert_eq!(count(&mut e, "faces"), 0, "the edge took its face");
+}
+
+#[test]
+fn select_clicks_toggles_with_shift_boxes_and_double_click_opens() {
+    let mut e = editor();
+    let face = square(&mut e);
+    exec(
+        &mut e,
+        json!({"type": "add_edge", "start": [4, 0, 0], "end": [4, 2, 0]}),
+    );
+    tool(&mut e, "select");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 0]}]));
+    assert_eq!(ran(&r), ["select"]);
+    assert_eq!(
+        ask(&mut e, json!({"type": "selection"}))["ids"],
+        json!([face])
+    );
+    // Shift-click toggles the edge in.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "modifiers", "shift": true},
+            {"type": "click", "point": [4, 1, 0]}
+        ]),
+    );
+    assert_eq!(r["commands"][0]["command"]["mode"], "toggle", "{r}");
+    assert_eq!(
+        ask(&mut e, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // A box dragged right around everything selects it all.
+    let r = input(
+        &mut e,
+        json!([{"type": "drag", "pixels": [[1, 1], [400, 300], [799, 599]]}]),
+    );
+    assert_eq!(ran(&r), ["select"], "{r}");
+    assert_eq!(
+        ask(&mut e, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+
+    // Group the square; a double-click opens the group.
+    exec(&mut e, json!({"type": "select", "ids": [face]}));
+    exec(&mut e, json!({"type": "make_group", "ids": [face]}));
+    let r = input(
+        &mut e,
+        json!([{"type": "double_click", "point": [1, 1, 0]}]),
+    );
+    assert_eq!(ran(&r), ["select", "select", "open_instance"], "{r}");
+    assert_eq!(
+        ask(&mut e, json!({"type": "context"}))["path"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn shift_and_arrow_keys_lock_the_direction() {
+    let mut e = editor();
+    // Shift pressed over the red axis holds the cursor to it while it clicks off the axis.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [2, 0, 0]},
+            {"type": "modifiers", "shift": true},
+            {"type": "click", "point": [2, 1, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_edge"], "{r}");
+    let end = vec3(&r["commands"][0]["command"]["end"]);
+    assert!(
+        end.x > 1.0 && end.y == 0.0 && end.z == 0.0,
+        "on the red axis: {r}"
+    );
+    // The lock ends with the call, when Shift is let go.
+    assert_eq!(r["editor"]["lock"], Value::Null);
+
+    // The up arrow locks the blue axis and stays until the operation ends.
+    let r = input(&mut e, json!([{"type": "key", "key": "up"}]));
+    assert_eq!(r["editor"]["lock"], "Locked: blue axis", "{r}");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "move", "point": [3, 1, 0]},
+            {"type": "type", "text": "1"}
+        ]),
+    );
+    assert!(
+        near(&r["commands"][0]["command"]["end"], [end.x, 0.0, 1.0]),
+        "{r}"
+    );
 }
 
 #[test]
