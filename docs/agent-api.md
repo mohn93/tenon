@@ -31,7 +31,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below) and `soften` for `soften_edges` and `soften_by_angle` |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, and `positioned` for `position_texture` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -64,7 +64,7 @@ of silently doing nothing).
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
-`change_material`, `delete_material`, `paint`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `position_texture`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -237,12 +237,38 @@ runs along the face's horizontal direction (`u` = z x normal, normalized; along 
 face) and its height across it (`v` = normal x u, up on a wall), repeating every `width` by
 `height` meters with a copy's bottom left corner at the definition's origin. Faces in one plane
 continue each other's pattern, and a component carries its pattern with it when moved, turned or
-scaled. Both sides of a face use the same placement, so from behind the image reads mirrored.
+scaled. A face's texture position (below) moves, turns and scales its texture on top of this.
+The back side shows the image as seen from behind, not mirrored: its `u` runs the other way, so
+the image's left edge is on the left for a viewer behind the face.
 The material's `color` stays the color edges, the Materials list and formats without textures
 show.
 
 The `materials` query adds `"texture": {"width": 0.6, "height": 0.3, "pixel_width": 1024,
 "pixel_height": 512, "format": "png"}` (`format` `png` or `jpeg`) to a material with a texture.
+
+#### Texture positions
+
+| Command | Effect |
+|---|---|
+| `{"type": "position_texture", "ids": ["f8", "f9"], "offset": [0.2, 0], "rotation_deg": 45, "scale": [2, 2]}` | Sets the texture position of the faces in `ids`, as one undo step: `offset` [u, v] moves the texture that many meters along the face's `u` and `v` (within +/-1e6 m), `rotation_deg` turns it counter-clockwise seen from the face's front, about the moved origin (any angle; kept from 0 up to 360), and `scale` [u, v] multiplies the size one copy covers along the image's own width and height (each 0.001 to 1000). Fields left out stay as they are; `"reset": true` first clears the position (then applies any fields given). At least one field or `reset` is required. Ids other than faces are `invalid_input` (naming them), as is an empty list or a value out of range; unknown ids are `not_found`. |
+
+The outcome reports `"positioned": n`, the faces whose position changed (also listed in
+`changes.modified`); a command that changes nothing makes no undo step. A face's `entity` result
+(and its entry in `entities`) has `"texture_position": {"offset": [0.2, 0.0], "rotation_deg": 45.0,
+"scale": [2.0, 2.0]}`, absent when the texture lies as projected (a position back at offset 0,
+rotation 0 and scale 1 is the same as none). The position belongs to the face, whatever material
+its sides have, and applies to both sides.
+
+Pieces of a face split by a new edge keep its position, as do copies, faces moved into a group or
+component or out of one by explode, and the faces of copied definitions. A push/pull cap keeps
+the pushed face's position (a sheet that turns over keeps what each side shows); the new sides
+and other new faces have none. Moving or turning faces keeps the numbers, so a moved face's
+pattern stays where the projection puts it.
+
+In the window, with only faces selected, Entity Info shows the first selected face's texture
+position: Offset (two fields, meters), Rotation (degrees) and Scale (two fields), each applied to
+every selected face when a drag ends or a typed value is entered, and Rotate 90 (turns each
+selected face's texture a further quarter counter-clockwise, as one undo step) and Reset.
 
 #### Lights
 
@@ -461,10 +487,12 @@ lists these controls) turns it on; Esc or F turns it off.
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
-when below 1 and its `emission` only when above 0, so a model whose materials are all opaque
-and dark is saved exactly as before opacity existed and older builds still open it; version 7
+when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
+has one, so a model whose materials are all opaque
+and dark is saved exactly as before opacity existed and older builds still open it; version 8
+and older files open without texture positions; version 7
 and older files open without glow; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
@@ -489,8 +517,9 @@ reason (a missing file, not a sketchup-alt file, a missing or newer schema versi
 over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
 fewer than two faces, a face or instance painted with a material the file lacks, a material
-name that is blank, too long or used twice, a material opacity outside 0 to 1, or a texture
-whose image is missing, broken or too large, or whose size is out of range); the model is left as it was. `save` also fails
+name that is blank, too long or used twice, a material opacity outside 0 to 1, a texture
+whose image is missing, broken or too large, or whose size is out of range, or a face texture
+position out of range); the model is left as it was. `save` also fails
 when the model has given out ids past 2^53, which no file can hold. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
@@ -516,7 +545,7 @@ never overwrites a model; use `save`.
 
 Colors and textures come from each face's front side (its own material, else that of the nearest
 painted instance placing it); back-side materials are not exported. Texture coordinates follow
-the projection described under Textures. An OBJ export whose `.mtl` would be the export path
+the projection described under Textures with each face's texture position on top. An OBJ export whose `.mtl` would be the export path
 itself or the open model's file is refused with `invalid_input`. The image files are written
 first, then the `.mtl`, then the `.obj`, so a failure writing the `.obj` can leave new image
 files and a new `.mtl` beside the old (or no) `.obj`. A glTF material with a texture and an
