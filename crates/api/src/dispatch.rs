@@ -6,10 +6,11 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use session::{
-    BatchError, Camera, ChangeEvent, Command, CommandError, Document, Lighting, Outcome, Query,
-    QueryResult,
+    BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind, Lighting, Outcome,
+    Query, QueryResult,
 };
 
+use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
 use crate::probe::{InferQuery, Inferred, PickHit, PickQuery, View, infer_query, pick_query};
 use crate::protocol::{RpcError, codes, failure, parse, success};
 
@@ -35,13 +36,34 @@ pub trait Host {
         width: u32,
         height: u32,
     ) -> Option<Vec<u8>>;
+    /// The editor's state, or None for a program without an editor (a bare document).
+    fn editor(&self) -> Option<EditorState> {
+        None
+    }
+    /// Runs an editor command.
+    fn editor_command(&mut self, _command: EditorCommand) -> Result<(), CommandError> {
+        Err(no_editor())
+    }
+    /// Ends the program once the replies waiting are sent. Refuses with `unsaved_changes`
+    /// when the model changed since it was opened, saved or started, unless `discard`.
+    fn quit(&mut self, _discard: bool) -> Result<(), CommandError> {
+        Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            "this program cannot be quit through the API",
+        ))
+    }
+}
+
+/// The error for editor commands and queries in a program without an editor.
+fn no_editor() -> CommandError {
+    CommandError::new(ErrorKind::InvalidInput, "this program has no editor")
 }
 
 /// Queries the API answers from the view around the document: what lies under a pixel or
 /// along a ray, and what the tools' inference would snap to there (see `probe`). Other
 /// queries are `session::Query`s.
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorQuery {
     /// Every face a pixel's ray (or a given ray) meets, front to back, and the edges and
     /// guides passing near it, each with its instance path from the root.
@@ -49,6 +71,8 @@ pub enum EditorQuery {
     /// What a tool's click at a pixel (or at a model point where the view shows it) would
     /// snap to: kind, point and the entities involved.
     Infer(InferQuery),
+    /// The editor's state (see `EditorState`).
+    Editor,
 }
 
 /// The `type` of a query or command, if it has one.
@@ -73,6 +97,11 @@ pub fn handle(host: &mut dyn Host, line: &str) -> Option<String> {
 
 fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcError> {
     match method {
+        "execute" if type_of(&params).is_some_and(|t| EDITOR_COMMANDS.contains(&t)) => {
+            let command: EditorCommand = params_as(params)?;
+            host.editor_command(command).map_err(command_failed)?;
+            Ok(json!({"editor": host.editor(), "revision": host.document().revision()}))
+        }
         "execute" => {
             let command: Command = params_as(params)?;
             let outcome = host.execute(command).map_err(command_failed)?;
@@ -98,7 +127,7 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             })?;
             Ok(json!({"outcomes": outcomes, "revision": host.document().revision()}))
         }
-        "query" if matches!(type_of(&params), Some("pick" | "infer")) => {
+        "query" if matches!(type_of(&params), Some("pick" | "infer" | "editor")) => {
             let query: EditorQuery = params_as(params)?;
             editor_query(host, query)
         }
@@ -108,6 +137,21 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             Ok(json!(result))
         }
         "render_view" => render_view(host, params),
+        "quit" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                #[serde(default)]
+                discard: bool,
+            }
+            let p: Params = if params.is_null() {
+                Params { discard: false }
+            } else {
+                params_as(params)?
+            };
+            host.quit(p.discard).map_err(command_failed)?;
+            Ok(json!({}))
+        }
         "describe" => Ok(describe()),
         "subscribe" => Err(RpcError::new(
             codes::INVALID_REQUEST,
@@ -130,6 +174,15 @@ fn editor_query(host: &mut dyn Host, query: EditorQuery) -> Result<Value, RpcErr
         EditorQuery::Infer(q) => {
             let mut result = json!(infer_query(doc, &q).map_err(command_failed)?);
             result["type"] = json!("infer");
+            Ok(result)
+        }
+        EditorQuery::Editor => {
+            let state = host
+                .editor()
+                .ok_or_else(no_editor)
+                .map_err(command_failed)?;
+            let mut result = json!(state);
+            result["type"] = json!("editor");
             Ok(result)
         }
     }
@@ -190,7 +243,7 @@ pub fn describe() -> Value {
         "units": "meters; Z is up; angles in degrees",
         "methods": {
             "execute": {
-                "params": "Command",
+                "params": "Command or EditorCommand (EditorCommand result: {editor: EditorState, revision})",
                 "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, revision}: the Outcome plus revision"
             },
             "batch": {
@@ -200,7 +253,7 @@ pub fn describe() -> Value {
             },
             "query": {
                 "params": "Query or EditorQuery",
-                "result": "QueryResult, or for EditorQuery: pick {type, hits: [PickHit]}, infer {type, ...Inferred}"
+                "result": "QueryResult, or for EditorQuery: pick {type, hits: [PickHit]}, infer {type, ...Inferred}, editor {type, ...EditorState}"
             },
             "render_view": {
                 "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\"}",
@@ -208,7 +261,12 @@ pub fn describe() -> Value {
                 "notes": "does not move the document camera or change its lighting"
             },
             "subscribe": {"params": null, "result": "{revision}", "notes": "connection only"},
-            "describe": {"params": null, "result": "this document"}
+            "describe": {"params": null, "result": "this document"},
+            "quit": {
+                "params": "{discard?: bool}",
+                "result": "{}",
+                "notes": "ends the program after replying; fails with unsaved_changes unless discard"
+            }
         },
         "notifications": {
             "changed": "{revision, changes: ChangeSummary} after every model change, in order",
@@ -225,6 +283,8 @@ pub fn describe() -> Value {
             "EditorQuery": schema_for!(EditorQuery),
             "PickHit": schema_for!(PickHit),
             "Inferred": schema_for!(Inferred),
+            "EditorCommand": schema_for!(EditorCommand),
+            "EditorState": schema_for!(EditorState),
             "QueryResult": schema_for!(QueryResult),
             "Outcome": schema_for!(Outcome),
             "CommandError": schema_for!(CommandError),

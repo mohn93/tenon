@@ -22,7 +22,7 @@ pub use command::{
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES, check_coordinates, unit_vector};
 pub use export::ExportReport;
 pub use import::{
-    ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
+    ImportAs, ImportFormat, ImportReport, ImportUnits, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
 };
 pub use kernel::{CurveKind, ImageFormat, MaterialId, Side, TexturePlacement};

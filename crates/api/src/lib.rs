@@ -2,6 +2,7 @@
 //! Every request runs through `session` commands and queries, the same path the UI uses.
 
 mod dispatch;
+mod editor;
 mod headless;
 mod hub;
 mod probe;
@@ -9,6 +10,7 @@ mod protocol;
 mod transport;
 
 pub use dispatch::{EditorQuery, Host, describe, handle};
+pub use editor::{Dialog, EditorCommand, EditorState, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{Hub, Inbox};
 pub use probe::{InferQuery, Inferred, PickHit, PickQuery, Placed, RaySpec, Snap, View};

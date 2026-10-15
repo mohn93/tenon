@@ -9,6 +9,7 @@ use std::time::Instant;
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{EntityId, InstanceId, MaterialId};
 use render::grid::LineVertex;
+pub use session::ImportUnits;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Lighting, Outcome,
     Projection, SelectMode, StandardView, TextureSource,
@@ -139,48 +140,6 @@ pub const EXPORT_FORMATS: [(&str, &str); 4] = [
     ("glTF binary", "glb"),
     ("glTF", "gltf"),
 ];
-
-/// The length one unit of an imported OBJ or STL file stands for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ImportUnits {
-    #[default]
-    Meters,
-    Centimeters,
-    Millimeters,
-    Inches,
-    Feet,
-}
-
-impl ImportUnits {
-    pub const ALL: [ImportUnits; 5] = [
-        ImportUnits::Meters,
-        ImportUnits::Centimeters,
-        ImportUnits::Millimeters,
-        ImportUnits::Inches,
-        ImportUnits::Feet,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ImportUnits::Meters => "Meters",
-            ImportUnits::Centimeters => "Centimeters",
-            ImportUnits::Millimeters => "Millimeters",
-            ImportUnits::Inches => "Inches",
-            ImportUnits::Feet => "Feet",
-        }
-    }
-
-    /// Meters per file unit: the import command's `scale`.
-    pub fn meters(self) -> f64 {
-        match self {
-            ImportUnits::Meters => 1.0,
-            ImportUnits::Centimeters => 0.01,
-            ImportUnits::Millimeters => 0.001,
-            ImportUnits::Inches => 0.0254,
-            ImportUnits::Feet => 0.3048,
-        }
-    }
-}
 
 /// The colors the Materials panel offers; new materials get them in turn.
 pub const MATERIAL_PALETTE: [[u8; 3]; 12] = [

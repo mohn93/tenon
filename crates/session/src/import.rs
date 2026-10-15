@@ -93,6 +93,50 @@ pub enum ImportAs {
     Context,
 }
 
+/// The length one unit of an imported OBJ or STL file stands for (the files carry no units):
+/// the window's File > Import Units, which sets the `import` command's `scale`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportUnits {
+    #[default]
+    Meters,
+    Centimeters,
+    Millimeters,
+    Inches,
+    Feet,
+}
+
+impl ImportUnits {
+    pub const ALL: [ImportUnits; 5] = [
+        ImportUnits::Meters,
+        ImportUnits::Centimeters,
+        ImportUnits::Millimeters,
+        ImportUnits::Inches,
+        ImportUnits::Feet,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ImportUnits::Meters => "Meters",
+            ImportUnits::Centimeters => "Centimeters",
+            ImportUnits::Millimeters => "Millimeters",
+            ImportUnits::Inches => "Inches",
+            ImportUnits::Feet => "Feet",
+        }
+    }
+
+    /// Meters per file unit: the import command's `scale`.
+    pub fn meters(self) -> f64 {
+        match self {
+            ImportUnits::Meters => 1.0,
+            ImportUnits::Centimeters => 0.01,
+            ImportUnits::Millimeters => 0.001,
+            ImportUnits::Inches => 0.0254,
+            ImportUnits::Feet => 0.3048,
+        }
+    }
+}
+
 /// What an `import` command read and made.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ImportReport {
