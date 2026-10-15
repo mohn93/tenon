@@ -291,6 +291,8 @@ pub struct PlacementEdit {
     pub offset: Option<[f64; 2]>,
     /// Any finite angle; stored from 0 up to 360.
     pub rotation_deg: Option<f64>,
+    /// Turns each face's texture further by this many degrees, after `rotation_deg`.
+    pub rotate_by: Option<f64>,
     pub scale: Option<[f64; 2]>,
     pub reset: bool,
 }
@@ -308,6 +310,9 @@ impl PlacementEdit {
         }
         if let Some(r) = self.rotation_deg {
             t.rotation_deg = normal_angle(r);
+        }
+        if let Some(r) = self.rotate_by {
+            t.rotation_deg = normal_angle(t.rotation_deg + r);
         }
         if let Some(scale) = self.scale {
             t.scale = scale;

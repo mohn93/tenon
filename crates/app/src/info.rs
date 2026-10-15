@@ -309,9 +309,12 @@ mod tests {
         assert_eq!(entity_info(&d), ["2 edges"]);
 
         d.execute(Command::AddArc {
-            center: [10.0, 0.0, 0.0],
+            center: Some([10.0, 0.0, 0.0]),
             start: [11.0, 0.0, 0.0],
-            angle: 90.0,
+            angle: Some(90.0),
+            end: None,
+            through: None,
+            bulge: None,
             normal: None,
             segments: Some(3),
         })

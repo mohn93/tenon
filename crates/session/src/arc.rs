@@ -98,9 +98,111 @@ pub fn arc_from_bulge(start: DVec3, end: DVec3, bulge: f64, normal: DVec3) -> Op
     Some((center, angle.to_degrees()))
 }
 
+/// The center, angle (degrees, counter-clockwise around the normal) and unit normal of the
+/// arc from `start` to `end` through `through`: the normal makes start, through, end run
+/// counter-clockwise, so the angle is between 0 and 360. None when the three points are
+/// (nearly) on one line or `end` is on `start`.
+pub fn arc_through(start: DVec3, end: DVec3, through: DVec3) -> Option<(DVec3, f64, DVec3)> {
+    let chord = end - start;
+    if chord.length() < 10.0 * LENGTH_TOL {
+        return None;
+    }
+    let off_line = chord.cross(through - start).length() / chord.length();
+    if !off_line.is_finite() || off_line < LENGTH_TOL {
+        return None;
+    }
+    // The circumcenter, with `through` as the origin.
+    let (a, b) = (start - through, end - through);
+    let axb = a.cross(b);
+    let center = through
+        + (b * a.length_squared() - a * b.length_squared()).cross(axb)
+            / (2.0 * axb.length_squared());
+    let normal = unit_vector((through - start).cross(end - through))?;
+    let (u, v) = (start - center, end - center);
+    let mut angle = normal.dot(u.cross(v)).atan2(u.dot(v));
+    if angle <= 0.0 {
+        angle += std::f64::consts::TAU;
+    }
+    Some((center, angle.to_degrees(), normal))
+}
+
+/// What `add_arc` was given, as the center, start, angle and normal `arc_points` takes: a
+/// `center` and `angle`; an `end` and a point it passes `through`; or an `end` and a `bulge`
+/// (the height of the arc's middle above the chord, positive to the left of start to end
+/// looking down the normal, as the Arc tool pulls it).
+pub fn arc_spec(
+    center: Option<[f64; 3]>,
+    start: [f64; 3],
+    angle: Option<f64>,
+    end: Option<[f64; 3]>,
+    through: Option<[f64; 3]>,
+    bulge: Option<f64>,
+    normal: Option<[f64; 3]>,
+) -> Result<(DVec3, DVec3, f64, Option<DVec3>), CommandError> {
+    let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+    let start = DVec3::from(start);
+    match (center, angle, end, through, bulge) {
+        (Some(c), Some(a), None, None, None) => {
+            Ok((DVec3::from(c), start, a, normal.map(DVec3::from)))
+        }
+        (None, None, Some(e), Some(t), None) => {
+            if normal.is_some() {
+                return Err(invalid(
+                    "normal goes with center or bulge: three points set their own plane",
+                ));
+            }
+            let (c, a, n) =
+                arc_through(start, DVec3::from(e), DVec3::from(t)).ok_or_else(|| {
+                    invalid("start, through and end must be apart and not on one line")
+                })?;
+            Ok((c, start, a, Some(n)))
+        }
+        (None, None, Some(e), None, Some(b)) => {
+            let n = match normal {
+                None => DVec3::Z,
+                Some(n) => unit_vector(DVec3::from(n))
+                    .ok_or_else(|| invalid("normal must be a finite, non-zero vector"))?,
+            };
+            let end = DVec3::from(e);
+            if (end - start).dot(n).abs() > LENGTH_TOL {
+                return Err(invalid(
+                    "start and end must lie in one plane with the normal",
+                ));
+            }
+            let (c, a) = arc_from_bulge(start, end, b, n)
+                .ok_or_else(|| invalid("end must be away from start and bulge must not be 0"))?;
+            Ok((c, start, a, Some(n)))
+        }
+        _ => Err(invalid(
+            "give center and angle, or end with through or bulge",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn three_points_give_the_arc_through_them() {
+        let (s, t, e) = (DVec3::X, DVec3::Y, -DVec3::X);
+        let (center, angle, normal) = arc_through(s, e, t).unwrap();
+        assert!(center.distance(DVec3::ZERO) < 1e-12);
+        assert!((angle - 180.0).abs() < 1e-9 && normal.abs_diff_eq(DVec3::Z, 1e-12));
+        // Through the other side: the same half circle, clockwise seen from above.
+        let (_, angle, normal) = arc_through(s, e, -DVec3::Y).unwrap();
+        assert!((angle - 180.0).abs() < 1e-9 && normal.abs_diff_eq(-DVec3::Z, 1e-12));
+        // A long way round: three quarters of a circle in a vertical plane.
+        let (s, e) = (DVec3::new(0.0, 0.0, 1.0), DVec3::new(0.0, 1.0, 0.0));
+        let t = DVec3::new(0.0, -1.0, 0.0);
+        let (center, angle, normal) = arc_through(s, e, t).unwrap();
+        let points = arc_points(center, s, angle, Some(normal), 3).unwrap();
+        assert!((angle - 270.0).abs() < 1e-9, "{angle}");
+        assert!(points[3].distance(e) < 1e-9);
+        assert!(points.iter().all(|p| (p.length() - 1.0).abs() < 1e-9));
+        assert!(arc_through(s, s * 2.0, s * 3.0).is_none(), "on one line");
+        assert!(arc_through(s, s, t).is_none(), "end on start");
+    }
 
     #[test]
     fn a_bulge_as_high_as_half_the_chord_is_a_half_circle() {

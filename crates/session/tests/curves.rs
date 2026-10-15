@@ -274,6 +274,57 @@ fn an_arc_is_one_curve_from_its_start_around_its_center() {
 }
 
 #[test]
+fn an_arc_is_drawn_through_three_points_or_by_its_bulge() {
+    let mut d = doc();
+    // Start, end and a point between them on the far side: a half circle around (1, 0, 0).
+    let out = run(
+        &mut d,
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0], "through": [1, 1, 0],
+               "segments": 4}),
+    )
+    .unwrap();
+    let c = curve(&d, &created(&out, 'e')[0]);
+    assert!(near(&c["center"], [1.0, 0.0, 0.0]));
+    assert!((c["radius"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+    assert!((c["angle"].as_f64().unwrap() - 180.0).abs() < 1e-9);
+    let at = |v: &Value| ask(&d, json!({"type": "entity", "id": v})).unwrap()["position"].clone();
+    assert!(
+        near(&at(&c["vertices"][2]), [1.0, 1.0, 0.0]),
+        "passes through it"
+    );
+    run(&mut d, json!({"type": "undo"})).unwrap();
+
+    // The same arc by its bulge: 1 m to the left of start to end, looking down +Z.
+    run(
+        &mut d,
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0], "bulge": 1, "segments": 4}),
+    )
+    .unwrap();
+    let c = curve(&d, &edges(&d)[0]["id"]);
+    assert!(near(&c["center"], [1.0, 0.0, 0.0]));
+    let at = |v: &Value| ask(&d, json!({"type": "entity", "id": v})).unwrap()["position"].clone();
+    assert!(near(&at(&c["vertices"][2]), [1.0, 1.0, 0.0]));
+
+    for bad in [
+        // Mixed or missing forms.
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0]}),
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "end": [0, 1, 0]}),
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0], "through": [1, 1, 0], "bulge": 1}),
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0], "through": [1, 1, 0], "normal": [0, 0, 1]}),
+        // Three points on a line, or an end on the start.
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0], "through": [1, 0, 0]}),
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [0, 0, 0], "through": [1, 1, 0]}),
+        // A bulge of 0, or an end off the plane of the normal.
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 0], "bulge": 0}),
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2, 0, 1], "bulge": 1}),
+        json!({"type": "add_arc", "start": [0, 0, 0], "end": [2e6, 0, 0], "bulge": 1}),
+    ] {
+        let (kind, _) = run(&mut d, bad.clone()).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");
+    }
+}
+
+#[test]
 fn bad_arcs_are_refused() {
     let mut d = doc();
     for bad in [

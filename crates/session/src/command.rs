@@ -38,14 +38,26 @@ pub enum Command {
         #[serde(default)]
         segments: Option<u32>,
     },
-    /// Draw an arc around `center` from `start`, turning `angle` degrees counter-clockwise
-    /// around `normal` (default Z; negative angles turn clockwise), as `segments` straight
-    /// edges (default 12, 2 to 360) tagged as one curve, in one undo step. `start` must lie in
-    /// the plane through `center` with that normal.
+    /// Draw an arc, as `segments` straight edges (default 12, 2 to 360) tagged as one curve,
+    /// in one undo step, given in one of three ways: around `center` from `start`, turning
+    /// `angle` degrees counter-clockwise around `normal` (default Z; negative angles turn
+    /// clockwise; `start` must lie in the plane through `center` with that normal); from
+    /// `start` to `end` passing through `through` (the three points set the plane; no
+    /// `normal`); or from `start` to `end` with its middle `bulge` meters from the chord, to
+    /// the left of start to end looking down `normal` (default Z; negative: to the right), as
+    /// the Arc tool draws it.
     AddArc {
-        center: [f64; 3],
+        #[serde(default)]
+        center: Option<[f64; 3]>,
         start: [f64; 3],
-        angle: f64,
+        #[serde(default)]
+        angle: Option<f64>,
+        #[serde(default)]
+        end: Option<[f64; 3]>,
+        #[serde(default)]
+        through: Option<[f64; 3]>,
+        #[serde(default)]
+        bulge: Option<f64>,
         #[serde(default)]
         normal: Option<[f64; 3]>,
         #[serde(default)]
@@ -201,15 +213,18 @@ pub enum Command {
     },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
-    /// seen from the face's front, and `scale` [u, v] (multipliers, 0.001 to 1000). Fields
-    /// left out stay as they are; `reset: true` first clears the placement. The outcome's
-    /// `positioned` counts the faces that changed.
+    /// seen from the face's front (or `rotate_by`: that many degrees more than each face's
+    /// own), and `scale` [u, v] (multipliers, 0.001 to 1000). Fields left out stay as they
+    /// are; `reset: true` first clears the placement. The outcome's `positioned` counts the
+    /// faces that changed.
     PositionTexture {
         ids: Vec<EntityId>,
         #[serde(default)]
         offset: Option<[f64; 2]>,
         #[serde(default)]
         rotation_deg: Option<f64>,
+        #[serde(default)]
+        rotate_by: Option<f64>,
         #[serde(default)]
         scale: Option<[f64; 2]>,
         #[serde(default)]

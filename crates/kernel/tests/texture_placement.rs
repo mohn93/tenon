@@ -38,6 +38,7 @@ fn sets(t: TexturePlacement) -> PlacementEdit {
     PlacementEdit {
         offset: Some(t.offset),
         rotation_deg: Some(t.rotation_deg),
+        rotate_by: None,
         scale: Some(t.scale),
         reset: false,
     }
@@ -114,6 +115,17 @@ fn position_texture_sets_the_given_fields_and_undo_restores_them() {
         ..PlacementEdit::default()
     };
     let (turn, n) = m.position_texture(&[f], edit).unwrap();
+    // A relative turn adds to it.
+    let mut by = m.clone();
+    let quarter = PlacementEdit {
+        rotate_by: Some(100.0),
+        ..PlacementEdit::default()
+    };
+    by.position_texture(&[f], quarter).unwrap();
+    assert_eq!(
+        by.face(f).unwrap().texture,
+        Some(placement([0.0, 0.0], 10.0, [1.0, 1.0]))
+    );
     assert_eq!(n, 1);
     assert_eq!(
         m.face(f).unwrap().texture,

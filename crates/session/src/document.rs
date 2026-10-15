@@ -7,7 +7,7 @@ use kernel::{
     MaterialEdit, MeshId, Model, PlacementEdit, Scene, SceneChange, SoftenReport, VertexId,
 };
 
-use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
+use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
 use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
@@ -337,9 +337,22 @@ impl Document {
                 center,
                 start,
                 angle,
+                end,
+                through,
+                bulge,
                 normal,
                 segments,
-            } => self.add_arc_changes(*center, *start, *angle, *normal, *segments),
+            } => {
+                let points: Vec<[f64; 3]> = [Some(*start), *center, *end, *through]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                check_coordinates(&points).and_then(|()| {
+                    let (center, start, angle, normal) =
+                        arc_spec(*center, *start, *angle, *end, *through, *bulge, *normal)?;
+                    self.add_arc_changes(center, start, angle, normal, *segments)
+                })
+            }
             Command::AddGuideLine { point, direction } => {
                 self.add_guide_line_changes(*point, *direction)
             }
@@ -419,6 +432,7 @@ impl Document {
                 ids,
                 offset,
                 rotation_deg,
+                rotate_by,
                 scale,
                 reset,
             } => self.position_texture_changes(
@@ -426,6 +440,7 @@ impl Document {
                 PlacementEdit {
                     offset: *offset,
                     rotation_deg: *rotation_deg,
+                    rotate_by: *rotate_by,
                     scale: *scale,
                     reset: *reset,
                 },
@@ -621,18 +636,17 @@ impl Document {
 
     fn add_arc_changes(
         &mut self,
-        center: [f64; 3],
-        start: [f64; 3],
+        center: DVec3,
+        start: DVec3,
         angle: f64,
-        normal: Option<[f64; 3]>,
+        normal: Option<DVec3>,
         segments: Option<u32>,
     ) -> Result<SceneChange, CommandError> {
-        check_coordinates(&[center, start])?;
         let points = arc_points(
-            DVec3::from(center),
-            DVec3::from(start),
+            center,
+            start,
             angle,
-            normal.map(DVec3::from),
+            normal,
             segments.unwrap_or(DEFAULT_ARC_SEGMENTS),
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;

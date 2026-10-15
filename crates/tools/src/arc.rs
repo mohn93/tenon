@@ -88,9 +88,12 @@ impl ArcTool {
             return Err(too_shallow());
         }
         Ok(Command::AddArc {
-            center: center.to_array(),
+            center: Some(center.to_array()),
             start: start.to_array(),
-            angle,
+            angle: Some(angle),
+            end: None,
+            through: None,
+            bulge: None,
             normal: Some(normal.to_array()),
             segments: Some(self.segments),
         })
@@ -223,9 +226,9 @@ impl Tool for ArcTool {
         match (self.start, self.end, self.hover) {
             (Some(_), Some(_), _) => {
                 if let Some(Command::AddArc {
-                    center,
+                    center: Some(center),
                     start,
-                    angle,
+                    angle: Some(angle),
                     normal,
                     ..
                 }) = self.bulge().and_then(|b| self.command(b).ok())
@@ -297,11 +300,12 @@ mod tests {
     /// The arc's center, start, angle and segments.
     fn parts(c: &Command) -> ([f64; 3], [f64; 3], f64, u32) {
         let Command::AddArc {
-            center,
+            center: Some(center),
             start,
-            angle,
+            angle: Some(angle),
             normal,
             segments,
+            ..
         } = c
         else {
             panic!("{c:?}");

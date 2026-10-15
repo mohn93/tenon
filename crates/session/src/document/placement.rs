@@ -34,7 +34,13 @@ impl Document {
         if edit == PlacementEdit::default() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "give offset, rotation_deg, scale or reset",
+                "give offset, rotation_deg, rotate_by, scale or reset",
+            ));
+        }
+        if edit.rotation_deg.is_some() && edit.rotate_by.is_some() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "give rotation_deg or rotate_by, not both",
             ));
         }
         let faces = self.parts(ids)?.faces;

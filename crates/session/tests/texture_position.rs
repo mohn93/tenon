@@ -142,6 +142,49 @@ fn position_texture_sets_fields_reports_them_and_is_one_undo_step() {
 }
 
 #[test]
+fn rotate_by_turns_each_face_from_its_own_rotation() {
+    let mut d = doc();
+    let f = rectangle(&mut d);
+    let out = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [3, 0, 0], "opposite": [4, 1, 0]}),
+    )
+    .unwrap();
+    let g = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone();
+    run(
+        &mut d,
+        json!({"type": "position_texture", "ids": [f], "rotation_deg": 300}),
+    )
+    .unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "position_texture", "ids": [f, g], "rotate_by": 90}),
+    )
+    .unwrap();
+    assert_eq!(out["positioned"], 2);
+    let rotation = |d: &Document, id: &Value| {
+        ask(d, json!({"type": "entity", "id": id}))["texture_position"]["rotation_deg"].clone()
+    };
+    assert_eq!(
+        (rotation(&d, &f), rotation(&d, &g)),
+        (json!(30.0), json!(90.0))
+    );
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "position_texture", "ids": [f], "rotation_deg": 10, "rotate_by": 10}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert_eq!(message, "give rotation_deg or rotate_by, not both");
+}
+
+#[test]
 fn bad_position_texture_commands_are_refused_and_change_nothing() {
     let mut d = doc();
     let f = rectangle(&mut d);

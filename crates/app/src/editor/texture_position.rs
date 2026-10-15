@@ -1,7 +1,5 @@
 //! Entity Info's texture position fields for selected faces.
 
-use std::collections::BTreeMap;
-
 use kernel::{EntityId, TexturePlacement};
 use session::Command;
 
@@ -30,6 +28,7 @@ impl Editor {
                 ids: Vec::new(),
                 offset: Some(millimeters.map(|mm| f64::from(mm) / 1000.0)),
                 rotation_deg: None,
+                rotate_by: None,
                 scale: None,
                 reset: false,
             },
@@ -44,6 +43,7 @@ impl Editor {
                 ids: Vec::new(),
                 offset: None,
                 rotation_deg: Some(f64::from(tenths) / 10.0),
+                rotate_by: None,
                 scale: None,
                 reset: false,
             },
@@ -58,6 +58,7 @@ impl Editor {
                 ids: Vec::new(),
                 offset: None,
                 rotation_deg: None,
+                rotate_by: None,
                 scale: Some(thousandths.map(|t| f64::from(t) / 1000.0)),
                 reset: false,
             },
@@ -73,6 +74,7 @@ impl Editor {
                 ids: Vec::new(),
                 offset: None,
                 rotation_deg: None,
+                rotate_by: None,
                 scale: None,
                 reset: true,
             },
@@ -80,38 +82,20 @@ impl Editor {
     }
 
     /// Turns the texture of each selected face a further quarter counter-clockwise, as one
-    /// undo step (faces turned alike share a command in one atomic batch).
+    /// undo step.
     pub fn rotate_texture_90(&mut self) -> bool {
-        let m = self.doc.model();
-        let mut by_rotation: BTreeMap<u64, (f64, Vec<EntityId>)> = BTreeMap::new();
-        for id in self.doc.selection() {
-            let EntityId::Face(f) = id else { continue };
-            let Some(face) = m.face(*f) else { continue };
-            let r = face.texture.unwrap_or_default().rotation_deg + 90.0;
-            by_rotation
-                .entry(r.to_bits())
-                .or_insert_with(|| (r, Vec::new()))
-                .1
-                .push(*id);
-        }
-        if by_rotation.is_empty() {
-            return false;
-        }
-        let commands = by_rotation
-            .into_values()
-            .map(|(r, ids)| Command::PositionTexture {
-                ids,
+        let faces = self.doc.selection().iter().copied().collect();
+        self.position_faces(
+            faces,
+            Command::PositionTexture {
+                ids: Vec::new(),
                 offset: None,
-                rotation_deg: Some(r),
+                rotation_deg: None,
+                rotate_by: Some(90.0),
                 scale: None,
                 reset: false,
-            })
-            .collect();
-        self.message = None;
-        if let Err(e) = self.execute_batch(commands, true) {
-            self.message = Some(e.error.message);
-        }
-        true
+            },
+        )
     }
 
     /// Runs a `position_texture` command on the faces of `ids` (its `ids` filled in). False
