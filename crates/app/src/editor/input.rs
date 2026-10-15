@@ -88,11 +88,18 @@ impl Editor {
             }
             Input::DoubleClick(at) => {
                 self.move_to(at, view)?;
+                let mut reached = false;
                 for _ in 0..2 {
                     self.button(Button::Left, true);
+                    // The return value of `button` is a redraw flag; the press reached the
+                    // tool if the editor now waits for its release.
+                    reached = self.tool_pressed;
                     self.button(Button::Left, false);
                 }
-                self.double_click();
+                // As in the window, only clicks that reached the tool can double-click.
+                if reached {
+                    self.double_click();
+                }
             }
             Input::Drag(path, button) => {
                 let button = button_of(button);

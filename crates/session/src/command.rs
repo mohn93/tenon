@@ -335,8 +335,11 @@ pub enum Command {
     /// Move the eye toward the target to `1 / factor` of its distance (factor above 1 zooms
     /// in, below 1 out; never nearer than 0.01 m). In a parallel view the view height shrinks
     /// the same way. With `about` (a root point), zoom toward it as the scroll wheel zooms
-    /// toward the point under the cursor: it stays where it is on screen, the eye moves to
-    /// `1 / factor` of its distance from it and, in perspective, the target moves to its depth.
+    /// toward the point under the cursor: it stays where it is on screen and, in perspective,
+    /// the target moves to its depth. The eye comes to `1 / factor` of its distance from the
+    /// point only in perspective with the point ahead of the eye and above the 0.01 m floor; in
+    /// a parallel view the view height shrinks by the factor instead, and at the floor or with
+    /// the point behind the eye the eye moves on past it, as the wheel does.
     Zoom {
         factor: f64,
         #[serde(default)]

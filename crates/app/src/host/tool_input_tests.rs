@@ -441,6 +441,28 @@ fn select_clicks_toggles_with_shift_boxes_and_double_click_opens() {
 }
 
 #[test]
+fn a_double_click_under_alt_is_a_view_action_and_opens_nothing() {
+    let mut e = editor();
+    let face = square(&mut e);
+    exec(&mut e, json!({"type": "make_group", "ids": [face]}));
+    tool(&mut e, "select");
+    input(
+        &mut e,
+        json!([
+            {"type": "modifiers", "alt": true},
+            {"type": "double_click", "point": [1, 1, 0]}
+        ]),
+    );
+    assert_eq!(
+        ask(&mut e, json!({"type": "context"}))["path"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
 fn shift_and_arrow_keys_lock_the_direction() {
     let mut e = editor();
     // Shift pressed over the red axis holds the cursor to it while it clicks off the axis.
