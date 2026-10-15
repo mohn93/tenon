@@ -12,7 +12,7 @@ use super::Document;
 use super::import::read_limited;
 use crate::command::{CommandError, ErrorKind, TextureSource};
 use crate::query::{MaterialInfo, TextureInfo};
-use crate::texture::{MAX_TEXTURE_BYTES, average_color, decode};
+use crate::texture::{MAX_TEXTURE_BYTES, average_color, check_total_pixels, decode, dimensions};
 
 /// The name `add_material` gives when none is passed (made unique with a number).
 const DEFAULT_MATERIAL_NAME: &str = "Material";
@@ -33,7 +33,8 @@ impl Document {
                 "a new material's texture needs a path",
             ));
         }
-        let texture = texture.map(|t| texture_of(t, None)).transpose()?;
+        let others = self.texture_pixels_besides(None);
+        let texture = texture.map(|t| texture_of(t, None, others)).transpose()?;
         let Some(color) = color.or_else(|| texture.as_ref().map(|t| average_color(&t.image)))
         else {
             return Err(CommandError::new(
@@ -73,7 +74,11 @@ impl Document {
         let texture = match texture {
             None => None,
             Some(None) => Some(None),
-            Some(Some(source)) => Some(Some(texture_of(source, material.texture.as_ref())?)),
+            Some(Some(source)) => Some(Some(texture_of(
+                source,
+                material.texture.as_ref(),
+                self.texture_pixels_besides(Some(id)),
+            )?)),
         };
         if let (Some(Some(t)), None) = (&texture, edit.color)
             && read
@@ -128,6 +133,19 @@ impl Document {
             .map_err(|e| material_error(e, material))
     }
 
+    /// The pixels the texture images of materials other than `except` hold, each image counted
+    /// once however many materials share it.
+    fn texture_pixels_besides(&self, except: Option<MaterialId>) -> u64 {
+        let mut seen = std::collections::HashSet::new();
+        self.scene
+            .materials()
+            .filter(|(id, _)| Some(*id) != except)
+            .filter_map(|(_, m)| m.texture.as_ref())
+            .filter(|t| seen.insert(Arc::as_ptr(&t.image)))
+            .map(|t| u64::from(t.image.width) * u64::from(t.image.height))
+            .sum()
+    }
+
     /// Every material with how many faces and instances use it.
     pub(super) fn material_infos(&self) -> Vec<MaterialInfo> {
         self.scene
@@ -163,13 +181,20 @@ impl Document {
 
 /// The texture `source` asks for: the image at its path, or else `current`'s. A new image
 /// without a width is as wide as `current` (or 1 m), and without a height keeps its
-/// proportions; a kept image keeps any size not given. A file that cannot be read or decoded is
-/// a `file` error naming it.
-fn texture_of(source: &TextureSource, current: Option<&Texture>) -> Result<Texture, CommandError> {
+/// proportions; a kept image keeps any size not given. A file that cannot be read or decoded,
+/// or whose image would take the textures' pixels (`others` besides it) over the total budget,
+/// is a `file` error naming it.
+fn texture_of(
+    source: &TextureSource,
+    current: Option<&Texture>,
+    others: u64,
+) -> Result<Texture, CommandError> {
     let image = match &source.path {
         Some(path) => {
             let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
             let bytes = read_limited(Path::new(path), MAX_TEXTURE_BYTES).map_err(file_error)?;
+            let (_, width, height) = dimensions(&bytes).map_err(file_error)?;
+            check_total_pixels(others, u64::from(width) * u64::from(height)).map_err(file_error)?;
             Arc::new(decode(bytes).map_err(file_error)?)
         }
         None => match current {

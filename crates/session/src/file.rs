@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::camera::{Camera, Lighting, Projection};
 use crate::document::MAX_COORDINATE;
-use crate::texture::{MAX_TEXTURE_BYTES, decode};
+use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
@@ -194,6 +194,19 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     {
         return Err(format!("more than {MAX_TEXTURES} materials have a texture"));
     }
+    // Sum the images' sizes from their headers before decoding any, against the total budget.
+    let mut sizes: HashMap<String, u64> = HashMap::new();
+    for m in &stored.model.materials {
+        let Some(t) = &m.texture else { continue };
+        if t.file == ENTRY || sizes.contains_key(&t.file) {
+            continue;
+        }
+        let bytes = texture_entry(&mut zip, m.id, &t.file)?;
+        let (_, width, height) = dimensions(&bytes)
+            .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
+        sizes.insert(t.file.clone(), u64::from(width) * u64::from(height));
+    }
+    check_total_pixels(0, sizes.values().sum())?;
     // A shared entry is decoded once.
     let mut decoded: HashMap<String, Arc<TextureImage>> = HashMap::new();
     for m in &mut stored.model.materials {
@@ -204,11 +217,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
         let image = match decoded.get(&t.file) {
             Some(image) => image.clone(),
             None => {
-                let entry = zip
-                    .by_name(&t.file)
-                    .map_err(|_| format!("material m{}'s texture {} is missing", m.id, t.file))?;
-                let bytes = read_limited(entry, MAX_TEXTURE_BYTES, &format!("texture {}", t.file))
-                    .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?;
+                let bytes = texture_entry(&mut zip, m.id, &t.file)?;
                 let image = Arc::new(
                     decode(bytes)
                         .map_err(|e| format!("material m{}'s texture {}: {e}", m.id, t.file))?,
@@ -236,6 +245,19 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
 
 /// Reads all of `reader` (`what` names it in the error), failing once it holds more than
 /// `limit` bytes.
+/// The bytes of texture entry `file` of material `id`, within [`MAX_TEXTURE_BYTES`].
+fn texture_entry(
+    zip: &mut zip::ZipArchive<std::fs::File>,
+    id: u64,
+    file: &str,
+) -> Result<Vec<u8>, String> {
+    let entry = zip
+        .by_name(file)
+        .map_err(|_| format!("material m{id}'s texture {file} is missing"))?;
+    read_limited(entry, MAX_TEXTURE_BYTES, &format!("texture {file}"))
+        .map_err(|e| format!("material m{id}'s texture {file}: {e}"))
+}
+
 fn read_limited(reader: impl Read, limit: u64, what: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     reader

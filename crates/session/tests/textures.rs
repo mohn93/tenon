@@ -384,3 +384,90 @@ fn a_file_with_too_many_textured_materials_does_not_open() {
     assert_eq!(kind, ErrorKind::File);
     assert!(message.contains("more than 256 materials"), "{message}");
 }
+
+/// A PNG for an image of `width` x `height` pixels with no pixel data: enough to read its size,
+/// not to decode it.
+fn png_header(width: u32, height: u32) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for b in bytes {
+            crc ^= u32::from(*b);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    let mut chunk = b"IHDR".to_vec();
+    chunk.extend_from_slice(&width.to_be_bytes());
+    chunk.extend_from_slice(&height.to_be_bytes());
+    // 8-bit RGBA, default compression, filter and no interlace.
+    chunk.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(&chunk);
+    png.extend_from_slice(&crc32(&chunk).to_be_bytes());
+    // An empty data chunk and the end, so the header reads as complete.
+    for name in [b"IDAT", b"IEND"] {
+        png.extend_from_slice(&0u32.to_be_bytes());
+        png.extend_from_slice(name);
+        png.extend_from_slice(&crc32(name).to_be_bytes());
+    }
+    png
+}
+
+#[test]
+fn a_file_whose_textures_hold_too_many_pixels_does_not_open() {
+    // Seventeen 4096 x 4096 images: each within the limits, together over the 2^28-pixel
+    // budget. They are refused from their headers, before any is decoded.
+    let png = red_blue_png("budget.png");
+    let mut d = doc();
+    add_textured(&mut d, &png, 1.0);
+    let path = scratch("budget-good.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let mut document: Value =
+        serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap();
+    let first = document["model"]["materials"][0].clone();
+    let materials = (1..=17)
+        .map(|k| {
+            let mut m = first.clone();
+            m["id"] = json!(k);
+            m["name"] = json!(format!("T{k}"));
+            m["texture"]["file"] = json!(format!("textures/{k}.png"));
+            m
+        })
+        .collect::<Vec<_>>();
+    document["model"]["materials"] = json!(materials);
+    let out = scratch("budget.skr");
+    let mut w = zip::ZipWriter::new(std::fs::File::create(&out).unwrap());
+    w.start_file("document.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    w.write_all(&serde_json::to_vec(&document).unwrap())
+        .unwrap();
+    for k in 1..=17 {
+        w.start_file(
+            format!("textures/{k}.png"),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        w.write_all(&png_header(4096, 4096)).unwrap();
+    }
+    w.finish().unwrap();
+    let mut e = doc();
+    let (kind, message) = run(
+        &mut e,
+        json!({"type": "open", "path": out.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("too many texture pixels"), "{message}");
+}

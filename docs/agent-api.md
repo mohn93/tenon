@@ -222,13 +222,16 @@ like any other.
 
 A texture is a PNG or JPEG file of at most 16 MiB and 4096 pixels on each side, read when the
 command runs; the model keeps its own copy (the file is saved inside `.skr`), so the file may
-change or go away later. A model holds at most 256 textures. `texture` is `{"path", "width",
+change or go away later. A model holds at most 256 textures, and their images together at most
+2^28 pixels (268435456, 1 GiB decoded; an image shared by materials counts once). `texture` is `{"path", "width",
 "height"}`: `width` and `height` are the meters one copy of the image covers on the model, each
 from 0.001 to 1000 (`invalid_input` otherwise). A new image without `width` is 1 m wide (or as
 wide as the texture it replaces), and without `height` keeps the image's proportions (limited to the same 0.001 to 1000 range).
 A file
-that cannot be read, is not a PNG or JPEG, or is too large gives the error kind `file`, naming
-the path; nothing changes.
+that cannot be read, is not a PNG or JPEG, is too large, or would take the textures over the
+total pixel limit gives the error kind `file`, naming the path; nothing changes. Opening a `.skr`
+whose textures hold more than that total is a `file` error too, checked from the images' headers
+before any is decoded.
 
 A face shows its side's material's texture in place of its color, shaded like any face (the
 material's opacity still applies; the image's own transparency is ignored). The image lies flat
