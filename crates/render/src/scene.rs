@@ -16,12 +16,12 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene,
-    back_texture_position,
+    VertexId, back_texture_position,
 };
 
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
-use crate::lights::{Glow, Light};
+use crate::lights::{Glow, Light, connected};
 use crate::texture::layers;
 
 /// A face corner with its selection flag, as `scene_geometry` returns it.
@@ -631,8 +631,9 @@ struct Walk<'a> {
     parts: &'a HashMap<MeshId, MeshParts>,
     /// Whether any material glows; when none does, lights are not looked for.
     glowing: bool,
-    /// What each mesh's own faces glow with, by the material it inherits, once worked out.
-    glows: HashMap<(MeshId, Option<MaterialId>), Glow>,
+    /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
+    /// glow for an instance's mesh, one per connected group of glowing faces for the root's.
+    glows: HashMap<(MeshId, Option<MaterialId>), Vec<Glow>>,
     /// Instances from the root down to the mesh being walked.
     path: Vec<InstanceId>,
     base: SceneBase,
@@ -659,7 +660,9 @@ impl Walk<'_> {
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
         // The mesh's glow, when it has to be worked out (in its own coordinates).
         let glow_key = (id, inherited);
-        let mut glow = (self.glowing && !self.glows.contains_key(&glow_key)).then(Glow::default);
+        // Each glowing face's glow, with the face.
+        let mut glow: Option<Vec<(Glow, FaceId)>> =
+            (self.glowing && !self.glows.contains_key(&glow_key)).then(Vec::new);
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
@@ -683,9 +686,10 @@ impl Walk<'_> {
             let (emission, glow_color) = face_glow(&front, &back);
             // A lamp's glowing shade does not hide its own light.
             let casts = emission <= 0.0;
+            let mut face_glow = Glow::default();
             for ((&[a, b, c], &[na, nb, nc]), &uvs) in tris.iter().zip(normals).zip(positions) {
-                if let Some(g) = &mut glow {
-                    g.add_triangle([a, b, c], emission, glow_color);
+                if glow.is_some() {
+                    face_glow.add_triangle([a, b, c], emission, glow_color);
                 }
                 let [ua, ub, uc] = both_uv(&front, &back, uvs);
                 let tri = if mirrored {
@@ -698,6 +702,11 @@ impl Walk<'_> {
                     let placed = &base.faces[base.faces.len() - 3..];
                     base.casters.extend(placed.iter().map(|v| v.pos));
                 }
+            }
+            if let Some(g) = &mut glow
+                && face_glow.glows()
+            {
+                g.push((face_glow, face.id));
             }
             if open {
                 base.spans.faces.push((face.id, start..base.faces.len()));
@@ -715,11 +724,33 @@ impl Walk<'_> {
                 hi: hi.to_array(),
             });
         }
-        if let Some(g) = glow {
-            self.glows.insert(glow_key, g);
+        if let Some(faces) = glow {
+            let glows = if id == MeshId::Root {
+                let faces: Vec<(Glow, Vec<VertexId>)> = faces
+                    .into_iter()
+                    .map(|(g, f)| {
+                        let vertices = model.face(f).map_or_else(Vec::new, |f| {
+                            f.outer
+                                .iter()
+                                .chain(f.holes.iter().flatten())
+                                .copied()
+                                .collect()
+                        });
+                        (g, vertices)
+                    })
+                    .collect();
+                connected(&faces)
+            } else {
+                let mut all = Glow::default();
+                for (g, _) in &faces {
+                    all.add(g);
+                }
+                vec![all]
+            };
+            self.glows.insert(glow_key, glows);
         }
-        if let Some(light) = self.glows.get(&glow_key).and_then(|g| g.placed(t)) {
-            base.lights.push(light);
+        if let Some(glows) = self.glows.get(&glow_key) {
+            base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
         for (eid, ends) in &parts.edges {
@@ -1057,6 +1088,58 @@ mod tests {
         );
         // The open context does not change the lights.
         assert_eq!(scene_base(&s, &[first]).lights, base.lights);
+    }
+
+    #[test]
+    fn loose_glowing_faces_give_a_light_per_connected_group_and_instances_one_each() {
+        let square_at = |m: &mut Model, x: f64, y: f64| {
+            let p = |dx: f64, dy: f64| DVec3::new(x + dx, y + dy, 0.0);
+            m.add_polygon(&[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)])
+                .unwrap();
+        };
+        // Loose: a and b share an edge, c touches b at a corner, d stands apart; e is plain and
+        // touches d, which does not join it to anything.
+        let mut m = Model::new();
+        for (x, y) in [(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (6.0, 0.0)] {
+            square_at(&mut m, x, y);
+        }
+        let glowing: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
+        square_at(&mut m, 7.0, 0.0);
+        let mut s = Scene::from_root(m);
+        let lamp = lamp(&mut s, 1.0);
+        s.paint(MeshId::Root, &glowing, &[], kernel::Side::Front, Some(lamp))
+            .unwrap();
+        let base = scene_base(&s, &[]);
+        let centers: Vec<DVec3> = base.lights.iter().map(|l| l.position).collect();
+        assert_eq!(centers.len(), 2, "{centers:?}");
+        // a, b and c weigh alike: centers (0.5, 0.5), (1.5, 0.5) and (2.5, 1.5).
+        let joined = DVec3::new(4.5 / 3.0, 2.5 / 3.0, 0.0);
+        let apart = DVec3::new(6.5, 0.5, 0.0);
+        assert!(
+            centers.iter().any(|c| c.distance(joined) < 1e-9),
+            "{centers:?}"
+        );
+        assert!(
+            centers.iter().any(|c| c.distance(apart) < 1e-9),
+            "{centers:?}"
+        );
+        assert!((base.lights.iter().map(|l| l.strength).sum::<f64>() - 4.0).abs() < 1e-9);
+
+        // The same four squares made a group: one light at their center.
+        let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+        s.make_group(
+            MeshId::Root,
+            &edges,
+            &glowing,
+            &[],
+            DefinitionKind::Group,
+            "Lamps",
+        )
+        .unwrap();
+        let base = scene_base(&s, &[]);
+        assert_eq!(base.lights.len(), 1);
+        let center = DVec3::new((4.5 + 6.5) / 4.0, (2.5 + 0.5) / 4.0, 0.0);
+        assert!(base.lights[0].position.distance(center) < 1e-9);
     }
 
     #[test]

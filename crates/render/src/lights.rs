@@ -1,12 +1,18 @@
 //! Point lights from glowing faces.
 //!
-//! Each placement of a mesh whose own faces glow (the root once, every instance wherever it is
-//! placed, at any depth) is one light: at the area-weighted center of those faces, colored like
-//! them, as strong as their emission times their area. Faces of nested instances belong to the
-//! instances' own lights, so a lamp deep inside a house still gives its own. What a mesh gives
-//! is worked out once per mesh and inherited material (see `Glow`), however often it is placed.
+//! Each placement of an instance whose own faces glow (wherever it is placed, at any depth) is
+//! one light: at the area-weighted center of those faces, colored like them, as strong as their
+//! emission times their area. The loose geometry's glowing faces (the root's) give one light per
+//! connected group of them (faces sharing a vertex or an edge), so lamps drawn loose in two
+//! rooms light each room rather than one light between them. Faces of nested instances belong
+//! to the instances' own lights, so a lamp deep inside a house still gives its own. What a mesh
+//! gives is worked out once per mesh and inherited material (see `Glow`), however often it is
+//! placed.
+
+use std::collections::HashMap;
 
 use glam::{DAffine3, DVec3};
+use kernel::VertexId;
 
 /// The most lights the renderer uses at once: the strongest at the camera (see `strongest`).
 pub const MAX_LIGHTS: usize = 128;
@@ -57,6 +63,19 @@ impl Glow {
         self.strength += strength;
     }
 
+    /// Whether anything glows.
+    pub(crate) fn glows(&self) -> bool {
+        self.strength > 0.0
+    }
+
+    /// Adds another glow's faces to this one.
+    pub(crate) fn add(&mut self, other: &Glow) {
+        self.weighted_center += other.weighted_center;
+        self.area += other.area;
+        self.weighted_color += other.weighted_color;
+        self.strength += other.strength;
+    }
+
     /// The light this glow gives placed by `t` (None when nothing glows). The strength grows
     /// with the area a scaling placement gives the faces.
     pub(crate) fn placed(&self, t: DAffine3) -> Option<Light> {
@@ -70,6 +89,40 @@ impl Glow {
             strength: self.strength * scale,
         })
     }
+}
+
+/// Glowing faces' glows, each with the vertices of its face, joined into one glow per connected
+/// group: faces sharing a vertex (so also those sharing an edge) are one group. In the order of
+/// each group's first face.
+pub(crate) fn connected(faces: &[(Glow, Vec<VertexId>)]) -> Vec<Glow> {
+    fn root(parent: &mut [usize], mut k: usize) -> usize {
+        while parent[k] != k {
+            parent[k] = parent[parent[k]];
+            k = parent[k];
+        }
+        k
+    }
+    let mut parent: Vec<usize> = (0..faces.len()).collect();
+    let mut first: HashMap<VertexId, usize> = HashMap::new();
+    for (k, (_, vertices)) in faces.iter().enumerate() {
+        for v in vertices {
+            let other = *first.entry(*v).or_insert(k);
+            let (a, b) = (root(&mut parent, k), root(&mut parent, other));
+            // The earlier face roots the group, so groups keep their first face's order.
+            parent[a.max(b)] = a.min(b);
+        }
+    }
+    let mut groups: Vec<Glow> = Vec::new();
+    let mut slot: HashMap<usize, usize> = HashMap::new();
+    for (k, (glow, _)) in faces.iter().enumerate() {
+        let r = root(&mut parent, k);
+        let at = *slot.entry(r).or_insert_with(|| {
+            groups.push(Glow::default());
+            groups.len() - 1
+        });
+        groups[at].add(glow);
+    }
+    groups
 }
 
 /// At most `n` of `lights`, the strongest as seen from `eye`: by strength over (1 + d²), d being

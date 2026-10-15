@@ -284,11 +284,13 @@ The view is lit by `day` (the default) or by `night`, a view setting `set_lighti
 the `camera` query reports as `lighting`.
 
 A glowing face side is drawn unshaded, in its material's color (or texture). Each placement of
-a mesh whose own faces glow lights its surroundings as one point light: the root's loose faces
-once, and every group or component wherever it is placed, at any depth (a lamp component inside
-a room inside a house gives its own light in each placed house; the groups around it give none
-of their own). A face glows with its stronger side's material (its own, or the nearest painted
-instance's, as for color). The light sits at the area-weighted center of the glowing faces, has
+a group or component whose own faces glow lights its surroundings as one point light, wherever
+it is placed, at any depth (a lamp component inside a room inside a house gives its own light in
+each placed house; the groups around it give none of their own). The root's loose glowing faces
+give one light per connected group of them (glowing faces sharing an edge or a vertex), so lamps
+drawn loose in two rooms light each room. A face glows with its stronger side's material (its
+own, or the nearest painted instance's, as for color). A light sits at the area-weighted center
+of its glowing faces, has
 their color weighted by emission times area (a textured glowing material lights with its
 material color, its image's average unless a color was given), and its strength is their
 emission times their area in square meters (scaled with a scaled placement). It reaches 6 x sqrt(strength) meters
