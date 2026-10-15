@@ -7,10 +7,11 @@ use glam::{DVec2, DVec3};
 use kernel::EntityId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use session::SelectMode;
 use session::{
     Camera, CommandError, Document, ErrorKind, Projection, Ray, check_coordinates, unit_vector,
 };
-use tools::{Axis, Guides, Reach, Scenery, SnapKind, infer_detail, pick};
+use tools::{Axis, Guides, Reach, Scenery, SnapKind, infer_detail, pick, select_box};
 
 use crate::dispatch::MAX_IMAGE_SIDE;
 
@@ -153,6 +154,46 @@ pub enum AxisName {
     X,
     Y,
     Z,
+}
+
+/// A box on screen, as the Select tool drags it.
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenBox {
+    /// One corner, in pixels from the view's top left (x right, y down).
+    pub from: [f64; 2],
+    /// The opposite corner.
+    pub to: [f64; 2],
+    /// Select what the box touches (the window's box dragged left), not only what lies
+    /// entirely inside it (dragged right). Default false.
+    #[serde(default)]
+    pub crossing: bool,
+    /// The view's size in pixels (both or neither; default: the document camera's viewport).
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// Commands the API resolves from the view before running them as session commands.
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScreenCommand {
+    /// `select` by a box on screen: what the Select tool's box selects of the open context,
+    /// seen by the document camera, combined with the selection by `mode`.
+    Select {
+        #[serde(rename = "box")]
+        screen_box: ScreenBox,
+        #[serde(default)]
+        mode: SelectMode,
+    },
+}
+
+/// The ids a screen box selects (see `ScreenCommand::Select`).
+pub fn box_ids(doc: &Document, b: &ScreenBox) -> Result<Vec<EntityId>, CommandError> {
+    let camera = view_camera(doc, None, b.width, b.height)?;
+    let from = pixel_in(&camera, b.from)?;
+    let to = pixel_in(&camera, b.to)?;
+    let (scenery, local) = (scenery(doc), local(doc, &camera));
+    Ok(select_box(&scenery, &local, from, to, b.crossing))
 }
 
 /// What the tools' inference snapped to.

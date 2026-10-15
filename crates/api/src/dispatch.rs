@@ -11,7 +11,9 @@ use session::{
 };
 
 use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
-use crate::probe::{InferQuery, Inferred, PickHit, PickQuery, View, infer_query, pick_query};
+use crate::probe::{
+    InferQuery, Inferred, PickHit, PickQuery, ScreenCommand, View, box_ids, infer_query, pick_query,
+};
 use crate::protocol::{RpcError, codes, failure, parse, success};
 
 /// Largest image side `render_view` accepts, in pixels.
@@ -118,6 +120,16 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             let command: EditorCommand = params_as(params)?;
             host.editor_command(command).map_err(command_failed)?;
             Ok(json!({"editor": host.editor(), "revision": host.document().revision()}))
+        }
+        "execute" if type_of(&params) == Some("select") && params.get("box").is_some() => {
+            let ScreenCommand::Select { screen_box, mode } = params_as(params)?;
+            let ids = box_ids(host.document(), &screen_box).map_err(command_failed)?;
+            let outcome = host
+                .execute(Command::Select { ids, mode })
+                .map_err(command_failed)?;
+            let mut result = json!(outcome);
+            result["revision"] = json!(host.document().revision());
+            Ok(result)
         }
         "execute" => {
             let command: Command = params_as(params)?;
@@ -260,7 +272,7 @@ pub fn describe() -> Value {
         "units": "meters; Z is up; angles in degrees",
         "methods": {
             "execute": {
-                "params": "Command or EditorCommand (EditorCommand result: {editor: EditorState, revision})",
+                "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, revision})",
                 "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, revision}: the Outcome plus revision"
             },
             "batch": {
@@ -304,6 +316,7 @@ pub fn describe() -> Value {
             "EditorQuery": schema_for!(EditorQuery),
             "PickHit": schema_for!(PickHit),
             "Inferred": schema_for!(Inferred),
+            "ScreenCommand": schema_for!(ScreenCommand),
             "EditorCommand": schema_for!(EditorCommand),
             "EditorState": schema_for!(EditorState),
             "QueryResult": schema_for!(QueryResult),

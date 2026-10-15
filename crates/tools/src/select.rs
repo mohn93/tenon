@@ -8,10 +8,10 @@
 use glam::{DVec2, DVec3};
 use kernel::geom::point_in_polygon;
 use kernel::{EntityId, Face, Guide, Model};
-use session::{Command, SelectMode};
+use session::{Camera, Command, SelectMode};
 
 use crate::inference::{edge_under_where, face_under_in, guide_under_where};
-use crate::scenery::Owner;
+use crate::scenery::{Owner, Scenery};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
@@ -73,11 +73,11 @@ fn partly_selected(ids: &[EntityId], ctx: &ToolContext) -> bool {
 }
 
 /// The corners of an instance's bounding box (bit 0 picks x, bit 1 y, bit 2 z).
-fn box_corners(ctx: &ToolContext, id: EntityId) -> Option<[DVec3; 8]> {
+fn box_corners(scenery: &Scenery, id: EntityId) -> Option<[DVec3; 8]> {
     let EntityId::Instance(i) = id else {
         return None;
     };
-    let [lo, hi] = ctx.scenery.instance_box(i)?;
+    let [lo, hi] = scenery.instance_box(i)?;
     Some(std::array::from_fn(|k| {
         DVec3::new(
             if k & 1 == 0 { lo.x } else { hi.x },
@@ -89,7 +89,7 @@ fn box_corners(ctx: &ToolContext, id: EntityId) -> Option<[DVec3; 8]> {
 
 /// The twelve edges of an instance's bounding box, for outlines.
 pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
-    let Some(c) = box_corners(ctx, id) else {
+    let Some(c) = box_corners(ctx.scenery, id) else {
         return Vec::new();
     };
     (0..8)
@@ -99,18 +99,25 @@ pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
         .collect()
 }
 
-/// Edges, faces, instances and guides selected by the screen box from `a` to `b`: inside it
-/// entirely when dragging right (`b.x >= a.x`), touching it when dragging left. Entities with
-/// a point behind the camera are skipped. Guide lines are never inside a box; a box dragged
-/// left selects those crossing it.
-fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
+/// The open context's edges, faces, instances and guides a screen box with corners `a` and
+/// `b` selects, as `camera` (in the open context's coordinates) sees `scenery`: those inside it
+/// entirely, or with `crossing` those touching it (the Select tool's box dragged right, or
+/// left). Entities with a point behind the camera are skipped. Guide lines are never inside a
+/// box; a crossing box selects those crossing it.
+pub fn select_box(
+    scenery: &Scenery,
+    camera: &Camera,
+    a: DVec2,
+    b: DVec2,
+    crossing: bool,
+) -> Vec<EntityId> {
     let (lo, hi) = (a.min(b), a.max(b));
-    let window = b.x >= a.x;
-    let m = ctx.model;
+    let window = !crossing;
+    let m = scenery.open();
     let screen = |points: &[kernel::VertexId]| -> Option<Vec<DVec2>> {
         points
             .iter()
-            .map(|v| m.position(*v).and_then(|p| ctx.camera.project(p)))
+            .map(|v| m.position(*v).and_then(|p| camera.project(p)))
             .collect()
     };
     let inside = |s: DVec2| s.cmpge(lo).all() && s.cmple(hi).all();
@@ -150,12 +157,12 @@ fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
     // screen rectangle overlaps the selection box.
     for (id, _) in m.instances() {
         let id = EntityId::Instance(id);
-        let Some(corners) = box_corners(ctx, id) else {
+        let Some(corners) = box_corners(scenery, id) else {
             continue;
         };
         let Some(pts) = corners
             .iter()
-            .map(|p| ctx.camera.project(*p))
+            .map(|p| camera.project(*p))
             .collect::<Option<Vec<DVec2>>>()
         else {
             continue;
@@ -174,13 +181,12 @@ fn boxed(ctx: &ToolContext, a: DVec2, b: DVec2) -> Vec<EntityId> {
     }
     for (id, g) in m.guides() {
         let hit = match *g {
-            Guide::Point { position } => ctx.camera.project(position).is_some_and(inside),
+            Guide::Point { position } => camera.project(position).is_some_and(inside),
             Guide::Line { point, direction } => {
                 !window
-                    && ctx
-                        .camera
+                    && camera
                         .line_span(point, direction)
-                        .and_then(|[a, b]| Some((ctx.camera.project(a)?, ctx.camera.project(b)?)))
+                        .and_then(|[a, b]| Some((camera.project(a)?, camera.project(b)?)))
                         .is_some_and(|(p, q)| touches(p, q))
             }
         };
@@ -269,7 +275,9 @@ impl Tool for SelectTool {
                     let ids = if clicked {
                         pick(ctx).map_or(Vec::new(), |id| whole_curve(ctx.model, id))
                     } else {
-                        boxed(ctx, start, ctx.cursor)
+                        // Dragged left: what the box touches.
+                        let crossing = ctx.cursor.x < start.x;
+                        select_box(ctx.scenery, ctx.camera, start, ctx.cursor, crossing)
                     };
                     let mode = if !ctx.shift {
                         SelectMode::Replace

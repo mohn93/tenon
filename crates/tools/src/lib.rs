@@ -34,6 +34,6 @@ pub use push_pull::PushPullTool;
 pub use rectangle::RectangleTool;
 pub use rotate::RotateTool;
 pub use scenery::{Layout, Owner, Part, Placed, Scenery};
-pub use select::SelectTool;
+pub use select::{SelectTool, select_box};
 pub use tape::TapeMeasureTool;
 pub use tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};

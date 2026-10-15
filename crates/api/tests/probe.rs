@@ -248,6 +248,70 @@ fn pick_and_infer_reject_what_they_cannot_use() {
 }
 
 #[test]
+fn select_takes_a_box_on_screen_inside_or_crossing() {
+    let mut h = boxed();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_camera", "eye": [1, 1, 10], "target": [1, 1, 0]}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    let select = |h: &mut HeadlessHost, b: Value| {
+        let r = call(h, "execute", json!({"type": "select", "box": b}));
+        assert!(r["error"].is_null(), "{r}");
+        let ids = query(h, json!({"type": "selection"}))["ids"].clone();
+        ids.as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap()[..1].to_string())
+            .collect::<Vec<_>>()
+    };
+    let count = |ids: &[String], k: &str| ids.iter().filter(|i| *i == k).count();
+    // The whole view: every edge and face lies inside.
+    let all = select(
+        &mut h,
+        json!({"from": [0, 0], "to": [100, 100], "width": 100, "height": 100}),
+    );
+    assert_eq!((count(&all, "e"), count(&all, "f")), (12, 6), "{all:?}");
+    // A small box in the middle holds nothing whole, but crosses into the top and bottom faces.
+    let small = json!({"from": [55, 55], "to": [45, 45], "width": 100, "height": 100});
+    assert!(select(&mut h, small.clone()).is_empty());
+    let mut crossing = small;
+    crossing["crossing"] = json!(true);
+    let touched = select(&mut h, crossing);
+    assert_eq!(
+        (count(&touched, "e"), count(&touched, "f")),
+        (0, 2),
+        "{touched:?}"
+    );
+    // `mode` combines it with the selection; a box outside the view or with ids is refused.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "select", "box": {"from": [0, 0], "to": [100, 100], "width": 100,
+               "height": 100}, "mode": "remove"}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    assert_eq!(
+        query(&mut h, json!({"type": "selection"}))["ids"],
+        json!([])
+    );
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "select", "box": {"from": [0, 0], "to": [101, 100], "width": 100,
+               "height": 100}}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "select", "ids": [], "box": {"from": [0, 0], "to": [1, 1]}}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+}
+
+#[test]
 fn describe_gives_the_view_queries_schemas() {
     let d = api::describe();
     for name in ["EditorQuery", "PickHit", "Inferred"] {

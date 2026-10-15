@@ -102,6 +102,14 @@ does not change the revision. The window shows the selection and agents see what
 selected with the `selection` query. Vertex ids are `invalid_input` and unknown ids are
 `not_found`, both with `ids`. Empty `ids` with mode `replace` clears the selection.
 
+`{"type": "select", "box": {"from": [100, 80], "to": [300, 240]}, "mode": "add"}` selects by a box
+on screen instead of `ids`, as the Select tool's box does: of the open context, the edges, faces,
+instances (by their bounding boxes) and guide points lying entirely inside it, or with
+`"crossing": true` everything it touches (the window's box dragged left), guide lines too.
+Corners are pixels of a view seen by the document camera (`width` and `height`, both or neither,
+default the 3D view's size); a corner outside the view is `invalid_input`. Only `execute` takes a
+box (not `batch`).
+
 The selection drops any entity that stops existing, through erase, merges, undo or redo. Undo does
 not restore the selection. The `selection` query's `revision` is the model revision: it does not
 change when only the selection changes. Subscribers get a `selection` notification when it
@@ -823,7 +831,7 @@ under a pixel and where a click would snap.
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
 | Orbit, pan and zoom with the mouse or trackpad, fly mode (F, Escape) and its speed | `set_camera`, `orbit`, `pan`, `zoom` reach the same views; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | The toolbar's tools and their keys | `set_tool`; `editor.tool`, `editor.phase`, `editor.points` |
-| Select: click, Shift-click, box (inside or crossing), double-click to open a group | `select` (`mode`), `pick` for what is under a pixel, `entities` with `within` for a box, `open_instance` / `open_path` |
+| Select: click, Shift-click, box (inside or crossing), double-click to open a group | `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Inference snapping, Shift and arrow-key locks, the marker under the cursor | `infer` (with `from`; `axis` is what Shift would lock) |
 | Typing into the measurements box, Escape | the commands' explicit values; `cancel`; `editor.measurement`, `editor.typing` |

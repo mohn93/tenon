@@ -13,6 +13,9 @@ pub use dispatch::{EditorQuery, Host, describe, handle};
 pub use editor::{Dialog, EditorCommand, EditorState, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{Hub, Inbox};
-pub use probe::{InferQuery, Inferred, PickHit, PickQuery, Placed, RaySpec, Snap, View};
+pub use probe::{
+    AxisName, InferQuery, Inferred, PickHit, PickQuery, Placed, RaySpec, ScreenBox, ScreenCommand,
+    Snap, View,
+};
 pub use protocol::{MAX_LINE_BYTES, codes};
 pub use transport::{listen_unix, serve_stdio, serve_stream};
