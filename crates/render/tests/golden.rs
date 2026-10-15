@@ -760,6 +760,94 @@ fn golden_textured_box_and_ground() {
     check("textured", &d);
 }
 
+/// A free-standing 1.5 x 1.5 m wall at `x` in the plane y = 0, turned so its front faces -y
+/// (toward the camera of `golden_positioned_textures`) or +y; returns its face.
+fn wall(doc: &mut Document, x: f64, front_to_camera: bool) -> EntityId {
+    let made = run(
+        doc,
+        Command::AddRectangle {
+            corner: [x, 0.0, 0.0],
+            opposite: [x + 1.5, 0.0, 1.5],
+            normal: None,
+        },
+    );
+    let face = created_face(&made);
+    let EntityId::Face(id) = face else {
+        unreachable!()
+    };
+    let toward = doc.model().face(id).expect("face").normal.y < 0.0;
+    if toward != front_to_camera {
+        // Half a turn about its middle shows the other side.
+        run(
+            doc,
+            Command::Rotate {
+                ids: vec![face],
+                center: [x + 0.75, 0.0, 0.0],
+                axis: None,
+                angle: 180.0,
+                copies: None,
+            },
+        );
+    }
+    face
+}
+
+#[test]
+fn golden_positioned_textures() {
+    let mut d = doc();
+    // Left: a wall's front with the texture turned a quarter counter-clockwise and halved.
+    // Right: a wall's back with the texture moved a quarter along: it reads as seen from
+    // behind, not mirrored (white lines along the tops and left sides of the copies).
+    let front = wall(&mut d, 0.0, true);
+    let back = wall(&mut d, 2.0, false);
+    let tiles = run(
+        &mut d,
+        Command::AddMaterial {
+            name: Some("Tiles".into()),
+            color: None,
+            opacity: None,
+            texture: Some(session::TextureSource {
+                path: Some(quadrants_png().display().to_string()),
+                width: Some(1.0),
+                height: Some(1.0),
+            }),
+            emission: None,
+        },
+    )
+    .changes
+    .materials[0];
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![front, back],
+            material: Some(tiles),
+            side: Side::Both,
+        },
+    );
+    run(
+        &mut d,
+        Command::PositionTexture {
+            ids: vec![front],
+            offset: None,
+            rotation_deg: Some(90.0),
+            scale: Some([0.5, 0.5]),
+            reset: false,
+        },
+    );
+    run(
+        &mut d,
+        Command::PositionTexture {
+            ids: vec![back],
+            offset: Some([0.25, 0.0]),
+            rotation_deg: None,
+            scale: None,
+            reset: false,
+        },
+    );
+    look(&mut d, [1.75, -4.5, 0.75], [1.75, 0.0, 0.75]);
+    check("positioned", &d);
+}
+
 /// A material glowing at `emission`.
 fn add_lamp_material(doc: &mut Document, name: &str, color: [u8; 3], emission: f32) -> MaterialId {
     let outcome = run(
@@ -876,6 +964,7 @@ fn every_golden_image_has_a_test() {
         "glass",
         "textured",
         "night",
+        "positioned",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene,
-    texture_position,
+    back_texture_position,
 };
 
 use crate::grid::LineVertex;
@@ -59,8 +59,10 @@ pub struct BaseFaceVertex {
     /// is drawn in the translucent pass (see `SceneBase::glass`).
     pub alpha: [f32; 2],
     /// The texture coordinates of the front (first two) and back sides: the corner's texture
-    /// position over its side's texture size, v counted down from the image's top, shifted by
-    /// whole repeats per triangle so they stay small. Zero on a side without a texture.
+    /// position on that side (see `kernel::Face::texture_position`; the back's is mirrored so
+    /// it reads as seen from behind) over its side's texture size, v counted down from the
+    /// image's top, shifted by whole repeats per triangle so they stay small. Zero on a side
+    /// without a texture.
     pub uv: [f32; 4],
     /// The texture array layers of the front and back sides (see `texture::layers`); -1 for
     /// none.
@@ -158,9 +160,13 @@ fn face_glow(front: &Look, back: &Look) -> (f32, [f32; 3]) {
     (side.emission, side.color)
 }
 
-/// The corners of a triangle with both sides' texture coordinates (see `BaseFaceVertex::uv`).
+/// The corners of a triangle with both sides' texture coordinates (see `BaseFaceVertex::uv`),
+/// from the corners' positions on the front's texture.
 fn both_uv(front: &Look, back: &Look, positions: [DVec2; 3]) -> [[f32; 4]; 3] {
-    let (f, b) = (front.uv(positions), back.uv(positions));
+    let (f, b) = (
+        front.uv(positions),
+        back.uv(positions.map(back_texture_position)),
+    );
     [0, 1, 2].map(|k| [f[k][0], f[k][1], b[k][0], b[k][1]])
 }
 
@@ -438,7 +444,8 @@ struct MeshParts {
     corners: Vec<DVec3>,
     /// The normal at each corner: the face's own, or across soft edges the smooth one.
     normals: Vec<DVec3>,
-    /// Each corner's position on its face's texture, in meters (see `texture_position`).
+    /// Each corner's position on its face's front texture, in meters (see
+    /// `kernel::Face::texture_position`).
     positions: Vec<DVec2>,
     faces: Vec<FacePart>,
     /// The ends of the hard edges (soft edges are not drawn).
@@ -475,7 +482,7 @@ impl MeshParts {
             for tri in model.shaded_triangles(id, &smooth).unwrap_or_default() {
                 corners.extend(tri.corners);
                 normals.extend(tri.normals);
-                positions.extend(tri.corners.map(|p| texture_position(face.normal, p)));
+                positions.extend(tri.corners.map(|p| face.texture_position(p)));
             }
             faces.push(FacePart {
                 id,
@@ -1305,6 +1312,71 @@ mod tests {
         assert_eq!(g, single_pass::scene_geometry(&s, &[], &BTreeSet::new()));
     }
 
+    #[test]
+    fn placed_textures_turn_and_back_sides_read_unmirrored() {
+        // A 1 m wall in the xz plane with the same 1 m texture on both sides, turned a quarter
+        // counter-clockwise.
+        let mut m = Model::new();
+        let pts =
+            [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(x, z)| DVec3::new(x, 0.0, z));
+        m.add_polygon(&pts).unwrap();
+        let face = m.faces().next().unwrap().0;
+        let turn = kernel::PlacementEdit {
+            rotation_deg: Some(90.0),
+            ..kernel::PlacementEdit::default()
+        };
+        m.position_texture(&[face], turn).unwrap();
+        let mut s = Scene::from_root(m);
+        let (tiles, _) = s
+            .add_material_with_texture("Tiles", [1, 2, 3], 1.0, Some(texture(1.0, 1.0)))
+            .unwrap();
+        s.paint(MeshId::Root, &[face], &[], kernel::Side::Both, Some(tiles))
+            .unwrap();
+        let n = s.root().face(face).unwrap().normal;
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(g.faces.len(), 6);
+        // For a viewer in front of a side, upright: how a step right and a step up move across
+        // the image (its width and its height, up the image). `right` is the viewer's right.
+        let image_steps = |tri: &[FaceVertex], k: usize, right: DVec3| {
+            let at = |v: &FaceVertex| {
+                let p = DVec3::from(v.pos.map(f64::from));
+                (
+                    DVec2::new(p.dot(right), p.z),
+                    // v counts down from the image's top.
+                    DVec2::new(f64::from(v.uv[k]), -f64::from(v.uv[k + 1])),
+                )
+            };
+            let ((p0, t0), (p1, t1), (p2, t2)) = (at(&tri[0]), at(&tri[1]), at(&tri[2]));
+            let screen = glam::DMat2::from_cols(p1 - p0, p2 - p0);
+            let image = glam::DMat2::from_cols(t1 - t0, t2 - t0);
+            image * screen.inverse()
+        };
+        for tri in g.faces.chunks(3) {
+            // From the front: the image's width runs up and its height to the left.
+            let front = image_steps(tri, 0, DVec3::Z.cross(n));
+            assert!(
+                front.x_axis.abs_diff_eq(DVec2::new(0.0, -1.0), 1e-6),
+                "{front}"
+            );
+            assert!(
+                front.y_axis.abs_diff_eq(DVec2::new(1.0, 0.0), 1e-6),
+                "{front}"
+            );
+            // From behind: the same turn seen from the other side (clockwise), not mirrored.
+            let back = image_steps(tri, 2, n.cross(DVec3::Z));
+            assert!(
+                back.x_axis.abs_diff_eq(DVec2::new(0.0, 1.0), 1e-6),
+                "{back}"
+            );
+            assert!(
+                back.y_axis.abs_diff_eq(DVec2::new(-1.0, 0.0), 1e-6),
+                "{back}"
+            );
+            assert!(back.determinant() > 0.0 && front.determinant() > 0.0);
+        }
+        assert_eq!(g, single_pass::scene_geometry(&s, &[], &BTreeSet::new()));
+    }
+
     /// The single pass `scene_geometry` made before the base and the selection flags were
     /// split, kept to check that the split changes nothing.
     mod single_pass {
@@ -1389,7 +1461,7 @@ mod tests {
                         DEFAULT_BACK,
                     );
                     for tri in model.shaded_triangles(fid, &smooth).unwrap_or_default() {
-                        let positions = tri.corners.map(|p| texture_position(face.normal, p));
+                        let positions = tri.corners.map(|p| face.texture_position(p));
                         let uv = both_uv(&front, &back, positions);
                         let mut corners =
                             [0, 1, 2].map(|k| (tri.corners[k], tri.normals[k], uv[k]));
