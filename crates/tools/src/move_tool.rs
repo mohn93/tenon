@@ -9,7 +9,7 @@ use kernel::geom::LENGTH_TOL;
 use session::{Command, MAX_COPIES};
 
 use crate::select::{box_outline, face_outline, guide_outline, pick, whole_curve};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_length, parse_array, parse_length};
 
 /// A move in progress.
@@ -134,6 +134,16 @@ impl Tool for MoveTool {
 
     fn anchor(&self) -> Option<DVec3> {
         self.drag.as_ref().map(|d| d.base)
+    }
+
+    /// The base point.
+    fn phase(&self) -> Phase {
+        match &self.drag {
+            Some(d) => Phase::Active {
+                points: vec![d.base],
+            },
+            None => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

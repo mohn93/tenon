@@ -6,7 +6,7 @@ use kernel::EntityId;
 use session::Command;
 
 use crate::select::{box_outline, face_outline, guide_outline, pick};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
 pub struct EraseTool {
@@ -53,6 +53,11 @@ impl Tool for EraseTool {
 
     fn anchor(&self) -> Option<DVec3> {
         None
+    }
+
+    /// Each click acts at once.
+    fn phase(&self) -> Phase {
+        Phase::Idle
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

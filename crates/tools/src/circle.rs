@@ -7,7 +7,7 @@ use glam::DVec3;
 use session::{Command, DEFAULT_CIRCLE_SEGMENTS, circle_points};
 
 use crate::rectangle::{on_plane, plane_normal};
-use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
 
 /// Shown for a side count that is not a whole number in range.
@@ -90,6 +90,15 @@ impl Tool for CircleTool {
 
     fn anchor(&self) -> Option<DVec3> {
         self.center.map(|(c, _)| c)
+    }
+
+    fn phase(&self) -> Phase {
+        match self.center {
+            Some((center, _)) => Phase::Active {
+                points: vec![center],
+            },
+            None => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

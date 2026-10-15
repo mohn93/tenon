@@ -78,6 +78,16 @@ pub struct ToolOutput {
     pub sampled: Option<Option<MaterialId>>,
 }
 
+/// Where a tool is in its operation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Phase {
+    /// No operation in progress: the next click starts one.
+    Idle,
+    /// An operation in progress, with the points it was given so far, in the open context's
+    /// coordinates (none for the Select tool's click or box, which happen on screen).
+    Active { points: Vec<DVec3> },
+}
+
 /// An interactive way to build commands. Tools never edit the model themselves.
 pub trait Tool {
     fn name(&self) -> &'static str;
@@ -87,6 +97,8 @@ pub trait Tool {
     fn measurement(&self) -> (&'static str, Option<String>);
     /// The point axis inference starts from, if any.
     fn anchor(&self) -> Option<DVec3>;
+    /// Whether an operation is in progress, and the points it was given so far.
+    fn phase(&self) -> Phase;
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput;
     /// The model changed outside the tool (agent edit, undo, redo): drop any operation in
     /// progress, since it may refer to geometry that no longer exists.
@@ -210,6 +222,8 @@ impl ToolKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::SnapKind;
+    use kernel::FaceId;
 
     #[test]
     fn labels_match_tool_names_and_shortcuts_round_trip() {
@@ -219,5 +233,125 @@ mod tests {
         }
         assert_eq!(ToolKind::from_shortcut('E'), Some(ToolKind::Erase));
         assert_eq!(ToolKind::from_shortcut('z'), None);
+    }
+
+    /// `phase` with its points rounded to micrometers (Push/Pull's comes from a ray).
+    fn rounded(phase: Phase) -> Phase {
+        match phase {
+            Phase::Idle => Phase::Idle,
+            Phase::Active { points } => Phase::Active {
+                points: points.iter().map(|p| (*p * 1e6).round() / 1e6).collect(),
+            },
+        }
+    }
+
+    /// Clicks a fresh `kind` tool at each of `clicks` (points on a selected 2 m square face at
+    /// the origin, seen from the default camera) and returns its phase after each, then after
+    /// the button's release, rounded.
+    fn phases(kind: ToolKind, clicks: &[DVec3]) -> Vec<Phase> {
+        let mut model = Model::new();
+        let p = |x, y| DVec3::new(x, y, 0.0);
+        model
+            .add_polygon(&[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0), p(0.0, 2.0)])
+            .unwrap();
+        let face: FaceId = model.faces().map(|(id, _)| id).next().unwrap();
+        let selection = BTreeSet::from([EntityId::Face(face)]);
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let scenery = Scenery::single(&model);
+        let mut tool = kind.make();
+        let mut out = vec![rounded(tool.phase())];
+        for &point in clicks {
+            let ctx = ToolContext {
+                model: &model,
+                scenery: &scenery,
+                camera: &camera,
+                cursor: camera.project(point).unwrap(),
+                pick_radius: 10.0,
+                drag_threshold: 4.0,
+                shift: false,
+                selection: &selection,
+                material: None,
+                sample: false,
+            };
+            let hit = Inference {
+                point,
+                kind: SnapKind::OnFace,
+                face: Some(face),
+            };
+            tool.handle(ToolEvent::Click(hit), &ctx);
+            out.push(rounded(tool.phase()));
+            tool.handle(ToolEvent::Release(hit), &ctx);
+            out.push(rounded(tool.phase()));
+        }
+        out
+    }
+
+    fn active(points: &[DVec3]) -> Phase {
+        Phase::Active {
+            points: points.to_vec(),
+        }
+    }
+
+    #[test]
+    fn phases_list_the_points_clicked_so_far() {
+        let a = DVec3::new(0.5, 0.5, 0.0);
+        let b = DVec3::new(1.5, 0.5, 0.0);
+        let c = DVec3::new(1.5, 1.5, 0.0);
+        let idle = Phase::Idle;
+        assert_eq!(
+            phases(ToolKind::Line, &[a, b]),
+            vec![
+                idle.clone(),
+                active(&[a]),
+                active(&[a]),
+                active(&[a, b]),
+                active(&[a, b])
+            ]
+        );
+        for kind in [ToolKind::Rectangle, ToolKind::Circle] {
+            assert_eq!(
+                phases(kind, &[a]),
+                vec![idle.clone(), active(&[a]), active(&[a])],
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            phases(ToolKind::Arc, &[a, b]),
+            vec![
+                idle.clone(),
+                active(&[a]),
+                active(&[a]),
+                active(&[a, b]),
+                active(&[a, b])
+            ]
+        );
+        for kind in [ToolKind::PushPull, ToolKind::Move, ToolKind::TapeMeasure] {
+            assert_eq!(
+                phases(kind, &[a]),
+                vec![idle.clone(), active(&[a]), active(&[a])],
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            phases(ToolKind::Rotate, &[a, b]),
+            vec![
+                idle.clone(),
+                active(&[a]),
+                active(&[a]),
+                active(&[a, b]),
+                active(&[a, b])
+            ]
+        );
+        // A finished operation is idle again.
+        let finished = phases(ToolKind::Rectangle, &[a, c]);
+        assert_eq!(finished.last(), Some(&idle));
+        // The Select tool is active while its button is held; Erase and Paint act at once.
+        assert_eq!(
+            phases(ToolKind::Select, &[a]),
+            vec![idle.clone(), active(&[]), idle.clone()]
+        );
+        for kind in [ToolKind::Erase, ToolKind::Paint] {
+            assert_eq!(phases(kind, &[a]), vec![idle.clone(); 3], "{kind:?}");
+        }
     }
 }

@@ -10,7 +10,7 @@ use session::Command;
 use crate::inference::face_under_in;
 use crate::scenery::Owner;
 use crate::select::{box_outline, face_outline};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
 pub struct PaintTool {
@@ -63,6 +63,11 @@ impl Tool for PaintTool {
 
     fn anchor(&self) -> Option<DVec3> {
         None
+    }
+
+    /// Each click acts at once.
+    fn phase(&self) -> Phase {
+        Phase::Idle
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

@@ -5,7 +5,7 @@ use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::Command;
 
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length};
 
 #[derive(Clone, Debug, Default)]
@@ -64,6 +64,17 @@ impl Tool for LineTool {
 
     fn anchor(&self) -> Option<DVec3> {
         self.last
+    }
+
+    /// The chain's first point and the point the next edge starts from.
+    fn phase(&self) -> Phase {
+        match (self.first, self.last) {
+            (Some(first), Some(last)) if first != last => Phase::Active {
+                points: vec![first, last],
+            },
+            (_, Some(last)) => Phase::Active { points: vec![last] },
+            _ => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, _ctx: &ToolContext) -> ToolOutput {

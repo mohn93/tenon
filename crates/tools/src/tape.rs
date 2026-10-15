@@ -12,7 +12,7 @@ use kernel::geom::LENGTH_TOL;
 use session::Command;
 
 use crate::inference::{SnapKind, edge_under_in, guide_under_where};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length};
 
 /// Where a measurement starts.
@@ -159,6 +159,16 @@ impl Tool for TapeMeasureTool {
 
     fn anchor(&self) -> Option<DVec3> {
         self.start.map(Start::point)
+    }
+
+    /// Where the measurement starts.
+    fn phase(&self) -> Phase {
+        match self.start {
+            Some(start) => Phase::Active {
+                points: vec![start.point()],
+            },
+            None => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

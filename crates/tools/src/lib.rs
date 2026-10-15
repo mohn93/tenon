@@ -34,4 +34,4 @@ pub use rotate::RotateTool;
 pub use scenery::{Layout, Owner, Part, Placed, Scenery};
 pub use select::SelectTool;
 pub use tape::TapeMeasureTool;
-pub use tool::{Remembered, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};
+pub use tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};

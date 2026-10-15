@@ -14,7 +14,7 @@ use crate::inference::{Inference, SnapKind};
 use crate::move_tool::outline;
 use crate::rectangle::{on_plane, plane_normal};
 use crate::select::{pick, whole_curve};
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_angle, parse_angle, parse_array};
 
 /// Angles within this many degrees of a multiple of `STEP` snap to it.
@@ -35,6 +35,8 @@ struct Turn {
     outline: Vec<[DVec3; 2]>,
     /// Unit vector in the rotation's plane the angle is measured from, once clicked.
     reference: Option<DVec3>,
+    /// Where the angle starts: the click that gave `reference`, on the rotation's plane.
+    start: Option<DVec3>,
 }
 
 /// The last rotation made, which a typed angle or array replaces.
@@ -220,6 +222,16 @@ impl Tool for RotateTool {
         self.turn.as_ref().map(|t| t.center)
     }
 
+    /// The center, then where the angle starts (the click on the rotation's plane).
+    fn phase(&self) -> Phase {
+        match &self.turn {
+            Some(t) => Phase::Active {
+                points: [Some(t.center), t.start].into_iter().flatten().collect(),
+            },
+            None => Phase::Idle,
+        }
+    }
+
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
@@ -247,6 +259,7 @@ impl Tool for RotateTool {
                             outline: outline(ctx, &ids),
                             ids,
                             reference: None,
+                            start: None,
                         });
                         self.hover = Some(hit.point);
                     }
@@ -256,7 +269,10 @@ impl Tool for RotateTool {
                         .map(|p| flat(p - turn.center, turn.axis))
                         .filter(|v| v.length() >= LENGTH_TOL);
                     match from {
-                        Some(v) => turn.reference = Some(v.normalize()),
+                        Some(v) => {
+                            turn.reference = Some(v.normalize());
+                            turn.start = Some(turn.center + v);
+                        }
                         None => {
                             out.message = Some("Click away from the center".into());
                         }

@@ -12,7 +12,7 @@ use session::{Command, SelectMode};
 
 use crate::inference::{edge_under_where, face_under_in, guide_under_where};
 use crate::scenery::Owner;
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
 pub struct SelectTool {
@@ -247,6 +247,14 @@ impl Tool for SelectTool {
 
     fn anchor(&self) -> Option<DVec3> {
         None
+    }
+
+    /// Active while the button is held: a click or a box being dragged, both on screen.
+    fn phase(&self) -> Phase {
+        match self.press {
+            Some(_) => Phase::Active { points: Vec::new() },
+            None => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

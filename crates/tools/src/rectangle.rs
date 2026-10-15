@@ -6,7 +6,7 @@ use kernel::geom::LENGTH_TOL;
 use session::{Command, rectangle_axes, rectangle_corners};
 
 use crate::inference::Inference;
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_lengths, toward_cursor};
 
 #[derive(Clone, Debug, Default)]
@@ -99,6 +99,15 @@ impl Tool for RectangleTool {
 
     fn anchor(&self) -> Option<DVec3> {
         self.start.map(|(corner, _)| corner)
+    }
+
+    fn phase(&self) -> Phase {
+        match self.start {
+            Some((corner, _)) => Phase::Active {
+                points: vec![corner],
+            },
+            None => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {

@@ -9,7 +9,7 @@ use kernel::geom::LENGTH_TOL;
 use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points};
 
 use crate::rectangle::{on_plane, plane_normal};
-use crate::tool::{Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
 
 /// Shown for a segment count that is not a whole number in range.
@@ -146,6 +146,16 @@ impl Tool for ArcTool {
             (Some((s, _)), Some(e)) => Some((s + e) / 2.0),
             (Some((s, _)), None) => Some(s),
             _ => None,
+        }
+    }
+
+    /// The start, then the end once clicked.
+    fn phase(&self) -> Phase {
+        match self.start {
+            Some((start, _)) => Phase::Active {
+                points: [Some(start), self.end].into_iter().flatten().collect(),
+            },
+            None => Phase::Idle,
         }
     }
 

@@ -8,7 +8,7 @@ use session::Command;
 
 use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
 use crate::scenery::Owner;
-use crate::tool::{Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, toward_cursor};
 
 /// A push/pull in progress.
@@ -102,6 +102,16 @@ impl Tool for PushPullTool {
 
     fn anchor(&self) -> Option<DVec3> {
         None
+    }
+
+    /// Where the face was clicked.
+    fn phase(&self) -> Phase {
+        match &self.drag {
+            Some(d) => Phase::Active {
+                points: vec![d.start],
+            },
+            None => Phase::Idle,
+        }
     }
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
