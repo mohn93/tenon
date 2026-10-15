@@ -154,6 +154,13 @@ fn describe_lists_methods_and_schemas() {
     ] {
         assert!(d["methods"][m].is_object(), "missing method {m}");
     }
+    // The execute result names every field an outcome has.
+    let result = d["methods"]["execute"]["result"].as_str().unwrap();
+    let outcome = d["schemas"]["Outcome"]["properties"].as_object().unwrap();
+    assert!(outcome.len() >= 5, "{outcome:?}");
+    for field in outcome.keys() {
+        assert!(result.contains(field.as_str()), "{field} in {result}");
+    }
     let command_schema = d["schemas"]["Command"].to_string();
     for variant in [
         "add_edge",

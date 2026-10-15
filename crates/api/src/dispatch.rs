@@ -163,7 +163,7 @@ pub fn describe() -> Value {
         "methods": {
             "execute": {
                 "params": "Command",
-                "result": "{changes: ChangeSummary, import?: ImportReport, revision}"
+                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, revision}: the Outcome plus revision"
             },
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
