@@ -1,11 +1,14 @@
 //! The Rectangle tool: click a corner, then the opposite corner (or type "width,height"). The
-//! rectangle lies on the face under the first click, or on a horizontal plane.
+//! rectangle lies on the face under the first click, or on a horizontal plane. A first corner
+//! on an edge or a point rather than inside a face (a wall's foot) can start a rectangle on
+//! any face through it: the rectangle lies on the face the cursor moves across, as in
+//! SketchUp.
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, rectangle_axes, rectangle_corners};
 
-use crate::inference::Inference;
+use crate::inference::{Inference, SnapKind};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_lengths, toward_cursor};
 
@@ -13,6 +16,9 @@ use crate::vcb::{format_length, parse_lengths, toward_cursor};
 pub struct RectangleTool {
     /// First corner and the normal of the plane the rectangle lies in.
     start: Option<(DVec3, DVec3)>,
+    /// The first corner was not inside a face: the plane follows the face under the cursor
+    /// when that face's plane holds the corner.
+    floating: bool,
     /// Opposite corner under the cursor, on that plane.
     hover: Option<DVec3>,
 }
@@ -35,6 +41,23 @@ impl RectangleTool {
             });
             self.start = None;
             self.hover = None;
+        }
+    }
+
+    /// With a floating first corner, takes the plane of the face under the cursor when that
+    /// plane holds the corner.
+    fn follow(&mut self, hit: &Inference, ctx: &ToolContext) {
+        let Some((corner, normal)) = self.start.as_mut() else {
+            return;
+        };
+        if !self.floating {
+            return;
+        }
+        if let Some(face) = hit.face.and_then(|id| ctx.model.face(id)) {
+            let origin = ctx.model.position(face.outer[0]).unwrap();
+            if (*corner - origin).dot(face.normal).abs() < LENGTH_TOL {
+                *normal = face.normal;
+            }
         }
     }
 
@@ -114,13 +137,19 @@ impl Tool for RectangleTool {
         let mut out = ToolOutput::default();
         match event {
             ToolEvent::Move(hit) => {
+                self.follow(&hit, ctx);
                 if let Some((corner, normal)) = self.start {
                     self.hover = on_plane(corner, normal, &hit, ctx);
                 }
             }
             ToolEvent::Click(hit) => match self.start {
-                None => self.start = Some((hit.point, plane_normal(&hit, ctx))),
-                Some((corner, normal)) => {
+                None => {
+                    self.start = Some((hit.point, plane_normal(&hit, ctx)));
+                    self.floating = hit.kind != SnapKind::OnFace;
+                }
+                Some(_) => {
+                    self.follow(&hit, ctx);
+                    let (corner, normal) = self.start.unwrap();
                     if let Some(p) = on_plane(corner, normal, &hit, ctx) {
                         self.finish(p, &mut out);
                     }
@@ -154,13 +183,13 @@ impl Tool for RectangleTool {
     fn on_external_change(&mut self) {
         self.start = None;
         self.hover = None;
+        self.floating = false;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inference::SnapKind;
     use glam::DVec2;
     use kernel::{FaceId, Model};
     use session::Camera;
@@ -301,6 +330,93 @@ mod tests {
             out.commands,
             vec![rect([0.0, 1.0, 1.0], [0.0, 2.0, 2.5], normal)]
         );
+    }
+
+    #[test]
+    fn a_corner_on_a_walls_foot_takes_the_plane_of_the_face_the_cursor_crosses() {
+        // A floor on z = 0 and a wall in the plane y = 0 standing on its front edge.
+        let mut m = Model::new();
+        m.add_polygon(&[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(4.0, 3.0, 0.0),
+            DVec3::new(0.0, 3.0, 0.0),
+        ])
+        .unwrap();
+        m.add_polygon(&[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 0.0),
+            DVec3::new(4.0, 0.0, 3.0),
+            DVec3::new(0.0, 0.0, 3.0),
+        ])
+        .unwrap();
+        let face_with = |m: &Model, n: DVec3| {
+            m.faces()
+                .find(|(_, f)| f.normal.cross(n).length() < 1e-9)
+                .unwrap()
+                .0
+        };
+        let (floor, wall) = (face_with(&m, DVec3::Z), face_with(&m, DVec3::Y));
+        let wall_normal = m.face(wall).unwrap().normal;
+        let mut r = Rig::new(m);
+        let at = |p: DVec3, kind: SnapKind, face: FaceId| Inference {
+            point: p,
+            kind,
+            face: Some(face),
+        };
+        // The first corner on the shared edge, seen over the floor.
+        r.send(ToolEvent::Click(at(
+            DVec3::new(1.0, 0.0, 0.0),
+            SnapKind::OnEdge,
+            floor,
+        )));
+        // Across the wall the rectangle stands in the wall.
+        r.send(ToolEvent::Move(at(
+            DVec3::new(2.0, 0.0, 2.0),
+            SnapKind::OnFace,
+            wall,
+        )));
+        let out = r.send(ToolEvent::Value("1,2".into()));
+        assert_eq!(out.commands.len(), 1);
+        let Command::AddRectangle {
+            corner,
+            opposite,
+            normal,
+        } = &out.commands[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(*normal, Some(wall_normal.to_array()));
+        assert_eq!(*corner, [1.0, 0.0, 0.0]);
+        assert!((opposite[1]).abs() < 1e-12 && (opposite[2] - 2.0).abs() < 1e-12);
+        // Back over the floor, the next one lies on the floor.
+        r.send(ToolEvent::Click(at(
+            DVec3::new(1.0, 0.0, 0.0),
+            SnapKind::OnEdge,
+            wall,
+        )));
+        let out = r.send(ToolEvent::Click(at(
+            DVec3::new(2.0, 1.0, 0.0),
+            SnapKind::OnFace,
+            floor,
+        )));
+        let floor_normal = r.model.face(floor).unwrap().normal;
+        assert_eq!(
+            out.commands,
+            vec![rect([1.0, 0.0, 0.0], [2.0, 1.0, 0.0], floor_normal)]
+        );
+        // A corner inside a face keeps that face's plane.
+        r.send(ToolEvent::Click(at(
+            DVec3::new(1.0, 1.0, 0.0),
+            SnapKind::OnFace,
+            floor,
+        )));
+        r.send(ToolEvent::Move(at(
+            DVec3::new(2.0, 0.0, 2.0),
+            SnapKind::OnFace,
+            wall,
+        )));
+        assert_eq!(r.tool.start.unwrap().1, floor_normal);
     }
 
     #[test]
