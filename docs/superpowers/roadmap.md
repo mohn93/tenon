@@ -28,7 +28,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M9b | Textures: image textures on materials (embedded in .skr), planar projection, texture-array rendering, glTF/OBJ export, Materials panel | done 8f34616..ffe9b1f |
 | M9c | Lights: glowing materials (emission), point lights from glowing instances, day/night lighting mode | done 9b27327..110673a |
 | M9d | Texture positioning: per-face offset, rotation and scale (`position_texture`), back sides not mirrored, export UVs, Entity Info fields | done 726a96d..45b0d23 |
-| M9e | Light shadows: cube shadow maps for up to 64 lights, cached between frames, glowing faces cast none | todo |
+| M9e | Light shadows: cube shadow maps for up to 64 lights, cached between frames, glowing faces cast none | planned docs/superpowers/plans/2026-10-15-m9e-shadows.md |
 
 ## Rules for the loop
 
