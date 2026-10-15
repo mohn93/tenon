@@ -251,6 +251,71 @@ fn copies_keep_the_placement_and_push_pull_caps_keep_it_too() {
         .collect();
     assert_eq!(placed.len(), 2, "the base and the cap");
     assert_eq!(m.faces().filter(|(_, g)| g.texture.is_none()).count(), 4);
+    // The cap is the pushed face moved: turned over with it when the sheet turned over.
+    let expected = if face.normal.z < 0.0 {
+        face.reversed().texture
+    } else {
+        face.texture
+    };
+    let cap = m
+        .faces()
+        .map(|(_, g)| g)
+        .find(|g| g.texture.is_some() && cap_is_off_ground(&m, g))
+        .expect("a placed cap on top");
+    assert_eq!(cap.texture, expected);
+    m.validate().unwrap();
+}
+
+/// True for a face that lies in the plane a meter off the ground, not on it.
+fn cap_is_off_ground(m: &Model, g: &Face) -> bool {
+    g.outer
+        .iter()
+        .all(|&v| (m.position(v).unwrap().z.abs() - 1.0).abs() < 1e-9)
+}
+
+#[test]
+fn push_pull_sides_inside_a_placed_face_have_no_placement() {
+    // A wall with a placement; a floor rectangle sharing its bottom edge pulled up 1 m: the
+    // side that lies inside the wall's plane must not inherit the wall's placement.
+    let mut m = Model::new();
+    m.add_polygon(&[
+        p(0.0, 0.0, 0.0),
+        p(4.0, 0.0, 0.0),
+        p(4.0, 0.0, 3.0),
+        p(0.0, 0.0, 3.0),
+    ])
+    .unwrap();
+    let wall = m.faces().next().unwrap().0;
+    m.position_texture(&[wall], sets(placement([0.0, 0.0], 30.0, [1.0, 1.0])))
+        .unwrap();
+    m.add_polygon(&[
+        p(1.0, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(2.0, 1.0, 0.0),
+        p(1.0, 1.0, 0.0),
+    ])
+    .unwrap();
+    let floor = m
+        .faces()
+        .find(|(_, g)| g.normal.z.abs() > 0.5)
+        .map(|(f, _)| f)
+        .unwrap();
+    let sign = m.face(floor).unwrap().normal.z.signum();
+    m.push_pull(floor, sign).unwrap();
+    let side = m
+        .faces()
+        .map(|(_, g)| g)
+        .find(|g| {
+            g.normal.y.abs() > 0.5
+                && g.outer.iter().all(|&v| {
+                    let q = m.position(v).unwrap();
+                    q.y.abs() < 1e-9
+                        && (1.0 - 1e-9..=2.0 + 1e-9).contains(&q.x)
+                        && q.z <= 1.0 + 1e-9
+                })
+        })
+        .expect("the side face in the wall's plane");
+    assert_eq!(side.texture, None);
     m.validate().unwrap();
 }
 

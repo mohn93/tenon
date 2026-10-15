@@ -492,7 +492,8 @@ fn drag_row<const N: usize>(
                     egui::DragValue::new(value)
                         .range(range.clone())
                         .speed(speed)
-                        .max_decimals(3),
+                        .max_decimals(3)
+                        .update_while_editing(false),
                 );
                 dragged |= field.dragged();
                 done |= field.drag_stopped() || field.changed();

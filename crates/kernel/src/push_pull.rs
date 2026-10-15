@@ -306,8 +306,10 @@ impl Model {
             let (_, _, pa, pb) = sides[i];
             let out = (pb - pa).cross(n).normalize();
             self.orient(f, if cut { -out } else { out });
-            // The sides take the pushed face's materials, as the cap does.
+            // The sides take the pushed face's materials, as the cap does, but no placement
+            // (one made inside a coplanar old face inherited that face's).
             self.set_paint(f, new_paint);
+            self.set_texture(f, None);
         }
         if cut {
             self.remove_strays(&vertices_before, &sides, offset);
