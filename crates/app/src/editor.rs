@@ -1070,6 +1070,8 @@ impl Editor {
         let saved = self
             .run(Command::Save {
                 path: path.map(|p| p.display().to_string()),
+                // The file dialog asked before replacing a file.
+                overwrite: true,
             })
             .is_some();
         if saved {
@@ -1090,6 +1092,8 @@ impl Editor {
         let outcome = self.run(Command::Export {
             path: path.display().to_string(),
             format: None,
+            // The file dialog asked before replacing a file.
+            overwrite: true,
         });
         let Some(outcome) = outcome else {
             return false;

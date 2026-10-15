@@ -741,7 +741,7 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 
 | Command | Effect |
 |---|---|
-| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. |
+| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. |
 | `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
@@ -773,6 +773,15 @@ twice is written twice), whatever instance is open. Edges without faces are not 
 case; any other extension without `format` is `invalid_input`, and so is a model with no faces.
 A `.skr` path (any case) and the open model's own file are refused with `invalid_input`: export
 never overwrites a model; use `save`.
+An existing file at `path` (and, for an OBJ with materials, at its `.mtl` and image paths) that is
+not of the format written is refused with `invalid_input` unless `"overwrite": true`; all are
+checked before anything is written. An empty file is always replaced, and a link is judged by the
+file it points to. Formats are recognised from their first 64 KiB: OBJ is UTF-8 text whose every
+complete line is blank, a `#` comment or starts with an OBJ keyword, with at least one keyword
+line; MTL is the same with MTL keywords and at least one `newmtl`; STL is text starting (after
+spaces) with `solid` in any case, or a binary STL whose size is 84 + 50 x its triangle count;
+`glb` starts with `glTF`; `gltf` starts (after spaces) with `{` and has `"asset"`; a texture
+image is a PNG or JPEG. Something that is not a regular file (a folder, a device) is refused.
 
 | Format | Content |
 |---|---|

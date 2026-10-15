@@ -9,6 +9,7 @@ use crate::camera::{Camera, Lighting};
 use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
 use crate::file;
+use crate::sniff::{self, Kind};
 
 impl Document {
     /// Refuses with `unsaved_changes` when the model changed since it was opened, saved or
@@ -45,7 +46,11 @@ impl Document {
     }
 
     /// Saves to `path`, or to the file last opened or saved.
-    pub(super) fn save_file(&mut self, path: Option<&str>) -> Result<(), CommandError> {
+    pub(super) fn save_file(
+        &mut self,
+        path: Option<&str>,
+        overwrite: bool,
+    ) -> Result<(), CommandError> {
         let target = path
             .map(PathBuf::from)
             .or_else(|| self.path.clone())
@@ -55,6 +60,9 @@ impl Document {
                     "give a path: the model was never opened or saved",
                 )
             })?;
+        if !overwrite && !sniff::replaceable(&target, Kind::Skr) {
+            return Err(sniff::refusal(&target, Kind::Skr));
+        }
         file::write(&target, &self.scene, &self.camera, self.lighting)
             .map_err(|e| file_error(&target.display().to_string(), e))?;
         self.path = Some(target);
@@ -68,6 +76,7 @@ impl Document {
         &self,
         path: &str,
         format: Option<ExportFormat>,
+        overwrite: bool,
     ) -> Result<ExportReport, CommandError> {
         let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
             return Err(CommandError::new(
@@ -115,7 +124,7 @@ impl Document {
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let encoded = export::encode(&self.scene, &triangles, format, &mtl_name)
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
-        if let Some(mtl) = &encoded.mtl {
+        if encoded.mtl.is_some() {
             // On a case-blind file system "x.MTL" is the library's own path.
             let same = |a: &Path, b: &Path| {
                 a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
@@ -130,6 +139,26 @@ impl Document {
                     ),
                 ));
             }
+        }
+        if !overwrite {
+            let kind = match format {
+                ExportFormat::Obj => Kind::Obj,
+                ExportFormat::Stl => Kind::Stl,
+                ExportFormat::Glb => Kind::Glb,
+                ExportFormat::Gltf => Kind::Gltf,
+            };
+            let mut checks = vec![(target.to_path_buf(), kind)];
+            if encoded.mtl.is_some() {
+                checks.push((mtl_path.clone(), Kind::Mtl));
+                for (name, _) in &encoded.images {
+                    checks.push((mtl_path.with_file_name(name), Kind::Image));
+                }
+            }
+            if let Some((p, k)) = checks.into_iter().find(|(p, k)| !sniff::replaceable(p, *k)) {
+                return Err(sniff::refusal(&p, k));
+            }
+        }
+        if let Some(mtl) = &encoded.mtl {
             // Texture images go beside the library, before it, as it names them.
             for (name, bytes) in &encoded.images {
                 let image = mtl_path.with_file_name(name);

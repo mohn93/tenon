@@ -1075,3 +1075,102 @@ fn gltf_writes_placed_texture_coordinates() {
         assert!((dt - dt.round()).abs() < 1e-6, "{model} {s:?} {placed}");
     }
 }
+
+#[test]
+fn export_does_not_overwrite_another_kind_of_file_unless_told() {
+    let mut d = doc();
+    painted_boxes(&mut d, "Red", [255, 0, 0]);
+    for (name, format) in [
+        ("v.txt", "stl"),
+        ("v2.txt", "obj"),
+        ("v3.txt", "glb"),
+        ("v4.txt", "gltf"),
+    ] {
+        let victim = scratch(name);
+        let _ = std::fs::remove_file(victim.with_extension("mtl"));
+        std::fs::write(&victim, "notes").unwrap();
+        let (kind, _) = run(
+            &mut d,
+            json!({"type": "export", "path": victim, "format": format}),
+        )
+        .unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{format}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "notes");
+        run(
+            &mut d,
+            json!({"type": "export", "path": victim, "format": format, "overwrite": true}),
+        )
+        .unwrap();
+        // Its own format is replaced freely.
+        run(
+            &mut d,
+            json!({"type": "export", "path": victim, "format": format}),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn an_obj_export_checks_its_library_before_writing_anything() {
+    let mut d = doc();
+    painted_boxes(&mut d, "Red", [255, 0, 0]);
+    let obj = scratch("lib-guard.obj");
+    let mtl = scratch("lib-guard.mtl");
+    std::fs::write(&mtl, "notes").unwrap();
+    let (kind, message) = run(&mut d, json!({"type": "export", "path": obj})).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert!(message.contains("lib-guard.mtl"), "{message}");
+    assert!(!obj.exists());
+    assert_eq!(std::fs::read_to_string(&mtl).unwrap(), "notes");
+    run(
+        &mut d,
+        json!({"type": "export", "path": obj, "overwrite": true}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "export", "path": obj})).unwrap();
+}
+
+#[test]
+fn stl_files_of_either_kind_are_recognised() {
+    let mut d = doc();
+    two_boxes(&mut d);
+    let ascii = scratch("ascii.stl");
+    std::fs::write(&ascii, "  SOLID x\nendsolid x\n").unwrap();
+    run(&mut d, json!({"type": "export", "path": ascii})).unwrap();
+    let binary = scratch("binary.stl");
+    let mut bytes = vec![0u8; 80];
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 50]);
+    std::fs::write(&binary, &bytes).unwrap();
+    run(&mut d, json!({"type": "export", "path": binary})).unwrap();
+    let wrong = scratch("wrong.stl");
+    bytes.push(0);
+    std::fs::write(&wrong, &bytes).unwrap();
+    assert!(run(&mut d, json!({"type": "export", "path": wrong})).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_obj_export_replaces_a_library_link_and_leaves_its_target() {
+    let mut d = doc();
+    painted_boxes(&mut d, "Red", [255, 0, 0]);
+    let obj = scratch("lib-link.obj");
+    let mtl = scratch("lib-link.mtl");
+    let outside = scratch("elsewhere/outside.txt");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    std::fs::write(&outside, "keep me").unwrap();
+    std::os::unix::fs::symlink(&outside, &mtl).unwrap();
+    run(
+        &mut d,
+        json!({"type": "export", "path": obj, "overwrite": true}),
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep me");
+    let meta = std::fs::symlink_metadata(&mtl).unwrap();
+    assert!(meta.is_file() && !meta.file_type().is_symlink());
+    assert!(
+        std::fs::read_to_string(&mtl)
+            .unwrap()
+            .contains("newmtl Red")
+    );
+}

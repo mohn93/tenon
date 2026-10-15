@@ -261,12 +261,16 @@ impl Document {
                 self.open_file(&path)?;
                 Ok(Outcome::default())
             }
-            Command::Save { path } => {
-                self.save_file(path.as_deref())?;
+            Command::Save { path, overwrite } => {
+                self.save_file(path.as_deref(), overwrite)?;
                 Ok(Outcome::default())
             }
-            Command::Export { path, format } => {
-                let report = self.export_file(&path, format)?;
+            Command::Export {
+                path,
+                format,
+                overwrite,
+            } => {
+                let report = self.export_file(&path, format, overwrite)?;
                 Ok(Outcome {
                     export: Some(report),
                     ..Outcome::default()

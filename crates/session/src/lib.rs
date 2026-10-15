@@ -11,6 +11,7 @@ mod import;
 mod query;
 mod rectangle;
 mod rotate;
+mod sniff;
 pub mod texture;
 
 pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points, arc_through};

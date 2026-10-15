@@ -574,3 +574,49 @@ fn open_errors_do_not_quote_the_file() {
         assert!(message.contains("line"), "{message}");
     }
 }
+
+#[test]
+fn save_does_not_overwrite_another_kind_of_file_unless_told() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+    let victim = scratch("victim.txt");
+    std::fs::write(&victim, "notes").unwrap();
+    let (kind, message) = run(&mut d, json!({"type": "save", "path": victim})).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert!(message.contains("\"overwrite\": true"), "{message}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "notes");
+    // A model file, an empty file and a missing one are fine.
+    let model = scratch("model.skr");
+    run(&mut d, json!({"type": "save", "path": model})).unwrap();
+    run(&mut d, json!({"type": "save", "path": model})).unwrap();
+    run(&mut d, json!({"type": "save"})).unwrap();
+    let empty = scratch("empty.skr");
+    std::fs::write(&empty, "").unwrap();
+    run(&mut d, json!({"type": "save", "path": empty})).unwrap();
+    // A zip that is not a model is another kind of file.
+    let other = scratch("other.zip");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&other).unwrap());
+    zip.start_file("a.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.finish().unwrap();
+    assert!(run(&mut d, json!({"type": "save", "path": other})).is_err());
+    run(
+        &mut d,
+        json!({"type": "save", "path": victim, "overwrite": true}),
+    )
+    .unwrap();
+    assert!(std::fs::read(&victim).unwrap().starts_with(b"PK"));
+}
+
+#[test]
+fn save_refuses_a_folder() {
+    let mut d = doc();
+    let dir = scratch("a-folder");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (kind, _) = run(&mut d, json!({"type": "save", "path": dir})).unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+}

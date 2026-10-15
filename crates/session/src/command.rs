@@ -245,19 +245,29 @@ pub enum Command {
         discard: bool,
     },
     /// Save the model and view as a `.skr` file at `path`, or at the path last opened or
-    /// saved when `path` is absent. Not an undo step.
+    /// saved when `path` is absent. Not an undo step. An existing file there that is not a
+    /// model (an empty file is fine) is refused unless `overwrite` is true.
     Save {
         #[serde(default)]
         path: Option<String>,
+        /// Replace an existing file even when it is not a `.skr` model (without it such a
+        /// file is refused; an empty or missing file is always fine).
+        #[serde(default)]
+        overwrite: bool,
     },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
     /// `.stl`, `.glb`, `.gltf`). Not an undo step. The outcome's `export` counts the triangles
-    /// written and the faces left out because they could not be triangulated.
+    /// written and the faces left out because they could not be triangulated. An existing
+    /// file that is not of the format written is refused unless `overwrite` is true.
     Export {
         path: String,
         #[serde(default)]
         format: Option<ExportFormat>,
+        /// Replace an existing file even when it is not of the format written; for an OBJ,
+        /// also its `.mtl` and images.
+        #[serde(default)]
+        overwrite: bool,
     },
     /// Read an OBJ or STL file and add its faces to the open context, as one undo step: as a
     /// new group (default) or component named after the file, placed at the context's origin
