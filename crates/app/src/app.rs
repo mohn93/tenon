@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use api::{Hub, listen_unix};
@@ -163,11 +164,111 @@ fn redraws_for_egui(event: &WindowEvent, egui_repaint: bool) -> bool {
     egui_repaint && !matches!(event, WindowEvent::RedrawRequested)
 }
 
-/// True if a frame skipped because the surface had no texture asks for another at once: after
-/// a timeout. A hidden window's frame waits until the window shows (`WindowEvent::Occluded`),
-/// so a hidden window stays idle.
-fn retries_at_once(skipped: &wgpu::CurrentSurfaceTexture) -> bool {
-    matches!(skipped, wgpu::CurrentSurfaceTexture::Timeout)
+/// How long a frame the surface could not give waits before trying again, when nothing else
+/// asks for one: a hidden window, or one whose surface reported an error, is not left idle for
+/// good if the window's own events and the surface disagree.
+const SKIPPED_RETRY: Duration = Duration::from_millis(250);
+
+/// What to do about a frame the surface had no texture for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AfterSkip {
+    /// The surface's configuration is out of date: configure it again and draw at once.
+    Reconfigure,
+    /// The surface is gone: make a new one, configure it and draw at once.
+    Recreate,
+    /// Draw again at once (a timeout).
+    RetryNow,
+    /// Draw again after `SKIPPED_RETRY` (a hidden window, or a surface error).
+    RetrySoon,
+}
+
+fn after_skip(skipped: &wgpu::CurrentSurfaceTexture) -> AfterSkip {
+    use wgpu::CurrentSurfaceTexture as S;
+    match skipped {
+        S::Outdated => AfterSkip::Reconfigure,
+        S::Lost => AfterSkip::Recreate,
+        S::Occluded | S::Validation => AfterSkip::RetrySoon,
+        S::Timeout | S::Success(_) | S::Suboptimal(_) => AfterSkip::RetryNow,
+    }
+}
+
+/// A short name for a skipped frame's surface status, for the log.
+fn skip_name(skipped: &wgpu::CurrentSurfaceTexture) -> &'static str {
+    use wgpu::CurrentSurfaceTexture as S;
+    match skipped {
+        S::Success(_) | S::Suboptimal(_) => "acquired",
+        S::Timeout => "timed out",
+        S::Occluded => "occluded",
+        S::Outdated => "outdated",
+        S::Lost => "lost",
+        S::Validation => "a validation error",
+    }
+}
+
+/// The GPU objects drawing into the window.
+struct Gpu {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    /// Set when the device is lost; then it and everything made with it are made again.
+    lost: Arc<AtomicBool>,
+}
+
+/// A surface for `window` and a device to draw into it, configured at the window's size. GPU
+/// errors are logged rather than ending the app, and a lost device is logged and flagged.
+fn gpu(instance: &wgpu::Instance, window: &Arc<Window>) -> Result<Gpu, String> {
+    let size = window.inner_size();
+    let surface = instance
+        .create_surface(window.clone())
+        .map_err(|e| format!("cannot create a surface: {e}"))?;
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        compatible_surface: Some(&surface),
+        ..Default::default()
+    }))
+    .map_err(|e| format!("no compatible GPU adapter: {e}"))?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: render::required_limits(&adapter),
+        ..Default::default()
+    }))
+    .map_err(|e| format!("cannot get a GPU device: {e}"))?;
+    let lost = Arc::new(AtomicBool::new(false));
+    device.set_device_lost_callback({
+        let lost = lost.clone();
+        move |reason, message| {
+            // A device dropped on purpose (made again, or the app closing) is not news.
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                eprintln!("GPU device lost ({reason:?}): {message}");
+                lost.store(true, Ordering::SeqCst);
+            }
+        }
+    });
+    device.on_uncaptured_error(Arc::new(|e| eprintln!("GPU error: {e}")));
+
+    let mut config = surface
+        .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+        .ok_or("surface not supported by adapter")?;
+    // Colors are authored as sRGB values, so prefer a non-sRGB target that writes them as-is.
+    // Keep the default format's channel layout when its non-sRGB twin is available.
+    let caps = surface.get_capabilities(&adapter);
+    let linear = config.format.remove_srgb_suffix();
+    config.format = if caps.formats.contains(&linear) {
+        linear
+    } else {
+        caps.formats
+            .iter()
+            .copied()
+            .find(|f| !f.is_srgb())
+            .unwrap_or(config.format)
+    };
+    surface.configure(&device, &config);
+    Ok(Gpu {
+        surface,
+        device,
+        queue,
+        config,
+        lost,
+    })
 }
 
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
@@ -289,10 +390,16 @@ fn is_click(press: Option<DVec2>, at: DVec2, max_px: f64) -> bool {
 
 struct State {
     window: Arc<Window>,
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// Set when the device is lost (see `gpu`).
+    device_lost: Arc<AtomicBool>,
+    /// The surface status of the last frame skipped and logged since one was drawn, so a run of
+    /// skips is logged once.
+    skip_logged: Option<&'static str>,
     renderer: Renderer,
     snapshotter: Snapshotter,
     editor: Editor,
@@ -334,39 +441,14 @@ struct State {
 
 impl State {
     fn new(window: Arc<Window>) -> Self {
-        let size = window.inner_size();
         let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("create surface");
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .expect("no compatible GPU adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: render::required_limits(&adapter),
-            ..Default::default()
-        }))
-        .expect("request device");
-
-        let mut config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .expect("surface not supported by adapter");
-        // Colors are authored as sRGB values, so prefer a non-sRGB target that writes them as-is.
-        // Keep the default format's channel layout when its non-sRGB twin is available.
-        let caps = surface.get_capabilities(&adapter);
-        let linear = config.format.remove_srgb_suffix();
-        config.format = if caps.formats.contains(&linear) {
-            linear
-        } else {
-            caps.formats
-                .iter()
-                .copied()
-                .find(|f| !f.is_srgb())
-                .unwrap_or(config.format)
-        };
-        surface.configure(&device, &config);
+        let Gpu {
+            surface,
+            device,
+            queue,
+            config,
+            lost,
+        } = gpu(&instance, &window).unwrap_or_else(|e| panic!("{e}"));
 
         let renderer = Renderer::new(&device, &queue, config.format);
         let gui = Gui::new(&window, &device, config.format);
@@ -378,10 +460,13 @@ impl State {
         );
         Self {
             window,
+            instance,
             surface,
             device,
             queue,
             config,
+            device_lost: lost,
+            skip_logged: None,
             renderer,
             snapshotter,
             editor,
@@ -746,19 +831,77 @@ impl State {
     /// Lays out and draws the 3D view and the panels, then applies what was clicked in them
     /// and asks for another frame to show the result. Returns true if a panel action ran (so
     /// subscribers should hear about edits).
-    fn render(&mut self) -> bool {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                self.window.request_redraw();
+    /// Makes the device, the surface and everything drawn with them again after the device was
+    /// lost. False, logged, when that fails (tried again later).
+    fn recreate_gpu(&mut self) -> bool {
+        let Gpu {
+            surface,
+            device,
+            queue,
+            config,
+            lost,
+        } = match gpu(&self.instance, &self.window) {
+            Ok(gpu) => gpu,
+            Err(e) => {
+                eprintln!("cannot make the GPU device again: {e}");
                 return false;
             }
+        };
+        eprintln!("GPU device made again");
+        self.renderer = Renderer::new(&device, &queue, config.format);
+        self.snapshotter = Snapshotter::with_device(&device, &queue);
+        self.gui = Gui::new(&self.window, &device, config.format);
+        // The swatches belonged to the old panels' context.
+        self.swatches.clear();
+        self.drawn = None;
+        self.surface = surface;
+        self.device = device;
+        self.queue = queue;
+        self.config = config;
+        self.device_lost = lost;
+        true
+    }
+
+    fn render(&mut self) -> bool {
+        if self.device_lost.load(Ordering::SeqCst) && !self.recreate_gpu() {
+            self.repaint_at = Some(Instant::now() + SKIPPED_RETRY);
+            return false;
+        }
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                self.skip_logged = None;
+                frame
+            }
             skipped => {
-                // Fly mode would otherwise freeze until the next input.
-                if retries_at_once(&skipped) {
-                    self.window.request_redraw();
+                let name = skip_name(&skipped);
+                if self.skip_logged != Some(name) {
+                    eprintln!("frame skipped: the window's surface is {name}");
+                    self.skip_logged = Some(name);
+                }
+                match after_skip(&skipped) {
+                    AfterSkip::Reconfigure => {
+                        self.surface.configure(&self.device, &self.config);
+                        self.window.request_redraw();
+                    }
+                    AfterSkip::Recreate => {
+                        match self.instance.create_surface(self.window.clone()) {
+                            Ok(surface) => {
+                                surface.configure(&self.device, &self.config);
+                                self.surface = surface;
+                                self.window.request_redraw();
+                            }
+                            Err(e) => {
+                                eprintln!("cannot create a surface: {e}");
+                                self.repaint_at = Some(Instant::now() + SKIPPED_RETRY);
+                            }
+                        }
+                    }
+                    // Fly mode would otherwise freeze until the next input.
+                    AfterSkip::RetryNow => self.window.request_redraw(),
+                    AfterSkip::RetrySoon => {
+                        self.repaint_at = Some(Instant::now() + SKIPPED_RETRY);
+                    }
                 }
                 return false;
             }
@@ -1443,9 +1586,16 @@ mod tests {
     }
 
     #[test]
-    fn a_skipped_frame_is_retried_after_a_timeout_but_not_while_hidden() {
-        assert!(retries_at_once(&wgpu::CurrentSurfaceTexture::Timeout));
-        assert!(!retries_at_once(&wgpu::CurrentSurfaceTexture::Occluded));
+    fn a_skipped_frame_is_always_tried_again() {
+        use wgpu::CurrentSurfaceTexture as S;
+        assert_eq!(after_skip(&S::Timeout), AfterSkip::RetryNow);
+        assert_eq!(after_skip(&S::Outdated), AfterSkip::Reconfigure);
+        assert_eq!(after_skip(&S::Lost), AfterSkip::Recreate);
+        // A hidden window, or a surface error (as after a lost device), tries again shortly
+        // rather than waiting for an event that may not come.
+        assert_eq!(after_skip(&S::Occluded), AfterSkip::RetrySoon);
+        assert_eq!(after_skip(&S::Validation), AfterSkip::RetrySoon);
+        assert_eq!(skip_name(&S::Validation), "a validation error");
     }
 
     #[test]
