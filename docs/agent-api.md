@@ -296,7 +296,7 @@ and falls off smoothly to nothing there; surfaces take it by the angle they face
 not depend on the open instance. The window and `render_view` use the 128 strongest lights as
 seen from the eye (strength over 1 + distance squared), and up to the strongest 64 of those
 cast shadows: every face stops their light except glowing ones (a lamp's glowing shade does not hide
-its own light), from both sides; shadow edges are slightly soft. Faces nearer a light than 2 cm
+its own light), from both sides; shadow edges are slightly soft. Faces nearer a light than 1 mm
 cast no shadow from it, and the other lights light without shadows. Shadow maps are kept while
 the camera moves and drawn again only when the model's faces move or the shadowed lights
 change, so the first frame after an edit is slower than the others. Where the GPU has no cube-map
