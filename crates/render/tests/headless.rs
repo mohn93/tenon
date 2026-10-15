@@ -909,6 +909,63 @@ fn a_wall_shades_the_floor_behind_it_and_shadow_maps_are_kept_between_frames() {
     assert_eq!(r.shadow_faces_drawn(), kept + 12);
 }
 
+/// A 10 m floor, an upright wall 4 m wide and 2 m tall along y at x = 0, and a lamp mounted on
+/// it: a 0.6 m upright glowing square `gap` meters in front of the wall (at -x), 1 m up.
+fn wall_lamp(gap: f64) -> Scene {
+    let p = |x: f64, y: f64, z: f64| DVec3::new(x, y, z);
+    let mut m = Model::new();
+    let floor = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
+    m.add_polygon(&floor.map(|(x, y)| p(x, y, 0.0))).unwrap();
+    let wall = [(-2.0, 0.0), (2.0, 0.0), (2.0, 2.0), (-2.0, 2.0)];
+    m.add_polygon(&wall.map(|(y, z)| p(0.0, y, z))).unwrap();
+    let before: Vec<_> = m.faces().map(|(id, _)| id).collect();
+    let shade = [(-0.3, 0.7), (0.3, 0.7), (0.3, 1.3), (-0.3, 1.3)];
+    m.add_polygon(&shade.map(|(y, z)| p(-gap, y, z))).unwrap();
+    let lamp = m
+        .faces()
+        .map(|(id, _)| id)
+        .find(|id| !before.contains(id))
+        .unwrap();
+    let mut s = Scene::from_root(m);
+    let (glow, _) = s
+        .add_material_from(kernel::Material {
+            name: "Lamp".into(),
+            color: [255, 255, 255],
+            opacity: 1.0,
+            texture: None,
+            emission: 6.0,
+        })
+        .unwrap();
+    for side in [Side::Front, Side::Back] {
+        s.paint(MeshId::Root, &[lamp], &[], side, Some(glow))
+            .unwrap();
+    }
+    s
+}
+
+#[test]
+fn a_lamp_a_centimeter_off_a_wall_does_not_light_through_it() {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = screen.renderer();
+    if !r.casts_shadows() {
+        eprintln!("no cube-map arrays, skipping");
+        return;
+    }
+    let cam = overhead(16.0);
+    r.set_lighting(Lighting::Night);
+    r.set_scene(&wall_lamp(0.01), &[], &BTreeSet::new());
+    let px = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    let front = brightness(pixel_at(&px, &cam, DVec3::new(-1.5, 0.0, 0.0)));
+    let behind = brightness(pixel_at(&px, &cam, DVec3::new(1.5, 0.0, 0.0)));
+    assert!(
+        front > behind + 40,
+        "front {front}, behind the wall {behind}"
+    );
+}
+
 #[test]
 fn without_shadows_the_lamp_lights_through_the_wall() {
     let Some(screen) = Offscreen::new() else {

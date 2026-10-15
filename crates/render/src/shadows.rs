@@ -16,8 +16,11 @@ pub const SHADOW_SIZE: u32 = 256;
 /// Shadow maps hold the distance to the nearest caster over the light's range, 0 to 1.
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth16Unorm;
 
-/// How near a caster can come to its light, in meters, and still cast.
-pub const SHADOW_NEAR: f32 = 0.02;
+/// How near a caster can come to its light, in meters, and still cast: small, so a lamp
+/// mounted a centimeter off a wall or ceiling is still shaded by it. Depth is written as the
+/// distance over the range (see the shadow shader), so the near plane only clips and costs no
+/// depth precision.
+pub const SHADOW_NEAR: f32 = 0.001;
 
 /// A light as its shadow map was drawn for it: where it is and how far it reaches, as the
 /// renderer uploads them. A light that keeps both keeps its map.
