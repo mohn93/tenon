@@ -3,7 +3,7 @@
 use std::cell::Cell;
 
 use glam::{DVec2, DVec3};
-use kernel::{EdgeId, FaceId, Guide, GuideId, Model, Shape, VertexId};
+use kernel::{EdgeId, EntityId, FaceId, Guide, GuideId, Model, Shape, VertexId};
 use session::{Camera, Ray};
 
 use crate::scenery::{Owner, Part, Scenery, Stretch};
@@ -127,26 +127,45 @@ pub fn infer_in(
     guides: &Guides,
     radius_px: f64,
 ) -> Inference {
+    infer_detail(scenery, camera, cursor, guides, radius_px).0
+}
+
+/// Entities a snap involves, each with the index of its part in the `Scenery`.
+pub type Involved = Vec<(usize, EntityId)>;
+
+/// [`infer_in`], also giving the entities the point snapped to: the vertex of an endpoint;
+/// the edge of a midpoint or of a point on an edge; the guide of a guide point or of a point on
+/// a guide line; the two edges or guide lines that cross at an intersection, the one the
+/// point lies on first; the face of a point on a face. None for the origin, a direction from
+/// the anchor, the ground, a free point or a locked direction.
+pub fn infer_detail(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+    guides: &Guides,
+    radius_px: f64,
+) -> (Inference, Involved) {
     let ray = camera.ray(cursor);
-    let face_hit = nearest_face_hit(scenery, &ray);
-    let face = face_hit.and_then(|(owner, f, _)| (owner == Owner::Open).then_some(f));
+    let face_hit = nearest_face_part(scenery, &ray);
+    let face = face_hit.and_then(|(k, f, _)| (scenery.part(k).owner == Owner::Open).then_some(f));
     let projector = camera.projector();
     let screen_dist = |p: DVec3| projector.project(p).map(|s| s.distance(cursor));
     let snapped = snap_point(scenery, camera, cursor, radius_px);
 
     if let (Some(anchor), Some(lock)) = (guides.anchor, guides.lock) {
         let point = match snapped {
-            Some((p, _)) => anchor + lock.dir * (p - anchor).dot(lock.dir),
+            Some((p, _, _)) => anchor + lock.dir * (p - anchor).dot(lock.dir),
             None => closest_on_line_to_ray(anchor, lock.dir, &ray, false),
         };
-        return Inference {
+        let hit = Inference {
             point,
             kind: lock.kind,
             face,
         };
+        return (hit, Vec::new());
     }
-    if let Some((point, kind)) = snapped {
-        return Inference { point, kind, face };
+    if let Some((point, kind, involved)) = snapped {
+        return (Inference { point, kind, face }, involved);
     }
 
     // Along a direction from the anchor. Direction lines are guides, so faces do not hide them.
@@ -169,20 +188,21 @@ pub fn infer_in(
             }
         }
         if let Some((_, hit)) = along {
-            return hit;
+            return (hit, Vec::new());
         }
     }
 
     // On a face (nearest along the ray).
-    if let Some((_, _, point)) = face_hit {
-        return Inference {
+    if let Some((k, f, point)) = face_hit {
+        let hit = Inference {
             point,
             kind: SnapKind::OnFace,
             face,
         };
+        return (hit, vec![(k, EntityId::Face(f))]);
     }
 
-    match camera.ground_at(cursor) {
+    let hit = match camera.ground_at(cursor) {
         Some(point) => Inference {
             point,
             kind: SnapKind::Ground,
@@ -193,18 +213,20 @@ pub fn infer_in(
             kind: SnapKind::Free,
             face,
         },
-    }
+    };
+    (hit, Vec::new())
 }
 
-/// The visible point snap under the cursor, if any: endpoint, midpoint, origin or guide point
-/// (nearest on screen), else the nearest apparent intersection of two edges or guide lines
-/// both visible there, else the nearest point on an edge, else on a guide line.
+/// The visible point snap under the cursor, if any, with the entities it involves (see
+/// `infer_detail`): endpoint, midpoint, origin or guide point (nearest on screen), else the
+/// nearest apparent intersection of two edges or guide lines both visible there, else the
+/// nearest point on an edge, else on a guide line.
 fn snap_point(
     scenery: &Scenery,
     camera: &Camera,
     cursor: DVec2,
     radius_px: f64,
-) -> Option<(DVec3, SnapKind)> {
+) -> Option<(DVec3, SnapKind, Involved)> {
     let ray = camera.ray(cursor);
     let projector = camera.projector();
     // How far from the cursor a point is on screen, if within the radius.
@@ -217,37 +239,46 @@ fn snap_point(
     let sight = Sight::new(scenery, camera);
     let seen = |p: &DVec3| sight.sees(*p);
     let near = Near::around(scenery, camera, cursor, radius_px);
-    let mut points: Vec<(f64, (DVec3, SnapKind))> = Vec::new();
-    let mut offer = |p: DVec3, kind: SnapKind| {
+    let mut points: Vec<(f64, (DVec3, SnapKind, Involved))> = Vec::new();
+    let mut offer = |p: DVec3, kind: SnapKind, involved: Involved| {
         if let Some(d) = near_enough(p) {
-            points.push((d, (p, kind)));
+            points.push((d, (p, kind, involved)));
         }
     };
-    for &(_, _, p) in &near.points {
-        offer(p, SnapKind::Endpoint);
+    for &(k, v, p) in &near.points {
+        offer(p, SnapKind::Endpoint, vec![(k, EntityId::Vertex(v))]);
     }
-    for &(_, _, a, b) in &near.segments {
-        offer((a + b) * 0.5, SnapKind::Midpoint);
+    for &(k, e, a, b) in &near.segments {
+        offer(
+            (a + b) * 0.5,
+            SnapKind::Midpoint,
+            vec![(k, EntityId::Edge(e))],
+        );
     }
-    offer(DVec3::ZERO, SnapKind::Origin);
+    offer(DVec3::ZERO, SnapKind::Origin, Vec::new());
     let guides = scenery.guides();
-    for &(_, _, g) in guides {
+    for &(k, id, g) in guides {
         if let Guide::Point { position } = g {
-            offer(position, SnapKind::GuidePoint);
+            offer(
+                position,
+                SnapKind::GuidePoint,
+                vec![(k, EntityId::Guide(id))],
+            );
         }
     }
-    if let Some((_, (p, kind))) = nearest_visible(points, |(p, _)| seen(p)) {
-        return Some((p, kind));
+    if let Some((_, snap)) = nearest_visible(points, |(p, _, _)| seen(p)) {
+        return Some(snap);
     }
 
-    // Guide lines passing near the cursor, as the part of them in view.
-    let guide_lines: Vec<(DVec3, DVec3)> = guides
+    // Guide lines passing near the cursor, as the part of them in view, each with its part
+    // and id.
+    let guide_lines: Vec<(usize, GuideId, DVec3, DVec3)> = guides
         .iter()
-        .filter_map(|&(_, _, g)| match g {
-            Guide::Line { point, direction } => Some((point, direction)),
+        .filter_map(|&(k, id, g)| match g {
+            Guide::Line { point, direction } => Some((k, id, point, direction)),
             Guide::Point { .. } => None,
         })
-        .filter(|&(point, dir)| {
+        .filter(|&(_, _, point, dir)| {
             let p = closest_on_line_to_ray(point, dir, &ray, false);
             projector
                 .project(p)
@@ -260,16 +291,15 @@ fn snap_point(
     let lines: Vec<ScreenLine> = near
         .segments
         .iter()
-        .map(|&(_, _, a, b)| (a, b))
-        .chain(
-            guide_lines
-                .iter()
-                .filter_map(|&(point, dir)| camera.line_span(point, dir))
-                .map(|[a, b]| (a, b)),
-        )
-        .filter_map(|(a, b)| {
+        .map(|&(k, e, a, b)| ((k, EntityId::Edge(e)), (a, b)))
+        .chain(guide_lines.iter().filter_map(|&(k, id, point, dir)| {
+            let [a, b] = camera.line_span(point, dir)?;
+            Some(((k, EntityId::Guide(id)), (a, b)))
+        }))
+        .filter_map(|(who, (a, b))| {
             let (sa, sb) = (projector.project(a)?, projector.project(b)?);
             (distance_to_segment(cursor, sa, sb) <= 2.0 * radius_px).then_some(ScreenLine {
+                who,
                 ends: (a, b),
                 screen: (sa, sb),
             })
@@ -278,37 +308,45 @@ fn snap_point(
     let mut crossings = Vec::new();
     for (i, ab) in lines.iter().enumerate() {
         for cd in &lines[i + 1..] {
-            if let Some((p, far)) = apparent_crossing(camera, ab, cd)
+            if let Some((p, far, ab_nearer)) = apparent_crossing(camera, ab, cd)
                 && let Some(dist) = near_enough(p)
             {
-                crossings.push((dist, (p, far)));
+                let involved = if ab_nearer {
+                    vec![ab.who, cd.who]
+                } else {
+                    vec![cd.who, ab.who]
+                };
+                crossings.push((dist, (p, far, involved)));
             }
         }
     }
-    if let Some((_, (p, _))) = nearest_visible(crossings, |(p, far)| seen(far) && seen(p)) {
-        return Some((p, SnapKind::Intersection));
+    if let Some((_, (p, _, involved))) =
+        nearest_visible(crossings, |(p, far, _)| seen(far) && seen(p))
+    {
+        return Some((p, SnapKind::Intersection, involved));
     }
 
     let on_edge = near
         .segments
         .iter()
-        .filter_map(|&(_, _, a, b)| {
+        .filter_map(|&(k, e, a, b)| {
             let p = closest_on_line_to_ray(a, b - a, &ray, true);
-            near_enough(p).map(|d| (d, p))
+            near_enough(p).map(|d| (d, (p, (k, EntityId::Edge(e)))))
         })
         .collect();
-    if let Some((_, p)) = nearest_visible(on_edge, seen) {
-        return Some((p, SnapKind::OnEdge));
+    if let Some((_, (p, who))) = nearest_visible(on_edge, |(p, _)| seen(p)) {
+        return Some((p, SnapKind::OnEdge, vec![who]));
     }
 
     let on_guide = guide_lines
         .iter()
-        .filter_map(|&(point, dir)| {
+        .filter_map(|&(k, id, point, dir)| {
             let p = closest_on_line_to_ray(point, dir, &ray, false);
-            near_enough(p).map(|d| (d, p))
+            near_enough(p).map(|d| (d, (p, (k, EntityId::Guide(id)))))
         })
         .collect();
-    nearest_visible(on_guide, seen).map(|(_, p)| (p, SnapKind::OnGuide))
+    nearest_visible(on_guide, |(p, _)| seen(p))
+        .map(|(_, (p, who))| (p, SnapKind::OnGuide, vec![who]))
 }
 
 /// The nearest of `candidates` (each with its distance from the cursor on screen) that `seen`
@@ -359,8 +397,9 @@ pub fn guide_under_where(
         .map(|(_, (owner, id, g, _))| (owner, id, g))
 }
 
-/// A segment and where its ends are on screen.
+/// A segment, where its ends are on screen, and the edge or guide line it is (with its part).
 struct ScreenLine {
+    who: (usize, EntityId),
     ends: (DVec3, DVec3),
     screen: (DVec2, DVec2),
 }
@@ -378,9 +417,14 @@ fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
 }
 
 /// Where segments a-b and c-d cross on screen away from their ends: the points under the
-/// crossing on the nearer and the farther segment, nearer first. Edges that meet in space share
-/// a vertex (the kernel splits crossing edges), so their crossing is an endpoint, not this.
-fn apparent_crossing(camera: &Camera, ab: &ScreenLine, cd: &ScreenLine) -> Option<(DVec3, DVec3)> {
+/// crossing on the nearer and the farther segment, nearer first, and whether a-b is the nearer.
+/// Edges that meet in space share a vertex (the kernel splits crossing edges), so their
+/// crossing is an endpoint, not this.
+fn apparent_crossing(
+    camera: &Camera,
+    ab: &ScreenLine,
+    cd: &ScreenLine,
+) -> Option<(DVec3, DVec3, bool)> {
     let ((a, b), (sa, sb)) = (ab.ends, ab.screen);
     let ((c, d), (sc, sd)) = (cd.ends, cd.screen);
     let (r, q) = (sb - sa, sd - sc);
@@ -399,9 +443,9 @@ fn apparent_crossing(camera: &Camera, ab: &ScreenLine, cd: &ScreenLine) -> Optio
     let on_cd = closest_on_line_to_ray(c, d - c, &ray, true);
     Some(
         if on_ab.distance(ray.origin) <= on_cd.distance(ray.origin) {
-            (on_ab, on_cd)
+            (on_ab, on_cd, true)
         } else {
-            (on_cd, on_ab)
+            (on_cd, on_ab, false)
         },
     )
 }
@@ -492,26 +536,29 @@ pub fn edge_under_where(
         .map(|(_, (owner, id, a, b, _))| (owner, id, a, b))
 }
 
-/// The vertices and edges that may lie within `radius_px` of the cursor on screen, with the
-/// index of the part each comes from and positions in the open context's coordinates, in
-/// part and id order so that ties between equally near candidates always go the same way.
-/// Soft edges are hidden, so they are left out: nothing snaps to them or picks them (their
-/// ends are vertices of the edges around them and still snap).
-struct Near {
-    points: Vec<(usize, VertexId, DVec3)>,
-    segments: Vec<(usize, EdgeId, DVec3, DVec3)>,
+/// The vertices and edges that may lie within `radius_px` of the cursor on screen (or in a
+/// cone), with the index of the part each comes from and positions in the open context's
+/// coordinates, in part and id order so that ties between equally near candidates always go
+/// the same way. Soft edges are hidden, so they are left out: nothing snaps to them or picks
+/// them (their ends are vertices of the edges around them and still snap).
+pub(crate) struct Near {
+    pub(crate) points: Vec<(usize, VertexId, DVec3)>,
+    pub(crate) segments: Vec<(usize, EdgeId, DVec3, DVec3)>,
 }
 
 impl Near {
     fn around(scenery: &Scenery, camera: &Camera, cursor: DVec2, radius_px: f64) -> Near {
-        let cone = Cone::around(camera, cursor, radius_px);
+        Near::in_cone(scenery, Cone::around(camera, cursor, radius_px))
+    }
+
+    /// Those that may lie in `cone`, in the open context's coordinates.
+    pub(crate) fn in_cone(scenery: &Scenery, cone: Cone) -> Near {
         let mut near = Near {
             points: Vec::new(),
             segments: Vec::new(),
         };
         for (k, part) in scenery.parts().enumerate() {
-            // Whatever lies near the cursor on screen lies in the cone, so a part whose box
-            // misses it has nothing to offer.
+            // A part whose box misses the cone has nothing in it.
             if !part.may_meet_cone(cone.origin, cone.dir, cone.r0, cone.slope) {
                 continue;
             }
@@ -543,7 +590,7 @@ impl Near {
 /// from 0, and `r0` behind the origin): what `Index::near_ray` and `Placed::may_meet_cone`
 /// search.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Cone {
+pub(crate) struct Cone {
     origin: DVec3,
     dir: DVec3,
     r0: f64,
@@ -569,7 +616,7 @@ impl Cone {
     /// cone (its rim, an ellipse or other conic in perspective and a circle in a parallel
     /// view, holds no straight piece between two corners), so rounding in where a point lands
     /// on screen cannot carry a candidate out of it.
-    fn around(camera: &Camera, cursor: DVec2, radius_px: f64) -> Cone {
+    pub(crate) fn around(camera: &Camera, cursor: DVec2, radius_px: f64) -> Cone {
         let ray = camera.ray(cursor);
         let (mut r0, mut slope) = (0.0_f64, 0.0_f64);
         for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
@@ -588,6 +635,17 @@ impl Cone {
             dir: ray.dir,
             r0,
             slope,
+        }
+    }
+
+    /// The points within `radius` of the ray `origin + t * dir` (unit `dir`), and `radius`
+    /// behind its origin.
+    pub(crate) fn along(origin: DVec3, dir: DVec3, radius: f64) -> Cone {
+        Cone {
+            origin,
+            dir,
+            r0: radius,
+            slope: 0.0,
         }
     }
 
@@ -715,8 +773,13 @@ pub(crate) fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segme
 
 /// The nearest face the ray meets in front of its origin: whose it is, the face, and where.
 fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec3)> {
-    let mut best: Option<(f64, Owner, FaceId)> = None;
-    for part in scenery.parts() {
+    nearest_face_part(scenery, ray).map(|(k, f, p)| (scenery.part(k).owner, f, p))
+}
+
+/// [`nearest_face_hit`] giving the index of the face's part instead of its owner.
+fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVec3)> {
+    let mut best: Option<(f64, usize, FaceId)> = None;
+    for (k, part) in scenery.parts().enumerate() {
         let reach = best.map_or(f64::INFINITY, |(t, _, _)| t);
         if !part.may_meet_ray(ray.origin, ray.dir, reach) {
             continue;
@@ -728,10 +791,10 @@ fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec
             reach,
         ) && best.is_none_or(|(bt, _, _)| t < bt)
         {
-            best = Some((t, part.owner, f));
+            best = Some((t, k, f));
         }
     }
-    best.map(|(t, owner, f)| (owner, f, ray.origin + ray.dir * t))
+    best.map(|(t, k, f)| (k, f, ray.origin + ray.dir * t))
 }
 
 #[cfg(test)]
@@ -755,6 +818,59 @@ mod tests {
             m.add_edge(DVec3::new(a.0, a.1, z), DVec3::new(b.0, b.1, z))
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn detailed_inference_names_what_was_snapped_to() {
+        let (c, mut m) = (cam(), Model::new());
+        square(&mut m, 0.0);
+        m.add_guide(Guide::Line {
+            point: DVec3::new(-5.0, 0.5, 0.0),
+            direction: DVec3::X,
+        })
+        .unwrap();
+        let v = Scenery::single(&m);
+        let none = Guides::default();
+        let snap = |p: DVec3| infer_detail(&v, &c, px(&c, p), &none, R);
+        let vertex = |p: DVec3| m.vertices().find(|(_, x)| x.pos == p).unwrap().0;
+        let edge = |a: DVec3, b: DVec3| {
+            m.edges()
+                .find(|(_, e)| {
+                    let ends = e.v.map(|id| m.vertex(id).unwrap().pos);
+                    ends == [a, b] || ends == [b, a]
+                })
+                .unwrap()
+                .0
+        };
+        let (o, x) = (DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0));
+        let (hit, involved) = snap(x);
+        assert_eq!(hit.kind, SnapKind::Endpoint);
+        assert_eq!(involved, vec![(0, EntityId::Vertex(vertex(x)))]);
+        let (hit, involved) = snap(DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(hit.kind, SnapKind::Midpoint);
+        assert_eq!(involved, vec![(0, EntityId::Edge(edge(o, x)))]);
+        let (hit, involved) = snap(DVec3::new(0.4, 0.0, 0.0));
+        assert_eq!(hit.kind, SnapKind::OnEdge);
+        assert_eq!(involved, vec![(0, EntityId::Edge(edge(o, x)))]);
+        let guide = m.guides().next().unwrap().0;
+        // The edge and the guide line cross in space here, so either may come first.
+        let (hit, mut involved) = snap(DVec3::new(2.0, 0.5, 0.0));
+        assert_eq!(hit.kind, SnapKind::Intersection);
+        involved.sort();
+        let side = edge(x, DVec3::new(2.0, 2.0, 0.0));
+        assert_eq!(
+            involved,
+            vec![(0, EntityId::Edge(side)), (0, EntityId::Guide(guide))]
+        );
+        let (hit, involved) = snap(DVec3::new(-3.0, 0.5, 0.0));
+        assert_eq!(hit.kind, SnapKind::OnGuide);
+        assert_eq!(involved, vec![(0, EntityId::Guide(guide))]);
+        let face = m.faces().next().unwrap().0;
+        let (hit, involved) = snap(DVec3::new(1.3, 1.4, 0.0));
+        assert_eq!(hit.kind, SnapKind::OnFace);
+        assert_eq!(involved, vec![(0, EntityId::Face(face))]);
+        let (hit, involved) = snap(DVec3::new(9.0, 9.0, 0.0));
+        assert_eq!((hit.kind, involved), (SnapKind::Ground, vec![]));
     }
 
     #[test]

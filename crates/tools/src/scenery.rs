@@ -169,6 +169,9 @@ pub struct Layout {
     meshes: Vec<MeshId>,
     /// Every placed mesh, the open context's first, then the others in walk order.
     parts: Vec<Placed>,
+    /// Each part's path: the instances from the root down to the one placing it (empty for
+    /// the root).
+    paths: Vec<Vec<InstanceId>>,
     /// Every guide of every part, placed in the open context's coordinates, with the index of
     /// the part it comes from, in part and id order.
     guides: Vec<(usize, GuideId, Guide)>,
@@ -191,27 +194,34 @@ impl Layout {
             &mut found,
         );
         // The open mesh first, then the others in walk order.
-        found.sort_by_key(|(_, _, _, owner)| *owner != Owner::Open);
+        found.sort_by_key(|f| f.owner != Owner::Open);
         let mut slots: HashMap<MeshId, usize> = HashMap::new();
         let mut meshes = Vec::new();
         let mut models = Vec::new();
+        let mut paths = Vec::new();
         let parts = found
             .into_iter()
-            .map(|(id, model, place, owner)| {
-                let mesh = *slots.entry(id).or_insert_with(|| {
-                    meshes.push(id);
-                    models.push(model);
+            .map(|f| {
+                let mesh = *slots.entry(f.id).or_insert_with(|| {
+                    meshes.push(f.id);
+                    models.push(f.model);
                     meshes.len() - 1
                 });
-                (mesh, place, owner)
+                paths.push(f.path);
+                (mesh, f.place, f.owner)
             })
             .collect();
-        Some(Layout::new(meshes, &models, parts))
+        Some(Layout::new(meshes, &models, parts, paths))
     }
 
     /// A layout of `parts` (each the index of its mesh in `meshes`, its placement and its
-    /// owner); `models` are the meshes themselves.
-    fn new(meshes: Vec<MeshId>, models: &[&Model], parts: Vec<(usize, DAffine3, Owner)>) -> Layout {
+    /// owner) reached by `paths`; `models` are the meshes themselves.
+    fn new(
+        meshes: Vec<MeshId>,
+        models: &[&Model],
+        parts: Vec<(usize, DAffine3, Owner)>,
+        paths: Vec<Vec<InstanceId>>,
+    ) -> Layout {
         let boxes: Vec<Option<[DVec3; 2]>> = models.iter().map(|m| mesh_box(m)).collect();
         let parts: Vec<Placed> = parts
             .into_iter()
@@ -248,6 +258,7 @@ impl Layout {
         Layout {
             meshes,
             parts,
+            paths,
             guides,
             boxes: instances
                 .into_iter()
@@ -276,7 +287,12 @@ impl<'a> Scenery<'a> {
         let parts = vec![(0, DAffine3::IDENTITY, Owner::Open)];
         Scenery {
             models: vec![model],
-            layout: Cow::Owned(Layout::new(vec![MeshId::Root], &[model], parts)),
+            layout: Cow::Owned(Layout::new(
+                vec![MeshId::Root],
+                &[model],
+                parts,
+                vec![Vec::new()],
+            )),
         }
     }
 
@@ -327,6 +343,12 @@ impl<'a> Scenery<'a> {
         })
     }
 
+    /// The instances from the root down to the one placing the `k`th part (empty for the
+    /// root's own mesh), whatever the open context.
+    pub fn path(&self, k: usize) -> &[InstanceId] {
+        &self.layout.paths[k]
+    }
+
     /// Every guide of every part, placed in the open context's coordinates, with the index of
     /// the part it comes from, in part and id order.
     pub fn guides(&self) -> &[(usize, GuideId, Guide)] {
@@ -367,6 +389,17 @@ impl<'a> Scenery<'a> {
     }
 }
 
+/// A mesh found placed in the scene.
+struct Found<'a> {
+    id: MeshId,
+    model: &'a Model,
+    /// Into the open context's coordinates.
+    place: DAffine3,
+    owner: Owner,
+    /// The instances from the root down to the one placing it.
+    path: Vec<InstanceId>,
+}
+
 /// Adds the mesh `id`, placed by `place` (into the open context's coordinates) and reached by
 /// `path`, and everything it places, each with its owner.
 fn collect<'a>(
@@ -375,7 +408,7 @@ fn collect<'a>(
     place: DAffine3,
     context: &[InstanceId],
     path: &mut Vec<InstanceId>,
-    found: &mut Vec<(MeshId, &'a Model, DAffine3, Owner)>,
+    found: &mut Vec<Found<'a>>,
 ) {
     let Some(model) = scene.mesh(id) else { return };
     let owner = if path.as_slice() == context {
@@ -385,7 +418,13 @@ fn collect<'a>(
     } else {
         Owner::Outside
     };
-    found.push((id, model, place, owner));
+    found.push(Found {
+        id,
+        model,
+        place,
+        owner,
+        path: path.clone(),
+    });
     for (iid, instance) in model.instances() {
         path.push(iid);
         collect(
@@ -440,6 +479,22 @@ mod tests {
             v.instance_box(i),
             Some([DVec3::new(5.0, 0.0, 0.0), DVec3::new(6.0, 1.0, 0.0)])
         );
+    }
+
+    #[test]
+    fn parts_know_their_path_from_the_root() {
+        let (s, i) = scene();
+        for context in [vec![], vec![i]] {
+            let v = Scenery::of(&s, &context).unwrap();
+            let paths: Vec<&[InstanceId]> = (0..v.len()).map(|k| v.path(k)).collect();
+            if context.is_empty() {
+                assert_eq!(paths, vec![&[][..], &[i][..]]);
+            } else {
+                assert_eq!(paths, vec![&[i][..], &[][..]]);
+            }
+        }
+        let m = Model::new();
+        assert!(Scenery::single(&m).path(0).is_empty());
     }
 
     #[test]
