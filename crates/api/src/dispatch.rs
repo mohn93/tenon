@@ -52,6 +52,19 @@ pub trait Host {
             "this program cannot be quit through the API",
         ))
     }
+    /// True once a `quit` was accepted: every later request is refused, so no edit is made
+    /// that would not be saved.
+    fn quitting(&self) -> bool {
+        false
+    }
+}
+
+/// The reply to a request that arrives after an accepted `quit`.
+fn quitting_error() -> RpcError {
+    command_failed(CommandError::new(
+        ErrorKind::InvalidInput,
+        "the program is quitting",
+    ))
 }
 
 /// The error for editor commands and queries in a program without an editor.
@@ -72,7 +85,7 @@ pub enum EditorQuery {
     /// snap to: kind, point and the entities involved.
     Infer(InferQuery),
     /// The editor's state (see `EditorState`).
-    Editor,
+    Editor {},
 }
 
 /// The `type` of a query or command, if it has one.
@@ -87,7 +100,11 @@ pub fn handle(host: &mut dyn Host, line: &str) -> Option<String> {
         Ok(r) => r,
         Err(reply) => return Some(reply),
     };
-    let result = call(host, &request.method, request.params);
+    let result = if host.quitting() {
+        Err(quitting_error())
+    } else {
+        call(host, &request.method, request.params)
+    };
     let id = request.id?;
     Some(match result {
         Ok(value) => success(&id, value),
@@ -176,7 +193,7 @@ fn editor_query(host: &mut dyn Host, query: EditorQuery) -> Result<Value, RpcErr
             result["type"] = json!("infer");
             Ok(result)
         }
-        EditorQuery::Editor => {
+        EditorQuery::Editor {} => {
             let state = host
                 .editor()
                 .ok_or_else(no_editor)
@@ -265,7 +282,7 @@ pub fn describe() -> Value {
             "quit": {
                 "params": "{discard?: bool}",
                 "result": "{}",
-                "notes": "ends the program after replying; fails with unsaved_changes unless discard"
+                "notes": "ends the program after replying; fails with unsaved_changes unless discard; once accepted, every later request is refused"
             }
         },
         "notifications": {
@@ -298,7 +315,15 @@ pub fn describe() -> Value {
     })
 }
 
+/// Params by name: an array (params by position) is refused, so `quit [true]` cannot discard
+/// changes by accident.
 fn params_as<T: DeserializeOwned>(params: Value) -> Result<T, RpcError> {
+    if params.is_array() {
+        return Err(RpcError::new(
+            codes::INVALID_PARAMS,
+            "invalid params: params must be an object (by name), not an array",
+        ));
+    }
     serde_json::from_value(params)
         .map_err(|e| RpcError::new(codes::INVALID_PARAMS, format!("invalid params: {e}")))
 }

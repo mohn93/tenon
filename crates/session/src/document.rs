@@ -182,7 +182,7 @@ impl Document {
             return Ok(outcome);
         }
         match command {
-            Command::Undo => {
+            Command::Undo {} => {
                 let step = self.undo.pop().ok_or_else(|| {
                     CommandError::new(ErrorKind::NothingToUndo, "nothing to undo")
                 })?;
@@ -191,7 +191,7 @@ impl Document {
                 self.redo.push(step);
                 Ok(self.changed(&inverse))
             }
-            Command::Redo => {
+            Command::Redo {} => {
                 let step = self.redo.pop().ok_or_else(|| {
                     CommandError::new(ErrorKind::NothingToRedo, "nothing to redo")
                 })?;
@@ -204,7 +204,7 @@ impl Document {
             | Command::Orbit { .. }
             | Command::Pan { .. }
             | Command::Zoom { .. }
-            | Command::ZoomExtents
+            | Command::ZoomExtents {}
             | Command::StandardView { .. }
             | Command::SetProjection { .. } => {
                 self.camera = self.moved_camera(&command)?;
@@ -218,7 +218,7 @@ impl Document {
                 self.open_instance(id)?;
                 Ok(Outcome::default())
             }
-            Command::CloseInstance => {
+            Command::CloseInstance {} => {
                 self.close_instance()?;
                 Ok(Outcome::default())
             }
@@ -267,7 +267,7 @@ impl Document {
             | Command::AddArc { .. }
             | Command::AddGuideLine { .. }
             | Command::AddGuidePoint { .. }
-            | Command::DeleteGuides
+            | Command::DeleteGuides {}
             | Command::PushPull { .. }
             | Command::Erase { .. }
             | Command::Move { .. }
@@ -277,7 +277,7 @@ impl Document {
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
             | Command::RenameDefinition { .. }
-            | Command::PurgeDefinitions
+            | Command::PurgeDefinitions {}
             | Command::AddMaterial { .. }
             | Command::ChangeMaterial { .. }
             | Command::DeleteMaterial { .. }
@@ -323,7 +323,7 @@ impl Document {
                     position: DVec3::from(*position),
                 })
             }),
-            Command::DeleteGuides => {
+            Command::DeleteGuides {} => {
                 let all: Vec<GuideId> = self.model().guides().map(|(id, _)| id).collect();
                 Ok(self
                     .edit_mesh(|m| Ok(m.erase_guides(&all)))
@@ -348,7 +348,7 @@ impl Document {
             Command::RenameDefinition { definition, name } => {
                 self.rename_changes(*definition, name)
             }
-            Command::PurgeDefinitions => Ok(self.scene.purge()),
+            Command::PurgeDefinitions {} => Ok(self.scene.purge()),
             Command::AddMaterial {
                 name,
                 color,
@@ -426,19 +426,19 @@ impl Document {
             | Command::Open { .. }
             | Command::Save { .. }
             | Command::Export { .. } => return None,
-            Command::Undo
-            | Command::Redo
+            Command::Undo {}
+            | Command::Redo {}
             | Command::SetCamera { .. }
             | Command::Orbit { .. }
             | Command::Pan { .. }
             | Command::Zoom { .. }
-            | Command::ZoomExtents
+            | Command::ZoomExtents {}
             | Command::StandardView { .. }
             | Command::SetProjection { .. }
             | Command::SetLighting { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
-            | Command::CloseInstance
+            | Command::CloseInstance {}
             | Command::OpenPath { .. } => {
                 return None;
             }
@@ -499,8 +499,8 @@ impl Document {
                 }),
                 None if matches!(
                     command,
-                    Command::Undo
-                        | Command::Redo
+                    Command::Undo {}
+                        | Command::Redo {}
                         | Command::New { .. }
                         | Command::Open { .. }
                         | Command::Save { .. }
@@ -1095,7 +1095,7 @@ impl Document {
                 }
             }
             Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
-            Query::Camera => QueryResult::Camera {
+            Query::Camera {} => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),
                 up: self.camera.up.to_array(),
@@ -1104,7 +1104,7 @@ impl Document {
                 view_height: self.camera.view_height(),
                 lighting: self.lighting,
             },
-            Query::Stats => QueryResult::Stats {
+            Query::Stats {} => QueryResult::Stats {
                 vertices: m.vertices().count(),
                 edges: m.edges().count(),
                 faces: m.faces().count(),
@@ -1112,18 +1112,18 @@ impl Document {
                 definitions: self.scene.definitions().count(),
                 revision: self.revision,
             },
-            Query::History => QueryResult::History {
+            Query::History {} => QueryResult::History {
                 undo_depth: self.undo.len(),
                 redo_depth: self.redo.len(),
                 undo: self.undo.iter().rev().map(|s| s.label.clone()).collect(),
                 redo: self.redo.iter().rev().map(|s| s.label.clone()).collect(),
                 revision: self.revision,
             },
-            Query::Selection => QueryResult::Selection {
+            Query::Selection {} => QueryResult::Selection {
                 ids: self.selection.iter().copied().collect(),
                 revision: self.revision,
             },
-            Query::Definitions => QueryResult::Definitions {
+            Query::Definitions {} => QueryResult::Definitions {
                 definitions: self
                     .scene
                     .definitions()
@@ -1138,11 +1138,11 @@ impl Document {
                     .collect(),
                 revision: self.revision,
             },
-            Query::Materials => QueryResult::Materials {
+            Query::Materials {} => QueryResult::Materials {
                 materials: self.material_infos(),
                 revision: self.revision,
             },
-            Query::Context => QueryResult::Context {
+            Query::Context {} => QueryResult::Context {
                 path: self
                     .context
                     .iter()
@@ -1157,7 +1157,7 @@ impl Document {
                 instances: self.outliner(*depth),
                 revision: self.revision,
             },
-            Query::File => QueryResult::File {
+            Query::File {} => QueryResult::File {
                 path: self.path.as_ref().map(|p| p.display().to_string()),
                 modified: self.is_modified(),
                 revision: self.revision,

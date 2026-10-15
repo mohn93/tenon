@@ -101,7 +101,14 @@ impl Host for AppHost<'_> {
                 self.editor.set_paint_material(material)?
             }
             EditorCommand::SetImportUnits { units } => self.editor.set_import_units(units),
-            EditorCommand::Cancel => self.editor.cancel(),
+            EditorCommand::Cancel {} => self.editor.cancel(),
+            EditorCommand::SetFlyMode { on, speed } => self.editor.set_fly_mode(on, speed)?,
+            EditorCommand::SetDialog { dialog } => {
+                self.editor.show_soften(dialog == Some(Dialog::SoftenEdges));
+            }
+            EditorCommand::SetSoftenAngle { angle } => {
+                self.editor.set_soften_angle_checked(angle)?
+            }
         }
         Ok(())
     }
@@ -110,6 +117,10 @@ impl Host for AppHost<'_> {
         self.editor.doc().check_unsaved(discard)?;
         *self.quit = true;
         Ok(())
+    }
+
+    fn quitting(&self) -> bool {
+        *self.quit
     }
 }
 
@@ -231,6 +242,88 @@ mod tests {
         let r = call(&mut e, &mut quit, "query", json!({"type": "editor"}));
         assert_eq!(r["result"]["import_units"], "inches");
         assert!(!quit);
+    }
+
+    #[test]
+    fn agents_set_fly_mode_and_the_soften_window() {
+        let (mut e, mut quit) = (editor(), false);
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_fly_mode", "on": true, "speed": 10.0}),
+        );
+        assert_eq!(r["result"]["editor"]["flying"], true, "{r}");
+        assert!(e.flying());
+        assert_eq!(e.flying_speed(), 10.0);
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_fly_mode", "on": false, "speed": 100.0}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+        assert!(e.flying(), "a refused command changes nothing");
+        assert_eq!(e.flying_speed(), 10.0);
+        // `cancel` leaves fly mode, as Escape does.
+        call(&mut e, &mut quit, "execute", json!({"type": "cancel"}));
+        assert!(!e.flying());
+
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_dialog", "dialog": "soften_edges"}),
+        );
+        assert_eq!(r["result"]["editor"]["dialog"], "soften_edges", "{r}");
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_soften_angle", "angle": 35}),
+        );
+        assert_eq!(r["result"]["editor"]["soften_angle"], 35, "{r}");
+        assert_eq!(e.soften_window(), Some(35));
+        for angle in [181, 300] {
+            let r = call(
+                &mut e,
+                &mut quit,
+                "execute",
+                json!({"type": "set_soften_angle", "angle": angle}),
+            );
+            assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+        }
+        assert_eq!(e.soften_window(), Some(35));
+        call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_dialog", "dialog": null}),
+        );
+        assert_eq!(e.soften_window(), None);
+    }
+
+    #[test]
+    fn after_an_accepted_quit_nothing_more_is_done() {
+        let (mut e, mut quit) = (editor(), false);
+        let r = call(&mut e, &mut quit, "quit", json!({}));
+        assert_eq!(r["result"], json!({}));
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+        );
+        assert_eq!(r["error"]["message"], "the program is quitting", "{r}");
+        assert!(!e.doc().is_modified());
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_tool", "tool": "erase"}),
+        );
+        assert_eq!(r["error"]["message"], "the program is quitting", "{r}");
+        assert_eq!(e.tool_kind(), ToolKind::Line);
     }
 
     #[test]

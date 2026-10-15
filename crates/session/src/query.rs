@@ -34,17 +34,17 @@ pub enum Query {
     Curve {
         id: EntityId,
     },
-    Camera,
-    Stats,
-    History,
+    Camera {},
+    Stats {},
+    History {},
     /// The selected edges, faces, instances and guides.
-    Selection,
+    Selection {},
     /// Every group and component definition.
-    Definitions,
+    Definitions {},
     /// Every material.
-    Materials,
+    Materials {},
     /// The open context: the path of instances being edited, from the root.
-    Context,
+    Context {},
     /// The tree of placed groups and components: the root's instances, each with the
     /// instances its definition places, down to `depth` levels below the root's instances
     /// (0: the root's instances only; absent: every level).
@@ -53,7 +53,7 @@ pub enum Query {
         depth: Option<u32>,
     },
     /// The file the model was last opened from or saved to, and whether it changed since.
-    File,
+    File {},
     /// Model changes after `since` (a revision number), oldest first.
     Events {
         since: u64,

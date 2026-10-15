@@ -73,7 +73,7 @@ pub enum Command {
     },
     /// Erase every guide of the open context, as one undo step (nothing to erase is not an
     /// error and makes no undo step).
-    DeleteGuides,
+    DeleteGuides {},
     /// Erase edges, faces, instances and guides as one undo step. An erased edge takes the
     /// faces it bounds with it, except that two faces in one plane meeting there merge into
     /// one. Vertices go away with their last edge and cannot be erased directly. A group's
@@ -136,7 +136,7 @@ pub enum Command {
     },
     /// Go back to editing the context the open instance is in. Clears the selection. Not
     /// recorded in undo history.
-    CloseInstance,
+    CloseInstance {},
     /// Make `path` the open context: instances from the root, each placed in the definition
     /// of the one before (empty: the root), as the `outliner` query lists them. Clears the
     /// selection unless `path` is already open. Not recorded in undo history.
@@ -150,7 +150,7 @@ pub enum Command {
     },
     /// Remove every definition that no instance places (components left after their last
     /// instance was erased or exploded), and what only they placed.
-    PurgeDefinitions,
+    PurgeDefinitions {},
     /// Add a material: a named sRGB color (each 0 to 255). Without `name` it is called
     /// "Material" (or "Material 2", ... if taken). Names must be distinct, not blank, and at
     /// most 256 characters. `opacity` (default 1, opaque) is from 0 to 1; below 1 faces
@@ -298,8 +298,8 @@ pub enum Command {
         #[serde(default)]
         mode: SelectMode,
     },
-    Undo,
-    Redo,
+    Undo {},
+    Redo {},
     /// Place the camera: from `eye` looking at `target`, with the vertical field of view
     /// `fov_y_deg` (1 to 170; default: unchanged) and `projection` (default: unchanged). A
     /// view straight down or up takes the screen's up direction from the horizontal part of
@@ -340,7 +340,7 @@ pub enum Command {
     /// Keep the view direction and fit the whole model (every vertex and placed instance, in
     /// root coordinates, whatever instance is open) in the view. Guides do not count. With
     /// nothing to fit, the camera stays.
-    ZoomExtents,
+    ZoomExtents {},
     /// Look at the target from a standard direction, from the same distance.
     StandardView {
         view: StandardView,
@@ -387,7 +387,7 @@ impl Command {
                 | Command::Orbit { .. }
                 | Command::Pan { .. }
                 | Command::Zoom { .. }
-                | Command::ZoomExtents
+                | Command::ZoomExtents {}
                 | Command::StandardView { .. }
                 | Command::SetProjection { .. }
                 | Command::SetLighting { .. }

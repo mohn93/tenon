@@ -37,7 +37,7 @@ all commands and results.
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are). Also `selection`, `camera` and `editor` notifications; see Notifications below |
 | `describe` | none | the API description |
-| `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes. Requests already waiting with it (the same round) are still answered |
+| `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes. Once it is accepted, every later request, including those already waiting with it, is refused (`-32000`, `invalid_input`, "the program is quitting"), so no edit is made that would not be saved. Camera changes do not count as unsaved (see Camera), so `quit` without `discard` does not keep a view moved since the last save; `save` first to keep it. Params go by name: `[true]` is `-32602` |
 
 Queries:
 
@@ -64,7 +64,7 @@ Queries:
 | `{"type": "editor"}` | the editor around the model: tool, its phase and points, paint material, import units, fly mode, view size, status bar, measurements box, open window; see Editor below |
 
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
-of silently doing nothing).
+of silently doing nothing), and so are params given by position (an array).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
@@ -102,8 +102,8 @@ selected with the `selection` query. Vertex ids are `invalid_input` and unknown 
 
 The selection drops any entity that stops existing, through erase, merges, undo or redo. Undo does
 not restore the selection. The `selection` query's `revision` is the model revision: it does not
-change when only the selection changes, and there is no notification for selection changes, so
-compare ids to detect changes.
+change when only the selection changes. Subscribers get a `selection` notification when it
+changes (see Notifications).
 
 Find the face to push from the `created` ids of the command that made it, or with
 `{"type": "entities", "kinds": ["face"]}`. Faces created by push/pull point out of the solid.
@@ -431,7 +431,9 @@ whose last instance was erased, and what only it placed (one undo step).
 ### Camera
 
 The camera belongs to the document (it is saved with the model) and is always in root
-coordinates, whatever instance is open. Camera commands are not undo steps, return empty
+coordinates, whatever instance is open. Moving it does not mark the model modified (the `file`
+query's `modified` stays as it was), so a view moved since the last save is lost on `new`,
+`open` or `quit` without `discard`; `save` keeps it. Camera commands are not undo steps, return empty
 changes, do not change the revision and send no `changed` notification; inside an atomic batch a
 failure puts the camera back. Each leaves the eye and target within the coordinate limit, or
 fails with `invalid_input` and leaves the camera as it was.
@@ -553,8 +555,8 @@ intersection, on an edge, on a guide line, along an axis from `from`, on a face,
 - `kind` is `endpoint`, `midpoint`, `origin`, `guide_point`, `intersection` (two edges or
   guide lines crossing on screen; the point lies on the nearer), `on_edge`, `on_guide`, `axis`
   (with `axis`: `x`, `y` or `z`, the axis through `from` the point is held to, which Shift would
-  lock), `on_face`, `ground` (z = 0 of the open context) or `nothing` (a point under the pixel at
-  the depth of the camera's target).
+  lock), `on_face`, `ground` (z = 0 of the open context) or `nothing` (a point on the pixel's ray as
+  far from the eye as the camera's target is; in a parallel view, at the target's depth).
 - `entities` are what it snapped to, each with its `path` as in `pick`: the vertex of an
   endpoint, the edge of a midpoint or of a point on an edge, the guide of a guide point or of a
   point on a guide line, the two edges or guide lines of an intersection (the one the point lies
@@ -594,7 +596,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   `import_units` is what one unit of an imported OBJ or STL file is in the window's File > Import
   (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
   `scale`).
-- `flying` and `fly_speed` (meters a second) are fly mode's (see Camera).
+- `flying` and `fly_speed` (meters a second) are fly mode's (see Camera). Headless nothing moves
+  the eye while flying; turning fly mode on still levels the view as in the window.
 - `viewport` is the window's 3D view in physical pixels (on a Retina display twice its size in
   points; 1280 x 800 headless): the view `pick` and
   `infer` use when not given a size.
@@ -614,7 +617,10 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 | `{"type": "set_tool", "tool": "rectangle"}` | Switches to the tool (a fresh one, even if it is the active tool), dropping the operation in progress and anything typed, as the toolbar does. |
 | `{"type": "set_paint_material", "material": "m6"}` | The material the Paint tool paints with; `null` or absent for the default material. The tool does not change (the window's Materials list also switches to Paint). An unknown material is `not_found`. |
 | `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
-| `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for). It never closes the open group (`close_instance` does). |
+| `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for). It never closes the open group (`close_instance` does). |
+| `{"type": "set_fly_mode", "on": true, "speed": 6}` | Turns fly mode on or off, as F does (see Camera), and sets its speed in meters a second (0.25 to 60, else `invalid_input`; absent: unchanged). In the window the pointer is held while flying. |
+| `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` closes it), as Edit > Soften Edges... and its close button do. |
+| `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180, else `invalid_input`), which its Soften button uses. |
 
 ### Files
 
@@ -773,7 +779,8 @@ agent or the person at the window):
 `selection`, `camera` and `editor` are coalesced: at most one of each per frame the window draws
 (so a drag sends one per frame, not one per mouse event), or per round of requests in headless
 mode, each carrying the state at that moment; a change undone within the same frame sends
-nothing. In the window they follow the frame after the change, so they come after the replies
+nothing (a camera turned and turned back may still send one: its eye can differ in the last
+digits). In the window they follow the frame after the change, so they come after the replies
 and `changed` notifications of the requests that caused them; a window that draws no frames
 (minimized, or hidden on another desktop) sends them when it draws again.
 
@@ -802,11 +809,11 @@ under a pixel and where a click would snap.
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (Cmd+Q, closing the window) | `quit` (`discard`) |
 | Edit > Erase Selection (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
-| Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `editor.soften_angle`, `editor.dialog` |
+| Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z) | `undo`, `redo`; `history` lists the steps |
 | Make group (G), Make component (Shift+G), Explode, Close group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
-| Orbit, pan and zoom with the mouse or trackpad, fly mode (F) | `set_camera`, `orbit`, `pan`, `zoom` reach the same views; fly mode itself is the window's (`editor.flying`, `editor.fly_speed`) |
+| Orbit, pan and zoom with the mouse or trackpad, fly mode (F, Escape) and its speed | `set_camera`, `orbit`, `pan`, `zoom` reach the same views; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | The toolbar's tools and their keys | `set_tool`; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click to open a group | `select` (`mode`), `pick` for what is under a pixel, `entities` with `within` for a box, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |

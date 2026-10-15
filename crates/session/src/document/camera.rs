@@ -41,7 +41,7 @@ impl Document {
                 }
                 camera.zoom_by(factor);
             }
-            Command::ZoomExtents => {
+            Command::ZoomExtents {} => {
                 if let Some([lo, hi]) = self.scene.bounds(MeshId::Root) {
                     camera.fit(lo, hi);
                 }

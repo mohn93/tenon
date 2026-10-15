@@ -6,6 +6,7 @@ use session::{CommandError, ErrorKind};
 use tools::Phase;
 
 use super::Editor;
+use crate::fly;
 
 impl Editor {
     /// Whether the tool is in an operation, and the points it was given so far.
@@ -43,11 +44,45 @@ impl Editor {
         Ok(())
     }
 
+    /// Turns fly mode on or off and, if given, sets its speed (meters a second, within
+    /// `fly::MIN_SPEED` and `fly::MAX_SPEED`; `invalid_input` otherwise, changing nothing).
+    pub fn set_fly_mode(&mut self, on: bool, speed: Option<f64>) -> Result<(), CommandError> {
+        if let Some(speed) = speed
+            && !self.fly.set_speed(speed)
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "fly speed must be between {} and {} m/s",
+                    fly::MIN_SPEED,
+                    fly::MAX_SPEED
+                ),
+            ));
+        }
+        self.set_flying(on);
+        Ok(())
+    }
+
+    /// Sets the Soften Edges window's angle; `invalid_input` above 180 degrees.
+    pub fn set_soften_angle_checked(&mut self, angle: u32) -> Result<(), CommandError> {
+        match u8::try_from(angle) {
+            Ok(a) if a <= 180 => {
+                self.set_soften_angle(a);
+                Ok(())
+            }
+            _ => Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "the soften angle must be between 0 and 180 degrees",
+            )),
+        }
+    }
+
     /// Aborts the tool's operation, as Escape pressed until the tool is idle would, without
-    /// closing the open group: drops typed text, the direction lock, a press the tool waits to
-    /// see released, and the operation with anything it waits for (a copy array, a retyped
-    /// angle).
+    /// closing the open group: leaves fly mode, drops typed text, the direction lock, a press
+    /// the tool waits to see released, and the operation with anything it waits for (a copy
+    /// array, a retyped angle).
     pub fn cancel(&mut self) {
+        self.set_flying(false);
         self.typed.clear();
         self.lock = None;
         self.shift_lock = false;

@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn undo_depth(e: &Editor) -> usize {
-        match e.doc().query(&session::Query::History).unwrap() {
+        match e.doc().query(&session::Query::History {}).unwrap() {
             session::QueryResult::History { undo_depth, .. } => undo_depth,
             other => panic!("{other:?}"),
         }

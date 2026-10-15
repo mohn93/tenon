@@ -53,7 +53,7 @@ fn subscribers_get_every_change_in_order() {
     assert_eq!(next(&w_rx)["params"]["revision"], 2);
 
     // Edits made outside the API (e.g. in the window) are announced by notify().
-    host.doc.execute(session::Command::Undo).unwrap();
+    host.doc.execute(session::Command::Undo {}).unwrap();
     hub.notify(&host);
     let undo = next(&w_rx);
     assert_eq!(undo["params"]["revision"], 3);
@@ -220,4 +220,52 @@ fn closing_waits_for_the_last_replies_to_be_written() {
     BufReader::new(&client).read_line(&mut line).unwrap();
     let reply: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(reply["result"]["revision"], 1);
+}
+
+#[test]
+fn a_connection_opened_while_closing_does_not_hold_it_up() {
+    use std::io::{Read, Write};
+    use std::time::Instant;
+
+    /// A reader that sends nothing for longer than the test runs.
+    struct Silent;
+    impl Read for Silent {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_secs(30));
+            Ok(0)
+        }
+    }
+    /// A writer that takes 300 ms per write.
+    struct Slow;
+    impl Write for Slow {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut host = HeadlessHost::new();
+    let mut hub = Hub::new(|| {});
+    let inbox = hub.inbox();
+    // A connection still writing its last reply when closing starts.
+    let (busy, busy_writer) = api::serve_stream(inbox.clone(), Silent, Slow);
+    inbox.reply(busy, "last".into());
+    hub.process(&mut host);
+    let late = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        // Opened while closing waits: its writer must end at once rather than with the hub.
+        api::serve_stream(inbox, Silent, std::io::sink()).1
+    });
+    let start = Instant::now();
+    assert!(hub.close(Duration::from_secs(5)));
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
+    late.join().unwrap().join().unwrap();
+    busy_writer.join().unwrap();
 }

@@ -289,7 +289,7 @@ fn time_house_renders() {
                 },
             );
         } else {
-            run(&mut d, Command::Undo);
+            run(&mut d, Command::Undo {});
         }
         let t = Instant::now();
         snap.capture(

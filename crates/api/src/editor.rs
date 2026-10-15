@@ -72,7 +72,7 @@ pub enum PhaseName {
 }
 
 /// A window the editor shows over the view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Dialog {
     /// Edit > Soften Edges...
@@ -135,16 +135,53 @@ pub enum EditorCommand {
     },
     /// What one unit of an imported file is, for the window's File > Import.
     SetImportUnits { units: ImportUnits },
-    /// Abort the tool's operation in progress, like Escape: drops typed text, the direction
-    /// lock and the operation (and a copy array or a retyped angle it waits for). It never
-    /// closes the open group (that is `close_instance`).
-    Cancel,
+    /// Abort the tool's operation in progress, like Escape pressed until the tool is idle:
+    /// leaves fly mode, drops typed text, the direction lock and the operation (and a copy
+    /// array or a retyped angle it waits for). It never closes the open group (that is
+    /// `close_instance`).
+    Cancel {},
+    /// Turn fly mode on or off (F in the window), and set its speed in meters a second (0.25
+    /// to 60; absent: unchanged).
+    SetFlyMode {
+        on: bool,
+        #[serde(default)]
+        speed: Option<f64>,
+    },
+    /// Open (`soften_edges`) or close (null) the window shown over the view.
+    SetDialog { dialog: Option<Dialog> },
+    /// The Soften Edges window's angle, in whole degrees (0 to 180).
+    SetSoftenAngle { angle: u32 },
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 4] = [
+pub const EDITOR_COMMANDS: [&str; 7] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
     "cancel",
+    "set_fly_mode",
+    "set_dialog",
+    "set_soften_angle",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_editor_command_is_listed() {
+        let schema = serde_json::to_value(schemars::schema_for!(EditorCommand)).unwrap();
+        let text = schema.to_string();
+        let mut listed = 0;
+        for variant in schema["oneOf"].as_array().expect("variants") {
+            let name = &variant["properties"]["type"];
+            let name = name["const"]
+                .as_str()
+                .or_else(|| name["enum"][0].as_str())
+                .unwrap_or_else(|| panic!("no type in {variant}"));
+            assert!(EDITOR_COMMANDS.contains(&name), "{name} not listed");
+            listed += 1;
+        }
+        assert_eq!(listed, EDITOR_COMMANDS.len(), "{text}");
+    }
+}

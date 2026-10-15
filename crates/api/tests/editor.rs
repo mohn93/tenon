@@ -74,7 +74,13 @@ impl Host for Editing {
             EditorCommand::SetTool { tool } => self.state.tool = tool,
             EditorCommand::SetPaintMaterial { material } => self.state.paint_material = material,
             EditorCommand::SetImportUnits { units } => self.state.import_units = units,
-            EditorCommand::Cancel => self.state.phase = PhaseName::Idle,
+            EditorCommand::Cancel {} => self.state.phase = PhaseName::Idle,
+            EditorCommand::SetFlyMode { on, speed } => {
+                self.state.flying = on;
+                self.state.fly_speed = speed.unwrap_or(self.state.fly_speed);
+            }
+            EditorCommand::SetDialog { dialog } => self.state.dialog = dialog,
+            EditorCommand::SetSoftenAngle { angle } => self.state.soften_angle = angle,
         }
         Ok(())
     }
@@ -83,6 +89,10 @@ impl Host for Editing {
         self.document().check_unsaved(discard)?;
         self.quit = true;
         Ok(())
+    }
+
+    fn quitting(&self) -> bool {
+        self.quit
     }
 }
 
@@ -117,6 +127,31 @@ fn editor_commands_set_the_editor_and_return_its_state() {
     assert_eq!(r["result"]["editor"]["paint_material"], Value::Null);
     let r = call(&mut h, "execute", json!({"type": "cancel"}));
     assert_eq!(r["result"]["editor"]["phase"], "idle");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_fly_mode", "on": true, "speed": 6.0}),
+    );
+    assert_eq!(r["result"]["editor"]["flying"], true, "{r}");
+    assert_eq!(r["result"]["editor"]["fly_speed"], 6.0);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_dialog", "dialog": "soften_edges"}),
+    );
+    assert_eq!(r["result"]["editor"]["dialog"], "soften_edges", "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_soften_angle", "angle": 45}),
+    );
+    assert_eq!(r["result"]["editor"]["soften_angle"], 45, "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_dialog", "dialog": null}),
+    );
+    assert_eq!(r["result"]["editor"]["dialog"], Value::Null, "{r}");
 
     let state = call(&mut h, "query", json!({"type": "editor"}))["result"].clone();
     assert_eq!(state["type"], "editor");
@@ -140,6 +175,13 @@ fn editor_commands_and_queries_check_their_params() {
             json!({"commands": [{"type": "set_tool", "tool": "line"}]}),
         ),
         ("quit", json!({"discard": "yes"})),
+        ("quit", json!([true])),
+        ("execute", json!({"type": "set_fly_mode"})),
+        ("execute", json!({"type": "set_dialog", "dialog": "export"})),
+        (
+            "execute",
+            json!({"type": "set_soften_angle", "angle": 12.5}),
+        ),
     ] {
         let r = call(&mut h, method, params.clone());
         assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{params}: {r}");
@@ -227,4 +269,113 @@ fn subscribers_hear_when_the_editor_changes() {
     assert_eq!(messages[1]["method"], "editor");
     assert_eq!(messages[1]["params"]["tool"], "move");
     assert_eq!(messages[1]["params"]["import_units"], "feet");
+}
+
+#[test]
+fn quit_takes_its_params_by_name_only() {
+    let mut h = Editing::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    );
+    for params in [json!([true]), json!([])] {
+        let r = call(&mut h, "quit", params.clone());
+        assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{params}: {r}");
+        assert!(!h.quit, "{params}");
+    }
+}
+
+#[test]
+fn argument_less_commands_and_queries_refuse_unknown_fields() {
+    let mut h = Editing::new();
+    let queries = [
+        "editor",
+        "history",
+        "stats",
+        "selection",
+        "camera",
+        "context",
+        "file",
+        "definitions",
+        "materials",
+    ];
+    for t in queries {
+        let r = call(&mut h, "query", json!({"type": t, "x": 1}));
+        assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{t}: {r}");
+        let r = call(&mut h, "query", json!({"type": t}));
+        assert!(r["result"].is_object(), "{t}: {r}");
+    }
+    let commands = [
+        "cancel",
+        "undo",
+        "redo",
+        "close_instance",
+        "delete_guides",
+        "purge_definitions",
+        "zoom_extents",
+    ];
+    for t in commands {
+        let r = call(&mut h, "execute", json!({"type": t, "x": 1}));
+        assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{t}: {r}");
+    }
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [{"type": "zoom_extents", "x": 1}]}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+}
+
+#[test]
+fn requests_after_an_accepted_quit_are_refused() {
+    use api::Hub;
+    use std::sync::mpsc::Receiver;
+
+    fn replies(rx: &Receiver<String>) -> Vec<Value> {
+        rx.try_iter()
+            .map(|l| serde_json::from_str(&l).unwrap())
+            .collect()
+    }
+
+    let mut host = Editing::new();
+    let mut hub = Hub::new(|| {});
+    let inbox = hub.inbox();
+    let (a, a_rx) = inbox.open();
+    let (b, b_rx) = inbox.open();
+    let line = |id: u64, method: &str, params: Value| {
+        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
+    };
+    // One round: A quits (the model is clean), then B edits, queries and subscribes.
+    inbox.send_line(a, line(1, "quit", json!({})));
+    inbox.send_line(
+        b,
+        line(
+            2,
+            "execute",
+            json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+        ),
+    );
+    inbox.send_line(b, line(3, "query", json!({"type": "stats"})));
+    inbox.send_line(b, line(4, "subscribe", Value::Null));
+    hub.process(&mut host);
+
+    assert!(host.quit);
+    assert_eq!(replies(&a_rx)[0]["result"], json!({}));
+    let b_replies = replies(&b_rx);
+    assert_eq!(b_replies.len(), 3, "{b_replies:?}");
+    for r in &b_replies {
+        assert_eq!(r["error"]["code"], codes::COMMAND_FAILED, "{r}");
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+        assert_eq!(r["error"]["message"], "the program is quitting", "{r}");
+    }
+    assert_eq!(host.document().revision(), 0);
+    assert!(
+        !host.document().is_modified(),
+        "no edit that will not be saved"
+    );
+
+    // A request in a later round is refused too, and so is a second quit.
+    let r = call(&mut host, "quit", json!({"discard": true}));
+    assert_eq!(r["error"]["message"], "the program is quitting", "{r}");
 }

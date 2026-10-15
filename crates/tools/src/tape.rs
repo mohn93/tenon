@@ -209,7 +209,7 @@ impl Tool for TapeMeasureTool {
                     }
                     // Right after a guide was added: move it to the typed distance.
                     (None, Some((start, dir))) => {
-                        out.commands.push(Command::Undo);
+                        out.commands.push(Command::Undo {});
                         self.finish(start, dir * length, &mut out);
                     }
                     (None, None) => {
@@ -400,7 +400,10 @@ mod tests {
         assert_eq!(out.commands.len(), 1);
         assert_line(&out.commands, [2.5, -2.0, 0.0], [1.0, 0.0, 0.0]);
         let out = r.send(ToolEvent::Value("3".into()));
-        assert_eq!((out.commands.len(), &out.commands[0]), (2, &Command::Undo));
+        assert_eq!(
+            (out.commands.len(), &out.commands[0]),
+            (2, &Command::Undo {})
+        );
         assert_line(&out.commands, [2.5, -3.0, 0.0], [1.0, 0.0, 0.0]);
         // A new measurement ends the chance to retype.
         r.click(DVec3::new(4.0, 0.0, 0.0));

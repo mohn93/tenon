@@ -36,8 +36,21 @@ pub struct Inbox {
 /// How many transport threads are writing replies, so `Hub::close` can wait for them.
 #[derive(Default)]
 struct Writers {
-    running: Mutex<usize>,
+    state: Mutex<WritersState>,
     done: Condvar,
+}
+
+#[derive(Default)]
+struct WritersState {
+    running: usize,
+    /// Set by `Hub::close`: connections opened after it are dropped at once.
+    closed: bool,
+}
+
+impl Writers {
+    fn lock(&self) -> std::sync::MutexGuard<'_, WritersState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// Held by a transport's writer thread while it runs.
@@ -45,18 +58,23 @@ pub(crate) struct Writing(Arc<Writers>);
 
 impl Drop for Writing {
     fn drop(&mut self) {
-        let mut running = self.0.running.lock().unwrap_or_else(|e| e.into_inner());
-        *running -= 1;
+        self.0.lock().running -= 1;
         self.0.done.notify_all();
     }
 }
 
 impl Inbox {
     /// Registers a connection. Replies and notifications for it arrive on the returned receiver.
+    /// Once the hub is closed the receiver gets nothing and ends at once.
     pub fn open(&self) -> (u64, Receiver<String>) {
         let conn = self.next_conn.fetch_add(1, Ordering::Relaxed);
         let (out, rx) = channel();
-        self.send(Event::Opened { conn, out });
+        // Checked and sent under the lock, so `Hub::close` never misses a connection's sender.
+        let writers = self.writers.lock();
+        if !writers.closed {
+            self.send(Event::Opened { conn, out });
+        }
+        drop(writers);
         (conn, rx)
     }
 
@@ -75,11 +93,7 @@ impl Inbox {
 
     /// Counts a writer thread as running until the returned guard is dropped.
     pub(crate) fn writing(&self) -> Writing {
-        *self
-            .writers
-            .running
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) += 1;
+        self.writers.lock().running += 1;
         Writing(self.writers.clone())
     }
 
@@ -114,7 +128,7 @@ impl Seen {
     fn of(host: &dyn Host) -> Seen {
         let doc = host.document();
         let mut camera = json!(
-            doc.query(&Query::Camera)
+            doc.query(&Query::Camera {})
                 .expect("the camera query cannot fail")
         );
         if let Some(fields) = camera.as_object_mut() {
@@ -248,19 +262,22 @@ impl Hub {
 
     /// Stops serving: drops requests not yet handled and every connection's sending side, so
     /// each transport's writer thread ends once the lines queued for it are written, and waits
-    /// up to `wait` for them. True if they all finished. Call it before the program exits, so
-    /// the last replies (such as a `quit`'s) reach their clients.
+    /// up to `wait` for them. True if they all finished. Connections opened from now on are
+    /// dropped at once. Call it before the program exits, so the last replies (such as a
+    /// `quit`'s) reach their clients.
     pub fn close(&mut self, wait: Duration) -> bool {
+        let writers = &self.inbox.writers;
+        let mut state = writers.lock();
+        state.closed = true;
+        // Under the lock: no connection can be registered between this and the wait.
         while self.rx.try_recv().is_ok() {}
         self.outs.clear();
         self.subscribers.clear();
-        let writers = &self.inbox.writers;
-        let running = writers.running.lock().unwrap_or_else(|e| e.into_inner());
-        let (running, _) = writers
+        let (state, _) = writers
             .done
-            .wait_timeout_while(running, wait, |n| *n > 0)
+            .wait_timeout_while(state, wait, |s| s.running > 0)
             .unwrap_or_else(|e| e.into_inner());
-        *running == 0
+        state.running == 0
     }
 
     fn on_event(&mut self, host: &mut dyn Host, event: Event) {
@@ -279,7 +296,7 @@ impl Hub {
             }
             Event::Line { conn, line } => {
                 let reply = match parse(&line) {
-                    Ok(req) if req.method == "subscribe" => {
+                    Ok(req) if req.method == "subscribe" && !host.quitting() => {
                         // Notify about anything earlier before this connection joins.
                         self.notify(host);
                         self.subscribers.insert(conn);

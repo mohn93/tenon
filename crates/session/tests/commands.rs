@@ -171,7 +171,7 @@ fn not_found_error_serializes_requested_ids_and_other_errors_omit_them() {
         json!({"kind": "not_found", "message": err.message, "ids": ["f99"]})
     );
     let mut d = doc();
-    let err = d.execute(Command::Undo).unwrap_err();
+    let err = d.execute(Command::Undo {}).unwrap_err();
     let v = serde_json::to_value(&err).unwrap();
     assert!(v.get("ids").is_none());
     let back: session::CommandError = serde_json::from_value(v).unwrap();

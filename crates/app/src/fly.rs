@@ -162,6 +162,16 @@ impl Fly {
         self.speed != before
     }
 
+    /// Sets the base speed, which must be within `MIN_SPEED` and `MAX_SPEED`. Returns false
+    /// (and keeps the speed) for one outside them.
+    pub fn set_speed(&mut self, speed: f64) -> bool {
+        if !(MIN_SPEED..=MAX_SPEED).contains(&speed) {
+            return false;
+        }
+        self.speed = speed;
+        true
+    }
+
     /// Scrolls the speed by `steps` (positive faster), which may be fractional: whole steps
     /// apply once they add up. Returns true if the speed changed.
     pub fn scroll_speed(&mut self, steps: f64) -> bool {

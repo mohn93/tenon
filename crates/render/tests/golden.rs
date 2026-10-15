@@ -642,7 +642,7 @@ fn golden_parallel_top_view() {
             projection: Projection::Parallel,
         },
     );
-    run(&mut d, Command::ZoomExtents);
+    run(&mut d, Command::ZoomExtents {});
     check("parallel_top", &d);
 }
 

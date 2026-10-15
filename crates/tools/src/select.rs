@@ -293,14 +293,14 @@ impl Tool for SelectTool {
                     out.commands.push(Command::OpenInstance { id });
                 }
                 None if ctx.scenery.inside_instance() => {
-                    out.commands.push(Command::CloseInstance);
+                    out.commands.push(Command::CloseInstance {});
                 }
                 _ => {}
             },
             // Escape with nothing in progress closes the open instance.
             ToolEvent::Cancel => {
                 if self.press.take().is_none() && ctx.scenery.inside_instance() {
-                    out.commands.push(Command::CloseInstance);
+                    out.commands.push(Command::CloseInstance {});
                 }
             }
             ToolEvent::ToggleCopy => {}

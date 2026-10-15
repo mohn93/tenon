@@ -72,7 +72,7 @@ fn events_list_changes_after_a_revision() {
     for c in square() {
         d.execute(c).unwrap();
     }
-    d.execute(Command::Undo).unwrap();
+    d.execute(Command::Undo {}).unwrap();
     let r = ask(&d, json!({"type": "events", "since": 3}));
     assert_eq!(r["revision"], 5);
     assert_eq!(r["truncated"], false);
@@ -134,7 +134,7 @@ fn atomic_batch_is_one_undo_step() {
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 1);
     assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], 1);
     assert_eq!(d.revision(), 1);
-    d.execute(Command::Undo).unwrap();
+    d.execute(Command::Undo {}).unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["edges"], 0);
 }
 
@@ -161,7 +161,7 @@ fn failed_atomic_batch_changes_nothing() {
 #[test]
 fn atomic_batch_rejects_undo() {
     let mut d = doc();
-    let err = d.execute_batch(vec![Command::Undo], true).unwrap_err();
+    let err = d.execute_batch(vec![Command::Undo {}], true).unwrap_err();
     assert_eq!(err.error.kind, ErrorKind::InvalidInput);
 }
 
@@ -222,7 +222,7 @@ fn history_labels_each_step_by_its_command() {
     d.execute(cmd(json!({"type": "orbit", "yaw": 10}))).unwrap();
     d.execute(cmd(json!({"type": "select", "ids": []})))
         .unwrap();
-    d.execute(Command::Undo).unwrap();
+    d.execute(Command::Undo {}).unwrap();
     let h = ask(&d, json!({"type": "history"}));
     assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
     assert_eq!(h["redo"], json!(["add_guide_point"]));
@@ -242,9 +242,9 @@ fn history_labels_each_step_by_its_command() {
     assert_eq!(h["redo"], json!([]));
 
     // Undo and redo carry the label across.
-    d.execute(Command::Undo).unwrap();
-    d.execute(Command::Undo).unwrap();
-    d.execute(Command::Redo).unwrap();
+    d.execute(Command::Undo {}).unwrap();
+    d.execute(Command::Undo {}).unwrap();
+    d.execute(Command::Redo {}).unwrap();
     let h = ask(&d, json!({"type": "history"}));
     assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
     assert_eq!(h["redo"], json!(["batch"]));
@@ -253,7 +253,7 @@ fn history_labels_each_step_by_its_command() {
 #[test]
 fn command_names_are_their_types() {
     assert_eq!(edge([0.0; 3], [1.0, 0.0, 0.0]).name(), "add_edge");
-    assert_eq!(Command::PurgeDefinitions.name(), "purge_definitions");
+    assert_eq!(Command::PurgeDefinitions {}.name(), "purge_definitions");
     assert_eq!(
         cmd(json!({"type": "push_pull", "face": "f1", "distance": 1})).name(),
         "push_pull"

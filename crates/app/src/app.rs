@@ -1075,6 +1075,8 @@ impl State {
         let before = shown(&self.editor);
         let mut host = self.host();
         hub.process(&mut host);
+        // An agent may have turned fly mode on or off: the pointer follows.
+        self.sync_fly_cursor();
         if shown(&self.editor) != before || self.editor.hover_pending() {
             match api_repaint(Instant::now(), self.presented) {
                 Repaint::At(t) => self.repaint_at = Some(earliest(self.repaint_at, t)),

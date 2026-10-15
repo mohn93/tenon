@@ -882,7 +882,7 @@ impl Editor {
     /// Fits the whole model in the view (Shift+Z). The tool's operation goes on. True if
     /// anything visible changed (false, say, for an empty model or a view already fitted).
     pub fn zoom_extents(&mut self) -> bool {
-        self.run_camera_command(Command::ZoomExtents)
+        self.run_camera_command(Command::ZoomExtents {})
     }
 
     /// Looks at the target from a standard direction. The tool's operation goes on. True if
@@ -927,7 +927,7 @@ impl Editor {
         if self.doc.model().guides().next().is_none() {
             return false;
         }
-        self.run_selection_command(Command::DeleteGuides)
+        self.run_selection_command(Command::DeleteGuides {})
     }
 
     /// Closes the open group or component. False if none is open.
@@ -935,7 +935,7 @@ impl Editor {
         if self.doc.context().is_empty() {
             return false;
         }
-        self.run_selection_command(Command::CloseInstance)
+        self.run_selection_command(Command::CloseInstance {})
     }
 
     /// Selects the outliner node at `path` (instance ids from the root down to it), first
@@ -1114,14 +1114,14 @@ impl Editor {
 
     pub fn undo(&mut self) -> bool {
         self.reset_tool();
-        self.run(Command::Undo);
+        self.run(Command::Undo {});
         self.invalidate_hover();
         true
     }
 
     pub fn redo(&mut self) -> bool {
         self.reset_tool();
-        self.run(Command::Redo);
+        self.run(Command::Redo {});
         self.invalidate_hover();
         true
     }
@@ -1262,7 +1262,7 @@ impl Editor {
         let mut undone = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         for command in out.commands {
-            let is_undo = matches!(command, Command::Undo);
+            let is_undo = matches!(command, Command::Undo {});
             let is_copy = matches!(
                 command,
                 Command::Copy { .. }
@@ -1284,7 +1284,7 @@ impl Editor {
                 });
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
-                if undone && let Ok(redone) = self.doc.execute(Command::Redo) {
+                if undone && let Ok(redone) = self.doc.execute(Command::Redo {}) {
                     if is_copy && !redone.changes.created.is_empty() {
                         self.select_created(redone);
                     } else {
@@ -1525,7 +1525,7 @@ mod tests {
     }
 
     fn stats(e: &Editor) -> (usize, usize) {
-        match e.doc().query(&Query::Stats).unwrap() {
+        match e.doc().query(&Query::Stats {}).unwrap() {
             QueryResult::Stats { edges, faces, .. } => (edges, faces),
             other => panic!("unexpected {other:?}"),
         }
@@ -2814,7 +2814,7 @@ mod tests {
         assert_eq!(box_max(&e, group), DVec3::new(10.0, 2.0, 1.0));
         type_text(&mut e, "-90");
         assert_eq!(box_min(&e, group), DVec3::new(10.0, -2.0, 0.0));
-        e.execute(Command::Undo).unwrap();
+        e.execute(Command::Undo {}).unwrap();
         assert_eq!(
             box_min(&e, group),
             DVec3::new(10.0, 0.0, 0.0),
@@ -3772,7 +3772,7 @@ mod tests {
         assert!(cam.eye.abs_diff_eq(eye, 1e-12), "the eye stays");
         assert!((cam.distance() - fly::TARGET_AHEAD).abs() < 1e-9);
         // The API's camera query reflects it.
-        match e.doc().query(&session::Query::Camera).unwrap() {
+        match e.doc().query(&session::Query::Camera {}).unwrap() {
             QueryResult::Camera { eye, target, .. } => {
                 let d = DVec3::from(target) - DVec3::from(eye);
                 assert!((d.length() - fly::TARGET_AHEAD).abs() < 1e-9);

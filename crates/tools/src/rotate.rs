@@ -112,7 +112,7 @@ impl RotateTool {
         };
         let angle = if last.angle < 0.0 { -angle } else { angle };
         last.angle = angle;
-        out.commands.push(Command::Undo);
+        out.commands.push(Command::Undo {});
         out.commands.push(command(last, angle, Some(last.count)));
     }
 
@@ -130,7 +130,7 @@ impl RotateTool {
             out.message = Some(format!("At most {MAX_COPIES} copies"));
             return;
         }
-        out.commands.push(Command::Undo);
+        out.commands.push(Command::Undo {});
         out.commands.push(command(last, step, Some(count)));
         if let Some(last) = self.last.as_mut() {
             last.count = count;
@@ -511,7 +511,10 @@ mod tests {
         let again = r.send(ToolEvent::Value("-60".into()));
         assert_eq!(
             again.commands,
-            vec![Command::Undo, rotate(&["f8"], [1.0, 1.0, 0.0], -60.0, None)]
+            vec![
+                Command::Undo {},
+                rotate(&["f8"], [1.0, 1.0, 0.0], -60.0, None)
+            ]
         );
         r.tool.on_external_change();
         let refused = r.send(ToolEvent::Value("10".into()));
@@ -541,12 +544,12 @@ mod tests {
         let times = r.send(ToolEvent::Value("3x".into()));
         assert_eq!(
             times.commands,
-            vec![Command::Undo, rotate(&["f8"], [0.0; 3], 90.0, Some(3))]
+            vec![Command::Undo {}, rotate(&["f8"], [0.0; 3], 90.0, Some(3))]
         );
         let divide = r.send(ToolEvent::Value("/3".into()));
         assert_eq!(
             divide.commands,
-            vec![Command::Undo, rotate(&["f8"], [0.0; 3], 30.0, Some(3))]
+            vec![Command::Undo {}, rotate(&["f8"], [0.0; 3], 30.0, Some(3))]
         );
         let big = r.send(ToolEvent::Value("1001x".into()));
         assert_eq!(big.message.as_deref(), Some("At most 1000 copies"));
@@ -560,7 +563,7 @@ mod tests {
         let again = r.send(ToolEvent::Value("45".into()));
         assert_eq!(
             again.commands,
-            vec![Command::Undo, rotate(&["f8"], [0.0; 3], -45.0, None)]
+            vec![Command::Undo {}, rotate(&["f8"], [0.0; 3], -45.0, None)]
         );
         let flipped = r.send(ToolEvent::Value("-20".into()));
         assert_eq!(turned(&flipped), 20.0, "a typed minus flips it");
@@ -576,7 +579,7 @@ mod tests {
         let out = r.send(ToolEvent::Value("45".into()));
         assert_eq!(
             out.commands,
-            vec![Command::Undo, rotate(&["f8"], [0.0; 3], 45.0, Some(3))]
+            vec![Command::Undo {}, rotate(&["f8"], [0.0; 3], 45.0, Some(3))]
         );
         let five = r.send(ToolEvent::Value("5x".into()));
         assert_eq!(turned(&five), 45.0);
