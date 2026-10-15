@@ -72,7 +72,7 @@ fn events_list_changes_after_a_revision() {
     for c in square() {
         d.execute(c).unwrap();
     }
-    d.execute(Command::Undo {}).unwrap();
+    d.execute(Command::Undo { count: None }).unwrap();
     let r = ask(&d, json!({"type": "events", "since": 3}));
     assert_eq!(r["revision"], 5);
     assert_eq!(r["truncated"], false);
@@ -134,7 +134,7 @@ fn atomic_batch_is_one_undo_step() {
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 1);
     assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], 1);
     assert_eq!(d.revision(), 1);
-    d.execute(Command::Undo {}).unwrap();
+    d.execute(Command::Undo { count: None }).unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["edges"], 0);
 }
 
@@ -161,7 +161,9 @@ fn failed_atomic_batch_changes_nothing() {
 #[test]
 fn atomic_batch_rejects_undo() {
     let mut d = doc();
-    let err = d.execute_batch(vec![Command::Undo {}], true).unwrap_err();
+    let err = d
+        .execute_batch(vec![Command::Undo { count: None }], true)
+        .unwrap_err();
     assert_eq!(err.error.kind, ErrorKind::InvalidInput);
 }
 
@@ -222,7 +224,7 @@ fn history_labels_each_step_by_its_command() {
     d.execute(cmd(json!({"type": "orbit", "yaw": 10}))).unwrap();
     d.execute(cmd(json!({"type": "select", "ids": []})))
         .unwrap();
-    d.execute(Command::Undo {}).unwrap();
+    d.execute(Command::Undo { count: None }).unwrap();
     let h = ask(&d, json!({"type": "history"}));
     assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
     assert_eq!(h["redo"], json!(["add_guide_point"]));
@@ -242,9 +244,9 @@ fn history_labels_each_step_by_its_command() {
     assert_eq!(h["redo"], json!([]));
 
     // Undo and redo carry the label across.
-    d.execute(Command::Undo {}).unwrap();
-    d.execute(Command::Undo {}).unwrap();
-    d.execute(Command::Redo {}).unwrap();
+    d.execute(Command::Undo { count: None }).unwrap();
+    d.execute(Command::Undo { count: None }).unwrap();
+    d.execute(Command::Redo { count: None }).unwrap();
     let h = ask(&d, json!({"type": "history"}));
     assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
     assert_eq!(h["redo"], json!(["batch"]));
@@ -258,4 +260,60 @@ fn command_names_are_their_types() {
         cmd(json!({"type": "push_pull", "face": "f1", "distance": 1})).name(),
         "push_pull"
     );
+}
+
+#[test]
+fn undo_and_redo_take_a_count() {
+    let mut d = doc();
+    d.execute_batch(square(), false).unwrap();
+    let r0 = d.revision();
+    let out = d.execute(cmd(json!({"type": "undo", "count": 3}))).unwrap();
+    assert_eq!(d.revision(), r0 + 3, "one revision a step");
+    let gone = |ids: &[kernel::EntityId]| {
+        ids.iter()
+            .filter(|id| !matches!(id, kernel::EntityId::Vertex(_)))
+            .count()
+    };
+    assert_eq!(
+        gone(&out.changes.deleted),
+        3 + 1,
+        "three edges and the face"
+    );
+    let h = ask(&d, json!({"type": "history"}));
+    assert_eq!(
+        (h["undo_depth"].clone(), h["redo_depth"].clone()),
+        (json!(1), json!(3))
+    );
+
+    // More steps than there are undoes nothing.
+    let e = d
+        .execute(cmd(json!({"type": "undo", "count": 2})))
+        .unwrap_err();
+    assert_eq!(
+        (e.kind, e.message.as_str()),
+        (ErrorKind::NothingToUndo, "only 1 step to undo")
+    );
+    let e = d
+        .execute(cmd(json!({"type": "redo", "count": 4})))
+        .unwrap_err();
+    assert_eq!(
+        (e.kind, e.message.as_str()),
+        (ErrorKind::NothingToRedo, "only 3 steps to redo")
+    );
+    let e = d
+        .execute(cmd(json!({"type": "undo", "count": 0})))
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidInput);
+    assert_eq!(d.revision(), r0 + 3);
+
+    let out = d.execute(cmd(json!({"type": "redo", "count": 3}))).unwrap();
+    assert_eq!(gone(&out.changes.created), 3 + 1);
+    let h = ask(&d, json!({"type": "history"}));
+    assert_eq!(
+        (h["undo_depth"].clone(), h["redo_depth"].clone()),
+        (json!(4), json!(0))
+    );
+    // Without a count, one step.
+    d.execute(cmd(json!({"type": "undo"}))).unwrap();
+    assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], 3);
 }

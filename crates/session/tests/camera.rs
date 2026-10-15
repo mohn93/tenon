@@ -130,6 +130,45 @@ fn zoom_divides_the_distance_by_the_factor() {
 }
 
 #[test]
+fn orbit_and_zoom_turn_and_zoom_about_a_given_point() {
+    let mut d = doc();
+    front(&mut d);
+    // A quarter turn about (2, 0, 0): the eye swings from (0, -10, 0) to (12, -2, 0).
+    run(
+        &mut d,
+        json!({"type": "orbit", "yaw": 90, "about": [2, 0, 0]}),
+    )
+    .unwrap();
+    let (eye, target, up) = view(&d);
+    assert!(close(eye, DVec3::new(12.0, -2.0, 0.0)), "{eye}");
+    assert!(close(target, DVec3::new(2.0, -2.0, 0.0)), "{target}");
+    assert!(close(up, DVec3::Z));
+
+    // Zooming about a point keeps it on the same pixel and divides the eye's distance to it.
+    front(&mut d);
+    let p = DVec3::new(1.0, -4.0, 0.5);
+    let px = d.camera.project(p).unwrap();
+    let before = d.camera.eye.distance(p);
+    run(
+        &mut d,
+        json!({"type": "zoom", "factor": 2, "about": p.to_array()}),
+    )
+    .unwrap();
+    assert!(d.camera.project(p).unwrap().abs_diff_eq(px, 1e-6));
+    assert!((d.camera.eye.distance(p) - before / 2.0).abs() < 1e-9);
+    // In perspective the target comes to the point's depth.
+    assert!((d.camera.distance() - d.camera.depth(p)).abs() < 1e-9);
+
+    for bad in [
+        json!({"type": "orbit", "yaw": 10, "about": [1e9, 0, 0]}),
+        json!({"type": "zoom", "factor": 2, "about": [0, f64::MAX, 0]}),
+    ] {
+        assert_eq!(run(&mut d, bad), Err(ErrorKind::InvalidInput));
+    }
+    assert_eq!(d.revision(), 0, "camera commands are not edits");
+}
+
+#[test]
 fn standard_views_look_along_the_axes_from_the_same_distance() {
     let mut d = doc();
     front(&mut d);

@@ -182,23 +182,48 @@ impl Document {
             return Ok(outcome);
         }
         match command {
-            Command::Undo {} => {
-                let step = self.undo.pop().ok_or_else(|| {
-                    CommandError::new(ErrorKind::NothingToUndo, "nothing to undo")
-                })?;
-                let inverse = step.changes.inverse();
-                self.scene.apply(&inverse);
-                self.redo.push(step);
-                Ok(self.changed(&inverse))
+            Command::Undo { count } => {
+                let n = step_count(count)?;
+                if self.undo.len() < n {
+                    return Err(CommandError::new(
+                        ErrorKind::NothingToUndo,
+                        too_few("undo", self.undo.len()),
+                    ));
+                }
+                let mut done = Vec::new();
+                for _ in 0..n {
+                    let step = self.undo.pop().expect("counted");
+                    let inverse = step.changes.inverse();
+                    self.scene.apply(&inverse);
+                    self.redo.push(step);
+                    self.changed(&inverse);
+                    done.push(inverse);
+                }
+                Ok(Outcome {
+                    changes: SceneChange::join(done).summary(),
+                    ..Outcome::default()
+                })
             }
-            Command::Redo {} => {
-                let step = self.redo.pop().ok_or_else(|| {
-                    CommandError::new(ErrorKind::NothingToRedo, "nothing to redo")
-                })?;
-                self.scene.apply(&step.changes);
-                let outcome = self.changed(&step.changes);
-                self.undo.push(step);
-                Ok(outcome)
+            Command::Redo { count } => {
+                let n = step_count(count)?;
+                if self.redo.len() < n {
+                    return Err(CommandError::new(
+                        ErrorKind::NothingToRedo,
+                        too_few("redo", self.redo.len()),
+                    ));
+                }
+                let mut done = Vec::new();
+                for _ in 0..n {
+                    let step = self.redo.pop().expect("counted");
+                    self.scene.apply(&step.changes);
+                    self.changed(&step.changes);
+                    done.push(step.changes.clone());
+                    self.undo.push(step);
+                }
+                Ok(Outcome {
+                    changes: SceneChange::join(done).summary(),
+                    ..Outcome::default()
+                })
             }
             Command::SetCamera { .. }
             | Command::Orbit { .. }
@@ -426,8 +451,8 @@ impl Document {
             | Command::Open { .. }
             | Command::Save { .. }
             | Command::Export { .. } => return None,
-            Command::Undo {}
-            | Command::Redo {}
+            Command::Undo { .. }
+            | Command::Redo { .. }
             | Command::SetCamera { .. }
             | Command::Orbit { .. }
             | Command::Pan { .. }
@@ -499,8 +524,8 @@ impl Document {
                 }),
                 None if matches!(
                     command,
-                    Command::Undo {}
-                        | Command::Redo {}
+                    Command::Undo { .. }
+                        | Command::Redo { .. }
                         | Command::New { .. }
                         | Command::Open { .. }
                         | Command::Save { .. }
@@ -1354,5 +1379,25 @@ pub fn check_coordinates(points: &[[f64; 3]]) -> Result<(), CommandError> {
             ErrorKind::InvalidInput,
             format!("coordinates must be finite and within +/-{MAX_COORDINATE} m"),
         ))
+    }
+}
+
+/// The steps an `undo` or `redo` of `count` takes: 1 by default, never 0.
+fn step_count(count: Option<u32>) -> Result<usize, CommandError> {
+    match count.unwrap_or(1) {
+        0 => Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            "count must be at least 1",
+        )),
+        n => Ok(n as usize),
+    }
+}
+
+/// Why an `undo` or `redo` of more steps than there are fails.
+fn too_few(what: &str, left: usize) -> String {
+    match left {
+        0 => format!("nothing to {what}"),
+        1 => format!("only 1 step to {what}"),
+        n => format!("only {n} steps to {what}"),
     }
 }

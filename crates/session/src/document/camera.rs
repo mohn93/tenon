@@ -5,7 +5,7 @@ use glam::DVec3;
 use kernel::MeshId;
 
 use super::{Document, check_coordinates, unit_vector};
-use crate::camera::{Camera, Projection, UP, VERTICAL_TOLERANCE};
+use crate::camera::{Camera, Projection, UP, VERTICAL_TOLERANCE, ZOOM_STEP};
 use crate::command::{Command, CommandError, ErrorKind};
 
 impl Document {
@@ -21,10 +21,16 @@ impl Document {
                 up,
                 projection,
             } => return self.camera_for(eye, target, fov_y_deg, up, projection),
-            Command::Orbit { yaw, pitch } => {
+            Command::Orbit { yaw, pitch, about } => {
                 finite(&[yaw, pitch], "yaw and pitch")?;
-                let target = camera.target;
-                camera.turn(target, yaw.to_radians(), -pitch.to_radians());
+                let pivot = match about {
+                    Some(p) => {
+                        check_coordinates(&[p])?;
+                        DVec3::from(p)
+                    }
+                    None => camera.target,
+                };
+                camera.turn(pivot, yaw.to_radians(), -pitch.to_radians());
             }
             Command::Pan { right, up } => {
                 finite(&[right, up], "right and up")?;
@@ -32,14 +38,21 @@ impl Document {
                 camera.eye += offset;
                 camera.target += offset;
             }
-            Command::Zoom { factor } => {
+            Command::Zoom { factor, about } => {
                 if !(factor.is_finite() && factor > 0.0) {
                     return Err(CommandError::new(
                         ErrorKind::InvalidInput,
                         "factor must be a positive number",
                     ));
                 }
-                camera.zoom_by(factor);
+                match about {
+                    Some(p) => {
+                        check_coordinates(&[p])?;
+                        // `zoom` takes scroll steps: `ZOOM_STEP^steps` of the distance.
+                        camera.zoom(DVec3::from(p), -factor.ln() / ZOOM_STEP.ln());
+                    }
+                    None => camera.zoom_by(factor),
+                }
             }
             Command::ZoomExtents {} => {
                 if let Some([lo, hi]) = self.scene.bounds(MeshId::Root) {

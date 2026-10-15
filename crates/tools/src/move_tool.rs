@@ -67,7 +67,7 @@ impl MoveTool {
             out.message = Some(format!("At most {MAX_COPIES} copies"));
             return;
         }
-        out.commands.push(Command::Undo {});
+        out.commands.push(Command::Undo { count: None });
         out.commands.push(Command::Copy {
             ids,
             offset: spacing.to_array(),
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(
             times.commands,
             vec![
-                Command::Undo {},
+                Command::Undo { count: None },
                 Command::Copy {
                     ids: ids(&["f8"]),
                     offset: [3.0, 0.0, 0.0],
@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(
             divide.commands,
             vec![
-                Command::Undo {},
+                Command::Undo { count: None },
                 Command::Copy {
                     ids: ids(&["f8"]),
                     offset: [1.0, 0.0, 0.0],

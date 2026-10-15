@@ -53,7 +53,9 @@ fn subscribers_get_every_change_in_order() {
     assert_eq!(next(&w_rx)["params"]["revision"], 2);
 
     // Edits made outside the API (e.g. in the window) are announced by notify().
-    host.doc.execute(session::Command::Undo {}).unwrap();
+    host.doc
+        .execute(session::Command::Undo { count: None })
+        .unwrap();
     hub.notify(&host);
     let undo = next(&w_rx);
     assert_eq!(undo["params"]["revision"], 3);

@@ -17,10 +17,7 @@ use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     /// Draw a straight edge. Sticky-geometry rules apply (merging, splitting, auto faces).
-    AddEdge {
-        start: [f64; 3],
-        end: [f64; 3],
-    },
+    AddEdge { start: [f64; 3], end: [f64; 3] },
     /// Draw a rectangle from one corner to the opposite one, as one undo step. Its sides follow
     /// the world axes on axis planes. `normal` picks the plane; without it the corners must
     /// differ in exactly two coordinates.
@@ -56,10 +53,7 @@ pub enum Command {
     },
     /// Move a face along its normal by `distance` meters (negative: against the normal),
     /// extruding new sides or stretching the faces around it.
-    PushPull {
-        face: EntityId,
-        distance: f64,
-    },
+    PushPull { face: EntityId, distance: f64 },
     /// Add a guide line: the infinite line through `point` along `direction` (any non-zero
     /// length), as one undo step. Guides are construction geometry: tools snap to them, they
     /// bound no faces and are not exported.
@@ -68,9 +62,7 @@ pub enum Command {
         direction: [f64; 3],
     },
     /// Add a guide point at `position`, as one undo step.
-    AddGuidePoint {
-        position: [f64; 3],
-    },
+    AddGuidePoint { position: [f64; 3] },
     /// Erase every guide of the open context, as one undo step (nothing to erase is not an
     /// error and makes no undo step).
     DeleteGuides {},
@@ -78,9 +70,7 @@ pub enum Command {
     /// faces it bounds with it, except that two faces in one plane meeting there merge into
     /// one. Vertices go away with their last edge and cannot be erased directly. A group's
     /// definition goes with its last instance.
-    Erase {
-        ids: Vec<EntityId>,
-    },
+    Erase { ids: Vec<EntityId> },
     /// Move vertices, edges, faces, instances and guides by `offset` meters as one undo step.
     /// Faces that share some of the moved vertices stretch and may tilt, but must stay flat.
     Move {
@@ -114,35 +104,24 @@ pub enum Command {
     /// Turn edges, faces (with their edges), instances and guides into a group: they move into
     /// a new definition, placed by one new instance where they were. Guides alone cannot be
     /// grouped. The instance becomes the selection.
-    MakeGroup {
-        ids: Vec<EntityId>,
-    },
+    MakeGroup { ids: Vec<EntityId> },
     /// Like `MakeGroup`, but the definition is a named component: copies of its instances
     /// share it, so editing one edits them all.
-    MakeComponent {
-        ids: Vec<EntityId>,
-        name: String,
-    },
+    MakeComponent { ids: Vec<EntityId>, name: String },
     /// Replace instances by their geometry, which merges with what it touches. Instances and
     /// guides inside them come out as instances and guides. What comes out becomes the selection.
-    Explode {
-        ids: Vec<EntityId>,
-    },
+    Explode { ids: Vec<EntityId> },
     /// Edit the definition an instance of the open context places: its entities become the
     /// ones commands and queries see, in its own coordinates. Clears the selection. Not
     /// recorded in undo history.
-    OpenInstance {
-        id: EntityId,
-    },
+    OpenInstance { id: EntityId },
     /// Go back to editing the context the open instance is in. Clears the selection. Not
     /// recorded in undo history.
     CloseInstance {},
     /// Make `path` the open context: instances from the root, each placed in the definition
     /// of the one before (empty: the root), as the `outliner` query lists them. Clears the
     /// selection unless `path` is already open. Not recorded in undo history.
-    OpenPath {
-        path: Vec<EntityId>,
-    },
+    OpenPath { path: Vec<EntityId> },
     /// Rename a group or component definition. A component's name must not be empty.
     RenameDefinition {
         definition: DefinitionId,
@@ -194,9 +173,7 @@ pub enum Command {
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.
-    DeleteMaterial {
-        material: MaterialId,
-    },
+    DeleteMaterial { material: MaterialId },
     /// Paint faces and instances of the open context with `material` (absent or null: the
     /// default material), as one undo step. On faces `side` (default `front`) picks the side
     /// the normal points to, the other one, or both. An instance's material shows on the face
@@ -212,10 +189,7 @@ pub enum Command {
     /// edges in `ids` and the edges around the faces in `ids`. A soft edge is hidden and the
     /// faces on its sides are shaded as one smooth surface. Only an edge between exactly two
     /// faces can be soft; others are left as they are and counted in the outcome's `soften`.
-    SoftenEdges {
-        ids: Vec<EntityId>,
-        soft: bool,
-    },
+    SoftenEdges { ids: Vec<EntityId>, soft: bool },
     /// Soften each edge between two faces whose normals differ by at most `max_angle_deg`
     /// (0 to 180), as one undo step: among the edges in `ids` and the edges around the faces
     /// in `ids`, or among every edge of the open context when `ids` is empty or absent. Other
@@ -298,8 +272,17 @@ pub enum Command {
         #[serde(default)]
         mode: SelectMode,
     },
-    Undo {},
-    Redo {},
+    /// Undo the last `count` steps (default 1), each its own revision. With fewer steps to
+    /// undo than `count`, fails (`nothing_to_undo`) and undoes nothing.
+    Undo {
+        #[serde(default)]
+        count: Option<u32>,
+    },
+    /// Redo the last `count` undone steps (default 1), like `undo`.
+    Redo {
+        #[serde(default)]
+        count: Option<u32>,
+    },
     /// Place the camera: from `eye` looking at `target`, with the vertical field of view
     /// `fov_y_deg` (1 to 170; default: unchanged) and `projection` (default: unchanged). A
     /// view straight down or up takes the screen's up direction from the horizontal part of
@@ -314,14 +297,17 @@ pub enum Command {
         #[serde(default)]
         projection: Option<Projection>,
     },
-    /// Turn the camera about its target: `yaw` degrees about the vertical (counter-clockwise
-    /// seen from above), then `pitch` degrees raising the eye (negative lowers it). The view
-    /// stops 0.01 rad short of straight down or up.
+    /// Turn the camera about its target, or about the root point `about` (as dragging with the
+    /// middle button turns it about the point under the cursor): `yaw` degrees about the
+    /// vertical (counter-clockwise seen from above), then `pitch` degrees raising the eye
+    /// (negative lowers it). The view stops 0.01 rad short of straight down or up.
     Orbit {
         #[serde(default)]
         yaw: f64,
         #[serde(default)]
         pitch: f64,
+        #[serde(default)]
+        about: Option<[f64; 3]>,
     },
     /// Move the eye and target together, `right` and `up` meters along the screen's right
     /// and up directions.
@@ -333,30 +319,28 @@ pub enum Command {
     },
     /// Move the eye toward the target to `1 / factor` of its distance (factor above 1 zooms
     /// in, below 1 out; never nearer than 0.01 m). In a parallel view the view height shrinks
-    /// the same way.
+    /// the same way. With `about` (a root point), zoom toward it as the scroll wheel zooms
+    /// toward the point under the cursor: it stays where it is on screen, the eye moves to
+    /// `1 / factor` of its distance from it and, in perspective, the target moves to its depth.
     Zoom {
         factor: f64,
+        #[serde(default)]
+        about: Option<[f64; 3]>,
     },
     /// Keep the view direction and fit the whole model (every vertex and placed instance, in
     /// root coordinates, whatever instance is open) in the view. Guides do not count. With
     /// nothing to fit, the camera stays.
     ZoomExtents {},
     /// Look at the target from a standard direction, from the same distance.
-    StandardView {
-        view: StandardView,
-    },
+    StandardView { view: StandardView },
     /// Switch between perspective and parallel projection. The view height at the target
     /// stays the same.
-    SetProjection {
-        projection: Projection,
-    },
+    SetProjection { projection: Projection },
     /// Light the view by `day` (a headlight and ambient light, glowing faces adding theirs) or
     /// by `night` (both dimmed, a dark background: glowing faces light the scene). A view
     /// setting like the camera's: saved with the model, but not an undo step and not a change
     /// to the revision.
-    SetLighting {
-        mode: Lighting,
-    },
+    SetLighting { mode: Lighting },
 }
 
 impl Command {

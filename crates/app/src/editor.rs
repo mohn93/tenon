@@ -1114,14 +1114,14 @@ impl Editor {
 
     pub fn undo(&mut self) -> bool {
         self.reset_tool();
-        self.run(Command::Undo {});
+        self.run(Command::Undo { count: None });
         self.invalidate_hover();
         true
     }
 
     pub fn redo(&mut self) -> bool {
         self.reset_tool();
-        self.run(Command::Redo {});
+        self.run(Command::Redo { count: None });
         self.invalidate_hover();
         true
     }
@@ -1262,7 +1262,7 @@ impl Editor {
         let mut undone = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         for command in out.commands {
-            let is_undo = matches!(command, Command::Undo {});
+            let is_undo = matches!(command, Command::Undo { .. });
             let is_copy = matches!(
                 command,
                 Command::Copy { .. }
@@ -1284,7 +1284,7 @@ impl Editor {
                 });
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
-                if undone && let Ok(redone) = self.doc.execute(Command::Redo {}) {
+                if undone && let Ok(redone) = self.doc.execute(Command::Redo { count: None }) {
                     if is_copy && !redone.changes.created.is_empty() {
                         self.select_created(redone);
                     } else {
@@ -2814,7 +2814,7 @@ mod tests {
         assert_eq!(box_max(&e, group), DVec3::new(10.0, 2.0, 1.0));
         type_text(&mut e, "-90");
         assert_eq!(box_min(&e, group), DVec3::new(10.0, -2.0, 0.0));
-        e.execute(Command::Undo {}).unwrap();
+        e.execute(Command::Undo { count: None }).unwrap();
         assert_eq!(
             box_min(&e, group),
             DVec3::new(10.0, 0.0, 0.0),
