@@ -23,7 +23,7 @@ use crate::awake::Awake;
 use crate::editor::{Editor, EditorKey};
 use crate::fly::FlyKey;
 use crate::gui::Gui;
-use crate::host::WindowHost;
+use crate::host::{AppHost, Offscreen};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
 use crate::ui::{MaterialRow, TexturePosition, TextureRow, UiAction, View};
@@ -401,8 +401,11 @@ struct State {
     /// skips is logged once.
     skip_logged: Option<&'static str>,
     renderer: Renderer,
-    snapshotter: Snapshotter,
+    /// What `render_view` renders with, on the window's device.
+    offscreen: Offscreen,
     editor: Editor,
+    /// An agent asked the app to quit.
+    quit: bool,
     gui: Gui,
     /// Document revision, selection and open context the renderer's model buffers were built
     /// from.
@@ -453,7 +456,7 @@ impl State {
         let renderer = Renderer::new(&device, &queue, config.format);
         let gui = Gui::new(&window, &device, config.format);
         let view = Viewport::full((config.width, config.height));
-        let snapshotter = Snapshotter::with_device(&device, &queue);
+        let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
         let editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
             window.scale_factor(),
@@ -468,8 +471,9 @@ impl State {
             device_lost: lost,
             skip_logged: None,
             renderer,
-            snapshotter,
+            offscreen,
             editor,
+            quit: false,
             gui,
             drawn: None,
             outliner: None,
@@ -846,7 +850,7 @@ impl State {
         };
         eprintln!("GPU device made again");
         self.renderer = Renderer::new(&device, &queue, config.format);
-        self.snapshotter = Snapshotter::with_device(&device, &queue);
+        self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
         self.gui = Gui::new(&self.window, &device, config.format);
         // The swatches belonged to the old panels' context.
         self.swatches.clear();
@@ -1051,9 +1055,10 @@ impl State {
             self.editor.doc().camera.clone(),
             self.editor.doc().lighting,
         );
-        let mut host = WindowHost {
+        let mut host = AppHost {
             editor: &mut self.editor,
-            snapshotter: &mut self.snapshotter,
+            offscreen: &mut self.offscreen,
+            quit: &mut self.quit,
         };
         hub.process(&mut host);
         let after = (
@@ -1073,9 +1078,10 @@ impl State {
 
     /// Tells API subscribers about edits made in the window.
     fn notify_api(&mut self, hub: &mut Hub) {
-        let host = WindowHost {
+        let host = AppHost {
             editor: &mut self.editor,
-            snapshotter: &mut self.snapshotter,
+            offscreen: &mut self.offscreen,
+            quit: &mut self.quit,
         };
         hub.notify(&host);
     }

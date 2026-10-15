@@ -35,8 +35,9 @@ all commands and results.
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
-| `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are) |
+| `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are). Also `selection`, `camera` and `editor` notifications; see Notifications below |
 | `describe` | none | the API description |
+| `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes |
 
 Queries:
 
@@ -60,6 +61,7 @@ Queries:
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 | `{"type": "pick", "pixel": [320, 200], "width": 640, "height": 400}` | what lies under a pixel of a view, or along a `ray`: `hits`, front to back; see Picking and inference below |
 | `{"type": "infer", "pixel": [320, 200]}` | what a tool's click there would snap to: `kind`, `point` and the `entities` involved; see Picking and inference below |
+| `{"type": "editor"}` | the editor around the model: tool, its phase and points, paint material, import units, fly mode, view size, status bar, measurements box, open window; see Editor below |
 
 Unknown fields in commands, queries and params are rejected with `-32602` (a typo fails instead
 of silently doing nothing).
@@ -563,6 +565,55 @@ intersection, on an edge, on a guide line, along an axis from `from`, on a face,
 - `radius` is how far from the pixel to snap, in pixels (default 8, the window's on a display of
   scale 1; at most 1000).
 
+### Editor
+
+The editor is what surrounds the model in the window (and in headless mode, which runs the same
+editor without one): the active tool and what it is doing, the material the Paint tool paints
+with, the units imports are read in, and the status bar. `{"type": "editor"}` returns:
+
+```
+{"type": "editor", "tool": "line", "phase": "active", "points": [[0,0,0]],
+ "paint_material": null, "import_units": "meters", "flying": false, "fly_speed": 3.0,
+ "viewport": [1280.0, 800.0], "status": "Line  |  Click the next point, or type a length  |  Length: 2 m",
+ "prompt": "Click the next point, or type a length", "message": null, "lock": null,
+ "measurement_label": "Length", "measurement": "2 m", "typing": false, "soften_angle": 20,
+ "dialog": null}
+```
+
+- `tool` is `select`, `line`, `rectangle`, `circle`, `arc`, `push_pull`, `move`, `rotate`,
+  `tape_measure`, `erase` or `paint`.
+- `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
+  points the operation was given so far, in the open context's coordinates: Line, the chain's
+  first point and the point the next edge starts from; Rectangle, the first corner; Circle, the
+  center; Arc, the start, then the end; Push/Pull, where the face was clicked; Move, the base
+  point; Rotate, the center, then where the angle starts; Tape Measure, where the measurement
+  starts. The Select tool is `active` with no points while its button is held (a click or a box,
+  both on screen); Erase and Paint are always `idle`.
+- `paint_material` is the material the Paint tool paints with (`null`: the default material);
+  `import_units` is what one unit of an imported OBJ or STL file is in the window's File > Import
+  (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
+  `scale`).
+- `flying` and `fly_speed` (meters a second) are fly mode's (see Camera).
+- `viewport` is the window's 3D view in pixels (1280 x 800 headless): the view `pick` and
+  `infer` use when not given a size.
+- `status` is the status bar's line as the window shows it; `prompt`, `message` (feedback from
+  the last tool action or failed command), `lock` (e.g. `Locked: red axis`) are its parts.
+  `measurement_label` and `measurement` are the measurements box: the typed text while
+  `typing`, else the live measurement (`null` when there is none).
+- `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
+  over the view: `soften_edges` or `null`. The window's file and unsaved-changes dialogs are
+  modal: while one is open the window handles no requests, which wait until it closes.
+
+Editor commands go through `execute` (not `batch`), are not undo steps and do not change the
+revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
+
+| Command | Effect |
+|---|---|
+| `{"type": "set_tool", "tool": "rectangle"}` | Switches to the tool (a fresh one, even if it is the active tool), dropping the operation in progress and anything typed, as the toolbar does. |
+| `{"type": "set_paint_material", "material": "m6"}` | The material the Paint tool paints with; `null` or absent for the default material. The tool does not change (the window's Materials list also switches to Paint). An unknown material is `not_found`. |
+| `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
+| `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for). It never closes the open group (`close_instance` does). |
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
@@ -703,6 +754,26 @@ than 200,000 faces are a `file` error. The regular-file check happens before the
 swapped for a pipe at that very instant could still block (local only, low risk). A file may
 have at most 1,000,000 polygon corners in all (OBJ `f` corners, STL vertices) and ASCII STL keywords are read in any case;
 vertices left without an `endloop` are a `file` error.
+
+### Notifications
+
+After `subscribe`, a connection is told about changes without asking, whoever made them (an
+agent or the person at the window):
+
+| Notification | Params | When |
+|---|---|---|
+| `changed` | `{revision, changes}` | after every model change, in order (see Methods) |
+| `resync` | `{revision}` | changes were missed: read the model again |
+| `selection` | `{ids, revision}`, as the `selection` query returns | the selection changed |
+| `camera` | the `camera` query's result (without `type`) | the camera or the lighting changed: navigating in the window, fly mode, camera commands |
+| `editor` | the `editor` query's result (without `type`) | anything in it changed: the tool, its phase or points, the status bar or measurements box (which follow the cursor in the window), the paint material, import units, fly mode, the view's size, the Soften Edges window |
+
+`selection`, `camera` and `editor` are coalesced: at most one of each per frame the window draws
+(so a drag sends one per frame, not one per mouse event), or per round of requests in headless
+mode, each carrying the state at that moment; a change undone within the same frame sends
+nothing. In the window they follow the frame after the change, so they come after the replies
+and `changed` notifications of the requests that caused them; a window that draws no frames
+(minimized, or hidden on another desktop) sends them when it draws again.
 
 Behaviors worth knowing:
 

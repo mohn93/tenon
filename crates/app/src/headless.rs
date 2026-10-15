@@ -1,32 +1,45 @@
-//! Running without a window: the agent API on stdio or a Unix socket.
+//! Running without a window: the window's editor and the agent API on stdio or a Unix socket.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
-use api::{HeadlessHost, Hub, listen_unix, serve_stdio};
+use api::{Hub, listen_unix, serve_stdio};
+use glam::DVec2;
 use session::Command;
 
 use crate::cli::Transport;
+use crate::editor::Editor;
+use crate::host::{AppHost, Offscreen};
 
-/// Opens `file` if given, then serves until stdin closes (stdio) or forever (socket). Returns
-/// the process exit code.
+/// The size of the view headless, in pixels: what `pick` and `infer` use without one given.
+const VIEWPORT: DVec2 = DVec2::new(1280.0, 800.0);
+
+/// How long a quitting app waits for its last replies to be written.
+pub const CLOSE_WAIT: Duration = Duration::from_secs(2);
+
+/// Opens `file` if given, then serves until stdin closes (stdio), forever (socket), or until
+/// an agent quits. Returns the process exit code.
 pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
-    let mut host = HeadlessHost::new();
+    let mut editor = Editor::new(VIEWPORT, 1.0);
     if let Some(path) = file {
         let open = Command::Open {
             path: path.display().to_string(),
             // A fresh model: nothing to lose.
             discard: false,
         };
-        if let Err(e) = host.doc.execute(open) {
+        if let Err(e) = editor.execute(open) {
             eprintln!("cannot open {}", e.message);
             return 1;
         }
     }
+    let mut offscreen = Offscreen::headless();
     let mut hub = Hub::new(|| {});
     match transport {
         Transport::Stdio => {
             let writer = serve_stdio(hub.inbox());
-            while hub.process_blocking(&mut host) && hub.open_connections() > 0 {}
+            serve(&mut hub, &mut editor, &mut offscreen, |hub| {
+                hub.open_connections() > 0
+            });
             // Dropping the hub ends the writer once every queued reply is on stdout.
             drop(hub);
             let _ = writer.join();
@@ -38,8 +51,35 @@ pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
                 return 1;
             }
             eprintln!("agent API listening on {}", path.display());
-            while hub.process_blocking(&mut host) {}
+            serve(&mut hub, &mut editor, &mut offscreen, |_| true);
+            hub.close(CLOSE_WAIT);
+            let _ = std::fs::remove_file(&path);
             0
+        }
+    }
+}
+
+/// Handles requests as they come, round by round, until `go_on` says to stop or an agent
+/// quits. After each round, subscribers hear about selection, camera and editor changes.
+fn serve(
+    hub: &mut Hub,
+    editor: &mut Editor,
+    offscreen: &mut Offscreen,
+    go_on: impl Fn(&Hub) -> bool,
+) {
+    let mut quit = false;
+    loop {
+        let mut host = AppHost {
+            editor: &mut *editor,
+            offscreen: &mut *offscreen,
+            quit: &mut quit,
+        };
+        if !hub.process_blocking(&mut host) {
+            return;
+        }
+        hub.notify_state(&host);
+        if quit || !go_on(hub) {
+            return;
         }
     }
 }

@@ -23,6 +23,7 @@ use tools::{
 use crate::fly::{self, Fly, FlyKey};
 use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
 
+mod agent;
 mod soften;
 mod texture_position;
 
