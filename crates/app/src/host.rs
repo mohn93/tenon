@@ -2,12 +2,17 @@
 //! (so the active tool stays consistent), editor commands set it, and `render_view` uses an
 //! offscreen renderer.
 
+use std::time::Duration;
+
 use api::{Dialog, EditorCommand, EditorState, Host, PhaseName, ToolName};
 use render::Snapshotter;
 use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
 use tools::Phase;
 
 use crate::editor::Editor;
+
+/// How long a quitting app waits for its last replies to be written.
+pub const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
 /// The offscreen renderer `render_view` uses: one on the window's GPU device, or, without a
 /// window, one made on first use (None when there is no GPU).

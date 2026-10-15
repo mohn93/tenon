@@ -786,6 +786,43 @@ Behaviors worth knowing:
 - A failed atomic batch is rolled back but still consumes entity ids, so later ids may skip numbers.
 - An `id` that is not a string, number or null is an invalid request (`-32600`, reply id null).
 
+## Window actions and the API
+
+Everything a person can do in the window is either a command or query here, or window chrome. The
+tools turn clicks and typing into the same commands with explicit values (the status bar's
+measurements become `distance`, `offset`, `angle` and so on), and `pick` and `infer` say what lies
+under a pixel and where a click would snap.
+
+| In the window | Through the API |
+|---|---|
+| File > New, Open..., Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt is `unsaved_changes` |
+| File > Import... (Cmd+I), File > Import Units | `import` (`scale`, `as`, `up`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
+| File > Export... (Shift+Cmd+E) | `export` (`format`) |
+| Quit (Cmd+Q, closing the window) | `quit` (`discard`) |
+| Edit > Erase Selection (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
+| Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `editor.soften_angle`, `editor.dialog` |
+| Undo, Redo (Cmd+Z, Shift+Cmd+Z) | `undo`, `redo`; `history` lists the steps |
+| Make group (G), Make component (Shift+G), Explode, Close group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
+| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
+| Orbit, pan and zoom with the mouse or trackpad, fly mode (F) | `set_camera`, `orbit`, `pan`, `zoom` reach the same views; fly mode itself is the window's (`editor.flying`, `editor.fly_speed`) |
+| The toolbar's tools and their keys | `set_tool`; `editor.tool`, `editor.phase`, `editor.points` |
+| Select: click, Shift-click, box (inside or crossing), double-click to open a group | `select` (`mode`), `pick` for what is under a pixel, `entities` with `within` for a box, `open_instance` / `open_path` |
+| Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
+| Inference snapping, Shift and arrow-key locks, the marker under the cursor | `infer` (with `from`; `axis` is what Shift would lock) |
+| Typing into the measurements box, Escape | the commands' explicit values; `cancel`; `editor.measurement`, `editor.typing` |
+| The status bar | `editor.status` (and `prompt`, `message`, `lock`) |
+| Materials list: choose (for Paint), Add, Delete, name, color, opacity, Glow, Texture..., Remove, texture size | `set_paint_material`, `add_material`, `delete_material`, `change_material` (`name`, `color`, `opacity`, `emission`, `texture`); `materials` |
+| Entity Info: what is selected, texture Offset / Rotation / Scale, Rotate 90, Reset | `entity`, `entities`, `curve`; `position_texture` (`offset`, `rotation_deg`, `scale`, `reset`) |
+| Outliner: the tree, click to select, Shift/Cmd-click to toggle, double-click to open, the Model row | `outliner`; `open_path` then `select` (`toggle`); `open_path` (`[]` for the root) |
+| The window's title (file name, unsaved mark) | `file` |
+| The 3D view's size | `editor.viewport` (the default view of `pick` and `infer`); `render_view` takes any size |
+
+Window chrome, which changes nothing in the model, its view or the editor, has no command: the
+window's size and position, the panels' sizes and scroll positions, which menus are open,
+tooltips, which Outliner rows are expanded, the export dialog's suggested format, and keyboard
+focus. The file dialogs are chrome too (commands take paths); while one, or the unsaved-changes
+prompt, is open, the window answers no requests.
+
 ## Example
 
 ```

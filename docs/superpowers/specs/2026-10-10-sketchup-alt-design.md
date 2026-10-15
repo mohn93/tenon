@@ -7,7 +7,7 @@ Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10
 
 A desktop 3D modeler in Rust with SketchUp-style direct modeling: draw edges, faces form automatically, push/pull faces, inference snapping, groups and components. macOS first; Windows and Linux supported through wgpu without dedicated work.
 
-The app is fully controllable by agents: every action a user can take is a serializable command available through a local API, the model can be queried as structured data, and the app can run headless (see section 5).
+The app is fully controllable by agents: every action a user can take is a serializable command available through a local API (except window chrome such as panel sizes and open menus, listed in `docs/agent-api.md`), the model can be queried as structured data, and the app can run headless (see section 5).
 
 ## Non-goals (v1)
 

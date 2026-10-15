@@ -1,7 +1,6 @@
 //! Running without a window: the window's editor and the agent API on stdio or a Unix socket.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use api::{Hub, listen_unix, serve_stdio};
 use glam::DVec2;
@@ -9,13 +8,10 @@ use session::Command;
 
 use crate::cli::Transport;
 use crate::editor::Editor;
-use crate::host::{AppHost, Offscreen};
+use crate::host::{AppHost, CLOSE_WAIT, Offscreen};
 
 /// The size of the view headless, in pixels: what `pick` and `infer` use without one given.
 const VIEWPORT: DVec2 = DVec2::new(1280.0, 800.0);
-
-/// How long a quitting app waits for its last replies to be written.
-pub const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
 /// Opens `file` if given, then serves until stdin closes (stdio), forever (socket), or until
 /// an agent quits. Returns the process exit code.

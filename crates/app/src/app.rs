@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use api::{Hub, listen_unix};
+use api::{EditorState, Hub, listen_unix};
 use glam::DVec2;
 use kernel::{EntityId, InstanceId, MaterialId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
-use session::{Command, OutlinerTable};
+use session::{Camera, Command, Lighting, OutlinerTable};
 use tools::Axis;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -23,7 +23,7 @@ use crate::awake::Awake;
 use crate::editor::{Editor, EditorKey};
 use crate::fly::FlyKey;
 use crate::gui::Gui;
-use crate::host::{AppHost, Offscreen};
+use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
 use crate::ui::{MaterialRow, TexturePosition, TextureRow, UiAction, View};
@@ -47,6 +47,30 @@ const HOVER_SETTLE: Duration = Duration::from_millis(50);
 
 /// The document revision, selection and open context the renderer's model buffers show.
 type Drawn = (u64, BTreeSet<EntityId>, Vec<InstanceId>);
+
+/// What the window shows that a request can change: the model (its revision), the selection,
+/// the open context, the camera, the lighting and the editor's state.
+type Shown = (
+    u64,
+    BTreeSet<EntityId>,
+    Vec<InstanceId>,
+    Camera,
+    Lighting,
+    EditorState,
+);
+
+/// What `editor`'s window shows that a request can change.
+fn shown(editor: &Editor) -> Shown {
+    let doc = editor.doc();
+    (
+        doc.revision(),
+        doc.selection().clone(),
+        doc.context().to_vec(),
+        doc.camera.clone(),
+        doc.lighting,
+        editor_state(editor),
+    )
+}
 
 /// What the renderer must redo before drawing a frame.
 #[derive(Debug, PartialEq)]
@@ -1045,30 +1069,17 @@ impl State {
     }
 
     /// Handles waiting API requests, answering each at once. If they changed the model,
-    /// selection, open context or camera, or may have changed the hover, a frame shows it:
-    /// at most about 30 a second while requests keep coming (see `api_repaint`).
+    /// selection, open context, camera or editor, or may have changed the hover, a frame shows
+    /// it: at most about 30 a second while requests keep coming (see `api_repaint`).
     fn process_api(&mut self, hub: &mut Hub) {
-        let before = (
-            self.editor.doc().revision(),
-            self.editor.doc().selection().clone(),
-            self.editor.doc().context().to_vec(),
-            self.editor.doc().camera.clone(),
-            self.editor.doc().lighting,
-        );
+        let before = shown(&self.editor);
         let mut host = AppHost {
             editor: &mut self.editor,
             offscreen: &mut self.offscreen,
             quit: &mut self.quit,
         };
         hub.process(&mut host);
-        let after = (
-            self.editor.doc().revision(),
-            self.editor.doc().selection().clone(),
-            self.editor.doc().context().to_vec(),
-            self.editor.doc().camera.clone(),
-            self.editor.doc().lighting,
-        );
-        if after != before || self.editor.hover_pending() {
+        if shown(&self.editor) != before || self.editor.hover_pending() {
             match api_repaint(Instant::now(), self.presented) {
                 Repaint::At(t) => self.repaint_at = Some(earliest(self.repaint_at, t)),
                 _ => self.window.request_redraw(),
@@ -1084,6 +1095,17 @@ impl State {
             quit: &mut self.quit,
         };
         hub.notify(&host);
+    }
+
+    /// Tells API subscribers what changed of the selection, camera and editor since the last
+    /// frame, once per frame drawn.
+    fn notify_frame(&mut self, hub: &mut Hub) {
+        let host = AppHost {
+            editor: &mut self.editor,
+            offscreen: &mut self.offscreen,
+            quit: &mut self.quit,
+        };
+        hub.notify_state(&host);
     }
 }
 
@@ -1254,6 +1276,8 @@ impl App {
 
 impl ApplicationHandler<ApiWake> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // The last replies (a `quit`'s) reach their agents before the app ends.
+        self.hub.close(CLOSE_WAIT);
         if let Some(path) = self.socket.take() {
             let _ = std::fs::remove_file(path);
         }
@@ -1274,7 +1298,7 @@ impl ApplicationHandler<ApiWake> for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ApiWake) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ApiWake) {
         // Wake before the work, not after: a napped app runs a request (a save, say) many
         // times slower, and an agent's first request often arrives with its connection.
         let state = &mut self.state;
@@ -1285,6 +1309,10 @@ impl ApplicationHandler<ApiWake> for App {
             }
             hub.open_connections() > 0
         });
+        // An agent asked to quit; any unsaved changes were refused or discarded already.
+        if self.state.as_ref().is_some_and(|s| s.quit) {
+            event_loop.exit();
+        }
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -1309,6 +1337,9 @@ impl ApplicationHandler<ApiWake> for App {
         state.window.request_redraw();
         // Requests that arrived before the window existed.
         state.process_api(&mut self.hub);
+        if state.quit {
+            event_loop.exit();
+        }
         self.state = Some(state);
     }
 
@@ -1349,6 +1380,7 @@ impl ApplicationHandler<ApiWake> for App {
                 if s.render() {
                     s.notify_api(&mut self.hub);
                 }
+                s.notify_frame(&mut self.hub);
                 false
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -1512,6 +1544,15 @@ impl ApplicationHandler<ApiWake> for App {
 mod tests {
     use super::*;
     use winit::keyboard::SmolStr;
+
+    #[test]
+    fn a_request_that_changes_only_the_editor_still_shows() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        let before = shown(&e);
+        assert_eq!(shown(&e), before);
+        e.set_import_units(crate::editor::ImportUnits::Feet);
+        assert_ne!(shown(&e), before);
+    }
 
     #[test]
     fn only_a_ctrl_tap_switches_copying() {
