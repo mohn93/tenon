@@ -4,12 +4,15 @@
 //! that owns the document calls `Hub::process` on its own thread; that is the only place
 //! requests touch the document.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
-use serde_json::json;
+use kernel::EntityId;
+use serde_json::{Value, json};
+use session::Query;
 
 use crate::dispatch::{Host, handle};
 use crate::protocol::{notification, parse, success};
@@ -27,6 +30,25 @@ pub struct Inbox {
     tx: Sender<Event>,
     next_conn: Arc<AtomicU64>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    writers: Arc<Writers>,
+}
+
+/// How many transport threads are writing replies, so `Hub::close` can wait for them.
+#[derive(Default)]
+struct Writers {
+    running: Mutex<usize>,
+    done: Condvar,
+}
+
+/// Held by a transport's writer thread while it runs.
+pub(crate) struct Writing(Arc<Writers>);
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        let mut running = self.0.running.lock().unwrap_or_else(|e| e.into_inner());
+        *running -= 1;
+        self.0.done.notify_all();
+    }
 }
 
 impl Inbox {
@@ -51,6 +73,16 @@ impl Inbox {
         self.send(Event::Reply { conn, line });
     }
 
+    /// Counts a writer thread as running until the returned guard is dropped.
+    pub(crate) fn writing(&self) -> Writing {
+        *self
+            .writers
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) += 1;
+        Writing(self.writers.clone())
+    }
+
     fn send(&self, event: Event) {
         if self.tx.send(event).is_ok() {
             (self.wake)();
@@ -65,6 +97,35 @@ pub struct Hub {
     subscribers: HashSet<u64>,
     /// Last revision subscribers were told about.
     notified: Option<u64>,
+    /// The selection, camera and editor subscribers were last told about (None while nobody
+    /// subscribes).
+    seen: Option<Seen>,
+}
+
+/// The state `selection`, `camera` and `editor` notifications report.
+struct Seen {
+    selection: BTreeSet<EntityId>,
+    /// The `camera` query's result without its `type`.
+    camera: Value,
+    editor: Option<Value>,
+}
+
+impl Seen {
+    fn of(host: &dyn Host) -> Seen {
+        let doc = host.document();
+        let mut camera = json!(
+            doc.query(&Query::Camera)
+                .expect("the camera query cannot fail")
+        );
+        if let Some(fields) = camera.as_object_mut() {
+            fields.remove("type");
+        }
+        Seen {
+            selection: doc.selection().clone(),
+            camera,
+            editor: host.editor().map(|e| json!(e)),
+        }
+    }
 }
 
 impl Hub {
@@ -78,10 +139,12 @@ impl Hub {
                 tx,
                 next_conn: Arc::new(AtomicU64::new(1)),
                 wake: Arc::new(wake),
+                writers: Arc::default(),
             },
             outs: HashMap::new(),
             subscribers: HashSet::new(),
             notified: None,
+            seen: None,
         }
     }
 
@@ -135,14 +198,69 @@ impl Hub {
                 .map(|e| notification("changed", json!(e)))
                 .collect()
         };
+        self.broadcast(&lines);
+        self.notified = Some(doc.revision());
+    }
+
+    /// Sends `selection`, `camera` and `editor` notifications for those that changed since
+    /// subscribers were last told, whoever changed them: at most one of each per call. Call it
+    /// once a frame (the window) or after each round of requests (headless).
+    pub fn notify_state(&mut self, host: &dyn Host) {
+        if self.subscribers.is_empty() {
+            self.seen = None;
+            return;
+        }
+        let now = Seen::of(host);
+        let Some(before) = self.seen.replace(now) else {
+            return;
+        };
+        let now = self.seen.as_ref().expect("just set");
+        let mut lines = Vec::new();
+        if now.selection != before.selection {
+            let ids: Vec<EntityId> = now.selection.iter().copied().collect();
+            let revision = host.document().revision();
+            lines.push(notification(
+                "selection",
+                json!({"ids": ids, "revision": revision}),
+            ));
+        }
+        if now.camera != before.camera {
+            lines.push(notification("camera", now.camera.clone()));
+        }
+        if now.editor != before.editor
+            && let Some(editor) = &now.editor
+        {
+            lines.push(notification("editor", editor.clone()));
+        }
+        self.broadcast(&lines);
+    }
+
+    /// Sends `lines` to every subscriber.
+    fn broadcast(&self, lines: &[String]) {
         for conn in &self.subscribers {
             if let Some(out) = self.outs.get(conn) {
-                for line in &lines {
+                for line in lines {
                     let _ = out.send(line.clone());
                 }
             }
         }
-        self.notified = Some(doc.revision());
+    }
+
+    /// Stops serving: drops requests not yet handled and every connection's sending side, so
+    /// each transport's writer thread ends once the lines queued for it are written, and waits
+    /// up to `wait` for them. True if they all finished. Call it before the program exits, so
+    /// the last replies (such as a `quit`'s) reach their clients.
+    pub fn close(&mut self, wait: Duration) -> bool {
+        while self.rx.try_recv().is_ok() {}
+        self.outs.clear();
+        self.subscribers.clear();
+        let writers = &self.inbox.writers;
+        let running = writers.running.lock().unwrap_or_else(|e| e.into_inner());
+        let (running, _) = writers
+            .done
+            .wait_timeout_while(running, wait, |n| *n > 0)
+            .unwrap_or_else(|e| e.into_inner());
+        *running == 0
     }
 
     fn on_event(&mut self, host: &mut dyn Host, event: Event) {
@@ -165,6 +283,9 @@ impl Hub {
                         // Notify about anything earlier before this connection joins.
                         self.notify(host);
                         self.subscribers.insert(conn);
+                        if self.seen.is_none() {
+                            self.seen = Some(Seen::of(host));
+                        }
                         req.id
                             .map(|id| success(&id, json!({"revision": host.document().revision()})))
                     }

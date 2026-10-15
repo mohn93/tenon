@@ -20,7 +20,9 @@ where
     W: Write + Send + 'static,
 {
     let (conn, replies) = inbox.open();
+    let writing = inbox.writing();
     let writer_thread = thread::spawn(move || {
+        let _writing = writing;
         for line in replies {
             if writer
                 .write_all(line.as_bytes())

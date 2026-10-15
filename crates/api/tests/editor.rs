@@ -189,3 +189,39 @@ fn describe_lists_quit_and_the_editor_schemas() {
         assert!(d["schemas"][name].is_object(), "{name}");
     }
 }
+
+#[test]
+fn subscribers_hear_when_the_editor_changes() {
+    use std::time::Duration;
+
+    let mut host = Editing::new();
+    let mut hub = api::Hub::new(|| {});
+    let inbox = hub.inbox();
+    let (conn, rx) = inbox.open();
+    let line = |id: u64, method: &str, params: Value| {
+        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string()
+    };
+    inbox.send_line(conn, line(1, "subscribe", Value::Null));
+    hub.process(&mut host);
+    hub.notify_state(&host);
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(rx.try_recv().is_err());
+
+    // Changed by a request or by the program itself, it is told once per round.
+    inbox.send_line(
+        conn,
+        line(2, "execute", json!({"type": "set_tool", "tool": "move"})),
+    );
+    hub.process(&mut host);
+    host.state.import_units = ImportUnits::Feet;
+    hub.notify_state(&host);
+    let messages: Vec<Value> = rx
+        .try_iter()
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0]["id"], 2);
+    assert_eq!(messages[1]["method"], "editor");
+    assert_eq!(messages[1]["params"]["tool"], "move");
+    assert_eq!(messages[1]["params"]["import_units"], "feet");
+}

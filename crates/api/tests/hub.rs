@@ -137,3 +137,87 @@ fn opening_a_file_tells_subscribers_to_read_the_model_again() {
     assert_eq!(note["method"], "resync", "{note}");
     assert_eq!(note["params"]["revision"], 2);
 }
+
+/// Every message waiting on `rx`.
+fn drain(rx: &Receiver<String>) -> Vec<Value> {
+    rx.try_iter()
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect()
+}
+
+#[test]
+fn selection_and_camera_changes_are_notified_once_per_round() {
+    let mut host = HeadlessHost::new();
+    let mut hub = Hub::new(|| {});
+    let inbox = hub.inbox();
+    let (watcher, w_rx) = inbox.open();
+    let (writer, _r_rx) = inbox.open();
+    inbox.send_line(writer, request(1, "execute", edge(0.0)));
+    hub.process(&mut host);
+    // Nobody listens yet: nothing is kept or sent.
+    hub.notify_state(&host);
+
+    inbox.send_line(watcher, request(2, "subscribe", json!(null)));
+    hub.process(&mut host);
+    hub.notify_state(&host);
+    assert_eq!(drain(&w_rx).len(), 1, "only the subscribe reply");
+
+    let select = json!({"type": "select", "ids": ["e2"]});
+    let camera = |x: i32| json!({"type": "set_camera", "eye": [x, -10, 5], "target": [0, 0, 0]});
+    inbox.send_line(writer, request(3, "execute", select));
+    inbox.send_line(writer, request(4, "execute", camera(10)));
+    inbox.send_line(writer, request(5, "execute", camera(12)));
+    hub.process(&mut host);
+    hub.notify_state(&host);
+    let messages = drain(&w_rx);
+    let methods: Vec<&str> = messages
+        .iter()
+        .map(|m| m["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(methods, vec!["selection", "camera"]);
+    assert_eq!(messages[0]["params"]["ids"], json!(["e2"]));
+    assert_eq!(messages[0]["params"]["revision"], 1);
+    assert_eq!(messages[1]["params"]["eye"], json!([12.0, -10.0, 5.0]));
+    assert!(messages[1]["params"]["type"].is_null());
+
+    // Changes made outside the API are notified the same way; nothing changed, nothing sent.
+    host.doc
+        .execute(session::Command::Select {
+            ids: Vec::new(),
+            mode: session::SelectMode::Replace,
+        })
+        .unwrap();
+    hub.notify_state(&host);
+    hub.notify_state(&host);
+    let messages = drain(&w_rx);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["params"]["ids"], json!([]));
+}
+
+#[test]
+fn closing_waits_for_the_last_replies_to_be_written() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Instant;
+
+    let mut host = HeadlessHost::new();
+    let mut hub = Hub::new(|| {});
+    let (served, client) = UnixStream::pair().unwrap();
+    api::serve_stream(hub.inbox(), served.try_clone().unwrap(), served);
+    writeln!(&client, "{}", request(1, "execute", edge(0.0))).unwrap();
+    // The request arrives from the reader thread; handling it bumps the revision.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while host.doc.revision() == 0 {
+        assert!(Instant::now() < deadline, "no request arrived");
+        hub.process(&mut host);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(hub.close(Duration::from_secs(5)));
+    client
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(&client).read_line(&mut line).unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["result"]["revision"], 1);
+}
