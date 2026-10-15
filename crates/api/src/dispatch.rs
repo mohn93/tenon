@@ -11,7 +11,9 @@ use session::{
 };
 
 use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
-use crate::input::{ToolInput, ToolInputParams, ToolInputResult, check};
+use crate::input::{
+    ToolInput, ToolInputError, ToolInputParams, ToolInputResult, ToolInputStopped, check,
+};
 use crate::probe::{
     InferQuery, Inferred, PickHit, PickQuery, ScreenCommand, View, box_ids, infer_query, pick_query,
 };
@@ -49,8 +51,8 @@ pub trait Host {
     }
     /// Feeds the active tool the events, as the window would, and reports the editor after
     /// them and the commands they ran.
-    fn tool_input(&mut self, _input: ToolInput) -> Result<ToolInputResult, CommandError> {
-        Err(no_editor())
+    fn tool_input(&mut self, _input: ToolInput) -> Result<ToolInputResult, ToolInputError> {
+        Err(no_editor().into())
     }
     /// Ends the program once the replies waiting are sent. Refuses with `unsaved_changes`
     /// when the model changed since it was opened, saved or started, unless `discard`.
@@ -175,7 +177,13 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
         "tool_input" => {
             let p: ToolInputParams = params_as(params)?;
             let input = check(p).map_err(command_failed)?;
-            let result = host.tool_input(input).map_err(command_failed)?;
+            let result = host.tool_input(input).map_err(|e| match e {
+                ToolInputError::Refused(e) => command_failed(e),
+                ToolInputError::Stopped(stopped) => {
+                    RpcError::new(codes::COMMAND_FAILED, stopped.error.message.clone())
+                        .with_data(json!(stopped))
+                }
+            })?;
             Ok(json!(result))
         }
         "quit" => {
@@ -304,7 +312,7 @@ pub fn describe() -> Value {
             "tool_input": {
                 "params": "ToolInput: {events: [InputEvent], width?, height?}",
                 "result": "ToolInputResult: {editor, inference, preview, commands: [{command, outcome?, error?}], revision}",
-                "notes": "runs the events through the window's editor and active tool (inference, locks, typed values); a model point is looked for where the view shows it at its turn; an event that cannot run stops the rest (the ones before it stay done); modifiers are let go at the end"
+                "notes": "runs the events through the window's editor and active tool (inference, locks, typed values); a model point is looked for where it is, even behind other geometry, at the pixel the view shows it at its turn; an event that cannot run stops the rest (the ones before it stay done; data: ToolInputStopped); modifiers a modifiers event holds stay held across calls until another lets them go or cancel"
             },
             "subscribe": {"params": null, "result": "{revision}", "notes": "connection only"},
             "describe": {"params": null, "result": "this document"},
@@ -324,7 +332,7 @@ pub fn describe() -> Value {
         },
         "errors": {
             "-32700": "parse error", "-32600": "invalid request", "-32601": "method not found",
-            "-32602": "invalid params", "-32000": "command failed (data: CommandError)",
+            "-32602": "invalid params", "-32000": "command failed (data: CommandError; for tool_input stopped partway, ToolInputStopped)",
             "-32001": "batch failed (data: BatchError)", "-32002": "rendering unavailable"
         },
         "schemas": {
@@ -338,6 +346,7 @@ pub fn describe() -> Value {
             "EditorState": schema_for!(EditorState),
             "ToolInput": schema_for!(ToolInputParams),
             "ToolInputResult": schema_for!(ToolInputResult),
+            "ToolInputStopped": schema_for!(ToolInputStopped),
             "QueryResult": schema_for!(QueryResult),
             "Outcome": schema_for!(Outcome),
             "CommandError": schema_for!(CommandError),

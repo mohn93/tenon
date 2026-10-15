@@ -5,14 +5,14 @@
 use std::time::Duration;
 
 use api::{
-    Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput, ToolInputResult,
-    ToolName, snap_name,
+    Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput, ToolInputError,
+    ToolInputResult, ToolInputStopped, ToolName, snap_name,
 };
 use render::Snapshotter;
 use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
 use tools::Phase;
 
-use crate::editor::Editor;
+use crate::editor::{DriveError, Driven, Editor, Stopped};
 
 /// How long a quitting app waits for its last replies to be written.
 pub const CLOSE_WAIT: Duration = Duration::from_secs(2);
@@ -116,41 +116,23 @@ impl Host for AppHost<'_> {
         Ok(())
     }
 
-    fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, CommandError> {
-        let driven = self.editor.drive(input)?;
-        Ok(ToolInputResult {
-            editor: editor_state(self.editor),
-            inference: driven.hover.map(|h| {
-                let (kind, axis) = snap_name(h.kind);
-                Hover {
-                    kind,
-                    axis,
-                    point: h.point.to_array(),
-                }
-            }),
-            preview: driven
-                .preview
-                .iter()
-                .map(|[a, b]| [a.to_array(), b.to_array()])
-                .collect(),
-            commands: driven
-                .issued
-                .into_iter()
-                .map(|(command, result)| match result {
-                    Ok(outcome) => Issued {
-                        command,
-                        outcome: Some(outcome),
-                        error: None,
-                    },
-                    Err(error) => Issued {
-                        command,
-                        outcome: None,
-                        error: Some(error),
-                    },
-                })
-                .collect(),
-            revision: self.editor.doc().revision(),
-        })
+    fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, ToolInputError> {
+        match self.editor.drive(input) {
+            Ok(driven) => Ok(tool_input_result(self.editor, driven)),
+            Err(DriveError::Refused(e)) => Err(ToolInputError::Refused(e)),
+            Err(DriveError::Stopped(stopped)) => {
+                let Stopped {
+                    event,
+                    error,
+                    driven,
+                } = *stopped;
+                Err(ToolInputError::Stopped(Box::new(ToolInputStopped {
+                    error,
+                    event,
+                    completed: tool_input_result(self.editor, driven),
+                })))
+            }
+        }
     }
 
     fn quit(&mut self, discard: bool) -> Result<(), CommandError> {
@@ -161,6 +143,43 @@ impl Host for AppHost<'_> {
 
     fn quitting(&self) -> bool {
         *self.quit
+    }
+}
+
+/// What `tool_input` reports after the events that ran.
+fn tool_input_result(editor: &Editor, driven: Driven) -> ToolInputResult {
+    ToolInputResult {
+        editor: editor_state(editor),
+        inference: driven.hover.map(|h| {
+            let (kind, axis) = snap_name(h.kind);
+            Hover {
+                kind,
+                axis,
+                point: h.point.to_array(),
+            }
+        }),
+        preview: driven
+            .preview
+            .iter()
+            .map(|[a, b]| [a.to_array(), b.to_array()])
+            .collect(),
+        commands: driven
+            .issued
+            .into_iter()
+            .map(|(command, result)| match result {
+                Ok(outcome) => Issued {
+                    command,
+                    outcome: Some(outcome),
+                    error: None,
+                },
+                Err(error) => Issued {
+                    command,
+                    outcome: None,
+                    error: Some(error),
+                },
+            })
+            .collect(),
+        revision: editor.doc().revision(),
     }
 }
 
@@ -199,6 +218,7 @@ pub fn editor_state(editor: &Editor) -> EditorState {
         typing: !typed.is_empty(),
         soften_angle: soften_angle.into(),
         dialog: soften_open.then_some(Dialog::SoftenEdges),
+        modifiers: editor.modifiers(),
     }
 }
 

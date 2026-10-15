@@ -409,10 +409,15 @@ fn select_clicks_toggles_with_shift_boxes_and_double_click_opens() {
             .len(),
         2
     );
+    // Shift stays held after the call until a modifiers event lets it go.
+    assert_eq!(r["editor"]["modifiers"]["shift"], true, "{r}");
     // A box dragged right around everything selects it all.
     let r = input(
         &mut e,
-        json!([{"type": "drag", "pixels": [[1, 1], [400, 300], [799, 599]]}]),
+        json!([
+            {"type": "modifiers"},
+            {"type": "drag", "pixels": [[1, 1], [400, 300], [799, 599]]}
+        ]),
     );
     assert_eq!(ran(&r), ["select"], "{r}");
     assert_eq!(
@@ -481,8 +486,11 @@ fn shift_and_arrow_keys_lock_the_direction() {
         end.x > 1.0 && end.y == 0.0 && end.z == 0.0,
         "on the red axis: {r}"
     );
-    // The lock ends with the call, when Shift is let go.
-    assert_eq!(r["editor"]["lock"], Value::Null);
+    // Shift stays held after the call, and so does its lock, until Shift is let go.
+    assert_eq!(r["editor"]["lock"], "Locked: red axis", "{r}");
+    assert_eq!(r["editor"]["modifiers"]["shift"], true, "{r}");
+    let r = input(&mut e, json!([{"type": "modifiers"}]));
+    assert_eq!(r["editor"]["lock"], Value::Null, "{r}");
 
     // The up arrow locks the blue axis and stays until the operation ends.
     let r = input(&mut e, json!([{"type": "key", "key": "up"}]));
@@ -523,7 +531,7 @@ fn keys_switch_tools_group_and_undo() {
 }
 
 #[test]
-fn pixels_scale_from_the_view_given_and_bad_events_stop_the_rest() {
+fn pixels_scale_from_the_view_given_and_pixels_outside_it_are_refused() {
     let mut e = editor();
     let a = e.doc().camera.project(DVec3::ZERO).unwrap();
     // The same spot in a view half the size.
@@ -541,7 +549,7 @@ fn pixels_scale_from_the_view_given_and_bad_events_stop_the_rest() {
         json!({"events": [{"type": "click", "pixel": [1, 1]}], "width": 400, "height": 400}),
     );
     assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
-    // The first event runs; the second is outside the view and stops the third.
+    // A pixel outside the view is refused before any event runs.
     let r = call(
         &mut e,
         "tool_input",
@@ -556,7 +564,8 @@ fn pixels_scale_from_the_view_given_and_bad_events_stop_the_rest() {
         "event 1: pixel must lie in the view, 0 to 800 across and 0 to 600 down",
         "{r}"
     );
-    assert_eq!(e.phase(), tools::Phase::Idle);
+    assert!(r["error"]["data"]["event"].is_null(), "{r}");
+    assert_ne!(e.phase(), tools::Phase::Idle);
     assert_eq!(e.tool_kind(), tools::ToolKind::Line);
     // A point behind the camera is not in view.
     let behind = e.doc().camera.eye * 2.0 - e.doc().camera.target;
@@ -591,4 +600,264 @@ fn a_middle_drag_orbits_and_draws_nothing() {
     assert_eq!(ran(&r), Vec::<String>::new());
     assert_eq!(r["editor"]["phase"], "idle");
     assert!(e.doc().camera.eye.distance(eye) > 0.1, "the view turned");
+}
+
+/// A 2 x 2 x 1 m box on the ground at the origin.
+fn cube(e: &mut Editor) {
+    let face = square(e);
+    let normal = ask(e, json!({"type": "entity", "id": face}))["normal"][2]
+        .as_f64()
+        .unwrap();
+    exec(
+        e,
+        json!({"type": "push_pull", "face": face, "distance": normal.signum()}),
+    );
+}
+
+/// The face of the open context whose normal is `n`.
+fn face_facing(e: &mut Editor, n: [f64; 3]) -> Value {
+    ask(e, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| near(&f["normal"], n))
+        .unwrap()["id"]
+        .clone()
+}
+
+/// A point behind the default camera, out of view.
+fn behind(e: &Editor) -> [f64; 3] {
+    let c = &e.doc().camera;
+    (c.eye * 2.0 - c.target).to_array()
+}
+
+#[test]
+fn an_event_that_fails_partway_reports_what_already_ran() {
+    let mut e = editor();
+    let out = behind(&e);
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [
+            {"type": "key", "key": "r"},
+            {"type": "click", "point": [1, 1, 0]},
+            {"type": "click", "point": [2, 2, 0]},
+            {"type": "move", "point": out},
+            {"type": "key", "key": "l"}
+        ]}),
+    );
+    let data = &r["error"]["data"];
+    assert_eq!(data["kind"], "invalid_input", "{r}");
+    assert_eq!(data["message"], "event 3: the point is not in view");
+    assert_eq!(data["event"], 3);
+    let done = &data["completed"];
+    assert_eq!(ran(done), ["add_rectangle"], "{r}");
+    assert!(done["commands"][0]["outcome"]["changes"]["created"].is_array());
+    assert_eq!(done["revision"], 1);
+    assert_eq!(
+        done["editor"]["tool"], "rectangle",
+        "the last event never ran"
+    );
+    assert_eq!(e.doc().revision(), 1);
+}
+
+#[test]
+fn a_drag_that_fails_partway_lets_go_of_its_button() {
+    let mut e = editor();
+    square(&mut e);
+    let out = behind(&e);
+    // A middle drag whose last place is out of sight: the orbit stops there.
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [{"type": "drag", "button": "middle",
+                           "points": [[1, 1, 0], [2, 1, 0], out]}]}),
+    );
+    assert_eq!(r["error"]["data"]["event"], 0, "{r}");
+    let eye = e.doc().camera.eye;
+    input(&mut e, json!([{"type": "move", "pixel": [600, 300]}]));
+    assert_eq!(e.doc().camera.eye, eye, "no orbit is left going");
+
+    // A Select box that cannot finish is dropped: the tool is idle again.
+    tool(&mut e, "select");
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [{"type": "drag", "points": [[0, 0, 0], [2, 2, 0], out]}]}),
+    );
+    assert_eq!(
+        r["error"]["data"]["completed"]["editor"]["phase"], "idle",
+        "{r}"
+    );
+    let r = input(&mut e, json!([{"type": "move", "pixel": [700, 500]}]));
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert!(
+        r["preview"].as_array().unwrap().is_empty(),
+        "no box follows: {r}"
+    );
+}
+
+#[test]
+fn a_point_is_found_where_it_is_even_behind_other_geometry() {
+    let mut e = editor();
+    cube(&mut e);
+    // The box's side facing +x cannot be seen from the default view, from -x and -y.
+    let hidden = [2.0, 1.0, 0.5];
+    let r = input(&mut e, json!([{"type": "move", "point": hidden}]));
+    assert_eq!(r["inference"]["kind"], "on_face", "{r}");
+    assert!(near(&r["inference"]["point"], hidden), "{r}");
+    let q = ask(&mut e, json!({"type": "infer", "point": hidden}));
+    assert_eq!(q["kind"], "on_face", "{q}");
+    let side = face_facing(&mut e, [1.0, 0.0, 0.0]);
+    assert_eq!(q["entities"][0]["id"], side, "{q}");
+    // A hidden corner snaps as an endpoint; a point in the air inside the box is free space.
+    let r = input(&mut e, json!([{"type": "move", "point": [2, 2, 0]}]));
+    assert_eq!(r["inference"]["kind"], "endpoint", "{r}");
+    let r = input(&mut e, json!([{"type": "move", "point": [1, 1, 0.5]}]));
+    assert_eq!(r["inference"]["kind"], "nothing", "{r}");
+    assert!(near(&r["inference"]["point"], [1.0, 1.0, 0.5]), "{r}");
+    // The tools' own picks look there too: Paint paints the hidden side.
+    tool(&mut e, "paint");
+    let r = input(&mut e, json!([{"type": "click", "point": hidden}]));
+    assert_eq!(r["commands"][0]["command"]["ids"], json!([side]), "{r}");
+    // A pixel keeps the window's front-most behaviour.
+    tool(&mut e, "line");
+    let px = e.doc().camera.project(DVec3::from(hidden)).unwrap();
+    let r = input(&mut e, json!([{"type": "move", "pixel": px.to_array()}]));
+    assert!(!near(&r["inference"]["point"], hidden), "{r}");
+}
+
+#[test]
+fn modifiers_stay_held_across_calls_until_let_go() {
+    let mut e = editor();
+    // Shift pressed in one call locks the red axis; the next call moves off it and types.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [2, 0, 0]},
+            {"type": "modifiers", "shift": true}
+        ]),
+    );
+    assert_eq!(r["editor"]["lock"], "Locked: red axis", "{r}");
+    assert_eq!(
+        r["editor"]["modifiers"],
+        json!({"shift": true, "alt": false, "cmd": false})
+    );
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "move", "point": [2, 1, 0]},
+            {"type": "type", "text": "3"}
+        ]),
+    );
+    assert!(
+        near(&r["commands"][0]["command"]["end"], [3.0, 0.0, 0.0]),
+        "{r}"
+    );
+    assert_eq!(
+        ask(&mut e, json!({"type": "editor"}))["modifiers"]["shift"],
+        true
+    );
+    // Cancel lets go of them.
+    exec(&mut e, json!({"type": "cancel"}));
+    assert_eq!(e.modifiers(), api::Mods::default());
+
+    // Held Cmd: a key with no binding and typing are refused.
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [{"type": "modifiers", "cmd": true}, {"type": "key", "key": "s"}]}),
+    );
+    assert_eq!(
+        r["error"]["data"]["message"],
+        "event 1: with cmd or ctrl held only z (undo, with shift redo) is taken",
+        "{r}"
+    );
+    assert_eq!(
+        r["error"]["data"]["completed"]["editor"]["modifiers"]["cmd"],
+        true
+    );
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [{"type": "type", "text": "3"}]}),
+    );
+    assert_eq!(r["error"]["data"]["event"], 0, "{r}");
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [
+            {"type": "modifiers", "alt": true},
+            {"type": "key", "key": "l"}
+        ]}),
+    );
+    assert_eq!(
+        r["error"]["data"]["message"], "event 1: with alt held no key is taken",
+        "{r}"
+    );
+    input(&mut e, json!([{"type": "modifiers"}]));
+    assert_eq!(e.modifiers(), api::Mods::default());
+
+    // In the window, letting go never releases what the user holds.
+    e.set_modifiers(true, false);
+    input(
+        &mut e,
+        json!([{"type": "modifiers", "cmd": true}, {"type": "modifiers"}]),
+    );
+    assert!(e.modifiers().shift);
+    e.set_modifiers(false, false);
+    assert!(!e.modifiers().shift);
+}
+
+#[test]
+fn a_rectangle_from_a_walls_foot_stands_in_the_wall() {
+    let mut e = editor();
+    cube(&mut e);
+    tool(&mut e, "rectangle");
+    // From the bottom edge of the front side (y = 0), across that side.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0.5, 0, 0]},
+            {"type": "move", "point": [1.5, 0, 0.8]},
+            {"type": "type", "text": "1,0.5"}
+        ]),
+    );
+    let c = &r["commands"][0]["command"];
+    assert_eq!(c["type"], "add_rectangle", "{r}");
+    assert!(
+        near(&c["normal"], [0.0, -1.0, 0.0]) || near(&c["normal"], [0.0, 1.0, 0.0]),
+        "{r}"
+    );
+    assert!(vec3(&c["opposite"]).y.abs() < 1e-9, "{r}");
+}
+
+#[test]
+fn the_hover_waits_while_a_middle_drag_turns_the_view() {
+    let mut e = editor();
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [1, 0, 0]}
+        ]),
+    );
+    let before = r["preview"].clone();
+    // The middle button held across calls: the preview stays where it was in the model.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "down", "pixel": [400, 300], "button": "middle"},
+            {"type": "move", "pixel": [500, 350]},
+            {"type": "move", "pixel": [550, 400]}
+        ]),
+    );
+    assert_eq!(r["preview"], before, "{r}");
+    // Released, the hover is worked out again.
+    let r = input(
+        &mut e,
+        json!([{"type": "up", "pixel": [550, 400], "button": "middle"}]),
+    );
+    assert_ne!(r["preview"], before, "{r}");
 }

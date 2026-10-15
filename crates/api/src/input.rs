@@ -87,7 +87,9 @@ pub enum InputEvent {
     /// letter holds Shift: "G" makes a component), or `enter`, `backspace`, `delete`,
     /// `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis), `down`
     /// (unlock), or `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure
-    /// guide making). With `cmd` (or `ctrl`) only `z` (undo; with `shift` redo) is taken.
+    /// guide making). With `cmd` (or `ctrl`) only `z` (undo; with `shift` redo) is taken, and
+    /// with `alt` (Cmd or Ctrl not held) no key: others are `invalid_input`, also when a
+    /// `modifiers` event holds them.
     Key {
         key: String,
         #[serde(default)]
@@ -99,9 +101,9 @@ pub enum InputEvent {
         #[serde(default)]
         cmd: bool,
     },
-    /// Hold exactly these modifiers until the next `modifiers` event or the end of the call
-    /// (then all are let go): Shift locks the direction the cursor snaps along, Cmd or Ctrl
-    /// makes a Paint click sample, Shift toggles in the Select tool.
+    /// Hold exactly these modifiers (absent ones are let go) until the next `modifiers` event
+    /// or `cancel`, across calls: Shift locks the direction the cursor snaps along, Cmd or
+    /// Ctrl makes a Paint click sample, Shift toggles in the Select tool.
     Modifiers {
         #[serde(default)]
         shift: bool,
@@ -113,7 +115,7 @@ pub enum InputEvent {
         cmd: bool,
     },
     /// Text typed into the measurements box (replacing anything typed), then Enter: lengths,
-    /// "2,3", "24s", "5x", "/5", angles.
+    /// "2,3", "24s", "5x", "/5", angles. Refused while Cmd, Ctrl or Alt is held.
     Type { text: String },
 }
 
@@ -142,8 +144,8 @@ pub enum Key {
     CtrlTap,
 }
 
-/// Modifier keys held. Ctrl and Cmd act alike (the window takes either).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Modifier keys held. Ctrl and Cmd act alike (the window takes either): `cmd` is either.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Mods {
     pub shift: bool,
     pub alt: bool,
@@ -205,6 +207,34 @@ pub struct ToolInputResult {
     /// Every command the events ran, in order (tools, shortcuts, undo).
     pub commands: Vec<Issued>,
     pub revision: u64,
+}
+
+/// Why `tool_input` failed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolInputError {
+    /// Nothing ran (`-32000`, data: CommandError).
+    Refused(CommandError),
+    /// An event could not run at its turn (`-32000`, data: ToolInputStopped).
+    Stopped(Box<ToolInputStopped>),
+}
+
+impl From<CommandError> for ToolInputError {
+    fn from(e: CommandError) -> Self {
+        ToolInputError::Refused(e)
+    }
+}
+
+/// The `tool_input` error's data when an event could not run at its turn: the events before
+/// it stay done.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct ToolInputStopped {
+    #[serde(flatten)]
+    pub error: CommandError,
+    /// The index of the event that could not run.
+    pub event: usize,
+    /// What the events before it (and any part of it that ran) left, as a result reports
+    /// it: the editor, the commands they ran with their outcomes, and the revision.
+    pub completed: ToolInputResult,
 }
 
 fn invalid(message: impl Into<String>) -> CommandError {
@@ -294,6 +324,9 @@ fn event(e: InputEvent) -> Result<Input, CommandError> {
                     "with cmd or ctrl only z (undo, with shift redo) is taken; file actions \
                      are commands",
                 ));
+            }
+            if mods.alt && !mods.cmd {
+                return Err(invalid("with alt no key is taken"));
             }
             Input::Key(key, mods)
         }
@@ -439,6 +472,10 @@ mod tests {
                 json!({"type": "key", "key": "s", "cmd": true}),
                 "event 0: with cmd or ctrl only z (undo, with shift redo) is taken; file \
                  actions are commands",
+            ),
+            (
+                json!({"type": "key", "key": "r", "alt": true}),
+                "event 0: with alt no key is taken",
             ),
             (
                 json!({"type": "type", "text": ""}),

@@ -6,6 +6,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Instant;
 
+use api::Mods;
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{EntityId, InstanceId, MaterialId};
 use render::grid::LineVertex;
@@ -16,7 +17,7 @@ use session::{
 };
 use tools::overlay::overlay;
 use tools::{
-    Axis, Guides, Inference, Layout, Lock, Remembered, Scenery, SnapKind, Tool, ToolContext,
+    Axis, Guides, Inference, Layout, Lock, Remembered, Scenery, Slab, SnapKind, Tool, ToolContext,
     ToolEvent, ToolKind, ToolOutput, edge_under_in, face_under_in, infer_in,
 };
 
@@ -25,6 +26,7 @@ use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
 
 mod agent;
 mod input;
+pub use input::{DriveError, Driven, Stopped};
 mod soften;
 mod texture_position;
 
@@ -135,6 +137,16 @@ pub struct Editor {
     soften: SoftenWindow,
     /// While an agent's `tool_input` runs: every command run, with its result.
     issued: Option<Vec<(Command, Result<Outcome, CommandError>)>>,
+    /// The modifier keys the window reports the user holding.
+    user_mods: Mods,
+    /// The modifier keys `tool_input` holds, until a `modifiers` event lets them go or
+    /// `cancel`.
+    agent_mods: Mods,
+    /// The modifiers a `tool_input` key event holds while its key goes down.
+    key_mods: Mods,
+    /// The model point (open context coordinates) a `tool_input` event put the cursor on:
+    /// the tools look for it there, whatever hides it (see `Slab`).
+    cursor_point: Option<DVec3>,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -194,6 +206,10 @@ impl Editor {
             flying: false,
             soften: SoftenWindow::default(),
             issued: None,
+            user_mods: Mods::default(),
+            agent_mods: Mods::default(),
+            key_mods: Mods::default(),
+            cursor_point: None,
         }
     }
 
@@ -256,9 +272,34 @@ impl Editor {
         self.invalidate_hover();
     }
 
-    /// Pressing Shift during an operation locks the direction the cursor follows (an axis,
-    /// parallel or perpendicular); releasing it unlocks. Returns true if the lock changed.
+    /// The user's Shift and Alt, as the window reports them. Pressing Shift during an
+    /// operation locks the direction the cursor follows (an axis, parallel or perpendicular);
+    /// releasing it unlocks, unless `tool_input` holds it too. Returns true if the lock changed.
     pub fn set_modifiers(&mut self, shift: bool, alt: bool) -> bool {
+        self.user_mods.shift = shift;
+        self.user_mods.alt = alt;
+        self.apply_modifiers()
+    }
+
+    /// The modifiers held: the user's and those `tool_input` holds.
+    pub fn modifiers(&self) -> Mods {
+        let (u, a, k) = (self.user_mods, self.agent_mods, self.key_mods);
+        Mods {
+            shift: u.shift || a.shift || k.shift,
+            alt: u.alt || a.alt || k.alt,
+            cmd: u.cmd || a.cmd || k.cmd,
+        }
+    }
+
+    /// Puts the modifiers held into effect. Returns true if the lock changed.
+    fn apply_modifiers(&mut self) -> bool {
+        let held = self.modifiers();
+        self.sample = held.cmd;
+        self.nav.set_command(held.cmd);
+        self.shift_and_alt(held.shift, held.alt)
+    }
+
+    fn shift_and_alt(&mut self, shift: bool, alt: bool) -> bool {
         self.fly.set_modifiers(shift, alt);
         if self.flying {
             // Shift and Alt change the flying speed; nothing locks.
@@ -305,10 +346,10 @@ impl Editor {
 
     /// Whether the sampling modifier (Cmd or Ctrl) is held: a Paint click then
     /// picks up a material instead of painting.
-    /// It also makes trackpad scrolling zoom.
+    /// It also makes trackpad scrolling zoom. The user's, as the window reports it.
     pub fn set_sample_modifier(&mut self, held: bool) {
-        self.sample = held;
-        self.nav.set_command(held);
+        self.user_mods.cmd = held;
+        self.apply_modifiers();
     }
 
     /// The material the Paint tool paints with; None (the default material) also when the
@@ -467,6 +508,7 @@ impl Editor {
     /// modifiers and cancels a press the tool is waiting to see released. Returns true if
     /// anything visible may have changed (a Shift lock ended or a press was cancelled).
     pub fn focus_lost(&mut self) -> bool {
+        self.user_mods = Mods::default();
         self.shift = false;
         self.sample = false;
         // Held fly keys are let go: their releases go to another window.
@@ -485,6 +527,10 @@ impl Editor {
         }
         if unlocked || cancelled {
             self.invalidate_hover();
+        }
+        // Keys `tool_input` holds stay held.
+        if self.modifiers() != Mods::default() {
+            self.apply_modifiers();
         }
         unlocked || cancelled || (dragged && self.hover_dirty)
     }
@@ -512,6 +558,7 @@ impl Editor {
     /// Returns true if anything visible may have changed: the camera moved, or the hover may
     /// have (it is worked out when the frame is drawn, see `refresh_hover`).
     pub fn cursor_moved(&mut self, pos: DVec2) -> bool {
+        self.cursor_point = None;
         if self.flying {
             // No hover while flying; leaving fly mode works it out afresh.
             self.cursor = pos;
@@ -1232,6 +1279,16 @@ impl Editor {
             .placed(self.doc.context_transform().inverse())
     }
 
+    /// When the cursor stands for a model point an event gave (and still lies where `camera`,
+    /// the local camera, shows it): the depths the tools look at, so the point is found even
+    /// behind other geometry.
+    fn point_slab(&self, camera: &Camera) -> Option<Slab> {
+        let p = self.cursor_point?;
+        let shown = camera.project(p)?;
+        (shown.distance(self.cursor) < 1e-6)
+            .then(|| Slab::around(camera, p, PICK_RADIUS_LOGICAL_PX * self.scale_factor))
+    }
+
     /// Where the scene's meshes lie seen from the open context.
     fn layout(&self) -> Rc<Layout> {
         cached_layout(&self.layout, &self.doc)
@@ -1240,7 +1297,8 @@ impl Editor {
     fn handle(&mut self, event: ToolEvent) -> ToolOutput {
         let camera = self.local_camera();
         let layout = self.layout();
-        let scenery = scenery_in(&layout, &self.doc);
+        let slab = self.point_slab(&camera);
+        let scenery = seen_within(scenery_in(&layout, &self.doc), slab);
         let ctx = ToolContext {
             model: self.doc.model(),
             scenery: &scenery,
@@ -1421,7 +1479,8 @@ impl Editor {
         let radius = PICK_RADIUS_LOGICAL_PX * self.scale_factor;
         let camera = self.local_camera();
         let layout = self.layout();
-        let scenery = scenery_in(&layout, &self.doc);
+        let slab = self.point_slab(&camera);
+        let scenery = seen_within(scenery_in(&layout, &self.doc), slab);
         let guides = Guides {
             anchor,
             reference: self.reference,
@@ -1475,6 +1534,14 @@ fn scenery_in<'a>(layout: &'a Layout, doc: &'a Document) -> Scenery<'a> {
     Scenery::view(layout, doc.scene())
         .or_else(|| Scenery::of(doc.scene(), doc.context()))
         .expect("the open context exists")
+}
+
+/// `scenery`, seen only within `slab` when there is one.
+fn seen_within(scenery: Scenery<'_>, slab: Option<Slab>) -> Scenery<'_> {
+    match slab {
+        Some(slab) => scenery.within(slab),
+        None => scenery,
+    }
 }
 
 /// The model point under `cursor` (view pixels) as `camera` (in root coordinates) sees it, in

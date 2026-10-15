@@ -117,6 +117,8 @@ pub struct EditorState {
     pub soften_angle: u32,
     /// The window open over the view, if any.
     pub dialog: Option<Dialog>,
+    /// The modifier keys held: the user's in the window and those `tool_input` holds.
+    pub modifiers: crate::input::Mods,
 }
 
 /// Commands that set the editor rather than the model: no undo step, no revision. `execute`
@@ -137,8 +139,8 @@ pub enum EditorCommand {
     SetImportUnits { units: ImportUnits },
     /// Abort the tool's operation in progress, like Escape pressed until the tool is idle:
     /// leaves fly mode, drops typed text, the direction lock and the operation (and a copy
-    /// array or a retyped angle it waits for). It never closes the open group (that is
-    /// `close_instance`).
+    /// array or a retyped angle it waits for), and lets go of the modifiers `tool_input`
+    /// holds. It never closes the open group (that is `close_instance`).
     Cancel {},
     /// Turn fly mode on or off (F in the window), and set its speed in meters a second (0.25
     /// to 60; absent: unchanged).

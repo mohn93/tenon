@@ -2,8 +2,8 @@
 //! editor and against one without.
 
 use api::{
-    EditorCommand, EditorState, HeadlessHost, Host, Input, PhaseName, ToolInput, ToolInputResult,
-    ToolName, codes, describe, handle,
+    EditorCommand, EditorState, HeadlessHost, Host, Input, Mods, PhaseName, ToolInput,
+    ToolInputError, ToolInputResult, ToolName, codes, describe, handle,
 };
 use serde_json::{Value, json};
 use session::{
@@ -41,6 +41,7 @@ impl Editing {
                 typing: false,
                 soften_angle: 20,
                 dialog: None,
+                modifiers: Mods::default(),
             },
             quit: false,
             events: Vec::new(),
@@ -89,7 +90,7 @@ impl Host for Editing {
         Ok(())
     }
 
-    fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, CommandError> {
+    fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, ToolInputError> {
         self.events.extend(input.events);
         Ok(ToolInputResult {
             editor: self.state.clone(),

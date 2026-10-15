@@ -15,8 +15,8 @@ pub use editor::{Dialog, EditorCommand, EditorState, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{Hub, Inbox};
 pub use input::{
-    Hover, Input, InputEvent, Issued, Key, Mods, MouseButton, Spot, ToolInput, ToolInputParams,
-    ToolInputResult,
+    Hover, Input, InputEvent, Issued, Key, Mods, MouseButton, Spot, ToolInput, ToolInputError,
+    ToolInputParams, ToolInputResult, ToolInputStopped,
 };
 pub use probe::{
     AxisName, InferQuery, Inferred, PickHit, PickQuery, Placed, RaySpec, ScreenBox, ScreenCommand,

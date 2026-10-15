@@ -1,6 +1,7 @@
 //! What agents read and set of the editor beyond the model (see `api::EditorState` and
 //! `api::EditorCommand`).
 
+use api::Mods;
 use kernel::MaterialId;
 use session::{CommandError, ErrorKind};
 use tools::Phase;
@@ -80,8 +81,11 @@ impl Editor {
     /// Aborts the tool's operation, as Escape pressed until the tool is idle would, without
     /// closing the open group: leaves fly mode, drops typed text, the direction lock, a press
     /// the tool waits to see released, and the operation with anything it waits for (a copy
-    /// array, a retyped angle).
+    /// array, a retyped angle), and lets go of the modifiers `tool_input` holds.
     pub fn cancel(&mut self) {
+        // Keys `tool_input` holds are let go.
+        self.agent_mods = Mods::default();
+        self.apply_modifiers();
         self.set_flying(false);
         self.typed.clear();
         self.lock = None;

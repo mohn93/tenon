@@ -560,7 +560,8 @@ edges are hidden and left out) and guide passing within `radius` of it, nearest 
   ray for a ray (default 0: faces only). `camera`, `width` and `height` go with a pixel only.
 
 `{"type": "infer", "pixel": [x, y], ...}` or `{"type": "infer", "point": [x, y, z], ...}` (a
-model point, looked for where the view shows it; `invalid_input` when it is not in view) returns
+model point, at the pixel where the view shows it and looked for where it is, even behind
+other geometry, as a `tool_input` point is; `invalid_input` when it is not in view) returns
 what a tool's click there would snap to, with the window's inference rules (points hidden behind
 faces are skipped; the order of preference is endpoint, midpoint, origin and guide point, then
 intersection, on an edge, on a guide line, along an axis from `from`, on a face, the ground):
@@ -572,7 +573,8 @@ intersection, on an edge, on a guide line, along an axis from `from`, on a face,
 - `kind` is `endpoint`, `midpoint`, `origin`, `guide_point`, `intersection` (two edges or
   guide lines crossing on screen; the point lies on the nearer), `on_edge`, `on_guide`, `axis`
   (with `axis`: `x`, `y` or `z`, the axis through `from` the point is held to, which Shift would
-  lock), `on_face`, `ground` (z = 0 of the open context) or `nothing` (a point on the pixel's ray as
+  lock), `parallel` and `perpendicular` (to the edge the cursor last rested on, from the point
+  a tool draws from; `tool_input` only), `on_face`, `ground` (z = 0 of the open context) or `nothing` (a point on the pixel's ray as
   far from the eye as the camera's target is; in a parallel view, at the target's depth).
 - `entities` are what it snapped to, each with its `path` as in `pick`: the vertex of an
   endpoint, the edge of a midpoint or of a point on an edge, the guide of a guide point or of a
@@ -597,7 +599,7 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
  "viewport": [1280.0, 800.0], "status": "Line  |  Click the next point, or type a length  |  Length: 2 m",
  "prompt": "Click the next point, or type a length", "message": null, "lock": null,
  "measurement_label": "Length", "measurement": "2 m", "typing": false, "soften_angle": 20,
- "dialog": null}
+ "dialog": null, "modifiers": {"shift": false, "alt": false, "cmd": false}}
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `arc`, `push_pull`, `move`, `rotate`,
@@ -625,6 +627,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 - `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
   over the view: `soften_edges` or `null`. The window's file and unsaved-changes dialogs are
   modal: while one is open the window handles no requests, which wait until it closes.
+- `modifiers` are the modifier keys held (`cmd` is Cmd or Ctrl): the user's in the window and
+  those a `tool_input` `modifiers` event holds (see Driving the tools).
 
 Editor commands go through `execute` (not `batch`), are not undo steps and do not change the
 revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
@@ -634,7 +638,7 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 | `{"type": "set_tool", "tool": "rectangle"}` | Switches to the tool (a fresh one, even if it is the active tool), dropping the operation in progress and anything typed, as the toolbar does. |
 | `{"type": "set_paint_material", "material": "m6"}` | The material the Paint tool paints with; `null` or absent for the default material. The tool does not change (the window's Materials list also switches to Paint). An unknown material is `not_found`. |
 | `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
-| `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for). It never closes the open group (`close_instance` does). |
+| `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for), and lets go of the modifiers `tool_input` holds. It never closes the open group (`close_instance` does). |
 | `{"type": "set_fly_mode", "on": true, "speed": 6}` | Turns fly mode on or off, as F does (see Camera), and sets its speed in meters a second (0.25 to 60, else `invalid_input`; absent: unchanged). In the window the pointer is held while flying. |
 | `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
 | `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
@@ -661,26 +665,42 @@ Events, run in order:
 | `{"type": "down", "point": [1, 2, 0], "button": "left"}`, `{"type": "up", ...}` | Presses or releases a button there (`left` default, `middle`, `right`). A middle drag orbits and Shift+middle pans, as in the window; Alt+left orbits. A button left down stays down for a later call. |
 | `{"type": "click", "point": [1, 2, 0]}` | Moves there, presses and releases. |
 | `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool opens the group under it, or closes the open one when there is nothing of it there. |
-| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. |
-| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making). An uppercase letter holds Shift. With `cmd` or `ctrl` only `z` is taken (undo; with `shift` redo); the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys are `invalid_input`. With `alt` a key does nothing, as in the window. |
-| `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Cmd or Ctrl makes a Paint click sample the material. |
-| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. |
+| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. While a navigation drag turns the view, the hover waits, as in the window. |
+| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` is taken (undo; with `shift` redo); the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
+| `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go, so `{"type": "modifiers"}` lets go of all): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Cmd or Ctrl makes a Paint click sample the material. They stay held across calls (see Modifiers below). |
+| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. |
 
 - **Where**: a `pixel` is in a view of `width` x `height` (both or neither; default the 3D view,
   `editor.viewport`, 1280 x 800 headless), scaled to the 3D view, which must have the same
-  proportions (within 1%). A `point` is in the open context's coordinates and is looked for
-  where the document camera shows it at the event's turn (the camera may have moved). Either
-  way the tool infers from that pixel, as for a click there: a point near an endpoint snaps to
-  it, as `infer` reports. Exact values come from typing them.
-- **Modifiers** held by `modifiers` are let go at the end of the call, as if the keys were
-  released (a Shift lock ends with it; arrow-key locks last until the operation ends). In the
-  window the user's own key presses also change them.
-- **Frames**: after each event the hover is worked out as a frame drawn between events would.
+  proportions (within 1%); the tool infers from that pixel as for a click there, with the
+  window's rules: what is in front wins. A `point` is in the open context's coordinates; the
+  cursor goes to the pixel where the document camera shows it at the event's turn (the camera
+  may have moved), and the tools look for that model point itself, even when other geometry
+  hides it from the camera: what lies in front of it (or behind it) is passed over, so it
+  snaps to what is at the point (a corner or edge within the snap radius, the face it lies
+  on) or else stands for itself in free space (`nothing`, or `ground` at z = 0), and a click
+  there acts on that face (Paint paints it, Push/Pull pulls it). Exact values come from
+  typing them.
+- **Modifiers** a `modifiers` event holds stay held after the call, until a later `modifiers`
+  event lets them go or `cancel` (so a Shift lock can be set in one call and used in the
+  next); arrow-key locks last until the operation ends. A `key` event's own modifiers are
+  held only while that key goes down. In the window the user's own keys add to them: letting
+  go through `tool_input` never releases a key the user holds. `editor.modifiers` (in the
+  result and the `editor` query) shows what is held.
+- **Frames**: after each event the hover is worked out as a frame drawn between events would,
+  except while a navigation drag turns the view (then, as in the window, it waits for the
+  button to come up).
 - **Errors**: malformed events are `-32602`; an event that makes no sense (both or neither of
-  `pixel` and `point`, a drag of one place, an unknown key, empty text, a size out of range) is
-  `invalid_input` naming it (`event 2: ...`) and nothing runs. An event that cannot run at its
-  turn (a pixel outside the view, a point not in sight) stops the rest with `invalid_input`;
-  the events before it stay done. While flying, clicks and typing do nothing, as in the window.
+  `pixel` and `point`, a drag of one place, an unknown key, a key with `alt`, empty text, a
+  size out of range) or a pixel outside the view is `invalid_input` naming it
+  (`event 2: ...`) and nothing runs. An event that cannot run at its turn (a point not in
+  sight, a key or typing under a held Cmd or Alt) stops the rest: the error is `-32000` with
+  `data` holding `kind` (`invalid_input`), `message`, `event` (its index) and `completed`, a
+  result as below for what ran before it (`editor`, `inference`, `preview`, `commands` with
+  their outcomes, `revision`); those events stay done. A drag stopped partway lets go of its
+  button without the release reaching the tool: a navigation drag stops where it got to, and
+  a press the tool saw is cancelled (as Escape), so no orbit or Select box is left going.
+  While flying, clicks and typing do nothing, as in the window.
 
 The result is the editor after the events:
 
