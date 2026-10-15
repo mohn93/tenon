@@ -921,3 +921,105 @@ fn mtl_of_glowing_materials_gives_their_emissive_color() {
     assert_eq!(library.matches("Ke ").count(), 1, "only the lamp glows");
     assert!(!library.contains("map_Ke"), "{library}");
 }
+
+/// A 2 x 1 m rectangle on the ground painted with a 2 x 1 m texture, its texture moved and
+/// turned a quarter. Returns the face as the kernel holds it.
+fn positioned_tile(d: &mut Document) -> kernel::Face {
+    let path = scratch("positioned-tile.png");
+    image::RgbaImage::from_fn(4, 2, |x, _| image::Rgba([60 * x as u8, 0, 200, 255]))
+        .save(&path)
+        .unwrap();
+    let out = run(
+        d,
+        json!({"type": "add_material", "name": "Tiles",
+               "texture": {"path": path.to_str().unwrap(), "width": 2}}),
+    )
+    .unwrap();
+    let material = out["changes"]["materials"][0].clone();
+    run(
+        d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 1, 0]}),
+    )
+    .unwrap();
+    let face = ask(d, json!({"type": "entities", "kinds": ["face"]}))["faces"][0]["id"].clone();
+    run(
+        d,
+        json!({"type": "paint", "ids": [face], "material": material}),
+    )
+    .unwrap();
+    run(
+        d,
+        json!({"type": "position_texture", "ids": [face], "offset": [0.5, 0.25],
+               "rotation_deg": 90}),
+    )
+    .unwrap();
+    d.model().faces().next().unwrap().1.clone()
+}
+
+#[test]
+fn obj_writes_placed_texture_coordinates() {
+    let mut d = doc();
+    let face = positioned_tile(&mut d);
+    let obj = String::from_utf8(export(&mut d, "positioned.obj")).unwrap();
+    let numbers = |prefix: &str| -> Vec<Vec<f64>> {
+        obj.lines()
+            .filter_map(|l| l.strip_prefix(prefix))
+            .map(|l| l.split(' ').map(|x| x.parse().unwrap()).collect())
+            .collect()
+    };
+    let (v, vt) = (numbers("v "), numbers("vt "));
+    let mut corners = 0;
+    for f in obj.lines().filter_map(|l| l.strip_prefix("f ")) {
+        for corner in f.split(' ') {
+            let ids: Vec<usize> = corner.split('/').map(|k| k.parse().unwrap()).collect();
+            // Y-up back to the model's Z-up.
+            let p = &v[ids[0] - 1];
+            let model = DVec3::new(p[0], -p[2], p[1]);
+            let expected = face.texture_position(model) / DVec2::new(2.0, 1.0);
+            let st = &vt[ids[1] - 1];
+            assert!(
+                (st[0] - expected.x).abs() < 1e-9 && (st[1] - expected.y).abs() < 1e-9,
+                "{model} {st:?} {expected}"
+            );
+            corners += 1;
+        }
+    }
+    assert_eq!(corners, 6);
+    // Turned a quarter: along the ground's x the texture's height changes, not its width.
+    assert!(
+        (face.texture_position(DVec3::new(1.0, 0.0, 0.0)) - face.texture_position(DVec3::ZERO))
+            .abs_diff_eq(DVec2::new(0.0, -1.0), 1e-12)
+    );
+}
+
+#[test]
+fn gltf_writes_placed_texture_coordinates() {
+    let mut d = doc();
+    let face = positioned_tile(&mut d);
+    let (doc, buffer) = glb_parts(&export(&mut d, "positioned.glb"));
+    let accessor = |k: &Value| {
+        let a = &doc["accessors"][k.as_u64().unwrap() as usize];
+        let view = &doc["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+        let at =
+            (view["byteOffset"].as_u64().unwrap() + a["byteOffset"].as_u64().unwrap()) as usize;
+        let width = if a["type"] == "VEC2" { 8 } else { 12 };
+        floats(&buffer[at..at + width * a["count"].as_u64().unwrap() as usize])
+    };
+    let primitive = &doc["meshes"][0]["primitives"][0];
+    let positions = accessor(&primitive["attributes"]["POSITION"]);
+    let st = accessor(&primitive["attributes"]["TEXCOORD_0"]);
+    assert_eq!(st.len(), 6 * 2);
+    for (p, s) in positions
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(st.as_chunks::<2>().0)
+    {
+        let model = DVec3::new(f64::from(p[0]), -f64::from(p[2]), f64::from(p[1]));
+        let placed = face.texture_position(model) / DVec2::new(2.0, 1.0);
+        // v counted down from the image's top, up to whole repeats.
+        let (ds, dt) = (f64::from(s[0]) - placed.x, f64::from(s[1]) + placed.y);
+        assert!((ds - ds.round()).abs() < 1e-6, "{model} {s:?} {placed}");
+        assert!((dt - dt.round()).abs() < 1e-6, "{model} {s:?} {placed}");
+    }
+}

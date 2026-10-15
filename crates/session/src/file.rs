@@ -17,20 +17,23 @@ use crate::texture::{MAX_TEXTURE_BYTES, decode};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when a material glows or
-/// the view is lit by night. Version 2 added guides, version 3 curves and soft edges, version 4
-/// the camera's up direction and projection, version 5 materials, version 6 material opacity,
-/// version 7 textures and version 8 material emission and the lighting mode; older files still
-/// open.
-pub const SCHEMA_VERSION: u32 = 8;
+/// The newest schema version this build reads, and the one it writes when a face has a texture
+/// position. Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up
+/// direction and projection, version 5 materials, version 6 material opacity, version 7
+/// textures, version 8 material emission and the lighting mode, and version 9 texture
+/// positions on faces; older files still open.
+pub const SCHEMA_VERSION: u32 = 9;
+/// The version written when a material glows or the view is lit by night but no face has a
+/// texture position.
+pub const LIGHTS_SCHEMA_VERSION: u32 = 8;
 /// The version written when a material has a texture but none glows and the view is lit by
 /// day.
 pub const TEXTURED_SCHEMA_VERSION: u32 = 7;
 /// The version written when a material is see-through but none has a texture or glows.
 pub const TRANSLUCENT_SCHEMA_VERSION: u32 = 6;
-/// The version written when every material is opaque and none has a texture or glows: such a
-/// model needs nothing versions 6 to 8 added, so its file is the same as before and older
-/// builds open it.
+/// The version written when every material is opaque and none has a texture or glows, and no
+/// face has a texture position: such a model needs nothing versions 6 to 9 added, so its file
+/// is the same as before and older builds open it.
 pub const OPAQUE_SCHEMA_VERSION: u32 = 5;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
@@ -81,6 +84,9 @@ pub(crate) fn write(
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
+    let positioned = std::iter::once(&model.root)
+        .chain(model.definitions.iter().map(|d| &d.mesh))
+        .any(|m| m.faces.iter().any(|f| f.texture_position.is_some()));
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -95,8 +101,10 @@ pub(crate) fn write(
         .collect();
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if needs_lights_schema {
+        schema_version: if positioned {
             SCHEMA_VERSION
+        } else if needs_lights_schema {
+            LIGHTS_SCHEMA_VERSION
         } else if textured {
             TEXTURED_SCHEMA_VERSION
         } else if translucent {

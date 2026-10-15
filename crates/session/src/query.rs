@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use kernel::{
     ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, MaterialId,
+    TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -146,6 +147,10 @@ pub struct FaceInfo {
     /// The material of the other side; absent for the default material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub back_material: Option<MaterialId>,
+    /// Where the texture lies on top of its projection (see `position_texture`); absent when
+    /// it lies as projected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_position: Option<TexturePlacement>,
 }
 
 /// A placed group or component.

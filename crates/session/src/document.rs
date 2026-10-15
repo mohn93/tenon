@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError,
-    MaterialEdit, MeshId, Model, Scene, SceneChange, SoftenReport, VertexId,
+    MaterialEdit, MeshId, Model, PlacementEdit, Scene, SceneChange, SoftenReport, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points};
@@ -24,6 +24,7 @@ mod files;
 mod groups;
 mod import;
 mod materials;
+mod placement;
 mod soften;
 
 use import::ImportOptions;
@@ -61,6 +62,8 @@ pub struct Document {
     import_report: Option<ImportReport>,
     /// What the last soften edit did, until its outcome takes it.
     soften_report: Option<SoftenReport>,
+    /// How many faces the last `position_texture` changed, until its outcome takes it.
+    positioned: Option<usize>,
 }
 
 impl Document {
@@ -80,6 +83,7 @@ impl Document {
             clean_revision: 0,
             import_report: None,
             soften_report: None,
+            positioned: None,
         }
     }
 
@@ -168,6 +172,7 @@ impl Document {
             let mut outcome = self.record(changes?);
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
+            outcome.positioned = self.positioned.take();
             return Ok(outcome);
         }
         match command {
@@ -273,6 +278,7 @@ impl Document {
             | Command::Paint { .. }
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
+            | Command::PositionTexture { .. }
             | Command::Import { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
@@ -378,6 +384,21 @@ impl Document {
             Command::SoftenByAngle { ids, max_angle_deg } => {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
             }
+            Command::PositionTexture {
+                ids,
+                offset,
+                rotation_deg,
+                scale,
+                reset,
+            } => self.position_texture_changes(
+                ids,
+                PlacementEdit {
+                    offset: *offset,
+                    rotation_deg: *rotation_deg,
+                    scale: *scale,
+                    reset: *reset,
+                },
+            ),
             Command::Import {
                 path,
                 format,
@@ -464,6 +485,7 @@ impl Document {
                         import: self.import_report.take(),
                         export: None,
                         soften: self.soften_report.take(),
+                        positioned: self.positioned.take(),
                     }
                 }),
                 None if matches!(
@@ -1258,6 +1280,7 @@ impl Document {
             area: self.model().area(id).unwrap(),
             front_material: f.front,
             back_material: f.back,
+            texture_position: f.texture,
         }
     }
 }

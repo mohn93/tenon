@@ -133,7 +133,10 @@ fn glowing_materials_are_saved_as_version_8() {
     )
     .unwrap();
     let document = stored(&path);
-    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(
+        document["schema_version"],
+        session::file::LIGHTS_SCHEMA_VERSION
+    );
     assert_eq!(document["schema_version"], 8);
     assert_eq!(document["model"]["materials"][0]["emission"], 3.0);
     let mut e = doc();

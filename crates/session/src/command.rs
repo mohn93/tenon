@@ -225,6 +225,22 @@ pub enum Command {
         ids: Vec<EntityId>,
         max_angle_deg: f64,
     },
+    /// Move, turn and scale the texture on faces of the open context, as one undo step: on
+    /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
+    /// seen from the face's front, and `scale` [u, v] (multipliers, 0.001 to 1000). Fields
+    /// left out stay as they are; `reset: true` first clears the placement. The outcome's
+    /// `positioned` counts the faces that changed.
+    PositionTexture {
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        offset: Option<[f64; 2]>,
+        #[serde(default)]
+        rotation_deg: Option<f64>,
+        #[serde(default)]
+        scale: Option<[f64; 2]>,
+        #[serde(default)]
+        reset: bool,
+    },
     /// Start an empty model with the default view. Clears undo history; not an undo step.
     /// With changes not saved, fails (`unsaved_changes`) unless `discard` is true.
     New {
@@ -422,6 +438,9 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soften: Option<SoftenReport>,
+    /// How many faces a `position_texture` changed; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positioned: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

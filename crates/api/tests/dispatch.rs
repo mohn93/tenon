@@ -184,6 +184,7 @@ fn describe_lists_methods_and_schemas() {
         "change_material",
         "delete_material",
         "paint",
+        "position_texture",
         "soften_edges",
         "soften_by_angle",
         "new",
