@@ -289,8 +289,8 @@ material color, its image's average unless a color was given), and its strength 
 emission times their area in square meters (scaled with a scaled placement). It reaches 6 x sqrt(strength) meters
 and falls off smoothly to nothing there; surfaces take it by the angle they face it. Lights do
 not depend on the open instance. The window and `render_view` use the 128 strongest lights as
-seen from the eye (strength over 1 + distance squared), and the strongest 64 of those cast
-shadows: every face stops their light except glowing ones (a lamp's glowing shade does not hide
+seen from the eye (strength over 1 + distance squared), and up to the strongest 64 of those
+cast shadows: every face stops their light except glowing ones (a lamp's glowing shade does not hide
 its own light), from both sides; shadow edges are slightly soft. Faces nearer a light than 2 cm
 cast no shadow from it, and the other lights light without shadows. Shadow maps are kept while
 the camera moves and drawn again only when the model's faces move or the shadowed lights

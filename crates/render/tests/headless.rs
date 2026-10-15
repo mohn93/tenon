@@ -869,13 +869,44 @@ fn a_wall_shades_the_floor_behind_it_and_shadow_maps_are_kept_between_frames() {
     r.set_scene(&lamp_and_wall(0.0, -1.5), &[], &BTreeSet::new());
     screen.draw(&mut r, &cam, full, &[]);
     assert_eq!(r.shadow_faces_drawn(), 6);
+    // The wall made a group: the same faces in the same places keep the map. Opening the group,
+    // selecting it and painting the floor with a plain color keep it too.
+    let mut grouped = lamp_and_wall(0.0, -1.5);
+    let ids: Vec<_> = grouped.root().faces().map(|(id, _)| id).collect();
+    let (floor, wall) = (ids[0], ids[1]);
+    let (group, _) = grouped
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[wall],
+            &[],
+            DefinitionKind::Group,
+            "Wall",
+        )
+        .unwrap();
+    r.set_scene(&grouped, &[], &BTreeSet::new());
+    screen.draw(&mut r, &cam, full, &[]);
+    let kept = r.shadow_faces_drawn();
+    r.set_model(&grouped, &[group]);
+    screen.draw(&mut r, &cam, full, &[]);
+    assert_eq!(r.shadow_faces_drawn(), kept, "opening a group");
+    r.set_selection(&BTreeSet::from([EntityId::Face(wall)]));
+    screen.draw(&mut r, &cam, full, &[]);
+    assert_eq!(r.shadow_faces_drawn(), kept, "selecting");
+    let (red, _) = grouped.add_material("Red", [220, 20, 20]).unwrap();
+    grouped
+        .paint(MeshId::Root, &[floor], &[], Side::Front, Some(red))
+        .unwrap();
+    r.set_model(&grouped, &[group]);
+    screen.draw(&mut r, &cam, full, &[]);
+    assert_eq!(r.shadow_faces_drawn(), kept, "painting a plain color");
     // The wall moving or the lamp moving draws the map again.
     r.set_scene(&lamp_and_wall(0.5, -1.5), &[], &BTreeSet::new());
     screen.draw(&mut r, &cam, full, &[]);
-    assert_eq!(r.shadow_faces_drawn(), 12);
+    assert_eq!(r.shadow_faces_drawn(), kept + 6);
     r.set_scene(&lamp_and_wall(0.5, -1.0), &[], &BTreeSet::new());
     screen.draw(&mut r, &cam, full, &[]);
-    assert_eq!(r.shadow_faces_drawn(), 18);
+    assert_eq!(r.shadow_faces_drawn(), kept + 12);
 }
 
 #[test]
