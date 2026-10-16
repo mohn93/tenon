@@ -311,7 +311,7 @@ fn a_failed_save_leaves_no_partial_file_and_the_model_modified() {
         json!({"type": "save", "path": dir.to_str().unwrap()}),
     )
     .unwrap_err();
-    assert_eq!(kind, ErrorKind::File);
+    assert_eq!(kind, ErrorKind::InvalidInput);
     assert!(message.contains("a-directory.skr"), "{message}");
     let mut partial = dir.clone().into_os_string();
     partial.push(".partial");
