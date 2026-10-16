@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use api::{Hub, listen_unix, serve_stdio};
+use api::{ApiRoots, Hub, listen_unix, serve_stdio};
 use glam::DVec2;
 use session::Command;
 
@@ -15,7 +15,7 @@ const VIEWPORT: DVec2 = DVec2::new(1280.0, 800.0);
 
 /// Opens `file` if given, then serves until stdin closes (stdio), forever (socket), or until
 /// an agent quits. Returns the process exit code.
-pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
+pub fn run(transport: Transport, file: Option<PathBuf>, roots: ApiRoots) -> i32 {
     let mut editor = Editor::new(VIEWPORT, 1.0);
     if let Some(path) = file {
         let open = Command::Open {
@@ -33,7 +33,7 @@ pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
     match transport {
         Transport::Stdio => {
             let writer = serve_stdio(hub.inbox());
-            serve(&mut hub, &mut editor, &mut offscreen, |hub| {
+            serve(&mut hub, &mut editor, &mut offscreen, &roots, |hub| {
                 hub.open_connections() > 0
             });
             // Dropping the hub ends the writer once every queued reply is on stdout.
@@ -47,7 +47,7 @@ pub fn run(transport: Transport, file: Option<PathBuf>) -> i32 {
                 return 1;
             }
             eprintln!("agent API listening on {}", path.display());
-            serve(&mut hub, &mut editor, &mut offscreen, |_| true);
+            serve(&mut hub, &mut editor, &mut offscreen, &roots, |_| true);
             hub.close(CLOSE_WAIT);
             let _ = std::fs::remove_file(&path);
             0
@@ -61,6 +61,7 @@ fn serve(
     hub: &mut Hub,
     editor: &mut Editor,
     offscreen: &mut Offscreen,
+    roots: &ApiRoots,
     go_on: impl Fn(&Hub) -> bool,
 ) {
     let mut quit = false;
@@ -69,6 +70,7 @@ fn serve(
             editor: &mut *editor,
             offscreen: &mut *offscreen,
             quit: &mut quit,
+            roots,
         };
         if !hub.process_blocking(&mut host) {
             return;

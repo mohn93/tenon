@@ -12,6 +12,7 @@ JSON object per line (UTF-8, `\n`-terminated).
 | `cargo run -p app -- --headless --stdio` | No window; requests on stdin, replies on stdout; exits when stdin closes |
 | `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
+| `cargo run -p app -- --api-root DIR [--api-root DIR2]` | Any mode: the API reads and writes files only inside these folders (see Access and safety) |
 
 Any of these can end with a `.skr` file to open at start, e.g.
 `cargo run -p app -- --headless --stdio house.skr`. In headless mode a file that cannot be opened
@@ -58,7 +59,7 @@ Queries:
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
-| `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, and `revision` |
+| `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, `revision`, and `api_roots`: the folders `--api-root` limits files to, resolved (`null` without it) |
 | `{"type": "events", "since": 3}` | model changes after revision 3, oldest first |
 | `{"type": "pick", "pixel": [320, 200], "width": 640, "height": 400}` | what lies under a pixel of a view, or along a `ray`: `hits`, front to back; see Picking and inference below |
 | `{"type": "infer", "pixel": [320, 200]}` | what a tool's click there would snap to: `kind`, `point` and the `entities` involved; see Picking and inference below |
@@ -745,7 +746,7 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 | `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
-Paths are relative to the app's working directory. None of these is an undo step. `open` and
+Paths are relative to the app's working directory, or with `--api-root` to the first root (see Access and safety). None of these is an undo step. `open` and
 `new` clear the undo history, the selection and the open context, and change the revision;
 subscribers get a `resync` notification and should read the model again. Ids in an opened file
 are those it was saved with, and new ids continue after the largest one ever used. A file that
@@ -872,6 +873,22 @@ than 200,000 faces are a `file` error. The regular-file check happens before the
 swapped for a pipe at that very instant could still block (local only, low risk). A file may
 have at most 1,000,000 polygon corners in all (OBJ `f` corners, STL vertices) and ASCII STL keywords are read in any case;
 vertices left without an `endloop` are a `file` error.
+
+### Access and safety
+
+Anyone who can connect to the socket (programs running as the same user) can drive the app. To
+keep an agent's file access to some folders, start the app with `--api-root DIR` (repeatable):
+then every path a request names (`open`, `save`, `export` and the `.mtl` and images an OBJ
+writes beside it, `import` and the material libraries an OBJ names, `texture.path`) must lie
+within one of them, after symlinks are resolved. A relative path is taken from the first root.
+A file to read must exist; a file to write must be in an existing folder and must not be a
+symbolic link. A path outside the roots is refused with `invalid_input`; one that cannot be
+resolved gives `file`. `save` without a path checks the open model's file; inside a `batch` it
+needs a path. A batch with a path outside the roots runs nothing (`-32001`, its `index` names
+the command). Commands run on the resolved path, so `query file` shows it; `query file` also
+lists the roots as `api_roots` (null without `--api-root`). The window's own dialogs and the
+FILE argument are not limited. A root that is not an existing folder stops the app (exit code
+2).
 
 ### Notifications
 

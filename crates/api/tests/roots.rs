@@ -1,0 +1,179 @@
+//! `--api-root`: every path the API reads or writes stays inside the roots.
+
+use std::path::PathBuf;
+
+use api::{ApiRoots, HeadlessHost, codes, handle};
+use serde_json::{Value, json};
+
+fn call(host: &mut HeadlessHost, method: &str, params: Value) -> Value {
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string();
+    serde_json::from_str(&handle(host, &line).expect("a reply")).unwrap()
+}
+
+/// A fresh folder for one test, with `root` and `outside` inside it.
+fn folders(name: &str) -> (PathBuf, PathBuf) {
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("api-roots-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    (root, outside)
+}
+
+fn host(root: &PathBuf) -> HeadlessHost {
+    HeadlessHost::with_roots(ApiRoots::new(std::slice::from_ref(root)).unwrap())
+}
+
+fn edge(h: &mut HeadlessHost) {
+    call(
+        h,
+        "execute",
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    );
+}
+
+#[test]
+fn relative_paths_land_in_the_first_root() {
+    let (root, _) = folders("relative");
+    let mut h = host(&root);
+    edge(&mut h);
+    let r = call(&mut h, "execute", json!({"type": "save", "path": "a.skr"}));
+    assert!(r["result"].is_object(), "{r}");
+    assert!(root.join("a.skr").exists());
+    let r = call(&mut h, "execute", json!({"type": "open", "path": "a.skr"}));
+    assert!(r["result"].is_object(), "{r}");
+    let file = call(&mut h, "query", json!({"type": "file"}));
+    let real = root.canonicalize().unwrap();
+    assert_eq!(file["result"]["api_roots"], json!([real]));
+    assert_eq!(file["result"]["path"], json!(real.join("a.skr")));
+}
+
+#[test]
+fn paths_outside_the_roots_are_refused() {
+    let (root, outside) = folders("outside");
+    let mut h = host(&root);
+    edge(&mut h);
+    std::fs::write(
+        outside.join("model.obj"),
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+    )
+    .unwrap();
+    std::fs::write(outside.join("t.png"), "x").unwrap();
+    let cases = [
+        json!({"type": "save", "path": outside.join("a.skr")}),
+        json!({"type": "save", "path": "../outside/a.skr"}),
+        json!({"type": "export", "path": outside.join("a.stl")}),
+        json!({"type": "import", "path": outside.join("model.obj")}),
+        json!({"type": "open", "path": "../outside/model.obj"}),
+        json!({"type": "add_material", "texture": {"path": outside.join("t.png")}}),
+    ];
+    for c in cases {
+        let r = call(&mut h, "execute", c.clone());
+        assert_eq!(r["error"]["code"], codes::COMMAND_FAILED, "{c}: {r}");
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{c}: {r}");
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--api-root"),
+            "{r}"
+        );
+    }
+    assert!(!outside.join("a.skr").exists() && !outside.join("a.stl").exists());
+}
+
+#[test]
+fn links_out_of_the_roots_are_followed_and_refused() {
+    let (root, outside) = folders("links");
+    let mut h = host(&root);
+    edge(&mut h);
+    std::os::unix::fs::symlink(&outside, root.join("door")).unwrap();
+    std::fs::write(outside.join("secret.obj"), "v 0 0 0\n").unwrap();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "save", "path": "door/a.skr"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "import", "path": "door/secret.obj"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    // A link as the file to write is refused even when it points inside.
+    std::fs::write(root.join("real.skr"), "").unwrap();
+    std::os::unix::fs::symlink(root.join("real.skr"), root.join("link.skr")).unwrap();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "save", "path": "link.skr"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    // A missing file is a file error naming the path given.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "open", "path": "nope.skr"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+    assert!(r["error"]["message"].as_str().unwrap().contains("nope.skr"));
+}
+
+#[test]
+fn a_batch_with_a_path_outside_runs_nothing() {
+    let (root, outside) = folders("batch");
+    let mut h = host(&root);
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [
+            {"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]},
+            {"type": "save", "path": outside.join("a.skr")}
+        ]}),
+    );
+    assert_eq!(r["error"]["code"], codes::BATCH_FAILED, "{r}");
+    assert_eq!(r["error"]["data"]["index"], 1);
+    assert_eq!(r["error"]["data"]["completed"], json!([]));
+    assert_eq!(
+        call(&mut h, "query", json!({"type": "stats"}))["result"]["edges"],
+        0
+    );
+    // Save without a path in a batch is refused under roots.
+    let r = call(&mut h, "batch", json!({"commands": [{"type": "save"}]}));
+    assert_eq!(r["error"]["data"]["error"]["kind"], "invalid_input", "{r}");
+}
+
+#[test]
+fn material_libraries_outside_the_roots_are_not_read() {
+    let (root, outside) = folders("mtllib");
+    std::fs::write(outside.join("paint.mtl"), "newmtl red\nKd 1 0 0\n").unwrap();
+    let obj = "mtllib ../outside/paint.mtl\nusemtl red\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+    std::fs::write(root.join("tri.obj"), obj).unwrap();
+    let mut limited = host(&root);
+    call(
+        &mut limited,
+        "execute",
+        json!({"type": "import", "path": "tri.obj"}),
+    );
+    let m = call(&mut limited, "query", json!({"type": "materials"}));
+    assert_eq!(m["result"]["materials"], json!([]), "{m}");
+    // Without roots the library is read, as before.
+    let mut free = HeadlessHost::new();
+    call(
+        &mut free,
+        "execute",
+        json!({"type": "import", "path": root.join("tri.obj")}),
+    );
+    let m = call(&mut free, "query", json!({"type": "materials"}));
+    assert_eq!(m["result"]["materials"].as_array().unwrap().len(), 1, "{m}");
+}
+
+#[test]
+fn without_roots_the_file_query_says_null() {
+    let mut h = HeadlessHost::new();
+    let file = call(&mut h, "query", json!({"type": "file"}));
+    assert_eq!(file["result"]["api_roots"], Value::Null);
+    assert!(ApiRoots::new(&[PathBuf::from("/no/such/folder")]).is_err());
+}

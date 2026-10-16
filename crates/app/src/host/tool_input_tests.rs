@@ -1,7 +1,7 @@
 //! `tool_input` over JSON-RPC through the app's host: every tool driven the way a user drives
 //! it in the window, with typed values, locks and modifier keys.
 
-use api::handle;
+use api::{ApiRoots, handle};
 use glam::{DVec2, DVec3};
 use serde_json::{Value, json};
 
@@ -18,6 +18,7 @@ fn call(e: &mut Editor, method: &str, params: Value) -> Value {
         editor: e,
         offscreen: &mut offscreen,
         quit: &mut quit,
+        roots: &ApiRoots::default(),
     };
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()

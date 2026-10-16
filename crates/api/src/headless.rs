@@ -5,11 +5,13 @@ use render::Snapshotter;
 use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
 
 use crate::dispatch::Host;
+use crate::roots::ApiRoots;
 
 pub struct HeadlessHost {
     pub doc: Document,
     snapshotter: Option<Snapshotter>,
     gpu_checked: bool,
+    roots: ApiRoots,
 }
 
 impl HeadlessHost {
@@ -18,6 +20,15 @@ impl HeadlessHost {
             doc: Document::new(DVec2::new(1280.0, 800.0)),
             snapshotter: None,
             gpu_checked: false,
+            roots: ApiRoots::default(),
+        }
+    }
+
+    /// A host whose API files must lie within `roots` (empty: no limit).
+    pub fn with_roots(roots: ApiRoots) -> Self {
+        Self {
+            roots,
+            ..Self::new()
         }
     }
 }
@@ -29,6 +40,10 @@ impl Default for HeadlessHost {
 }
 
 impl Host for HeadlessHost {
+    fn roots(&self) -> Option<&ApiRoots> {
+        (!self.roots.is_empty()).then_some(&self.roots)
+    }
+
     fn document(&self) -> &Document {
         &self.doc
     }

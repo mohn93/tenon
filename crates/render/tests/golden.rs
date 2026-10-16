@@ -576,6 +576,7 @@ fn golden_smooth_sphere_beside_a_faceted_one() {
     run(
         &mut d,
         Command::Import {
+            library_roots: None,
             path: path.to_string_lossy().into_owned(),
             format: None,
             place: ImportAs::Context,

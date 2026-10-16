@@ -181,3 +181,70 @@ fn an_agent_draws_a_box_with_the_tools_over_stdio() {
     let changed = messages.iter().filter(|m| m["method"] == "changed").count();
     assert_eq!(changed, 2, "{messages:?}");
 }
+
+#[test]
+fn an_agent_is_kept_inside_its_api_root() {
+    let base = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("agent-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_app"))
+        .args(["--headless", "--stdio", "--api-root"])
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start app");
+    let mut stdin = child.stdin.take().unwrap();
+    let requests = [
+        request(
+            1,
+            "execute",
+            json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+        ),
+        request(2, "execute", json!({"type": "save", "path": "inside.skr"})),
+        request(
+            3,
+            "execute",
+            json!({"type": "save", "path": base.join("outside.skr")}),
+        ),
+        request(4, "query", json!({"type": "file"})),
+    ];
+    for r in &requests {
+        writeln!(stdin, "{r}").unwrap();
+    }
+    drop(stdin);
+    let status = exits(&mut child);
+    assert!(status.success(), "exit status {status}");
+    let replies: HashMap<u64, Value> = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(&l.unwrap()).unwrap())
+        .filter_map(|m| m["id"].as_u64().map(|id| (id, m)))
+        .collect();
+    assert!(replies[&2]["result"].is_object(), "{:?}", replies[&2]);
+    assert_eq!(replies[&3]["error"]["data"]["kind"], "invalid_input");
+    assert!(root.join("inside.skr").exists() && !base.join("outside.skr").exists());
+    assert_eq!(
+        replies[&4]["result"]["api_roots"],
+        json!([root.canonicalize().unwrap()])
+    );
+}
+
+#[test]
+fn a_missing_api_root_stops_the_app() {
+    let status = Command::new(env!("CARGO_BIN_EXE_app"))
+        .args([
+            "--headless",
+            "--stdio",
+            "--api-root",
+            "/no/such/folder/at/all",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(2));
+}

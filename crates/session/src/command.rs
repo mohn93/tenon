@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side, SoftenReport};
 
@@ -290,6 +291,10 @@ pub enum Command {
         up: Option<UpAxis>,
         #[serde(default)]
         merge_coplanar: Option<bool>,
+        /// Set by the API under `--api-root`: the OBJ's material libraries are read only when
+        /// they lie, after symlinks, within these folders. Never read from or written to JSON.
+        #[serde(skip)]
+        library_roots: Option<Vec<PathBuf>>,
     },
     /// Change the selection of edges, faces, instances and guides. Not recorded in undo history.
     Select {

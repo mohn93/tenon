@@ -5,10 +5,11 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 pub const USAGE: &str =
-    "usage: app [--socket PATH] [FILE]                 window, agent API on a Unix socket
-       app --headless --stdio [FILE]               no window, agent API on stdin/stdout
-       app --headless [--socket PATH] [FILE]       no window, agent API on a Unix socket
-FILE is a .skr model to open at start.";
+    "usage: app [--socket PATH] [--api-root DIR]... [FILE]            window, agent API on a Unix socket
+       app --headless --stdio [--api-root DIR]... [FILE]          no window, agent API on stdin/stdout
+       app --headless [--socket PATH] [--api-root DIR]... [FILE]  no window, agent API on a Unix socket
+FILE is a .skr model to open at start.
+--api-root DIR (repeatable) keeps every file the API reads or writes inside DIR.";
 
 #[derive(Debug, PartialEq)]
 pub enum Transport {
@@ -22,10 +23,12 @@ pub enum Mode {
     Window {
         socket: PathBuf,
         file: Option<PathBuf>,
+        api_roots: Vec<PathBuf>,
     },
     Headless {
         transport: Transport,
         file: Option<PathBuf>,
+        api_roots: Vec<PathBuf>,
     },
 }
 
@@ -90,6 +93,7 @@ pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     let (mut headless, mut stdio, mut socket, mut file) = (false, false, None, None);
+    let mut api_roots = Vec::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -102,6 +106,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
                     .filter(|p| !p.starts_with("--"))
                     .ok_or("--socket needs a path")?;
                 socket = Some(PathBuf::from(path));
+            }
+            "--api-root" => {
+                let dir = args
+                    .next()
+                    .filter(|p| !p.starts_with("--"))
+                    .ok_or("--api-root needs a folder")?;
+                api_roots.push(PathBuf::from(dir));
             }
             other if !other.starts_with('-') && file.is_none() => {
                 file = Some(PathBuf::from(other));
@@ -117,16 +128,22 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     }
     let socket = socket.unwrap_or_else(default_socket);
     Ok(if !headless {
-        Mode::Window { socket, file }
+        Mode::Window {
+            socket,
+            file,
+            api_roots,
+        }
     } else if stdio {
         Mode::Headless {
             transport: Transport::Stdio,
             file,
+            api_roots,
         }
     } else {
         Mode::Headless {
             transport: Transport::Socket(socket),
             file,
+            api_roots,
         }
     })
 }
@@ -150,28 +167,32 @@ mod tests {
             parse(args("")).unwrap(),
             Mode::Window {
                 socket: default_socket(),
-                file: None
+                file: None,
+                api_roots: vec![]
             }
         );
         assert_eq!(
             parse(args("--headless --stdio")).unwrap(),
             Mode::Headless {
                 transport: Transport::Stdio,
-                file: None
+                file: None,
+                api_roots: vec![]
             }
         );
         assert_eq!(
             parse(args("--headless --socket /tmp/a.sock")).unwrap(),
             Mode::Headless {
                 transport: Transport::Socket("/tmp/a.sock".into()),
-                file: None
+                file: None,
+                api_roots: vec![]
             }
         );
         assert_eq!(
             parse(args("--socket /tmp/b.sock")).unwrap(),
             Mode::Window {
                 socket: "/tmp/b.sock".into(),
-                file: None
+                file: None,
+                api_roots: vec![]
             }
         );
     }
@@ -182,17 +203,36 @@ mod tests {
             parse(args("--headless --stdio house.skr")).unwrap(),
             Mode::Headless {
                 transport: Transport::Stdio,
-                file: Some("house.skr".into())
+                file: Some("house.skr".into()),
+                api_roots: vec![]
             }
         );
         assert_eq!(
             parse(args("house.skr --socket /tmp/c.sock")).unwrap(),
             Mode::Window {
                 socket: "/tmp/c.sock".into(),
-                file: Some("house.skr".into())
+                file: Some("house.skr".into()),
+                api_roots: vec![]
             }
         );
         assert!(parse(args("a.skr b.skr")).unwrap_err().contains("b.skr"));
+    }
+
+    #[test]
+    fn api_roots_repeat() {
+        assert_eq!(
+            parse(args("--headless --stdio --api-root /a --api-root b f.skr")).unwrap(),
+            Mode::Headless {
+                transport: Transport::Stdio,
+                file: Some("f.skr".into()),
+                api_roots: vec!["/a".into(), "b".into()],
+            }
+        );
+        assert!(
+            parse(args("--api-root"))
+                .unwrap_err()
+                .contains("needs a folder")
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod hub;
 mod input;
 mod probe;
 mod protocol;
+mod roots;
 mod transport;
 
 pub use dispatch::{EditorQuery, Host, describe, handle};
@@ -23,4 +24,5 @@ pub use probe::{
     Snap, View, snap_name,
 };
 pub use protocol::{MAX_LINE_BYTES, codes};
+pub use roots::ApiRoots;
 pub use transport::{listen_unix, serve_stdio, serve_stream};

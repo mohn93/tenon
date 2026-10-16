@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use api::{EditorState, Hub, listen_unix};
+use api::{ApiRoots, EditorState, Hub, listen_unix};
 use glam::DVec2;
 use kernel::{EntityId, InstanceId, MaterialId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
@@ -430,6 +430,8 @@ struct State {
     editor: Editor,
     /// An agent asked the app to quit.
     quit: bool,
+    /// The folders the API's file paths must lie within (empty: no limit).
+    roots: ApiRoots,
     gui: Gui,
     /// Document revision, selection and open context the renderer's model buffers were built
     /// from.
@@ -467,7 +469,7 @@ struct State {
 }
 
 impl State {
-    fn new(window: Arc<Window>) -> Self {
+    fn new(window: Arc<Window>, roots: ApiRoots) -> Self {
         let instance = wgpu::Instance::default();
         let Gpu {
             surface,
@@ -498,6 +500,7 @@ impl State {
             offscreen,
             editor,
             quit: false,
+            roots,
             gui,
             drawn: None,
             outliner: None,
@@ -1091,6 +1094,7 @@ impl State {
             editor: &mut self.editor,
             offscreen: &mut self.offscreen,
             quit: &mut self.quit,
+            roots: &self.roots,
         }
     }
 
@@ -1236,6 +1240,8 @@ pub struct App {
     socket: Option<PathBuf>,
     /// A model to open once the window exists.
     file: Option<PathBuf>,
+    /// The folders the API's file paths must lie within.
+    roots: ApiRoots,
 }
 
 impl App {
@@ -1245,6 +1251,7 @@ impl App {
         event_loop: &EventLoop<ApiWake>,
         socket: Option<PathBuf>,
         file: Option<PathBuf>,
+        roots: ApiRoots,
     ) -> Self {
         let proxy = event_loop.create_proxy();
         let hub = Hub::new(move || {
@@ -1269,6 +1276,7 @@ impl App {
             awake: Awake::default(),
             socket,
             file,
+            roots,
         }
     }
 }
@@ -1322,7 +1330,7 @@ impl ApplicationHandler<ApiWake> for App {
             .with_title("sketchup-alt")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        let mut state = State::new(window);
+        let mut state = State::new(window, self.roots.clone());
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),

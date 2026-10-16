@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use glam::DVec3;
 use kernel::{DefinitionKind, EntityId, MaterialId, MeshId, MeshPolygon, SceneChange};
@@ -27,6 +27,7 @@ pub(crate) struct ImportOptions {
     pub scale: Option<f64>,
     pub up: Option<UpAxis>,
     pub merge_coplanar: Option<bool>,
+    pub library_roots: Option<Vec<PathBuf>>,
 }
 
 impl Document {
@@ -74,7 +75,9 @@ impl Document {
             )));
         }
 
-        let (materials, added) = self.import_materials(file, &read).map_err(file_error)?;
+        let (materials, added) = self
+            .import_materials(file, &read, o.library_roots.as_deref())
+            .map_err(file_error)?;
         let polygon_count = read.polygons.len();
         let polygons: Vec<MeshPolygon> = std::mem::take(&mut read.polygons)
             .into_iter()
@@ -175,6 +178,7 @@ impl Document {
         &mut self,
         obj: &Path,
         read: &ReadMesh,
+        roots: Option<&[PathBuf]>,
     ) -> Result<(BTreeMap<String, MaterialId>, AddedMaterials), String> {
         let used: BTreeSet<&String> = read
             .polygons
@@ -192,7 +196,16 @@ impl Document {
                 .filter(|l| !Path::new(l).is_absolute())
                 .filter(|l| tried.insert(l))
             {
-                if let Ok(bytes) = read_limited(&dir.join(library), MAX_MTL_BYTES) {
+                let library = dir.join(library);
+                let allowed = roots.is_none_or(|roots| {
+                    library
+                        .canonicalize()
+                        .is_ok_and(|real| roots.iter().any(|r| real.starts_with(r)))
+                });
+                if !allowed {
+                    continue;
+                }
+                if let Ok(bytes) = read_limited(&library, MAX_MTL_BYTES) {
                     colors.extend(read_mtl(&bytes));
                 }
             }

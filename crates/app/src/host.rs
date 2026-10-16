@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use api::{
-    Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput, ToolInputError,
-    ToolInputResult, ToolInputStopped, ToolName, snap_name,
+    ApiRoots, Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput,
+    ToolInputError, ToolInputResult, ToolInputStopped, ToolName, snap_name,
 };
 use render::Snapshotter;
 use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
@@ -55,9 +55,15 @@ pub struct AppHost<'a> {
     pub offscreen: &'a mut Offscreen,
     /// Set when an agent asks the app to quit.
     pub quit: &'a mut bool,
+    /// The folders the API's file paths must lie within (empty: no limit).
+    pub roots: &'a ApiRoots,
 }
 
 impl Host for AppHost<'_> {
+    fn roots(&self) -> Option<&ApiRoots> {
+        (!self.roots.is_empty()).then_some(self.roots)
+    }
+
     fn document(&self) -> &Document {
         self.editor.doc()
     }
@@ -248,6 +254,7 @@ mod tests {
             editor: e,
             offscreen: &mut offscreen,
             quit,
+            roots: &ApiRoots::default(),
         };
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()

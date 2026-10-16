@@ -456,6 +456,7 @@ impl Document {
                 scale,
                 up,
                 merge_coplanar,
+                library_roots,
             } => self.import_changes(
                 path,
                 &ImportOptions {
@@ -464,6 +465,7 @@ impl Document {
                     scale: *scale,
                     up: *up,
                     merge_coplanar: *merge_coplanar,
+                    library_roots: library_roots.clone(),
                 },
             ),
             Command::New { .. }

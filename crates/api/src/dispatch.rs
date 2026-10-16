@@ -18,6 +18,7 @@ use crate::probe::{
     InferQuery, Inferred, PickHit, PickQuery, ScreenCommand, View, box_ids, infer_query, pick_query,
 };
 use crate::protocol::{RpcError, codes, failure, parse, success};
+use crate::roots::ApiRoots;
 
 /// Largest image side `render_view` accepts, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 4096;
@@ -62,10 +63,26 @@ pub trait Host {
             "this program cannot be quit through the API",
         ))
     }
+    /// The folders file paths must lie within (`--api-root`), or None for no limit.
+    fn roots(&self) -> Option<&ApiRoots> {
+        None
+    }
     /// True once a `quit` was accepted: every later request is refused, so no edit is made
     /// that would not be saved.
     fn quitting(&self) -> bool {
         false
+    }
+}
+
+/// Applies the host's `--api-root` folders to `command`'s paths.
+fn within_roots(
+    host: &dyn Host,
+    command: &mut Command,
+    in_batch: bool,
+) -> Result<(), CommandError> {
+    match host.roots() {
+        Some(roots) => roots.apply(command, host.document().path(), in_batch),
+        None => Ok(()),
     }
 }
 
@@ -140,7 +157,8 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             Ok(result)
         }
         "execute" => {
-            let command: Command = params_as(params)?;
+            let mut command: Command = params_as(params)?;
+            within_roots(host, &mut command, false).map_err(command_failed)?;
             let outcome = host.execute(command).map_err(command_failed)?;
             let mut result = json!(outcome);
             result["revision"] = json!(host.document().revision());
@@ -155,7 +173,23 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
                 atomic: bool,
             }
             let p: Params = params_as(params)?;
-            let outcomes = host.execute_batch(p.commands, p.atomic).map_err(|e| {
+            let mut commands = p.commands;
+            for (index, command) in commands.iter_mut().enumerate() {
+                if let Err(error) = within_roots(host, command, true) {
+                    let e = BatchError {
+                        index,
+                        error,
+                        completed: Vec::new(),
+                        rolled_back: false,
+                    };
+                    return Err(RpcError::new(
+                        codes::BATCH_FAILED,
+                        format!("batch stopped at command {index}"),
+                    )
+                    .with_data(json!(e)));
+                }
+            }
+            let outcomes = host.execute_batch(commands, p.atomic).map_err(|e| {
                 RpcError::new(
                     codes::BATCH_FAILED,
                     format!("batch stopped at command {}", e.index),
@@ -169,9 +203,13 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             editor_query(host, query)
         }
         "query" => {
+            let file = type_of(&params) == Some("file");
             let query: Query = params_as(params)?;
-            let result = host.document().query(&query).map_err(command_failed)?;
-            Ok(json!(result))
+            let mut result = json!(host.document().query(&query).map_err(command_failed)?);
+            if file {
+                result["api_roots"] = json!(host.roots().map(ApiRoots::dirs));
+            }
+            Ok(result)
         }
         "render_view" => render_view(host, params),
         "tool_input" => {
@@ -290,6 +328,7 @@ pub fn describe() -> Value {
         "schema_version": 1,
         "protocol": "JSON-RPC 2.0, one JSON object per line (UTF-8, '\\n' terminated)",
         "units": "meters; Z is up; angles in degrees",
+        "paths": "file paths are absolute or relative to the app's working directory; with --api-root, relative to the first root and kept within the roots after symlinks (query file lists them as api_roots); save and export refuse to replace a file of another format unless overwrite: true",
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, revision})",

@@ -1138,6 +1138,7 @@ impl Editor {
         self.typed.clear();
         self.message = None;
         let outcome = self.run(Command::Import {
+            library_roots: None,
             path: path.display().to_string(),
             format: None,
             place: ImportAs::Group,
