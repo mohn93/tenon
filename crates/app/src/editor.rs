@@ -2,7 +2,7 @@
 //! resulting commands on the document, and produces the overlay and status text to show.
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -119,6 +119,8 @@ pub struct Editor {
     typed: String,
     /// Feedback from the last tool action or failed command.
     message: Option<String>,
+    /// Recovery files an agent's discards were kept in this session.
+    recovered: Vec<PathBuf>,
     /// Physical pixels per logical pixel.
     scale_factor: f64,
     /// The material the Paint tool paints with (None: the default material).
@@ -197,6 +199,7 @@ impl Editor {
             layout: RefCell::new(None),
             typed: String::new(),
             message: None,
+            recovered: Vec::new(),
             scale_factor,
             material: None,
             sample: false,
@@ -1038,6 +1041,23 @@ impl Editor {
         self.run(command);
         self.invalidate_hover();
         true
+    }
+
+    /// Notes a recovery file an agent's discard was kept in: the status says where, and
+    /// stderr too (the window may be quitting).
+    pub fn note_recovery(&mut self, path: PathBuf) {
+        let line = format!(
+            "An agent discarded unsaved changes; they were kept in {}",
+            path.display()
+        );
+        eprintln!("{line}");
+        self.message = Some(line);
+        self.recovered.push(path);
+    }
+
+    /// The recovery files written this session, oldest first.
+    pub fn recovered(&self) -> &[PathBuf] {
+        &self.recovered
     }
 
     /// Starts an empty model, dropping unsaved changes (the window asks about them first).

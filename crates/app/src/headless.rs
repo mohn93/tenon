@@ -71,6 +71,7 @@ fn serve(
             offscreen: &mut *offscreen,
             quit: &mut quit,
             roots,
+            recovery: None,
         };
         if !hub.process_blocking(&mut host) {
             return;

@@ -19,6 +19,7 @@ fn call(e: &mut Editor, method: &str, params: Value) -> Value {
         offscreen: &mut offscreen,
         quit: &mut quit,
         roots: &ApiRoots::default(),
+        recovery: None,
     };
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()

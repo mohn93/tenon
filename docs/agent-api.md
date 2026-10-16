@@ -761,7 +761,11 @@ position out of range); error messages never quote the file's contents (a JSON f
 line and column); the model is left as it was. `save` also fails
 when the model has given out ids past 2^53, which no file can hold. `open` and `new` never drop changes the user has
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
-a client that means it, or has asked the user, passes `"discard": true`. The window asks the user
+a client that means it, or has asked the user, passes `"discard": true`. In the window, `new`,
+`open` and `quit` with `discard: true` first write the unsaved model to a recovery file,
+`~/.sketchup-alt/recovery/<name>-<seconds>.skr`; the window's status bar and its Agent Activity
+window name it. If the file cannot be written the command fails with `file` and nothing is
+discarded. Headless, nothing is written. The window asks the user
 itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an
 atomic batch.
 
@@ -888,7 +892,9 @@ needs a path. A batch with a path outside the roots runs nothing (`-32001`, its 
 the command). Commands run on the resolved path, so `query file` shows it; `query file` also
 lists the roots as `api_roots` (null without `--api-root`). The window's own dialogs and the
 FILE argument are not limited. A root that is not an existing folder stops the app (exit code
-2).
+2). The window shows `Agents: N` in its status bar while N connections are open; View > Agent
+Activity lists the connections' requests (the last 100, newest first, with their results and how
+long ago they came) and any recovery files.
 
 ### Notifications
 
@@ -935,6 +941,7 @@ under a pixel and where a click would snap.
 | File > Import... (Cmd+I), File > Import Units | `import` (`scale`, `as`, `up`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (Cmd+Q, closing the window) | `quit` (`discard`) |
+| View > Agent Activity; the status bar's `Agents: N` | none: they only show what agents do |
 | Edit > Erase Selection (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z) | `undo`, `redo`; `history` lists the steps |

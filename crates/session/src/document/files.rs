@@ -12,6 +12,13 @@ use crate::file;
 use crate::sniff::{self, Kind};
 
 impl Document {
+    /// Writes the model, view and lighting as a `.skr` file at `path`, leaving the document's
+    /// own file and its unsaved state as they are (a recovery copy).
+    pub fn write_copy(&self, path: &Path) -> Result<(), CommandError> {
+        file::write(path, &self.scene, &self.camera, self.lighting)
+            .map_err(|e| file_error(&path.display().to_string(), e))
+    }
+
     /// Refuses with `unsaved_changes` when the model changed since it was opened, saved or
     /// started, unless `discard`: what `new`, `open` and quitting check first.
     pub fn check_unsaved(&self, discard: bool) -> Result<(), CommandError> {

@@ -2,6 +2,7 @@
 //! Info, the Materials list and the Outliner.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use egui::collapsing_header::CollapsingState;
 use egui::{Align, Color32, Layout, Panel, RichText, Sense, Ui, Vec2};
@@ -62,6 +63,8 @@ pub enum UiAction {
     OpenPath(Vec<EntityId>),
     /// Turn fly mode on or off.
     ToggleFly,
+    /// Open or close the Agent Activity window.
+    ShowAgentActivity(bool),
     /// Open or close the Soften Edges window.
     ShowSoften(bool),
     /// Set the Soften Edges window's angle, in degrees (0 to 180).
@@ -116,8 +119,19 @@ const RIGHT_PANEL_WIDTH: f32 = 180.0;
 /// The default material's swatch: its front color.
 const DEFAULT_SWATCH: Color32 = Color32::from_rgb(237, 237, 230);
 
+/// What the window shows of the agents using the API.
+pub struct Agents<'a> {
+    /// Connections open now.
+    pub connected: usize,
+    /// The activity log's lines, newest first, while the Agent Activity window is open.
+    pub log: Option<&'a [String]>,
+    /// Recovery files written this session.
+    pub recovered: &'a [PathBuf],
+}
+
 /// What the panels show.
 pub struct View<'a> {
+    pub agents: Agents<'a>,
     pub tool: ToolKind,
     pub status: &'a Status,
     pub info: &'a [String],
@@ -192,6 +206,8 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     Panel::top("toolbar").show(ui, |ui| {
         // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
         ui.horizontal_wrapped(|ui| {
+            // Tighter than the default so the default window's toolbar stays on one row.
+            ui.spacing_mut().item_spacing.x = 7.0;
             ui.menu_button("File", |ui| {
                 let items = [
                     ("New", "Cmd+N", UiAction::NewModel),
@@ -281,6 +297,11 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     actions.push(UiAction::ToggleFly);
                 }
             });
+            ui.menu_button("View", |ui| {
+                if ui.button("Agent Activity").clicked() {
+                    actions.push(UiAction::ShowAgentActivity(true));
+                }
+            });
             ui.separator();
             for kind in ToolKind::ALL {
                 let key = match kind.shortcut() {
@@ -339,6 +360,16 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                 ui.label(RichText::new(message).color(ui.visuals().warn_fg_color));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if view.agents.connected > 0 {
+                    let text = format!("Agents: {}", view.agents.connected);
+                    if ui
+                        .add(egui::Button::new(RichText::new(text).strong()).small())
+                        .on_hover_text("Programs connected to the agent API")
+                        .clicked()
+                    {
+                        actions.push(UiAction::ShowAgentActivity(true));
+                    }
+                }
                 // The measurements box: typed text, or the tool's live measurement.
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_min_width(120.0);
@@ -370,11 +401,54 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     if let Some(angle) = view.soften {
         soften_window(ui, angle, &mut actions);
     }
+    if let Some(log) = view.agents.log {
+        agent_activity(ui, &view.agents, log, &mut actions);
+    }
     (actions, ui.available_rect_before_wrap())
 }
 
 /// The Soften Edges window: an angle and the Soften and Harden buttons, which act on the
 /// selection, or on the open context when nothing is selected.
+/// The Agent Activity window: how many agents are connected, the recovery files their
+/// discards left, and what they asked for, newest first.
+fn agent_activity(ui: &mut Ui, agents: &Agents, log: &[String], actions: &mut Vec<UiAction>) {
+    let mut open = true;
+    egui::Window::new("Agent Activity")
+        .open(&mut open)
+        .collapsible(false)
+        .default_width(420.0)
+        .show(ui.ctx(), |ui| {
+            ui.label(match agents.connected {
+                0 => "No agents connected".to_string(),
+                1 => "1 agent connected".to_string(),
+                n => format!("{n} agents connected"),
+            });
+            if !agents.recovered.is_empty() {
+                ui.label(
+                    RichText::new("Unsaved changes agents discarded were kept in:")
+                        .color(ui.visuals().warn_fg_color),
+                );
+                for path in agents.recovered {
+                    ui.monospace(path.display().to_string());
+                }
+            }
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    if log.is_empty() {
+                        ui.label(RichText::new("Nothing yet").weak());
+                    }
+                    for line in log {
+                        ui.monospace(line);
+                    }
+                });
+        });
+    if !open {
+        actions.push(UiAction::ShowAgentActivity(false));
+    }
+}
+
 fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>) {
     let mut open = true;
     egui::Window::new("Soften Edges")
@@ -1098,6 +1172,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -1167,6 +1242,108 @@ mod tests {
         clicked
     }
 
+    fn no_agents() -> Agents<'static> {
+        Agents {
+            connected: 0,
+            log: None,
+            recovered: &[],
+        }
+    }
+
+    /// Every text the frame draws, with the middle of where it lies.
+    fn texts(ctx: &egui::Context, view: &View) -> Vec<(String, Pos2)> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<(String, Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    let middle = t.pos + t.galley.rect.center().to_vec2();
+                    out.push((t.galley.text().to_string(), middle));
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        let output = ctx.run_ui(screen(), |ui| {
+            draw(ui, view);
+        });
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut found);
+        }
+        output.drop_without_applying_deltas();
+        found
+    }
+
+    fn text_at(ctx: &egui::Context, view: &View, text: &str) -> Option<Pos2> {
+        texts(ctx, view)
+            .into_iter()
+            .find(|(t, _)| t == text)
+            .map(|(_, p)| p)
+    }
+
+    #[test]
+    fn the_view_menu_and_the_indicator_open_agent_activity() {
+        let status = status();
+        let info = Vec::new();
+        let mut view = soften_view(&status, &info, None, None);
+        // View menu, right of Camera.
+        let ctx = egui::Context::default();
+        let _ = run(&ctx, screen(), &view);
+        let camera = text_at(&ctx, &view, "Camera").expect("the Camera menu");
+        let at = text_at(&ctx, &view, "View").expect("the View menu");
+        assert!(at.x > camera.x, "{at:?} right of {camera:?}");
+        // Open the menu, then click its item, which lies just below the toolbar row.
+        click(&ctx, &view, at);
+        let _ = run(&ctx, screen(), &view);
+        let item = text_at(&ctx, &view, "Agent Activity").expect("the menu's item");
+        let clicked = click(&ctx, &view, item);
+        assert!(
+            clicked.contains(&UiAction::ShowAgentActivity(true)),
+            "{clicked:?}"
+        );
+
+        // Status bar: nothing at 0 agents, "Agents: 2" at 2, and a click on it opens the log.
+        let ctx = egui::Context::default();
+        assert!(text_at(&ctx, &view, "Agents: 2").is_none());
+        view.agents.connected = 2;
+        let ctx = egui::Context::default();
+        let _ = run(&ctx, screen(), &view);
+        let at = text_at(&ctx, &view, "Agents: 2").expect("the indicator is drawn");
+        assert!(at.y > 700.0, "{at:?}");
+        let clicked = click(&ctx, &view, at);
+        assert_eq!(clicked, vec![UiAction::ShowAgentActivity(true)]);
+
+        // The window lists the log and the recovery files, and closes.
+        let lines = ["5 s ago  #1  execute save /a.skr  ok".to_string()];
+        let recovered = [PathBuf::from("/r/untitled-1.skr")];
+        view.agents = Agents {
+            connected: 2,
+            log: Some(&lines),
+            recovered: &recovered,
+        };
+        let ctx = egui::Context::default();
+        let _ = run(&ctx, screen(), &view);
+        let shown = texts(&ctx, &view);
+        for want in [
+            "2 agents connected",
+            "5 s ago  #1  execute save /a.skr  ok",
+            "/r/untitled-1.skr",
+        ] {
+            assert!(shown.iter().any(|(t, _)| t == want), "{want} in {shown:?}");
+        }
+        // The close button sits at the right end of the title bar, whose text is at y 33.
+        let title = text_at(&ctx, &view, "Agent Activity").expect("the window's title");
+        let mut clicked = Vec::new();
+        for y in (title.y as i32 - 8..title.y as i32 + 8).step_by(4) {
+            for x in (title.x as i32..700).step_by(6) {
+                clicked.extend(click(&ctx, &view, Pos2::new(x as f32, y as f32)));
+            }
+        }
+        assert!(
+            clicked.contains(&UiAction::ShowAgentActivity(false)),
+            "{clicked:?}"
+        );
+    }
+
     #[test]
     fn the_camera_menu_has_views_zoom_extents_and_projections() {
         let status = status();
@@ -1188,6 +1365,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -1243,6 +1421,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -1295,6 +1474,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften,
             edges_soft,
             texture_position: None,
@@ -1580,6 +1760,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -1624,6 +1805,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -1793,6 +1975,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -2083,6 +2266,7 @@ mod tests {
             outliner: &NO_ROWS,
             context: &[],
             selection: &NO_SELECTION,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,
@@ -2374,6 +2558,7 @@ mod tests {
             outliner: table,
             context,
             selection,
+            agents: no_agents(),
             soften: None,
             edges_soft: None,
             texture_position: None,

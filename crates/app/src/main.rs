@@ -84,7 +84,9 @@ fn main() {
             let event_loop = builder.build().expect("create event loop");
             // Redraw on demand only; the loop sleeps until input or an API request arrives.
             event_loop.set_control_flow(ControlFlow::Wait);
-            let mut app = app::App::new(&event_loop, socket, file, roots);
+            let recovery = std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(cli::FALLBACK_DIR).join("recovery"));
+            let mut app = app::App::new(&event_loop, socket, file, roots, recovery);
             event_loop.run_app(&mut app).expect("run app");
         }
     }

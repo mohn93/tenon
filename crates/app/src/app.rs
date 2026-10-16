@@ -26,7 +26,7 @@ use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
-use crate::ui::{MaterialRow, TexturePosition, TextureRow, UiAction, View};
+use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
 
 /// The side of a texture's swatch image in the Materials list, in pixels.
 const SWATCH_PIXELS: u32 = 32;
@@ -432,6 +432,12 @@ struct State {
     quit: bool,
     /// The folders the API's file paths must lie within (empty: no limit).
     roots: ApiRoots,
+    /// Where discarded work is kept (None: nowhere).
+    recovery: Option<PathBuf>,
+    /// The Agent Activity window is open.
+    agent_activity: bool,
+    /// How many of the editor's recovery files the window has already shown.
+    recovered_seen: usize,
     gui: Gui,
     /// Document revision, selection and open context the renderer's model buffers were built
     /// from.
@@ -469,7 +475,7 @@ struct State {
 }
 
 impl State {
-    fn new(window: Arc<Window>, roots: ApiRoots) -> Self {
+    fn new(window: Arc<Window>, roots: ApiRoots, recovery: Option<PathBuf>) -> Self {
         let instance = wgpu::Instance::default();
         let Gpu {
             surface,
@@ -501,6 +507,9 @@ impl State {
             editor,
             quit: false,
             roots,
+            recovery,
+            agent_activity: false,
+            recovered_seen: 0,
             gui,
             drawn: None,
             outliner: None,
@@ -817,6 +826,7 @@ impl State {
             UiAction::ToggleFly => {
                 self.editor.toggle_fly();
             }
+            UiAction::ShowAgentActivity(open) => self.agent_activity = open,
             UiAction::ShowSoften(open) => {
                 self.editor.show_soften(open);
             }
@@ -893,7 +903,7 @@ impl State {
     /// Lays out and draws the 3D view and the panels, then applies what was clicked in them
     /// and asks for another frame to show the result. Returns true if a panel action ran (so
     /// subscribers should hear about edits).
-    fn render(&mut self) -> bool {
+    fn render(&mut self, hub: &Hub) -> bool {
         if self.device_lost.load(Ordering::SeqCst) && !self.recreate_gpu() {
             self.repaint_at = Some(Instant::now() + SKIPPED_RETRY);
             return false;
@@ -968,7 +978,25 @@ impl State {
             .iter()
             .map(|i| EntityId::Instance(*i))
             .collect();
+        // A discard an agent made opens the window that lists where its work went.
+        if self.editor.recovered().len() > self.recovered_seen {
+            self.recovered_seen = self.editor.recovered().len();
+            self.agent_activity = true;
+        }
+        let now = Instant::now();
+        let lines: Option<Vec<String>> = self.agent_activity.then(|| {
+            hub.activity()
+                .iter()
+                .rev()
+                .map(|a| activity_line(a, now))
+                .collect()
+        });
         let panels = View {
+            agents: Agents {
+                connected: hub.open_connections(),
+                log: lines.as_deref(),
+                recovered: self.editor.recovered(),
+            },
             tool: self.editor.tool_kind(),
             status: &status,
             info: &info,
@@ -1059,6 +1087,10 @@ impl State {
         if flying_on {
             self.window.request_redraw();
         }
+        // The ages in the open log move.
+        if lines.is_some() {
+            self.repaint_at = Some(earliest(self.repaint_at, now + Duration::from_secs(1)));
+        }
         if self.editor.hover_deferred() {
             self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
         }
@@ -1076,11 +1108,14 @@ impl State {
     /// it: at most about 30 a second while requests keep coming (see `api_repaint`).
     fn process_api(&mut self, hub: &mut Hub) {
         let before = shown(&self.editor);
+        let agents_before = (hub.open_connections(), hub.activity_revision());
         let mut host = self.host();
         hub.process(&mut host);
+        let agents_changed = hub.open_connections() != agents_before.0
+            || (self.agent_activity && hub.activity_revision() != agents_before.1);
         // An agent may have turned fly mode on or off: the pointer follows.
         self.sync_fly_cursor();
-        if shown(&self.editor) != before || self.editor.hover_pending() {
+        if shown(&self.editor) != before || self.editor.hover_pending() || agents_changed {
             match api_repaint(Instant::now(), self.presented) {
                 Repaint::At(t) => self.repaint_at = Some(earliest(self.repaint_at, t)),
                 _ => self.window.request_redraw(),
@@ -1095,6 +1130,7 @@ impl State {
             offscreen: &mut self.offscreen,
             quit: &mut self.quit,
             roots: &self.roots,
+            recovery: self.recovery.as_deref(),
         }
     }
 
@@ -1110,6 +1146,30 @@ impl State {
         let host = self.host();
         hub.notify_state(&host);
     }
+}
+
+/// A line of the Agent Activity log: how long ago, the connection, the request and how it
+/// went. One line: control characters in a caller's text become spaces.
+fn activity_line(a: &api::Activity, now: Instant) -> String {
+    let secs = now.saturating_duration_since(a.at).as_secs();
+    let ago = if secs < 120 {
+        format!("{secs} s ago")
+    } else if secs < 7200 {
+        format!("{} min ago", secs / 60)
+    } else {
+        format!("{} h ago", secs / 3600)
+    };
+    let result = match &a.error {
+        None => "ok".to_string(),
+        Some(e) => format!("error: {e}"),
+    };
+    let mut line = format!("{ago}  #{}  {}  {result}", a.connection, a.request);
+    if a.repeats > 1 {
+        line += &format!("  (x{})", a.repeats);
+    }
+    line.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// The letter of a Cmd/Ctrl shortcut: the layout's character when it is ASCII, else the
@@ -1242,6 +1302,8 @@ pub struct App {
     file: Option<PathBuf>,
     /// The folders the API's file paths must lie within.
     roots: ApiRoots,
+    /// Where work an agent discards is kept.
+    recovery: Option<PathBuf>,
 }
 
 impl App {
@@ -1252,6 +1314,7 @@ impl App {
         socket: Option<PathBuf>,
         file: Option<PathBuf>,
         roots: ApiRoots,
+        recovery: Option<PathBuf>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
         let hub = Hub::new(move || {
@@ -1277,6 +1340,7 @@ impl App {
             socket,
             file,
             roots,
+            recovery,
         }
     }
 }
@@ -1330,7 +1394,7 @@ impl ApplicationHandler<ApiWake> for App {
             .with_title("sketchup-alt")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        let mut state = State::new(window, self.roots.clone());
+        let mut state = State::new(window, self.roots.clone(), self.recovery.clone());
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),
@@ -1384,7 +1448,7 @@ impl ApplicationHandler<ApiWake> for App {
                 false
             }
             WindowEvent::RedrawRequested => {
-                if s.render() {
+                if s.render(&self.hub) {
                     s.notify_api(&mut self.hub);
                 }
                 s.notify_frame(&mut self.hub);
@@ -1549,6 +1613,42 @@ impl ApplicationHandler<ApiWake> for App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn activity_lines_read_newest_first_with_age_and_result() {
+        let now = Instant::now();
+        let a = api::Activity {
+            at: now - Duration::from_secs(12),
+            connection: 3,
+            request: "execute save /a/house.skr".into(),
+            error: None,
+            repeats: 1,
+        };
+        assert_eq!(
+            activity_line(&a, now),
+            "12 s ago  #3  execute save /a/house.skr  ok"
+        );
+        let b = api::Activity {
+            error: Some("no".into()),
+            repeats: 4,
+            at: now,
+            ..a
+        };
+        assert_eq!(
+            activity_line(&b, now),
+            "0 s ago  #3  execute save /a/house.skr  error: no  (x4)"
+        );
+        let c = api::Activity {
+            at: now - Duration::from_secs(3 * 60 + 5),
+            ..b
+        };
+        assert!(activity_line(&c, now).starts_with("3 min ago"));
+        let d = api::Activity {
+            request: "execute open /a\nb\u{1b}[0m".into(),
+            ..c
+        };
+        assert!(!activity_line(&d, now).contains(char::is_control));
+    }
+
     use super::*;
     use winit::keyboard::SmolStr;
 

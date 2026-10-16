@@ -2,16 +2,18 @@
 //! (so the active tool stays consistent), editor commands set it, and `render_view` uses an
 //! offscreen renderer.
 
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use api::{
     ApiRoots, Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput,
     ToolInputError, ToolInputResult, ToolInputStopped, ToolName, snap_name,
 };
 use render::Snapshotter;
-use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
+use session::{BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Outcome};
 use tools::Phase;
 
+use crate::cli;
 use crate::editor::{DriveError, Driven, Editor, Stopped};
 
 /// How long a quitting app waits for its last replies to be written.
@@ -57,6 +59,96 @@ pub struct AppHost<'a> {
     pub quit: &'a mut bool,
     /// The folders the API's file paths must lie within (empty: no limit).
     pub roots: &'a ApiRoots,
+    /// The folder unsaved changes are kept in when an API `new`, `open` or `quit` discards
+    /// them (the window's; None keeps nothing, as headless, where the agent's work is all
+    /// there is).
+    pub recovery: Option<&'a Path>,
+}
+
+/// Whether `command` drops unsaved changes when it runs.
+fn discards(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::New { discard: true } | Command::Open { discard: true, .. }
+    )
+}
+
+/// A free file name in `dir` for a recovery copy of the model at `open_file` (or an unsaved
+/// one), stamped with `now` in seconds.
+pub fn recovery_path(dir: &Path, open_file: Option<&Path>, now: SystemTime) -> PathBuf {
+    let stem: String = open_file
+        .and_then(Path::file_stem)
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "untitled".into())
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let secs = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let mut path = dir.join(format!("{stem}-{secs}.skr"));
+    let mut n = 2;
+    while std::fs::symlink_metadata(&path).is_ok() {
+        path = dir.join(format!("{stem}-{secs}-{n}.skr"));
+        n += 1;
+    }
+    path
+}
+
+impl AppHost<'_> {
+    /// Before a command that discards unsaved changes, writes the model to a recovery file
+    /// (in the window). Fails, so the command does not run, when it cannot be written.
+    fn keep_discarded(&mut self) -> Result<Option<PathBuf>, CommandError> {
+        let Some(dir) = self.recovery else {
+            return Ok(None);
+        };
+        if !self.editor.doc().is_modified() {
+            return Ok(None);
+        }
+        let failed = |e: String| {
+            CommandError::new(
+                ErrorKind::File,
+                format!(
+                    "could not keep the unsaved changes in a recovery file ({e}): nothing was discarded"
+                ),
+            )
+        };
+        if let Some(parent) = cli::private_dir_for(&dir.join("x")) {
+            cli::ensure_private_dir(parent).map_err(|e| failed(e.to_string()))?;
+        }
+        cli::ensure_private_dir(dir).map_err(|e| failed(e.to_string()))?;
+        let path = recovery_path(dir, self.editor.doc().path(), SystemTime::now());
+        self.editor
+            .doc()
+            .write_copy(&path)
+            .map_err(|e| failed(e.message))?;
+        Ok(Some(path))
+    }
+
+    /// Runs `command`, first keeping the work it would discard.
+    fn execute_keeping(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        let kept = if discards(&command) {
+            self.keep_discarded()?
+        } else {
+            None
+        };
+        let result = self.editor.execute(command);
+        if let Some(path) = kept {
+            match &result {
+                Ok(_) => self.editor.note_recovery(path),
+                // Nothing was dropped.
+                Err(_) => {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        result
+    }
 }
 
 impl Host for AppHost<'_> {
@@ -69,7 +161,7 @@ impl Host for AppHost<'_> {
     }
 
     fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        self.editor.execute(command)
+        self.execute_keeping(command)
     }
 
     fn execute_batch(
@@ -77,6 +169,24 @@ impl Host for AppHost<'_> {
         commands: Vec<Command>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
+        // Run one by one when a command would discard work, so it is kept at its turn.
+        if !atomic && self.recovery.is_some() && commands.iter().any(discards) {
+            let mut completed = Vec::new();
+            for (index, command) in commands.into_iter().enumerate() {
+                match self.execute_keeping(command) {
+                    Ok(outcome) => completed.push(outcome),
+                    Err(error) => {
+                        return Err(BatchError {
+                            index,
+                            error,
+                            completed,
+                            rolled_back: false,
+                        });
+                    }
+                }
+            }
+            return Ok(completed);
+        }
         self.editor.execute_batch(commands, atomic)
     }
 
@@ -143,6 +253,9 @@ impl Host for AppHost<'_> {
 
     fn quit(&mut self, discard: bool) -> Result<(), CommandError> {
         self.editor.doc().check_unsaved(discard)?;
+        if let Some(path) = self.keep_discarded()? {
+            self.editor.note_recovery(path);
+        }
         *self.quit = true;
         Ok(())
     }
@@ -233,6 +346,8 @@ mod tool_input_tests;
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use api::{ToolName, handle};
     use glam::{DVec2, DVec3};
     use serde_json::{Value, json};
@@ -255,6 +370,7 @@ mod tests {
             offscreen: &mut offscreen,
             quit,
             roots: &ApiRoots::default(),
+            recovery: None,
         };
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
@@ -410,5 +526,198 @@ mod tests {
         let r = call(&mut e, &mut quit, "quit", json!({"discard": true}));
         assert_eq!(r["result"], json!({}));
         assert!(quit);
+        assert!(e.recovered().is_empty());
+    }
+
+    fn recovery_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sketchup-alt-recovery-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn call_kept(e: &mut Editor, dir: &Path, method: &str, params: Value) -> Value {
+        let (mut offscreen, mut quit) = (Offscreen::headless(), false);
+        let roots = ApiRoots::default();
+        let mut host = AppHost {
+            editor: e,
+            offscreen: &mut offscreen,
+            quit: &mut quit,
+            roots: &roots,
+            recovery: Some(dir),
+        };
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+        serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
+    }
+
+    fn files_in(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map_or_else(|_| Vec::new(), |r| r.map(|e| e.unwrap().path()).collect())
+    }
+
+    fn add_edge() -> Value {
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]})
+    }
+
+    #[test]
+    fn work_an_agent_discards_is_kept_in_a_recovery_file() {
+        let dir = recovery_dir("new");
+        let mut e = editor();
+        // Nothing unsaved: nothing kept.
+        call_kept(
+            &mut e,
+            &dir,
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert!(files_in(&dir).is_empty());
+        call_kept(&mut e, &dir, "execute", add_edge());
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        let kept = files_in(&dir);
+        assert_eq!(kept.len(), 1);
+        assert!(
+            kept[0]
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("untitled-")
+        );
+        assert_eq!(e.recovered(), &kept[..]);
+        assert!(
+            e.status_parts()
+                .message
+                .unwrap()
+                .contains(&kept[0].display().to_string())
+        );
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        // The file holds the dropped edge.
+        let mut back = editor();
+        back.execute(Command::Open {
+            path: kept[0].display().to_string(),
+            discard: false,
+        })
+        .unwrap();
+        assert_eq!(back.doc().model().edges().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_open_keeps_nothing_and_drops_nothing() {
+        let dir = recovery_dir("open");
+        let mut e = editor();
+        call_kept(&mut e, &dir, "execute", add_edge());
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "execute",
+            json!({"type": "open", "path": "/no/such.skr", "discard": true}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+        assert!(files_in(&dir).is_empty());
+        assert!(e.doc().is_modified());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_that_discards_keeps_the_work_at_that_command() {
+        let dir = recovery_dir("batch");
+        let mut e = editor();
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "batch",
+            json!({"commands": [
+                add_edge(),
+                {"type": "new", "discard": true},
+                {"type": "add_edge", "start": [0, 0, 0], "end": [0, 1, 0]}
+            ]}),
+        );
+        assert_eq!(r["result"]["outcomes"].as_array().unwrap().len(), 3, "{r}");
+        assert_eq!(files_in(&dir).len(), 1);
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "batch",
+            json!({"commands": [
+                {"type": "new", "discard": true},
+                {"type": "open", "path": "/no/such.skr", "discard": true}
+            ]}),
+        );
+        assert_eq!(r["error"]["data"]["index"], 1, "{r}");
+        assert_eq!(r["error"]["data"]["completed"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quitting_with_discard_keeps_the_work_and_a_folder_open_to_others_is_refused() {
+        let dir = recovery_dir("quit");
+        let mut e = editor();
+        call_kept(&mut e, &dir, "execute", add_edge());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let r = call_kept(&mut e, &dir, "quit", json!({"discard": true}));
+        assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("nothing was discarded")
+        );
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let r = call_kept(&mut e, &dir, "quit", json!({"discard": true}));
+        assert!(r["result"].is_object(), "{r}");
+        assert_eq!(files_in(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recovery_folder_that_is_a_link_is_refused_and_nothing_is_discarded() {
+        let dir = recovery_dir("link");
+        let target = recovery_dir("link-target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&target, &dir).unwrap();
+        let mut e = editor();
+        call_kept(&mut e, &dir, "execute", add_edge());
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+        assert!(files_in(&target).is_empty());
+        assert!(e.doc().is_modified());
+        assert!(e.recovered().is_empty());
+        let _ = std::fs::remove_file(&dir);
+        let _ = std::fs::remove_dir_all(&target);
+    }
+
+    #[test]
+    fn recovery_names_follow_the_open_file_and_never_collide() {
+        let dir = recovery_dir("names");
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let a = recovery_path(&dir, Some(Path::new("/x/My house?.skr")), now);
+        assert_eq!(a, dir.join("My house_-1700000000.skr"));
+        std::fs::write(&a, "").unwrap();
+        assert_eq!(
+            recovery_path(&dir, Some(Path::new("/x/My house?.skr")), now),
+            dir.join("My house_-1700000000-2.skr")
+        );
+        assert_eq!(
+            recovery_path(&dir, None, now),
+            dir.join("untitled-1700000000.skr")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
