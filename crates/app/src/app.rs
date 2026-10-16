@@ -1149,7 +1149,7 @@ impl State {
 }
 
 /// A line of the Agent Activity log: how long ago, the connection, the request and how it
-/// went. One line: control characters in a caller's text become spaces.
+/// went. One line: control and format characters in a caller's text become spaces.
 fn activity_line(a: &api::Activity, now: Instant) -> String {
     let secs = now.saturating_duration_since(a.at).as_secs();
     let ago = if secs < 120 {
@@ -1168,8 +1168,40 @@ fn activity_line(a: &api::Activity, now: Instant) -> String {
         line += &format!("  (x{})", a.repeats);
     }
     line.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if hidden(c) { ' ' } else { c })
         .collect()
+}
+
+/// Characters that do not show as themselves in a log line: controls, line breaks and other
+/// whitespace than the space, and format characters (Unicode Cf), among them the bidi
+/// overrides and isolates that could make a path read as another.
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || (c.is_whitespace() && c != ' ')
+        || matches!(
+            c,
+            '\u{ad}'
+                | '\u{600}'..='\u{605}'
+                | '\u{61c}'
+                | '\u{6dd}'
+                | '\u{70f}'
+                | '\u{890}'..='\u{891}'
+                | '\u{8e2}'
+                | '\u{180e}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{206f}'
+                | '\u{feff}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{110bd}'
+                | '\u{110cd}'
+                | '\u{13430}'..='\u{1343f}'
+                | '\u{1bca0}'..='\u{1bca3}'
+                | '\u{1d173}'..='\u{1d17a}'
+                | '\u{e0001}'
+                | '\u{e0020}'..='\u{e007f}'
+        )
 }
 
 /// The letter of a Cmd/Ctrl shortcut: the layout's character when it is ASCII, else the
@@ -1647,6 +1679,13 @@ mod tests {
             ..c
         };
         assert!(!activity_line(&d, now).contains(char::is_control));
+        // Bidi overrides, isolates and other format characters cannot reorder the line.
+        let e = api::Activity {
+            request: "execute save /a/\u{202e}piz.skr\u{2066}x\u{2028}y\u{200b}".into(),
+            ..d
+        };
+        let line = activity_line(&e, now);
+        assert!(line.contains("/a/ piz.skr x y "), "{line}");
     }
 
     use super::*;
