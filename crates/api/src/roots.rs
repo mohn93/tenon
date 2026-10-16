@@ -39,7 +39,8 @@ impl ApiRoots {
     }
 
     fn inside(&self, real: &Path) -> bool {
-        self.roots.iter().any(|r| real.starts_with(r))
+        // A root itself is not a file within it (a write there would put files beside it).
+        self.roots.iter().any(|r| real != *r && real.starts_with(r))
     }
 
     /// `path` as given, made absolute against the first root.
@@ -222,7 +223,7 @@ mod tests {
             width: None,
             height: None,
         };
-        let mut commands = vec![
+        let mut commands = [
             Command::Open {
                 path: "m.skr".into(),
                 discard: false,
@@ -261,10 +262,31 @@ mod tests {
                 emission: None,
             },
         ];
-        for command in &mut commands {
-            let before = command.clone();
+        let expected = ["m.skr", "s.skr", "e.obj", "a.obj", "t.png", "t.png"];
+        for (command, name) in commands.iter_mut().zip(expected) {
             roots.apply(command, None, false).unwrap();
-            assert_ne!(*command, before, "{before:?}");
+            let want = base.join(name).display().to_string();
+            let got = match &*command {
+                Command::Open { path, .. } | Command::Export { path, .. } => path.clone(),
+                Command::Save { path, .. } => path.clone().unwrap(),
+                Command::Import {
+                    path,
+                    library_roots,
+                    ..
+                } => {
+                    assert_eq!(library_roots.as_deref(), Some(roots.dirs()));
+                    path.clone()
+                }
+                Command::AddMaterial {
+                    texture: Some(t), ..
+                }
+                | Command::ChangeMaterial {
+                    texture: Some(Some(t)),
+                    ..
+                } => t.path.clone().unwrap(),
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(got, want);
         }
         // Other commands pass untouched.
         let mut other = Command::Undo { count: None };

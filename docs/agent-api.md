@@ -746,7 +746,8 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 | `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
-Paths are relative to the app's working directory, or with `--api-root` to the first root (see Access and safety). None of these is an undo step. `open` and
+Paths are relative to the app's working directory, or with `--api-root` to the first
+root (see Access and safety). None of these is an undo step. `open` and
 `new` clear the undo history, the selection and the open context, and change the revision;
 subscribers get a `resync` notification and should read the model again. Ids in an opened file
 are those it was saved with, and new ids continue after the largest one ever used. A file that
@@ -886,7 +887,8 @@ then every path a request names (`open`, `save`, `export` and the `.mtl` and ima
 writes beside it, `import` and the material libraries an OBJ names, `texture.path`) must lie
 within one of them, after symlinks are resolved. A relative path is taken from the first root.
 A file to read must exist; a file to write must be in an existing folder and must not be a
-symbolic link. A path outside the roots is refused with `invalid_input`; one that cannot be
+symbolic link; a root folder itself is not a file within it. A hard link inside a root to a file
+outside is followed (the API cannot create links). A path outside the roots is refused with `invalid_input`; one that cannot be
 resolved gives `file`. `save` without a path checks the open model's file; inside a `batch` it
 needs a path. A batch with a path outside the roots runs nothing (`-32001`, its `index` names
 the command). Commands run on the resolved path, so `query file` shows it; `query file` also

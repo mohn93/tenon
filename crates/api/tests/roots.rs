@@ -177,3 +177,39 @@ fn without_roots_the_file_query_says_null() {
     assert_eq!(file["result"]["api_roots"], Value::Null);
     assert!(ApiRoots::new(&[PathBuf::from("/no/such/folder")]).is_err());
 }
+
+#[test]
+fn a_root_folder_itself_is_not_a_file_to_write_or_read() {
+    let (root, outside) = folders("rootself");
+    let base = root.parent().unwrap().to_path_buf();
+    let mut h = host(&root);
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_material", "name": "red", "color": [255, 0, 0]}),
+    );
+    edge(&mut h);
+    std::fs::write(base.join("root.mtl"), "keep me").unwrap();
+    let real = root.canonicalize().unwrap();
+    for path in [real.display().to_string(), "../root".to_string()] {
+        let r = call(
+            &mut h,
+            "execute",
+            json!({"type": "export", "path": path, "format": "obj", "overwrite": true}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+        let r = call(
+            &mut h,
+            "execute",
+            json!({"type": "save", "path": path, "overwrite": true}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+        let r = call(&mut h, "execute", json!({"type": "open", "path": path}));
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(base.join("root.mtl")).unwrap(),
+        "keep me"
+    );
+    assert!(!base.join("root.partial").exists() && outside.exists());
+}
