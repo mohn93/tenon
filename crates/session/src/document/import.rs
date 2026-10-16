@@ -197,14 +197,14 @@ impl Document {
                 .filter(|l| tried.insert(l))
             {
                 let library = dir.join(library);
-                let allowed = roots.is_none_or(|roots| {
-                    library
-                        .canonicalize()
-                        .is_ok_and(|real| roots.iter().any(|r| real.starts_with(r)))
-                });
-                if !allowed {
-                    continue;
-                }
+                // Under roots, the resolved file is what is read.
+                let library = match roots {
+                    None => library,
+                    Some(roots) => match library.canonicalize() {
+                        Ok(real) if roots.iter().any(|r| real.starts_with(r)) => real,
+                        _ => continue,
+                    },
+                };
                 if let Ok(bytes) = read_limited(&library, MAX_MTL_BYTES) {
                     colors.extend(read_mtl(&bytes));
                 }

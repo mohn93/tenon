@@ -248,3 +248,55 @@ fn a_missing_api_root_stops_the_app() {
         .unwrap();
     assert_eq!(status.code(), Some(2));
 }
+
+#[test]
+fn a_relative_file_argument_saves_where_it_lies_not_in_the_root() {
+    let base = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("agent-relfile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (root, work) = (base.join("root"), base.join("work"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // A model to open: made by a first run with no roots.
+    let mut first = Command::new(env!("CARGO_BIN_EXE_app"))
+        .args(["--headless", "--stdio"])
+        .current_dir(&work)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start app");
+    let mut stdin = first.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        request(1, "execute", json!({"type": "save", "path": "house.skr"}))
+    )
+    .unwrap();
+    drop(stdin);
+    assert!(exits(&mut first).success());
+    assert!(work.join("house.skr").exists());
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_app"))
+        .args(["--headless", "--stdio", "--api-root"])
+        .arg(&root)
+        .arg("house.skr")
+        .current_dir(&work)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start app");
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", request(1, "execute", json!({"type": "save"}))).unwrap();
+    drop(stdin);
+    assert!(exits(&mut child).success());
+    let line = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .next()
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["error"]["data"]["kind"], "invalid_input", "{reply}");
+    assert!(!root.join("house.skr").exists());
+}

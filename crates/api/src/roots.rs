@@ -128,7 +128,13 @@ impl ApiRoots {
                             "give save a path: under --api-root a batch cannot save to the open file",
                         ));
                     }
-                    (None, Some(open)) => open.display().to_string(),
+                    (None, Some(open)) => {
+                        // The file's own place: a relative open file is from the working
+                        // directory, not the first root.
+                        let open = std::path::absolute(open)
+                            .map_err(|e| file_error(&open.display().to_string(), &e))?;
+                        open.display().to_string()
+                    }
                     // Nothing to check: the session asks for a path.
                     (None, None) => return Ok(()),
                 };
@@ -264,5 +270,40 @@ mod tests {
         let mut other = Command::Undo { count: None };
         roots.apply(&mut other, None, false).unwrap();
         assert_eq!(other, Command::Undo { count: None });
+    }
+
+    #[test]
+    fn save_without_a_path_judges_the_open_file_where_it_lies() {
+        let base = scratch("openfile");
+        let (root, other) = (base.join("root"), base.join("other"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let roots = ApiRoots::new(std::slice::from_ref(&root)).unwrap();
+        let save = || Command::Save {
+            path: None,
+            overwrite: false,
+        };
+        // A relative open file is from the working directory, not the first root.
+        let cwd = std::env::current_dir().unwrap();
+        let outside = std::path::absolute("house.skr").unwrap();
+        assert!(!outside.starts_with(&root) && cwd != root);
+        let mut c = save();
+        let e = roots
+            .apply(&mut c, Some(Path::new("house.skr")), false)
+            .unwrap_err();
+        assert_eq!(e.kind, ErrorKind::InvalidInput);
+        assert_eq!(c, save());
+        // An open file inside a root is saved where it is.
+        let inside = root.join("m.skr");
+        let mut c = save();
+        roots.apply(&mut c, Some(&inside), false).unwrap();
+        assert_eq!(
+            c,
+            Command::Save {
+                path: Some(inside.display().to_string()),
+                overwrite: false
+            }
+        );
+        assert!(!root.join("house.skr").exists());
     }
 }
