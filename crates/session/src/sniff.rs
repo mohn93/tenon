@@ -8,6 +8,8 @@ use crate::command::{CommandError, ErrorKind};
 
 /// How much of a file is read to recognise it.
 const HEAD: u64 = 64 * 1024;
+/// How much of a `.gltf` is read looking for its `asset`.
+const GLTF_HEAD: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -113,6 +115,10 @@ pub(crate) fn replaceable(path: &Path, kind: Kind) -> bool {
     if kind == Kind::Skr {
         return zip::ZipArchive::new(file).is_ok_and(|mut z| z.by_name("document.json").is_ok());
     }
+    if kind == Kind::Gltf {
+        // The `asset` may come after a long `accessors` list: read on, as far as it.
+        return gltf_json(std::io::BufReader::new(file.take(GLTF_HEAD)));
+    }
     let mut head = Vec::new();
     if file.take(HEAD).read_to_end(&mut head).is_err() {
         return false;
@@ -129,9 +135,7 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
             head.starts_with(b"\x89PNG\r\n\x1a\n") || head.starts_with(&[0xFF, 0xD8, 0xFF])
         }
         Kind::Stl => {
-            let text = head.trim_ascii_start();
-            text.get(..5)
-                .is_some_and(|w| w.eq_ignore_ascii_case(b"solid"))
+            ascii_stl(head)
                 || (len >= 84
                     && head.len() >= 84
                     && u64::from(u32::from_le_bytes(
@@ -140,12 +144,69 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
                         + 84
                         == len)
         }
-        Kind::Gltf => {
-            head.trim_ascii_start().starts_with(b"{") && head.windows(7).any(|w| w == b"\"asset\"")
-        }
+        Kind::Gltf => gltf_json(head),
         Kind::Obj => keyword_text(head, len, OBJ_KEYWORDS, None),
         Kind::Mtl => keyword_text(head, len, MTL_KEYWORDS, Some("newmtl")),
     }
+}
+
+/// ASCII STL: a first line `solid` (alone or followed by a name), then a line starting with
+/// `facet` or `endsolid`.
+fn ascii_stl(head: &[u8]) -> bool {
+    let mut lines = head
+        .split(|b| *b == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .filter(|l| !l.is_empty());
+    let first_word = |line: &[u8]| -> Vec<u8> {
+        let end = line
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(line.len());
+        line[..end].to_ascii_lowercase()
+    };
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    if first_word(first) != b"solid" {
+        return false;
+    }
+    lines
+        .next()
+        .is_some_and(|l| matches!(first_word(l).as_slice(), b"facet" | b"endsolid"))
+}
+
+/// glTF JSON: an object whose `asset` holds a `version` string. Reading stops at the
+/// `asset`.
+fn gltf_json(reader: impl std::io::Read) -> bool {
+    use serde::de::{self, Deserializer, IgnoredAny, MapAccess, Visitor};
+    use std::cell::Cell;
+
+    #[derive(serde::Deserialize)]
+    struct Asset {
+        version: Option<String>,
+    }
+    struct Find<'a>(&'a Cell<bool>);
+    impl<'de> Visitor<'de> for Find<'_> {
+        type Value = ();
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a glTF object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "asset" {
+                    let asset: Asset = map.next_value()?;
+                    self.0.set(asset.version.is_some());
+                    // Found: stop reading.
+                    return Err(de::Error::custom("found"));
+                }
+                map.next_value::<IgnoredAny>()?;
+            }
+            Ok(())
+        }
+    }
+    let found = Cell::new(false);
+    let _ = serde_json::Deserializer::from_reader(reader).deserialize_map(Find(&found));
+    found.get()
 }
 
 /// UTF-8 text whose complete lines are blank, `#` comments or start with one of `keywords`
@@ -221,6 +282,31 @@ mod tests {
             assert!(!kind_of("hello world\n", kind));
             assert!(!kind_of("# only a comment\n", kind));
         }
+    }
+
+    #[test]
+    fn only_stl_text_is_stl() {
+        assert!(kind_of("solid box\nfacet normal 0 0 1\n", Kind::Stl));
+        assert!(kind_of("  SOLID\r\n  endsolid\r\n", Kind::Stl));
+        assert!(kind_of("solid\n\nendsolid x\n", Kind::Stl));
+        assert!(!kind_of("Solidarity forever\nfacet\n", Kind::Stl));
+        assert!(!kind_of("solid ground\nis what we stand on\n", Kind::Stl));
+        assert!(!kind_of("solid\n", Kind::Stl));
+    }
+
+    #[test]
+    fn only_json_with_an_asset_version_is_gltf() {
+        assert!(kind_of(r#"{"asset": {"version": "2.0"}}"#, Kind::Gltf));
+        let long = format!(
+            r#"{{"accessors": [{}], "asset": {{"generator": "x", "version": "2.0"}}}}"#,
+            vec!["{\"count\": 3}"; 10_000].join(",")
+        );
+        assert!(gltf_json(long.as_bytes()));
+        assert!(!kind_of(r#"{"asset": 1, "user": "data"}"#, Kind::Gltf));
+        assert!(!kind_of(r#"{"asset": {"name": "x"}}"#, Kind::Gltf));
+        assert!(!kind_of(r#"{"user": "\"asset\""}"#, Kind::Gltf));
+        assert!(!kind_of("[1, 2]", Kind::Gltf));
+        assert!(!kind_of("not json", Kind::Gltf));
     }
 
     #[test]

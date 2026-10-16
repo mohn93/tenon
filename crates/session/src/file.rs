@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kernel::{MAX_ID, MAX_TEXTURES, MeshData, Scene, SceneData, TextureImage};
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,7 @@ pub(crate) fn write(
     scene: &Scene,
     camera: &Camera,
     lighting: Lighting,
+    access: Access,
 ) -> Result<(), String> {
     let mut model = scene.to_data();
     // Materials sharing an image share its entry, so the file reads back within the texture
@@ -154,37 +156,58 @@ pub(crate) fn write(
         zip.write_all(&image.encoded).map_err(|e| e.to_string())?;
     }
     let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    replace_file(path, &bytes)
+    replace_file(path, &bytes, access)
+}
+
+/// Who may read a file written: as the user's other files (the umask decides), or the user
+/// only (0600).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Access {
+    Default,
+    Private,
 }
 
 /// Writes `bytes` to `path`, replacing the file there only once they are all on disk. The
-/// bytes go to `<path>.partial` first: whatever is at that name (a file left by a failed
-/// write, or a link planted there) is removed, the link itself and not what it points to, and
-/// the file is created anew, so the bytes never go through a link.
-pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut name = path.as_os_str().to_owned();
-    name.push(".partial");
-    let partial = Path::new(&name);
-    match std::fs::remove_file(partial) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.to_string()),
-    }
+/// bytes go first to a new hidden file beside it (`.sketchup-alt-<pid>-<n>.partial`), created
+/// only where nothing is, so they never go through a link and no file of the user's is
+/// touched; it is renamed over `path` once written, or removed if the write fails.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8], access: Access) -> Result<(), String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let (partial, mut file) = loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let partial = dir.join(format!(".sketchup-alt-{}-{n}.partial", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if access == Access::Private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&partial) {
+            Ok(file) => break (partial, file),
+            // Another file (a process's that reused this id, say) has the name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    #[cfg(not(unix))]
+    let _ = access;
     let result = (|| -> Result<(), String> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(partial)
-            .map_err(|e| e.to_string())?;
         file.write_all(bytes).map_err(|e| e.to_string())?;
         // The data must be on disk before the rename makes it the file.
         file.sync_all().map_err(|e| e.to_string())?;
-        std::fs::rename(partial, path).map_err(|e| e.to_string())?;
+        drop(file);
+        std::fs::rename(&partial, path).map_err(|e| e.to_string())?;
         sync_parent(path);
         Ok(())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(partial);
+        // The file this call created, and nothing else.
+        let _ = std::fs::remove_file(&partial);
     }
     result
 }

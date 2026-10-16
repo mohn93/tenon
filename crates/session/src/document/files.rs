@@ -8,15 +8,22 @@ use super::Document;
 use crate::camera::{Camera, Lighting};
 use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
-use crate::file;
+use crate::file::{self, Access};
 use crate::sniff::{self, Kind};
 
 impl Document {
     /// Writes the model, view and lighting as a `.skr` file at `path`, leaving the document's
-    /// own file and its unsaved state as they are (a recovery copy).
+    /// own file and its unsaved state as they are (a recovery copy). Only the user may read
+    /// the copy (0600).
     pub fn write_copy(&self, path: &Path) -> Result<(), CommandError> {
-        file::write(path, &self.scene, &self.camera, self.lighting)
-            .map_err(|e| file_error(&path.display().to_string(), e))
+        file::write(
+            path,
+            &self.scene,
+            &self.camera,
+            self.lighting,
+            Access::Private,
+        )
+        .map_err(|e| file_error(&path.display().to_string(), e))
     }
 
     /// Refuses with `unsaved_changes` when the model changed since it was opened, saved or
@@ -67,11 +74,18 @@ impl Document {
                     "give a path: the model was never opened or saved",
                 )
             })?;
+        check_nul(&target)?;
         if !overwrite && !sniff::replaceable(&target, Kind::Skr) {
             return Err(sniff::refusal(&target, Kind::Skr));
         }
-        file::write(&target, &self.scene, &self.camera, self.lighting)
-            .map_err(|e| file_error(&target.display().to_string(), e))?;
+        file::write(
+            &target,
+            &self.scene,
+            &self.camera,
+            self.lighting,
+            Access::Default,
+        )
+        .map_err(|e| file_error(&target.display().to_string(), e))?;
         self.path = Some(target);
         self.clean_revision = self.revision;
         Ok(())
@@ -84,6 +98,7 @@ impl Document {
         path: &str,
         format: Option<ExportFormat>,
         overwrite: bool,
+        refuse_links: bool,
     ) -> Result<ExportReport, CommandError> {
         let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
             return Err(CommandError::new(
@@ -92,6 +107,7 @@ impl Document {
             ));
         };
         let target = Path::new(path);
+        check_nul(target)?;
         if target
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("skr"))
@@ -147,6 +163,32 @@ impl Document {
                 ));
             }
         }
+        // The files written beside an OBJ: its library and the images the library names.
+        let side: Vec<(PathBuf, Kind)> = match &encoded.mtl {
+            Some(_) => std::iter::once((mtl_path.clone(), Kind::Mtl))
+                .chain(
+                    encoded
+                        .images
+                        .iter()
+                        .map(|(name, _)| (mtl_path.with_file_name(name), Kind::Image)),
+                )
+                .collect(),
+            None => Vec::new(),
+        };
+        if refuse_links {
+            let link = std::iter::once(target)
+                .chain(side.iter().map(|(p, _)| p.as_path()))
+                .find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()));
+            if let Some(link) = link {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "{} is a symbolic link: under --api-root the API does not write to links",
+                        link.display()
+                    ),
+                ));
+            }
+        }
         if !overwrite {
             let kind = match format {
                 ExportFormat::Obj => Kind::Obj,
@@ -154,13 +196,7 @@ impl Document {
                 ExportFormat::Glb => Kind::Glb,
                 ExportFormat::Gltf => Kind::Gltf,
             };
-            let mut checks = vec![(target.to_path_buf(), kind)];
-            if encoded.mtl.is_some() {
-                checks.push((mtl_path.clone(), Kind::Mtl));
-                for (name, _) in &encoded.images {
-                    checks.push((mtl_path.with_file_name(name), Kind::Image));
-                }
-            }
+            let checks = std::iter::once((target.to_path_buf(), kind)).chain(side);
             if let Some((p, k)) = checks.into_iter().find(|(p, k)| !sniff::replaceable(p, *k)) {
                 return Err(sniff::refusal(&p, k));
             }
@@ -169,13 +205,14 @@ impl Document {
             // Texture images go beside the library, before it, as it names them.
             for (name, bytes) in &encoded.images {
                 let image = mtl_path.with_file_name(name);
-                file::replace_file(&image, bytes)
+                file::replace_file(&image, bytes, Access::Default)
                     .map_err(|e| file_error(&image.display().to_string(), e))?;
             }
-            file::replace_file(&mtl_path, mtl)
+            file::replace_file(&mtl_path, mtl, Access::Default)
                 .map_err(|e| file_error(&mtl_path.display().to_string(), e))?;
         }
-        file::replace_file(target, &encoded.bytes).map_err(|e| file_error(path, e))?;
+        file::replace_file(target, &encoded.bytes, Access::Default)
+            .map_err(|e| file_error(path, e))?;
         Ok(ExportReport {
             triangles: triangles.len(),
             skipped_faces,
@@ -218,6 +255,20 @@ impl Document {
             .rename_definition(id, name)
             .map_err(|e| CommandError::new(ErrorKind::NotFound, e.to_string()))
     }
+}
+
+/// Refuses a path holding a NUL byte, which no file name can hold.
+fn check_nul(path: &Path) -> Result<(), CommandError> {
+    if path.as_os_str().as_encoded_bytes().contains(&0) {
+        return Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "{} contains a NUL byte, which no file name can hold",
+                path.display().to_string().escape_debug()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn file_error(path: &str, e: String) -> CommandError {

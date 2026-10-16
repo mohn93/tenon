@@ -269,8 +269,9 @@ impl Document {
                 path,
                 format,
                 overwrite,
+                refuse_links,
             } => {
-                let report = self.export_file(&path, format, overwrite)?;
+                let report = self.export_file(&path, format, overwrite, refuse_links)?;
                 Ok(Outcome {
                     export: Some(report),
                     ..Outcome::default()

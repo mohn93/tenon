@@ -213,3 +213,172 @@ fn a_root_folder_itself_is_not_a_file_to_write_or_read() {
     );
     assert!(!base.join("root.partial").exists() && outside.exists());
 }
+
+/// A 1x1 PNG at `path`.
+fn png_file(path: &std::path::Path) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut encoder = png::Encoder::new(file, 1, 1);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[200, 0, 0, 255]).unwrap();
+}
+
+/// A rectangle painted with a textured material named "T".
+fn textured_face(h: &mut HeadlessHost) {
+    call(
+        h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    );
+    let r = call(
+        h,
+        "execute",
+        json!({"type": "add_material", "name": "T", "texture": {"path": "tex.png"}}),
+    );
+    let material = r["result"]["changes"]["materials"][0].clone();
+    let faces = call(h, "query", json!({"type": "entities", "kinds": ["face"]}));
+    let face = faces["result"]["faces"][0]["id"].clone();
+    let r = call(
+        h,
+        "execute",
+        json!({"type": "paint", "ids": [face], "material": material}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+}
+
+#[test]
+fn obj_side_files_that_are_links_are_refused_and_their_targets_not_read() {
+    let (root, outside) = folders("side-links");
+    let mut h = host(&root);
+    png_file(&root.join("tex.png"));
+    textured_face(&mut h);
+    // Targets of the right format: a library and an image outside.
+    std::fs::write(outside.join("victim.mtl"), "newmtl a\nKd 1 1 1\n").unwrap();
+    png_file(&outside.join("victim.png"));
+    let before = std::fs::read(outside.join("victim.png")).unwrap();
+    for (link, target) in [
+        ("exp.mtl", outside.join("victim.mtl")),
+        ("exp_T.png", outside.join("victim.png")),
+        ("exp.mtl", outside.join("missing.mtl")),
+    ] {
+        let _ = std::fs::remove_file(root.join("exp.mtl"));
+        let _ = std::fs::remove_file(root.join("exp_T.png"));
+        std::os::unix::fs::symlink(&target, root.join(link)).unwrap();
+        for overwrite in [false, true] {
+            let r = call(
+                &mut h,
+                "execute",
+                json!({"type": "export", "path": "exp.obj", "overwrite": overwrite}),
+            );
+            assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{link}: {r}");
+            let message = r["error"]["message"].as_str().unwrap();
+            assert!(
+                message.contains(link) && message.contains("symbolic link"),
+                "{message}"
+            );
+            let meta = std::fs::symlink_metadata(root.join(link)).unwrap();
+            assert!(meta.file_type().is_symlink(), "the link is left as it is");
+        }
+    }
+    assert!(!root.join("exp.obj").exists());
+    assert!(!outside.join("missing.mtl").exists());
+    assert_eq!(std::fs::read(outside.join("victim.png")).unwrap(), before);
+    // With the links gone the export writes all three files.
+    std::fs::remove_file(root.join("exp.mtl")).unwrap();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export", "path": "exp.obj"}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+    assert!(root.join("exp.mtl").is_file() && root.join("exp_T.png").is_file());
+}
+
+#[test]
+fn outside_paths_get_one_answer_whether_they_exist_or_not() {
+    let (root, outside) = folders("oracle");
+    let mut h = host(&root);
+    edge(&mut h);
+    std::fs::write(outside.join("secret.skr"), "x").unwrap();
+    std::fs::create_dir(outside.join("locked")).unwrap();
+    std::fs::write(outside.join("locked/in.obj"), "v 0 0 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        outside.join("locked"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let paths = [
+        outside.join("secret.skr"),
+        outside.join("nope.skr"),
+        outside.join("nodir/nope.skr"),
+        outside.join("locked/in.obj"),
+        outside.join("locked/nope.obj"),
+        root.join("missing/../../outside/secret.skr"),
+        root.join("missing/../../outside/nope.skr"),
+    ];
+    let mut messages = std::collections::BTreeSet::new();
+    for path in &paths {
+        let p = path.display().to_string();
+        for c in [
+            json!({"type": "open", "path": p}),
+            json!({"type": "import", "path": p}),
+            json!({"type": "save", "path": p}),
+            json!({"type": "export", "path": format!("{p}.stl")}),
+            json!({"type": "add_material", "texture": {"path": p}}),
+        ] {
+            let r = call(&mut h, "execute", c.clone());
+            assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{c}: {r}");
+            let message = r["error"]["message"].as_str().unwrap();
+            assert!(message.contains("outside the folders"), "{c}: {message}");
+            let given = c["path"]
+                .as_str()
+                .or(c["texture"]["path"].as_str())
+                .unwrap();
+            messages.insert(message.replace(given, "PATH"));
+        }
+    }
+    std::fs::set_permissions(
+        outside.join("locked"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    // Inside a root a missing file is still a file error.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "open", "path": "missing/nope.skr"}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+}
+
+#[test]
+fn a_root_as_the_target_is_a_folder_and_a_nul_is_invalid() {
+    let (root, _) = folders("root-target");
+    let mut h = host(&root);
+    edge(&mut h);
+    let real = root.canonicalize().unwrap().display().to_string();
+    for c in [
+        json!({"type": "open", "path": real}),
+        json!({"type": "import", "path": real}),
+        json!({"type": "save", "path": real}),
+        json!({"type": "export", "path": real, "format": "stl"}),
+    ] {
+        let r = call(&mut h, "execute", c.clone());
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{c}: {r}");
+        let message = r["error"]["message"].as_str().unwrap();
+        assert!(message.contains("is a folder"), "{c}: {message}");
+    }
+    for c in [
+        json!({"type": "save", "path": "a\u{0}b.skr"}),
+        json!({"type": "open", "path": "a\u{0}b.skr"}),
+        json!({"type": "export", "path": "a\u{0}b.stl"}),
+    ] {
+        let r = call(&mut h, "execute", c.clone());
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{c}: {r}");
+        let message = r["error"]["message"].as_str().unwrap();
+        assert!(message.contains("NUL"), "{c}: {message}");
+    }
+}

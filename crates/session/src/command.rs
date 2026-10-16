@@ -269,6 +269,10 @@ pub enum Command {
         /// also its `.mtl` and images.
         #[serde(default)]
         overwrite: bool,
+        /// Set by the API under `--api-root`: the file, and the `.mtl` and images an OBJ
+        /// writes beside it, must not be symbolic links. Never read from or written to JSON.
+        #[serde(skip)]
+        refuse_links: bool,
     },
     /// Read an OBJ or STL file and add its faces to the open context, as one undo step: as a
     /// new group (default) or component named after the file, placed at the context's origin

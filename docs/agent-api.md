@@ -742,7 +742,7 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 
 | Command | Effect |
 |---|---|
-| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. |
+| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete: the bytes go to a new hidden `.sketchup-alt-<pid>-<n>.partial` beside it, renamed over it at the end; no other file is touched). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. |
 | `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
@@ -765,7 +765,7 @@ not saved (`modified` in the `file` query) unless told to: they fail with `unsav
 a client that means it, or has asked the user, passes `"discard": true`. In the window, `new`,
 `open` and `quit` with `discard: true` first write the unsaved model to a recovery file,
 `~/.sketchup-alt/recovery/<name>-<seconds>.skr`; the window's status bar and its Agent Activity
-window name it. If the file cannot be written the command fails with `file` and nothing is
+window name it; only the user may read it (0600). If the file cannot be written the command fails with `file` and nothing is
 discarded. Headless, nothing is written. The window asks the user
 itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an
 atomic batch.
@@ -782,12 +782,14 @@ never overwrites a model; use `save`.
 An existing file at `path` (and, for an OBJ with materials, at its `.mtl` and image paths) that is
 not of the format written is refused with `invalid_input` unless `"overwrite": true`; all are
 checked before anything is written. An empty file is always replaced, and a link is judged by the
-file it points to. Formats are recognised from their first 64 KiB: OBJ is UTF-8 text whose every
+file it points to (under `--api-root` any of these files that is a link is refused, and what it
+points to is not read). Formats are recognised from their first 64 KiB: OBJ is UTF-8 text whose every
 complete line is blank, a `#` comment or starts with an OBJ keyword, with at least one keyword
-line; MTL is the same with MTL keywords and at least one `newmtl`; STL is text starting (after
-spaces) with `solid` in any case, or a binary STL whose size is 84 + 50 x its triangle count;
-`glb` starts with `glTF`; `gltf` starts (after spaces) with `{` and has `"asset"`; a texture
-image is a PNG or JPEG. Something that is not a regular file (a folder, a device) is refused.
+line; MTL is the same with MTL keywords and at least one `newmtl`; STL is text whose first line
+is `solid` (alone or followed by a name, any case) and whose next line starts with `facet` or
+`endsolid`, or a binary STL whose size is 84 + 50 x its triangle count; `glb` starts with
+`glTF`; `gltf` is a JSON object whose `asset` has a `version` string (read up to the `asset`,
+within 16 MiB); a texture image is a PNG or JPEG. Something that is not a regular file (a folder, a device) is refused.
 
 | Format | Content |
 |---|---|
@@ -886,17 +888,21 @@ keep an agent's file access to some folders, start the app with `--api-root DIR`
 then every path a request names (`open`, `save`, `export` and the `.mtl` and images an OBJ
 writes beside it, `import` and the material libraries an OBJ names, `texture.path`) must lie
 within one of them, after symlinks are resolved. A relative path is taken from the first root.
-A file to read must exist; a file to write must be in an existing folder and must not be a
-symbolic link; a root folder itself is not a file within it. A hard link inside a root to a file
-outside is followed (the API cannot create links). A path outside the roots is refused with `invalid_input`; one that cannot be
-resolved gives `file`. `save` without a path checks the open model's file; inside a `batch` it
+A file to read must exist; a file to write (the `.mtl` and images beside an OBJ too) must be in
+an existing folder and must not be a symbolic link; a root folder itself is refused as a folder,
+not a file. A hard link inside a root to a file outside is followed (the API cannot create
+links). A path outside the roots is refused with `invalid_input` ("outside the folders the API
+may use"), the same whether it exists, is missing or cannot be read; a path that cannot be
+resolved but would lie within a root (a missing file, say) gives `file`. A path with a NUL byte
+is `invalid_input`. `save` without a path checks the open model's file; inside a `batch` it
 needs a path. A batch with a path outside the roots runs nothing (`-32001`, its `index` names
 the command). Commands run on the resolved path, so `query file` shows it; `query file` also
 lists the roots as `api_roots` (null without `--api-root`). The window's own dialogs and the
 FILE argument are not limited. A root that is not an existing folder stops the app (exit code
 2). The window shows `Agents: N` in its status bar while N connections are open; View > Agent
 Activity lists the connections' requests (the last 100, newest first, with their results and how
-long ago they came) and any recovery files.
+long ago they came; control and format characters, such as bidi overrides, show as spaces)
+and any recovery files.
 
 ### Notifications
 

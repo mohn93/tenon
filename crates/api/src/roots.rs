@@ -43,23 +43,66 @@ impl ApiRoots {
         self.roots.iter().any(|r| real != *r && real.starts_with(r))
     }
 
-    /// `path` as given, made absolute against the first root.
-    fn absolute(&self, path: &str) -> PathBuf {
-        match self.roots.first() {
+    /// Refuses `real` (`path` as given) unless it lies within a root. A root itself is
+    /// refused as a folder.
+    fn check_inside(&self, path: &str, real: &Path) -> Result<(), CommandError> {
+        if self.roots.iter().any(|r| r == real) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("{path} is a folder, not a file"),
+            ));
+        }
+        if !self.inside(real) {
+            return Err(outside(path));
+        }
+        Ok(())
+    }
+
+    /// `path` as given, made absolute against the first root. A NUL byte, which no file name
+    /// can hold, is refused.
+    fn absolute(&self, path: &str) -> Result<PathBuf, CommandError> {
+        if path.contains('\0') {
+            return Err(nul(path));
+        }
+        Ok(match self.roots.first() {
             Some(first) if Path::new(path).is_relative() => first.join(path),
             _ => PathBuf::from(path),
+        })
+    }
+
+    /// `absolute` (`path` as given) resolved after symlinks. When it cannot be resolved (it
+    /// is missing, or a folder on the way cannot be searched), the error says why only when
+    /// the path would lie within a root, judged by its deepest folder that resolves and the
+    /// rest of the path read as written; anywhere else it is the one refusal for outside, so
+    /// an agent learns nothing of what lies outside the roots.
+    fn resolve(&self, path: &str, absolute: &Path) -> Result<PathBuf, CommandError> {
+        let e = match absolute.canonicalize() {
+            Ok(real) => return Ok(real),
+            Err(e) => e,
+        };
+        let would_be = absolute.ancestors().skip(1).find_map(|a| {
+            let mut real = a.canonicalize().ok()?;
+            for c in absolute.strip_prefix(a).ok()?.components() {
+                match c {
+                    Component::Normal(n) => real.push(n),
+                    Component::ParentDir => {
+                        real.pop();
+                    }
+                    _ => {}
+                }
+            }
+            Some(real)
+        });
+        match would_be {
+            Some(p) if self.roots.iter().any(|r| p.starts_with(r)) => Err(file_error(path, &e)),
+            _ => Err(outside(path)),
         }
     }
 
     /// The file to read at `path`, resolved after symlinks, when it lies within a root.
     pub fn read(&self, path: &str) -> Result<PathBuf, CommandError> {
-        let real = self
-            .absolute(path)
-            .canonicalize()
-            .map_err(|e| file_error(path, &e))?;
-        if !self.inside(&real) {
-            return Err(outside(path));
-        }
+        let real = self.resolve(path, &self.absolute(path)?)?;
+        self.check_inside(path, &real)?;
         Ok(real)
     }
 
@@ -68,7 +111,7 @@ impl ApiRoots {
     pub fn write(&self, path: &str) -> Result<PathBuf, CommandError> {
         // `sub/.` and `dir/..` normalize to a folder; a trailing slash or nothing names none.
         let last = path.rsplit('/').next().unwrap_or("");
-        let absolute = self.absolute(path);
+        let absolute = self.absolute(path)?;
         let named = !matches!(last, "" | "." | "..");
         let Some(Component::Normal(name)) =
             named.then(|| absolute.components().next_back()).flatten()
@@ -79,13 +122,8 @@ impl ApiRoots {
             ));
         };
         let folder = absolute.parent().unwrap_or(Path::new("/"));
-        let real = folder
-            .canonicalize()
-            .map_err(|e| file_error(path, &e))?
-            .join(name);
-        if !self.inside(&real) {
-            return Err(outside(path));
-        }
+        let real = self.resolve(path, folder)?.join(name);
+        self.check_inside(path, &real)?;
         if std::fs::symlink_metadata(&real).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
@@ -119,7 +157,12 @@ impl ApiRoots {
                 *path = text(self.read(path)?)?;
                 *library_roots = Some(self.roots.clone());
             }
-            Command::Export { path, .. } => *path = text(self.write(path)?)?,
+            Command::Export {
+                path, refuse_links, ..
+            } => {
+                *path = text(self.write(path)?)?;
+                *refuse_links = true;
+            }
             Command::Save { path, .. } => {
                 let given = match (path.as_ref(), open_file) {
                     (Some(p), _) => p.clone(),
@@ -159,6 +202,16 @@ fn outside(path: &str) -> CommandError {
     CommandError::new(
         ErrorKind::InvalidInput,
         format!("{path} is outside the folders the API may use (--api-root)"),
+    )
+}
+
+fn nul(path: &str) -> CommandError {
+    CommandError::new(
+        ErrorKind::InvalidInput,
+        format!(
+            "{} contains a NUL byte, which no file name can hold",
+            path.escape_debug()
+        ),
     )
 }
 
@@ -236,6 +289,7 @@ mod tests {
                 path: "e.obj".into(),
                 format: None,
                 overwrite: false,
+                refuse_links: false,
             },
             Command::Import {
                 path: "a.obj".into(),
@@ -288,6 +342,13 @@ mod tests {
             };
             assert_eq!(got, want);
         }
+        assert!(matches!(
+            commands[2],
+            Command::Export {
+                refuse_links: true,
+                ..
+            }
+        ));
         // Other commands pass untouched.
         let mut other = Command::Undo { count: None };
         roots.apply(&mut other, None, false).unwrap();

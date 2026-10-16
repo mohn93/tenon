@@ -301,8 +301,9 @@ fn renaming_and_purging_are_undo_steps() {
 
 #[test]
 fn a_failed_save_leaves_no_partial_file_and_the_model_modified() {
-    let dir = scratch("a-directory.skr");
-    let _ = std::fs::remove_dir_all(&dir);
+    let folder = scratch("failed-save");
+    let _ = std::fs::remove_dir_all(&folder);
+    let dir = folder.join("a-directory.skr");
     std::fs::create_dir_all(&dir).unwrap();
     let mut d = doc();
     model(&mut d);
@@ -313,9 +314,11 @@ fn a_failed_save_leaves_no_partial_file_and_the_model_modified() {
     .unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput);
     assert!(message.contains("a-directory.skr"), "{message}");
-    let mut partial = dir.clone().into_os_string();
-    partial.push(".partial");
-    assert!(!PathBuf::from(partial).exists(), "the partial file is gone");
+    let left: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["a-directory.skr"], "the partial file is gone");
     assert!(dir.is_dir(), "the target is untouched");
     let file = ask(&d, json!({"type": "file"}));
     assert_eq!(file["modified"], true);
@@ -542,8 +545,8 @@ fn a_link_at_the_partial_name_is_not_written_through() {
     run(&mut d, json!({"type": "save", "path": target})).unwrap();
     assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
     assert!(
-        std::fs::symlink_metadata(&partial).is_err(),
-        "the link is gone"
+        std::fs::symlink_metadata(&partial).is_ok_and(|m| m.file_type().is_symlink()),
+        "the link is the user's: left as it is"
     );
     let mut opened = doc();
     run(&mut opened, json!({"type": "open", "path": target})).unwrap();
@@ -619,4 +622,43 @@ fn save_refuses_a_folder() {
     std::fs::create_dir_all(&dir).unwrap();
     let (kind, _) = run(&mut d, json!({"type": "save", "path": dir})).unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_user_file_named_like_a_partial_file_is_kept() {
+    let mut d = doc();
+    model(&mut d);
+    let target = scratch("notes.skr");
+    let mine = scratch("notes.skr.partial");
+    std::fs::write(&mine, "my notes").unwrap();
+    run(&mut d, json!({"type": "save", "path": target})).unwrap();
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "my notes");
+    let mut opened = doc();
+    run(&mut opened, json!({"type": "open", "path": target})).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recovery_copy_is_readable_by_the_user_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut d = doc();
+    model(&mut d);
+    let copy = scratch("recovery-copy.skr");
+    d.write_copy(&copy).unwrap();
+    let mode = std::fs::metadata(&copy).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+}
+
+#[test]
+fn a_path_with_a_nul_byte_is_invalid_input() {
+    let mut d = doc();
+    model(&mut d);
+    for c in [
+        json!({"type": "save", "path": "a\u{0}b.skr"}),
+        json!({"type": "export", "path": "a\u{0}b.stl"}),
+    ] {
+        let (kind, message) = run(&mut d, c.clone()).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{c}");
+        assert!(message.contains("NUL"), "{c}: {message}");
+    }
 }
