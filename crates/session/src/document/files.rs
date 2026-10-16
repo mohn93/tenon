@@ -49,6 +49,7 @@ impl Document {
     /// Replaces the model, view and lighting with a file's. A file whose view cannot be used
     /// (an eye on its target, say) opens with the default view.
     pub(super) fn open_file(&mut self, path: &str) -> Result<(), CommandError> {
+        check_nul(Path::new(path))?;
         let (scene, c) = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
         let camera = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
@@ -258,7 +259,7 @@ impl Document {
 }
 
 /// Refuses a path holding a NUL byte, which no file name can hold.
-fn check_nul(path: &Path) -> Result<(), CommandError> {
+pub(super) fn check_nul(path: &Path) -> Result<(), CommandError> {
     if path.as_os_str().as_encoded_bytes().contains(&0) {
         return Err(CommandError::new(
             ErrorKind::InvalidInput,

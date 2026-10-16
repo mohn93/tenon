@@ -191,6 +191,7 @@ fn texture_of(
 ) -> Result<Texture, CommandError> {
     let image = match &source.path {
         Some(path) => {
+            super::files::check_nul(Path::new(path))?;
             let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
             let bytes = read_limited(Path::new(path), MAX_TEXTURE_BYTES).map_err(file_error)?;
             let (_, width, height) = dimensions(&bytes).map_err(file_error)?;

@@ -303,6 +303,10 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     std::fs::write(outside.join("secret.skr"), "x").unwrap();
     std::fs::create_dir(outside.join("locked")).unwrap();
     std::fs::write(outside.join("locked/in.obj"), "v 0 0 0\n").unwrap();
+    std::fs::create_dir(outside.join("exists")).unwrap();
+    std::fs::create_dir(outside.join("made")).unwrap();
+    std::os::unix::fs::symlink(outside.join("nodir"), root.join("dangling")).unwrap();
+    std::os::unix::fs::symlink(outside.join("made"), root.join("dangling-made")).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(
         outside.join("locked"),
@@ -315,8 +319,13 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
         outside.join("nodir/nope.skr"),
         outside.join("locked/in.obj"),
         outside.join("locked/nope.obj"),
-        root.join("missing/../../outside/secret.skr"),
-        root.join("missing/../../outside/nope.skr"),
+        // Out and back into the root through an outside folder that exists or not.
+        outside.join("exists/../../root/a.skr"),
+        outside.join("missing/../../root/a.skr"),
+        outside.join("locked/x/../../../root/a.skr"),
+        // A dangling link in the root, its target outside missing or not.
+        root.join("dangling/a.skr"),
+        root.join("dangling-made/a.skr"),
     ];
     let mut messages = std::collections::BTreeSet::new();
     for path in &paths {
@@ -345,13 +354,16 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     )
     .unwrap();
     assert_eq!(messages.len(), 1, "{messages:?}");
-    // Inside a root a missing file is still a file error.
-    let r = call(
-        &mut h,
-        "execute",
-        json!({"type": "open", "path": "missing/nope.skr"}),
-    );
-    assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+    // A part missing within a root is a file error, wherever the rest would lead: it says
+    // nothing of what lies outside.
+    for path in [
+        "missing/nope.skr",
+        "missing/../../outside/secret.skr",
+        "missing/../../outside/nope.skr",
+    ] {
+        let r = call(&mut h, "execute", json!({"type": "open", "path": path}));
+        assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+    }
 }
 
 #[test]

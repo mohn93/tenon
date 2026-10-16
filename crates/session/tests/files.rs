@@ -656,6 +656,9 @@ fn a_path_with_a_nul_byte_is_invalid_input() {
     for c in [
         json!({"type": "save", "path": "a\u{0}b.skr"}),
         json!({"type": "export", "path": "a\u{0}b.stl"}),
+        json!({"type": "open", "path": "a\u{0}b.skr", "discard": true}),
+        json!({"type": "import", "path": "a\u{0}b.obj"}),
+        json!({"type": "add_material", "texture": {"path": "a\u{0}b.png"}}),
     ] {
         let (kind, message) = run(&mut d, c.clone()).unwrap_err();
         assert_eq!(kind, ErrorKind::InvalidInput, "{c}");

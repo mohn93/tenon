@@ -892,8 +892,10 @@ A file to read must exist; a file to write (the `.mtl` and images beside an OBJ 
 an existing folder and must not be a symbolic link; a root folder itself is refused as a folder,
 not a file. A hard link inside a root to a file outside is followed (the API cannot create
 links). A path outside the roots is refused with `invalid_input` ("outside the folders the API
-may use"), the same whether it exists, is missing or cannot be read; a path that cannot be
-resolved but would lie within a root (a missing file, say) gives `file`. A path with a NUL byte
+may use"), the same whether it exists, is missing or cannot be read. Paths are resolved one part
+at a time and may pass only through folders that hold a root and folders within one, so
+`outside/x/../../root/a.skr` and a dangling link are refused the same way; a part missing within
+a root (a missing file, say) gives `file`. A path with a NUL byte
 is `invalid_input`. `save` without a path checks the open model's file; inside a `batch` it
 needs a path. A batch with a path outside the roots runs nothing (`-32001`, its `index` names
 the command). Commands run on the resolved path, so `query file` shows it; `query file` also

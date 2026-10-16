@@ -40,6 +40,7 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         let file = Path::new(path);
+        super::files::check_nul(file)?;
         if file
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("skr"))

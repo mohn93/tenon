@@ -70,33 +70,42 @@ impl ApiRoots {
         })
     }
 
-    /// `absolute` (`path` as given) resolved after symlinks. When it cannot be resolved (it
-    /// is missing, or a folder on the way cannot be searched), the error says why only when
-    /// the path would lie within a root, judged by its deepest folder that resolves and the
-    /// rest of the path read as written; anywhere else it is the one refusal for outside, so
-    /// an agent learns nothing of what lies outside the roots.
+    /// `absolute` (`path` as given) resolved after symlinks, one part at a time. The walk
+    /// may only pass through folders that hold a root and folders within a root; anything
+    /// else (a part outside, missing or unreadable before a root is reached, or a dangling
+    /// link) is the one refusal for outside, so an agent learns nothing of what lies outside
+    /// the roots. A part missing within a root is a `file` error.
     fn resolve(&self, path: &str, absolute: &Path) -> Result<PathBuf, CommandError> {
-        let e = match absolute.canonicalize() {
-            Ok(real) => return Ok(real),
-            Err(e) => e,
-        };
-        let would_be = absolute.ancestors().skip(1).find_map(|a| {
-            let mut real = a.canonicalize().ok()?;
-            for c in absolute.strip_prefix(a).ok()?.components() {
-                match c {
-                    Component::Normal(n) => real.push(n),
-                    Component::ParentDir => {
-                        real.pop();
+        let within = |p: &Path| self.roots.iter().any(|r| p.starts_with(r));
+        let holds_root = |p: &Path| self.roots.iter().any(|r| r.starts_with(p));
+        let mut real = PathBuf::new();
+        for c in absolute.components() {
+            match c {
+                Component::Prefix(_) | Component::RootDir => real.push(c),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    real.pop();
+                }
+                Component::Normal(name) => {
+                    let next = real.join(name);
+                    match next.canonicalize() {
+                        Ok(r) => real = r,
+                        Err(_) if !within(&real) => return Err(outside(path)),
+                        Err(_)
+                            if std::fs::symlink_metadata(&next)
+                                .is_ok_and(|m| m.file_type().is_symlink()) =>
+                        {
+                            return Err(outside(path));
+                        }
+                        Err(e) => return Err(file_error(path, &e)),
                     }
-                    _ => {}
                 }
             }
-            Some(real)
-        });
-        match would_be {
-            Some(p) if self.roots.iter().any(|r| p.starts_with(r)) => Err(file_error(path, &e)),
-            _ => Err(outside(path)),
+            if !within(&real) && !holds_root(&real) {
+                return Err(outside(path));
+            }
         }
+        Ok(real)
     }
 
     /// The file to read at `path`, resolved after symlinks, when it lies within a root.
