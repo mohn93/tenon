@@ -31,7 +31,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M9e | Light shadows: cube shadow maps for up to 64 lights, cached between frames, glowing faces cast none | done 0561d71..a7037f4 |
 | M10a | Agent sight and state: pick and infer queries, editor state query and setters, selection/camera/editor notifications, undo labels, quit | done 29a3982..584fff4 |
 | M10b | Tool driving and parity: tool_input events through the real tools and inference; orbit/zoom about a point, crossing box select, 3-point arc, relative texture rotation, undo/redo count | done e2c645f..f69b7f0 |
-| M10c | Safe agent access: connected-agent indicator and activity log, opt-in --api-root folders, overwrite guard, no file contents in errors, recovery file on discard | planned plans/2026-10-15-m10c-safe-access.md |
+| M10c | Safe agent access: connected-agent indicator and activity log, opt-in --api-root folders, overwrite guard, no file contents in errors, recovery file on discard | done ee9c368..a9b4b65 |
 
 ## Rules for the loop
 
