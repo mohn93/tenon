@@ -86,6 +86,11 @@ fn main() {
             event_loop.set_control_flow(ControlFlow::Wait);
             let recovery = std::env::var_os("HOME")
                 .map(|home| PathBuf::from(home).join(cli::FALLBACK_DIR).join("recovery"));
+            if recovery.is_none() {
+                eprintln!(
+                    "warning: HOME is not set: work an agent discards in the window is not kept"
+                );
+            }
             let mut app = app::App::new(&event_loop, socket, file, roots, recovery);
             event_loop.run_app(&mut app).expect("run app");
         }
