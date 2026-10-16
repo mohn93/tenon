@@ -221,6 +221,109 @@ Agent control milestones (an audit found every model edit has a command, but not
 - **M10b**: tool driving and parity. Method `tool_input {events}` feeds the active tool the events a user would make, without the window: `move`, `down`, `up`, `click`, `double_click` at a pixel (with view width and height) or a model point, `drag` paths, `key` (with modifiers) and `type` (measurements box text then Enter), each run through the same inference, locks and typed-value handling as the window; the result reports the tool's phase, preview (inferred point, rubber-band geometry), status text and the outcome of any command it issued. So every tool behaviour (inference snapping, typed lengths and counts, Shift locks, Ctrl copy, double-click to open a group) is reachable. A model `point` means that point: inference resolves at it (the face or edge holding it, or free space) even when other geometry hides it from the camera, while pixels keep the window's front-most behaviour. Modifiers a `modifiers` event holds stay held across calls until another lets them go or `cancel` (so a Shift lock can span calls), are reported in the editor state, and never release keys the user holds in the window; Cmd or Alt with a key that has no binding, and typing under them, are `invalid_input`. Pixels outside the view are refused before anything runs; an event that fails at its turn stops the rest, and the error's data gives its index and what ran before it (editor, commands with outcomes, revision); a drag that fails partway lets go of its button without the release reaching the tool (no orbit or Select box left going). As in the window, the hover waits while a navigation drag turns the view. Tool change found by the review: a rectangle started on an edge or point rather than inside a face (a wall's foot) lies in the plane of the face the cursor moves across that holds the corner, as in SketchUp, in the window too. Parity gaps closed as commands: `orbit`/`zoom` about a given model point; `select` by screen box with window or crossing mode; `add_arc` by start, end and a third point (or bulge); `position_texture` with `rotate_by` (relative); `undo`/`redo` with a count.
 - **M10c**: safe agent access. The window shows when agents are connected (a status-bar indicator with the count, and a log of the last commands in View > Agent Activity). An opt-in `--api-root DIR` (repeatable) limits every path the API reads or writes (open, save, import, export, textures) to those folders, resolved after symlinks; relative paths resolve against the first root, or are refused when no root and no absolute path. A path outside the roots gets one refusal whether it exists or not; the files an OBJ export writes beside it may not be links either. Without roots, behaviour is unchanged. API saves and exports refuse to overwrite a file that is not of the target format unless `overwrite: true`. File errors never echo file contents. When an API `open`/`new` with `discard: true` drops unsaved window work, the dropped model is first written to a private (0600) recovery file and the window says so. Saves and exports write through a fresh hidden temporary file beside the target and never delete a file they did not create.
 
+Interface milestones (a four-part design audit on 2026-10-16 found the engine solid but the window plain: stock egui with no theme, fonts or icons; one wrapped text row mixing menus, tools and commands; a fixed 180 pt right panel that clips; snap markers told apart by color only; all feedback in the status bar; several SketchUp conventions missing; and no macOS menu bar. The goal is a window that feels like a finished design tool. Window-only preferences (theme, UI scale, panel sizes, recent files) are chrome and are listed as such in agent-api.md. Every model or editor action added below gets a command or a `tool_input` path as before):
+
+- **M11a**: design foundation, with the layout unchanged.
+  - `ui.rs` becomes a `ui/` module tree with no behaviour change.
+  - The UI tests move to `egui_kittest` (0.36.2) and find widgets by label through the AccessKit tree instead of sweeping screen coordinates.
+  - A theme module defines dark and light token sets: background levels, border, text primary/secondary/disabled, one accent (`#4C8DFF` dark, `#2463EB` light), warn, danger and success. It also sets a 4 pt spacing grid, 28 pt controls, a corner radius of 6 for controls, 8 for windows and 4 for swatches, and a 2 pt accent focus ring.
+  - Fonts are Inter for text (13 pt body, 11 pt uppercase section titles) and JetBrains Mono for values, both OFL, plus the Phosphor icon font (`egui-phosphor`, MIT), all built into the binary.
+  - A widget kit: tool button, icon button, section header, numeric field, swatch, and a menu item that takes its shortcut text from one shortcut table. The same table drives the key handling, so labels cannot drift from bindings.
+  - The theme (System, Dark, Light; default System) is set from View > Theme and saved in a preferences file, `~/.sketchup-alt/prefs.json`, which is window chrome.
+  - The viewport follows the theme:
+    - Day lighting draws a light canvas gradient in the light theme and a mid-dark one in the dark theme.
+    - `render_view` and headless renders keep their current backgrounds, so golden images and agent renders do not change.
+  - The selection uses the accent everywhere: list rows, the viewport's selected edges at 2 px, and the face tint cut to 18%.
+  - The right panel loses its magic heights. Sections size from measured text, no row is clipped, and the panel keeps its current place for now.
+  - Undo and Redo are disabled when there is nothing to undo or redo, and their tooltips name the step (from the history labels).
+  - The window has a minimum size of 960 x 600 pt.
+- **M11b**: layout.
+  - **Tool rail:** a 44 pt rail on the left of 32 pt icon buttons in groups, separated by 8 pt gaps:
+    - Select, Erase, Paint
+    - Line, Rectangle, Circle, Arc
+    - Push/Pull, Move, Rotate
+    - Tape Measure
+
+    The tooltips name the tool and its key in a chip. The active tool has an accent fill. The rail never wraps.
+  - **Context bar:** a 36 pt bar along the top holds:
+    - Undo and Redo as icons.
+    - A breadcrumb of the open path (`Model > House > Kitchen`): clicking a crumb runs `open_path` to that level, and Esc still closes one level.
+    - Make Group, Make Component and Explode, shown only when they apply.
+    - The day/night toggle and the agents indicator.
+  - **Right dock:** a resizable dock, 280 pt by default, between 240 and 420, with its width saved in prefs. It has two areas split by a draggable divider:
+    - Tabs for Entity Info and Materials.
+    - The Outliner, with a filter field that matches names. Matching rows show along with their ancestors.
+  - **Materials:** shown as a swatch grid with an "Edit material" section under it. Clicking a swatch chooses it for editing and as the paint material without switching tool. Double-clicking a swatch, or choosing the Paint tool, paints.
+  - **Status bar:** 28 pt tall, with every element on one baseline:
+    - The tool name chip and its prompt.
+    - The axis lock as a pill colored for its axis.
+    - The measurements box, 180 pt wide, always labelled, with JetBrains Mono values and an accent ring while typing. In Select it is hidden.
+    - The selection count.
+    - The agents badge.
+  - **Menus:** on macOS the menus move to the native menu bar through `muda`; other systems keep egui menus built from the same table. The menu layout is:
+    - **App menu:** About, Settings..., Quit.
+    - **File:** New, Open..., Open Recent, Save, Save As..., Import..., Export...
+    - **Edit:** Undo <label>, Redo <label>, Select All, Select None, Erase, Delete Guides, Soften Edges...
+    - **Draw:** the four drawing tools.
+    - **Tools:** the other tools.
+    - **Group:** Make Group, Make Component, Explode, Close Group, Rename Component..., Purge Unused.
+    - **Camera:** as now, plus Field of View...
+    - **View:** Theme, Agent Activity.
+    - **Help:** Keyboard Shortcuts, which opens a window listing every binding from the shortcut table.
+
+    A shortcut that a native menu handles is not also handled by the editor's key path, so it never fires twice. Items whose milestone has not landed yet are left out of the menus until it does.
+- **M11c**: feedback in the viewport.
+  - **Snap markers:** each kind has its own shape and color: endpoint is a green filled circle, midpoint a cyan filled circle, intersection an orange X, on edge a red hollow square, on face a blue diamond, and a guide point a cross. Markers are 12 px with a 1.5 px halo (white in day, black in night).
+  - **Preview lines:** 2 px, and 2.5 px when locked to an axis. The axis colors are shared by the axes and the locks: X `#E5484D`, Y `#30A46C`, Z `#3E63DD`. The axes are 1.5 px, faded on their negative side.
+  - **Snap label:** after the cursor rests for 150 ms, a chip near it names the snap ("Endpoint", "On Red Axis", "Parallel to Edge", "Midpoint in Group").
+  - **Live measurement:** a line under the snap label shows the measurement or, while typing, the typed text. An invalid typed value flashes its message at the cursor for 2.5 s and also stays in the status bar.
+  - **Hover highlight:** the face or edge a click would act on is highlighted for Select, Push/Pull, Paint and Erase. Faces mix 25% toward the accent and edges are drawn 2 px in the accent. Erase shows the target in the danger color, and Paint previews the material.
+  - **Previews:** Push/Pull previews a solid in the face's material at 70% opacity.
+  - **Cursors:** each tool sets a cursor: a crosshair for the drawing tools and Tape, move arrows for Move, and grabbing while orbiting.
+  - **Select:** the Select tool draws no snap markers.
+  - **Orientation gizmo:** a 72 pt gizmo in the viewport's top right shows the axes. Clicking an axis end sets that standard view, and clicking the centre switches between perspective and parallel.
+  - **API:** the `editor` query and `tool_input` results report the hovered entity and the snap label, so agents see what the window shows.
+- **M11d**: interaction conventions.
+  - **Drag to draw:** Line, Rectangle, Circle, Arc and Push/Pull treat a release more than the drag threshold from the press as the second click.
+  - **Push/Pull:**
+    - A typed distance right after a pull redoes it at that distance, as Move and Rotate already allow.
+    - A double-click on a face repeats the last pull distance.
+  - **Selection clicks:**
+    - With Select, double-clicking a face selects it with its edges, and double-clicking an edge selects it with its faces.
+    - Triple-clicking selects everything connected.
+    - Double-clicking an instance still opens it.
+  - **Select All and Select None:** Cmd+A selects everything in the open context and Cmd+Shift+A selects nothing. `select` takes `all: true`.
+  - **Duplicate:** Cmd+D copies the selection in place and starts Move on the copy.
+  - **Rotate:** before the first click, the arrow keys lock Rotate's protractor plane to an axis.
+  - **Startup:** the app starts in Select.
+  - **No silent dead ends:**
+    - Clicking empty space with Push/Pull, Paint or Erase says what the tool works on.
+    - Move's idle prompt describes what it actually does.
+  - **Empty-model card:** an empty model shows a dismissable hint card, 360 x 200 pt, bottom left of the viewport. It lists New, Open and the five most recent files, with a one-line hint for drawing a box. It goes away at the first edit.
+- **M11e**: app basics and missing UI.
+  - **Recent files:** Open Recent lists the last 10 files from prefs.
+  - **Unsaved changes:** the prompt reads `Do you want to save changes to "<name>"?` with Save, Don't Save and Cancel.
+  - **Window title:** on macOS the title is the file name, and the window shows the edited dot instead of `*`.
+  - **Import options:** before the file is read, a sheet sets units, up axis, import as (group, component or loose) and merge coplanar faces. The last values are remembered.
+  - **Component names:**
+    - Rename Component... renames a definition (`rename_definition`), as do F2 on a selected Outliner row and the Entity Info name field.
+    - Make Component asks for a name.
+  - **Purge Unused:** runs `purge_definitions` and reports the count.
+  - **Field of View...:** sets the camera's field of view (`set_camera` `fov`).
+  - **Settings** (Cmd+,) has two tabs:
+    - Appearance: theme and UI scale (90, 100, 110 or 125%).
+    - Input: trackpad scroll orbits or zooms.
+
+    Both are saved in prefs.
+  - **Accessibility:** AccessKit is switched on, so VoiceOver reads the window's controls. Every icon-only control has a label.
+
+  Deferred:
+  - the Offset, Scale and Follow Me tools
+  - cut, copy and paste between models
+  - display units and precision
+  - custom cursor images
+  - number keys for standard views
+
 ## Risks
 
 - **Sticky geometry robustness**: edge merging and face detection under floating-point error is the main risk. Mitigation: robust predicates, explicit tolerances, invariant checks in every test, fuzz tests on random edge sequences.

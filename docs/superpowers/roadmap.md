@@ -32,6 +32,11 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M10a | Agent sight and state: pick and infer queries, editor state query and setters, selection/camera/editor notifications, undo labels, quit | done 29a3982..584fff4 |
 | M10b | Tool driving and parity: tool_input events through the real tools and inference; orbit/zoom about a point, crossing box select, 3-point arc, relative texture rotation, undo/redo count | done e2c645f..f69b7f0 |
 | M10c | Safe agent access: connected-agent indicator and activity log, opt-in --api-root folders, overwrite guard, no file contents in errors, recovery file on discard | done ee9c368..a9b4b65 |
+| M11a | Design foundation: ui module split, label-based UI tests (egui_kittest), dark and light theme tokens, Inter/JetBrains Mono/Phosphor fonts, widget kit and shortcut table, accent selection, no clipped panels, honest Undo/Redo | planned |
+| M11b | Layout: left icon tool rail, context bar with breadcrumb, resizable tabbed right dock with Outliner filter and swatch grid, status bar and measurements box, native macOS menus, keyboard shortcuts window | planned |
+| M11c | Viewport feedback: shape-coded snap markers, snap label and live value at the cursor, hover highlight, solid Push/Pull preview, tool cursors, orientation gizmo | planned |
+| M11d | Interaction conventions: drag to draw, Push/Pull retype and repeat, double/triple-click select, Select All/None, Duplicate, Rotate axis lock, start in Select, no silent dead ends, empty-model card | planned |
+| M11e | App basics: Open Recent, Save/Don't Save prompt, macOS edited dot, import options sheet, rename and purge components, field of view, Settings, AccessKit | planned |
 
 ## Rules for the loop
 
