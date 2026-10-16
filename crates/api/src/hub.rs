@@ -4,11 +4,11 @@
 //! that owns the document calls `Hub::process` on its own thread; that is the only place
 //! requests touch the document.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kernel::EntityId;
 use serde_json::{Value, json};
@@ -104,6 +104,24 @@ impl Inbox {
     }
 }
 
+/// How many entries the activity log keeps.
+pub const ACTIVITY_LEN: usize = 100;
+
+/// One line of the activity log: a connection opening or closing, or a request handled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Activity {
+    /// When it happened (the last time, for a repeated request).
+    pub at: Instant,
+    pub connection: u64,
+    /// `connected`, `disconnected`, or the request: method, command or query type, and the
+    /// path of a file command (`execute save /a/house.skr`), at most 160 characters.
+    pub request: String,
+    /// The error message when the reply was an error.
+    pub error: Option<String>,
+    /// How many times in a row it came with the same result (1 at first).
+    pub repeats: u32,
+}
+
 pub struct Hub {
     rx: Receiver<Event>,
     inbox: Inbox,
@@ -114,6 +132,8 @@ pub struct Hub {
     /// The selection, camera and editor subscribers were last told about (None while nobody
     /// subscribes).
     seen: Option<Seen>,
+    activity: VecDeque<Activity>,
+    activity_revision: u64,
 }
 
 /// The state `selection`, `camera` and `editor` notifications report.
@@ -159,11 +179,48 @@ impl Hub {
             subscribers: HashSet::new(),
             notified: None,
             seen: None,
+            activity: VecDeque::new(),
+            activity_revision: 0,
         }
     }
 
     pub fn inbox(&self) -> Inbox {
         self.inbox.clone()
+    }
+
+    /// The log, oldest first.
+    pub fn activity(&self) -> &VecDeque<Activity> {
+        &self.activity
+    }
+
+    /// Goes up whenever the log changes, so a window knows to draw it again.
+    pub fn activity_revision(&self) -> u64 {
+        self.activity_revision
+    }
+
+    /// Adds a line to the activity log, or counts it again when it repeats the last one.
+    fn log(&mut self, connection: u64, request: String, error: Option<String>) {
+        self.activity_revision += 1;
+        let now = Instant::now();
+        if let Some(last) = self.activity.back_mut()
+            && last.connection == connection
+            && last.request == request
+            && last.error == error
+        {
+            last.repeats += 1;
+            last.at = now;
+            return;
+        }
+        if self.activity.len() == ACTIVITY_LEN {
+            self.activity.pop_front();
+        }
+        self.activity.push_back(Activity {
+            at: now,
+            connection,
+            request,
+            error,
+            repeats: 1,
+        });
     }
 
     pub fn open_connections(&self) -> usize {
@@ -284,10 +341,13 @@ impl Hub {
         match event {
             Event::Opened { conn, out } => {
                 self.outs.insert(conn, out);
+                self.log(conn, "connected".into(), None);
             }
             Event::Closed { conn } => {
-                self.outs.remove(&conn);
                 self.subscribers.remove(&conn);
+                if self.outs.remove(&conn).is_some() {
+                    self.log(conn, "disconnected".into(), None);
+                }
             }
             Event::Reply { conn, line } => {
                 if let Some(out) = self.outs.get(&conn) {
@@ -308,6 +368,11 @@ impl Hub {
                     }
                     _ => handle(host, &line),
                 };
+                let error = reply
+                    .as_deref()
+                    .and_then(|r| serde_json::from_str::<Value>(r).ok())
+                    .and_then(|r| r["error"]["message"].as_str().map(str::to_string));
+                self.log(conn, summary(&line), error);
                 if let (Some(reply), Some(out)) = (reply, self.outs.get(&conn)) {
                     let _ = out.send(reply);
                 }
@@ -317,4 +382,37 @@ impl Hub {
             }
         }
     }
+}
+
+/// How the activity log names a request line: method, command or query type, and the path
+/// of a file command; at most 160 characters.
+fn summary(line: &str) -> String {
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return "(not JSON)".into();
+    };
+    let method = v["method"].as_str().unwrap_or("?");
+    let params = &v["params"];
+    let mut s = method.to_string();
+    match method {
+        "batch" => {
+            let n = params["commands"].as_array().map_or(0, Vec::len);
+            s += &format!(" ({n} commands)");
+        }
+        "tool_input" => {
+            let n = params["events"].as_array().map_or(0, Vec::len);
+            s += &format!(" ({n} events)");
+        }
+        _ => {
+            if let Some(t) = params["type"].as_str() {
+                s += &format!(" {t}");
+            }
+            if let Some(p) = params["path"].as_str() {
+                s += &format!(" {p}");
+            }
+        }
+    }
+    if s.chars().count() > 160 {
+        s = s.chars().take(159).collect::<String>() + "\u{2026}";
+    }
+    s
 }

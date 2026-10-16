@@ -86,6 +86,36 @@ pub fn serve_stdio(inbox: Inbox) -> JoinHandle<()> {
     serve_stream(inbox, io::stdin(), io::stdout()).1
 }
 
+/// Binds a socket at `path` that is never reachable at a mode the umask chose: it is bound in
+/// a fresh folder only this user can enter, made 0600 there, then linked to `path` (failing,
+/// not replacing, when something appeared there meanwhile).
+fn bind_private(path: &Path) -> io::Result<UnixListener> {
+    use std::os::unix::fs::DirBuilderExt;
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut n = 0u32;
+    let dir = loop {
+        let dir = parent.join(format!(".sa{}-{n}", std::process::id()));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => break dir,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && n < 100 => n += 1,
+            Err(e) => return Err(e),
+        }
+    };
+    let temp = dir.join("s");
+    let result = (|| {
+        let listener = UnixListener::bind(&temp)?;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::hard_link(&temp, path)?;
+        Ok(listener)
+    })();
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_dir(&dir);
+    result
+}
+
 /// Listens on a Unix socket readable only by the current user. A stale socket file (nobody
 /// listening) at `path` is replaced; a live socket or any other existing file is an error.
 pub fn listen_unix(path: &Path, inbox: Inbox) -> io::Result<()> {
@@ -105,8 +135,7 @@ pub fn listen_unix(path: &Path, inbox: Inbox) -> io::Result<()> {
             ));
         }
     }
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let listener = bind_private(path)?;
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             if let Ok(reader) = stream.try_clone() {

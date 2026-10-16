@@ -271,3 +271,67 @@ fn a_connection_opened_while_closing_does_not_hold_it_up() {
     late.join().unwrap().join().unwrap();
     busy_writer.join().unwrap();
 }
+
+#[test]
+fn the_activity_log_records_requests_folds_repeats_and_keeps_the_last_hundred() {
+    let mut hub = Hub::new(|| {});
+    let inbox = hub.inbox();
+    let mut host = HeadlessHost::new();
+    let (conn, rx) = inbox.open();
+    inbox.send_line(
+        conn,
+        request(
+            1,
+            "execute",
+            json!({"type": "save", "path": "/no/such/dir/a.skr"}),
+        ),
+    );
+    inbox.send_line(conn, request(2, "query", json!({"type": "camera"})));
+    inbox.send_line(conn, request(3, "query", json!({"type": "camera"})));
+    inbox.send_line(conn, "not json".into());
+    hub.process(&mut host);
+    for _ in 0..4 {
+        next(&rx);
+    }
+    let log: Vec<_> = hub.activity().iter().collect();
+    assert_eq!(log[0].request, "connected");
+    assert_eq!(log[1].request, "execute save /no/such/dir/a.skr");
+    assert!(log[1].error.as_deref().unwrap().contains("a.skr"));
+    assert_eq!(log[2].request, "query camera");
+    assert_eq!((log[2].repeats, log[2].error.clone()), (2, None));
+    assert_eq!(log[3].request, "(not JSON)");
+    assert_eq!(log.len(), 4);
+    let revision = hub.activity_revision();
+    for i in 0..150 {
+        let command = if i % 2 == 0 {
+            json!({"type": "select", "ids": []})
+        } else {
+            json!({"type": "zoom_extents"})
+        };
+        inbox.send_line(conn, request(10 + i, "execute", command));
+    }
+    inbox.close(conn);
+    hub.process(&mut host);
+    assert_eq!(hub.activity().len(), api::ACTIVITY_LEN);
+    assert_eq!(hub.activity().back().unwrap().request, "disconnected");
+    assert!(hub.activity_revision() > revision);
+}
+
+#[test]
+fn a_request_that_fails_before_the_host_is_logged_with_its_error() {
+    let mut hub = Hub::new(|| {});
+    let inbox = hub.inbox();
+    let mut host = HeadlessHost::new();
+    let (conn, rx) = inbox.open();
+    inbox.send_line(conn, request(1, "execute", json!({"type": "nope"})));
+    hub.process(&mut host);
+    let reply = next(&rx);
+    assert_eq!(reply["error"]["code"], -32602);
+    let entry = hub.activity().back().unwrap();
+    assert_eq!(entry.request, "execute nope");
+    assert_eq!(
+        entry.error.as_deref(),
+        reply["error"]["message"].as_str(),
+        "the log keeps the -32602 message"
+    );
+}

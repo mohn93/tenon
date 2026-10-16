@@ -14,7 +14,7 @@ mod transport;
 pub use dispatch::{EditorQuery, Host, describe, handle};
 pub use editor::{Dialog, EditorCommand, EditorState, PhaseName, ToolName};
 pub use headless::HeadlessHost;
-pub use hub::{Hub, Inbox};
+pub use hub::{ACTIVITY_LEN, Activity, Hub, Inbox};
 pub use input::{
     Hover, Input, InputEvent, Issued, Key, Mods, MouseButton, Spot, ToolInput, ToolInputError,
     ToolInputParams, ToolInputResult, ToolInputStopped,

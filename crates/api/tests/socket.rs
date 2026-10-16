@@ -155,3 +155,24 @@ fn oversized_and_invalid_lines_get_errors_and_the_connection_survives() {
     assert!(replies[2]["result"].is_object(), "{:?}", replies[2]);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn the_socket_is_private_from_the_start_and_leaves_no_folder() {
+    let dir = test_dir("private-bind");
+    let path = dir.join("p.sock");
+    let hub = Hub::new(|| {});
+    listen_unix(&path, hub.inbox()).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let names: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        names,
+        vec![std::ffi::OsString::from("p.sock")],
+        "no bind folder left"
+    );
+    UnixStream::connect(&path).expect("connects at the final path");
+    std::fs::remove_file(&path).unwrap();
+}
