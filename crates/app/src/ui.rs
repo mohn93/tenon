@@ -407,8 +407,6 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
     (actions, ui.available_rect_before_wrap())
 }
 
-/// The Soften Edges window: an angle and the Soften and Harden buttons, which act on the
-/// selection, or on the open context when nothing is selected.
 /// The Agent Activity window: how many agents are connected, the recovery files their
 /// discards left, and what they asked for, newest first.
 fn agent_activity(ui: &mut Ui, agents: &Agents, log: &[String], actions: &mut Vec<UiAction>) {
@@ -449,6 +447,8 @@ fn agent_activity(ui: &mut Ui, agents: &Agents, log: &[String], actions: &mut Ve
     }
 }
 
+/// The Soften Edges window: an angle and the Soften and Harden buttons, which act on the
+/// selection, or on the open context when nothing is selected.
 fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>) {
     let mut open = true;
     egui::Window::new("Soften Edges")
@@ -1303,7 +1303,13 @@ mod tests {
 
         // Status bar: nothing at 0 agents, "Agents: 2" at 2, and a click on it opens the log.
         let ctx = egui::Context::default();
-        assert!(text_at(&ctx, &view, "Agents: 2").is_none());
+        let _ = run(&ctx, screen(), &view);
+        let drawn = texts(&ctx, &view);
+        assert!(drawn.len() > 10, "a laid-out frame: {drawn:?}");
+        assert!(
+            !drawn.iter().any(|(t, _)| t.starts_with("Agents:")),
+            "{drawn:?}"
+        );
         view.agents.connected = 2;
         let ctx = egui::Context::default();
         let _ = run(&ctx, screen(), &view);

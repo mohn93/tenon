@@ -118,7 +118,7 @@ impl AppHost<'_> {
                 ),
             )
         };
-        if let Some(parent) = cli::private_dir_for(&dir.join("x")) {
+        if let Some(parent) = cli::private_dir_for(dir) {
             cli::ensure_private_dir(parent).map_err(|e| failed(e.to_string()))?;
         }
         cli::ensure_private_dir(dir).map_err(|e| failed(e.to_string()))?;
@@ -677,6 +677,44 @@ mod tests {
         assert!(r["result"].is_object(), "{r}");
         assert_eq!(files_in(&dir).len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sketchup_alt_folder_is_made_private_with_the_recovery_folder_in_it() {
+        let base = recovery_dir("home");
+        let dir = base.join(cli::FALLBACK_DIR).join("recovery");
+        std::fs::create_dir_all(&base).unwrap();
+        let mut e = editor();
+        call_kept(&mut e, &dir, "execute", add_edge());
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        for d in [dir.parent().unwrap(), &dir] {
+            let mode = std::fs::metadata(d).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", d.display());
+        }
+        assert_eq!(files_in(&dir).len(), 1);
+        // Open to others: refused, nothing discarded.
+        std::fs::set_permissions(
+            dir.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        call_kept(&mut e, &dir, "execute", add_edge());
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+        assert!(e.doc().is_modified());
+        assert_eq!(files_in(&dir).len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
