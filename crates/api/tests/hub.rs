@@ -300,6 +300,7 @@ fn the_activity_log_records_requests_folds_repeats_and_keeps_the_last_hundred() 
     assert_eq!(log[2].request, "query camera");
     assert_eq!((log[2].repeats, log[2].error.clone()), (2, None));
     assert_eq!(log[3].request, "(not JSON)");
+    assert!(log[3].error.as_deref().unwrap().starts_with("parse error"));
     assert_eq!(log.len(), 4);
     let revision = hub.activity_revision();
     for i in 0..150 {

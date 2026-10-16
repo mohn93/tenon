@@ -14,7 +14,7 @@ use kernel::EntityId;
 use serde_json::{Value, json};
 use session::Query;
 
-use crate::dispatch::{Host, handle};
+use crate::dispatch::{Host, respond};
 use crate::protocol::{notification, parse, success};
 
 enum Event {
@@ -355,7 +355,7 @@ impl Hub {
                 }
             }
             Event::Line { conn, line } => {
-                let reply = match parse(&line) {
+                let replied = match parse(&line) {
                     Ok(req) if req.method == "subscribe" && !host.quitting() => {
                         // Notify about anything earlier before this connection joins.
                         self.notify(host);
@@ -363,15 +363,17 @@ impl Hub {
                         if self.seen.is_none() {
                             self.seen = Some(Seen::of(host));
                         }
-                        req.id
-                            .map(|id| success(&id, json!({"revision": host.document().revision()})))
+                        req.id.map(|id| {
+                            let result = json!({"revision": host.document().revision()});
+                            (success(&id, result), None)
+                        })
                     }
-                    _ => handle(host, &line),
+                    _ => respond(host, &line),
                 };
-                let error = reply
-                    .as_deref()
-                    .and_then(|r| serde_json::from_str::<Value>(r).ok())
-                    .and_then(|r| r["error"]["message"].as_str().map(str::to_string));
+                let (reply, error) = match replied {
+                    Some((reply, error)) => (Some(reply), error),
+                    None => (None, None),
+                };
                 self.log(conn, summary(&line), error);
                 if let (Some(reply), Some(out)) = (reply, self.outs.get(&conn)) {
                     let _ = out.send(reply);

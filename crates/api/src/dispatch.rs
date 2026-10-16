@@ -123,9 +123,21 @@ fn type_of(params: &Value) -> Option<&str> {
 /// Handles one request line and returns the reply line (None for notifications).
 /// `subscribe` is connection-level and handled by `Hub`.
 pub fn handle(host: &mut dyn Host, line: &str) -> Option<String> {
+    respond(host, line).map(|(reply, _)| reply)
+}
+
+/// [`handle`], with the error message when the reply is an error, so the activity log need
+/// not parse the reply again (a `render_view` reply is megabytes).
+pub(crate) fn respond(host: &mut dyn Host, line: &str) -> Option<(String, Option<String>)> {
     let request = match parse(line) {
         Ok(r) => r,
-        Err(reply) => return Some(reply),
+        Err(reply) => {
+            // A parse or request error: a short line.
+            let message = serde_json::from_str::<Value>(&reply)
+                .ok()
+                .and_then(|r| r["error"]["message"].as_str().map(str::to_string));
+            return Some((reply, message));
+        }
     };
     let result = if host.quitting() {
         Err(quitting_error())
@@ -134,8 +146,11 @@ pub fn handle(host: &mut dyn Host, line: &str) -> Option<String> {
     };
     let id = request.id?;
     Some(match result {
-        Ok(value) => success(&id, value),
-        Err(error) => failure(&id, error),
+        Ok(value) => (success(&id, value), None),
+        Err(error) => {
+            let message = error.message.clone();
+            (failure(&id, error), Some(message))
+        }
     })
 }
 
