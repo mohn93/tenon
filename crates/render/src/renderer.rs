@@ -25,6 +25,8 @@ const FACE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
 const FLAG_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Float32];
+const PREVIEW_ATTRIBS: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];
 /// The hover flag of a face or edge vertex, from a third vertex buffer (1 hovered, 0 not).
 const FACE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![9 => Float32];
 const EDGE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![3 => Float32];
@@ -221,6 +223,15 @@ pub struct HoverLook {
     pub edge: [f32; 4],
 }
 
+/// A vertex of a tool's preview solid, in root coordinates; `color` is sRGB with its alpha.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PreviewVertex {
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 4],
+}
+
 /// Selected and hovered edges, in points, where the style widens them.
 const WIDE_EDGE_PT: f32 = 2.0;
 
@@ -375,6 +386,8 @@ pub struct Renderer {
     canvas_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
+    /// A tool's translucent preview solid.
+    preview_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     /// The lighting uniforms, rewritten every frame (see `LightingUniforms`).
     lighting_uniforms: wgpu::Buffer,
@@ -416,6 +429,10 @@ pub struct Renderer {
     hover_ranges: Ranges,
     /// Physical pixels per point, as of the last `set_pixels_per_point`.
     pixels_per_point: f32,
+    /// The preview solid's triangles as of the last `set_preview`, and their buffer, which
+    /// is kept and grown as needed (its count is 0 while there are none).
+    preview_vertices: Vec<PreviewVertex>,
+    preview: Option<Mesh>,
     /// Where the open context's entities lie in `faces`, `edges` and `base_guides`.
     spans: Spans,
     /// Guides in root coordinates with nothing selected.
@@ -734,6 +751,51 @@ impl Renderer {
             },
             None,
         );
+        // The preview solid: blended over the scene and hidden by what is in front of it,
+        // without writing depth; back faces are culled so a single layer shows.
+        let preview_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("preview solid"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_preview"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<PreviewVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &PREVIEW_ATTRIBS,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Greater),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: SAMPLE_COUNT,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_preview"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniforms"),
@@ -792,6 +854,7 @@ impl Renderer {
             canvas_pipeline,
             guide_pipeline,
             overlay_pipeline,
+            preview_pipeline,
             uniforms,
             lighting_uniforms,
             bind_layout,
@@ -816,6 +879,8 @@ impl Renderer {
             hover: None,
             hover_ranges: Ranges::default(),
             pixels_per_point: 1.0,
+            preview_vertices: Vec::new(),
+            preview: None,
             spans: Spans::default(),
             base_guides: Vec::new(),
             guides: Vec::new(),
@@ -1005,6 +1070,41 @@ impl Renderer {
         }
     }
 
+    /// Draws `triangles` (three vertices each) from the next frame, blended over the scene and
+    /// hidden by what is in front of them; empty draws none. Re-uploads only when it changed,
+    /// into the same buffer while they fit.
+    pub fn set_preview(&mut self, triangles: &[PreviewVertex]) {
+        if triangles == self.preview_vertices.as_slice() {
+            return;
+        }
+        self.preview_vertices = triangles.to_vec();
+        let bytes: &[u8] = bytemuck::cast_slice(triangles);
+        let fits = self
+            .preview
+            .as_ref()
+            .is_some_and(|m| m.buffer.size() >= bytes.len() as u64);
+        if !fits {
+            let size = (bytes.len() as u64).next_power_of_two();
+            self.preview = Some(Mesh {
+                buffer: self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("preview solid"),
+                    size,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                count: 0,
+                flags: None,
+                hover: None,
+            });
+        }
+        if let Some(preview) = &mut self.preview {
+            if !bytes.is_empty() {
+                self.queue.write_buffer(&preview.buffer, 0, bytes);
+            }
+            preview.count = triangles.len() as u32;
+        }
+    }
+
     /// Draws the frames from now on for a display of `scale` physical pixels per point, which
     /// widths given in points are multiplied by. render_view and headless keep 1.
     pub fn set_pixels_per_point(&mut self, scale: f32) {
@@ -1167,6 +1267,9 @@ impl Renderer {
                     bind(&mut pass, &self.glass_pipeline, faces);
                     pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..glass.count(), 0, 0..1);
+                }
+                if let Some(preview) = self.preview.as_ref().filter(|m| m.count > 0) {
+                    draw(&mut pass, &self.preview_pipeline, Some(preview));
                 }
                 draw(&mut pass, &self.overlay_pipeline, overlay.as_ref());
             }

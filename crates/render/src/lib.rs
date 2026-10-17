@@ -9,6 +9,6 @@ pub mod snapshot;
 pub mod style;
 pub mod texture;
 
-pub use renderer::{HoverLook, Renderer, Viewport, required_limits};
+pub use renderer::{HoverLook, PreviewVertex, Renderer, Viewport, required_limits};
 pub use snapshot::Snapshotter;
 pub use style::ViewStyle;

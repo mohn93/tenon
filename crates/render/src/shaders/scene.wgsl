@@ -308,3 +308,34 @@ fn fs_glass(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec
     }
     return vec4<f32>(color, mix(alpha, 1.0, 0.4 * in.selected));
 }
+
+struct PreviewOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) color: vec4<f32>,
+};
+
+// A tool's preview solid, in root coordinates.
+@vertex
+fn vs_preview(
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) color: vec4<f32>,
+) -> PreviewOut {
+    var out: PreviewOut;
+    out.pos = u.view_proj * vec4<f32>(pos, 1.0);
+    out.world = pos;
+    out.normal = normal;
+    out.color = color;
+    return out;
+}
+
+// The preview solid, shaded by the ambient light and the headlight, at its own opacity.
+@fragment
+fn fs_preview(in: PreviewOut) -> @location(0) vec4<f32> {
+    let n = normalize(in.normal);
+    let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
+    let shade = lighting.mode.y + lighting.mode.z * abs(dot(n, to_eye));
+    return vec4<f32>(in.color.rgb * shade, in.color.a);
+}

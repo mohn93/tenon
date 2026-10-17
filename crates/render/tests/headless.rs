@@ -1274,3 +1274,92 @@ fn a_new_model_drops_the_hover() {
         expected
     );
 }
+
+/// An axis-aligned box from `min`, `size` on each side, as 12 triangles wound
+/// counter-clockwise seen from outside, with flat normals, in `color`.
+fn box_vertices(min: DVec3, size: f64, color: [f32; 4]) -> Vec<render::PreviewVertex> {
+    let corner = |k: usize| {
+        let bit = |b: usize| if k & b == 0 { 0.0 } else { size };
+        min + DVec3::new(bit(1), bit(2), bit(4))
+    };
+    // Each side's corners, counter-clockwise seen from outside.
+    let sides = [
+        [0, 2, 3, 1], // -z
+        [4, 5, 7, 6], // +z
+        [0, 1, 5, 4], // -y
+        [2, 6, 7, 3], // +y
+        [0, 4, 6, 2], // -x
+        [1, 3, 7, 5], // +x
+    ];
+    let mut out = Vec::new();
+    for side in sides {
+        let [a, b, c, d] = side.map(corner);
+        let n = (b - a).cross(c - a).normalize().as_vec3().to_array();
+        for p in [a, b, c, a, c, d] {
+            out.push(render::PreviewVertex {
+                pos: p.as_vec3().to_array(),
+                normal: n,
+                color,
+            });
+        }
+    }
+    out
+}
+
+#[test]
+fn a_preview_solid_blends_over_what_is_behind_it_and_hides_behind_faces() {
+    // A red box on the ground square at 70%: over the square, the pixel is reddish but shows
+    // the square through it; clearing it gives back the plain frame.
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = screen.renderer();
+    r.set_scene(&Scene::from_root(ground_square()), &[], &BTreeSet::new());
+    let cam = camera();
+    let plain = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    r.set_preview(&box_vertices(
+        DVec3::new(0.2, 0.2, 0.0),
+        0.6,
+        [1.0, 0.0, 0.0, 0.7],
+    ));
+    let shown = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    let p = pixel_at(&shown, &cam, DVec3::new(0.5, 0.5, 0.6));
+    assert!(dominant(p, 0), "red: {p:?}");
+    assert!(p[1] > 30 && p[2] > 30, "the square shows through: {p:?}");
+    r.set_preview(&[]);
+    assert_eq!(
+        screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]),
+        plain
+    );
+}
+
+#[test]
+fn a_preview_solid_under_a_face_is_hidden() {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = screen.renderer();
+    r.set_scene(&Scene::from_root(ground_square()), &[], &BTreeSet::new());
+    let cam = camera();
+    let plain = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    r.set_preview(&box_vertices(
+        DVec3::new(-0.5, -0.5, -1.0),
+        0.6,
+        [1.0, 0.0, 0.0, 0.7],
+    ));
+    let under = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    assert_eq!(under, plain, "the square hides the solid under it");
+    // A larger solid reuses the buffer after growing it, and still shows above the square.
+    r.set_preview(&box_vertices(
+        DVec3::new(-1.0, -1.0, 0.0),
+        1.5,
+        [1.0, 0.0, 0.0, 0.7],
+    ));
+    let above = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    assert!(dominant(
+        pixel_at(&above, &cam, DVec3::new(-0.25, -0.25, 1.5)),
+        0
+    ));
+}
