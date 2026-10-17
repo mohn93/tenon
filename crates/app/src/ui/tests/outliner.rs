@@ -208,3 +208,33 @@ fn a_filter_draws_at_most_its_row_limit() {
     assert_eq!(named, MAX_FILTERED_ROWS);
     h.get_by_label("More matches: refine the filter");
 }
+
+#[test]
+fn a_node_collapsed_under_a_filter_opens_again_for_the_next_filter() {
+    let mut h = harness(house_fixture(&[]));
+    let collapse_house = |h: &mut H| {
+        type_into(h, "Filter outliner", 0, "kit", egui::Key::Enter);
+        h.get_by_label("<Kitchen>");
+        let toggle = toggle_at(&rows(h), &ids(&["i1"]));
+        click_at(h, toggle, egui::Modifiers::NONE);
+        h.run_ok();
+        assert!(h.query_by_label("<Kitchen>").is_none(), "collapsed");
+    };
+    // Cleared, then typed again.
+    collapse_house(&mut h);
+    click(&mut h, "Clear filter");
+    type_into(&mut h, "Filter outliner", 0, "kit", egui::Key::Enter);
+    h.get_by_label("<Kitchen>");
+    // Changed.
+    click(&mut h, "Clear filter");
+    collapse_house(&mut h);
+    type_into(&mut h, "Filter outliner", 0, "chen", egui::Key::Enter);
+    assert_eq!(
+        h.get_by_label("Filter outliner")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("kitchen")
+    );
+    h.get_by_label("<Kitchen>");
+}

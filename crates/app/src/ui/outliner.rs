@@ -98,7 +98,11 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     expand_open_path(ui.ctx(), view.context);
     #[cfg(test)]
     ui.data_mut(|d| d.remove::<Vec<super::tests::Recorded>>(super::tests::recorded_id()));
+    let before = ui.data(|d| d.get_temp::<String>(filter_key()));
     let query = filter_field(ui);
+    if before.as_deref().unwrap_or_default() != query {
+        forget_filtered_states(ui.ctx());
+    }
     let mut filtering =
         Filter::new(view.outliner, &query).map(|filter| Filtering { filter, drawn: 0 });
     egui::ScrollArea::vertical()
@@ -134,7 +138,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
 /// The filter field, named "Filter outliner", and a Clear filter button while it holds text.
 /// Returns the text; it lives in egui's memory.
 fn filter_field(ui: &mut Ui) -> String {
-    let key = egui::Id::new("outliner-filter");
+    let key = filter_key();
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_default();
     let had_text = !text.is_empty();
     ui.horizontal(|ui| {
@@ -174,6 +178,38 @@ fn filter_field(ui: &mut Ui) -> String {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
     }
     text
+}
+
+/// Where the filter text lives in egui's memory.
+fn filter_key() -> egui::Id {
+    egui::Id::new("outliner-filter")
+}
+
+/// Where the ids of the collapsing states used under a filter live in egui's memory.
+fn filtered_ids_key() -> egui::Id {
+    egui::Id::new("outliner-filtered-ids")
+}
+
+/// The collapsing state's id of the node at `path` while a filter is typed, noted so
+/// `forget_filtered_states` can drop it.
+fn filtered_id(ctx: &egui::Context, path: &[EntityId]) -> egui::Id {
+    let id = egui::Id::new(("outliner-filtered", path));
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<HashSet<egui::Id>>(filtered_ids_key())
+            .insert(id)
+    });
+    id
+}
+
+/// Drops the collapsing states used under a filter, so a node collapsed under one filter
+/// shows expanded again under the next.
+fn forget_filtered_states(ctx: &egui::Context) {
+    let ids = ctx.data_mut(|d| d.remove_temp::<HashSet<egui::Id>>(filtered_ids_key()));
+    for id in ids.unwrap_or_default() {
+        if let Some(state) = CollapsingState::load(ctx, id) {
+            state.remove(ctx);
+        }
+    }
 }
 
 /// The collapsing state's id of the node at `path`.
@@ -239,11 +275,7 @@ fn outliner_node(
         // Nodes on the open path start expanded; with a filter, every node shown with
         // children does.
         let state = if filtering.is_some() {
-            CollapsingState::load_with_default_open(
-                ui.ctx(),
-                egui::Id::new(("outliner-filtered", path.as_slice())),
-                true,
-            )
+            CollapsingState::load_with_default_open(ui.ctx(), filtered_id(ui.ctx(), path), true)
         } else {
             CollapsingState::load_with_default_open(ui.ctx(), outliner_id(path), open)
         };
