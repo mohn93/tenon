@@ -8,6 +8,7 @@ mod layout;
 mod materials;
 mod menus;
 mod outliner;
+mod start;
 mod status;
 mod viewport;
 mod widgets;
@@ -24,7 +25,8 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, TexturePosition, TextureRow, UiAction, View, draw,
+    Agents, DockLayout, DockTab, MaterialRow, StartCard, TexturePosition, TextureRow, UiAction,
+    View, draw,
 };
 use crate::editor::{ImportUnits, Status};
 use crate::feedback::Hud;
@@ -75,6 +77,8 @@ pub(super) struct Fixture {
     pub cursor: egui::CursorIcon,
     /// The camera the orientation gizmo follows.
     pub camera: Camera,
+    /// The empty-model card's recent files, when it shows.
+    pub start: Option<Vec<PathBuf>>,
 }
 
 impl Default for Fixture {
@@ -124,6 +128,7 @@ impl Default for Fixture {
             hud: Hud::default(),
             cursor: egui::CursorIcon::Default,
             camera: Camera::new(glam::DVec2::new(1280.0, 800.0)),
+            start: None,
         }
     }
 }
@@ -164,6 +169,7 @@ impl Fixture {
             hud: &self.hud,
             cursor: self.cursor,
             camera: &self.camera,
+            start: self.start.as_deref().map(|recent| StartCard { recent }),
         }
     }
 
@@ -362,6 +368,17 @@ pub(super) fn drawn_texts_of<S>(h: &Harness<'_, S>) -> Vec<String> {
         .into_iter()
         .filter_map(|s| match s {
             egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every text the last frame painted, with where it was painted, in points.
+pub(super) fn drawn_text_rects(h: &H) -> Vec<(String, Rect)> {
+    drawn_shapes(h)
+        .into_iter()
+        .filter_map(|s| match s {
+            egui::Shape::Text(t) => Some((t.galley.text().to_string(), t.visual_bounding_rect())),
             _ => None,
         })
         .collect()

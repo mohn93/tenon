@@ -176,11 +176,12 @@ fn an_icon_button_is_named_and_can_be_disabled() {
 fn the_panels_draw_every_icon_in_the_icon_family() {
     use crate::ui::{fonts, icons};
     // The rail, Undo and Redo, the three group buttons, the breadcrumb's carets, the night
-    // toggle, the agents indicator and the Outliner's Clear filter.
+    // toggle, the agents indicator, the Outliner's Clear filter and the start card's Dismiss.
     let mut h = harness(Fixture {
         has_selection: true,
         has_instance_selected: true,
         lighting: Lighting::Night,
+        start: Some(Vec::new()),
         ..house_fixture(&["i1", "i3"])
     });
     type_into(&mut h, "Filter outliner", 0, "kit", egui::Key::Enter);

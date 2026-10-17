@@ -18,6 +18,8 @@ pub const ROBOT: &str = ph::ROBOT;
 pub const CARET_RIGHT: &str = ph::CARET_RIGHT;
 /// Clears the Outliner's filter.
 pub const X_CIRCLE: &str = ph::X_CIRCLE;
+/// Dismisses the start card.
+pub const X: &str = ph::X;
 
 /// A tool's glyph on the rail.
 pub fn tool(kind: ToolKind) -> &'static str {
@@ -50,6 +52,7 @@ pub fn all() -> Vec<&'static str> {
         ROBOT,
         CARET_RIGHT,
         X_CIRCLE,
+        X,
     ];
     all.extend(ToolKind::ALL.map(tool));
     all

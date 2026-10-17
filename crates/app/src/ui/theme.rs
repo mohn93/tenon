@@ -246,6 +246,13 @@ pub const GIZMO_NEG_CAP: f32 = 5.0;
 pub const GIZMO_CENTRE: f32 = 7.0;
 pub const GIZMO_HIDE: f32 = 10.0;
 
+/// The empty-model card: its size (border included), its inset from the view's bottom left
+/// corner, its padding and the height of its recent file rows.
+pub const START_CARD: Vec2 = Vec2::new(360.0, 200.0);
+pub const START_CARD_INSET: f32 = 12.0;
+pub const START_CARD_PADDING: f32 = 12.0;
+pub const START_CARD_ROW: f32 = 18.0;
+
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {
     let mut style = egui::Style {

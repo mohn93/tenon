@@ -1322,6 +1322,18 @@ impl Editor {
         true
     }
 
+    /// True for an empty, unedited model: the root open, the root mesh without vertices,
+    /// instances or guides, and nothing to undo or redo. The window shows its start card then.
+    pub fn untouched(&self) -> bool {
+        let root = self.doc.scene().root();
+        self.doc.context().is_empty()
+            && root.vertices().next().is_none()
+            && root.instances().next().is_none()
+            && root.guides().next().is_none()
+            && self.doc.undo_label().is_none()
+            && self.doc.redo_label().is_none()
+    }
+
     /// Selects every edge, face, group and guide of the open context (Cmd+A). The tool and
     /// its operation stay. Always true.
     pub fn select_all(&mut self) -> bool {
@@ -5090,5 +5102,40 @@ mod tests {
             e.status_parts().prompt,
             "Copy: click a base point to copy the selection"
         );
+    }
+
+    #[test]
+    fn the_model_is_untouched_until_the_first_edit() {
+        let mut e = editor();
+        assert!(e.untouched());
+        ground_square(&mut e);
+        assert!(!e.untouched());
+        e.undo();
+        assert!(!e.untouched(), "there is a redo");
+        e.new_model();
+        assert!(e.untouched(), "File > New");
+        e.execute(Command::AddGuidePoint {
+            position: [1.0, 2.0, 0.0],
+        })
+        .unwrap();
+        assert!(!e.untouched(), "a guide");
+        // A group's model open: not the root.
+        e.new_model();
+        ground_square(&mut e);
+        let face = e.doc().model().faces().next().unwrap().0;
+        let made = e
+            .execute(Command::MakeGroup {
+                ids: vec![EntityId::Face(face)],
+            })
+            .unwrap();
+        let group = made
+            .changes
+            .created
+            .into_iter()
+            .find(|id| matches!(id, EntityId::Instance(_)))
+            .unwrap();
+        e.open_path(vec![group]);
+        assert!(!e.doc().context().is_empty());
+        assert!(!e.untouched());
     }
 }

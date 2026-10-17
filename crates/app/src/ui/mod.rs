@@ -25,6 +25,7 @@ mod menu_bar;
 mod outliner;
 mod rail;
 mod right;
+mod start;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -128,6 +129,10 @@ pub enum UiAction {
     RotateTexture90,
     /// Clear the texture placement of the selected faces.
     ResetTexturePosition,
+    /// Open this recent file (after asking about unsaved changes).
+    OpenRecent(PathBuf),
+    /// Hide the empty-model card for the rest of the session.
+    DismissStart,
 }
 
 /// A material as the Materials list shows it.
@@ -220,6 +225,14 @@ pub struct View<'a> {
     pub cursor: egui::CursorIcon,
     /// The camera the orientation gizmo follows (its projection is `projection`).
     pub camera: &'a Camera,
+    /// The card over an empty, unedited model; None: hidden.
+    pub start: Option<StartCard<'a>>,
+}
+
+/// What the empty-model card lists; `View::start` is None when the card is hidden.
+pub struct StartCard<'a> {
+    /// The recent files that exist, newest first (at most `prefs::CARD_RECENT`).
+    pub recent: &'a [PathBuf],
 }
 
 /// What Entity Info's texture position fields show and apply to.
@@ -320,6 +333,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     let central = ui.available_rect_before_wrap();
     // In the root's own layer, under every window and menu.
     viewport::hud(ui, central, view.hud);
+    if let Some(card) = &view.start {
+        start::start_card(ui, central, card, actions);
+    }
     if !view.flying {
         viewport::gizmo(ui, central, view.camera, view.projection, actions);
     }

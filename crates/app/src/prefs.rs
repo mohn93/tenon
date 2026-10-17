@@ -27,6 +27,19 @@ pub struct Prefs {
 /// How many recent files the prefs keep.
 pub const RECENT_LEN: usize = 10;
 
+/// How many recent files the empty-model card lists.
+pub const CARD_RECENT: usize = 5;
+
+/// The first `n` entries of `recent` that are regular files now.
+pub fn existing(recent: &[PathBuf], n: usize) -> Vec<PathBuf> {
+    recent
+        .iter()
+        .filter(|p| p.is_file())
+        .take(n)
+        .cloned()
+        .collect()
+}
+
 /// Puts `path` (made absolute) first in `recent`, dropping an equal entry and any past
 /// `RECENT_LEN`. A path that cannot be made absolute is left out.
 pub fn remember_recent(recent: &mut Vec<PathBuf>, path: &Path) {
@@ -455,5 +468,18 @@ mod tests {
         remember_recent(&mut recent, Path::new("x.skr"));
         assert_eq!(recent, [std::path::absolute("x.skr").unwrap()]);
         assert!(recent[0].is_absolute());
+    }
+
+    #[test]
+    fn the_card_lists_only_files_that_exist() {
+        let home = home("recent-existing");
+        let (a, b) = (home.join("a.skr"), home.join("b.skr"));
+        std::fs::write(&a, b"").unwrap();
+        std::fs::write(&b, b"").unwrap();
+        // A folder is not a file either.
+        let list = vec![home.join("gone.skr"), b.clone(), home.clone(), a.clone()];
+        assert_eq!(existing(&list, 5), [b.clone(), a]);
+        assert_eq!(existing(&list, 1), [b]);
+        std::fs::remove_dir_all(home).unwrap();
     }
 }

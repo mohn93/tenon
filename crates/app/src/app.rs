@@ -35,7 +35,7 @@ use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
-use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
+use crate::ui::{Agents, MaterialRow, StartCard, TexturePosition, TextureRow, UiAction, View};
 use crate::ui::{theme, viewport};
 
 /// The window's least size, in points: the panels and a usable 3D view.
@@ -489,6 +489,10 @@ struct State {
     prefs: Prefs,
     /// Where they are kept between sessions (None: HOME is not set; they last the session).
     prefs_path: Option<PathBuf>,
+    /// The recent files the start card lists: those that existed when the list last changed.
+    recent_shown: Vec<PathBuf>,
+    /// The start card was dismissed: it stays hidden for the rest of the session.
+    start_dismissed: bool,
     /// The Agent Activity window is open.
     agent_activity: bool,
     /// Whether the Keyboard Shortcuts window is open.
@@ -546,6 +550,7 @@ impl State {
         prefs_path: Option<PathBuf>,
     ) -> Self {
         let prefs = prefs_path.as_deref().map(prefs::load).unwrap_or_default();
+        let recent_shown = prefs::existing(&prefs.recent, prefs::CARD_RECENT);
         let instance = wgpu::Instance::default();
         let Gpu {
             surface,
@@ -580,6 +585,8 @@ impl State {
             recovery,
             prefs,
             prefs_path,
+            recent_shown,
+            start_dismissed: false,
             agent_activity: false,
             shortcuts_window: false,
             recovered_seen: 0,
@@ -719,6 +726,7 @@ impl State {
         if let Some(path) = self.editor.doc().path() {
             prefs::remember_recent(&mut self.prefs.recent, path);
             self.save_prefs();
+            self.recent_shown = prefs::existing(&self.prefs.recent, prefs::CARD_RECENT);
         }
     }
 
@@ -1007,6 +1015,13 @@ impl State {
             UiAction::ResetTexturePosition => {
                 self.editor.reset_texture_position();
             }
+            UiAction::OpenRecent(path) => {
+                // A file that fails to open says why in the status and stays in the list.
+                if self.settle_changes() && self.editor.open_file(&path) {
+                    self.remember_file();
+                }
+            }
+            UiAction::DismissStart => self.start_dismissed = true,
         }
     }
 
@@ -1209,6 +1224,10 @@ impl State {
                 navigating,
             ),
             camera: &self.editor.doc().camera,
+            start: (self.editor.untouched() && !self.start_dismissed && !self.editor.flying())
+                .then_some(StartCard {
+                    recent: &self.recent_shown,
+                }),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
