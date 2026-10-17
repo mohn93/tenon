@@ -33,6 +33,11 @@ fn image_swatch(ui: &mut Ui, image: egui::TextureId) -> egui::Response {
     response
 }
 
+/// How a palette swatch is named for AccessKit: `Color #C45440`.
+pub(super) fn palette_label(c: [u8; 3]) -> String {
+    format!("Color #{:02X}{:02X}{:02X}", c[0], c[1], c[2])
+}
+
 fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
@@ -95,6 +100,11 @@ pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         .data(|d| d.get_temp::<String>(key))
         .unwrap_or_else(|| m.name.clone());
     let edit = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+    edit.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Material name");
+        info.current_text_value = Some(text.clone());
+        info
+    });
     if edit.lost_focus() {
         // Escape discards the edit; so does deleting the material in the same frame.
         let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -109,6 +119,9 @@ pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.horizontal_wrapped(|ui| {
         for color in MATERIAL_PALETTE {
             let response = swatch(ui, rgb(color));
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, palette_label(color))
+            });
             if response.clicked() && color != m.color {
                 actions.push(UiAction::RecolorMaterial(m.id, color));
             }
@@ -121,10 +134,11 @@ pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     let mut value = ui.data(|d| d.get_temp::<u8>(key)).unwrap_or(shown);
     let slider = ui
         .horizontal(|ui| {
-            ui.label("Opacity");
+            let label = ui.label("Opacity");
             // Fit the panel: the slider takes what the label and the number leave.
             ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(40.0);
             ui.add(egui::Slider::new(&mut value, 0..=100).suffix("%"))
+                .labelled_by(label.id)
         })
         .inner;
     if slider.dragged() {
@@ -149,7 +163,7 @@ fn glow_slider(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
         .unwrap_or(f32::from(shown) / 10.0);
     let slider = ui
         .horizontal(|ui| {
-            ui.label("Glow").on_hover_text(
+            let label = ui.label("Glow").on_hover_text(
                 "Faces painted with a glowing material are drawn unshaded and light their \
                  surroundings (Camera > Night lighting shows them best)",
             );
@@ -159,6 +173,7 @@ fn glow_slider(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
                     .step_by(0.1)
                     .max_decimals(1),
             )
+            .labelled_by(label.id)
         })
         .inner;
     if slider.dragged() {

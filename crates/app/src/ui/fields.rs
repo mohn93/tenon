@@ -25,23 +25,25 @@ pub(super) fn drag_row<const N: usize>(
 ) -> DragRow<N> {
     let stored = ui.data(|d| d.get_temp::<([f64; N], [f64; N])>(key));
     let (start, mut values) = stored.unwrap_or((shown, shown));
-    if N > 1 {
-        ui.label(label);
-    }
+    let label_id = if N > 1 {
+        Some(ui.label(label).id)
+    } else {
+        None
+    };
     let (editing, ended) = ui
         .horizontal(|ui| {
-            if N == 1 {
-                ui.label(label);
-            }
+            let label_id = label_id.unwrap_or_else(|| ui.label(label).id);
             let (mut editing, mut ended) = (false, false);
             for value in &mut values {
-                let field = ui.add(
-                    egui::DragValue::new(value)
-                        .range(range.clone())
-                        .speed(speed)
-                        .max_decimals(3)
-                        .update_while_editing(false),
-                );
+                let field = ui
+                    .add(
+                        egui::DragValue::new(value)
+                            .range(range.clone())
+                            .speed(speed)
+                            .max_decimals(3)
+                            .update_while_editing(false),
+                    )
+                    .labelled_by(label_id);
                 // A field being typed in reports a change per keystroke; its value comes
                 // when it loses focus.
                 editing |= field.dragged() || field.has_focus();

@@ -7,6 +7,8 @@ use egui::{Pos2, Rect, Vec2};
 use kernel::DefinitionKind;
 use session::OutlinerRow;
 
+use super::tests::{Recorded, recorded_id};
+
 static NO_ROWS: OutlinerTable = OutlinerTable {
     roots: Vec::new(),
     by_definition: std::collections::BTreeMap::new(),
@@ -1330,42 +1332,6 @@ fn deleting_a_material_does_not_also_rename_it() {
             .any(|a| matches!(a, UiAction::RenameMaterial(..))),
         "{actions:?}"
     );
-}
-
-/// A row the Outliner laid out in the last frame: a node's name (or the Model row, with
-/// an empty path) or a node's expand button, with the marks it was drawn with.
-#[derive(Clone, Debug)]
-pub(super) struct Recorded {
-    pub path: Vec<EntityId>,
-    pub rect: Rect,
-    pub toggle: bool,
-    pub selected: bool,
-    pub open: bool,
-}
-
-pub(super) fn recorded_id() -> egui::Id {
-    egui::Id::new("outliner-test-rows")
-}
-
-pub(super) fn record(
-    ui: &Ui,
-    path: &[EntityId],
-    rect: Rect,
-    toggle: bool,
-    selected: bool,
-    open: bool,
-) {
-    let row = Recorded {
-        path: path.to_vec(),
-        rect,
-        toggle,
-        selected,
-        open,
-    };
-    ui.data_mut(|d| {
-        d.get_temp_mut_or_default::<Vec<Recorded>>(recorded_id())
-            .push(row)
-    });
 }
 
 /// Lays out one frame and returns the Outliner's rows.

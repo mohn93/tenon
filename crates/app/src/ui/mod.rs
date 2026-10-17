@@ -19,6 +19,8 @@ mod right;
 mod status;
 #[cfg(test)]
 mod sweep_tests;
+#[cfg(test)]
+mod tests;
 mod toolbar;
 
 /// What the user asked for through the panels this frame.

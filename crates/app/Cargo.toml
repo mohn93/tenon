@@ -25,3 +25,4 @@ objc2-foundation.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+egui_kittest.workspace = true

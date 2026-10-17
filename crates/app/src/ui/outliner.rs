@@ -17,9 +17,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.heading("Outliner");
     expand_open_path(ui.ctx(), view.context);
     #[cfg(test)]
-    ui.data_mut(|d| {
-        d.remove::<Vec<super::sweep_tests::Recorded>>(super::sweep_tests::recorded_id())
-    });
+    ui.data_mut(|d| d.remove::<Vec<super::tests::Recorded>>(super::tests::recorded_id()));
     egui::ScrollArea::vertical()
         .id_salt("outliner")
         .auto_shrink([false, true])
@@ -32,7 +30,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
             let row = row_button(ui, false, model);
             #[cfg(test)]
-            super::sweep_tests::record(ui, &[], row.rect, false, false, at_root);
+            super::tests::record(ui, &[], row.rect, false, false, at_root);
             // Already at the root: nothing to do (and the tool keeps its operation).
             if row.clicked() && !at_root {
                 actions.push(UiAction::OpenPath(Vec::new()));
@@ -97,7 +95,7 @@ fn outliner_node(
                 }
             });
         #[cfg(test)]
-        super::sweep_tests::record(ui, path, _toggle.rect, true, false, false);
+        super::tests::record(ui, path, _toggle.rect, true, false, false);
         actions.extend(header.inner);
     }
     path.pop();
@@ -117,7 +115,7 @@ fn outliner_row(
     }
     let response = row_button(ui, selected, text);
     #[cfg(test)]
-    super::sweep_tests::record(ui, path, response.rect, false, selected, open);
+    super::tests::record(ui, path, response.rect, false, selected, open);
     if response.double_clicked() {
         Some(UiAction::OpenPath(path.to_vec()))
     } else if response.clicked() {
@@ -133,15 +131,26 @@ fn outliner_row(
     }
 }
 
-/// A selectable row as wide as the space left, its text on the left (cut short if too long).
+/// A selectable row as wide as the space left, its text on the left (cut short if too long),
+/// named by its text alone for AccessKit.
 fn row_button(ui: &mut Ui, selected: bool, text: RichText) -> egui::Response {
     let width = ui.available_width();
-    ui.add(
+    let name = text.text().to_owned();
+    let response = ui.add(
         egui::Button::selectable(selected, text)
             .right_text("")
             .truncate()
             .min_size(Vec2::new(width, 0.0)),
-    )
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            response.enabled(),
+            selected,
+            &name,
+        )
+    });
+    response
 }
 
 /// How the Outliner names a node: a component as `<Name>`, a group by its name or as `Group`.

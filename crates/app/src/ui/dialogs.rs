@@ -62,9 +62,10 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
         .show(ui.ctx(), |ui| {
             let mut value = angle;
             ui.horizontal(|ui| {
-                ui.label("Angle");
+                let label = ui.label("Angle");
                 if ui
                     .add(egui::Slider::new(&mut value, 0..=180).suffix("°"))
+                    .labelled_by(label.id)
                     .changed()
                 {
                     actions.push(UiAction::SetSoftenAngle(value));

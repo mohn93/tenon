@@ -22,10 +22,7 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
                 ("Export...", "Shift+Cmd+E", UiAction::ExportFile),
             ];
             for (label, key, action) in items {
-                if ui
-                    .add(egui::Button::new(label).shortcut_text(key))
-                    .clicked()
-                {
+                if item(ui, label, key, true).clicked() {
                     actions.push(action);
                 }
             }
@@ -41,8 +38,7 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             });
         });
         ui.menu_button("Edit", |ui| {
-            let erase = egui::Button::new("Erase Selection").shortcut_text("Delete");
-            if ui.add_enabled(view.has_selection, erase).clicked() {
+            if item(ui, "Erase Selection", "Delete", view.has_selection).clicked() {
                 actions.push(UiAction::EraseSelection);
             }
             if ui
@@ -57,10 +53,7 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
         });
         ui.menu_button("Camera", |ui| {
-            if ui
-                .add(egui::Button::new("Zoom Extents").shortcut_text("Shift+Z"))
-                .clicked()
-            {
+            if item(ui, "Zoom Extents", "Shift+Z", true).clicked() {
                 actions.push(UiAction::ZoomExtents);
             }
             ui.separator();
@@ -153,4 +146,13 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
         }
     });
+}
+
+/// A menu item showing `key` on its right, named `label` alone for AccessKit.
+fn item(ui: &mut Ui, label: &str, key: &str, enabled: bool) -> egui::Response {
+    let response = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(key));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
+    });
+    response
 }
