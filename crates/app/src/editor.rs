@@ -5121,6 +5121,67 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_inside_an_open_group_copies_within_it() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.select_tool(ToolKind::Select);
+        double_click_at(&mut e, DVec3::new(11.0, 1.0, 1.0));
+        assert_eq!(e.doc().context().len(), 1, "the group is open");
+        e.select_all();
+        let inside = (
+            e.doc().model().edges().count(),
+            e.doc().model().faces().count(),
+        );
+        assert_eq!(inside, (12, 6));
+        move_to(&mut e, DVec3::new(12.0, 2.0, 1.0));
+        e.duplicate().unwrap();
+        click_at(&mut e, DVec3::new(12.0, 5.0, 1.0));
+        assert_eq!(e.doc().undo_label(), Some("copy"));
+        let EntityId::Instance(open) = group else {
+            panic!("{group:?}")
+        };
+        assert_eq!(e.doc().context(), [open], "it stays open");
+        let m = e.doc().model();
+        assert_eq!(
+            (m.edges().count(), m.faces().count()),
+            (24, 12),
+            "the copy is inside the group"
+        );
+        // The copies are selected, all in the group.
+        assert_eq!(e.doc().selection().len(), 18);
+        let root = e.doc().scene().root();
+        assert_eq!(root.edges().count() + root.faces().count(), 0);
+        assert_eq!(root.instances().count(), 1, "no new group outside");
+    }
+
+    #[test]
+    fn duplicate_copies_selected_guides_with_the_geometry() {
+        let mut e = editor();
+        ground_square(&mut e);
+        e.execute(Command::AddGuidePoint {
+            position: [1.0, 1.0, 0.0],
+        })
+        .unwrap();
+        e.execute(Command::AddGuideLine {
+            point: [0.0, 3.0, 0.0],
+            direction: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        e.select_all();
+        assert_eq!(e.doc().selection().len(), 4 + 1 + 2, "guides included");
+        move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.duplicate().unwrap();
+        click_at(&mut e, DVec3::new(7.0, 2.0, 0.0));
+        let m = e.doc().model();
+        assert_eq!((m.edges().count(), m.faces().count()), (8, 2));
+        assert_eq!(m.guides().count(), 4, "both guides copied");
+        assert_eq!(e.doc().selection().len(), 7, "the copies are selected");
+        e.undo();
+        assert_eq!(e.doc().model().guides().count(), 2, "one undo step");
+        assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
     fn the_model_is_untouched_until_the_first_edit() {
         let mut e = editor();
         assert!(e.untouched());
