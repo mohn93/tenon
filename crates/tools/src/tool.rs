@@ -9,7 +9,7 @@ use session::{Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS};
 use crate::arc::ArcTool;
 use crate::circle::CircleTool;
 use crate::erase::EraseTool;
-use crate::inference::Inference;
+use crate::inference::{Axis, Inference};
 use crate::line::LineTool;
 use crate::move_tool::MoveTool;
 use crate::paint::PaintTool;
@@ -128,6 +128,15 @@ pub trait Tool {
     /// Writes the settings this tool keeps for the session (such as a circle's side count)
     /// into `r`, so the tool made next time starts with them.
     fn remember(&self, _r: &mut Remembered) {}
+    /// Before its first click, a tool whose operation lies in a plane (Rotate) can lock that
+    /// plane's normal to an axis (`Some`) or unlock it (`None`). True if the tool took it.
+    fn lock_plane(&mut self, _axis: Option<Axis>) -> bool {
+        false
+    }
+    /// The axis `lock_plane` locked, if any.
+    fn plane_lock(&self) -> Option<Axis> {
+        None
+    }
 }
 
 /// Drag to draw: where the press that started an operation went down, until its release.

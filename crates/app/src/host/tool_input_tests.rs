@@ -1227,3 +1227,32 @@ fn double_and_triple_clicks_select_bounds_and_connected() {
         1
     );
 }
+
+#[test]
+fn arrow_keys_lock_rotates_plane_before_the_first_click() {
+    let mut e = editor();
+    cube(&mut e);
+    tool(&mut e, "rotate");
+    let key = |e: &mut Editor, k: &str| input(e, json!([{"type": "key", "key": k}]));
+    assert_eq!(key(&mut e, "right")["editor"]["lock"], "Locked: red axis");
+    assert_eq!(key(&mut e, "right")["editor"]["lock"], Value::Null);
+    key(&mut e, "up");
+    assert_eq!(key(&mut e, "down")["editor"]["lock"], Value::Null);
+    // Locked to blue, the center on a side face (normal X) still turns about Z.
+    assert_eq!(key(&mut e, "up")["editor"]["lock"], "Locked: blue axis");
+    let side = face_facing(&mut e, [1.0, 0.0, 0.0]);
+    exec(&mut e, json!({"type": "select", "ids": [side]}));
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [2, 1, 0.5]},
+            {"type": "type", "text": "90"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["rotate"], "{r}");
+    assert_eq!(
+        r["commands"][0]["command"]["axis"],
+        json!([0.0, 0.0, 1.0]),
+        "{r}"
+    );
+}

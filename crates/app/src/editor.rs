@@ -938,7 +938,14 @@ impl Editor {
             }
             EditorKey::LockAxis(axis) => {
                 if self.tool.anchor().is_none() {
-                    return false;
+                    // Before the first click: the plane of a tool that works in one (Rotate);
+                    // the same axis again unlocks it.
+                    let axis = (self.tool.plane_lock() != Some(axis)).then_some(axis);
+                    if !self.tool.lock_plane(axis) {
+                        return false;
+                    }
+                    self.invalidate_hover();
+                    return true;
                 }
                 let same = self.lock.is_some_and(|l| l.kind == SnapKind::Axis(axis));
                 self.lock = (!same).then_some(Lock {
@@ -946,6 +953,13 @@ impl Editor {
                     kind: SnapKind::Axis(axis),
                 });
                 self.shift_lock = false;
+                self.invalidate_hover();
+                true
+            }
+            EditorKey::Unlock
+                if self.tool.anchor().is_none() && self.tool.plane_lock().is_some() =>
+            {
+                self.tool.lock_plane(None);
                 self.invalidate_hover();
                 true
             }
@@ -1335,7 +1349,8 @@ impl Editor {
         } else {
             Some(format!("{}_", self.typed))
         };
-        let lock = self.lock.map(|l| match l.kind {
+        let plane = self.tool.plane_lock().map(SnapKind::Axis);
+        let lock = self.lock.map(|l| l.kind).or(plane).map(|kind| match kind {
             SnapKind::Axis(Axis::X) => "Locked: red axis",
             SnapKind::Axis(Axis::Y) => "Locked: green axis",
             SnapKind::Axis(Axis::Z) => "Locked: blue axis",

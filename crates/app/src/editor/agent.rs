@@ -93,6 +93,8 @@ impl Editor {
         self.tool_pressed = false;
         self.message = None;
         self.reset_tool();
+        // Rotate's plane lock goes too (`reset_tool` keeps it: it is not about geometry).
+        self.tool.lock_plane(None);
         self.invalidate_hover();
     }
 }
@@ -177,6 +179,12 @@ mod tests {
         // Cancelling an idle tool changes nothing.
         e.cancel();
         assert_eq!(e.phase(), Phase::Idle);
+        // Rotate's plane lock goes.
+        e.select_tool(ToolKind::Rotate);
+        e.key(EditorKey::LockAxis(tools::Axis::Z));
+        assert_eq!(e.status_parts().lock, Some("Locked: blue axis"));
+        e.cancel();
+        assert_eq!(e.status_parts().lock, None);
     }
 
     #[test]

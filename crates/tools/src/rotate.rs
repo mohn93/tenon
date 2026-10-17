@@ -1,6 +1,7 @@
 //! The Rotate tool: click the center of rotation, click a point the angle starts from, then
 //! click where it ends (or type the angle in degrees). The axis is the normal of the face under
-//! the center click, or vertical elsewhere. The selection turns (or else the edge, face or
+//! the center click, or vertical elsewhere, unless an arrow key locked it to an axis before
+//! the center click. The selection turns (or else the edge, face or
 //! group under the center click). Off points the angle snaps to 15 degree steps. Tapping Ctrl
 //! switches to copying. Right after a rotation, typing an angle redoes it with that angle, and
 //! after a copy "5x" makes 5 copies at that angle and "/5" puts 5 copies evenly up to it.
@@ -10,7 +11,7 @@ use kernel::EntityId;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, MAX_COPIES, rotation};
 
-use crate::inference::{Inference, SnapKind};
+use crate::inference::{Axis, Inference, SnapKind};
 use crate::move_tool::outline;
 use crate::rectangle::{on_plane, plane_normal};
 use crate::select::{pick, whole_curve};
@@ -61,6 +62,9 @@ pub struct RotateTool {
     on_point: bool,
     copy: bool,
     last: Option<Last>,
+    /// The axis the rotation's plane is locked square to, set before the center click; it
+    /// lasts across rotations until unlocked or cancelled.
+    plane: Option<Axis>,
 }
 
 impl RotateTool {
@@ -237,10 +241,11 @@ impl Tool for RotateTool {
         match event {
             ToolEvent::Move(hit) => {
                 self.on_point = is_point(hit.kind);
-                self.hover = self
-                    .turn
-                    .as_ref()
-                    .and_then(|t| on_rotation_plane(t.center, t.axis, &hit, ctx));
+                self.hover = match &self.turn {
+                    Some(t) => on_rotation_plane(t.center, t.axis, &hit, ctx),
+                    // Idle and locked: where the protractor would go.
+                    None => self.plane.map(|_| hit.point),
+                };
             }
             ToolEvent::Click(hit) => match &mut self.turn {
                 None => {
@@ -255,7 +260,9 @@ impl Tool for RotateTool {
                     } else {
                         self.turn = Some(Turn {
                             center: hit.point,
-                            axis: plane_normal(&hit, ctx),
+                            axis: self
+                                .plane
+                                .map_or_else(|| plane_normal(&hit, ctx), Axis::dir),
                             outline: outline(ctx, &ids),
                             ids,
                             reference: None,
@@ -311,6 +318,7 @@ impl Tool for RotateTool {
             ToolEvent::Cancel => {
                 self.turn = None;
                 self.hover = None;
+                self.plane = None;
             }
             ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) => {}
         }
@@ -332,6 +340,9 @@ impl Tool for RotateTool {
                         .map(|[a, b]| [turned.transform_point3(*a), turned.transform_point3(*b)]),
                 );
             }
+        } else if let (Some(axis), Some(at)) = (self.plane, self.hover) {
+            let radius = PROTRACTOR * ctx.camera.eye_distance(at);
+            out.preview = circle(at, axis.dir(), radius, 24);
         }
         out
     }
@@ -340,6 +351,19 @@ impl Tool for RotateTool {
         self.turn = None;
         self.hover = None;
         self.last = None;
+    }
+
+    /// Taken only while idle.
+    fn lock_plane(&mut self, axis: Option<Axis>) -> bool {
+        if self.turn.is_some() {
+            return false;
+        }
+        self.plane = axis;
+        true
+    }
+
+    fn plane_lock(&self) -> Option<Axis> {
+        self.plane
     }
 }
 
@@ -460,6 +484,49 @@ mod tests {
             vec![rotate(&["f8"], [1.0, 1.0, 0.0], 90.0, None)]
         );
         assert!(r.tool.anchor().is_none());
+    }
+
+    #[test]
+    fn an_axis_locked_before_the_first_click_sets_the_plane() {
+        let mut r = Rig::new(&["f8"]);
+        assert!(r.tool.lock_plane(Some(Axis::X)));
+        // The center on the square (normal Z), the angle on the plane x = 0.
+        r.click(DVec3::ZERO);
+        assert!(!r.tool.lock_plane(None), "not while a turn is in progress");
+        r.click(DVec3::new(0.0, 0.0, 1.0));
+        let out = r.click(DVec3::new(0.0, 1.0, 0.0));
+        let [Command::Rotate { axis, angle, .. }] = &out.commands[..] else {
+            panic!("{:?}", out.commands);
+        };
+        assert_eq!(*axis, Some([1.0, 0.0, 0.0]));
+        assert!((angle.abs() - 90.0).abs() < 1e-6, "{angle}");
+        assert_eq!(r.tool.plane_lock(), Some(Axis::X), "the lock lasts");
+        r.tool.on_external_change();
+        assert_eq!(
+            r.tool.plane_lock(),
+            Some(Axis::X),
+            "it is not about geometry"
+        );
+        r.send(ToolEvent::Cancel);
+        assert_eq!(r.tool.plane_lock(), None);
+    }
+
+    #[test]
+    fn a_locked_plane_shows_the_protractor_under_the_cursor() {
+        let mut r = Rig::new(&["f8"]);
+        let at = DVec3::new(1.0, 1.0, 0.0);
+        assert!(
+            r.hover(at).preview.is_empty(),
+            "unlocked idle shows nothing"
+        );
+        r.tool.lock_plane(Some(Axis::Z));
+        let out = r.hover(at);
+        assert_eq!(out.preview.len(), 24);
+        let radius = PROTRACTOR * r.camera.eye_distance(at);
+        for [a, b] in &out.preview {
+            assert!((a.distance(at) - radius).abs() < 1e-9);
+            assert!((a.z - at.z).abs() < 1e-9 && (b.z - at.z).abs() < 1e-9);
+        }
     }
 
     #[test]
