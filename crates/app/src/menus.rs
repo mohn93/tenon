@@ -235,7 +235,8 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
     if native {
         menus.push(Menu {
             title: APP_MENU,
-            entries: vec![bound_item("Quit", Bound::Quit, UiAction::Quit).entry()],
+            // macOS names the app in its menu's Quit, as the predefined About does.
+            entries: vec![bound_item("Quit sketchup-alt", Bound::Quit, UiAction::Quit).entry()],
         });
     }
     menus.extend([

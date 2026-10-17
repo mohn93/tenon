@@ -539,7 +539,8 @@ fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
     let f = Fixture::default();
     let egui = menu_bar(&f.view(), false);
     let file = &egui.iter().find(|m| m.title == "File").unwrap().entries;
-    assert!(matches!(file.last(), Some(Entry::Item(i)) if i.action == UiAction::Quit));
+    assert!(matches!(file.last(), Some(Entry::Item(i))
+        if i.action == UiAction::Quit && i.label == "Quit"));
     assert!(egui.iter().all(|m| m.title != APP_MENU));
     let native = menu_bar(&f.view(), true);
     assert_eq!(native[0].title, APP_MENU);
@@ -548,6 +549,8 @@ fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
         .filter(|i| i.action == UiAction::Quit)
         .count();
     assert_eq!(quits, 1);
+    assert!(matches!(native[0].entries.as_slice(), [Entry::Item(i)]
+        if i.action == UiAction::Quit && i.label == "Quit sketchup-alt"));
     assert_eq!(
         click_menu(&mut harness(Fixture::default()), &["File", "Quit"]),
         [UiAction::Quit]
