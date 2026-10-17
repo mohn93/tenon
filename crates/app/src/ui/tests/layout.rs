@@ -19,6 +19,8 @@ fn panels_leave_a_central_view_inside_the_window() {
 /// A fixture with every toolbar button enabled.
 fn toolbar_fixture() -> Fixture {
     Fixture {
+        undo: Some("push_pull".into()),
+        redo: Some("paint".into()),
         has_selection: true,
         has_instance_selected: true,
         inside_instance: true,

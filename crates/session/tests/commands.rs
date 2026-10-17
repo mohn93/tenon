@@ -232,3 +232,15 @@ fn entities_query_filters_by_kind_and_id() {
     let all = ask(&d, json!({"type": "entities"}));
     assert_eq!(all["vertices"].as_array().unwrap().len(), 4);
 }
+
+#[test]
+fn the_next_undo_and_redo_steps_are_named() {
+    let mut d = doc();
+    assert_eq!((d.undo_label(), d.redo_label()), (None, None));
+    edge(&mut d, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    assert_eq!((d.undo_label(), d.redo_label()), (Some("add_edge"), None));
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!((d.undo_label(), d.redo_label()), (None, Some("add_edge")));
+    // The same names the history query lists first.
+    assert_eq!(ask(&d, json!({"type": "history"}))["redo"][0], "add_edge");
+}

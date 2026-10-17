@@ -24,6 +24,8 @@ use crate::editor::{ImportUnits, Status};
 
 /// Everything a test's `View` borrows, owned, and what the panels reported.
 pub(super) struct Fixture {
+    pub undo: Option<String>,
+    pub redo: Option<String>,
     pub tool: ToolKind,
     pub status: Status,
     pub info: Vec<String>,
@@ -55,6 +57,8 @@ pub(super) struct Fixture {
 impl Default for Fixture {
     fn default() -> Self {
         Self {
+            undo: None,
+            redo: None,
             tool: ToolKind::Line,
             status: Status {
                 tool: "Line",
@@ -96,6 +100,8 @@ impl Default for Fixture {
 impl Fixture {
     pub fn view(&self) -> View<'_> {
         View {
+            undo: self.undo.as_deref(),
+            redo: self.redo.as_deref(),
             agents: Agents {
                 connected: self.connected,
                 log: self.log.as_deref(),

@@ -134,3 +134,21 @@ fn a_numeric_rows_values_are_mono_and_its_label_is_not() {
         "{fonts:?}"
     );
 }
+
+#[test]
+fn an_icon_button_is_named_and_can_be_disabled() {
+    let mut h = kit(|ui| {
+        widgets::icon_button(
+            ui,
+            crate::ui::icons::UNDO,
+            "Undo",
+            "Nothing to undo",
+            Some(Bound::Undo),
+            false,
+        );
+    });
+    assert!(h.get_by_label("Undo").accesskit_node().is_disabled());
+    h.get_by_label("Undo").hover();
+    h.run_steps(20);
+    assert!(drawn_texts_of(&h).iter().any(|t| t == "Nothing to undo"));
+}

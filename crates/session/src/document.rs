@@ -1072,6 +1072,16 @@ impl Document {
         }
     }
 
+    /// The label of the step `undo` would undo next (the `history` query's first `undo`).
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.last().map(|s| s.label.as_str())
+    }
+
+    /// The label of the step `redo` would redo next.
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo.last().map(|s| s.label.as_str())
+    }
+
     pub fn query(&self, query: &Query) -> Result<QueryResult, CommandError> {
         let m = self.model();
         Ok(match query {

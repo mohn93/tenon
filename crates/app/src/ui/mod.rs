@@ -13,6 +13,7 @@ use crate::editor::{ImportUnits, Status};
 
 mod dialogs;
 mod fonts;
+mod icons;
 mod materials;
 mod outliner;
 mod right;
@@ -141,6 +142,10 @@ pub struct Agents<'a> {
 /// What the panels show.
 pub struct View<'a> {
     pub agents: Agents<'a>,
+    /// The label of the step Undo would undo (`Document::undo_label`); None: nothing to undo.
+    pub undo: Option<&'a str>,
+    /// The label of the step Redo would redo.
+    pub redo: Option<&'a str>,
     pub tool: ToolKind,
     pub status: &'a Status,
     pub info: &'a [String],

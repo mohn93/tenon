@@ -994,6 +994,8 @@ impl State {
                 .collect()
         });
         let panels = View {
+            undo: self.editor.doc().undo_label(),
+            redo: self.editor.doc().redo_label(),
             agents: Agents {
                 connected: hub.open_connections(),
                 log: lines.as_deref(),

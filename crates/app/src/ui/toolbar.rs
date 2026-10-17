@@ -4,7 +4,7 @@ use egui::Ui;
 use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
 
-use super::{FLY_HELP, UiAction, View, widgets};
+use super::{FLY_HELP, UiAction, View, icons, widgets};
 use crate::editor::ImportUnits;
 use crate::shortcuts::Bound;
 
@@ -111,17 +111,33 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
         }
         ui.separator();
-        if ui
-            .button("Undo")
-            .on_hover_ui(|ui| widgets::hint(ui, "Undo", Some(Bound::Undo)))
-            .clicked()
+        let undo = view.undo.map_or("Nothing to undo".into(), |l| {
+            format!("Undo {}", step_name(l))
+        });
+        if widgets::icon_button(
+            ui,
+            icons::UNDO,
+            "Undo",
+            &undo,
+            Some(Bound::Undo),
+            view.undo.is_some(),
+        )
+        .clicked()
         {
             actions.push(UiAction::Undo);
         }
-        if ui
-            .button("Redo")
-            .on_hover_ui(|ui| widgets::hint(ui, "Redo", Some(Bound::Redo)))
-            .clicked()
+        let redo = view.redo.map_or("Nothing to redo".into(), |l| {
+            format!("Redo {}", step_name(l))
+        });
+        if widgets::icon_button(
+            ui,
+            icons::REDO,
+            "Redo",
+            &redo,
+            Some(Bound::Redo),
+            view.redo.is_some(),
+        )
+        .clicked()
         {
             actions.push(UiAction::Redo);
         }
@@ -162,4 +178,14 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
         }
     });
+}
+
+/// A history label as words: `push_pull` reads "Push pull".
+pub(super) fn step_name(label: &str) -> String {
+    let words = label.replace('_', " ");
+    let mut chars = words.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }

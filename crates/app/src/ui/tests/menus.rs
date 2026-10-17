@@ -238,3 +238,38 @@ fn group_buttons_name_their_keys() {
     let key = chord(Bound::MakeComponent).unwrap().text();
     assert!(drawn_texts(&h).contains(&key), "{key}");
 }
+
+#[test]
+fn undo_and_redo_are_disabled_when_empty_and_name_their_step() {
+    let mut h = harness(Fixture::default());
+    for label in ["Undo", "Redo"] {
+        assert!(
+            h.get_by_label(label).accesskit_node().is_disabled(),
+            "{label}"
+        );
+        assert_eq!(click(&mut h, label), [], "{label}");
+    }
+    let mut h = harness(Fixture {
+        undo: Some("push_pull".into()),
+        ..Default::default()
+    });
+    assert!(!h.get_by_label("Undo").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Redo").accesskit_node().is_disabled());
+    h.get_by_label("Undo").hover();
+    h.run_steps(20);
+    let texts = drawn_texts(&h);
+    assert!(texts.iter().any(|t| t == "Undo Push pull"), "{texts:?}");
+    assert!(
+        texts.contains(&chord(Bound::Undo).unwrap().text()),
+        "{texts:?}"
+    );
+    assert_eq!(click(&mut h, "Undo"), [UiAction::Undo]);
+}
+
+#[test]
+fn history_labels_read_as_words() {
+    use crate::ui::toolbar::step_name;
+    assert_eq!(step_name("push_pull"), "Push pull");
+    assert_eq!(step_name("batch"), "Batch");
+    assert_eq!(step_name(""), "");
+}

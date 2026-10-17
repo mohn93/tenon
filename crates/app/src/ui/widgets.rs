@@ -12,6 +12,31 @@ use tools::ToolKind;
 use super::{fonts, theme};
 use crate::shortcuts::Bound;
 
+/// A square button showing `icon`, named `label`; its tooltip is `tooltip` and the key bound
+/// to `bound`, also while disabled (then the icon takes the disabled text color).
+pub fn icon_button(
+    ui: &mut Ui,
+    icon: &str,
+    label: &str,
+    tooltip: &str,
+    bound: Option<Bound>,
+    enabled: bool,
+) -> Response {
+    let t = theme::tokens(ui.ctx().theme());
+    let mut glyph = RichText::new(icon).size(theme::ICON_SIZE);
+    if !enabled {
+        glyph = glyph.color(t.text_disabled);
+    }
+    let response = ui.add_enabled(
+        enabled,
+        egui::Button::new(glyph).min_size(Vec2::splat(theme::CONTROL_HEIGHT)),
+    );
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
+    response
+        .on_hover_ui(|ui| hint(ui, tooltip, bound))
+        .on_disabled_hover_ui(|ui| hint(ui, tooltip, bound))
+}
+
 /// A tool's button: its name, on an accent fill while it is the active tool (otherwise framed
 /// only under the pointer, as a selectable label is). The tooltip names the tool and its key.
 pub fn tool_button(ui: &mut Ui, kind: ToolKind, selected: bool) -> Response {

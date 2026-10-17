@@ -148,6 +148,8 @@ pub const SECTION_SIZE: f32 = 11.0;
 /// The gap above a section title.
 pub const SECTION_GAP: f32 = 12.0;
 pub const SWATCH_SIZE: f32 = 16.0;
+/// Icon glyphs in buttons.
+pub const ICON_SIZE: f32 = 16.0;
 
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {
