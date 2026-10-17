@@ -1,12 +1,15 @@
 //! What egui draws over the 3D view for the tools: the preview lines, the snap marker with its
-//! halo, the snap chip by the cursor and the flash of a refused value.
+//! halo, the snap chip by the cursor and the flash of a refused value; and the view's cursor.
 
 use std::f32::consts::SQRT_2;
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Ui};
+use egui::{
+    Color32, CornerRadius, CursorIcon, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Ui,
+};
 use egui::{Vec2, vec2};
 use glam::DVec2;
+use tools::ToolKind;
 use tools::overlay::{HALO_PT, MARKER_PT, Rgba, Shape};
 
 use super::theme;
@@ -19,7 +22,7 @@ const SQUARE_STROKE: f32 = 2.0;
 /// Paints `hud` over the 3D view, whose rectangle is `view_rect` (points); the HUD's positions
 /// are view pixels. Lines go first, then the marker (its halo, then its shape), then the chip
 /// and the flash. The chip is left out while the pointer is over a window, a menu or the
-/// gizmo; with no cursor in the view the flash shows centred above the status bar.
+/// gizmo; there, and with no cursor in the view, the flash shows centred above the status bar.
 pub fn hud(ui: &Ui, view_rect: Rect, hud: &Hud) {
     let ctx = ui.ctx();
     let ppp = ctx.pixels_per_point();
@@ -42,29 +45,27 @@ pub fn hud(ui: &Ui, view_rect: Rect, hud: &Hud) {
     }
 
     let t = theme::tokens(ctx.theme());
-    let cursor = hud.cursor.map(at);
-    let chip = hud
-        .chip
-        .as_ref()
-        .filter(|_| cursor.is_some() && !ctx.is_pointer_over_egui())
-        .map(|chip| {
-            let label = chip.label.as_ref().map(|s| {
-                painter.layout_no_wrap(
-                    s.clone(),
-                    FontId::proportional(theme::SMALL_SIZE),
-                    t.text_primary,
-                )
-            });
-            let value_color = if chip.typing {
-                t.accent
-            } else {
-                t.text_primary
-            };
-            let value = chip.value.as_ref().map(|s| {
-                painter.layout_no_wrap(s.clone(), FontId::monospace(theme::BODY_SIZE), value_color)
-            });
-            Card::new([label, value].into_iter().flatten().collect())
+    // Under a window the chip would be hidden and the flash lost: as with no cursor in the
+    // view, the flash goes above the status bar.
+    let cursor = hud.cursor.map(at).filter(|_| !ctx.is_pointer_over_egui());
+    let chip = hud.chip.as_ref().filter(|_| cursor.is_some()).map(|chip| {
+        let label = chip.label.as_ref().map(|s| {
+            painter.layout_no_wrap(
+                s.clone(),
+                FontId::proportional(theme::SMALL_SIZE),
+                t.text_primary,
+            )
         });
+        let value_color = if chip.typing {
+            t.accent
+        } else {
+            t.text_primary
+        };
+        let value = chip.value.as_ref().map(|s| {
+            painter.layout_no_wrap(s.clone(), FontId::monospace(theme::BODY_SIZE), value_color)
+        });
+        Card::new([label, value].into_iter().flatten().collect())
+    });
     let flash = hud.flash.as_ref().map(|message| {
         Card::new(vec![painter.layout_no_wrap(
             message.clone(),
@@ -113,6 +114,44 @@ pub fn hud(ui: &Ui, view_rect: Rect, hud: &Hud) {
                 flash.paint(&painter, min, flash_fill);
             }
         }
+    }
+}
+
+/// The pointer over the 3D view with `tool` active: `Grabbing` while `navigating` (an orbit or
+/// pan drag), a crosshair for the drawing tools and Tape, move arrows for Move, a vertical
+/// resize for Push/Pull, and for Paint and Erase a pointing hand while `hovering` a target.
+pub fn cursor_icon(tool: ToolKind, hovering: bool, navigating: bool) -> CursorIcon {
+    if navigating {
+        return CursorIcon::Grabbing;
+    }
+    match tool {
+        ToolKind::Select => CursorIcon::Default,
+        ToolKind::Line
+        | ToolKind::Rectangle
+        | ToolKind::Circle
+        | ToolKind::Arc
+        | ToolKind::Rotate
+        | ToolKind::TapeMeasure => CursorIcon::Crosshair,
+        ToolKind::Move => CursorIcon::Move,
+        ToolKind::PushPull => CursorIcon::ResizeVertical,
+        ToolKind::Paint | ToolKind::Erase if hovering => CursorIcon::PointingHand,
+        ToolKind::Paint | ToolKind::Erase => CursorIcon::Default,
+    }
+}
+
+/// Shows `cursor` while the pointer is over the 3D view (`view_rect`), on no window, menu or
+/// gizmo, and no widget chose a cursor this frame (the dock's resize edge keeps its own).
+/// Called after everything else is laid out.
+pub fn set_cursor(ctx: &egui::Context, view_rect: Rect, cursor: CursorIcon) {
+    let Some(pointer) = ctx.pointer_hover_pos() else {
+        return;
+    };
+    let in_view = view_rect.contains(pointer)
+        && ctx
+            .layer_id_at(pointer)
+            .is_none_or(|layer| layer.order == egui::Order::Background);
+    if in_view && ctx.output(|o| o.cursor_icon) == CursorIcon::Default {
+        ctx.set_cursor_icon(cursor);
     }
 }
 

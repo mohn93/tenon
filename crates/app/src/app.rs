@@ -35,8 +35,8 @@ use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
-use crate::ui::theme;
 use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
+use crate::ui::{theme, viewport};
 
 /// The window's least size, in points: the panels and a usable 3D view.
 const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
@@ -160,9 +160,15 @@ fn earliest(deadline: Option<Instant>, t: Instant) -> Instant {
 }
 
 /// The repaint deadline after a frame whose HUD was dressed at `shown_at`: `pending`, or
-/// sooner when the HUD changes by itself before (the chip's rest, the flash's end).
-fn with_feedback(pending: Option<Instant>, timing: &Timing, shown_at: Instant) -> Option<Instant> {
-    match timing.deadline(shown_at) {
+/// sooner when the HUD changes by itself before (the rest's end, when it reveals a `chip`; the
+/// flash's end).
+fn with_feedback(
+    pending: Option<Instant>,
+    timing: &Timing,
+    shown_at: Instant,
+    chip: bool,
+) -> Option<Instant> {
+    match timing.deadline(shown_at, chip) {
         Some(t) => Some(earliest(pending, t)),
         None => pending,
     }
@@ -1103,8 +1109,13 @@ impl State {
         let covered = self.in_view(self.cursor) && self.gui.wants_pointer_at(self.cursor);
         let dark_canvas =
             self.editor.doc().lighting == Lighting::Night || self.gui.theme() == egui::Theme::Dark;
-        // Editor::navigating comes with the cursors (Task 10); until then no navigation hides it.
-        let hud = self.timing.dress(self.editor.hud(dark_canvas), now, false);
+        let navigating = self.editor.navigating();
+        let hud = self.editor.hud(dark_canvas);
+        // Whether the rest's end would show a chip: none to show, or one hidden while
+        // navigating or under a window, is no reason to wake (Select over empty space, an
+        // orbit drag).
+        let chip_at_rest = hud.chip.is_some() && !navigating && !covered;
+        let hud = self.timing.dress(hud, now, navigating);
         let hud = if covered { hud.covered() } else { hud };
         let dressed_at = now;
         let lines: Option<Vec<String>> = self.agent_activity.then(|| {
@@ -1157,6 +1168,11 @@ impl State {
                 }
             }),
             hud: &hud,
+            cursor: viewport::cursor_icon(
+                self.editor.tool_kind(),
+                self.editor.hovered().is_some(),
+                navigating,
+            ),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -1246,7 +1262,7 @@ impl State {
             self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
         }
         // The chip's rest and the flash's end, as of the HUD this frame showed.
-        self.repaint_at = with_feedback(self.repaint_at, &self.timing, dressed_at);
+        self.repaint_at = with_feedback(self.repaint_at, &self.timing, dressed_at, chip_at_rest);
         for action in actions {
             self.apply(action);
         }
@@ -2021,16 +2037,25 @@ mod tests {
     fn a_still_window_asks_for_no_repaint() {
         let now = Instant::now();
         let mut timing = Timing::default();
-        assert_eq!(with_feedback(None, &timing, now), None, "nothing pending");
+        assert_eq!(
+            with_feedback(None, &timing, now, true),
+            None,
+            "nothing pending"
+        );
         assert_eq!(wake_decision(now, None), Wake::Wait);
         // A move asks for the frame at the rest, and that frame for nothing more.
         timing.moved(now);
         let rest = now + crate::feedback::LABEL_REST;
-        assert_eq!(with_feedback(None, &timing, now), Some(rest));
-        assert_eq!(with_feedback(None, &timing, rest), None);
+        assert_eq!(with_feedback(None, &timing, now, true), Some(rest));
+        assert_eq!(with_feedback(None, &timing, rest, true), None);
+        // With no chip to show at the rest, the move asks for nothing.
+        assert_eq!(with_feedback(None, &timing, now, false), None);
         // An earlier deadline already pending stays.
         let sooner = now + Duration::from_millis(10);
-        assert_eq!(with_feedback(Some(sooner), &timing, now), Some(sooner));
+        assert_eq!(
+            with_feedback(Some(sooner), &timing, now, true),
+            Some(sooner)
+        );
     }
 
     #[test]

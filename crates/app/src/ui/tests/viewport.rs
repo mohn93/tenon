@@ -1,5 +1,5 @@
 //! What is drawn over the 3D view: the snap marker and its halo, the preview lines, the snap
-//! chip and the flash.
+//! chip and the flash, and the view's cursor.
 
 use egui::{Color32, FontFamily, Pos2, Rect, Vec2};
 use glam::DVec2;
@@ -7,7 +7,7 @@ use tools::overlay::{ENDPOINT, HALO_PT, INTERSECTION, LINE_PT, MARKER_PT, Screen
 
 use super::*;
 use crate::feedback::{Chip, Hud};
-use crate::ui::viewport::chip_rect;
+use crate::ui::viewport::{chip_rect, cursor_icon};
 
 /// The text shapes painted with `text`.
 fn texts_named(h: &H, text: &str) -> Vec<egui::epaint::TextShape> {
@@ -154,6 +154,91 @@ fn the_chip_hides_over_a_window() {
     assert!(
         !drawn_texts(&h).iter().any(|s| s == "Endpoint"),
         "the window covers the chip's place"
+    );
+}
+
+#[test]
+fn the_chip_shows_with_the_pointer_over_the_view() {
+    let mut h = harness(with_hud(Hud {
+        cursor: Some(DVec2::new(300.0, 200.0)),
+        chip: chip("Endpoint", None, false),
+        ..Hud::default()
+    }));
+    let at = h.state().central.min + Vec2::new(300.0, 200.0);
+    h.event(egui::Event::PointerMoved(at));
+    h.run_ok();
+    assert!(drawn_texts(&h).iter().any(|s| s == "Endpoint"));
+}
+
+#[test]
+fn over_a_window_the_flash_sits_above_the_status_bar() {
+    let f = Fixture {
+        shortcuts: true,
+        ..with_hud(Hud {
+            cursor: Some(DVec2::new(300.0, 200.0)),
+            flash: Some("Not width,height: 2,x".into()),
+            ..Hud::default()
+        })
+    };
+    let mut h = harness(f);
+    let window = rect_of(&h, "Keyboard Shortcuts");
+    h.event(egui::Event::PointerMoved(window.center()));
+    h.run_ok();
+    let view = h.state().central;
+    let shapes = texts_named(&h, "Not width,height: 2,x");
+    assert_eq!(shapes.len(), 1, "{shapes:?}");
+    let text = Rect::from_min_size(shapes[0].pos, shapes[0].galley.size());
+    assert!(
+        (text.center().x - view.center().x).abs() < 1.0,
+        "centred: {text:?} in {view:?}"
+    );
+    assert!(
+        text.max.y < view.max.y && text.max.y > view.max.y - 20.0,
+        "not under the window at the cursor: {text:?} in {view:?}"
+    );
+}
+
+#[test]
+fn each_tool_has_its_cursor() {
+    use egui::CursorIcon as C;
+    for (tool, icon) in [
+        (ToolKind::Select, C::Default),
+        (ToolKind::Line, C::Crosshair),
+        (ToolKind::Rectangle, C::Crosshair),
+        (ToolKind::Circle, C::Crosshair),
+        (ToolKind::Arc, C::Crosshair),
+        (ToolKind::TapeMeasure, C::Crosshair),
+        (ToolKind::Rotate, C::Crosshair),
+        (ToolKind::Move, C::Move),
+        (ToolKind::PushPull, C::ResizeVertical),
+        (ToolKind::Paint, C::Default),
+        (ToolKind::Erase, C::Default),
+    ] {
+        assert_eq!(cursor_icon(tool, false, false), icon, "{tool:?}");
+    }
+    assert_eq!(cursor_icon(ToolKind::Paint, true, false), C::PointingHand);
+    assert_eq!(cursor_icon(ToolKind::Erase, true, false), C::PointingHand);
+    assert_eq!(cursor_icon(ToolKind::Line, false, true), C::Grabbing);
+}
+
+#[test]
+fn the_view_shows_the_tools_cursor_and_the_panels_keep_theirs() {
+    let mut h = harness(Fixture {
+        cursor: egui::CursorIcon::Crosshair,
+        ..Default::default()
+    });
+    let view = h.state().central;
+    h.event(egui::Event::PointerMoved(view.center()));
+    h.run_ok();
+    assert_eq!(
+        h.output().platform_output.cursor_icon,
+        egui::CursorIcon::Crosshair
+    );
+    h.event(egui::Event::PointerMoved(rect_of(&h, "Line").center()));
+    h.run_ok();
+    assert_ne!(
+        h.output().platform_output.cursor_icon,
+        egui::CursorIcon::Crosshair
     );
 }
 

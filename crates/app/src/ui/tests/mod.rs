@@ -71,6 +71,8 @@ pub(super) struct Fixture {
     pub central: Rect,
     /// What is drawn over the 3D view.
     pub hud: Hud,
+    /// The pointer over the 3D view.
+    pub cursor: egui::CursorIcon,
 }
 
 impl Default for Fixture {
@@ -118,6 +120,7 @@ impl Default for Fixture {
             actions: Vec::new(),
             central: Rect::NOTHING,
             hud: Hud::default(),
+            cursor: egui::CursorIcon::Default,
         }
     }
 }
@@ -156,6 +159,7 @@ impl Fixture {
             egui_menus: self.egui_menus,
             dock: self.dock,
             hud: &self.hud,
+            cursor: self.cursor,
         }
     }
 

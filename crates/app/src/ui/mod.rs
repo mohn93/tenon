@@ -209,6 +209,8 @@ pub struct View<'a> {
     pub dock: DockLayout,
     /// What is drawn over the 3D view for the tools.
     pub hud: &'a Hud,
+    /// The pointer over the 3D view (`viewport::cursor_icon`).
+    pub cursor: egui::CursorIcon,
 }
 
 /// What Entity Info's texture position fields show and apply to.
@@ -309,5 +311,6 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     let central = ui.available_rect_before_wrap();
     // In the root's own layer, under every window and menu.
     viewport::hud(ui, central, view.hud);
+    viewport::set_cursor(ui.ctx(), central, view.cursor);
     central
 }

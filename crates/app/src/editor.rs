@@ -765,6 +765,11 @@ impl Editor {
         moved
     }
 
+    /// True while a button drag orbits or pans the camera.
+    pub fn navigating(&self) -> bool {
+        self.nav.dragging()
+    }
+
     /// True while fly mode is on.
     pub fn flying(&self) -> bool {
         self.flying
@@ -1949,6 +1954,20 @@ mod tests {
             "orbits about the face point"
         );
         assert!(cam.project(p).unwrap().abs_diff_eq(px, 1e-6));
+    }
+
+    #[test]
+    fn a_middle_drag_is_navigating() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        assert!(!e.navigating());
+        e.button(Button::Middle, true);
+        assert!(e.navigating(), "from the press");
+        e.cursor_moved(px + DVec2::new(40.0, 25.0));
+        assert!(e.navigating(), "while it moves");
+        e.button(Button::Middle, false);
+        assert!(!e.navigating(), "until the release");
     }
 
     #[test]

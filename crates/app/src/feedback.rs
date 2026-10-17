@@ -81,9 +81,10 @@ impl Timing {
     }
 
     /// When the HUD next changes by itself (the rest's end, the flash's end); None when
-    /// nothing is pending.
-    pub fn deadline(&self, now: Instant) -> Option<Instant> {
-        let rest = self.moved.map(|t| t + LABEL_REST);
+    /// nothing is pending. The rest counts only when `chip`: a chip waits for it, so the frame
+    /// at its end shows something new.
+    pub fn deadline(&self, now: Instant, chip: bool) -> Option<Instant> {
+        let rest = self.moved.filter(|_| chip).map(|t| t + LABEL_REST);
         let flash = self.flash.as_ref().map(|(_, t)| *t + FLASH_TIME);
         [rest, flash]
             .into_iter()
@@ -101,18 +102,31 @@ mod tests {
     fn timing_asks_for_one_frame_per_change_then_none() {
         let t0 = Instant::now();
         let mut t = Timing::default();
-        assert_eq!(t.deadline(t0), None, "idle from the start");
+        assert_eq!(t.deadline(t0, true), None, "idle from the start");
         t.moved(t0);
-        assert_eq!(t.deadline(t0), Some(t0 + LABEL_REST));
+        assert_eq!(t.deadline(t0, true), Some(t0 + LABEL_REST));
         let rested = t0 + LABEL_REST;
         assert_eq!(
-            t.deadline(rested),
+            t.deadline(rested, true),
             None,
             "the frame at the rest is the last"
         );
         t.flash("Not a length: 2,x".into(), rested);
-        assert_eq!(t.deadline(rested), Some(rested + FLASH_TIME));
-        assert_eq!(t.deadline(rested + FLASH_TIME), None);
+        assert_eq!(t.deadline(rested, true), Some(rested + FLASH_TIME));
+        assert_eq!(t.deadline(rested + FLASH_TIME, true), None);
+    }
+
+    #[test]
+    fn the_rest_wakes_the_window_only_for_a_chip() {
+        // Select over empty space, or an orbit drag: the cursor moves, but no chip waits for
+        // the rest, so the rest's end draws nothing new.
+        let t0 = Instant::now();
+        let mut t = Timing::default();
+        t.moved(t0);
+        assert_eq!(t.deadline(t0, false), None);
+        // A flash still ends on time.
+        t.flash("Not a length: 2,x".into(), t0);
+        assert_eq!(t.deadline(t0, false), Some(t0 + FLASH_TIME));
     }
 
     #[test]
