@@ -9,7 +9,9 @@ use std::time::Instant;
 use api::Mods;
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{DefinitionKind, EntityId, InstanceId, MaterialId};
+use render::PreviewVertex;
 use render::grid::LineVertex;
+use render::scene::DEFAULT_FRONT;
 pub use session::ImportUnits;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Lighting, Outcome,
@@ -17,7 +19,7 @@ use session::{
 };
 use tools::overlay::{overlay, snap_label};
 use tools::{
-    Axis, Guides, Inference, Layout, Lock, Owner, Remembered, Scenery, Slab, SnapKind, Tool,
+    Axis, Guides, Inference, Layout, Lock, Owner, Remembered, Scenery, Slab, SnapKind, Solid, Tool,
     ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in, face_under_in,
     infer_detail,
 };
@@ -41,6 +43,8 @@ type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
 const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
 /// How far (logical px) the cursor must travel from a press for it to be a drag.
 const DRAG_LOGICAL_PX: f64 = 4.0;
+/// The opacity of the solid a tool previews.
+const SOLID_ALPHA: f32 = 0.7;
 
 /// Keys the editor handles itself (navigation and undo shortcuts are handled elsewhere).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +113,8 @@ pub struct Editor {
     /// Where the geometry `hit` snapped to lies, for the snap label.
     within: Within,
     preview: Vec<[DVec3; 2]>,
+    /// The solid the tool previews (Push/Pull's pulled shape), in the open context's coordinates.
+    solid: Option<Solid>,
     /// The inference under the cursor, the tool preview and what the tool shows of them are
     /// out of date. Input that may change them only sets this; they are worked out again once,
     /// when a frame is drawn (`refresh_hover`) or before input that uses them.
@@ -198,6 +204,7 @@ impl Editor {
             hit: None,
             within: Within::Open,
             preview: Vec::new(),
+            solid: None,
             hover_dirty: false,
             hover_hidden: false,
             navigated: false,
@@ -258,6 +265,7 @@ impl Editor {
         self.tool = kind.make_with(&self.remembered);
         self.kind = kind;
         self.preview.clear();
+        self.solid = None;
         self.typed.clear();
         self.message = None;
         self.invalidate_hover();
@@ -1298,6 +1306,38 @@ impl Editor {
         snap_label(hit.kind, self.within)
     }
 
+    /// The triangles of the solid the tool previews (Push/Pull's pulled shape), as of the last
+    /// `refresh_hover`, in root coordinates: each with its flat normal and the material's
+    /// color (or the default material's front) at 70% opacity. Empty while flying.
+    pub fn solid_preview(&self) -> Vec<PreviewVertex> {
+        let Some(solid) = self.solid.as_ref().filter(|_| !self.flying) else {
+            return Vec::new();
+        };
+        let [r, g, b] = solid
+            .material
+            .and_then(|m| self.doc.scene().material(m))
+            .map_or(DEFAULT_FRONT, |m| m.color.map(|u| f32::from(u) / 255.0));
+        let color = [r, g, b, SOLID_ALPHA];
+        let t = self.doc.context_transform();
+        solid
+            .triangles
+            .iter()
+            .flat_map(|tri| {
+                let [a, b, c] = tri.map(|p| t.transform_point3(p));
+                let normal = (b - a)
+                    .cross(c - a)
+                    .normalize_or_zero()
+                    .as_vec3()
+                    .to_array();
+                [a, b, c].map(|p| PreviewVertex {
+                    pos: p.as_vec3().to_array(),
+                    normal,
+                    color,
+                })
+            })
+            .collect()
+    }
+
     /// Line pairs for the renderer's overlay pass, as of the last `refresh_hover`. Tools work
     /// in the open context's coordinates; the overlay is drawn in the root's.
     pub fn overlay(&self) -> Vec<LineVertex> {
@@ -1444,6 +1484,7 @@ impl Editor {
             }
         }
         self.preview = out.preview;
+        self.solid = out.solid;
     }
 
     /// Selects the edges, faces, instances and guides a command created in the open context (a
@@ -1472,6 +1513,7 @@ impl Editor {
     fn reset_tool(&mut self) {
         self.tool.on_external_change();
         self.preview.clear();
+        self.solid = None;
     }
 
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
@@ -1591,10 +1633,14 @@ impl Editor {
         };
         let out = self.tool.handle(ToolEvent::Move(hit), &ctx);
         let hit = (!self.hover_hidden).then_some(hit);
-        let changed = self.hit != hit || self.within != within || self.preview != out.preview;
+        let changed = self.hit != hit
+            || self.within != within
+            || self.preview != out.preview
+            || self.solid != out.solid;
         self.hit = hit;
         self.within = within;
         self.preview = out.preview;
+        self.solid = out.solid;
         changed
     }
 
@@ -4261,5 +4307,92 @@ mod tests {
         assert_eq!(e.snap_label().as_deref(), Some("Endpoint"));
         e.toggle_fly();
         assert_eq!(e.snap_label(), None, "no label while flying");
+    }
+
+    #[test]
+    fn pulling_a_face_previews_a_translucent_solid() {
+        let mut e = editor();
+        square(&mut e);
+        e.select_tool(ToolKind::PushPull);
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        move_to(&mut e, DVec3::new(2.0, 2.0, 1.5));
+        e.refresh_hover();
+        let solid = e.solid_preview();
+        assert_eq!(solid.len(), 3 * (2 + 4 * 2));
+        assert!(solid.iter().all(|v| v.color[3] == 0.7));
+        assert!(
+            solid
+                .iter()
+                .all(|v| v.color[..3] == render::scene::DEFAULT_FRONT[..])
+        );
+        e.key(EditorKey::Escape);
+        e.refresh_hover();
+        assert!(e.solid_preview().is_empty());
+    }
+
+    #[test]
+    fn the_solid_goes_with_a_tool_switch_an_agent_edit_and_fly_mode() {
+        let pulling = || {
+            let mut e = editor();
+            square(&mut e);
+            e.select_tool(ToolKind::PushPull);
+            click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+            move_to(&mut e, DVec3::new(2.0, 2.0, 1.5));
+            e.refresh_hover();
+            assert!(!e.solid_preview().is_empty());
+            e
+        };
+        let mut e = pulling();
+        e.select_tool(ToolKind::PushPull);
+        assert!(e.solid_preview().is_empty(), "a tool switch drops it");
+        let mut e = pulling();
+        e.execute(Command::Select {
+            ids: Vec::new(),
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        e.execute(Command::AddEdge {
+            start: [5.0, 5.0, 0.0],
+            end: [6.0, 5.0, 0.0],
+        })
+        .unwrap();
+        assert!(e.solid_preview().is_empty(), "an agent edit drops it");
+        let mut e = pulling();
+        e.toggle_fly();
+        assert!(e.solid_preview().is_empty(), "none while flying");
+    }
+
+    #[test]
+    fn the_solid_is_in_root_coordinates_inside_a_group() {
+        let mut e = editor();
+        square(&mut e);
+        let face = e.doc().model().faces().next().unwrap().0;
+        let outcome = e
+            .execute(Command::MakeGroup {
+                ids: vec![EntityId::Face(face)],
+            })
+            .unwrap();
+        let group = outcome
+            .changes
+            .created
+            .iter()
+            .find_map(|id| match id {
+                EntityId::Instance(i) => Some(*i),
+                _ => None,
+            })
+            .unwrap();
+        e.execute(Command::Move {
+            ids: vec![EntityId::Instance(group)],
+            offset: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+        e.open_path(vec![EntityId::Instance(group)]);
+        e.select_tool(ToolKind::PushPull);
+        click_at(&mut e, DVec3::new(12.0, 2.0, 0.0));
+        move_to(&mut e, DVec3::new(12.0, 2.0, 1.5));
+        e.refresh_hover();
+        let solid = e.solid_preview();
+        assert!(!solid.is_empty());
+        assert!(solid.iter().all(|v| v.pos[0] >= 10.9), "{solid:?}");
     }
 }

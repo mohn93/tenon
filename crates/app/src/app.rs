@@ -704,6 +704,19 @@ impl State {
         }
     }
 
+    /// The sRGB color the Paint tool paints with: its material's, or the default material's
+    /// front.
+    fn paint_color(&self) -> [u8; 3] {
+        let doc = self.editor.doc();
+        self.editor
+            .current_material()
+            .and_then(|m| doc.scene().material(m))
+            .map_or(
+                render::scene::DEFAULT_FRONT.map(|c| (c * 255.0).round() as u8),
+                |m| m.color,
+            )
+    }
+
     /// The Materials list rows, with a swatch image for each texture (made when a material's
     /// image changes; those of materials gone are dropped).
     fn material_rows(&mut self) -> Vec<MaterialRow> {
@@ -1152,6 +1165,17 @@ impl State {
                 doc.context().to_vec(),
             ));
         }
+        // What a click would act on, and the tool's solid: window feedback only (render_view's
+        // renderer never shows them). Both are no-ops when unchanged.
+        let paint = self.paint_color();
+        let tool = self.editor.tool_kind();
+        let ui_theme = self.gui.theme();
+        self.renderer.set_hover(
+            self.editor
+                .hovered()
+                .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint))),
+        );
+        self.renderer.set_preview(&self.editor.solid_preview());
         // The view follows the panels' theme; render_view keeps its own renderer's classic look.
         self.renderer.set_style(theme::view_style(self.gui.theme()));
         self.renderer

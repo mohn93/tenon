@@ -2,7 +2,9 @@
 //! and how they map onto egui's style.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, TextStyle, Vec2};
+use kernel::EntityId;
 use serde::{Deserialize, Serialize};
+use tools::ToolKind;
 
 use super::fonts;
 
@@ -146,6 +148,44 @@ pub fn view_style(theme: egui::Theme) -> render::ViewStyle {
     }
 }
 
+/// How far a hovered face is tinted toward the accent (or, for Erase, the danger color).
+pub const HOVER_TINT: f32 = 0.25;
+
+/// How the entity a click of `tool` would act on (`target`) is highlighted in `theme`: faces
+/// tinted toward the accent with accent edges, in the danger color for Erase. Paint shows a
+/// face in the color it would paint (`paint`, sRGB) with accent edges; a group as Select.
+pub fn hover_look(
+    theme: egui::Theme,
+    tool: ToolKind,
+    target: EntityId,
+    paint: [u8; 3],
+) -> render::HoverLook {
+    let t = tokens(theme);
+    let unit = |c: Color32| [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
+    let edge = |[r, g, b]: [f32; 3]| [r, g, b, 1.0];
+    let accent = unit(t.accent);
+    match (tool, target) {
+        (ToolKind::Erase, _) => {
+            let danger = unit(t.danger);
+            render::HoverLook {
+                face: danger,
+                face_mix: HOVER_TINT,
+                edge: edge(danger),
+            }
+        }
+        (ToolKind::Paint, EntityId::Face(_)) => render::HoverLook {
+            face: paint.map(|u| f32::from(u) / 255.0),
+            face_mix: 1.0,
+            edge: edge(accent),
+        },
+        _ => render::HoverLook {
+            face: accent,
+            face_mix: HOVER_TINT,
+            edge: edge(accent),
+        },
+    }
+}
+
 /// The spacing grid every gap and padding is a multiple of.
 pub const GRID: f32 = 4.0;
 /// A control's height.
@@ -286,6 +326,29 @@ pub fn set_choice(ctx: &egui::Context, choice: ThemeChoice) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hover_look_follows_the_tool() {
+        let face = EntityId::Face(kernel::FaceId(1));
+        let group = EntityId::Instance(kernel::InstanceId(2));
+        let t = tokens(egui::Theme::Light);
+        let rgb = |c: Color32| [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
+        let select = hover_look(egui::Theme::Light, ToolKind::Select, face, [0; 3]);
+        assert_eq!((select.face, select.face_mix), (rgb(t.accent), HOVER_TINT));
+        assert_eq!(&select.edge[..3], &rgb(t.accent)[..]);
+        let push = hover_look(egui::Theme::Light, ToolKind::PushPull, face, [0; 3]);
+        assert_eq!(push, select);
+        let erase = hover_look(egui::Theme::Light, ToolKind::Erase, face, [0; 3]);
+        assert_eq!(erase.face, rgb(t.danger));
+        assert_eq!(&erase.edge[..3], &rgb(t.danger)[..]);
+        let paint = hover_look(egui::Theme::Light, ToolKind::Paint, face, [255, 0, 0]);
+        assert_eq!((paint.face, paint.face_mix), ([1.0, 0.0, 0.0], 1.0));
+        assert_eq!(&paint.edge[..3], &rgb(t.accent)[..]);
+        assert_eq!(
+            hover_look(egui::Theme::Light, ToolKind::Paint, group, [255, 0, 0]),
+            select
+        );
+    }
 
     #[test]
     fn the_view_follows_the_theme() {
