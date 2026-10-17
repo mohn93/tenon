@@ -190,6 +190,25 @@ mod tests {
     }
 
     #[test]
+    fn a_dock_and_a_theme_round_trip_together() {
+        let home = home("dock-and-theme");
+        let path = path_in(&home);
+        let prefs = Prefs {
+            theme: ThemeChoice::Dark,
+            dock: DockLayout {
+                width: 333.0,
+                split: 0.3,
+                tab: DockTab::Materials,
+            },
+        };
+        assert_ne!(prefs.theme, ThemeChoice::default());
+        assert_ne!(prefs.dock, DockLayout::default());
+        save(&path, &prefs).unwrap();
+        assert_eq!(load(&path), prefs);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
     fn dock_prefs_load_old_files_and_clamp_bad_values() {
         let home = home("dock");
         let path = path_in(&home);
