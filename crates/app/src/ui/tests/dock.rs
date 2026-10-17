@@ -144,3 +144,55 @@ fn both_areas_keep_their_least_height() {
         "too short for both: shared by split"
     );
 }
+
+#[test]
+fn pressing_the_divider_without_moving_keeps_the_split() {
+    // A split the least heights hold the top area to: a press read as a drag would report it
+    // clamped.
+    let mut h = harness(Fixture {
+        dock: DockLayout {
+            split: 0.2,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let divider = rect_of(&h, "Resize Outliner").center();
+    assert_eq!(click_at(&mut h, divider, egui::Modifiers::NONE), []);
+    press_and_move(&mut h, divider, divider);
+    assert_eq!(release(&mut h, divider), [], "held, then released in place");
+}
+
+#[test]
+fn a_split_left_from_an_interrupted_drag_is_dropped() {
+    let mut h = harness(Fixture::default());
+    let divider = rect_of(&h, "Resize Outliner").center();
+    // A drag that never saw its release left its split behind.
+    h.ctx
+        .data_mut(|d| d.insert_temp(egui::Id::new("dock-split"), 0.3_f32));
+    h.run_ok();
+    h.run_ok();
+    assert_eq!(rect_of(&h, "Resize Outliner").center(), divider);
+    assert_eq!(h.state_mut().take(), []);
+    assert_eq!(
+        h.ctx
+            .data(|d| d.get_temp::<f32>(egui::Id::new("dock-split"))),
+        None
+    );
+}
+
+#[test]
+fn a_dock_held_narrower_than_its_width_keeps_the_saved_width() {
+    // 400 pt wide: the panel cannot be 420 pt beside the rail.
+    let mut h = harness_sized(
+        Fixture {
+            dock: DockLayout {
+                width: 420.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        Vec2::new(400.0, 800.0),
+    );
+    let tab = rect_of(&h, "Entity Info").center();
+    assert_eq!(click_at(&mut h, tab, egui::Modifiers::NONE), []);
+}

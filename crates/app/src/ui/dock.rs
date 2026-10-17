@@ -114,24 +114,38 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
     let mut split = ui
         .data(|d| d.get_temp::<f32>(split_id()))
         .unwrap_or(view.dock.split);
-    if let Some(r) = ui.ctx().read_response(divider_id) {
-        // While dragged: the top area's committed height moved as far as the pointer has.
-        if r.dragged()
-            && height > 0.0
-            && let (Some(pos), Some(origin)) = (
-                r.interact_pointer_pos(),
-                ui.input(|i| i.pointer.press_origin()),
-            )
-        {
-            split = ((committed + pos.y - origin.y) / height).clamp(*SPLIT.start(), *SPLIT.end());
-            ui.data_mut(|d| d.insert_temp(split_id(), split));
+    let response = ui.ctx().read_response(divider_id);
+    match response {
+        Some(r) if r.dragged() || r.drag_stopped() => {
+            // While dragged: the top area's committed height moved as far as the pointer has.
+            // egui counts a press as a drag; the split is kept only once the pointer moved, so
+            // a plain press and release leaves the saved split as it is.
+            if r.dragged()
+                && height > 0.0
+                && let (Some(pos), Some(origin)) = (
+                    r.interact_pointer_pos(),
+                    ui.input(|i| i.pointer.press_origin()),
+                )
+                && (pos != origin || ui.data(|d| d.get_temp::<f32>(split_id())).is_some())
+            {
+                split =
+                    ((committed + pos.y - origin.y) / height).clamp(*SPLIT.start(), *SPLIT.end());
+                ui.data_mut(|d| d.insert_temp(split_id(), split));
+            }
+            // Released: the last split shown, in hundredths, is reported.
+            if r.drag_stopped()
+                && let Some(last) = ui.data_mut(|d| d.remove_temp::<f32>(split_id()))
+            {
+                split = last;
+                layout.split = (last * 100.0).round() / 100.0;
+            }
         }
-        // Released: the last split shown, in hundredths, is reported.
-        if r.drag_stopped()
-            && let Some(last) = ui.data_mut(|d| d.remove_temp::<f32>(split_id()))
-        {
-            split = last;
-            layout.split = (last * 100.0).round() / 100.0;
+        // Not dragged: a split left from a drag that ended without a release (the divider
+        // gone, the window unfocused) is dropped.
+        _ => {
+            if ui.data_mut(|d| d.remove_temp::<f32>(split_id())).is_some() {
+                split = view.dock.split;
+            }
         }
     }
     egui::ScrollArea::vertical()

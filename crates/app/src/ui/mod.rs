@@ -222,6 +222,15 @@ pub const FLY_HELP: &str = "Walk or fly through the model.\n\
     Shift: 3x faster; Option/Alt: slower\n\
     Esc or F: leave fly mode";
 
+/// The dock panel's id.
+const DOCK_ID: &str = "dock";
+
+/// The id of the dock panel's resize edge, as egui 0.36 registers it (`Panel::resize_id`, not
+/// public): the panel's id with "__resize".
+fn dock_resize_id() -> egui::Id {
+    egui::Id::new(DOCK_ID).with("__resize")
+}
+
 /// Lays out the panels for one pass, appending the actions asked for to `actions`. Returns the
 /// rectangle left for the 3D view, in points.
 ///
@@ -256,7 +265,7 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
                 .inner_margin(egui::Margin::symmetric(6, 8)),
         )
         .show(ui, |ui| rail::rail(ui, view, actions));
-    let panel = Panel::right("dock")
+    let panel = Panel::right(DOCK_ID)
         .resizable(true)
         .default_size(view.dock.width)
         .size_range(dock::DOCK_WIDTH)
@@ -267,10 +276,15 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
         )
         .show(ui, |ui| dock::dock(ui, view, actions));
     let mut layout = panel.inner;
-    // The width the panel was dragged to, once the button is released: not while dragging,
-    // and not a width that only rounding moved.
+    // The width the panel's edge was dragged to, once the drag ends: not while dragging, not a
+    // width that only rounding moved, and not a width the panel was held to without a drag
+    // (the window too narrow for the saved width).
     let width = panel.response.rect.width();
-    if ui.input(|i| i.pointer.primary_released()) && (width - view.dock.width).abs() > 0.5 {
+    let edge_dragged = ui
+        .ctx()
+        .read_response(dock_resize_id())
+        .is_some_and(|r| r.drag_stopped());
+    if edge_dragged && (width - view.dock.width).abs() > 0.5 {
         layout.width = width.round();
     }
     if layout != view.dock {
