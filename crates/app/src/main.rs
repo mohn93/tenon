@@ -8,6 +8,7 @@ mod headless;
 mod host;
 mod info;
 mod navigation;
+mod shortcuts;
 mod ui;
 
 use std::path::PathBuf;

@@ -96,6 +96,14 @@ pub const LIGHT: Tokens = Tokens {
     canvas_bottom: hex(0xE3E7EC),
 };
 
+/// The tokens of the theme egui resolved (for System, the one the window reported).
+pub fn tokens(theme: egui::Theme) -> &'static Tokens {
+    match theme {
+        egui::Theme::Dark => &DARK,
+        egui::Theme::Light => &LIGHT,
+    }
+}
+
 /// The spacing grid every gap and padding is a multiple of.
 pub const GRID: f32 = 4.0;
 /// A control's height.
@@ -103,6 +111,8 @@ pub const CONTROL_HEIGHT: f32 = 28.0;
 pub const CONTROL_RADIUS: u8 = 6;
 /// Windows and menus.
 pub const WINDOW_RADIUS: u8 = 8;
+/// Swatches and key chips.
+pub const SWATCH_RADIUS: u8 = 4;
 /// The width of the accent ring around a focused or chosen control.
 pub const FOCUS_RING: f32 = 2.0;
 pub const BODY_SIZE: f32 = 13.0;

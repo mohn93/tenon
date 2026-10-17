@@ -1,4 +1,5 @@
 use super::*;
+use crate::shortcuts::{Bound, chord};
 
 #[test]
 fn the_file_menu_reports_its_items() {
@@ -191,4 +192,49 @@ fn the_soften_window_sets_its_angle_softens_hardens_and_closes() {
     for label in ["Soften", "Harden", "Angle"] {
         assert!(h.query_by_label(label).is_none(), "{label}");
     }
+}
+
+#[test]
+fn menu_items_show_the_tables_keys() {
+    let mut h = harness(Fixture::default());
+    click(&mut h, "File");
+    let texts = drawn_texts(&h);
+    for bound in [
+        Bound::NewModel,
+        Bound::OpenFile,
+        Bound::SaveFile,
+        Bound::SaveFileAs,
+        Bound::ImportFile,
+        Bound::ExportFile,
+    ] {
+        let key = chord(bound).unwrap().text();
+        assert!(texts.contains(&key), "{key} in {texts:?}");
+    }
+    let mut h = harness(Fixture::default());
+    click(&mut h, "Camera");
+    let fly = format!("Fly mode ({})", chord(Bound::ToggleFly).unwrap().text());
+    assert!(h.query_by_label(&fly).is_some(), "{fly}");
+}
+
+#[test]
+fn tool_buttons_mark_the_active_tool_and_name_their_keys() {
+    let mut h = harness(Fixture::default());
+    assert_eq!(is_on(&h, "Line"), Some(true));
+    assert_eq!(is_on(&h, "Move"), Some(false));
+    h.get_by_label("Rectangle").hover();
+    h.run_steps(20);
+    let key = chord(Bound::Tool(ToolKind::Rectangle)).unwrap().text();
+    assert!(drawn_texts(&h).contains(&key), "the tooltip's key chip");
+}
+
+#[test]
+fn group_buttons_name_their_keys() {
+    let mut h = harness(Fixture {
+        has_selection: true,
+        ..Default::default()
+    });
+    h.get_by_label("Make component").hover();
+    h.run_steps(20);
+    let key = chord(Bound::MakeComponent).unwrap().text();
+    assert!(drawn_texts(&h).contains(&key), "{key}");
 }

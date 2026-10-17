@@ -4,8 +4,9 @@ use egui::Ui;
 use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
 
-use super::{FLY_HELP, UiAction, View};
+use super::{FLY_HELP, UiAction, View, widgets};
 use crate::editor::ImportUnits;
+use crate::shortcuts::Bound;
 
 pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
@@ -16,15 +17,15 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         ui.spacing_mut().button_padding.x = 4.0;
         ui.menu_button("File", |ui| {
             let items = [
-                ("New", "Cmd+N", UiAction::NewModel),
-                ("Open...", "Cmd+O", UiAction::OpenFile),
-                ("Save", "Cmd+S", UiAction::SaveFile),
-                ("Save As...", "Shift+Cmd+S", UiAction::SaveFileAs),
-                ("Import...", "Cmd+I", UiAction::ImportFile),
-                ("Export...", "Shift+Cmd+E", UiAction::ExportFile),
+                ("New", Bound::NewModel, UiAction::NewModel),
+                ("Open...", Bound::OpenFile, UiAction::OpenFile),
+                ("Save", Bound::SaveFile, UiAction::SaveFile),
+                ("Save As...", Bound::SaveFileAs, UiAction::SaveFileAs),
+                ("Import...", Bound::ImportFile, UiAction::ImportFile),
+                ("Export...", Bound::ExportFile, UiAction::ExportFile),
             ];
-            for (label, key, action) in items {
-                if item(ui, label, key, true).clicked() {
+            for (label, bound, action) in items {
+                if widgets::menu_item(ui, label, Some(bound), true).clicked() {
                     actions.push(action);
                 }
             }
@@ -40,27 +41,25 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             });
         });
         ui.menu_button("Edit", |ui| {
-            if item(ui, "Erase Selection", "Delete", view.has_selection).clicked() {
+            let erase = Some(Bound::EraseSelection);
+            if widgets::menu_item(ui, "Erase Selection", erase, view.has_selection).clicked() {
                 actions.push(UiAction::EraseSelection);
             }
-            if ui
-                .add_enabled(view.has_guides, egui::Button::new("Delete Guides"))
-                .clicked()
-            {
+            if widgets::menu_item(ui, "Delete Guides", None, view.has_guides).clicked() {
                 actions.push(UiAction::DeleteGuides);
             }
             ui.separator();
-            if ui.button("Soften Edges...").clicked() {
+            if widgets::menu_item(ui, "Soften Edges...", None, true).clicked() {
                 actions.push(UiAction::ShowSoften(true));
             }
         });
         ui.menu_button("Camera", |ui| {
-            if item(ui, "Zoom Extents", "Shift+Z", true).clicked() {
+            if widgets::menu_item(ui, "Zoom Extents", Some(Bound::ZoomExtents), true).clicked() {
                 actions.push(UiAction::ZoomExtents);
             }
             ui.separator();
             for v in StandardView::ALL {
-                if ui.button(v.label()).clicked() {
+                if widgets::menu_item(ui, v.label(), None, true).clicked() {
                     actions.push(UiAction::StandardView(v));
                 }
             }
@@ -88,8 +87,12 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
             ui.separator();
             let mut flying = view.flying;
+            let fly = format!(
+                "Fly mode ({})",
+                Bound::ToggleFly.key_text().unwrap_or_default()
+            );
             if ui
-                .checkbox(&mut flying, "Fly mode (F)")
+                .checkbox(&mut flying, fly)
                 .on_hover_text(FLY_HELP)
                 .clicked()
             {
@@ -97,64 +100,66 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
         });
         ui.menu_button("View", |ui| {
-            if ui.button("Agent Activity").clicked() {
+            if widgets::menu_item(ui, "Agent Activity", None, true).clicked() {
                 actions.push(UiAction::ShowAgentActivity(true));
             }
         });
         ui.separator();
         for kind in ToolKind::ALL {
-            let key = match kind.shortcut() {
-                ' ' => "Space".to_string(),
-                c => c.to_ascii_uppercase().to_string(),
-            };
-            let button = ui
-                .selectable_label(view.tool == kind, kind.label())
-                .on_hover_text(format!("{} ({key})", kind.label()));
-            if button.clicked() {
+            if widgets::tool_button(ui, kind, view.tool == kind).clicked() {
                 actions.push(UiAction::Tool(kind));
             }
         }
         ui.separator();
-        if ui.button("Undo").on_hover_text("Cmd+Z").clicked() {
+        if ui
+            .button("Undo")
+            .on_hover_ui(|ui| widgets::hint(ui, "Undo", Some(Bound::Undo)))
+            .clicked()
+        {
             actions.push(UiAction::Undo);
         }
-        if ui.button("Redo").on_hover_text("Shift+Cmd+Z").clicked() {
+        if ui
+            .button("Redo")
+            .on_hover_ui(|ui| widgets::hint(ui, "Redo", Some(Bound::Redo)))
+            .clicked()
+        {
             actions.push(UiAction::Redo);
         }
         ui.separator();
         let buttons = [
-            (view.has_selection, "Make group", "G", UiAction::MakeGroup),
+            (
+                view.has_selection,
+                "Make group",
+                Some(Bound::MakeGroup),
+                UiAction::MakeGroup,
+            ),
             (
                 view.has_selection,
                 "Make component",
-                "Shift+G",
+                Some(Bound::MakeComponent),
                 UiAction::MakeComponent,
             ),
-            (view.has_instance_selected, "Explode", "", UiAction::Explode),
+            (
+                view.has_instance_selected,
+                "Explode",
+                None,
+                UiAction::Explode,
+            ),
             (
                 view.inside_instance,
                 "Close group",
-                "Escape",
+                Some(Bound::CloseInstance),
                 UiAction::CloseInstance,
             ),
         ];
-        for (enabled, label, key, action) in buttons {
-            let mut button = ui.add_enabled(enabled, egui::Button::new(label));
-            if !key.is_empty() {
-                button = button.on_hover_text(key);
-            }
+        for (enabled, label, bound, action) in buttons {
+            let button = ui
+                .add_enabled(enabled, egui::Button::new(label))
+                .on_hover_ui(|ui| widgets::hint(ui, label, bound))
+                .on_disabled_hover_ui(|ui| widgets::hint(ui, label, bound));
             if button.clicked() {
                 actions.push(action);
             }
         }
     });
-}
-
-/// A menu item showing `key` on its right, named `label` alone for AccessKit.
-fn item(ui: &mut Ui, label: &str, key: &str, enabled: bool) -> egui::Response {
-    let response = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(key));
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
-    });
-    response
 }

@@ -26,6 +26,7 @@ use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
+use crate::shortcuts::{self, Bound};
 use crate::ui::theme::ThemeChoice;
 use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
 
@@ -1580,41 +1581,27 @@ impl ApplicationHandler<ApiWake> for App {
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command_key = s.modifiers.super_key() || s.modifiers.control_key();
                 let letter = shortcut_letter(&event.logical_key, event.physical_key);
-                if command_key && letter == Some('z') {
-                    if s.modifiers.shift_key() {
-                        s.editor.redo()
-                    } else {
-                        s.editor.undo()
+                if command_key {
+                    let shift = s.modifiers.shift_key();
+                    match letter.and_then(|l| shortcuts::command(l, shift, event.repeat)) {
+                        Some(Bound::Quit) => {
+                            if s.settle_changes() {
+                                event_loop.exit();
+                            }
+                            false
+                        }
+                        // Redraw only if there was a step to take back or redo.
+                        Some(Bound::Undo) => s.editor.undo(),
+                        Some(Bound::Redo) => s.editor.redo(),
+                        Some(bound) => {
+                            if let Some(action) = bound.action() {
+                                s.apply(action);
+                            }
+                            true
+                        }
+                        None => false,
                     }
-                } else if command_key && !event.repeat && letter == Some('n') {
-                    s.new_model();
-                    true
-                } else if command_key && !event.repeat && letter == Some('o') {
-                    s.open();
-                    true
-                } else if command_key && !event.repeat && letter == Some('s') {
-                    s.save(s.modifiers.shift_key());
-                    true
-                } else if command_key
-                    && !event.repeat
-                    && !s.modifiers.shift_key()
-                    && letter == Some('i')
-                {
-                    s.import();
-                    true
-                } else if command_key
-                    && !event.repeat
-                    && s.modifiers.shift_key()
-                    && letter == Some('e')
-                {
-                    s.export();
-                    true
-                } else if command_key && !event.repeat && letter == Some('q') {
-                    if s.settle_changes() {
-                        event_loop.exit();
-                    }
-                    false
-                } else if command_key || s.modifiers.alt_key() {
+                } else if s.modifiers.alt_key() {
                     // Alt/Option is the orbit modifier; Option+letter must not type or switch
                     // tools through its physical-key fallback.
                     false
@@ -1862,6 +1849,33 @@ mod tests {
         assert_eq!(shortcut_letter(&ch("ه"), code(KeyCode::KeyI)), Some('i'));
         assert_eq!(shortcut_letter(&ch("Q"), code(KeyCode::KeyQ)), Some('q'));
         assert_eq!(shortcut_letter(&ch("ث"), code(KeyCode::KeyE)), Some('e'));
+    }
+
+    #[test]
+    fn every_command_letter_has_a_physical_key_fallback() {
+        use crate::shortcuts::{Key as ShortcutKey, TABLE};
+        let code = |c: char| match c {
+            'n' => KeyCode::KeyN,
+            'o' => KeyCode::KeyO,
+            's' => KeyCode::KeyS,
+            'i' => KeyCode::KeyI,
+            'e' => KeyCode::KeyE,
+            'q' => KeyCode::KeyQ,
+            'z' => KeyCode::KeyZ,
+            other => panic!("add {other} to shortcut_letter's fallbacks and here"),
+        };
+        let arabic = Key::Character(SmolStr::new("ب"));
+        for s in TABLE.iter().filter(|s| s.chord.command) {
+            let ShortcutKey::Letter(c) = s.chord.key else {
+                continue;
+            };
+            assert_eq!(
+                shortcut_letter(&arabic, PhysicalKey::Code(code(c))),
+                Some(c),
+                "{:?}",
+                s.bound
+            );
+        }
     }
 
     #[test]

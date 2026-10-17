@@ -23,6 +23,7 @@ use tools::{
 
 use crate::fly::{self, Fly, FlyKey};
 use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
+use crate::shortcuts::{self, Bound};
 
 mod agent;
 mod input;
@@ -786,9 +787,10 @@ impl Editor {
     }
 
     /// Typing goes to the measurements box once it starts with a digit, ".", "-", "/" or "*"
-    /// (or "x" in the Move and Rotate tools, for arrays like "x5"); "g" makes a group and
-    /// "G" (Shift+G) a component of the selection; "Z" (Shift+Z) zooms to the whole model;
-    /// "f" enters fly mode; other letters are tool shortcuts. In fly mode only Escape and "f"
+    /// (or "x" in the Move and Rotate tools, for arrays like "x5"); other letters, and Space,
+    /// do what `shortcuts::TABLE` binds them to ("g" makes a group, Shift+G a component,
+    /// Shift+Z zooms to the whole model, "f" enters fly mode, the rest pick tools; a shifted
+    /// letter with no binding of its own acts as the plain one). In fly mode only Escape and "f"
     /// (leave) and the speed keys ("[" "-" slower, "]" "=" faster) do anything. Enter
     /// submits the typed text to the tool. Escape clears the typed text, or else cancels the
     /// tool's operation (the Select tool then closes the open group). Delete, and Backspace
@@ -811,17 +813,8 @@ impl Editor {
                 if starts_value || starts_array {
                     self.typed.push(c);
                     true
-                } else if c == 'g' {
-                    self.make_group()
-                } else if c == 'G' {
-                    self.make_component()
-                } else if c == 'Z' {
-                    self.zoom_extents()
-                } else if matches!(c, 'f' | 'F') {
-                    self.set_flying(true)
-                } else if let Some(kind) = ToolKind::from_shortcut(c) {
-                    self.select_tool(kind);
-                    true
+                } else if let Some(bound) = shortcuts::plain(c) {
+                    self.run_shortcut(bound)
                 } else {
                     false
                 }
@@ -868,6 +861,22 @@ impl Editor {
                 self.invalidate_hover();
                 had
             }
+        }
+    }
+
+    /// Does what a key typed without Cmd is bound to. True if anything changed.
+    fn run_shortcut(&mut self, bound: Bound) -> bool {
+        match bound {
+            Bound::Tool(kind) => {
+                self.select_tool(kind);
+                true
+            }
+            Bound::MakeGroup => self.make_group(),
+            Bound::MakeComponent => self.make_component(),
+            Bound::ZoomExtents => self.zoom_extents(),
+            Bound::ToggleFly => self.set_flying(true),
+            // Cmd chords, and Delete and Escape, which `key` handles before letters.
+            _ => false,
         }
     }
 
@@ -2855,6 +2864,92 @@ mod tests {
         assert_eq!(open, [group]);
         e.key(EditorKey::Escape);
         assert!(e.doc().context().is_empty());
+    }
+
+    #[test]
+    fn shifted_letters_keep_their_meanings() {
+        let mut e = editor();
+        assert!(e.key(EditorKey::Char('L')));
+        assert_eq!(e.tool_kind(), ToolKind::Line);
+        assert!(e.key(EditorKey::Char('E')));
+        assert_eq!(e.tool_kind(), ToolKind::Erase);
+        assert!(e.key(EditorKey::Char('F')));
+        assert!(e.flying(), "Shift+F flies as f does");
+    }
+
+    /// The editor key the table's plain `chord` arrives as.
+    fn table_key(bound: crate::shortcuts::Bound) -> EditorKey {
+        use crate::shortcuts::{Key, chord};
+        let chord = chord(bound).expect("bound to a key");
+        assert!(!chord.command, "{bound:?} is a plain key");
+        match chord.key {
+            Key::Letter(c) if chord.shift => EditorKey::Char(c.to_ascii_uppercase()),
+            Key::Letter(c) => EditorKey::Char(c),
+            Key::Space => EditorKey::Char(' '),
+            Key::Delete => EditorKey::Delete,
+            Key::Escape => EditorKey::Escape,
+        }
+    }
+
+    #[test]
+    fn the_editor_does_what_the_table_says_of_delete_and_escape() {
+        use crate::shortcuts::Bound;
+        // Erase Selection's key erases a selected edge.
+        let mut e = editor();
+        e.execute(Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        let ids: Vec<EntityId> = e
+            .doc()
+            .model()
+            .edges()
+            .map(|(id, _)| EntityId::Edge(id))
+            .collect();
+        e.execute(Command::Select {
+            ids,
+            mode: SelectMode::Replace,
+        })
+        .unwrap();
+        assert!(e.key(table_key(Bound::EraseSelection)));
+        assert_eq!(e.doc().model().edges().count(), 0);
+        // Close Group's key closes the open group in the Select tool.
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.select_tool(ToolKind::Select);
+        assert!(!e.doc().context().is_empty());
+        assert!(e.key(table_key(Bound::CloseInstance)));
+        assert!(e.doc().context().is_empty());
+    }
+
+    #[test]
+    fn the_editor_does_what_the_table_says_of_plain_letters() {
+        use crate::shortcuts::Bound;
+        let mut e = editor();
+        for kind in ToolKind::ALL {
+            e.select_tool(if kind == ToolKind::Line {
+                ToolKind::Move
+            } else {
+                ToolKind::Line
+            });
+            assert!(e.key(table_key(Bound::Tool(kind))));
+            assert_eq!(e.tool_kind(), kind);
+        }
+        // Make Group and Make Component's keys say what they need with nothing selected.
+        e.key(table_key(Bound::MakeGroup));
+        assert_eq!(
+            e.message.as_deref(),
+            Some("Select geometry to make a group")
+        );
+        e.key(table_key(Bound::MakeComponent));
+        assert_eq!(
+            e.message.as_deref(),
+            Some("Select geometry to make a component")
+        );
+        assert!(e.key(table_key(Bound::ToggleFly)));
+        assert!(e.flying());
     }
 
     #[test]

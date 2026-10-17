@@ -6,6 +6,7 @@ mod layout;
 mod materials;
 mod menus;
 mod outliner;
+mod widgets;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -162,17 +163,21 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
             },
             f,
         );
-    theme::install(&h.ctx, ThemeChoice::Dark);
-    // As the harness set it up: no animations, so one run settles everything.
-    h.ctx.all_styles_mut(|s| {
-        s.animation_time = 0.0;
-        s.scroll_animation = egui::style::ScrollAnimation::none();
-    });
+    install_theme(&h.ctx);
     h.run_ok();
     // Laying the panels out reports nothing by itself.
     assert_eq!(h.state().actions, [], "actions from the first frames");
     h.state_mut().actions.clear();
     h
+}
+
+/// The dark theme, without animations as the harness set it up, so one run settles everything.
+pub(super) fn install_theme(ctx: &egui::Context) {
+    theme::install(ctx, ThemeChoice::Dark);
+    ctx.all_styles_mut(|s| {
+        s.animation_time = 0.0;
+        s.scroll_animation = egui::style::ScrollAnimation::none();
+    });
 }
 
 /// Clicks the widget named `label` and runs the frames that follow. Returns the actions.
@@ -230,6 +235,38 @@ pub(super) fn type_into(
 /// Where the widget named `label` is, in points.
 pub(super) fn rect_of(h: &H, label: &str) -> Rect {
     h.get_by_label(label).rect()
+}
+
+/// Whether the selectable widget named `label` is on. egui reports a button's selected state
+/// to AccessKit as toggled, not as selected.
+pub(super) fn is_on<S>(h: &Harness<'_, S>, label: &str) -> Option<bool> {
+    use egui::accesskit::Toggled;
+    h.get_by_label(label)
+        .accesskit_node()
+        .toggled()
+        .map(|t| t == Toggled::True)
+}
+
+/// Every text the last frame painted (tooltips and shortcut texts are not in the AccessKit
+/// tree under their own names).
+pub(super) fn drawn_texts(h: &H) -> Vec<String> {
+    drawn_texts_of(h)
+}
+
+/// `drawn_texts` for a harness with any state.
+pub(super) fn drawn_texts_of<S>(h: &Harness<'_, S>) -> Vec<String> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.output().shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out
 }
 
 /// A row the Outliner laid out in the last frame: a node's name (or the Model row, with an

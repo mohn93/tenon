@@ -22,6 +22,7 @@ mod status;
 mod tests;
 pub mod theme;
 mod toolbar;
+pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
 #[derive(Clone, Debug, PartialEq, Eq)]

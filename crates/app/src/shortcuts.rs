@@ -1,0 +1,306 @@
+//! Every keyboard shortcut in one table. Menus and tooltips take their key text from it and
+//! the window's key handling looks keys up in it, so a label cannot name a key that does
+//! something else.
+
+use tools::ToolKind;
+
+use crate::ui::UiAction;
+
+/// What a shortcut does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bound {
+    Tool(ToolKind),
+    NewModel,
+    OpenFile,
+    SaveFile,
+    SaveFileAs,
+    ImportFile,
+    ExportFile,
+    Quit,
+    Undo,
+    Redo,
+    EraseSelection,
+    MakeGroup,
+    MakeComponent,
+    CloseInstance,
+    ZoomExtents,
+    ToggleFly,
+}
+
+/// The key of a shortcut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// A lowercase ASCII letter.
+    Letter(char),
+    Space,
+    Delete,
+    Escape,
+}
+
+/// A key and the modifiers held with it. `command` is Cmd on macOS and Ctrl elsewhere (the
+/// window takes either everywhere).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chord {
+    pub command: bool,
+    pub shift: bool,
+    pub key: Key,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Shortcut {
+    pub bound: Bound,
+    pub chord: Chord,
+    /// Held down, the key acts again.
+    pub repeats: bool,
+}
+
+const fn on(bound: Bound, command: bool, shift: bool, key: Key) -> Shortcut {
+    Shortcut {
+        bound,
+        chord: Chord {
+            command,
+            shift,
+            key,
+        },
+        repeats: false,
+    }
+}
+
+/// A tool's key. The letters restate `ToolKind::shortcut`, which is not `const`; a test keeps
+/// the two the same.
+const fn tool(kind: ToolKind, c: char) -> Shortcut {
+    on(Bound::Tool(kind), false, false, Key::Letter(c))
+}
+
+const fn repeating(s: Shortcut) -> Shortcut {
+    Shortcut { repeats: true, ..s }
+}
+
+pub const TABLE: [Shortcut; 26] = [
+    on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
+    tool(ToolKind::Line, 'l'),
+    tool(ToolKind::Rectangle, 'r'),
+    tool(ToolKind::Circle, 'c'),
+    tool(ToolKind::Arc, 'a'),
+    tool(ToolKind::PushPull, 'p'),
+    tool(ToolKind::Move, 'm'),
+    tool(ToolKind::Rotate, 'q'),
+    tool(ToolKind::TapeMeasure, 't'),
+    tool(ToolKind::Erase, 'e'),
+    tool(ToolKind::Paint, 'b'),
+    on(Bound::NewModel, true, false, Key::Letter('n')),
+    on(Bound::OpenFile, true, false, Key::Letter('o')),
+    on(Bound::SaveFile, true, false, Key::Letter('s')),
+    on(Bound::SaveFileAs, true, true, Key::Letter('s')),
+    on(Bound::ImportFile, true, false, Key::Letter('i')),
+    on(Bound::ExportFile, true, true, Key::Letter('e')),
+    on(Bound::Quit, true, false, Key::Letter('q')),
+    repeating(on(Bound::Undo, true, false, Key::Letter('z'))),
+    repeating(on(Bound::Redo, true, true, Key::Letter('z'))),
+    on(Bound::EraseSelection, false, false, Key::Delete),
+    on(Bound::MakeGroup, false, false, Key::Letter('g')),
+    on(Bound::MakeComponent, false, true, Key::Letter('g')),
+    on(Bound::CloseInstance, false, false, Key::Escape),
+    on(Bound::ZoomExtents, false, true, Key::Letter('z')),
+    on(Bound::ToggleFly, false, false, Key::Letter('f')),
+];
+
+/// The chord bound to `bound`, if any.
+pub fn chord(bound: Bound) -> Option<Chord> {
+    TABLE.iter().find(|s| s.bound == bound).map(|s| s.chord)
+}
+
+/// The shortcut `chord` is bound to, if any.
+pub fn lookup(chord: Chord) -> Option<&'static Shortcut> {
+    TABLE.iter().find(|s| s.chord == chord)
+}
+
+/// What Cmd (or Ctrl) with `letter` (lowercase) does; `repeat` when the key is held down.
+/// The modifiers must match exactly: Shift+Cmd+N is not Cmd+N.
+pub fn command(letter: char, shift: bool, repeat: bool) -> Option<Bound> {
+    let chord = Chord {
+        command: true,
+        shift,
+        key: Key::Letter(letter),
+    };
+    lookup(chord)
+        .filter(|s| s.repeats || !repeat)
+        .map(|s| s.bound)
+}
+
+/// What a key typed without Cmd does, as the editor gets it: `' '` for Space, a letter
+/// uppercase exactly when Shift is held. An uppercase letter with no binding of its own acts
+/// as its lowercase one, so Shift+L picks Line while Shift+G makes a component.
+pub fn plain(c: char) -> Option<Bound> {
+    let find = |shift, key| {
+        lookup(Chord {
+            command: false,
+            shift,
+            key,
+        })
+        .map(|s| s.bound)
+    };
+    if c == ' ' {
+        return find(false, Key::Space);
+    }
+    if !c.is_ascii_alphabetic() {
+        return None;
+    }
+    let key = Key::Letter(c.to_ascii_lowercase());
+    let shift = c.is_ascii_uppercase();
+    find(shift, key).or_else(|| if shift { find(false, key) } else { None })
+}
+
+impl Chord {
+    /// How menus and tooltips show the chord on this system.
+    pub fn text(self) -> String {
+        self.text_for(cfg!(target_os = "macos"))
+    }
+
+    /// `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
+    pub fn text_for(self, mac: bool) -> String {
+        let key = match self.key {
+            Key::Letter(c) => c.to_ascii_uppercase().to_string(),
+            Key::Space => "Space".into(),
+            Key::Delete if mac => "⌫".into(),
+            Key::Delete => "Delete".into(),
+            Key::Escape => "Esc".into(),
+        };
+        let (shift, command) = if mac {
+            ("⇧", "⌘")
+        } else {
+            ("Shift+", "Ctrl+")
+        };
+        let shift = if self.shift { shift } else { "" };
+        let command = if self.command { command } else { "" };
+        if mac {
+            format!("{shift}{command}{key}")
+        } else {
+            format!("{command}{shift}{key}")
+        }
+    }
+}
+
+impl Bound {
+    /// The panels' action for the binding; None for Quit, which the window handles itself.
+    pub fn action(self) -> Option<UiAction> {
+        Some(match self {
+            Bound::Tool(kind) => UiAction::Tool(kind),
+            Bound::NewModel => UiAction::NewModel,
+            Bound::OpenFile => UiAction::OpenFile,
+            Bound::SaveFile => UiAction::SaveFile,
+            Bound::SaveFileAs => UiAction::SaveFileAs,
+            Bound::ImportFile => UiAction::ImportFile,
+            Bound::ExportFile => UiAction::ExportFile,
+            Bound::Quit => return None,
+            Bound::Undo => UiAction::Undo,
+            Bound::Redo => UiAction::Redo,
+            Bound::EraseSelection => UiAction::EraseSelection,
+            Bound::MakeGroup => UiAction::MakeGroup,
+            Bound::MakeComponent => UiAction::MakeComponent,
+            Bound::CloseInstance => UiAction::CloseInstance,
+            Bound::ZoomExtents => UiAction::ZoomExtents,
+            Bound::ToggleFly => UiAction::ToggleFly,
+        })
+    }
+
+    /// The key text menus and tooltips show for the binding, if it has a key.
+    pub fn key_text(self) -> Option<String> {
+        chord(self).map(Chord::text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_binding_and_every_chord_is_in_the_table_once() {
+        for (i, a) in TABLE.iter().enumerate() {
+            for b in &TABLE[i + 1..] {
+                assert_ne!(a.bound, b.bound, "{:?} twice", a.bound);
+                assert_ne!(
+                    a.chord, b.chord,
+                    "{:?} and {:?} share a key",
+                    a.bound, b.bound
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_keys_are_the_tools_own() {
+        for kind in ToolKind::ALL {
+            let key = match kind.shortcut() {
+                ' ' => Key::Space,
+                c => Key::Letter(c),
+            };
+            assert_eq!(
+                chord(Bound::Tool(kind)),
+                Some(Chord {
+                    command: false,
+                    shift: false,
+                    key
+                }),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_keys_find_their_bindings() {
+        assert_eq!(plain(' '), Some(Bound::Tool(ToolKind::Select)));
+        assert_eq!(plain('l'), Some(Bound::Tool(ToolKind::Line)));
+        // An uppercase letter with no binding of its own acts as its lowercase one.
+        assert_eq!(plain('L'), Some(Bound::Tool(ToolKind::Line)));
+        assert_eq!(plain('F'), Some(Bound::ToggleFly));
+        assert_eq!(plain('g'), Some(Bound::MakeGroup));
+        assert_eq!(plain('G'), Some(Bound::MakeComponent));
+        assert_eq!(plain('Z'), Some(Bound::ZoomExtents));
+        assert_eq!(plain('z'), None);
+        assert_eq!(plain('5'), None);
+        // Cmd chords are not plain keys.
+        assert_eq!(plain('s'), None);
+    }
+
+    #[test]
+    fn command_chords_match_their_modifiers_and_repeat_only_undo_and_redo() {
+        assert_eq!(command('z', false, false), Some(Bound::Undo));
+        assert_eq!(command('z', false, true), Some(Bound::Undo), "held");
+        assert_eq!(command('z', true, true), Some(Bound::Redo), "held");
+        assert_eq!(command('s', false, false), Some(Bound::SaveFile));
+        assert_eq!(command('s', false, true), None, "held Cmd+S saves once");
+        assert_eq!(command('s', true, false), Some(Bound::SaveFileAs));
+        assert_eq!(command('i', false, false), Some(Bound::ImportFile));
+        assert_eq!(command('i', true, false), None);
+        assert_eq!(command('e', true, false), Some(Bound::ExportFile));
+        assert_eq!(command('e', false, false), None);
+        assert_eq!(command('q', false, false), Some(Bound::Quit));
+        assert_eq!(command('l', false, false), None);
+    }
+
+    #[test]
+    fn chords_read_as_mac_glyphs_or_words() {
+        let text = |b, mac| chord(b).unwrap().text_for(mac);
+        assert_eq!(text(Bound::SaveFileAs, true), "⇧⌘S");
+        assert_eq!(text(Bound::SaveFileAs, false), "Ctrl+Shift+S");
+        assert_eq!(text(Bound::Undo, true), "⌘Z");
+        assert_eq!(text(Bound::MakeComponent, true), "⇧G");
+        assert_eq!(text(Bound::MakeComponent, false), "Shift+G");
+        assert_eq!(text(Bound::Tool(ToolKind::Rectangle), false), "R");
+        assert_eq!(text(Bound::Tool(ToolKind::Select), true), "Space");
+        assert_eq!(text(Bound::EraseSelection, true), "⌫");
+        assert_eq!(text(Bound::EraseSelection, false), "Delete");
+        assert_eq!(text(Bound::CloseInstance, true), "Esc");
+    }
+
+    #[test]
+    fn bindings_ask_for_the_panels_actions() {
+        assert_eq!(
+            Bound::Tool(ToolKind::Move).action(),
+            Some(UiAction::Tool(ToolKind::Move))
+        );
+        assert_eq!(Bound::SaveFileAs.action(), Some(UiAction::SaveFileAs));
+        assert_eq!(Bound::Quit.action(), None);
+    }
+}
