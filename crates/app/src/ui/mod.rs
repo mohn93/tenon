@@ -124,8 +124,9 @@ pub struct TextureRow {
     pub pixels: [u32; 2],
 }
 
-/// The right panel's width, in points. Room for two value fields side by side at 13 pt.
-const RIGHT_PANEL_WIDTH: f32 = 200.0;
+/// The right panel's width, in points. Room for two value fields side by side at 13 pt in the
+/// value font (JetBrains Mono is wider than Inter).
+const RIGHT_PANEL_WIDTH: f32 = 220.0;
 
 /// What the window shows of the agents using the API.
 pub struct Agents<'a> {

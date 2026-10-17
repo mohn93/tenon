@@ -166,7 +166,6 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
             },
             f,
         );
-    install_theme(&h.ctx);
     h.run_ok();
     // Laying the panels out reports nothing by itself.
     assert_eq!(h.state().actions, [], "actions from the first frames");

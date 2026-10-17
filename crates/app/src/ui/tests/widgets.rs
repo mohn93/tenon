@@ -12,7 +12,6 @@ pub(super) fn kit<'a>(f: impl FnMut(&mut Ui) + 'a) -> Harness<'a> {
                 f(ui);
             }
         });
-    install_theme(&h.ctx);
     h.run_ok();
     h
 }
@@ -95,4 +94,43 @@ fn a_numeric_row_reports_a_typed_value_once_entered() {
     h.run_ok();
     drop(h);
     assert_eq!(done, [([1.0, 0.5], [1.0, 2.0])]);
+}
+
+#[test]
+fn a_numeric_rows_values_are_mono_and_its_label_is_not() {
+    let h = kit(|ui| {
+        widgets::numeric_row(
+            ui,
+            egui::Id::new("font-row"),
+            "Rotation",
+            [12.5],
+            0.0..=90.0,
+            0.1,
+        );
+    });
+    let mut fonts = Vec::new();
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::FontFamily)>) {
+        match shape {
+            egui::Shape::Text(t) => {
+                let family = t.galley.job.sections[0].format.font_id.family.clone();
+                out.push((t.galley.text().to_string(), family));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    for clipped in &h.output().shapes {
+        collect(&clipped.shape, &mut fonts);
+    }
+    let family = |text: &str| fonts.iter().find(|(t, _)| t.contains(text)).map(|f| &f.1);
+    assert_eq!(
+        family("12.5"),
+        Some(&egui::FontFamily::Monospace),
+        "{fonts:?}"
+    );
+    assert_eq!(
+        family("Rotation"),
+        Some(&egui::FontFamily::Proportional),
+        "{fonts:?}"
+    );
 }

@@ -175,6 +175,8 @@ pub fn style(t: &Tokens, dark: bool) -> egui::Style {
     s.window_margin = Margin::same(12);
     s.menu_margin = Margin::same(8);
     s.indent = 4.0 * GRID;
+    // Values in the value font: DragValue and Slider read this, not `override_text_style`.
+    style.drag_value_text_style = TextStyle::Monospace;
 
     style.text_styles = [
         (

@@ -118,8 +118,6 @@ pub fn numeric_row<const N: usize>(
     };
     let (editing, ended) = ui
         .horizontal(|ui| {
-            // Values in the value font.
-            ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
             let label_id = label_id.unwrap_or_else(|| ui.label(label).id);
             let (mut editing, mut ended) = (false, false);
             for value in &mut values {
