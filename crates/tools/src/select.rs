@@ -300,7 +300,11 @@ impl Tool for SelectTool {
                     };
                     // Shift with nothing picked leaves the selection alone.
                     if !(ctx.shift && ids.is_empty()) {
-                        out.commands.push(Command::Select { ids, mode });
+                        out.commands.push(Command::Select {
+                            ids,
+                            mode,
+                            all: false,
+                        });
                     }
                 }
             }
@@ -462,6 +466,7 @@ mod tests {
         vec![Command::Select {
             ids: ids.iter().map(|s| s.parse().unwrap()).collect(),
             mode,
+            all: false,
         }]
     }
 
@@ -524,7 +529,7 @@ mod tests {
 
         // The middle of a top rim edge facing the camera: the whole top circle.
         let rim = r.click((at(225.0, 1.0) + at(270.0, 1.0)) / 2.0);
-        let [Command::Select { ids, mode }] = &rim.commands[..] else {
+        let [Command::Select { ids, mode, .. }] = &rim.commands[..] else {
             panic!("{:?}", rim.commands);
         };
         assert_eq!(*mode, SelectMode::Replace);
@@ -748,7 +753,7 @@ mod tests {
 
         r.selection = all[..4].iter().copied().collect();
         let out = r.click(rim);
-        let [Command::Select { ids, mode }] = &out.commands[..] else {
+        let [Command::Select { ids, mode, .. }] = &out.commands[..] else {
             panic!("{:?}", out.commands);
         };
         assert_eq!(
@@ -759,7 +764,7 @@ mod tests {
 
         r.selection = all.iter().copied().collect();
         let out = r.click(rim);
-        let [Command::Select { ids, mode }] = &out.commands[..] else {
+        let [Command::Select { ids, mode, .. }] = &out.commands[..] else {
             panic!("{:?}", out.commands);
         };
         assert_eq!(

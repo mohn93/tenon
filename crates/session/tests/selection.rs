@@ -170,3 +170,105 @@ fn select_and_erase_are_classified_for_tools() {
     assert!(!cmd(json!({"type": "select", "ids": []})).changes_model());
     assert!(cmd(json!({"type": "erase", "ids": ["e1"]})).changes_model());
 }
+
+fn all_of(m: &kernel::Model) -> std::collections::BTreeSet<kernel::EntityId> {
+    use kernel::EntityId;
+    m.edges()
+        .map(|(id, _)| EntityId::Edge(id))
+        .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
+        .chain(m.instances().map(|(id, _)| EntityId::Instance(id)))
+        .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
+        .collect()
+}
+
+#[test]
+fn select_all_takes_everything_in_the_open_context() {
+    let mut d = doc();
+    square(&mut d);
+    run(
+        &mut d,
+        json!({"type": "add_guide_point", "position": [5, 5, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [10, 0, 0], "opposite": [12, 2, 0]}),
+    )
+    .unwrap();
+    let second: Vec<kernel::EntityId> = all_of(d.model())
+        .into_iter()
+        .filter(|id| match id {
+            kernel::EntityId::Face(f) => d
+                .model()
+                .face(*f)
+                .is_some_and(|f| d.model().position(f.outer[0]).unwrap().x > 5.0),
+            kernel::EntityId::Edge(e) => d
+                .model()
+                .edge(*e)
+                .is_some_and(|e| d.model().position(e.v[0]).unwrap().x > 5.0),
+            _ => false,
+        })
+        .collect();
+    run(&mut d, json!({"type": "make_group", "ids": second})).unwrap();
+    let (instance, _) = d.model().instances().next().expect("the group");
+    let group = kernel::EntityId::Instance(instance);
+
+    run(&mut d, json!({"type": "select", "all": true})).unwrap();
+    let root = all_of(d.model());
+    assert_eq!(d.selection(), &root);
+    assert_eq!(
+        root.len(),
+        4 + 1 + 1 + 1,
+        "the square, the guide and the group"
+    );
+    assert!(root.contains(&group));
+
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    run(&mut d, json!({"type": "select", "all": true})).unwrap();
+    let inside = all_of(d.model());
+    assert_eq!(inside.len(), 4 + 1);
+    assert_eq!(d.selection(), &inside);
+    assert!(root.is_disjoint(&inside));
+
+    run(
+        &mut d,
+        json!({"type": "select", "all": true, "mode": "remove"}),
+    )
+    .unwrap();
+    assert!(d.selection().is_empty());
+}
+
+#[test]
+fn select_all_with_ids_is_refused() {
+    let mut d = doc();
+    square(&mut d);
+    run(&mut d, json!({"type": "select", "ids": ["f8"]})).unwrap();
+    let err = d
+        .execute(Command::Select {
+            ids: vec!["e2".parse().unwrap()],
+            mode: session::SelectMode::Replace,
+            all: true,
+        })
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidInput);
+    assert!(err.message.contains("ids or all"), "{}", err.message);
+    assert_eq!(selection(&d), json!(["f8"]));
+}
+
+#[test]
+fn select_all_reads_from_json() {
+    match cmd(json!({"type": "select", "all": true})) {
+        Command::Select { ids, all, .. } => {
+            assert!(all);
+            assert!(ids.is_empty());
+        }
+        other => panic!("not a select: {other:?}"),
+    }
+    let plain = serde_json::to_value(Command::Select {
+        ids: vec![],
+        mode: session::SelectMode::Replace,
+        all: false,
+    })
+    .unwrap();
+    assert!(plain.get("all").is_none(), "{plain}");
+}

@@ -1103,6 +1103,7 @@ impl Editor {
             self.run(Command::Select {
                 ids: vec![*id],
                 mode,
+                all: false,
             });
         }
         self.invalidate_hover();
@@ -1582,6 +1583,7 @@ impl Editor {
                         self.run(Command::Select {
                             ids: selected,
                             mode: SelectMode::Replace,
+                            all: false,
                         });
                     }
                 }
@@ -1616,6 +1618,7 @@ impl Editor {
         self.run(Command::Select {
             ids,
             mode: SelectMode::Replace,
+            all: false,
         });
     }
 
@@ -2663,6 +2666,7 @@ mod tests {
         e.run(Command::Select {
             ids: vec![face],
             mode: SelectMode::Replace,
+            all: false,
         });
         assert!(e.key(EditorKey::Char('t')));
         click_at(&mut e, DVec3::new(2.5, 1.0, 0.0));
@@ -3187,6 +3191,7 @@ mod tests {
         e.execute(Command::Select {
             ids: Vec::new(),
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
     }
@@ -3287,6 +3292,7 @@ mod tests {
         e.execute(Command::Select {
             ids,
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         assert!(e.key(table_key(Bound::EraseSelection)));
@@ -3414,6 +3420,7 @@ mod tests {
         e.execute(Command::Select {
             ids: vec![EntityId::Edge(edge)],
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         // An unrelated later step, which a retyped angle's undo would take back.
@@ -3438,6 +3445,7 @@ mod tests {
         e.execute(Command::Select {
             ids: vec![face],
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         e.select_tool(ToolKind::Rotate);
@@ -3504,6 +3512,7 @@ mod tests {
         e.execute(Command::Select {
             ids,
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         e.select_tool(ToolKind::Rotate);
@@ -4322,6 +4331,7 @@ mod tests {
         e.execute(Command::Select {
             ids: faces,
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         e.select_tool(ToolKind::Paint);
@@ -4636,6 +4646,7 @@ mod tests {
         e.execute(Command::Select {
             ids: Vec::new(),
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         e.execute(Command::AddEdge {

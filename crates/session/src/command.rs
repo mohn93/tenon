@@ -302,9 +302,14 @@ pub enum Command {
     },
     /// Change the selection of edges, faces, instances and guides. Not recorded in undo history.
     Select {
+        #[serde(default)]
         ids: Vec<EntityId>,
         #[serde(default)]
         mode: SelectMode,
+        /// Everything in the open context (edges, faces, instances and guides) in place of
+        /// `ids`, combined by `mode` the same way.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        all: bool,
     },
     /// Undo the last `count` steps (default 1), each its own revision. With fewer steps to
     /// undo than `count`, fails (`nothing_to_undo`) and undoes nothing.

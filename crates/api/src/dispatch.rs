@@ -165,7 +165,11 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             let ScreenCommand::Select { screen_box, mode } = params_as(params)?;
             let ids = box_ids(host.document(), &screen_box).map_err(command_failed)?;
             let outcome = host
-                .execute(Command::Select { ids, mode })
+                .execute(Command::Select {
+                    ids,
+                    mode,
+                    all: false,
+                })
                 .map_err(command_failed)?;
             let mut result = json!(outcome);
             result["revision"] = json!(host.document().revision());

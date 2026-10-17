@@ -189,6 +189,7 @@ mod tests {
         e.execute(Command::Select {
             ids,
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
     }

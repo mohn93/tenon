@@ -220,6 +220,7 @@ mod tests {
         d.execute(Command::Select {
             ids: ids.iter().map(|s| s.parse().unwrap()).collect(),
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
     }
@@ -296,6 +297,7 @@ mod tests {
             d.execute(Command::Select {
                 ids,
                 mode: SelectMode::Replace,
+                all: false,
             })
             .unwrap();
         };
@@ -394,6 +396,7 @@ mod tests {
         d.execute(Command::Select {
             ids: vec![edge, component],
             mode: SelectMode::Replace,
+            all: false,
         })
         .unwrap();
         assert_eq!(entity_info(&d), ["1 edge, 1 instance"]);

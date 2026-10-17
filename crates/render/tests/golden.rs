@@ -462,6 +462,7 @@ fn golden_rotated_component() {
         Command::Select {
             ids: Vec::new(),
             mode: Default::default(),
+            all: false,
         },
     );
     look(&mut d, [7.0, -6.0, 5.0], [2.5, 1.0, 0.4]);
@@ -592,6 +593,7 @@ fn golden_smooth_sphere_beside_a_faceted_one() {
         Command::Select {
             ids: Vec::new(),
             mode: Default::default(),
+            all: false,
         },
     );
     // Soften the sphere on the right only.
@@ -669,6 +671,7 @@ fn golden_selection_highlight() {
         Command::Select {
             ids,
             mode: Default::default(),
+            all: false,
         },
     );
     look(&mut d, [5.0, -4.5, 3.5], [1.0, 0.75, 0.4]);
@@ -936,6 +939,7 @@ fn golden_night_lit_by_two_lamps() {
         Command::Select {
             ids: Vec::new(),
             mode: Default::default(),
+            all: false,
         },
     );
     run(
@@ -1000,6 +1004,7 @@ fn golden_wall_shading_the_floor_from_a_lamp() {
         Command::Select {
             ids: Vec::new(),
             mode: Default::default(),
+            all: false,
         },
     );
     run(

@@ -732,3 +732,39 @@ fn soften_over_json_rpc() {
     );
     assert_eq!(r["error"]["code"], codes::INVALID_PARAMS);
 }
+
+#[test]
+fn select_all_runs_and_box_refuses_all() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "batch",
+        json!({"commands": square(), "atomic": true}),
+    );
+    let r = call(&mut h, "execute", json!({"type": "select", "all": true}));
+    assert!(r.get("error").is_none(), "{r}");
+    let all = call(
+        &mut h,
+        "query",
+        json!({"type": "entities", "kinds": ["edge", "face"]}),
+    );
+    let mut every: Vec<Value> = ["edges", "faces"]
+        .iter()
+        .flat_map(|k| all["result"][k].as_array().unwrap().clone())
+        .map(|e| e["id"].clone())
+        .collect();
+    every.sort_by_key(|id| id.to_string());
+    let selection = call(&mut h, "query", json!({"type": "selection"}));
+    let mut ids = selection["result"]["ids"].as_array().unwrap().clone();
+    ids.sort_by_key(|id| id.to_string());
+    assert_eq!(ids.len(), 5);
+    assert_eq!(ids, every);
+
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "select", "box": {"from": [0, 0], "to": [100, 100], "width": 100,
+            "height": 100}, "all": true}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+}

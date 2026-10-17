@@ -135,6 +135,7 @@ fn scene() -> Document {
         Command::Select {
             ids: Vec::new(),
             mode: Default::default(),
+            all: false,
         },
     );
     run(

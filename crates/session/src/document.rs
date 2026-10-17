@@ -277,9 +277,25 @@ impl Document {
                     ..Outcome::default()
                 })
             }
-            Command::Select { ids, mode } => {
-                self.parts(&ids)?;
-                let ids: BTreeSet<EntityId> = ids.into_iter().collect();
+            Command::Select { ids, mode, all } => {
+                let ids: BTreeSet<EntityId> = if all {
+                    if !ids.is_empty() {
+                        return Err(CommandError::new(
+                            ErrorKind::InvalidInput,
+                            "select takes ids or all, not both",
+                        ));
+                    }
+                    let m = self.model();
+                    m.edges()
+                        .map(|(id, _)| EntityId::Edge(id))
+                        .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
+                        .chain(m.instances().map(|(id, _)| EntityId::Instance(id)))
+                        .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
+                        .collect()
+                } else {
+                    self.parts(&ids)?;
+                    ids.into_iter().collect()
+                };
                 match mode {
                     SelectMode::Replace => self.selection = ids,
                     SelectMode::Add => self.selection.extend(ids),

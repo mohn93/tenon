@@ -187,6 +187,7 @@ fn selection_and_camera_changes_are_notified_once_per_round() {
         .execute(session::Command::Select {
             ids: Vec::new(),
             mode: session::SelectMode::Replace,
+            all: false,
         })
         .unwrap();
     hub.notify_state(&host);
