@@ -6,7 +6,9 @@ pub mod scene;
 mod shadow_maps;
 pub mod shadows;
 pub mod snapshot;
+pub mod style;
 pub mod texture;
 
 pub use renderer::{Renderer, Viewport, required_limits};
 pub use snapshot::Snapshotter;
+pub use style::ViewStyle;

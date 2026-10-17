@@ -27,7 +27,7 @@ use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
 use crate::shortcuts::{self, Bound};
-use crate::ui::theme::ThemeChoice;
+use crate::ui::theme::{self, ThemeChoice};
 use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
 
 /// The side of a texture's swatch image in the Materials list, in pixels.
@@ -1060,6 +1060,8 @@ impl State {
                 doc.context().to_vec(),
             ));
         }
+        // The view follows the panels' theme; render_view keeps its own renderer's classic look.
+        self.renderer.set_style(theme::view_style(self.gui.theme()));
         self.renderer.set_lighting(doc.lighting);
         self.renderer.render_in(
             &target,

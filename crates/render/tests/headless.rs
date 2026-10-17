@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use glam::{DVec2, DVec3};
 use kernel::{DefinitionKind, EntityId, InstanceId, MeshId, Model, Scene, Side};
 use render::grid::{BACKGROUND, LineVertex};
-use render::{Renderer, Viewport};
+use render::{Renderer, ViewStyle, Viewport};
 use session::{Camera, Lighting};
 
 const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
@@ -985,4 +985,173 @@ fn without_shadows_the_lamp_lights_through_the_wall() {
         "open {open}, behind the wall {behind}"
     );
     assert_eq!(r.shadow_faces_drawn(), 0);
+}
+
+/// Renders `model` with `selection`, lit by `lighting` and drawn in `style`, from `camera`.
+fn render_styled(
+    camera: &Camera,
+    model: &Model,
+    selection: &BTreeSet<EntityId>,
+    style: ViewStyle,
+    lighting: Lighting,
+) -> Option<Vec<u8>> {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return None;
+    };
+    let mut renderer = screen.renderer();
+    renderer.set_scene(&Scene::from_root(model.clone()), &[], selection);
+    renderer.set_style(style);
+    renderer.set_lighting(lighting);
+    Some(screen.draw(&mut renderer, camera, Viewport::full((W, H)), &[]))
+}
+
+/// A style selecting in magenta, a color nothing else in these scenes has.
+const MAGENTA: ViewStyle = ViewStyle {
+    selected_edge: [1.0, 0.0, 1.0, 1.0],
+    selected_face: [1.0, 0.0, 1.0],
+    face_tint: 0.18,
+    wide_selected_edges: true,
+    ..ViewStyle::CLASSIC
+};
+
+fn magenta(p: [u8; 4]) -> bool {
+    p[0] > 150 && p[1] < 110 && p[2] > 150
+}
+
+/// Whether channel `i` of `p` clearly outweighs the other two.
+fn dominant(p: [u8; 4], i: usize) -> bool {
+    (0..3).all(|k| k == i || i32::from(p[i]) > i32::from(p[k]) + 40)
+}
+
+/// Whether red and blue together clearly outweigh green.
+fn magenta_dominant(p: [u8; 4]) -> bool {
+    i32::from(p[0]) > i32::from(p[1]) + 40 && i32::from(p[2]) > i32::from(p[1]) + 40
+}
+
+fn count(px: &[u8], f: impl Fn([u8; 4]) -> bool) -> usize {
+    px.chunks(4).filter(|p| f([p[0], p[1], p[2], p[3]])).count()
+}
+
+#[test]
+fn a_style_tints_selected_faces_lightly_in_its_color() {
+    let cam = camera();
+    let model = ground_square();
+    let face = model.faces().next().unwrap().0;
+    let selected = BTreeSet::from([EntityId::Face(face)]);
+    let (Some(plain), Some(tinted)) = (
+        render_styled(&cam, &model, &BTreeSet::new(), MAGENTA, Lighting::Day),
+        render_styled(&cam, &model, &selected, MAGENTA, Lighting::Day),
+    ) else {
+        return;
+    };
+    let at = DVec3::new(0.5, 0.5, 0.0);
+    let (p, t) = (pixel_at(&plain, &cam, at), pixel_at(&tinted, &cam, at));
+    assert!(t[0] > p[0] && t[2] > p[2], "toward magenta: {p:?} -> {t:?}");
+    assert!(
+        (i32::from(p[1]) - i32::from(t[1])).abs() < 60,
+        "18% leaves the face showing: {p:?} -> {t:?}"
+    );
+}
+
+#[test]
+fn wide_selected_edges_cover_more_pixels() {
+    let cam = camera();
+    let model = ground_square();
+    let edges: BTreeSet<EntityId> = model.edges().map(|(id, _)| EntityId::Edge(id)).collect();
+    let thin = ViewStyle {
+        wide_selected_edges: false,
+        ..MAGENTA
+    };
+    let (Some(a), Some(b)) = (
+        render_styled(&cam, &model, &edges, thin, Lighting::Day),
+        render_styled(&cam, &model, &edges, MAGENTA, Lighting::Day),
+    ) else {
+        return;
+    };
+    let (thin_px, wide_px) = (count(&a, magenta), count(&b, magenta));
+    assert!(thin_px > 0, "the selected edges show");
+    assert!(
+        wide_px as f64 > 1.6 * thin_px as f64,
+        "{thin_px} -> {wide_px} pixels"
+    );
+}
+
+#[test]
+fn the_day_canvas_is_a_gradient_and_night_keeps_its_background() {
+    // Looking horizontally: the upper half sees only sky.
+    let mut cam = camera();
+    cam.eye = DVec3::new(0.0, -10.0, 1.0);
+    cam.target = DVec3::new(0.0, 0.0, 1.0);
+    let style = ViewStyle {
+        day_canvas: [[0.1, 0.1, 0.1, 1.0], [0.9, 0.9, 0.9, 1.0]],
+        ..ViewStyle::CLASSIC
+    };
+    let empty = Model::new();
+    let none = BTreeSet::new();
+    let (Some(day), Some(night)) = (
+        render_styled(&cam, &empty, &none, style, Lighting::Day),
+        render_styled(&cam, &empty, &none, style, Lighting::Night),
+    ) else {
+        return;
+    };
+    let (top, quarter) = (pixel(&day, 0, 0), pixel(&day, 0, H / 4));
+    assert!(
+        i32::from(quarter[0]) - i32::from(top[0]) > 30,
+        "lighter downward: {top:?} {quarter:?}"
+    );
+    assert_eq!(
+        pixel(&night, 0, 0),
+        pixel(&night, 0, H / 4),
+        "night is one color"
+    );
+}
+
+#[test]
+fn restyling_recolors_a_selected_guide() {
+    let c = camera();
+    let mut m = Model::new();
+    // Through the target, raised half a pixel onto the middle of a pixel row, so
+    // multisampling covers it whole rather than sharing it between two rows.
+    m.add_guide(kernel::Guide::Line {
+        point: c.target + c.up() * (0.5 * c.pixel_size(c.target)),
+        direction: c.right(),
+    })
+    .unwrap();
+    let guide = m.guides().next().unwrap().0;
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut renderer = screen.renderer();
+    // The axes cross the view too: count against the same frame with the guide unselected.
+    let scene = Scene::from_root(m);
+    renderer.set_scene(&scene, &[], &BTreeSet::new());
+    renderer.set_style(MAGENTA);
+    let plain = screen.draw(&mut renderer, &c, Viewport::full((W, H)), &[]);
+    let (plain_magenta, plain_green) = (
+        count(&plain, magenta_dominant),
+        count(&plain, |p| dominant(p, 1)),
+    );
+    renderer.set_selection(&BTreeSet::from([EntityId::Guide(guide)]));
+    let px = screen.draw(&mut renderer, &c, Viewport::full((W, H)), &[]);
+    assert!(
+        count(&px, magenta_dominant) > plain_magenta + 20,
+        "the guide in the style's color"
+    );
+    let green = ViewStyle {
+        selected_edge: [0.0, 1.0, 0.0, 1.0],
+        ..MAGENTA
+    };
+    renderer.set_style(green);
+    let px = screen.draw(&mut renderer, &c, Viewport::full((W, H)), &[]);
+    assert_eq!(
+        count(&px, magenta_dominant),
+        plain_magenta,
+        "no rebuild needed"
+    );
+    assert!(
+        count(&px, |p| dominant(p, 1)) > plain_green + 20,
+        "the guide turns green"
+    );
 }

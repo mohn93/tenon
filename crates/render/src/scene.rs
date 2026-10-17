@@ -293,19 +293,18 @@ impl SceneBase {
         ModelGeometry {
             faces,
             edges,
-            guides: shown_guides(&self.guides, &flags.guides),
+            guides: shown_guides(&self.guides, &flags.guides, SELECTED_EDGE_COLOR),
         }
     }
 }
 
-/// The guides of a `SceneBase` with the selected ones (`lit`, one per guide) in
-/// SELECTED_EDGE_COLOR.
-pub fn shown_guides(guides: &[GuideShape], lit: &[bool]) -> Vec<GuideShape> {
+/// The guides of a `SceneBase` with the selected ones (`lit`, one per guide) in `color`.
+pub fn shown_guides(guides: &[GuideShape], lit: &[bool], color: [f32; 4]) -> Vec<GuideShape> {
     guides
         .iter()
         .zip(lit)
         .map(|(g, &lit)| GuideShape {
-            color: if lit { SELECTED_EDGE_COLOR } else { g.color },
+            color: if lit { color } else { g.color },
             ..*g
         })
         .collect()

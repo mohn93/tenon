@@ -25,19 +25,25 @@ const MAX_LIGHTS: u32 = 128u;
 struct Lighting {
     // x: how many lights; y: the ambient light; z: the headlight; w: 1 at night, else 0.
     mode: vec4<f32>,
-    // The background, which lines fade toward at night.
+    // The background, which lines fade toward.
     background: vec4<f32>,
+    // Selected edges and guides.
+    selected_edge: vec4<f32>,
+    // rgb: the color selected faces are tinted toward; w: how far.
+    selected_face: vec4<f32>,
+    // x: how far unselected edges fade toward the background; y: how far the grid and axes do;
+    // zw: the view's size in pixels.
+    lines: vec4<f32>,
+    // The day canvas's top and bottom.
+    canvas_top: vec4<f32>,
+    canvas_bottom: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
 @group(0) @binding(3) var<uniform> lighting: Lighting;
 
-// How far unselected edges, the grid and the axes fade toward the background at night, so they
-// stay quiet outlines rather than bright lines on the dark.
-const NIGHT_LINE_FADE: f32 = 0.8;
-
-fn night_line(color: vec4<f32>) -> vec4<f32> {
-    let fade = NIGHT_LINE_FADE * lighting.mode.w;
+// `color` faded toward the background by `fade` (0 to 1; the lighting uniforms set how far).
+fn faded_line(color: vec4<f32>, fade: f32) -> vec4<f32> {
     return vec4<f32>(mix(color.rgb, lighting.background.rgb, fade), color.a);
 }
 
@@ -61,20 +67,40 @@ fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
     return out;
 }
 
-// SELECTED_EDGE_COLOR in scene.rs.
-const SELECTED_EDGE: vec4<f32> = vec4<f32>(0.10, 0.35, 0.95, 1.0);
-
 // Model edges: pulled toward the camera by 0.05% of clip depth, enough to win against the faces
 // they bound at this depth precision without showing through faces in front of them. A
-// selected edge (flag 1, from the second vertex buffer) is drawn in SELECTED_EDGE; the others
-// fade at night.
+// selected edge (flag 1, from the second vertex buffer) is drawn in the style's selected-edge
+// color; the others fade toward the background as far as the lighting says.
 @vertex
 fn vs_edge(
     @location(0) pos: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) selected: f32,
 ) -> LineOut {
-    return line_vertex(pos, select(night_line(color), SELECTED_EDGE, selected > 0.5), 1.0005);
+    return line_vertex(
+        pos,
+        select(faded_line(color, lighting.lines.x), lighting.selected_edge, selected > 0.5),
+        1.0005,
+    );
+}
+
+// Selected edges drawn again one pixel across (instance 0) and one pixel down (instance 1), so
+// they read about 2 px wide; the other edges are moved outside the view and clipped away.
+@vertex
+fn vs_edge_wide(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) selected: f32,
+    @builtin(instance_index) k: u32,
+) -> LineOut {
+    var out = line_vertex(pos, lighting.selected_edge, 1.0005);
+    if selected < 0.5 {
+        out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+        return out;
+    }
+    let pixel = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), k == 0u) / lighting.lines.zw;
+    out.pos = vec4<f32>(out.pos.xy + pixel * out.pos.w, out.pos.zw);
+    return out;
 }
 
 // Guides: pulled toward the camera like model edges; their color already shows the selection.
@@ -83,16 +109,16 @@ fn vs_guide(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineO
     return line_vertex(pos, color, 1.0005);
 }
 
-// Grid and axes: drawn under faces lying on the ground; faded at night.
+// Grid and axes: drawn under faces lying on the ground; faded as far as the lighting says.
 @vertex
 fn vs_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
-    return line_vertex(pos, night_line(color), 0.998);
+    return line_vertex(pos, faded_line(color, lighting.lines.y), 0.998);
 }
 
-// The flat ground grid, drawn without depth testing before everything else; faded at night.
+// The flat ground grid, drawn without depth testing before everything else; faded like the axes.
 @vertex
 fn vs_flat_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
-    return line_vertex(pos, night_line(color), 1.0);
+    return line_vertex(pos, faded_line(color, lighting.lines.y), 1.0);
 }
 
 // Tool previews and inference markers: drawn without depth testing.
@@ -104,6 +130,27 @@ fn vs_overlay(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> Lin
 @fragment
 fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
     return in.color;
+}
+
+struct CanvasOut {
+    @builtin(position) pos: vec4<f32>,
+    // 0 at the view's top, 1 at its bottom.
+    @location(0) down: f32,
+};
+
+// One triangle covering the view, at the far plane.
+@vertex
+fn vs_canvas(@builtin(vertex_index) i: u32) -> CanvasOut {
+    let xy = vec2<f32>(f32(i & 1u) * 4.0 - 1.0, f32(i >> 1u) * 4.0 - 1.0);
+    var out: CanvasOut;
+    out.pos = vec4<f32>(xy, 0.0, 1.0);
+    out.down = (1.0 - xy.y) * 0.5;
+    return out;
+}
+
+@fragment
+fn fs_canvas(in: CanvasOut) -> @location(0) vec4<f32> {
+    return mix(lighting.canvas_top, lighting.canvas_bottom, in.down);
 }
 
 struct FaceOut {
@@ -122,8 +169,6 @@ struct FaceOut {
     // 1 on a glowing front (x) or back (y) side.
     @location(8) @interpolate(flat) glow: vec2<f32>,
 };
-
-const SELECTED: vec3<f32> = vec3<f32>(0.25, 0.45, 0.95);
 
 // `selected` (1 or 0) comes from the second vertex buffer.
 @vertex
@@ -187,7 +232,7 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // Each side shows its own color (its material's, or the default: light in front, blue-gray
 // behind), or its material's texture instead; ambient light, a headlight at the eye (from the
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
-// unshaded. Selected faces are tinted blue. Call it before any discard: the texture lookup needs
+// unshaded. Selected faces are tinted toward the style's color. Call it before any discard: the texture lookup needs
 // every pixel of its quad.
 fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
@@ -196,7 +241,7 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let uv = select(in.uv.zw, in.uv.xy, front);
     let texel = textureSample(textures, texture_sampler, uv, i32(max(layer, 0.0))).rgb;
     let color = select(select(in.back_color, in.front_color, front), texel, layer >= 0.0);
-    let base = mix(color, SELECTED, 0.5 * in.selected);
+    let base = mix(color, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
     if select(in.glow.y, in.glow.x, front) > 0.5 {
         return base;
     }

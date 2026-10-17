@@ -104,6 +104,32 @@ pub fn tokens(theme: egui::Theme) -> &'static Tokens {
     }
 }
 
+/// How far faces are tinted toward the accent when selected.
+pub const SELECTION_TINT: f32 = 0.18;
+/// How far the grid and axes fade toward the dark theme's day canvas (black edges keep theirs).
+pub const DARK_GROUND_FADE: f32 = 0.6;
+
+/// How the window's 3D view looks in `theme`: its day canvas and the selection in the accent.
+pub fn view_style(theme: egui::Theme) -> render::ViewStyle {
+    let t = tokens(theme);
+    let rgba = |c: Color32| {
+        let [r, g, b] = [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
+        [r, g, b, 1.0]
+    };
+    let accent = rgba(t.accent);
+    render::ViewStyle {
+        day_canvas: [rgba(t.canvas_top), rgba(t.canvas_bottom)],
+        day_ground_fade: match theme {
+            egui::Theme::Dark => DARK_GROUND_FADE,
+            egui::Theme::Light => 0.0,
+        },
+        selected_edge: accent,
+        selected_face: [accent[0], accent[1], accent[2]],
+        face_tint: SELECTION_TINT,
+        wide_selected_edges: true,
+    }
+}
+
 /// The spacing grid every gap and padding is a multiple of.
 pub const GRID: f32 = 4.0;
 /// A control's height.
@@ -224,6 +250,29 @@ pub fn set_choice(ctx: &egui::Context, choice: ThemeChoice) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_view_follows_the_theme() {
+        let unit = |c: Color32| [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
+        for (theme, t) in [(egui::Theme::Dark, &DARK), (egui::Theme::Light, &LIGHT)] {
+            let s = view_style(theme);
+            let [r, g, b] = unit(t.accent);
+            assert_eq!(s.selected_edge, [r, g, b, 1.0]);
+            assert_eq!(s.selected_face, [r, g, b]);
+            assert_eq!(s.face_tint, 0.18);
+            assert!(s.wide_selected_edges);
+            assert!(s.has_gradient());
+            let [r, g, b] = unit(t.canvas_top);
+            assert_eq!(s.day_canvas[0], [r, g, b, 1.0]);
+            let [r, g, b] = unit(t.canvas_bottom);
+            assert_eq!(s.day_canvas[1], [r, g, b, 1.0]);
+        }
+        assert_eq!(view_style(egui::Theme::Light).day_ground_fade, 0.0);
+        assert!(
+            view_style(egui::Theme::Dark).day_ground_fade > 0.0,
+            "a dark canvas quiets the grid"
+        );
+    }
 
     /// WCAG contrast ratio of two opaque colors.
     fn contrast(a: Color32, b: Color32) -> f32 {

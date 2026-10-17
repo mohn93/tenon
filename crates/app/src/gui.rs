@@ -59,6 +59,11 @@ impl Gui {
         &self.ctx
     }
 
+    /// The theme the panels are drawn in now (System resolved to what the window reports).
+    pub fn theme(&self) -> egui::Theme {
+        self.ctx.theme()
+    }
+
     /// Feeds a window event to egui. Returns true if egui needs a repaint.
     pub fn on_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
         self.state.on_window_event(window, event).repaint

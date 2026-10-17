@@ -4,14 +4,13 @@ use kernel::{EntityId, InstanceId, Scene};
 use session::{Camera, Lighting};
 use wgpu::util::DeviceExt;
 
-use crate::grid::{
-    BACKGROUND, LineVertex, NIGHT_BACKGROUND, flat_ground_lines, vertical_axis_lines,
-};
+use crate::grid::{LineVertex, NIGHT_BACKGROUND, flat_ground_lines, vertical_axis_lines};
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{BaseFaceVertex, CasterChunk, Spans, scene_base, shown_guides};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
+use crate::style::ViewStyle;
 use crate::texture::TextureArray;
 
 pub const SAMPLE_COUNT: u32 = 4;
@@ -107,6 +106,9 @@ impl Uniforms {
 const DAY: [f32; 2] = [0.6, 0.4];
 /// The same at night, dimmed so glowing faces light the scene.
 const NIGHT: [f32; 2] = [0.08, 0.12];
+/// How far unselected edges, the grid and the axes fade toward the background at night, so they
+/// stay quiet outlines rather than bright lines on the dark.
+const NIGHT_LINE_FADE: f32 = 0.8;
 
 /// A light as scene.wgsl reads it.
 #[repr(C)]
@@ -124,18 +126,39 @@ struct LightUniform {
 struct LightingUniforms {
     /// x: how many lights; y: the ambient light; z: the headlight; w: 1 at night, else 0.
     mode: [f32; 4],
-    /// The background, which lines fade toward at night.
+    /// The background, which lines fade toward.
     background: [f32; 4],
+    /// Selected edges and guides.
+    selected_edge: [f32; 4],
+    /// rgb: the color selected faces are tinted toward; w: how far.
+    selected_face: [f32; 4],
+    /// x: how far unselected edges fade toward the background; y: how far the grid and axes
+    /// do; zw: the view's size in pixels.
+    lines: [f32; 4],
+    /// The day canvas's top and bottom.
+    canvas_top: [f32; 4],
+    canvas_bottom: [f32; 4],
     lights: [LightUniform; MAX_LIGHTS],
 }
 
 impl LightingUniforms {
     /// The lighting for `mode` with `used` (at most MAX_LIGHTS), each with its shadow map's
-    /// slot if it casts shadows.
-    fn new(used: &[Light], shadow_slots: &[Option<usize>], mode: Lighting) -> Self {
+    /// slot if it casts shadows, drawn in `style` into a view `view` pixels in size.
+    fn new(
+        used: &[Light],
+        shadow_slots: &[Option<usize>],
+        mode: Lighting,
+        style: &ViewStyle,
+        view: (u32, u32),
+    ) -> Self {
         let mut uniforms = Self {
             mode: [0.0; 4],
-            background: background(mode),
+            background: background(mode, style),
+            selected_edge: [0.0; 4],
+            selected_face: [0.0; 4],
+            lines: [0.0; 4],
+            canvas_top: [0.0; 4],
+            canvas_bottom: [0.0; 4],
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
         for ((u, l), slot) in uniforms.lights.iter_mut().zip(used).zip(shadow_slots) {
@@ -149,14 +172,30 @@ impl LightingUniforms {
             Lighting::Night => (NIGHT, 1.0),
         };
         uniforms.mode = [used.len() as f32, ambient, headlight, night];
+        let night = mode == Lighting::Night;
+        let [r, g, b] = style.selected_face;
+        uniforms.selected_edge = style.selected_edge;
+        uniforms.selected_face = [r, g, b, style.face_tint];
+        uniforms.lines = [
+            if night { NIGHT_LINE_FADE } else { 0.0 },
+            if night {
+                NIGHT_LINE_FADE
+            } else {
+                style.day_ground_fade
+            },
+            view.0.max(1) as f32,
+            view.1.max(1) as f32,
+        ];
+        uniforms.canvas_top = style.day_canvas[0];
+        uniforms.canvas_bottom = style.day_canvas[1];
         uniforms
     }
 }
 
 /// The color the target is cleared to.
-fn background(mode: Lighting) -> [f32; 4] {
+fn background(mode: Lighting, style: &ViewStyle) -> [f32; 4] {
     match mode {
-        Lighting::Day => BACKGROUND,
+        Lighting::Day => style.day_background(),
         Lighting::Night => NIGHT_BACKGROUND,
     }
 }
@@ -297,6 +336,10 @@ pub struct Renderer {
     solid_side_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
+    /// Selected edges again, a pixel across and a pixel down, when the style widens them.
+    wide_edge_pipeline: wgpu::RenderPipeline,
+    /// The day canvas's gradient, when the style has one.
+    canvas_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
@@ -323,6 +366,8 @@ pub struct Renderer {
     caster_generation: u64,
     /// Day or night, as of the last `set_lighting`.
     lighting: Lighting,
+    /// How the frames look, as of the last `set_style`.
+    style: ViewStyle,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
     flat_ground: Mesh,
@@ -331,6 +376,8 @@ pub struct Renderer {
     /// The see-through triangles of `faces`, if any.
     glass: Option<Glass>,
     edges: Option<Mesh>,
+    /// Whether any edge is selected, as of the last `set_selection`.
+    edges_selected: bool,
     /// Where the open context's entities lie in `faces`, `edges` and `base_guides`.
     spans: Spans,
     /// Guides in root coordinates with nothing selected.
@@ -338,6 +385,8 @@ pub struct Renderer {
     /// The guides with the selection shown; their lines depend on the camera, so they are
     /// built per frame.
     guides: Vec<GuideShape>,
+    /// Which of `base_guides` are selected, as of the last `set_selection`.
+    guide_flags: Vec<bool>,
     targets: Option<Targets>,
 }
 
@@ -584,6 +633,32 @@ impl Renderer {
             },
             None,
         );
+        // Selected edges a second and third time, offset a pixel (see `vs_edge_wide`).
+        let wide_edge_pipeline = pipeline(
+            "wide edges",
+            "vs_edge_wide",
+            "fs_line",
+            &flagged_lines,
+            lines,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::GreaterEqual,
+            },
+            None,
+        );
+        // The day canvas's gradient, under everything.
+        let canvas_pipeline = pipeline(
+            "canvas",
+            "vs_canvas",
+            "fs_canvas",
+            &[],
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Always,
+            },
+            None,
+        );
         let guide_pipeline = pipeline(
             "guides",
             "vs_guide",
@@ -662,6 +737,8 @@ impl Renderer {
             solid_side_pipeline,
             glass_pipeline,
             edge_pipeline,
+            wide_edge_pipeline,
+            canvas_pipeline,
             guide_pipeline,
             overlay_pipeline,
             uniforms,
@@ -677,15 +754,18 @@ impl Renderer {
             caster_chunks: Vec::new(),
             caster_generation: 0,
             lighting: Lighting::Day,
+            style: ViewStyle::CLASSIC,
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
             faces: None,
             glass: None,
             edges: None,
+            edges_selected: false,
             spans: Spans::default(),
             base_guides: Vec::new(),
             guides: Vec::new(),
+            guide_flags: Vec::new(),
             targets: None,
         }
     }
@@ -715,6 +795,8 @@ impl Renderer {
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
         self.spans = base.spans;
         self.guides = base.guides.clone();
+        self.guide_flags = vec![false; base.guides.len()];
+        self.edges_selected = false;
         self.base_guides = base.guides;
         self.lights = base.lights;
         // Shadow maps are drawn again only when the casters move, not when, say, a group is
@@ -817,7 +899,19 @@ impl Renderer {
                     .write_buffer(buffer, 0, bytemuck::cast_slice(flags));
             }
         }
-        self.guides = shown_guides(&self.base_guides, &flags.guides);
+        self.edges_selected = flags.edges.iter().any(|&f| f > 0.5);
+        self.guides = shown_guides(&self.base_guides, &flags.guides, self.style.selected_edge);
+        self.guide_flags = flags.guides;
+    }
+
+    /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
+    /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild.
+    pub fn set_style(&mut self, style: ViewStyle) {
+        if style == self.style {
+            return;
+        }
+        self.style = style;
+        self.guides = shown_guides(&self.base_guides, &self.guide_flags, style.selected_edge);
     }
 
     /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything) over the
@@ -856,7 +950,13 @@ impl Renderer {
             });
         let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
         let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
-        let lighting = LightingUniforms::new(&used, &shadow_slots, self.lighting);
+        let lighting = LightingUniforms::new(
+            &used,
+            &shadow_slots,
+            self.lighting,
+            &self.style,
+            (viewport.width, viewport.height),
+        );
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         let targets = self.targets.as_ref().expect("targets just created");
@@ -866,7 +966,7 @@ impl Renderer {
             glass.sort(&self.queue, camera);
         }
 
-        let [r, g, b, a] = background(self.lighting).map(f64::from);
+        let [r, g, b, a] = background(self.lighting, &self.style).map(f64::from);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -899,6 +999,10 @@ impl Renderer {
                 pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
+                if self.lighting == Lighting::Day && self.style.has_gradient() {
+                    pass.set_pipeline(&self.canvas_pipeline);
+                    pass.draw(0..3, 0..1);
+                }
                 let bind = |pass: &mut wgpu::RenderPass, pipeline, mesh: &Mesh| {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, mesh.buffer.slice(..));
@@ -932,6 +1036,13 @@ impl Renderer {
                     (faces, _) => draw(&mut pass, &self.face_pipeline, faces.as_ref()),
                 }
                 draw(&mut pass, &self.edge_pipeline, self.edges.as_ref());
+                if self.style.wide_selected_edges
+                    && self.edges_selected
+                    && let Some(edges) = &self.edges
+                {
+                    bind(&mut pass, &self.wide_edge_pipeline, edges);
+                    pass.draw(0..edges.count, 0..2);
+                }
                 draw(&mut pass, &self.guide_pipeline, guides.as_ref());
                 // See-through faces last but for the overlay: everything opaque shows through.
                 if let (Some(faces), Some(glass)) = (&self.faces, &self.glass) {
