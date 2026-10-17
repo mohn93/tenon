@@ -1,7 +1,7 @@
 //! The Paint tool (Paint Bucket): click a face to paint the side facing you with the current
 //! material, or a group to paint the group. Clicking something selected paints every selected
 //! face and group. With the sampling modifier (Cmd on macOS, Ctrl elsewhere) held, a click
-//! picks up the material clicked instead. What is under the cursor is outlined.
+//! picks up the material clicked instead. What is under the cursor is reported as hovered.
 
 use glam::DVec3;
 use kernel::{EntityId, FaceId, Side};
@@ -9,13 +9,12 @@ use session::Command;
 
 use crate::inference::face_under_in;
 use crate::scenery::Owner;
-use crate::select::{box_outline, face_outline};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
 pub struct PaintTool {
-    /// Outline of the face or group under the cursor.
-    outline: Vec<[DVec3; 2]>,
+    /// The face or group a click would paint.
+    hovered: Option<EntityId>,
 }
 
 impl PaintTool {
@@ -74,17 +73,13 @@ impl Tool for PaintTool {
         let mut out = ToolOutput::default();
         match event {
             ToolEvent::Move(_) => {
-                self.outline = match target(ctx) {
-                    Some(Target::Face(f, _)) => ctx
-                        .model
-                        .face(f)
-                        .map(|face| face_outline(ctx.model, face))
-                        .unwrap_or_default(),
-                    Some(Target::Instance(id)) => box_outline(ctx, id),
-                    None => Vec::new(),
-                };
+                self.hovered = target(ctx).map(|t| match t {
+                    Target::Face(f, _) => EntityId::Face(f),
+                    Target::Instance(id) => id,
+                });
             }
             ToolEvent::Click(_) => {
+                self.hovered = None;
                 let Some(target) = target(ctx) else {
                     return out;
                 };
@@ -125,17 +120,18 @@ impl Tool for PaintTool {
             ToolEvent::Value(_) => {
                 out.message = Some("The Paint tool takes no typed values".into());
             }
-            ToolEvent::Release(_)
-            | ToolEvent::DoubleClick(_)
-            | ToolEvent::Cancel
-            | ToolEvent::ToggleCopy => {}
+            ToolEvent::Cancel => self.hovered = None,
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
         }
-        out.preview = self.outline.clone();
         out
     }
 
     fn on_external_change(&mut self) {
-        self.outline.clear();
+        self.hovered = None;
+    }
+
+    fn hovered(&self) -> Option<EntityId> {
+        self.hovered
     }
 }
 
@@ -240,16 +236,6 @@ mod tests {
             on_square,
             false,
             &none,
-            ToolEvent::Move(hit()),
-        );
-        assert_eq!(out.preview.len(), 4, "the face is outlined");
-        let out = send(
-            &mut t,
-            &s,
-            &above,
-            on_square,
-            false,
-            &none,
             ToolEvent::Click(hit()),
         );
         let face = face_at(&s, 0.0);
@@ -319,6 +305,24 @@ mod tests {
             ToolEvent::Click(hit()),
         );
         assert!(out.commands.is_empty() && out.sampled.is_none());
+    }
+
+    #[test]
+    fn hovering_reports_the_face_or_group_a_click_would_paint() {
+        let s = scene();
+        let none = BTreeSet::new();
+        let mut t = PaintTool::new();
+        let above = Camera::new(DVec2::new(800.0, 600.0));
+        let hover = |t: &mut PaintTool, at: DVec3| {
+            let out = send(t, &s, &above, at, false, &none, ToolEvent::Move(hit()));
+            assert!(out.preview.is_empty(), "no outline at {at}");
+            t.hovered()
+        };
+        let face = face_at(&s, 0.0);
+        assert_eq!(hover(&mut t, DVec3::new(1.0, 1.0, 0.0)), Some(face));
+        let group = EntityId::Instance(s.root().instances().next().unwrap().0);
+        assert_eq!(hover(&mut t, DVec3::new(4.0, 1.0, 0.0)), Some(group));
+        assert_eq!(hover(&mut t, DVec3::new(-3.0, 6.0, 0.0)), None);
     }
 
     #[test]

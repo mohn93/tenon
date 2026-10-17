@@ -26,8 +26,8 @@ struct Drag {
 #[derive(Clone, Debug, Default)]
 pub struct PushPullTool {
     drag: Option<Drag>,
-    /// Outline of the face under the cursor while no push/pull is in progress.
-    hover: Vec<Vec<DVec3>>,
+    /// The face a click would push or pull, while no push/pull is in progress.
+    hovered: Option<FaceId>,
 }
 
 impl PushPullTool {
@@ -51,6 +51,13 @@ fn loops(model: &Model, id: FaceId) -> Vec<Vec<DVec3>> {
         .chain(&f.holes)
         .map(|l| l.iter().filter_map(|v| model.position(*v)).collect())
         .collect()
+}
+
+/// The open context's face under the cursor, and the point on it there.
+fn open_face_under(ctx: &ToolContext) -> Option<(FaceId, DVec3)> {
+    face_under_in(ctx.scenery, ctx.camera, ctx.cursor)
+        .filter(|(owner, ..)| *owner == Owner::Open)
+        .map(|(_, f, p)| (f, p))
 }
 
 fn outline(loops: &[Vec<DVec3>], offset: DVec3, out: &mut Vec<[DVec3; 2]>) {
@@ -119,14 +126,11 @@ impl Tool for PushPullTool {
         match event {
             ToolEvent::Move(hit) => match self.drag.as_mut() {
                 Some(d) => d.distance = measure(d, &hit, ctx),
-                None => self.hover = hit.face.map(|f| loops(ctx.model, f)).unwrap_or_default(),
+                None => self.hovered = open_face_under(ctx).map(|(f, _)| f),
             },
             ToolEvent::Click(hit) => match self.drag.as_ref() {
                 None => {
-                    let under = face_under_in(ctx.scenery, ctx.camera, ctx.cursor)
-                        .filter(|(owner, ..)| *owner == Owner::Open)
-                        .map(|(_, f, p)| (f, p));
-                    if let Some((face, start)) = under {
+                    if let Some((face, start)) = open_face_under(ctx) {
                         self.drag = Some(Drag {
                             face,
                             normal: ctx.model.face(face).unwrap().normal,
@@ -134,8 +138,8 @@ impl Tool for PushPullTool {
                             loops: loops(ctx.model, face),
                             distance: 0.0,
                         });
-                        self.hover.clear();
                     }
+                    self.hovered = None;
                 }
                 Some(d) => {
                     let distance = measure(d, &hit, ctx);
@@ -159,25 +163,26 @@ impl Tool for PushPullTool {
             ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
-        match &self.drag {
-            Some(d) => {
-                let offset = d.normal * d.distance;
-                outline(&d.loops, DVec3::ZERO, &mut out.preview);
-                if d.distance.abs() >= LENGTH_TOL {
-                    outline(&d.loops, offset, &mut out.preview);
-                    for p in d.loops.iter().flatten() {
-                        out.preview.push([*p, *p + offset]);
-                    }
+        if let Some(d) = &self.drag {
+            let offset = d.normal * d.distance;
+            outline(&d.loops, DVec3::ZERO, &mut out.preview);
+            if d.distance.abs() >= LENGTH_TOL {
+                outline(&d.loops, offset, &mut out.preview);
+                for p in d.loops.iter().flatten() {
+                    out.preview.push([*p, *p + offset]);
                 }
             }
-            None => outline(&self.hover, DVec3::ZERO, &mut out.preview),
         }
         out
     }
 
     fn on_external_change(&mut self) {
         self.drag = None;
-        self.hover.clear();
+        self.hovered = None;
+    }
+
+    fn hovered(&self) -> Option<EntityId> {
+        self.hovered.map(EntityId::Face)
     }
 }
 
@@ -253,12 +258,20 @@ mod tests {
     }
 
     #[test]
-    fn hovering_a_face_outlines_it() {
+    fn hovering_a_face_reports_it_without_an_outline() {
         let mut r = Rig::new();
         let out = r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Move);
-        assert_eq!(out.preview.len(), 4);
+        assert_eq!(r.tool.hovered(), Some(EntityId::Face(r.face)));
+        assert!(out.preview.is_empty());
         let off = r.at(DVec3::new(-3.0, 4.0, 0.0), ToolEvent::Move);
+        assert_eq!(r.tool.hovered(), None);
         assert!(off.preview.is_empty());
+        // A drag in progress hovers nothing.
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Move);
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        assert_eq!(r.tool.hovered(), None);
+        r.at(DVec3::new(1.0, 1.0, 0.5), ToolEvent::Move);
+        assert_eq!(r.tool.hovered(), None);
     }
 
     #[test]

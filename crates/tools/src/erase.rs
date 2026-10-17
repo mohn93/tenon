@@ -1,40 +1,22 @@
 //! The Erase tool: click an edge, face, guide or group to erase it. What is under the cursor is
-//! outlined.
+//! reported as hovered.
 
 use glam::DVec3;
 use kernel::EntityId;
 use session::Command;
 
-use crate::select::{box_outline, face_outline, guide_outline, pick};
+use crate::select::pick;
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
 pub struct EraseTool {
-    /// Outline of the entity under the cursor.
-    outline: Vec<[DVec3; 2]>,
+    /// What a click would erase.
+    hovered: Option<EntityId>,
 }
 
 impl EraseTool {
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-fn outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
-    let m = ctx.model;
-    match id {
-        EntityId::Edge(e) => m
-            .edge(e)
-            .and_then(|e| Some([m.position(e.v[0])?, m.position(e.v[1])?]))
-            .into_iter()
-            .collect(),
-        EntityId::Face(f) => m.face(f).map(|f| face_outline(m, f)).unwrap_or_default(),
-        EntityId::Instance(_) => box_outline(ctx, id),
-        EntityId::Guide(g) => m
-            .guide(g)
-            .map(|g| guide_outline(ctx, g))
-            .unwrap_or_default(),
-        EntityId::Vertex(_) => Vec::new(),
     }
 }
 
@@ -63,29 +45,28 @@ impl Tool for EraseTool {
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
-            ToolEvent::Move(_) => {
-                self.outline = pick(ctx).map(|id| outline(ctx, id)).unwrap_or_default()
-            }
+            ToolEvent::Move(_) => self.hovered = pick(ctx),
             ToolEvent::Click(_) => {
                 if let Some(id) = pick(ctx) {
                     out.commands.push(Command::Erase { ids: vec![id] });
                 }
-                self.outline.clear();
+                self.hovered = None;
             }
             ToolEvent::Value(_) => {
                 out.message = Some("The Erase tool takes no typed values".into());
             }
-            ToolEvent::Release(_)
-            | ToolEvent::DoubleClick(_)
-            | ToolEvent::Cancel
-            | ToolEvent::ToggleCopy => {}
+            ToolEvent::Cancel => self.hovered = None,
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
         }
-        out.preview = self.outline.clone();
         out
     }
 
     fn on_external_change(&mut self) {
-        self.outline.clear();
+        self.hovered = None;
+    }
+
+    fn hovered(&self) -> Option<EntityId> {
+        self.hovered
     }
 }
 
@@ -128,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    fn hovering_outlines_and_clicking_erases() {
+    fn hovering_reports_the_target_and_clicking_erases() {
         let mut m = Model::new();
         let pts = [
             DVec3::ZERO,
@@ -140,27 +121,27 @@ mod tests {
         let cam = Camera::new(DVec2::new(800.0, 600.0));
         let mut t = EraseTool::new();
         let edge = DVec3::new(1.0, 0.0, 0.0);
-        assert_eq!(
-            send(&mut t, &m, &cam, edge, ToolEvent::Move(hit()))
-                .preview
-                .len(),
-            1
-        );
+        let out = send(&mut t, &m, &cam, edge, ToolEvent::Move(hit()));
+        assert_eq!(t.hovered(), Some("e2".parse().unwrap()));
+        assert!(out.preview.is_empty());
         let inside = DVec3::new(1.0, 1.0, 0.0);
-        assert_eq!(
-            send(&mut t, &m, &cam, inside, ToolEvent::Move(hit()))
-                .preview
-                .len(),
-            4
-        );
+        let out = send(&mut t, &m, &cam, inside, ToolEvent::Move(hit()));
+        assert_eq!(t.hovered(), Some("f8".parse().unwrap()));
+        assert!(out.preview.is_empty());
+        let off = DVec3::new(-3.0, 4.0, 0.0);
+        let out = send(&mut t, &m, &cam, off, ToolEvent::Move(hit()));
+        assert_eq!(t.hovered(), None);
+        assert!(out.preview.is_empty());
+        send(&mut t, &m, &cam, inside, ToolEvent::Move(hit()));
         let out = send(&mut t, &m, &cam, inside, ToolEvent::Click(hit()));
+        assert!(out.preview.is_empty());
+        assert_eq!(t.hovered(), None, "a click clears the hover");
         assert_eq!(
             out.commands,
             vec![Command::Erase {
                 ids: vec!["f8".parse().unwrap()]
             }]
         );
-        let off = DVec3::new(-3.0, 4.0, 0.0);
         assert!(
             send(&mut t, &m, &cam, off, ToolEvent::Click(hit()))
                 .commands

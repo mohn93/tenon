@@ -103,6 +103,12 @@ pub trait Tool {
     /// The model changed outside the tool (agent edit, undo, redo): drop any operation in
     /// progress, since it may refer to geometry that no longer exists.
     fn on_external_change(&mut self);
+    /// What a click would act on now (Select, Push/Pull, Paint, Erase): an id of the open
+    /// context; None for the other tools, while an operation is in progress, and until the
+    /// cursor moves again after a click, Escape or an external change.
+    fn hovered(&self) -> Option<EntityId> {
+        None
+    }
     /// Writes the settings this tool keeps for the session (such as a circle's side count)
     /// into `r`, so the tool made next time starts with them.
     fn remember(&self, _r: &mut Remembered) {}
@@ -284,6 +290,62 @@ mod tests {
             out.push(rounded(tool.phase()));
         }
         out
+    }
+
+    /// The 2 m square of `phases`, unselected, and its face.
+    fn square_model() -> (Model, FaceId) {
+        let mut model = Model::new();
+        let p = |x, y| DVec3::new(x, y, 0.0);
+        model
+            .add_polygon(&[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0), p(0.0, 2.0)])
+            .unwrap();
+        let face = model.faces().map(|(id, _)| id).next().unwrap();
+        (model, face)
+    }
+
+    /// Moves the cursor of `tool` over `point` on `face`, seen from the default camera.
+    fn moved(tool: &mut dyn Tool, model: &Model, point: DVec3, face: FaceId) {
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let scenery = Scenery::single(model);
+        let ctx = ToolContext {
+            model,
+            scenery: &scenery,
+            camera: &camera,
+            cursor: camera.project(point).unwrap(),
+            pick_radius: 10.0,
+            drag_threshold: 4.0,
+            shift: false,
+            selection: &BTreeSet::new(),
+            material: None,
+            sample: false,
+        };
+        let hit = Inference {
+            point,
+            kind: SnapKind::OnFace,
+            face: Some(face),
+        };
+        tool.handle(ToolEvent::Move(hit), &ctx);
+    }
+
+    #[test]
+    fn external_changes_clear_the_hover() {
+        // A 2 m square seen from the default camera; the cursor over its middle.
+        for kind in [
+            ToolKind::Select,
+            ToolKind::PushPull,
+            ToolKind::Paint,
+            ToolKind::Erase,
+        ] {
+            let (model, face) = square_model();
+            let mut tool = kind.make();
+            moved(&mut *tool, &model, DVec3::new(1.0, 1.0, 0.0), face);
+            assert_eq!(tool.hovered(), Some(EntityId::Face(face)), "{kind:?}");
+            tool.on_external_change();
+            assert_eq!(tool.hovered(), None, "{kind:?}");
+        }
+        for kind in [ToolKind::Line, ToolKind::Move, ToolKind::TapeMeasure] {
+            assert_eq!(kind.make().hovered(), None);
+        }
     }
 
     fn active(points: &[DVec3]) -> Phase {

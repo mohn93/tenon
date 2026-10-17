@@ -19,6 +19,8 @@ pub struct SelectTool {
     /// Cursor position where the button went down, while it is held.
     press: Option<DVec2>,
     cursor: DVec2,
+    /// What a click would select, while the button is up.
+    hovered: Option<EntityId>,
 }
 
 impl SelectTool {
@@ -267,8 +269,17 @@ impl Tool for SelectTool {
         let mut out = ToolOutput::default();
         self.cursor = ctx.cursor;
         match event {
-            ToolEvent::Move(_) => {}
-            ToolEvent::Click(_) => self.press = Some(ctx.cursor),
+            ToolEvent::Move(_) => {
+                self.hovered = if self.press.is_none() {
+                    pick(ctx)
+                } else {
+                    None
+                };
+            }
+            ToolEvent::Click(_) => {
+                self.press = Some(ctx.cursor);
+                self.hovered = None;
+            }
             ToolEvent::Release(_) => {
                 if let Some(start) = self.press.take() {
                     let clicked = start.distance(ctx.cursor) < ctx.drag_threshold;
@@ -307,6 +318,7 @@ impl Tool for SelectTool {
             },
             // Escape with nothing in progress closes the open instance.
             ToolEvent::Cancel => {
+                self.hovered = None;
                 if self.press.take().is_none() && ctx.scenery.inside_instance() {
                     out.commands.push(Command::CloseInstance {});
                 }
@@ -323,6 +335,11 @@ impl Tool for SelectTool {
 
     fn on_external_change(&mut self) {
         self.press = None;
+        self.hovered = None;
+    }
+
+    fn hovered(&self) -> Option<EntityId> {
+        self.hovered
     }
 }
 
@@ -446,6 +463,26 @@ mod tests {
             ids: ids.iter().map(|s| s.parse().unwrap()).collect(),
             mode,
         }]
+    }
+
+    #[test]
+    fn hovering_reports_what_a_click_would_select() {
+        let mut r = Rig::new();
+        let hover = |r: &mut Rig, p: DVec3| {
+            r.cursor = r.px(p);
+            r.send(ToolEvent::Move(Rig::hit()));
+            r.tool.hovered()
+        };
+        let edge = hover(&mut r, DVec3::new(1.0, 0.0, 0.0));
+        assert_eq!(edge, Some("e2".parse().unwrap()));
+        let face = hover(&mut r, DVec3::new(1.0, 1.0, 0.0));
+        assert_eq!(face, Some("f8".parse().unwrap()));
+        assert_eq!(hover(&mut r, DVec3::new(-3.0, 4.0, 0.0)), None);
+        // While the button is held (a box being dragged) nothing is hovered.
+        hover(&mut r, DVec3::new(1.0, 1.0, 0.0));
+        r.send(ToolEvent::Click(Rig::hit()));
+        assert_eq!(r.tool.hovered(), None);
+        assert_eq!(hover(&mut r, DVec3::new(1.5, 1.5, 0.0)), None);
     }
 
     #[test]
