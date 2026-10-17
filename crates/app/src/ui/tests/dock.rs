@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::dock::{AREA_MIN, top_height};
+use crate::ui::dock::{AREA_MIN, OUTLINER_MIN, top_height};
 
 /// Presses at `from`, then holds the primary button down while the pointer moves to `to` in
 /// four steps, running after each.
@@ -137,7 +137,8 @@ fn dragging_the_divider_reports_the_split_on_release() {
 fn both_areas_keep_their_least_height() {
     assert_eq!(top_height(0.55, 1000.0), 550.0);
     assert_eq!(top_height(0.2, 500.0), AREA_MIN);
-    assert_eq!(top_height(0.8, 500.0), 500.0 - AREA_MIN);
+    assert_eq!(top_height(0.8, 500.0), 500.0 - OUTLINER_MIN);
+    assert_eq!(OUTLINER_MIN, AREA_MIN + 32.0, "the filter row on top");
     assert_eq!(
         top_height(0.5, 200.0),
         100.0,

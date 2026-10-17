@@ -69,19 +69,23 @@ impl DockLayout {
 pub const DOCK_WIDTH: RangeInclusive<f32> = 240.0..=420.0;
 /// The share of the height under the tabs the top area takes.
 pub const SPLIT: RangeInclusive<f32> = 0.2..=0.8;
-/// The least height of the top area and of the Outliner area, when both fit.
+/// The least height of the top area, when both areas fit.
 pub const AREA_MIN: f32 = 160.0;
+/// The least height of the Outliner area, when both areas fit: AREA_MIN for its header and
+/// list, and the filter row (a control and the spacing under it) on top.
+pub const OUTLINER_MIN: f32 = AREA_MIN + theme::CONTROL_HEIGHT + theme::GRID;
 /// The divider's height.
 pub const DIVIDER: f32 = 8.0;
 /// The dock's inner margin.
 pub const DOCK_MARGIN: i8 = 12;
 
-/// The top area's height for `split` of `height`, keeping both areas AREA_MIN when they fit.
+/// The top area's height for `split` of `height`, keeping the top area AREA_MIN and the
+/// Outliner area OUTLINER_MIN when both fit.
 pub fn top_height(split: f32, height: f32) -> f32 {
-    if height < 2.0 * AREA_MIN {
+    if height < AREA_MIN + OUTLINER_MIN {
         split * height
     } else {
-        (split * height).clamp(AREA_MIN, height - AREA_MIN)
+        (split * height).clamp(AREA_MIN, height - OUTLINER_MIN)
     }
 }
 
@@ -106,7 +110,9 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
         }
     });
     let width = ui.available_width();
-    let height = (ui.available_height() - DIVIDER).max(0.0);
+    // The areas share what the divider and the spacing after the top area and after the
+    // divider leave.
+    let height = (ui.available_height() - DIVIDER - 2.0 * ui.spacing().item_spacing.y).max(0.0);
     // The divider's drag, read before the areas are laid out so they follow the pointer in
     // the same frame.
     let divider_id = Id::new("dock-divider");

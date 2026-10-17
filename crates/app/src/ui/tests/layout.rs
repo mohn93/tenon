@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::dock::{AREA_MIN, DIVIDER};
+use crate::ui::dock::{AREA_MIN, DOCK_MARGIN, SPLIT};
 use kernel::DefinitionKind;
 use session::OutlinerRow;
 
@@ -209,16 +209,27 @@ pub(super) fn crowded(groups: u64) -> Fixture {
 
 #[test]
 fn the_outliner_keeps_its_least_area_in_the_smallest_window() {
-    let h = harness_sized(crowded(40), Vec2::new(960.0, 600.0));
-    // The filter field heads the list; the Model row follows it.
-    let list = rect_of(&h, "Filter outliner");
-    assert!(list.max.y <= rect_of(&h, "Model").min.y);
-    // The dock ends where the status bar begins, as the 3D view does.
-    let bottom = h.state().central.max.y;
+    // The top area as tall as the split allows, so the Outliner is held to its least height.
+    let mut f = crowded(40);
+    f.dock.split = *SPLIT.end();
+    let h = harness_sized(f, Vec2::new(960.0, 600.0));
+    let divider = rect_of(&h, "Resize Outliner");
+    let filter = rect_of(&h, "Filter outliner");
+    let model = rect_of(&h, "Model");
+    assert!(divider.max.y <= filter.min.y && filter.max.y <= model.min.y);
+    // The dock's content ends its margin above the status bar, as the 3D view ends at it.
+    let bottom = h.state().central.max.y - f32::from(DOCK_MARGIN);
+    // The list itself (the Model row down to the dock's bottom) keeps four rows and more.
+    let list = bottom - model.min.y;
     assert!(
-        list.min.y + AREA_MIN - DIVIDER <= bottom,
-        "the Outliner's list starts at {} over a dock ending at {bottom}",
-        list.min.y
+        list >= 120.0,
+        "the Outliner's list is {list} pt high ({model:?} over a dock ending at {bottom})"
+    );
+    // The top area keeps its own least height: the tabs' row down to the divider.
+    let tabs = rect_of(&h, "Materials");
+    assert!(
+        divider.min.y - tabs.max.y >= AREA_MIN,
+        "{tabs:?} {divider:?}"
     );
 }
 
