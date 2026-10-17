@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::outliner::outliner_label;
+use crate::ui::outliner::{Filter, MAX_FILTERED_ROWS, outliner_label};
 use kernel::DefinitionKind;
 
 /// Two "Box" components (definition d1) each placing the group i27 (definition d2).
@@ -162,4 +162,49 @@ fn a_newly_opened_path_expands_its_ancestors() {
     );
     h.run_ok();
     assert!(row(&rows(&h), &context).is_none(), "{:?}", rows(&h));
+}
+
+#[test]
+fn the_filter_keeps_matches_and_their_ancestors() {
+    let t = house();
+    let f = Filter::new(&t, "KIT").unwrap(); // case-insensitive
+    let house = &t.roots.iter().find(|r| r.name == "House").unwrap();
+    assert!(f.shows(house) && f.opens(house) && !f.matches(house));
+    let kitchen = &t
+        .children(house.definition)
+        .iter()
+        .find(|r| r.name == "Kitchen")
+        .unwrap();
+    assert!(f.matches(kitchen) && f.shows(kitchen));
+    assert!(Filter::new(&t, "   ").is_none());
+    let none = Filter::new(&t, "zzz").unwrap();
+    assert!(t.roots.iter().all(|r| !none.shows(r)));
+}
+
+#[test]
+fn typing_a_filter_shows_matching_rows_only() {
+    let mut h = harness(house_fixture(&[]));
+    type_into(&mut h, "Filter outliner", 0, "kit", egui::Key::Enter);
+    h.get_by_label("Model");
+    h.get_by_label("<Kitchen>");
+    h.get_by_label("House"); // its ancestor, drawn expanded
+    assert!(h.query_by_label("Street").is_none());
+    click(&mut h, "Clear filter");
+    assert!(h.query_by_label("Street").is_some());
+    // The stored expansion is untouched: House is collapsed again.
+    assert!(h.query_by_label("<Kitchen>").is_none());
+    type_into(&mut h, "Filter outliner", 0, "zzz", egui::Key::Enter);
+    h.get_by_label("No matches");
+}
+
+#[test]
+fn a_filter_draws_at_most_its_row_limit() {
+    let mut h = harness(Fixture {
+        outliner: super::layout::many_groups(MAX_FILTERED_ROWS as u64 + 20),
+        ..Default::default()
+    });
+    type_into(&mut h, "Filter outliner", 0, "group", egui::Key::Enter);
+    let named = rows(&h).iter().filter(|r| !r.path.is_empty()).count();
+    assert_eq!(named, MAX_FILTERED_ROWS);
+    h.get_by_label("More matches: refine the filter");
 }

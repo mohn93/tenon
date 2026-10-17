@@ -210,13 +210,15 @@ pub(super) fn crowded(groups: u64) -> Fixture {
 #[test]
 fn the_outliner_keeps_its_least_area_in_the_smallest_window() {
     let h = harness_sized(crowded(40), Vec2::new(960.0, 600.0));
-    let model = rect_of(&h, "Model");
+    // The filter field heads the list; the Model row follows it.
+    let list = rect_of(&h, "Filter outliner");
+    assert!(list.max.y <= rect_of(&h, "Model").min.y);
     // The dock ends where the status bar begins, as the 3D view does.
     let bottom = h.state().central.max.y;
     assert!(
-        model.min.y + AREA_MIN - DIVIDER <= bottom,
+        list.min.y + AREA_MIN - DIVIDER <= bottom,
         "the Outliner's list starts at {} over a dock ending at {bottom}",
-        model.min.y
+        list.min.y
     );
 }
 
