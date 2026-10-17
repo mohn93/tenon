@@ -1278,9 +1278,14 @@ fn a_new_model_drops_the_hover() {
 /// An axis-aligned box from `min`, `size` on each side, as 12 triangles wound
 /// counter-clockwise seen from outside, with flat normals, in `color`.
 fn box_vertices(min: DVec3, size: f64, color: [f32; 4]) -> Vec<render::PreviewVertex> {
+    cuboid_vertices(min, DVec3::splat(size), color)
+}
+
+/// `box_vertices` with a size of its own along each axis.
+fn cuboid_vertices(min: DVec3, size: DVec3, color: [f32; 4]) -> Vec<render::PreviewVertex> {
     let corner = |k: usize| {
-        let bit = |b: usize| if k & b == 0 { 0.0 } else { size };
-        min + DVec3::new(bit(1), bit(2), bit(4))
+        let bit = |b: usize, s: f64| if k & b == 0 { 0.0 } else { s };
+        min + DVec3::new(bit(1, size.x), bit(2, size.y), bit(4, size.z))
     };
     // Each side's corners, counter-clockwise seen from outside.
     let sides = [
@@ -1388,4 +1393,82 @@ fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
     let (t, w) = (count(&thin, magenta), count(&thick, magenta));
     assert!(t > 0, "the axes in the style's colors");
     assert!(w as f64 > 1.25 * t as f64, "{t} -> {w} pixels");
+}
+
+#[test]
+fn a_pushed_in_preview_tints_the_box_sides_it_lies_on_evenly() {
+    // A 0.6 m box with its top pushed 0.3 m down: the solid's sides lie in the box's side
+    // planes, facing the same way. Every pixel of a side they cover is tinted, none speckled.
+    let mut m = Model::new();
+    let (lo, size) = (DVec3::new(0.2, 0.2, 0.0), 0.6);
+    m.add_polygon(&[
+        lo,
+        lo + DVec3::new(size, 0.0, 0.0),
+        lo + DVec3::new(size, size, 0.0),
+        lo + DVec3::new(0.0, size, 0.0),
+    ])
+    .unwrap();
+    let base = m.faces().next().unwrap().0;
+    let up = if m.face(base).unwrap().normal.z > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    m.push_pull(base, up * size).unwrap();
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = screen.renderer();
+    r.set_scene(&Scene::from_root(m), &[], &BTreeSet::new());
+    let cam = camera();
+    let plain = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    r.set_preview(&cuboid_vertices(
+        lo + DVec3::new(0.0, 0.0, 0.3),
+        DVec3::new(size, size, 0.3),
+        [1.0, 0.0, 0.0, 0.7],
+    ));
+    let shown = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    // The -y side (y = 0.2) and the -x side (x = 0.2) face the default camera.
+    let mut sampled = 0;
+    for i in 1..10 {
+        for j in 1..6 {
+            let (u, z) = (0.2 + 0.06 * i as f64, 0.3 + 0.05 * j as f64);
+            for p in [DVec3::new(u, 0.2, z), DVec3::new(0.2, u, z)] {
+                let (a, b) = (pixel_at(&plain, &cam, p), pixel_at(&shown, &cam, p));
+                assert!(
+                    i32::from(b[0]) > i32::from(b[1]) + 40
+                        && i32::from(b[1]) + 30 < i32::from(a[1]),
+                    "at {p}: {a:?} -> {b:?}"
+                );
+                sampled += 1;
+            }
+        }
+    }
+    assert_eq!(sampled, 90);
+}
+
+#[test]
+fn the_hover_wins_over_the_selection_on_a_face() {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let cam = camera();
+    let square = ground_square();
+    let face = EntityId::Face(square.faces().next().unwrap().0);
+    let scene = Scene::from_root(square);
+    let hovered = |selection: &BTreeSet<EntityId>| {
+        let mut r = screen.renderer();
+        r.set_scene(&scene, &[], selection);
+        r.set_style(MAGENTA);
+        r.set_hover(Some((face, HOVER)));
+        let px = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+        pixel_at(&px, &cam, DVec3::new(0.5, 0.5, 0.0))
+    };
+    assert_eq!(
+        hovered(&BTreeSet::from([face])),
+        hovered(&BTreeSet::new()),
+        "a selected face hovered looks as an unselected one hovered"
+    );
 }

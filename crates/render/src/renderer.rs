@@ -240,13 +240,26 @@ const WIDE_EDGE_PT: f32 = 2.0;
 /// The axes, in points, where the style widens them.
 const WIDE_AXIS_PT: f32 = 1.5;
 
-/// How a line `width` physical pixels wide is drawn from 1 px lines: the line, then copies
-/// `step` pixels apart across and up, `count` copies in all (half of them each way).
+/// How a line `width` physical pixels wide is drawn from 1 px lines: the line, then
+/// (instances, step): copies `step` pixels apart, half of them across and half up. A line
+/// at most 1 px wide needs none.
 fn spread(width: f32) -> (u32, f32) {
-    let extra = (width - 1.0).max(0.0);
-    let copies = extra.ceil().max(1.0);
+    let extra = width - 1.0;
+    if extra <= 0.0 {
+        return (0, 0.0);
+    }
+    let copies = extra.ceil();
     (2 * copies as u32, extra / copies)
 }
+
+/// Pulls the preview solid toward the camera (depth is reversed, so up) so that a side lying
+/// in the plane of a model face, as when a face is pushed into a box, is tinted evenly rather
+/// than fighting the face for depth.
+const PREVIEW_DEPTH_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState {
+    constant: 4,
+    slope_scale: 1.0,
+    clamp: 0.0,
+};
 
 /// A rectangle of the render target in physical pixels, origin top-left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -813,7 +826,7 @@ impl Renderer {
                 depth_write_enabled: Some(false),
                 depth_compare: Some(wgpu::CompareFunction::Greater),
                 stencil: Default::default(),
-                bias: Default::default(),
+                bias: PREVIEW_DEPTH_BIAS,
             }),
             multisample: wgpu::MultisampleState {
                 count: SAMPLE_COUNT,
@@ -1113,7 +1126,8 @@ impl Renderer {
         if triangles == self.preview_vertices.as_slice() {
             return;
         }
-        self.preview_vertices = triangles.to_vec();
+        self.preview_vertices.clear();
+        self.preview_vertices.extend_from_slice(triangles);
         let bytes: &[u8] = bytemuck::cast_slice(triangles);
         let fits = self
             .preview
@@ -1459,7 +1473,19 @@ fn flagged_mesh<T: bytemuck::Pod>(
 mod tests {
     use glam::Vec3;
 
-    use super::back_to_front;
+    use super::{back_to_front, spread};
+
+    #[test]
+    fn wide_lines_spread_into_one_pixel_copies() {
+        // 2 pt edges and 1.5 pt axes at 1x and at 2x.
+        assert_eq!(spread(2.0), (2, 1.0));
+        assert_eq!(spread(1.5), (2, 0.5));
+        assert_eq!(spread(4.0), (6, 1.0));
+        assert_eq!(spread(3.0), (4, 1.0));
+        // A line no wider than a pixel needs no copies.
+        assert_eq!(spread(1.0), (0, 0.0));
+        assert_eq!(spread(0.75), (0, 0.0));
+    }
 
     #[test]
     fn glass_triangles_are_ordered_far_to_near() {

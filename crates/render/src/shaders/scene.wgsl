@@ -291,8 +291,8 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
 // unshaded. Selected faces are tinted toward the style's color; unselected ones skip the mix so
 // their arithmetic stays exactly as before the tint came from a uniform. A hovered face is
-// mixed toward the hover color the same way. Call it before any discard: the texture lookup
-// needs every pixel of its quad.
+// mixed toward the hover color from its own color, so the hover wins over the selection.
+// Call it before any discard: the texture lookup needs every pixel of its quad.
 fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
@@ -304,7 +304,7 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let base = select(color, tinted, in.selected > 0.0);
     let shown = select(
         base,
-        mix(base, lighting.hover_face.rgb, lighting.hover_face.w),
+        mix(color, lighting.hover_face.rgb, lighting.hover_face.w),
         in.hovered > 0.5,
     );
     if select(in.glow.y, in.glow.x, front) > 0.5 {
