@@ -245,6 +245,25 @@ fn the_view_shows_the_tools_cursor_and_the_panels_keep_theirs() {
 }
 
 #[test]
+fn a_cursor_a_widget_set_inside_the_view_stays() {
+    let mut h = harness(Fixture {
+        cursor: egui::CursorIcon::Crosshair,
+        ..Default::default()
+    });
+    let view = h.state().central;
+    // The dock's resize edge reaches a few points into the view.
+    let edge = Pos2::new(view.max.x - 1.0, view.center().y);
+    assert!(view.contains(edge));
+    h.event(egui::Event::PointerMoved(edge));
+    h.run_ok();
+    assert_eq!(
+        h.output().platform_output.cursor_icon,
+        egui::CursorIcon::ResizeHorizontal,
+        "the dock's edge keeps its own cursor"
+    );
+}
+
+#[test]
 fn the_chip_stays_inside_the_view() {
     let view = Rect::from_min_size(Pos2::new(44.0, 36.0), Vec2::new(600.0, 400.0));
     let size = Vec2::new(120.0, 40.0);
