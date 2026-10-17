@@ -182,7 +182,7 @@ impl Chord {
 }
 
 impl Bound {
-    /// The panels' action for the binding; None for Quit, which the window handles itself.
+    /// The panels' action for the binding.
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
             Bound::Tool(kind) => UiAction::Tool(kind),
@@ -192,7 +192,7 @@ impl Bound {
             Bound::SaveFileAs => UiAction::SaveFileAs,
             Bound::ImportFile => UiAction::ImportFile,
             Bound::ExportFile => UiAction::ExportFile,
-            Bound::Quit => return None,
+            Bound::Quit => UiAction::Quit,
             Bound::Undo => UiAction::Undo,
             Bound::Redo => UiAction::Redo,
             Bound::EraseSelection => UiAction::EraseSelection,
@@ -301,6 +301,6 @@ mod tests {
             Some(UiAction::Tool(ToolKind::Move))
         );
         assert_eq!(Bound::SaveFileAs.action(), Some(UiAction::SaveFileAs));
-        assert_eq!(Bound::Quit.action(), None);
+        assert_eq!(Bound::Quit.action(), Some(UiAction::Quit));
     }
 }

@@ -49,6 +49,8 @@ pub(super) struct Fixture {
     pub edges_soft: Option<bool>,
     pub texture_position: Option<TexturePosition>,
     pub theme: ThemeChoice,
+    /// Whether the menus are egui's (the window has no native ones).
+    pub egui_menus: bool,
     /// Every action the panels reported since the last `take`.
     pub actions: Vec<UiAction>,
     /// The 3D view's rectangle in the last frame.
@@ -93,6 +95,7 @@ impl Default for Fixture {
             edges_soft: None,
             texture_position: None,
             theme: ThemeChoice::System,
+            egui_menus: true,
             actions: Vec::new(),
             central: Rect::NOTHING,
         }
@@ -129,6 +132,7 @@ impl Fixture {
             edges_soft: self.edges_soft,
             texture_position: self.texture_position.clone(),
             theme: self.theme,
+            egui_menus: self.egui_menus,
         }
     }
 
@@ -208,6 +212,26 @@ pub(super) fn install_theme(ctx: &egui::Context) {
 /// Clicks the widget named `label` and runs the frames that follow. Returns the actions.
 pub(super) fn click(h: &mut H, label: &str) -> Vec<UiAction> {
     h.get_by_label(label).click();
+    h.run_ok();
+    h.state_mut().take()
+}
+
+/// Opens the menus along `path` (a title, then submenus) and clicks the last entry. An item
+/// may share its name with a rail or bar button, so the item clicked is the node with that
+/// name that was not there before the last menu opened.
+pub(super) fn click_menu(h: &mut H, path: &[&str]) -> Vec<UiAction> {
+    let (item, menus) = path.split_last().expect("a menu path");
+    let (last, before) = menus.split_last().expect("a menu title");
+    for m in before {
+        click(h, m);
+    }
+    let there: Vec<Rect> = h.query_all_by_label(item).map(|n| n.rect()).collect();
+    click(h, last);
+    let node = h
+        .get_all_by_label(item)
+        .find(|n| !there.contains(&n.rect()))
+        .unwrap_or_else(|| panic!("{item} in {path:?}"));
+    node.click();
     h.run_ok();
     h.state_mut().take()
 }

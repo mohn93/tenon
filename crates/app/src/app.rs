@@ -852,6 +852,11 @@ impl State {
             UiAction::ToggleFly => {
                 self.editor.toggle_fly();
             }
+            UiAction::Quit => {
+                if self.settle_changes() {
+                    self.quit = true;
+                }
+            }
             UiAction::ShowAgentActivity(open) => self.agent_activity = open,
             UiAction::SetTheme(choice) => {
                 self.prefs.theme = choice;
@@ -1062,6 +1067,8 @@ impl State {
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
             theme: self.prefs.theme,
+            // Task 9: !cfg!(target_os = "macos")
+            egui_menus: true,
             texture_position: self.editor.selection_texture_position().map(|placement| {
                 TexturePosition {
                     placement,
@@ -1535,6 +1542,9 @@ impl ApplicationHandler<ApiWake> for App {
                     s.notify_api(&mut self.hub);
                 }
                 s.notify_frame(&mut self.hub);
+                if s.quit {
+                    event_loop.exit();
+                }
                 false
             }
             WindowEvent::ModifiersChanged(m) => {

@@ -16,6 +16,7 @@ mod dialogs;
 mod fonts;
 mod icons;
 mod materials;
+mod menu_bar;
 mod outliner;
 mod right;
 mod status;
@@ -23,6 +24,7 @@ mod status;
 mod tests;
 pub mod theme;
 mod toolbar;
+pub(crate) use toolbar::step_name;
 pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
@@ -76,6 +78,8 @@ pub enum UiAction {
     OpenPath(Vec<EntityId>),
     /// Turn fly mode on or off.
     ToggleFly,
+    /// Ask about unsaved changes, then quit.
+    Quit,
     /// Open or close the Agent Activity window.
     ShowAgentActivity(bool),
     /// Draw the window in this theme, and keep it in the preferences.
@@ -185,6 +189,8 @@ pub struct View<'a> {
     pub texture_position: Option<TexturePosition>,
     /// The theme chosen in View > Theme.
     pub theme: ThemeChoice,
+    /// Whether the menus are drawn by egui (otherwise the window has native ones).
+    pub egui_menus: bool,
 }
 
 /// What Entity Info's texture position fields show and apply to.

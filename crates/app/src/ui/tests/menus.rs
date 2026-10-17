@@ -12,8 +12,7 @@ fn the_file_menu_reports_its_items() {
         ("Export...", UiAction::ExportFile),
     ] {
         let mut h = harness(Fixture::default());
-        click(&mut h, "File");
-        assert_eq!(click(&mut h, item), [action], "{item}");
+        assert_eq!(click_menu(&mut h, &["File", item]), [action], "{item}");
     }
 }
 
@@ -24,9 +23,8 @@ fn the_view_menu_and_the_indicator_open_agent_activity() {
         rect_of(&h, "View").min.x > rect_of(&h, "Camera").min.x,
         "View right of Camera"
     );
-    click(&mut h, "View");
     assert_eq!(
-        click(&mut h, "Agent Activity"),
+        click_menu(&mut h, &["View", "Agent Activity"]),
         [UiAction::ShowAgentActivity(true)]
     );
 
@@ -69,9 +67,7 @@ fn the_view_menu_and_the_indicator_open_agent_activity() {
 
 /// Opens the Camera menu over a fixture from `f` and clicks `item`.
 fn camera_menu(f: impl Fn() -> Fixture, item: &str) -> Vec<UiAction> {
-    let mut h = harness(f());
-    click(&mut h, "Camera");
-    click(&mut h, item)
+    click_menu(&mut harness(f()), &["Camera", item])
 }
 
 #[test]
@@ -95,9 +91,9 @@ fn the_camera_menu_has_views_zoom_extents_and_projections() {
         camera_menu(plain, "Perspective"),
         [UiAction::SetProjection(Projection::Perspective)]
     );
-    assert_eq!(camera_menu(plain, "Fly mode (F)"), [UiAction::ToggleFly]);
+    assert_eq!(camera_menu(plain, "Fly Mode"), [UiAction::ToggleFly]);
     assert_eq!(
-        camera_menu(plain, "Night lighting"),
+        camera_menu(plain, "Night Lighting"),
         [UiAction::SetLighting(Lighting::Night)]
     );
     let parallel_night = || Fixture {
@@ -109,50 +105,52 @@ fn the_camera_menu_has_views_zoom_extents_and_projections() {
         camera_menu(parallel_night, "Perspective"),
         [UiAction::SetProjection(Projection::Perspective)]
     );
-    // Unchecking Night lighting goes back to day.
+    // Unchecking Night Lighting goes back to day.
     assert_eq!(
-        camera_menu(parallel_night, "Night lighting"),
+        camera_menu(parallel_night, "Night Lighting"),
         [UiAction::SetLighting(Lighting::Day)]
     );
 }
 
-/// A harness with the Edit menu open.
-fn edit_menu(has_selection: bool, has_guides: bool) -> H {
-    let mut h = harness(Fixture {
+/// A fixture for the Edit menu tests.
+fn edit_fixture(has_selection: bool, has_guides: bool) -> Fixture {
+    Fixture {
         has_selection,
         has_guides,
         ..Default::default()
-    });
-    click(&mut h, "Edit");
-    h
+    }
 }
 
 #[test]
 fn the_edit_menu_erases_the_selection_and_deletes_guides() {
     for (item, action) in [
-        ("Erase Selection", UiAction::EraseSelection),
+        ("Erase", UiAction::EraseSelection),
         ("Delete Guides", UiAction::DeleteGuides),
         ("Soften Edges...", UiAction::ShowSoften(true)),
     ] {
-        let mut h = edit_menu(true, true);
-        assert_eq!(click(&mut h, item), [action], "{item}");
+        let mut h = harness(edit_fixture(true, true));
+        assert_eq!(click_menu(&mut h, &["Edit", item]), [action], "{item}");
     }
 }
 
 #[test]
 fn the_edit_menu_items_need_a_selection_and_guides() {
-    for item in ["Erase Selection", "Delete Guides"] {
-        let mut h = edit_menu(false, false);
-        assert!(
-            h.get_by_label(item).accesskit_node().is_disabled(),
-            "{item}"
-        );
-        assert_eq!(click(&mut h, item), [], "{item}");
+    for item in ["Erase", "Delete Guides"] {
+        let mut h = harness(edit_fixture(false, false));
+        click(&mut h, "Edit");
+        let disabled = h
+            .get_all_by_label(item)
+            .any(|n| n.accesskit_node().is_disabled());
+        assert!(disabled, "{item}");
+        // A disabled item does nothing.
+        h.get_all_by_label(item).last().unwrap().click();
+        h.run_ok();
+        assert_eq!(h.state_mut().take(), [], "{item}");
     }
     // Soften Edges... works on the open context.
-    let mut h = edit_menu(false, false);
+    let mut h = harness(edit_fixture(false, false));
     assert_eq!(
-        click(&mut h, "Soften Edges..."),
+        click_menu(&mut h, &["Edit", "Soften Edges..."]),
         [UiAction::ShowSoften(true)]
     );
 }
@@ -212,8 +210,9 @@ fn menu_items_show_the_tables_keys() {
     }
     let mut h = harness(Fixture::default());
     click(&mut h, "Camera");
-    let fly = format!("Fly mode ({})", chord(Bound::ToggleFly).unwrap().text());
-    assert!(h.query_by_label(&fly).is_some(), "{fly}");
+    let fly = chord(Bound::ToggleFly).unwrap().text();
+    assert!(drawn_texts(&h).contains(&fly), "{fly}");
+    h.get_by_label("Fly Mode");
 }
 
 #[test]
@@ -284,9 +283,11 @@ fn the_view_menu_sets_the_theme() {
         ("Light", ThemeChoice::Light),
     ] {
         let mut h = harness(Fixture::default());
-        click(&mut h, "View");
-        click(&mut h, THEME);
-        assert_eq!(click(&mut h, item), [UiAction::SetTheme(choice)], "{item}");
+        assert_eq!(
+            click_menu(&mut h, &["View", THEME, item]),
+            [UiAction::SetTheme(choice)],
+            "{item}"
+        );
     }
     let mut h = harness(Fixture {
         theme: ThemeChoice::Dark,
@@ -297,4 +298,132 @@ fn the_view_menu_sets_the_theme() {
     assert_eq!(is_on(&h, "Dark"), Some(true));
     assert_eq!(is_on(&h, "Light"), Some(false));
     assert_eq!(is_on(&h, "System"), Some(false));
+}
+
+#[test]
+fn the_draw_tools_group_and_help_menus_report_their_items() {
+    let f = || Fixture {
+        has_selection: true,
+        has_instance_selected: true,
+        inside_instance: true,
+        ..Default::default()
+    };
+    for kind in [
+        ToolKind::Line,
+        ToolKind::Rectangle,
+        ToolKind::Circle,
+        ToolKind::Arc,
+    ] {
+        assert_eq!(
+            click_menu(&mut harness(f()), &["Draw", kind.label()]),
+            [UiAction::Tool(kind)]
+        );
+    }
+    for kind in [
+        ToolKind::Select,
+        ToolKind::PushPull,
+        ToolKind::Move,
+        ToolKind::Rotate,
+        ToolKind::TapeMeasure,
+        ToolKind::Erase,
+        ToolKind::Paint,
+    ] {
+        assert_eq!(
+            click_menu(&mut harness(f()), &["Tools", kind.label()]),
+            [UiAction::Tool(kind)]
+        );
+    }
+    for (item, action) in [
+        ("Make Group", UiAction::MakeGroup),
+        ("Make Component", UiAction::MakeComponent),
+        ("Explode", UiAction::Explode),
+        ("Close Group", UiAction::CloseInstance),
+    ] {
+        assert_eq!(
+            click_menu(&mut harness(f()), &["Group", item]),
+            [action],
+            "{item}"
+        );
+    }
+    // Help has no items yet, so it is not drawn.
+    let h = harness(f());
+    assert!(h.query_by_label("Help").is_none());
+}
+
+#[test]
+fn the_edit_menu_names_the_undo_and_redo_steps() {
+    let mut h = harness(Fixture {
+        undo: Some("push_pull".into()),
+        ..Default::default()
+    });
+    assert_eq!(
+        click_menu(&mut h, &["Edit", "Undo Push pull"]),
+        [UiAction::Undo]
+    );
+    let mut h = harness(Fixture::default());
+    // Nothing to redo: the item reads "Redo" and does nothing.
+    assert_eq!(click_menu(&mut h, &["Edit", "Redo"]), []);
+}
+
+#[test]
+fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
+    use crate::menus::{APP_MENU, Entry, items, menu_bar};
+    let f = Fixture::default();
+    let egui = menu_bar(&f.view(), false);
+    let file = &egui.iter().find(|m| m.title == "File").unwrap().entries;
+    assert!(matches!(file.last(), Some(Entry::Item(i)) if i.action == UiAction::Quit));
+    assert!(egui.iter().all(|m| m.title != APP_MENU));
+    let native = menu_bar(&f.view(), true);
+    assert_eq!(native[0].title, APP_MENU);
+    let quits = items(&native)
+        .iter()
+        .filter(|i| i.action == UiAction::Quit)
+        .count();
+    assert_eq!(quits, 1);
+    assert_eq!(
+        click_menu(&mut harness(Fixture::default()), &["File", "Quit"]),
+        [UiAction::Quit]
+    );
+}
+
+#[test]
+fn the_menu_bar_has_the_same_items_in_every_state() {
+    use crate::menus::{item_id, items, menu_bar};
+    let ids = |f: &Fixture| {
+        items(&menu_bar(&f.view(), true))
+            .iter()
+            .map(|i| item_id(&i.action))
+            .collect::<Vec<_>>()
+    };
+    let empty = ids(&Fixture::default());
+    let busy = |lighting| Fixture {
+        undo: Some("paint".into()),
+        redo: Some("erase".into()),
+        has_selection: true,
+        has_instance_selected: true,
+        inside_instance: true,
+        has_guides: true,
+        flying: true,
+        lighting,
+        ..Default::default()
+    };
+    assert_eq!(
+        empty,
+        ids(&busy(Lighting::Day)),
+        "native items are built once and only synced"
+    );
+    assert_eq!(empty, ids(&busy(Lighting::Night)), "also at night");
+    let unique: std::collections::BTreeSet<_> = empty.iter().collect();
+    assert_eq!(unique.len(), empty.len(), "ids are unique");
+}
+
+#[test]
+fn no_egui_menus_when_the_window_has_native_ones() {
+    let h = harness(Fixture {
+        egui_menus: false,
+        ..Default::default()
+    });
+    for title in ["File", "Edit", "Draw", "Tools", "Group", "Camera", "View"] {
+        assert!(h.query_by_label(title).is_none(), "{title}");
+    }
 }

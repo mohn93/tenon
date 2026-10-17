@@ -7,6 +7,7 @@ mod gui;
 mod headless;
 mod host;
 mod info;
+mod menus;
 mod navigation;
 mod prefs;
 mod shortcuts;

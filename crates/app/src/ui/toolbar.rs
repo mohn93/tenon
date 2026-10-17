@@ -1,120 +1,21 @@
 //! The toolbar: menus, tool buttons, Undo and Redo, and the group buttons.
 
 use egui::Ui;
-use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
 
-use super::theme::ThemeChoice;
-use super::{FLY_HELP, UiAction, View, icons, widgets};
-use crate::editor::ImportUnits;
+use super::{UiAction, View, icons, menu_bar, widgets};
 use crate::shortcuts::Bound;
 
 pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
     ui.horizontal_wrapped(|ui| {
-        // Tighter than the theme so the default window's toolbar stays on one row (M8b), until
-        // M11b moves the tools to a rail.
-        ui.spacing_mut().item_spacing.x = 6.0;
-        ui.spacing_mut().button_padding.x = 4.0;
-        ui.menu_button("File", |ui| {
-            let items = [
-                ("New", Bound::NewModel, UiAction::NewModel),
-                ("Open...", Bound::OpenFile, UiAction::OpenFile),
-                ("Save", Bound::SaveFile, UiAction::SaveFile),
-                ("Save As...", Bound::SaveFileAs, UiAction::SaveFileAs),
-                ("Import...", Bound::ImportFile, UiAction::ImportFile),
-                ("Export...", Bound::ExportFile, UiAction::ExportFile),
-            ];
-            for (label, bound, action) in items {
-                if widgets::menu_item(ui, label, Some(bound), true).clicked() {
-                    actions.push(action);
-                }
-            }
-            ui.menu_button("Import Units", |ui| {
-                for units in ImportUnits::ALL {
-                    if ui
-                        .selectable_label(view.import_units == units, units.label())
-                        .clicked()
-                    {
-                        actions.push(UiAction::SetImportUnits(units));
-                    }
-                }
-            });
-        });
-        ui.menu_button("Edit", |ui| {
-            let erase = Some(Bound::EraseSelection);
-            if widgets::menu_item(ui, "Erase Selection", erase, view.has_selection).clicked() {
-                actions.push(UiAction::EraseSelection);
-            }
-            if widgets::menu_item(ui, "Delete Guides", None, view.has_guides).clicked() {
-                actions.push(UiAction::DeleteGuides);
-            }
-            ui.separator();
-            if widgets::menu_item(ui, "Soften Edges...", None, true).clicked() {
-                actions.push(UiAction::ShowSoften(true));
-            }
-        });
-        ui.menu_button("Camera", |ui| {
-            if widgets::menu_item(ui, "Zoom Extents", Some(Bound::ZoomExtents), true).clicked() {
-                actions.push(UiAction::ZoomExtents);
-            }
-            ui.separator();
-            for v in StandardView::ALL {
-                if widgets::menu_item(ui, v.label(), None, true).clicked() {
-                    actions.push(UiAction::StandardView(v));
-                }
-            }
-            ui.separator();
-            for (projection, label) in [
-                (Projection::Perspective, "Perspective"),
-                (Projection::Parallel, "Parallel Projection"),
-            ] {
-                if ui
-                    .selectable_label(view.projection == projection, label)
-                    .clicked()
-                {
-                    actions.push(UiAction::SetProjection(projection));
-                }
-            }
-            ui.separator();
-            let mut night = view.lighting == Lighting::Night;
-            if ui.checkbox(&mut night, "Night lighting").clicked() {
-                let mode = if night {
-                    Lighting::Night
-                } else {
-                    Lighting::Day
-                };
-                actions.push(UiAction::SetLighting(mode));
-            }
-            ui.separator();
-            let mut flying = view.flying;
-            let fly = format!(
-                "Fly mode ({})",
-                Bound::ToggleFly.key_text().unwrap_or_default()
-            );
-            if ui
-                .checkbox(&mut flying, fly)
-                .on_hover_text(FLY_HELP)
-                .clicked()
-            {
-                actions.push(UiAction::ToggleFly);
-            }
-        });
-        ui.menu_button("View", |ui| {
-            if widgets::menu_item(ui, "Agent Activity", None, true).clicked() {
-                actions.push(UiAction::ShowAgentActivity(true));
-            }
-            ui.menu_button("Theme", |ui| {
-                for choice in ThemeChoice::ALL {
-                    if ui
-                        .selectable_label(view.theme == choice, choice.label())
-                        .clicked()
-                    {
-                        actions.push(UiAction::SetTheme(choice));
-                    }
-                }
-            });
-        });
+        // Tighter than the theme so the default window's toolbar, with all of the menus, stays on
+        // one row, until M11b moves the tools to a rail.
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().button_padding.x = 2.0;
+        if view.egui_menus {
+            menu_bar::show(ui, &crate::menus::menu_bar(view, false), actions);
+        }
         ui.separator();
         for kind in ToolKind::ALL {
             if widgets::tool_button(ui, kind, view.tool == kind).clicked() {
@@ -192,7 +93,7 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
 }
 
 /// A history label as words: `push_pull` reads "Push pull".
-pub(super) fn step_name(label: &str) -> String {
+pub(crate) fn step_name(label: &str) -> String {
     let words = label.replace('_', " ");
     let mut chars = words.chars();
     chars
