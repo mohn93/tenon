@@ -128,6 +128,9 @@ pub struct Editor {
     shift: bool,
     /// Whether the left-button press reached the tool, so its release should too.
     tool_pressed: bool,
+    /// Whether the next left press comes within the double-click time of the last click's
+    /// release (`quick_press`); the press clears it.
+    quick_press: bool,
     /// The document revision right after the tool's own last commands ran. A tool's retype
     /// or array starts with an Undo of that step; it runs only while the revision is still
     /// this one, so it never undoes a step made since (a material change, an undo, an edit).
@@ -233,6 +236,7 @@ impl Editor {
             shift: false,
             tool_pressed: false,
             tool_step: None,
+            quick_press: false,
             reference: None,
             lock: None,
             shift_lock: false,
@@ -673,8 +677,24 @@ impl Editor {
         true
     }
 
+    /// Says whether the next left press comes within the double-click time of the last
+    /// click's release. The window times it; `tool_input` says so for the later presses of a
+    /// `double_click` or `triple_click`. Push/Pull swallows such a press near its first click (a
+    /// double-click's second press) instead of finishing a tiny pull.
+    pub fn quick_press(&mut self, quick: bool) {
+        self.quick_press = quick;
+    }
+
     /// A button went down or up. Returns true if anything visible may have changed.
     pub fn button(&mut self, button: Button, pressed: bool) -> bool {
+        let changed = self.press_or_release(button, pressed);
+        if pressed && button == Button::Left {
+            self.quick_press = false;
+        }
+        changed
+    }
+
+    fn press_or_release(&mut self, button: Button, pressed: bool) -> bool {
         if self.flying {
             // Clicks do nothing to the model while flying.
             return false;
@@ -1580,7 +1600,7 @@ impl Editor {
         {
             // The step the tool would undo is not its own last one: the tool forgets it and
             // says, as for a value typed with nothing to change, what to do instead.
-            self.tool.on_external_change();
+            self.tool.on_refused();
             out = self.handle(event);
             out.commands.clear();
         }
@@ -1649,6 +1669,7 @@ impl Editor {
             cursor: self.cursor,
             pick_radius: PICK_RADIUS_LOGICAL_PX * self.scale_factor,
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
+            quick_press: self.quick_press && matches!(event, ToolEvent::Click(_)),
             shift: self.shift,
             selection: self.doc.selection(),
             material: self.current_material(),
@@ -1858,6 +1879,7 @@ impl Editor {
             cursor: self.cursor,
             pick_radius: radius,
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
+            quick_press: false,
             shift: self.shift,
             selection: self.doc.selection(),
             material: self.current_material(),
@@ -2642,6 +2664,46 @@ mod tests {
         assert!((top(&e) - 2.0).abs() < 1e-9);
         double_click_at(&mut e, DVec3::new(1.0, 1.0, 2.0));
         assert!((top(&e) - 4.0).abs() < 1e-9, "top {}", top(&e));
+    }
+
+    #[test]
+    fn only_a_quick_press_near_the_first_click_leaves_a_pull_unfinished() {
+        for quick in [true, false] {
+            let mut e = editor();
+            square_then_push_pull(&mut e);
+            click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+            // 5 px higher, within twice the drag threshold of the first release.
+            let px = e.doc().camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap();
+            e.cursor_moved(px - DVec2::new(0.0, 5.0));
+            e.quick_press(quick);
+            e.button(Button::Left, true);
+            e.button(Button::Left, false);
+            if quick {
+                assert_eq!(stats(&e), (4, 1), "a double-click's second press");
+                assert!(matches!(e.phase(), tools::Phase::Active { .. }));
+            } else {
+                assert_eq!(stats(&e), (12, 6), "a late click finishes the pull");
+                assert_eq!(e.phase(), tools::Phase::Idle);
+            }
+        }
+    }
+
+    #[test]
+    fn an_agent_edit_after_a_retype_keeps_the_retyped_distance() {
+        let mut e = editor();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        type_text(&mut e, "2");
+        type_text(&mut e, "3");
+        assert!((top(&e) - 3.0).abs() < 1e-9);
+        // Straight after, with no tool event between: the retyped pull stands.
+        e.execute(Command::AddEdge {
+            start: [5.0, 5.0, 0.0],
+            end: [6.0, 5.0, 0.0],
+        })
+        .unwrap();
+        double_click_at(&mut e, DVec3::new(1.0, 1.0, 3.0));
+        assert!((top(&e) - 6.0).abs() < 1e-9, "top {}", top(&e));
     }
 
     #[test]

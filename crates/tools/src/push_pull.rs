@@ -43,8 +43,8 @@ pub struct PushPullTool {
     last: Option<(FaceId, f64)>,
     /// The distance a double-click repeats.
     repeat: Option<f64>,
-    /// The distance a double-click repeated before a retype, until the next event: an external
-    /// change before then (the editor refusing the retype, or its pull failing) restores it.
+    /// The distance a double-click repeated before a retype, until the next event or external
+    /// change: the editor refusing the retype restores it.
     before_retype: Option<Option<f64>>,
 }
 
@@ -132,6 +132,14 @@ fn loops(model: &Model, id: FaceId) -> Vec<Vec<DVec3>> {
         .chain(&f.holes)
         .map(|l| l.iter().filter_map(|v| model.position(*v)).collect())
         .collect()
+}
+
+/// Whether the cursor lies where a double-click's second press would: within the drag
+/// threshold of the drag's first press, or twice that of its release.
+fn second_press(d: &Drag, ctx: &ToolContext) -> bool {
+    d.press.distance(ctx.cursor) < ctx.drag_threshold
+        || d.release
+            .is_some_and(|r| r.distance(ctx.cursor) < 2.0 * ctx.drag_threshold)
 }
 
 /// The open context's face under the cursor, and the point on it there.
@@ -272,13 +280,10 @@ impl Tool for PushPullTool {
                     }
                     self.hovered = None;
                 }
-                // A click a few pixels from the first's press, or within twice that of its
-                // release (where any double-click's second press lands), never finishes the pull.
-                Some(d)
-                    if d.press.distance(ctx.cursor) < ctx.drag_threshold
-                        || d.release
-                            .is_some_and(|r| r.distance(ctx.cursor) < 2.0 * ctx.drag_threshold) => {
-                }
+                // A quick press a few pixels from the first's press, or within twice that of its
+                // release (where any double-click's second press lands), is a double-click's
+                // second press: it does not finish the pull. A later one does.
+                Some(d) if ctx.quick_press && second_press(d, ctx) => {}
                 Some(d) => {
                     let distance = measure(d, &hit, ctx);
                     if distance.abs() >= LENGTH_TOL {
@@ -325,13 +330,18 @@ impl Tool for PushPullTool {
     }
 
     fn on_external_change(&mut self) {
-        if let Some(repeat) = self.before_retype.take() {
-            self.repeat = repeat;
-        }
+        self.before_retype = None;
         self.drag = None;
         self.hovered = None;
         self.drag_start = DragStart::default();
         self.last = None;
+    }
+
+    fn on_refused(&mut self) {
+        if let Some(repeat) = self.before_retype.take() {
+            self.repeat = repeat;
+        }
+        self.on_external_change();
     }
 
     fn hovered(&self) -> Option<EntityId> {
@@ -358,6 +368,8 @@ mod tests {
         face: FaceId,
         camera: Camera,
         cursor: DVec2,
+        /// Whether presses come within the double-click time of the last release.
+        quick: bool,
     }
 
     impl Rig {
@@ -385,6 +397,7 @@ mod tests {
                 face,
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 cursor: DVec2::ZERO,
+                quick: false,
             }
         }
 
@@ -417,6 +430,7 @@ mod tests {
                 cursor: self.cursor,
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                quick_press: self.quick && matches!(event, ToolEvent::Click(_)),
                 shift: false,
                 selection: &Default::default(),
                 material: None,
@@ -600,6 +614,7 @@ mod tests {
             cursor: r.camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap(),
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            quick_press: false,
             shift: false,
             selection: &Default::default(),
             material: None,
@@ -658,6 +673,7 @@ mod tests {
             cursor: r.camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap(),
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            quick_press: false,
             shift: false,
             selection: &Default::default(),
             material: None,
@@ -757,6 +773,7 @@ mod tests {
         r.at(p, ToolEvent::Release);
         // The second press lands 3 px higher on screen (under the 4 px threshold).
         r.cursor_offset(DVec2::new(0.0, -3.0));
+        r.quick = true;
         let second = r.send(ToolEvent::Click(r.hit(p)));
         assert!(
             second.commands.is_empty(),
@@ -777,6 +794,7 @@ mod tests {
         r.cursor_offset(DVec2::new(0.0, -3.0));
         r.send(ToolEvent::Release(r.hit(p)));
         r.cursor_offset(DVec2::new(0.0, -2.0));
+        r.quick = true;
         let second = r.send(ToolEvent::Click(r.hit(p)));
         assert!(
             second.commands.is_empty(),
@@ -797,6 +815,7 @@ mod tests {
         r.at(p, ToolEvent::Click);
         r.at(p, ToolEvent::Release);
         r.cursor_offset(DVec2::new(0.0, -5.0));
+        r.quick = true;
         let second = r.send(ToolEvent::Click(r.hit(p)));
         assert!(
             second.commands.is_empty(),
@@ -810,6 +829,28 @@ mod tests {
     }
 
     #[test]
+    fn a_late_click_near_the_first_finishes_the_pull() {
+        // As in the tests above, but the second press comes after the double-click time: it
+        // is a finishing click, however close (a face seen almost edge-on).
+        for (release, press) in [(0.0, -5.0), (0.0, -3.0), (-3.0, -2.0)] {
+            let mut r = Rig::with_distance(Some(1.0));
+            let p = DVec3::new(1.0, 1.0, 0.0);
+            r.at(p, ToolEvent::Click);
+            r.cursor_offset(DVec2::new(0.0, release));
+            r.send(ToolEvent::Release(r.hit(p)));
+            r.cursor_offset(DVec2::new(0.0, press));
+            r.send(ToolEvent::Move(r.hit(p)));
+            let second = r.send(ToolEvent::Click(r.hit(p)));
+            assert!(
+                matches!(second.commands[..], [Command::PushPull { distance, .. }] if distance > 0.0),
+                "{release} {press}: {:?}",
+                second.commands
+            );
+            assert_eq!(r.tool.phase(), Phase::Idle);
+        }
+    }
+
+    #[test]
     fn a_refused_retype_keeps_the_double_click_distance() {
         let mut r = Rig::new();
         let p = DVec3::new(1.0, 1.0, 0.0);
@@ -818,16 +859,15 @@ mod tests {
         // What the editor does when it refuses a retype: the tool forgets, then is asked again.
         let refused = r.send(ToolEvent::Value("3".into()));
         assert_eq!(refused.commands[1], push_pull(r.face, 3.0));
-        r.tool.on_external_change();
+        r.tool.on_refused();
         r.send(ToolEvent::Value("3".into()));
         let out = r.at(p, ToolEvent::DoubleClick);
         assert_eq!(out.commands, vec![push_pull(r.face, 1.0)]);
-        // A retype that ran changes it, even if an undo follows before any other event.
+        // A retype that ran changes it, even if an undo or agent edit follows at once.
         let mut r = Rig::new();
         r.at(p, ToolEvent::Click);
         r.send(ToolEvent::Value("1".into()));
         r.send(ToolEvent::Value("3".into()));
-        r.at(p, ToolEvent::Move);
         r.tool.on_external_change();
         let out = r.at(p, ToolEvent::DoubleClick);
         assert_eq!(out.commands, vec![push_pull(r.face, 3.0)]);

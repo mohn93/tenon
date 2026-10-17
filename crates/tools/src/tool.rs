@@ -34,6 +34,10 @@ pub struct ToolContext<'a> {
     pub pick_radius: f64,
     /// How far (physical pixels) the cursor must travel from a press for it to be a drag.
     pub drag_threshold: f64,
+    /// Whether this press of the primary button comes within the double-click time of the
+    /// previous click's release (false for every other event). The window times it; in
+    /// `tool_input` only a `double_click` or `triple_click` event's later presses are quick.
+    pub quick_press: bool,
     /// Whether Shift is held.
     pub shift: bool,
     /// The selected edges and faces.
@@ -119,6 +123,12 @@ pub trait Tool {
     /// The model changed outside the tool (agent edit, undo, redo): drop any operation in
     /// progress, since it may refer to geometry that no longer exists.
     fn on_external_change(&mut self);
+    /// The editor refused the output just returned, which would undo a step that is not the
+    /// tool's own (a retype after another step): undo what that output changed in the tool,
+    /// then drop its operation as for an external change.
+    fn on_refused(&mut self) {
+        self.on_external_change();
+    }
     /// What a click would act on now (Select, Push/Pull, Paint, Erase): an id of the open
     /// context; None for the other tools, while an operation is in progress, and until the
     /// cursor moves again after a click, Escape or an external change.
@@ -324,6 +334,7 @@ mod tests {
                 cursor: camera.project(point).unwrap(),
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                quick_press: false,
                 shift: false,
                 selection: &selection,
                 material: None,
@@ -368,6 +379,7 @@ mod tests {
                 cursor: camera.project(point).unwrap(),
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                quick_press: false,
                 shift: false,
                 selection: &selection,
                 material: None,
@@ -508,6 +520,7 @@ mod tests {
                 cursor,
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                quick_press: false,
                 shift: false,
                 selection: &selection,
                 material: None,
@@ -552,6 +565,7 @@ mod tests {
             cursor: camera.project(point).unwrap(),
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            quick_press: false,
             shift: false,
             selection: &BTreeSet::new(),
             material: None,

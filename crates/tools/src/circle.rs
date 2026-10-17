@@ -206,6 +206,7 @@ mod tests {
             cursor: DVec2::ZERO,
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            quick_press: false,
             shift: false,
             selection: &Default::default(),
             material: None,

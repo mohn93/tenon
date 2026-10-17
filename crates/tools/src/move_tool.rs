@@ -273,6 +273,7 @@ mod tests {
                 cursor: self.cursor,
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                quick_press: false,
                 shift: false,
                 selection: &self.selection,
                 material: None,

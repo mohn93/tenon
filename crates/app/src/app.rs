@@ -456,6 +456,11 @@ fn click_count(last: Option<(Instant, DVec2, u8)>, now: Instant, at: DVec2, max_
     }
 }
 
+/// True if a press at `now` comes within `DOUBLE_CLICK` of the last click's release.
+fn is_quick(last: Option<(Instant, DVec2, u8)>, now: Instant) -> bool {
+    last.is_some_and(|(t, ..)| now.duration_since(t) <= DOUBLE_CLICK)
+}
+
 /// True if a release at `at` ends a click, that is the cursor is less than `max_px` from where
 /// the button went down, rather than a drag (the tools take `max_px` or more as a drag).
 fn is_click(press: Option<DVec2>, at: DVec2, max_px: f64) -> bool {
@@ -1820,6 +1825,9 @@ impl ApplicationHandler<AppEvent> for App {
                 if pressed && !s.pointer_in_view() {
                     false
                 } else {
+                    if pressed && button == MouseButton::Left {
+                        s.editor.quick_press(is_quick(s.clicks, Instant::now()));
+                    }
                     let handled = s.editor.button(map_button(button), pressed);
                     if pressed && button == MouseButton::Left {
                         s.left_press = Some(s.cursor);
@@ -2136,6 +2144,22 @@ mod tests {
             schedule_repaint(now, Some(Duration::from_secs(3600))),
             Repaint::Idle
         );
+    }
+
+    #[test]
+    fn a_press_is_quick_within_the_double_click_time_of_the_last_click() {
+        let now = Instant::now();
+        let at = DVec2::new(100.0, 100.0);
+        assert!(!is_quick(None, now));
+        assert!(is_quick(
+            Some((now, at, 1)),
+            now + Duration::from_millis(300)
+        ));
+        assert!(is_quick(Some((now, at, 2)), now + DOUBLE_CLICK));
+        assert!(!is_quick(
+            Some((now, at, 1)),
+            now + Duration::from_millis(800)
+        ));
     }
 
     #[test]

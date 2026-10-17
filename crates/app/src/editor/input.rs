@@ -131,6 +131,8 @@ impl Editor {
     /// count.
     fn clicks(&mut self, n: u8) {
         for i in 1..=n {
+            // Within one event the later presses come quickly, as in a real double-click.
+            self.quick_press(i > 1);
             self.button(Button::Left, true);
             // The return value of `button` is a redraw flag; the press reached the tool if the
             // editor now waits for its release.

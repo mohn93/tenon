@@ -210,6 +210,7 @@ mod tests {
             cursor: camera.project(at).unwrap(),
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            quick_press: false,
             shift: false,
             selection,
             material: Some(MaterialId(77)),
