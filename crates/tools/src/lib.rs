@@ -28,6 +28,7 @@ pub use inference::{
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;
+pub use overlay::{Rgba, ScreenLine, Shape, Within};
 pub use paint::PaintTool;
 pub use probe::{Hit, Reach, pick};
 pub use push_pull::PushPullTool;
