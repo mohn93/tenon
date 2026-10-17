@@ -122,7 +122,8 @@ pub const SELECTION_TINT: f32 = 0.18;
 /// How far the grid and axes fade toward the dark theme's day canvas (black edges keep theirs).
 pub const DARK_GROUND_FADE: f32 = 0.6;
 
-/// How the window's 3D view looks in `theme`: its day canvas and the selection in the accent.
+/// How the window's 3D view looks in `theme`: its day canvas, the selection in the accent and
+/// the axes in the shared axis colors, 1.5 pt wide.
 pub fn view_style(theme: egui::Theme) -> render::ViewStyle {
     let t = tokens(theme);
     let rgba = |c: Color32| {
@@ -140,6 +141,8 @@ pub fn view_style(theme: egui::Theme) -> render::ViewStyle {
         selected_face: [accent[0], accent[1], accent[2]],
         face_tint: SELECTION_TINT,
         wide_selected_edges: true,
+        axes: [rgba(AXIS_X), rgba(AXIS_Y), rgba(AXIS_Z)],
+        wide_axes: true,
     }
 }
 
@@ -305,6 +308,21 @@ mod tests {
             view_style(egui::Theme::Dark).day_ground_fade > 0.0,
             "a dark canvas quiets the grid"
         );
+    }
+
+    #[test]
+    fn the_views_axes_are_the_shared_axis_colors() {
+        let unit = |c: Color32| [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let s = view_style(theme);
+            for (axis, color) in s.axes.iter().zip([AXIS_X, AXIS_Y, AXIS_Z]) {
+                let [r, g, b] = unit(color);
+                assert_eq!(*axis, [r, g, b, 1.0]);
+            }
+            assert!(s.wide_axes);
+        }
+        let x = view_style(egui::Theme::Dark).axes[0];
+        assert_eq!(x, [229.0 / 255.0, 72.0 / 255.0, 77.0 / 255.0, 1.0]);
     }
 
     /// WCAG contrast ratio of two opaque colors.

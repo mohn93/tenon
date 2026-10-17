@@ -1363,3 +1363,29 @@ fn a_preview_solid_under_a_face_is_hidden() {
         0
     ));
 }
+
+#[test]
+fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
+    let cam = camera();
+    let none = BTreeSet::new();
+    let magenta_axes = ViewStyle {
+        axes: [[1.0, 0.0, 1.0, 1.0]; 3],
+        ..ViewStyle::CLASSIC
+    };
+    let wide = ViewStyle {
+        wide_axes: true,
+        ..magenta_axes
+    };
+    let empty = Model::new();
+    let (Some(classic), Some(thin), Some(thick)) = (
+        render_styled(&cam, &empty, &none, ViewStyle::CLASSIC, Lighting::Day),
+        render_styled(&cam, &empty, &none, magenta_axes, Lighting::Day),
+        render_styled(&cam, &empty, &none, wide, Lighting::Day),
+    ) else {
+        return;
+    };
+    assert_eq!(count(&classic, magenta), 0);
+    let (t, w) = (count(&thin, magenta), count(&thick, magenta));
+    assert!(t > 0, "the axes in the style's colors");
+    assert!(w as f64 > 1.25 * t as f64, "{t} -> {w} pixels");
+}

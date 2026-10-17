@@ -41,7 +41,7 @@ struct Lighting {
     hover_face: vec4<f32>,
     // Hovered edges and guides.
     hover_edge: vec4<f32>,
-    // x: the step in pixels between the copies of a wide edge.
+    // The step in pixels between the copies of a wide edge (x) and of a wide axis (y).
     wide: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
@@ -116,10 +116,16 @@ fn vs_edge_wide(
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         return out;
     }
-    let step = lighting.wide.x * f32(k / 2u + 1u);
-    let pixel = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), k % 2u == 0u) * step
+    return wide_copy(out, k, lighting.wide.x);
+}
+
+// Copy `k` of a wide line: moved across (even k) or up (odd k) by `step` pixels per pair.
+fn wide_copy(line: LineOut, k: u32, step: f32) -> LineOut {
+    var out = line;
+    let pixels = step * f32(k / 2u + 1u);
+    let shift = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), k % 2u == 0u) * pixels
         / lighting.lines.zw;
-    out.pos = vec4<f32>(out.pos.xy + pixel * out.pos.w, out.pos.zw);
+    out.pos = vec4<f32>(out.pos.xy + shift * out.pos.w, out.pos.zw);
     return out;
 }
 
@@ -139,6 +145,34 @@ fn vs_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> Line
 @vertex
 fn vs_flat_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
     return line_vertex(pos, faded_line(color, lighting.lines.y), 1.0);
+}
+
+// Wide copies of the flat X and Y axes (as `vs_flat_ground`) and of the Z axis (as
+// `vs_ground`), `lighting.wide.y` pixels apart (see `wide_copy`).
+@vertex
+fn vs_flat_ground_wide(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @builtin(instance_index) k: u32,
+) -> LineOut {
+    return wide_copy(
+        line_vertex(pos, faded_line(color, lighting.lines.y), 1.0),
+        k,
+        lighting.wide.y,
+    );
+}
+
+@vertex
+fn vs_ground_wide(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @builtin(instance_index) k: u32,
+) -> LineOut {
+    return wide_copy(
+        line_vertex(pos, faded_line(color, lighting.lines.y), 0.998),
+        k,
+        lighting.wide.y,
+    );
 }
 
 // Tool previews and inference markers: drawn without depth testing.

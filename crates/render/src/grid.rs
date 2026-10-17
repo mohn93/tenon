@@ -16,12 +16,13 @@ pub const AXIS_X: [f32; 4] = [0.85, 0.15, 0.15, 1.0];
 pub const AXIS_Y: [f32; 4] = [0.15, 0.65, 0.20, 1.0];
 pub const AXIS_Z: [f32; 4] = [0.15, 0.30, 0.85, 1.0];
 
-fn faded(c: [f32; 4]) -> [f32; 4] {
+/// `c` mixed 60% toward `toward`.
+fn faded(c: [f32; 4], toward: [f32; 4]) -> [f32; 4] {
     let mix = |a: f32, b: f32| a + (b - a) * 0.6;
     [
-        mix(c[0], BACKGROUND[0]),
-        mix(c[1], BACKGROUND[1]),
-        mix(c[2], BACKGROUND[2]),
+        mix(c[0], toward[0]),
+        mix(c[1], toward[1]),
+        mix(c[2], toward[2]),
         1.0,
     ]
 }
@@ -45,14 +46,18 @@ pub fn grid_lines(half_extent: f32, spacing: f32) -> Vec<LineVertex> {
 
 /// Red/green/blue axes from the origin; negative halves are faded.
 pub fn axis_lines(length: f32) -> Vec<LineVertex> {
-    let axes = [
-        ([1.0, 0.0, 0.0], AXIS_X),
-        ([0.0, 1.0, 0.0], AXIS_Y),
-        ([0.0, 0.0, 1.0], AXIS_Z),
-    ];
+    axis_lines_in(length, CLASSIC_AXES, BACKGROUND)
+}
+
+/// The classic axis colors, red, green and blue.
+const CLASSIC_AXES: [[f32; 4]; 3] = [AXIS_X, AXIS_Y, AXIS_Z];
+
+/// The X, Y and Z axes from the origin in `colors`; negative halves mix 60% toward `toward`.
+pub fn axis_lines_in(length: f32, colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
+    let dirs = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     let mut out = Vec::with_capacity(12);
-    for (dir, color) in axes {
-        for (sign, c) in [(1.0, color), (-1.0, faded(color))] {
+    for (dir, color) in dirs.into_iter().zip(colors) {
+        for (sign, c) in [(1.0, color), (-1.0, faded(color, toward))] {
             let end = [
                 dir[0] * length * sign,
                 dir[1] * length * sign,
@@ -71,21 +76,35 @@ pub fn axis_lines(length: f32) -> Vec<LineVertex> {
 /// Lines lying flat on z = 0: the ground grid and the X and Y axes.
 /// Drawn before faces, so faces always cover them even at grazing angles.
 pub fn flat_ground_lines() -> Vec<LineVertex> {
+    flat_ground_lines_in(CLASSIC_AXES, BACKGROUND)
+}
+
+/// `flat_ground_lines` with the axes in `colors`, their negative halves faded toward `toward`.
+pub fn flat_ground_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
     let mut lines = grid_lines(100.0, 1.0);
-    // Axis segments come as (origin, end) pairs; keep the ones lying on z = 0.
-    lines.extend(
-        axis_lines(1000.0)
-            .chunks(2)
-            .filter(|seg| seg[1].pos[2] == 0.0)
-            .flatten()
-            .copied(),
-    );
+    lines.extend(flat_axis_lines_in(colors, toward));
     lines
+}
+
+/// The X and Y axes alone, as in `flat_ground_lines_in`.
+pub fn flat_axis_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
+    // Axis segments come as (origin, end) pairs; keep the ones lying on z = 0.
+    axis_lines_in(1000.0, colors, toward)
+        .chunks(2)
+        .filter(|seg| seg[1].pos[2] == 0.0)
+        .flatten()
+        .copied()
+        .collect()
 }
 
 /// The Z axis segments only, drawn with the depth bias that keeps them visible against faces.
 pub fn vertical_axis_lines() -> Vec<LineVertex> {
-    axis_lines(1000.0)
+    vertical_axis_lines_in(CLASSIC_AXES, BACKGROUND)
+}
+
+/// `vertical_axis_lines` in `colors`, the negative half faded toward `toward`.
+pub fn vertical_axis_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
+    axis_lines_in(1000.0, colors, toward)
         .chunks(2)
         .filter(|seg| seg[1].pos[2] != 0.0)
         .flatten()
@@ -133,6 +152,62 @@ mod tests {
         let vertical = vertical_axis_lines();
         assert_eq!(vertical.len(), 4);
         assert!(vertical.iter().all(|v| v.pos[0] == 0.0 && v.pos[1] == 0.0));
+    }
+
+    /// Bit patterns, so a sign or rounding change shows.
+    fn bits(v: &[LineVertex]) -> Vec<[u32; 7]> {
+        v.iter()
+            .map(|v| {
+                let [x, y, z] = v.pos.map(f32::to_bits);
+                let [r, g, b, a] = v.color.map(f32::to_bits);
+                [x, y, z, r, g, b, a]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_classic_axes_are_unchanged() {
+        // The vertices `axis_lines(1000.0)` gave before the axes took a style's colors.
+        let x = |x: f32, y: f32, z: f32| [x, y, z];
+        let expected: Vec<LineVertex> = [
+            (x(0.0, 0.0, 0.0), [0.85, 0.15, 0.15, 1.0]),
+            (x(1000.0, 0.0, 0.0), [0.85, 0.15, 0.15, 1.0]),
+            (x(0.0, 0.0, 0.0), [0.916, 0.636, 0.636, 1.0]),
+            (x(-1000.0, -0.0, -0.0), [0.916, 0.636, 0.636, 1.0]),
+            (x(0.0, 0.0, 0.0), [0.15, 0.65, 0.2, 1.0]),
+            (x(0.0, 1000.0, 0.0), [0.15, 0.65, 0.2, 1.0]),
+            (x(0.0, 0.0, 0.0), [0.636, 0.83599997, 0.656, 1.0]),
+            (x(-0.0, -1000.0, -0.0), [0.636, 0.83599997, 0.656, 1.0]),
+            (x(0.0, 0.0, 0.0), [0.15, 0.3, 0.85, 1.0]),
+            (x(0.0, 0.0, 1000.0), [0.15, 0.3, 0.85, 1.0]),
+            (x(0.0, 0.0, 0.0), [0.636, 0.696, 0.916, 1.0]),
+            (x(-0.0, -0.0, -1000.0), [0.636, 0.696, 0.916, 1.0]),
+        ]
+        .map(|(pos, color)| LineVertex { pos, color })
+        .to_vec();
+        let classic = [AXIS_X, AXIS_Y, AXIS_Z];
+        assert_eq!(bits(&axis_lines(1000.0)), bits(&expected));
+        assert_eq!(
+            bits(&axis_lines_in(1000.0, classic, BACKGROUND)),
+            bits(&expected)
+        );
+        let mut flat = grid_lines(100.0, 1.0);
+        flat.extend(expected.chunks(2).take(4).flatten());
+        assert_eq!(bits(&flat_ground_lines()), bits(&flat));
+        assert_eq!(
+            bits(&flat_ground_lines_in(classic, BACKGROUND)),
+            bits(&flat)
+        );
+        let vertical = &expected[8..];
+        assert_eq!(bits(&vertical_axis_lines()), bits(vertical));
+        assert_eq!(
+            bits(&vertical_axis_lines_in(classic, BACKGROUND)),
+            bits(vertical)
+        );
+        assert_eq!(
+            bits(&flat_axis_lines_in(classic, BACKGROUND)),
+            bits(&expected[..8])
+        );
     }
 
     #[test]

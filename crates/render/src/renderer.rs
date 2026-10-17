@@ -4,7 +4,9 @@ use kernel::{EntityId, InstanceId, Scene};
 use session::{Camera, Lighting};
 use wgpu::util::DeviceExt;
 
-use crate::grid::{LineVertex, NIGHT_BACKGROUND, flat_ground_lines, vertical_axis_lines};
+use crate::grid::{
+    LineVertex, NIGHT_BACKGROUND, flat_axis_lines_in, flat_ground_lines_in, vertical_axis_lines_in,
+};
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base, shown_guides};
@@ -147,7 +149,8 @@ struct LightingUniforms {
     hover_face: [f32; 4],
     /// Hovered edges and guides. Zero without a hover.
     hover_edge: [f32; 4],
-    /// x: the step in pixels between the copies of a wide edge (see `vs_edge_wide`).
+    /// The step in pixels between the copies of a wide edge (x, see `vs_edge_wide`) and of a
+    /// wide axis (y).
     wide: [f32; 4],
     lights: [LightUniform; MAX_LIGHTS],
 }
@@ -234,6 +237,8 @@ pub struct PreviewVertex {
 
 /// Selected and hovered edges, in points, where the style widens them.
 const WIDE_EDGE_PT: f32 = 2.0;
+/// The axes, in points, where the style widens them.
+const WIDE_AXIS_PT: f32 = 1.5;
 
 /// How a line `width` physical pixels wide is drawn from 1 px lines: the line, then copies
 /// `step` pixels apart across and up, `count` copies in all (half of them each way).
@@ -375,6 +380,9 @@ pub struct Renderer {
     format: wgpu::TextureFormat,
     flat_ground_pipeline: wgpu::RenderPipeline,
     ground_pipeline: wgpu::RenderPipeline,
+    /// The X and Y axes, then the Z axis, again across and up, when the style widens them.
+    wide_flat_axes_pipeline: wgpu::RenderPipeline,
+    wide_vertical_axis_pipeline: wgpu::RenderPipeline,
     face_pipeline: wgpu::RenderPipeline,
     /// The opaque side of a triangle whose other side is see-through.
     solid_side_pipeline: wgpu::RenderPipeline,
@@ -416,8 +424,11 @@ pub struct Renderer {
     style: ViewStyle,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
+    /// The grid and the axes in the style's colors (see `set_style`); `flat_axes` is the X and
+    /// Y axes alone, for their wide copies.
     flat_ground: Mesh,
     vertical_axis: Mesh,
+    flat_axes: Mesh,
     faces: Option<Mesh>,
     /// The see-through triangles of `faces`, if any.
     glass: Option<Glass>,
@@ -651,6 +662,31 @@ impl Renderer {
             tested,
             None,
         );
+        // The axes' wide copies (see `vs_flat_ground_wide`), tested as their 1 px lines are.
+        let wide_flat_axes_pipeline = pipeline(
+            "wide flat axes",
+            "vs_flat_ground_wide",
+            "fs_line",
+            &lines_only,
+            lines,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Always,
+            },
+            None,
+        );
+        let wide_vertical_axis_pipeline = pipeline(
+            "wide vertical axis",
+            "vs_ground_wide",
+            "fs_line",
+            &lines_only,
+            lines,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::GreaterEqual,
+            },
+            None,
+        );
         let face_pipeline = pipeline(
             "faces",
             "vs_face",
@@ -836,16 +872,15 @@ impl Renderer {
             shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
         );
 
-        let flat_ground =
-            mesh(device, "flat ground lines", &flat_ground_lines()).expect("grid is never empty");
-        let vertical_axis =
-            mesh(device, "vertical axis", &vertical_axis_lines()).expect("z axis is never empty");
+        let [flat_ground, vertical_axis, flat_axes] = ground_meshes(device, &ViewStyle::CLASSIC);
         Self {
             device: device.clone(),
             queue: queue.clone(),
             format,
             flat_ground_pipeline,
             ground_pipeline,
+            wide_flat_axes_pipeline,
+            wide_vertical_axis_pipeline,
             face_pipeline,
             solid_side_pipeline,
             glass_pipeline,
@@ -872,6 +907,7 @@ impl Renderer {
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
+            flat_axes,
             faces: None,
             glass: None,
             edges: None,
@@ -1112,10 +1148,15 @@ impl Renderer {
     }
 
     /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
-    /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild.
+    /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild; the grid
+    /// and axes are rebuilt only when their colors change.
     pub fn set_style(&mut self, style: ViewStyle) {
         if style == self.style {
             return;
+        }
+        if style.axes != self.style.axes || style.day_background() != self.style.day_background() {
+            [self.flat_ground, self.vertical_axis, self.flat_axes] =
+                ground_meshes(&self.device, &style);
         }
         self.style = style;
         self.refresh_guides();
@@ -1170,7 +1211,9 @@ impl Renderer {
             lighting.hover_edge = look.edge;
         }
         let (wide_copies, wide_step) = spread(WIDE_EDGE_PT * self.pixels_per_point);
+        let (axis_copies, axis_step) = spread(WIDE_AXIS_PT * self.pixels_per_point);
         lighting.wide[0] = wide_step;
+        lighting.wide[1] = axis_step;
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         let targets = self.targets.as_ref().expect("targets just created");
@@ -1238,7 +1281,19 @@ impl Renderer {
                     &self.flat_ground_pipeline,
                     Some(&self.flat_ground),
                 );
+                if self.style.wide_axes {
+                    bind(&mut pass, &self.wide_flat_axes_pipeline, &self.flat_axes);
+                    pass.draw(0..self.flat_axes.count, 0..axis_copies);
+                }
                 draw(&mut pass, &self.ground_pipeline, Some(&self.vertical_axis));
+                if self.style.wide_axes {
+                    bind(
+                        &mut pass,
+                        &self.wide_vertical_axis_pipeline,
+                        &self.vertical_axis,
+                    );
+                    pass.draw(0..self.vertical_axis.count, 0..axis_copies);
+                }
                 match (&self.faces, &self.glass) {
                     (Some(faces), Some(glass)) => {
                         if glass.solid_count > 0 {
@@ -1347,6 +1402,18 @@ fn bind_group(
         layout,
         entries: &entries,
     })
+}
+
+/// The flat ground (grid and X and Y axes), the Z axis and the X and Y axes alone, in
+/// `style`'s axis colors, their negative halves faded toward its day background.
+fn ground_meshes(device: &wgpu::Device, style: &ViewStyle) -> [Mesh; 3] {
+    let (colors, toward) = (style.axes, style.day_background());
+    [
+        ("flat ground lines", flat_ground_lines_in(colors, toward)),
+        ("vertical axis", vertical_axis_lines_in(colors, toward)),
+        ("flat axes", flat_axis_lines_in(colors, toward)),
+    ]
+    .map(|(label, lines)| mesh(device, label, &lines).expect("the axes are never empty"))
 }
 
 /// Uploads vertices, or None when there are none to draw.

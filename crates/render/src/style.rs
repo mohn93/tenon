@@ -1,7 +1,7 @@
 //! How a renderer draws what the window's theme decides. `ViewStyle::CLASSIC` is the default
 //! and what `render_view`, headless renders and the golden images use.
 
-use crate::grid::BACKGROUND;
+use crate::grid::{AXIS_X, AXIS_Y, AXIS_Z, BACKGROUND};
 use crate::scene::SELECTED_EDGE_COLOR;
 
 /// The canvas, the line fading and the selection's look. Colors are sRGB-authored like
@@ -17,8 +17,12 @@ pub struct ViewStyle {
     /// The color selected faces are tinted toward, and how far (0 to 1).
     pub selected_face: [f32; 3],
     pub face_tint: f32,
-    /// Selected edges drawn about 2 px wide rather than 1.
+    /// Selected (and hovered) edges drawn about 2 pt wide rather than 1 px.
     pub wide_selected_edges: bool,
+    /// The X, Y and Z axes' colors; their negative halves fade toward the day background.
+    pub axes: [[f32; 4]; 3],
+    /// The axes drawn about 1.5 pt wide rather than 1 px.
+    pub wide_axes: bool,
 }
 
 impl ViewStyle {
@@ -30,6 +34,8 @@ impl ViewStyle {
         selected_face: [0.25, 0.45, 0.95],
         face_tint: 0.5,
         wide_selected_edges: false,
+        axes: [AXIS_X, AXIS_Y, AXIS_Z],
+        wide_axes: false,
     };
 
     /// The day background's middle: the clear color, and what lines fade toward by day.
