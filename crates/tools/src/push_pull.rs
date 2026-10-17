@@ -43,6 +43,9 @@ pub struct PushPullTool {
     last: Option<(FaceId, f64)>,
     /// The distance a double-click repeats.
     repeat: Option<f64>,
+    /// The distance a double-click repeated before a retype, until the next event: an external
+    /// change before then (the editor refusing the retype, or its pull failing) restores it.
+    before_retype: Option<Option<f64>>,
 }
 
 impl PushPullTool {
@@ -87,6 +90,7 @@ impl PushPullTool {
             }
             Some(v) => {
                 out.commands.push(Command::Undo { count: None });
+                self.before_retype = Some(self.repeat);
                 self.pull(face, if last < 0.0 { -v } else { v }, out);
             }
         }
@@ -225,6 +229,8 @@ impl Tool for PushPullTool {
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
+        // Any event after a retype comes after the editor ran it.
+        self.before_retype = None;
         match event {
             ToolEvent::Move(hit) => match self.drag.as_mut() {
                 Some(d) => d.distance = measure(d, &hit, ctx),
@@ -266,12 +272,13 @@ impl Tool for PushPullTool {
                     }
                     self.hovered = None;
                 }
-                // A click a few pixels from the first's press or release (a double-click's
-                // second press) never finishes the pull.
+                // A click a few pixels from the first's press, or within twice that of its
+                // release (where any double-click's second press lands), never finishes the pull.
                 Some(d)
-                    if std::iter::once(d.press)
-                        .chain(d.release)
-                        .any(|p| p.distance(ctx.cursor) < ctx.drag_threshold) => {}
+                    if d.press.distance(ctx.cursor) < ctx.drag_threshold
+                        || d.release
+                            .is_some_and(|r| r.distance(ctx.cursor) < 2.0 * ctx.drag_threshold) => {
+                }
                 Some(d) => {
                     let distance = measure(d, &hit, ctx);
                     if distance.abs() >= LENGTH_TOL {
@@ -318,6 +325,9 @@ impl Tool for PushPullTool {
     }
 
     fn on_external_change(&mut self) {
+        if let Some(repeat) = self.before_retype.take() {
+            self.repeat = repeat;
+        }
         self.drag = None;
         self.hovered = None;
         self.drag_start = DragStart::default();
@@ -776,6 +786,51 @@ mod tests {
         r.send(ToolEvent::Release(r.hit(p)));
         let out = r.send(ToolEvent::DoubleClick(r.hit(p)));
         assert_eq!(out.commands, vec![push_pull(r.face, 1.0)]);
+    }
+
+    #[test]
+    fn a_second_press_that_moved_back_pulls_nothing_tiny() {
+        // Press and release at P; the second press lands 5 px away and its release comes back
+        // to 2 px, still a double-click for the window.
+        let mut r = Rig::with_distance(Some(1.0));
+        let p = DVec3::new(1.0, 1.0, 0.0);
+        r.at(p, ToolEvent::Click);
+        r.at(p, ToolEvent::Release);
+        r.cursor_offset(DVec2::new(0.0, -5.0));
+        let second = r.send(ToolEvent::Click(r.hit(p)));
+        assert!(
+            second.commands.is_empty(),
+            "no pull of a few pixels: {:?}",
+            second.commands
+        );
+        r.cursor_offset(DVec2::new(0.0, 3.0));
+        r.send(ToolEvent::Release(r.hit(p)));
+        let out = r.send(ToolEvent::DoubleClick(r.hit(p)));
+        assert_eq!(out.commands, vec![push_pull(r.face, 1.0)]);
+    }
+
+    #[test]
+    fn a_refused_retype_keeps_the_double_click_distance() {
+        let mut r = Rig::new();
+        let p = DVec3::new(1.0, 1.0, 0.0);
+        r.at(p, ToolEvent::Click);
+        r.send(ToolEvent::Value("1".into()));
+        // What the editor does when it refuses a retype: the tool forgets, then is asked again.
+        let refused = r.send(ToolEvent::Value("3".into()));
+        assert_eq!(refused.commands[1], push_pull(r.face, 3.0));
+        r.tool.on_external_change();
+        r.send(ToolEvent::Value("3".into()));
+        let out = r.at(p, ToolEvent::DoubleClick);
+        assert_eq!(out.commands, vec![push_pull(r.face, 1.0)]);
+        // A retype that ran changes it, even if an undo follows before any other event.
+        let mut r = Rig::new();
+        r.at(p, ToolEvent::Click);
+        r.send(ToolEvent::Value("1".into()));
+        r.send(ToolEvent::Value("3".into()));
+        r.at(p, ToolEvent::Move);
+        r.tool.on_external_change();
+        let out = r.at(p, ToolEvent::DoubleClick);
+        assert_eq!(out.commands, vec![push_pull(r.face, 3.0)]);
     }
 
     #[test]

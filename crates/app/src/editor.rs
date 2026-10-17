@@ -2629,6 +2629,22 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_retype_keeps_the_double_click_distance() {
+        let mut e = editor();
+        assert!(e.add_material());
+        let material = e.current_material().unwrap();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        type_text(&mut e, "2");
+        e.recolor_material(material, [1, 2, 3]);
+        // Refused: no pull ran at 3, so a double-click still repeats 2.
+        type_text(&mut e, "3");
+        assert!((top(&e) - 2.0).abs() < 1e-9);
+        double_click_at(&mut e, DVec3::new(1.0, 1.0, 2.0));
+        assert!((top(&e) - 4.0).abs() < 1e-9, "top {}", top(&e));
+    }
+
+    #[test]
     fn an_array_after_another_step_undoes_nothing() {
         let mut e = editor();
         assert!(e.add_material());
