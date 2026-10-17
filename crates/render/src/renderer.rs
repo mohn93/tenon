@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 use crate::grid::{LineVertex, NIGHT_BACKGROUND, flat_ground_lines, vertical_axis_lines};
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
-use crate::scene::{BaseFaceVertex, CasterChunk, Spans, scene_base, shown_guides};
+use crate::scene::{BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base, shown_guides};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
 use crate::style::ViewStyle;
@@ -25,6 +25,9 @@ const FACE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
 const FLAG_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![2 => Float32];
+/// The hover flag of a face or edge vertex, from a third vertex buffer (1 hovered, 0 not).
+const FACE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![9 => Float32];
+const EDGE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![3 => Float32];
 
 /// The limits the renderer asks of a device: the defaults, with room for a cube shadow map per
 /// shadowed light (six array layers each) where the adapter has it.
@@ -138,6 +141,12 @@ struct LightingUniforms {
     /// The day canvas's top and bottom.
     canvas_top: [f32; 4],
     canvas_bottom: [f32; 4],
+    /// rgb: the color hovered faces are mixed toward; w: how far. Zero without a hover.
+    hover_face: [f32; 4],
+    /// Hovered edges and guides. Zero without a hover.
+    hover_edge: [f32; 4],
+    /// x: the step in pixels between the copies of a wide edge (see `vs_edge_wide`).
+    wide: [f32; 4],
     lights: [LightUniform; MAX_LIGHTS],
 }
 
@@ -159,6 +168,9 @@ impl LightingUniforms {
             lines: [0.0; 4],
             canvas_top: [0.0; 4],
             canvas_bottom: [0.0; 4],
+            hover_face: [0.0; 4],
+            hover_edge: [0.0; 4],
+            wide: [0.0; 4],
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
         for ((u, l), slot) in uniforms.lights.iter_mut().zip(used).zip(shadow_slots) {
@@ -200,6 +212,26 @@ fn background(mode: Lighting, style: &ViewStyle) -> [f32; 4] {
     }
 }
 
+/// How the hovered entity is shown: its faces mixed `face_mix` toward `face` (sRGB), its
+/// edges and guides in `edge`, edges about 2 pt wide where the style widens selected edges.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HoverLook {
+    pub face: [f32; 3],
+    pub face_mix: f32,
+    pub edge: [f32; 4],
+}
+
+/// Selected and hovered edges, in points, where the style widens them.
+const WIDE_EDGE_PT: f32 = 2.0;
+
+/// How a line `width` physical pixels wide is drawn from 1 px lines: the line, then copies
+/// `step` pixels apart across and up, `count` copies in all (half of them each way).
+fn spread(width: f32) -> (u32, f32) {
+    let extra = (width - 1.0).max(0.0);
+    let copies = extra.ceil().max(1.0);
+    (2 * copies as u32, extra / copies)
+}
+
 /// A rectangle of the render target in physical pixels, origin top-left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Viewport {
@@ -229,11 +261,12 @@ struct Targets {
 }
 
 /// A vertex buffer and how many vertices it holds, with, for model faces and edges, a second
-/// buffer holding each vertex's selection flag.
+/// buffer holding each vertex's selection flag and a third holding its hover flag.
 struct Mesh {
     buffer: wgpu::Buffer,
     count: u32,
     flags: Option<wgpu::Buffer>,
+    hover: Option<wgpu::Buffer>,
 }
 
 /// The triangles of `faces` with a see-through side, drawn after everything opaque.
@@ -336,7 +369,7 @@ pub struct Renderer {
     solid_side_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
-    /// Selected edges again, a pixel across and a pixel up, when the style widens them.
+    /// Selected and hovered edges again, across and up, when the style widens them.
     wide_edge_pipeline: wgpu::RenderPipeline,
     /// The day canvas's gradient, when the style has one.
     canvas_pipeline: wgpu::RenderPipeline,
@@ -378,6 +411,11 @@ pub struct Renderer {
     edges: Option<Mesh>,
     /// Whether any edge is selected, as of the last `set_selection`.
     edges_selected: bool,
+    /// The hovered entity and its look, as of the last `set_hover`, and where it lies.
+    hover: Option<(EntityId, HoverLook)>,
+    hover_ranges: Ranges,
+    /// Physical pixels per point, as of the last `set_pixels_per_point`.
+    pixels_per_point: f32,
     /// Where the open context's entities lie in `faces`, `edges` and `base_guides`.
     spans: Spans,
     /// Guides in root coordinates with nothing selected.
@@ -508,9 +546,22 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &FLAG_ATTRIBS,
         };
+        let hover_layout = |attributes| wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<f32>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes,
+        };
         let lines_only = [Some(line_layout.clone())];
-        let flagged_faces = [Some(face_layout), Some(flag_layout.clone())];
-        let flagged_lines = [Some(line_layout), Some(flag_layout)];
+        let flagged_faces = [
+            Some(face_layout),
+            Some(flag_layout.clone()),
+            Some(hover_layout(&FACE_HOVER_ATTRIBS)),
+        ];
+        let flagged_lines = [
+            Some(line_layout),
+            Some(flag_layout),
+            Some(hover_layout(&EDGE_HOVER_ATTRIBS)),
+        ];
         let tested = DepthUse {
             write: true,
             compare: wgpu::CompareFunction::GreaterEqual,
@@ -633,7 +684,7 @@ impl Renderer {
             },
             None,
         );
-        // Selected edges a second and third time, offset a pixel (see `vs_edge_wide`).
+        // Selected and hovered edges again, offset across and up (see `vs_edge_wide`).
         let wide_edge_pipeline = pipeline(
             "wide edges",
             "vs_edge_wide",
@@ -762,6 +813,9 @@ impl Renderer {
             glass: None,
             edges: None,
             edges_selected: false,
+            hover: None,
+            hover_ranges: Ranges::default(),
+            pixels_per_point: 1.0,
             spans: Spans::default(),
             base_guides: Vec::new(),
             guides: Vec::new(),
@@ -797,6 +851,9 @@ impl Renderer {
         self.guides = base.guides.clone();
         self.guide_flags = vec![false; base.guides.len()];
         self.edges_selected = false;
+        // The new flag buffers start at 0: nothing is hovered.
+        self.hover = None;
+        self.hover_ranges = Ranges::default();
         self.base_guides = base.guides;
         self.lights = base.lights;
         // Shadow maps are drawn again only when the casters move, not when, say, a group is
@@ -900,8 +957,58 @@ impl Renderer {
             }
         }
         self.edges_selected = flags.edges.iter().any(|&f| f > 0.5);
-        self.guides = shown_guides(&self.base_guides, &flags.guides, self.style.selected_edge);
         self.guide_flags = flags.guides;
+        self.refresh_guides();
+    }
+
+    /// Shows `hover` (an id of the open context given to the last `set_model`) from the next
+    /// frame; None shows nothing hovered. Only the old and new entity's flags are rewritten.
+    pub fn set_hover(&mut self, hover: Option<(EntityId, HoverLook)>) {
+        if hover == self.hover {
+            return;
+        }
+        let ranges = hover
+            .and_then(|(id, _)| self.spans.ranges(id))
+            .unwrap_or_default();
+        self.write_hover(&self.hover_ranges, 0.0);
+        self.write_hover(&ranges, 1.0);
+        self.hover = hover;
+        self.hover_ranges = ranges;
+        self.refresh_guides();
+    }
+
+    /// Sets the hover flags of `ranges` to `value`.
+    fn write_hover(&self, ranges: &Ranges, value: f32) {
+        for (mesh, range) in [(&self.faces, &ranges.faces), (&self.edges, &ranges.edges)] {
+            if let Some(buffer) = mesh.as_ref().and_then(|m| m.hover.as_ref())
+                && !range.is_empty()
+            {
+                let offset = (range.start * std::mem::size_of::<f32>()) as u64;
+                let flags = vec![value; range.len()];
+                self.queue
+                    .write_buffer(buffer, offset, bytemuck::cast_slice(&flags));
+            }
+        }
+    }
+
+    /// The guides with the selection and the hover shown.
+    fn refresh_guides(&mut self) {
+        self.guides = shown_guides(
+            &self.base_guides,
+            &self.guide_flags,
+            self.style.selected_edge,
+        );
+        if let Some((_, look)) = self.hover {
+            for g in &mut self.guides[self.hover_ranges.guides.clone()] {
+                g.color = look.edge;
+            }
+        }
+    }
+
+    /// Draws the frames from now on for a display of `scale` physical pixels per point, which
+    /// widths given in points are multiplied by. render_view and headless keep 1.
+    pub fn set_pixels_per_point(&mut self, scale: f32) {
+        self.pixels_per_point = scale;
     }
 
     /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
@@ -911,7 +1018,7 @@ impl Renderer {
             return;
         }
         self.style = style;
-        self.guides = shown_guides(&self.base_guides, &self.guide_flags, style.selected_edge);
+        self.refresh_guides();
     }
 
     /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything) over the
@@ -950,13 +1057,20 @@ impl Renderer {
             });
         let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
         let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
-        let lighting = LightingUniforms::new(
+        let mut lighting = LightingUniforms::new(
             &used,
             &shadow_slots,
             self.lighting,
             &self.style,
             (viewport.width, viewport.height),
         );
+        if let Some((_, look)) = self.hover {
+            let [r, g, b] = look.face;
+            lighting.hover_face = [r, g, b, look.face_mix];
+            lighting.hover_edge = look.edge;
+        }
+        let (wide_copies, wide_step) = spread(WIDE_EDGE_PT * self.pixels_per_point);
+        lighting.wide[0] = wide_step;
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         let targets = self.targets.as_ref().expect("targets just created");
@@ -1009,6 +1123,9 @@ impl Renderer {
                     if let Some(flags) = &mesh.flags {
                         pass.set_vertex_buffer(1, flags.slice(..));
                     }
+                    if let Some(hover) = &mesh.hover {
+                        pass.set_vertex_buffer(2, hover.slice(..));
+                    }
                 };
                 let draw = |pass: &mut wgpu::RenderPass, pipeline, mesh: Option<&Mesh>| {
                     if let Some(mesh) = mesh {
@@ -1036,12 +1153,13 @@ impl Renderer {
                     (faces, _) => draw(&mut pass, &self.face_pipeline, faces.as_ref()),
                 }
                 draw(&mut pass, &self.edge_pipeline, self.edges.as_ref());
+                let edges_hovered = !self.hover_ranges.edges.is_empty();
                 if self.style.wide_selected_edges
-                    && self.edges_selected
+                    && (self.edges_selected || edges_hovered)
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, &self.wide_edge_pipeline, edges);
-                    pass.draw(0..edges.count, 0..2);
+                    pass.draw(0..edges.count, 0..wide_copies);
                 }
                 draw(&mut pass, &self.guide_pipeline, guides.as_ref());
                 // See-through faces last but for the overlay: everything opaque shows through.
@@ -1142,23 +1260,28 @@ fn mesh<T: bytemuck::Pod>(device: &wgpu::Device, label: &str, vertices: &[T]) ->
         buffer,
         count: vertices.len() as u32,
         flags: None,
+        hover: None,
     })
 }
 
-/// Uploads vertices with a flag buffer beside them, every flag 0 (wgpu zeroes new buffers),
-/// or None when there are none to draw.
+/// Uploads vertices with selection and hover flag buffers beside them, every flag 0 (wgpu
+/// zeroes new buffers), or None when there are none to draw.
 fn flagged_mesh<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: &str,
     vertices: &[T],
 ) -> Option<Mesh> {
     let mut mesh = mesh(device, label, vertices)?;
-    mesh.flags = Some(device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (vertices.len() * std::mem::size_of::<f32>()) as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    }));
+    let flags = || {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (vertices.len() * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    mesh.flags = Some(flags());
+    mesh.hover = Some(flags());
     Some(mesh)
 }
 

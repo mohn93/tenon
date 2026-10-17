@@ -1155,3 +1155,122 @@ fn restyling_recolors_a_selected_guide() {
         "the guide turns green"
     );
 }
+
+const HOVER: render::HoverLook = render::HoverLook {
+    face: [1.0, 0.0, 1.0],
+    face_mix: 0.25,
+    edge: [1.0, 0.0, 1.0, 1.0],
+};
+
+/// Renders the ground square in `style` three times through one renderer: plain, with `hover`
+/// hovered, then with the hover cleared.
+fn hovered_frames(hover: EntityId, style: ViewStyle) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return None;
+    };
+    let cam = camera();
+    let mut r = screen.renderer();
+    r.set_scene(&Scene::from_root(ground_square()), &[], &BTreeSet::new());
+    r.set_style(style);
+    let frame = |r: &mut Renderer| screen.draw(r, &cam, Viewport::full((W, H)), &[]);
+    let plain = frame(&mut r);
+    r.set_hover(Some((hover, HOVER)));
+    let hovered = frame(&mut r);
+    r.set_hover(None);
+    let cleared = frame(&mut r);
+    Some((plain, hovered, cleared))
+}
+
+/// The positions of an edge's ends.
+fn edge_ends(model: &Model, edge: kernel::EdgeId) -> (DVec3, DVec3) {
+    let e = model.edge(edge).unwrap();
+    (
+        model.position(e.v[0]).unwrap(),
+        model.position(e.v[1]).unwrap(),
+    )
+}
+
+#[test]
+fn hovering_a_face_tints_it_toward_the_hover_color() {
+    let model = ground_square();
+    let face = model.faces().next().unwrap().0;
+    let Some((plain, hovered, cleared)) = hovered_frames(EntityId::Face(face), ViewStyle::CLASSIC)
+    else {
+        return;
+    };
+    let at = DVec3::new(0.5, 0.5, 0.0);
+    let (p, h) = (
+        pixel_at(&plain, &camera(), at),
+        pixel_at(&hovered, &camera(), at),
+    );
+    assert!(
+        h[0] > p[0] && h[2] > p[2] && h[1] < p[1],
+        "toward magenta: {p:?} -> {h:?}"
+    );
+    assert_eq!(
+        plain, cleared,
+        "clearing the hover draws what was drawn before"
+    );
+}
+
+#[test]
+fn a_hovered_edge_takes_the_hover_color_and_widens_where_selections_do() {
+    let model = ground_square();
+    let edge = model.edges().next().unwrap().0;
+    let len = {
+        let c = camera();
+        let (a, b) = edge_ends(&model, edge);
+        c.project(a).unwrap().distance(c.project(b).unwrap())
+    };
+    // CLASSIC never widens: the edge is drawn 1 px in the hover color.
+    let Some((plain, thin, cleared)) = hovered_frames(EntityId::Edge(edge), ViewStyle::CLASSIC)
+    else {
+        return;
+    };
+    assert_eq!(count(&plain, magenta), 0);
+    let thin = count(&thin, magenta);
+    assert!(thin > 0, "the hovered edge in the hover color");
+    assert_eq!(plain, cleared);
+    // A style that widens selected edges widens a hovered one, about 2 px.
+    let wide_style = ViewStyle {
+        wide_selected_edges: true,
+        ..ViewStyle::CLASSIC
+    };
+    let Some((_, wide, _)) = hovered_frames(EntityId::Edge(edge), wide_style) else {
+        return;
+    };
+    let wide = count(&wide, magenta);
+    assert!(wide as f64 > 1.6 * thin as f64, "{thin} -> {wide} pixels");
+    assert!(
+        wide as f64 > 1.6 * len,
+        "{wide} pixels for {len} px of edge"
+    );
+}
+
+#[test]
+fn a_new_model_drops_the_hover() {
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let cam = camera();
+    let square = ground_square();
+    let face = square.faces().next().unwrap().0;
+    let mut r = screen.renderer();
+    r.set_scene(&Scene::from_root(square), &[], &BTreeSet::new());
+    r.set_hover(Some((EntityId::Face(face), HOVER)));
+    // A model without that face: nothing hovered, nothing written out of range.
+    let empty = Scene::from_root(Model::new());
+    r.set_model(&empty, &[]);
+    let after = screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]);
+    r.set_hover(None);
+    let mut fresh = screen.renderer();
+    fresh.set_scene(&empty, &[], &BTreeSet::new());
+    let expected = screen.draw(&mut fresh, &cam, Viewport::full((W, H)), &[]);
+    assert_eq!(after, expected);
+    assert_eq!(
+        screen.draw(&mut r, &cam, Viewport::full((W, H)), &[]),
+        expected
+    );
+}

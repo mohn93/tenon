@@ -1154,6 +1154,8 @@ impl State {
         }
         // The view follows the panels' theme; render_view keeps its own renderer's classic look.
         self.renderer.set_style(theme::view_style(self.gui.theme()));
+        self.renderer
+            .set_pixels_per_point(self.window.scale_factor() as f32);
         self.renderer.set_lighting(doc.lighting);
         self.renderer.render_in(
             &target,

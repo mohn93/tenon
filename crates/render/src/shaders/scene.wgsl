@@ -37,6 +37,12 @@ struct Lighting {
     // The day canvas's top and bottom.
     canvas_top: vec4<f32>,
     canvas_bottom: vec4<f32>,
+    // rgb: the color hovered faces are mixed toward; w: how far. Zero without a hover.
+    hover_face: vec4<f32>,
+    // Hovered edges and guides.
+    hover_edge: vec4<f32>,
+    // x: the step in pixels between the copies of a wide edge.
+    wide: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -70,35 +76,49 @@ fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
 // Model edges: pulled toward the camera by 0.05% of clip depth, enough to win against the faces
 // they bound at this depth precision without showing through faces in front of them. A
 // selected edge (flag 1, from the second vertex buffer) is drawn in the style's selected-edge
-// color; the others fade toward the background as far as the lighting says.
+// color; the others fade toward the background as far as the lighting says. A hovered edge
+// (flag 1, from the third vertex buffer) is drawn in the hover color.
 @vertex
 fn vs_edge(
     @location(0) pos: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) selected: f32,
+    @location(3) hovered: f32,
 ) -> LineOut {
     return line_vertex(
         pos,
-        select(faded_line(color, lighting.lines.x), lighting.selected_edge, selected > 0.5),
+        select(
+            select(faded_line(color, lighting.lines.x), lighting.selected_edge, selected > 0.5),
+            lighting.hover_edge,
+            hovered > 0.5,
+        ),
         1.0005,
     );
 }
 
-// Selected edges drawn again one pixel across (instance 0) and one pixel up (instance 1), so
-// they read about 2 px wide; the other edges are moved outside the view and clipped away.
+// Selected and hovered edges drawn again, offset across (even instances) and up (odd ones) by
+// `lighting.wide.x` pixels per pair, so they read as wide as the instances span; the other
+// edges are moved outside the view and clipped away.
 @vertex
 fn vs_edge_wide(
     @location(0) pos: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) selected: f32,
+    @location(3) hovered: f32,
     @builtin(instance_index) k: u32,
 ) -> LineOut {
-    var out = line_vertex(pos, lighting.selected_edge, 1.0005);
-    if selected < 0.5 {
+    var out = line_vertex(
+        pos,
+        select(lighting.selected_edge, lighting.hover_edge, hovered > 0.5),
+        1.0005,
+    );
+    if selected < 0.5 && hovered < 0.5 {
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         return out;
     }
-    let pixel = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), k == 0u) / lighting.lines.zw;
+    let step = lighting.wide.x * f32(k / 2u + 1u);
+    let pixel = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), k % 2u == 0u) * step
+        / lighting.lines.zw;
     out.pos = vec4<f32>(out.pos.xy + pixel * out.pos.w, out.pos.zw);
     return out;
 }
@@ -168,9 +188,10 @@ struct FaceOut {
     @location(7) @interpolate(flat) layer: vec2<f32>,
     // 1 on a glowing front (x) or back (y) side.
     @location(8) @interpolate(flat) glow: vec2<f32>,
+    @location(9) @interpolate(flat) hovered: f32,
 };
 
-// `selected` (1 or 0) comes from the second vertex buffer.
+// `selected` (1 or 0) comes from the second vertex buffer, `hovered` from the third.
 @vertex
 fn vs_face(
     @location(0) pos: vec3<f32>,
@@ -182,6 +203,7 @@ fn vs_face(
     @location(6) uv: vec4<f32>,
     @location(7) layer: vec2<f32>,
     @location(8) glow: vec2<f32>,
+    @location(9) hovered: f32,
 ) -> FaceOut {
     var out: FaceOut;
     out.pos = u.view_proj * vec4<f32>(pos, 1.0);
@@ -194,6 +216,7 @@ fn vs_face(
     out.uv = uv;
     out.layer = layer;
     out.glow = glow;
+    out.hovered = hovered;
     return out;
 }
 
@@ -233,8 +256,9 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // behind), or its material's texture instead; ambient light, a headlight at the eye (from the
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
 // unshaded. Selected faces are tinted toward the style's color; unselected ones skip the mix so
-// their arithmetic stays exactly as before the tint came from a uniform. Call it before any
-// discard: the texture lookup needs every pixel of its quad.
+// their arithmetic stays exactly as before the tint came from a uniform. A hovered face is
+// mixed toward the hover color the same way. Call it before any discard: the texture lookup
+// needs every pixel of its quad.
 fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
@@ -244,11 +268,16 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let color = select(select(in.back_color, in.front_color, front), texel, layer >= 0.0);
     let tinted = mix(color, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
     let base = select(color, tinted, in.selected > 0.0);
+    let shown = select(
+        base,
+        mix(base, lighting.hover_face.rgb, lighting.hover_face.w),
+        in.hovered > 0.5,
+    );
     if select(in.glow.y, in.glow.x, front) > 0.5 {
-        return base;
+        return shown;
     }
     let shade = lighting.mode.y + lighting.mode.z * max(dot(n, to_eye), 0.0);
-    return base * (vec3<f32>(shade) + lamp_light(in.world, n));
+    return shown * (vec3<f32>(shade) + lamp_light(in.world, n));
 }
 
 // Opaque faces.

@@ -322,15 +322,7 @@ pub struct Spans {
     /// Each guide's index.
     guides: Vec<(GuideId, usize)>,
     /// Everything an instance places, at any depth.
-    instances: Vec<(InstanceId, Placed)>,
-}
-
-/// The vertices and guides an instance places, as ranges of a `SceneBase`'s lists.
-#[derive(Clone, Debug, PartialEq)]
-struct Placed {
-    faces: Range<usize>,
-    edges: Range<usize>,
-    guides: Range<usize>,
+    instances: Vec<(InstanceId, Ranges)>,
 }
 
 /// What a selection lights up in a `SceneBase`: a flag per face vertex and per edge vertex (1
@@ -342,7 +334,40 @@ pub struct Flags {
     pub guides: Vec<bool>,
 }
 
+/// Where one entity of the open context lies in a `SceneBase`'s lists (a group: all it places).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ranges {
+    pub faces: Range<usize>,
+    pub edges: Range<usize>,
+    pub guides: Range<usize>,
+}
+
 impl Spans {
+    /// Where `id`, an id of the open context the spans were built for, lies; None for ids not
+    /// found there and for vertices.
+    pub fn ranges(&self, id: EntityId) -> Option<Ranges> {
+        match id {
+            EntityId::Face(id) => find(&self.faces, id).map(|r| Ranges {
+                faces: r.clone(),
+                ..Ranges::default()
+            }),
+            EntityId::Edge(id) => find(&self.edges, id).map(|r| Ranges {
+                edges: r.clone(),
+                ..Ranges::default()
+            }),
+            EntityId::Guide(id) => find(&self.guides, id).map(|&k| Ranges {
+                guides: k..k + 1,
+                ..Ranges::default()
+            }),
+            EntityId::Instance(id) => find(&self.instances, id).map(|p| Ranges {
+                faces: p.faces.clone(),
+                edges: p.edges.clone(),
+                guides: p.guides.clone(),
+            }),
+            EntityId::Vertex(_) => None,
+        }
+    }
+
     /// The flags for `selection`, ids of the open context the spans were built for. Ids not
     /// found there, and vertices, light nothing.
     pub fn flags(&self, selection: &BTreeSet<EntityId>) -> Flags {
@@ -351,32 +376,10 @@ impl Spans {
             edges: vec![0.0; self.edge_vertices],
             guides: vec![false; self.guide_count],
         };
-        for id in selection {
-            match *id {
-                EntityId::Face(id) => {
-                    if let Some(r) = find(&self.faces, id) {
-                        f.faces[r.clone()].fill(1.0);
-                    }
-                }
-                EntityId::Edge(id) => {
-                    if let Some(r) = find(&self.edges, id) {
-                        f.edges[r.clone()].fill(1.0);
-                    }
-                }
-                EntityId::Guide(id) => {
-                    if let Some(&k) = find(&self.guides, id) {
-                        f.guides[k] = true;
-                    }
-                }
-                EntityId::Instance(id) => {
-                    if let Some(p) = find(&self.instances, id) {
-                        f.faces[p.faces.clone()].fill(1.0);
-                        f.edges[p.edges.clone()].fill(1.0);
-                        f.guides[p.guides.clone()].fill(true);
-                    }
-                }
-                EntityId::Vertex(_) => {}
-            }
+        for r in selection.iter().filter_map(|&id| self.ranges(id)) {
+            f.faces[r.faces].fill(1.0);
+            f.edges[r.edges].fill(1.0);
+            f.guides[r.guides].fill(true);
         }
         f
     }
@@ -796,7 +799,7 @@ impl Walk<'_> {
             );
             self.path.pop();
             if open {
-                let placed = Placed {
+                let placed = Ranges {
                     faces: start.0..self.base.faces.len(),
                     edges: start.1..self.base.edges.len(),
                     guides: start.2..self.base.guides.len(),
@@ -2036,6 +2039,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ranges_match_the_flags_of_a_one_entity_selection() {
+        let (s, contexts) = forest();
+        // The root holds the guide and the instances; the tree, faces and edges.
+        let mut kinds = BTreeSet::new();
+        for context in &contexts[..2] {
+            let spans = scene_base(&s, context).spans;
+            let ids = [
+                spans.faces.first().map(|f| EntityId::Face(f.0)),
+                spans.edges.first().map(|e| EntityId::Edge(e.0)),
+                spans.guides.first().map(|g| EntityId::Guide(g.0)),
+                spans.instances.first().map(|i| EntityId::Instance(i.0)),
+            ];
+            for (kind, id) in ids.into_iter().enumerate() {
+                let Some(id) = id else { continue };
+                kinds.insert(kind);
+                let r = spans.ranges(id).expect("an entity of the open context");
+                let mut f = spans.flags(&BTreeSet::new());
+                f.faces[r.faces].fill(1.0);
+                f.edges[r.edges].fill(1.0);
+                f.guides[r.guides].fill(true);
+                assert_eq!(f, spans.flags(&BTreeSet::from([id])), "{id:?}");
+            }
+            let unknown = EntityId::Instance(InstanceId(u64::MAX));
+            assert_eq!(spans.ranges(unknown), None);
+        }
+        assert_eq!(kinds.len(), 4, "a face, an edge, a guide and an instance");
+        let (mesh, _) = s.resolve(&contexts[1]).unwrap();
+        let vertex = s.mesh(mesh).unwrap().vertices().next().unwrap().0;
+        let spans = scene_base(&s, &contexts[1]).spans;
+        assert_eq!(spans.ranges(EntityId::Vertex(vertex)), None);
     }
 
     #[test]
