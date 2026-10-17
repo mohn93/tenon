@@ -8,17 +8,18 @@ use std::time::Instant;
 
 use api::Mods;
 use glam::{DAffine3, DVec2, DVec3};
-use kernel::{EntityId, InstanceId, MaterialId};
+use kernel::{DefinitionKind, EntityId, InstanceId, MaterialId};
 use render::grid::LineVertex;
 pub use session::ImportUnits;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Lighting, Outcome,
     Projection, SelectMode, StandardView, TextureSource,
 };
-use tools::overlay::overlay;
+use tools::overlay::{overlay, snap_label};
 use tools::{
-    Axis, Guides, Inference, Layout, Lock, Remembered, Scenery, Slab, SnapKind, Tool, ToolContext,
-    ToolEvent, ToolKind, ToolOutput, edge_under_in, face_under_in, infer_in,
+    Axis, Guides, Inference, Layout, Lock, Owner, Remembered, Scenery, Slab, SnapKind, Tool,
+    ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in, face_under_in,
+    infer_detail,
 };
 
 use crate::fly::{self, Fly, FlyKey};
@@ -105,6 +106,8 @@ pub struct Editor {
     shift_lock: bool,
     cursor: DVec2,
     hit: Option<Inference>,
+    /// Where the geometry `hit` snapped to lies, for the snap label.
+    within: Within,
     preview: Vec<[DVec3; 2]>,
     /// The inference under the cursor, the tool preview and what the tool shows of them are
     /// out of date. Input that may change them only sets this; they are worked out again once,
@@ -193,6 +196,7 @@ impl Editor {
             shift_lock: false,
             cursor: DVec2::ZERO,
             hit: None,
+            within: Within::Open,
             preview: Vec::new(),
             hover_dirty: false,
             hover_hidden: false,
@@ -1273,6 +1277,27 @@ impl Editor {
         }
     }
 
+    /// What a click would act on now (Select, Push/Pull, Paint, Erase), as of the last
+    /// `refresh_hover`: an id of the open context. None while flying, with the cursor outside
+    /// the view, and for the other tools.
+    pub fn hovered(&self) -> Option<EntityId> {
+        if self.flying || self.hover_hidden {
+            return None;
+        }
+        self.tool.hovered()
+    }
+
+    /// The name of the snap under the cursor, e.g. "Endpoint" or "Midpoint in Group", as of
+    /// the last `refresh_hover`. None in Select (which shows no marker), while flying, and
+    /// when there is no snap to name.
+    pub fn snap_label(&self) -> Option<String> {
+        if self.kind == ToolKind::Select || self.flying {
+            return None;
+        }
+        let hit = self.hit?;
+        snap_label(hit.kind, self.within)
+    }
+
     /// Line pairs for the renderer's overlay pass, as of the last `refresh_hover`. Tools work
     /// in the open context's coordinates; the overlay is drawn in the root's.
     pub fn overlay(&self) -> Vec<LineVertex> {
@@ -1538,7 +1563,14 @@ impl Editor {
             reference: self.reference,
             lock: self.lock,
         };
-        let hit = infer_in(&scenery, &camera, self.cursor, &guides, radius);
+        let (hit, involved) = infer_detail(&scenery, &camera, self.cursor, &guides, radius);
+        let within = involved
+            .first()
+            .map_or(Within::Open, |&(k, _)| match scenery.part(k).owner {
+                Owner::Open => Within::Open,
+                Owner::Outside => Within::Outside,
+                Owner::Instance(i) => self.instance_within(i),
+            });
         // The edge the cursor rests on (anywhere) becomes the reference for direction snaps.
         let reference = edge_under_in(&scenery, &camera, self.cursor, radius)
             .and_then(|(_, _, a, b)| (b - a).try_normalize());
@@ -1559,10 +1591,27 @@ impl Editor {
         };
         let out = self.tool.handle(ToolEvent::Move(hit), &ctx);
         let hit = (!self.hover_hidden).then_some(hit);
-        let changed = self.hit != hit || self.preview != out.preview;
+        let changed = self.hit != hit || self.within != within || self.preview != out.preview;
         self.hit = hit;
+        self.within = within;
         self.preview = out.preview;
         changed
+    }
+
+    /// Where geometry placed by instance `i` of the open context lies: in a group or in a
+    /// component, by its definition's kind.
+    fn instance_within(&self, i: InstanceId) -> Within {
+        let kind = self
+            .doc
+            .model()
+            .instance(i)
+            .and_then(|inst| self.doc.scene().definition(inst.definition))
+            .map(|d| d.kind);
+        match kind {
+            Some(DefinitionKind::Group) => Within::Group,
+            Some(DefinitionKind::Component) => Within::Component,
+            None => Within::Open,
+        }
     }
 }
 
@@ -1639,6 +1688,7 @@ fn export_message(path: &Path, skipped: usize) -> String {
 mod tests {
     use super::*;
     use session::{Query, QueryResult};
+    use tools::infer_in;
 
     fn editor() -> Editor {
         Editor::new(DVec2::new(800.0, 600.0), 1.25)
@@ -4176,5 +4226,40 @@ mod tests {
         e.set_modifiers(false, false);
         e.toggle_fly();
         assert!(!e.status().contains("Locked"));
+    }
+
+    #[test]
+    fn an_agent_edit_drops_the_highlight_until_the_next_frame() {
+        let mut e = editor();
+        square(&mut e);
+        e.select_tool(ToolKind::Erase);
+        // `square` draws 1..3 on both axes: the face's middle.
+        move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.refresh_hover();
+        let face = e.hovered().expect("the face");
+        e.execute(Command::Erase { ids: vec![face] }).unwrap();
+        assert_eq!(
+            e.hovered(),
+            None,
+            "nothing stale between the edit and the next frame"
+        );
+    }
+
+    #[test]
+    fn the_hover_and_the_snap_label_hide_while_flying_and_outside_the_view() {
+        let mut e = editor();
+        square(&mut e);
+        e.select_tool(ToolKind::Erase);
+        move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.refresh_hover();
+        assert!(e.hovered().is_some());
+        e.cursor_left();
+        assert_eq!(e.hovered(), None, "the cursor left the view");
+        e.select_tool(ToolKind::Line);
+        move_to(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        e.refresh_hover();
+        assert_eq!(e.snap_label().as_deref(), Some("Endpoint"));
+        e.toggle_fly();
+        assert_eq!(e.snap_label(), None, "no label while flying");
     }
 }

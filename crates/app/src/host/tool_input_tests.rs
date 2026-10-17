@@ -932,3 +932,48 @@ fn a_failed_drag_leaves_a_press_made_before_it() {
         "{r}"
     );
 }
+
+#[test]
+fn results_report_the_hovered_target_and_the_snap_label() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    let r = input(&mut e, json!([{"type": "move", "point": [1, 1, 0]}]));
+    assert!(
+        r["editor"]["hovered"].as_str().unwrap().starts_with('f'),
+        "{r}"
+    );
+    tool(&mut e, "line");
+    let r = input(&mut e, json!([{"type": "move", "point": [0, 0, 0]}]));
+    assert_eq!(r["editor"]["snap_label"], "Endpoint", "{r}");
+    assert_eq!(r["editor"]["hovered"], Value::Null);
+    tool(&mut e, "select");
+    let r = input(&mut e, json!([{"type": "move", "point": [2, 1, 0]}]));
+    assert_eq!(
+        r["editor"]["snap_label"],
+        Value::Null,
+        "Select names no snap"
+    );
+    assert!(
+        r["inference"].is_object(),
+        "Select still reports the inference: {r}"
+    );
+    assert!(
+        r["editor"]["hovered"].as_str().unwrap().starts_with('e'),
+        "{r}"
+    );
+    assert_eq!(
+        ask(&mut e, json!({"type": "editor"}))["hovered"],
+        r["editor"]["hovered"]
+    );
+}
+
+#[test]
+fn a_snap_inside_a_group_says_so() {
+    let mut e = editor();
+    let face = square(&mut e);
+    exec(&mut e, json!({"type": "make_group", "ids": [face]}));
+    tool(&mut e, "line");
+    let r = input(&mut e, json!([{"type": "move", "point": [1, 0, 0]}]));
+    assert_eq!(r["editor"]["snap_label"], "Midpoint in Group", "{r}");
+}

@@ -2,7 +2,7 @@
 //! the material the Paint tool paints with, the units imports are read in, fly mode, the
 //! status bar and the measurements box.
 
-use kernel::MaterialId;
+use kernel::{EntityId, MaterialId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use session::ImportUnits;
@@ -119,6 +119,12 @@ pub struct EditorState {
     pub dialog: Option<Dialog>,
     /// The modifier keys held: the user's in the window and those `tool_input` holds.
     pub modifiers: crate::input::Mods,
+    /// What a click would act on now (Select, Push/Pull, Paint, Erase): an id of the open
+    /// context; null otherwise.
+    pub hovered: Option<EntityId>,
+    /// The snap the window names by the cursor, e.g. "Endpoint" or "Midpoint in Group"; null
+    /// when there is none (always in Select).
+    pub snap_label: Option<String>,
 }
 
 /// Commands that set the editor rather than the model: no undo step, no revision. `execute`

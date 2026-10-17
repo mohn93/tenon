@@ -338,6 +338,8 @@ pub fn editor_state(editor: &Editor) -> EditorState {
         soften_angle: soften_angle.into(),
         dialog: soften_open.then_some(Dialog::SoftenEdges),
         modifiers: editor.modifiers(),
+        hovered: editor.hovered(),
+        snap_label: editor.snap_label(),
     }
 }
 

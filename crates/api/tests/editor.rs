@@ -42,6 +42,8 @@ impl Editing {
                 soften_angle: 20,
                 dialog: None,
                 modifiers: Mods::default(),
+                hovered: None,
+                snap_label: None,
             },
             quit: false,
             events: Vec::new(),
