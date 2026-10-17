@@ -254,14 +254,22 @@ fn every_material_is_reachable_by_scrolling() {
         let top = rect_of(&h, "Materials").max.y;
         let divider = rect_of(&h, "Resize Outliner").min.y;
         assert!(rect_of(&h, "Default").min.y >= top, "the list starts shown");
+        // The material controls follow the grid, so the last tile shows on the way down
+        // rather than at the end.
         let over_top = Pos2::new(1200.0, rect_of(&h, "Default").center().y);
-        for _ in 0..10 {
-            wheel(&mut h, over_top, -400.0);
+        let mut seen = Vec::new();
+        for _ in 0..40 {
+            wheel(&mut h, over_top, -50.0);
+            let last = rect_of(&h, "Material 39");
+            seen.push(last);
+            if last.min.y >= top && last.max.y <= divider {
+                break;
+            }
         }
-        let last = rect_of(&h, "Material 39");
+        let last = *seen.last().unwrap();
         assert!(
             last.min.y >= top && last.max.y <= divider,
-            "the last material shows above the divider at {divider} at {height} points: {last:?}"
+            "the last material shows above the divider at {divider} at {height} points: {seen:?}"
         );
     }
 }

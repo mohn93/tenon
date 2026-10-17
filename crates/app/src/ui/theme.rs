@@ -161,6 +161,9 @@ pub const SECTION_SIZE: f32 = 11.0;
 /// The gap above a section title.
 pub const SECTION_GAP: f32 = 12.0;
 pub const SWATCH_SIZE: f32 = 16.0;
+/// A material tile's side in the Materials grid, and the gap between tiles.
+pub const TILE: f32 = 56.0;
+pub const TILE_GAP: f32 = 8.0;
 /// Icon glyphs in buttons.
 pub const ICON_SIZE: f32 = 16.0;
 /// The tool rail's width, its buttons' side, their glyph size, and the gap between groups.

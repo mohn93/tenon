@@ -17,14 +17,18 @@ fn two_materials() -> Fixture {
     }
 }
 
-/// Brick, chosen, with `texture`.
+/// Brick, chosen, with `texture`; the top area at its tallest, so the texture's fields show
+/// under the grid without scrolling.
 fn brick_with(texture: Option<TextureRow>) -> Fixture {
     let mut row = brick();
     row.texture = texture;
     Fixture {
         materials: vec![row],
         material: Some(MaterialId(31)),
-        dock: super::layout::materials_tab(),
+        dock: DockLayout {
+            split: *crate::ui::dock::SPLIT.end(),
+            ..super::layout::materials_tab()
+        },
         ..Default::default()
     }
 }
@@ -276,15 +280,41 @@ fn sections_are_titled_and_the_chosen_material_and_color_are_marked() {
         "the material's color"
     );
     assert_eq!(is_on(&h, &palette_label(MATERIAL_PALETTE[0])), Some(false));
-    assert_eq!(is_on(&h, "Brick color"), Some(true), "the chosen material");
-    assert_eq!(is_on(&h, "Default color"), Some(false));
+    assert_eq!(is_on(&h, "Brick"), Some(true), "the chosen material");
+    assert_eq!(is_on(&h, "Default"), Some(false));
+    h.get_by_label("Edit material");
+    let h = harness(Fixture {
+        material: None,
+        ..brick_with(None)
+    });
+    assert!(h.query_by_label("Edit material").is_none(), "the default");
 }
 
 #[test]
-fn a_material_swatch_chooses_it() {
+fn double_clicking_a_tile_paints_with_it() {
     let mut h = harness(two_materials());
+    let glass = rect_of(&h, "Glass").center();
     assert_eq!(
-        click(&mut h, "Glass color"),
+        click_at(&mut h, glass, egui::Modifiers::NONE),
         [UiAction::ChooseMaterial(Some(MaterialId(32)))]
     );
+    assert_eq!(
+        click_at(&mut h, glass, egui::Modifiers::NONE),
+        [UiAction::PaintWithMaterial(Some(MaterialId(32)))]
+    );
+}
+
+#[test]
+fn the_grid_fits_its_columns_to_the_dock() {
+    use crate::ui::materials::grid_columns;
+    assert_eq!(grid_columns(216.0), 3); // 240 dock less its margins
+    assert_eq!(grid_columns(256.0), 4); // the default 280
+    assert_eq!(grid_columns(396.0), 6); // 420
+    assert_eq!(grid_columns(10.0), 1);
+    let h = harness(super::layout::crowded(3));
+    let row: Vec<f32> = (0..3)
+        .map(|k| rect_of(&h, &format!("Material {k}")).min.y)
+        .collect();
+    assert_eq!(row[0], row[1], "side by side");
+    assert_eq!(rect_of(&h, "Material 0").width(), theme::TILE);
 }

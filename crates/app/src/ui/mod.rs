@@ -58,8 +58,10 @@ pub enum UiAction {
     SetProjection(Projection),
     /// Light the view by day or by night.
     SetLighting(Lighting),
-    /// Paint with this material (None: the default material), switching to the Paint tool.
+    /// Choose the material to paint with (None: the default material), keeping the tool.
     ChooseMaterial(Option<MaterialId>),
+    /// Choose the material and the Paint tool (a material tile double-clicked).
+    PaintWithMaterial(Option<MaterialId>),
     AddMaterial,
     DeleteMaterial(MaterialId),
     RenameMaterial(MaterialId, String),

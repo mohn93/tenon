@@ -76,6 +76,22 @@ fn a_swatch_is_named_and_marked_when_chosen() {
     });
     assert_eq!(is_on(&h, "Brick color"), Some(true));
     assert_eq!(is_on(&h, "Glass color"), Some(false));
+    // A material's tile: a TILE square with its name under it.
+    let h = kit(|ui| {
+        widgets::material_tile(ui, Fill::Color(egui::Color32::RED), "Brick", true);
+        widgets::material_tile(ui, Fill::Color(egui::Color32::BLUE), "Glass", false);
+    });
+    assert_eq!(is_on(&h, "Brick"), Some(true));
+    assert_eq!(is_on(&h, "Glass"), Some(false));
+    let tile = rect_of_any(&h, "Brick");
+    assert_eq!(tile.width(), theme::TILE);
+    assert!(tile.height() > theme::TILE, "a caption under the square");
+    assert!(drawn_texts_of(&h).iter().any(|t| t == "Brick"));
+}
+
+/// Where the widget named `label` is, in any harness.
+fn rect_of_any<S>(h: &Harness<'_, S>, label: &str) -> Rect {
+    h.get_by_label(label).rect()
 }
 
 #[test]

@@ -202,6 +202,59 @@ pub enum Fill {
     Image(egui::TextureId),
 }
 
+/// A material's tile in the Materials grid: a `TILE` square of its color or image, ringed in
+/// the accent when `chosen`, with its name under it in small secondary text, cut short with
+/// "…" to the tile's width. Clicked or double-clicked; named `name`.
+pub fn material_tile(ui: &mut Ui, fill: Fill, name: &str, chosen: bool) -> Response {
+    let t = theme::tokens(ui.ctx().theme());
+    let mut job = egui::text::LayoutJob::single_section(
+        name.to_owned(),
+        egui::TextFormat::simple(
+            egui::FontId::proportional(theme::SMALL_SIZE),
+            t.text_secondary,
+        ),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: theme::TILE,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let caption = ui.fonts_mut(|f| f.layout_job(job));
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(theme::TILE, theme::TILE + caption.size().y),
+        Sense::click(),
+    );
+    let square = egui::Rect::from_min_size(rect.min, Vec2::splat(theme::TILE));
+    let radius = CornerRadius::same(theme::SWATCH_RADIUS);
+    match fill {
+        Fill::Color(color) => {
+            ui.painter().rect_filled(square, radius, color);
+        }
+        Fill::Image(image) => egui::Image::new((image, square.size()))
+            .corner_radius(radius)
+            .paint_at(ui, square),
+    }
+    ui.painter().rect_stroke(
+        square,
+        radius,
+        Stroke::new(1.0, t.border),
+        StrokeKind::Inside,
+    );
+    if chosen {
+        ui.painter().rect_stroke(
+            square,
+            radius,
+            Stroke::new(theme::FOCUS_RING, t.accent),
+            StrokeKind::Outside,
+        );
+    }
+    ui.painter()
+        .galley(square.left_bottom(), caption, t.text_secondary);
+    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, chosen, name));
+    response
+}
+
 /// A small square of a color or an image that can be clicked, ringed in the accent when
 /// `selected`. Named `label`.
 pub fn swatch(ui: &mut Ui, fill: Fill, label: &str, selected: bool) -> Response {

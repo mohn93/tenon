@@ -363,9 +363,25 @@ impl Editor {
             .filter(|m| self.doc.scene().material(*m).is_some())
     }
 
-    /// Makes `material` the one to paint with and switches to the Paint tool.
+    /// Makes `material` (None: the default material) the one to paint with, keeping the tool
+    /// and what it is doing, as the API's `set_paint_material` does. False for a material the
+    /// model does not have (the status says so).
     pub fn choose_material(&mut self, material: Option<MaterialId>) -> bool {
-        self.material = material;
+        match self.set_paint_material(material) {
+            Ok(()) => true,
+            Err(e) => {
+                self.message = Some(e.message);
+                false
+            }
+        }
+    }
+
+    /// Chooses `material`, then the Paint tool unless it is active (the API's
+    /// `set_paint_material`, then `set_tool` with `paint`).
+    pub fn paint_with(&mut self, material: Option<MaterialId>) -> bool {
+        if !self.choose_material(material) {
+            return false;
+        }
         if self.kind != ToolKind::Paint {
             self.select_tool(ToolKind::Paint);
         }
@@ -373,7 +389,7 @@ impl Editor {
     }
 
     /// Adds a material named "Material" (numbered when taken) in the next palette color and
-    /// chooses it. False if it could not be added (the status says why).
+    /// chooses it, keeping the tool. False if it could not be added (the status says why).
     pub fn add_material(&mut self) -> bool {
         let count = self.doc.scene().materials().count();
         let color = MATERIAL_PALETTE[count % MATERIAL_PALETTE.len()];
@@ -3829,6 +3845,26 @@ mod tests {
         assert!(e.status().contains("needs a name"), "{}", e.status());
         e.delete_material(second);
         assert_eq!(e.current_material(), None);
+    }
+
+    #[test]
+    fn choosing_a_material_keeps_the_tool_and_its_operation() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Rectangle);
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0)); // the first corner
+        let prompt = e.status_parts().prompt;
+        e.add_material();
+        let added = e.current_material();
+        assert!(added.is_some());
+        assert_eq!(e.tool_kind(), ToolKind::Rectangle, "adding keeps the tool");
+        e.choose_material(None);
+        assert_eq!(e.tool_kind(), ToolKind::Rectangle);
+        assert_eq!(e.status_parts().prompt, prompt, "the operation goes on");
+        e.paint_with(added);
+        assert_eq!(
+            (e.tool_kind(), e.current_material()),
+            (ToolKind::Paint, added)
+        );
     }
 
     /// A 2 x 1 pixel PNG: a red pixel, then a blue one.

@@ -835,6 +835,9 @@ impl State {
             UiAction::ChooseMaterial(material) => {
                 self.editor.choose_material(material);
             }
+            UiAction::PaintWithMaterial(material) => {
+                self.editor.paint_with(material);
+            }
             UiAction::AddMaterial => {
                 self.editor.add_material();
             }

@@ -1,10 +1,10 @@
 //! The Materials list and its controls.
 
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, RichText, Ui, Vec2};
 use session::MaterialId;
 
 use super::widgets::{self, Fill, take_row};
-use super::{MaterialRow, UiAction, View};
+use super::{MaterialRow, UiAction, View, theme};
 use crate::editor::MATERIAL_PALETTE;
 
 /// The default material's swatch: its front color.
@@ -19,37 +19,52 @@ fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
-/// The Materials list: the default material and every material, the one painted with
-/// highlighted (clicking one chooses it and the Paint tool); Add and Delete; and for the
-/// chosen material its name (renamed on Enter or leaving the field), colors to pick from and
-/// its opacity (set when a drag of the slider ends). The dock's Materials tab (the tab is its
-/// title); the dock's top area scrolls it.
+/// How many `TILE` columns, `TILE_GAP` apart, fit `width` points (at least one).
+pub(super) fn grid_columns(width: f32) -> usize {
+    ((width + theme::TILE_GAP) / (theme::TILE + theme::TILE_GAP))
+        .floor()
+        .max(1.0) as usize
+}
+
+/// The Materials grid: a tile for the default material and each material, the one painted
+/// with ringed. A click chooses a material, keeping the tool; a double-click also takes the
+/// Paint tool. Then Add and Delete, and under "Edit material" the chosen material's name
+/// (renamed on Enter or leaving the field), colors to pick from and its opacity (set when a
+/// drag of the slider ends). The dock's Materials tab (the tab is its title); the dock's top
+/// area scrolls it.
 pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     end_texture_size_edit(ui, view.material, actions);
-    let rows = std::iter::once((None, "Default", Fill::Color(DEFAULT_SWATCH))).chain(
-        view.materials.iter().map(|m| {
-            let fill = match &m.texture {
-                Some(t) => Fill::Image(t.swatch),
-                None => Fill::Color(rgb(m.color)),
-            };
-            (Some(m.id), m.name.as_str(), fill)
-        }),
-    );
-    for (id, name, fill) in rows {
-        ui.horizontal(|ui| {
-            let chosen = view.material == id;
-            let picked = widgets::swatch(ui, fill, &format!("{name} color"), chosen).clicked();
-            // Cut short, not wider than the panel: a wide row would push it aside.
-            let label = ui.add(egui::Button::selectable(chosen, name).truncate());
-            if picked || label.clicked() {
-                actions.push(UiAction::ChooseMaterial(id));
-            }
-        });
-    }
+    let tiles: Vec<(Option<MaterialId>, &str, Fill)> =
+        std::iter::once((None, "Default", Fill::Color(DEFAULT_SWATCH)))
+            .chain(view.materials.iter().map(|m| {
+                let fill = match &m.texture {
+                    Some(t) => Fill::Image(t.swatch),
+                    None => Fill::Color(rgb(m.color)),
+                };
+                (Some(m.id), m.name.as_str(), fill)
+            }))
+            .collect();
+    let columns = grid_columns(ui.available_width());
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::splat(theme::TILE_GAP);
+        for row in tiles.chunks(columns) {
+            ui.horizontal(|ui| {
+                for &(id, name, fill) in row {
+                    let tile = widgets::material_tile(ui, fill, name, view.material == id);
+                    if tile.double_clicked() {
+                        actions.push(UiAction::PaintWithMaterial(id));
+                    } else if tile.clicked() {
+                        actions.push(UiAction::ChooseMaterial(id));
+                    }
+                }
+            });
+        }
+    });
     material_controls(ui, view, actions);
 }
 
-/// Add and Delete, and the chosen material's name, colors, sliders and texture.
+/// Add and Delete, and under "Edit material" the chosen material's name, colors, sliders and
+/// texture.
 fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.horizontal(|ui| {
         if ui.button("Add").clicked() {
@@ -70,6 +85,7 @@ fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     else {
         return;
     };
+    widgets::section_header(ui, "Edit material");
     // The name being typed lives in egui's memory until the field loses focus.
     let key = egui::Id::new(("material-name", m.id.0));
     let mut text = ui
