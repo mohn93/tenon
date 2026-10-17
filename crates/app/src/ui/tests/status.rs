@@ -60,3 +60,21 @@ fn locks_are_colored_for_their_axis() {
     assert_eq!(lock_color("Locked: blue axis", accent), theme::AXIS_Z);
     assert_eq!(lock_color("Locked: parallel", accent), accent);
 }
+
+#[test]
+fn a_long_prompt_leaves_the_lock_pill_clear_of_the_measurements_box() {
+    let mut f = Fixture {
+        selection: faces(&[3]).into_iter().collect(),
+        ..Default::default()
+    };
+    f.status.prompt = "Click to start a line, or type a length and press Enter; ".repeat(4);
+    f.status.lock = Some("Locked: red axis");
+    let h = harness_sized(f, Vec2::new(960.0, 600.0));
+    let pill = rect_of(&h, "Locked: red axis");
+    let length = rect_of(&h, "Length");
+    assert!(
+        pill.max.x <= length.min.x,
+        "the pill {pill:?} overlaps the box {length:?}"
+    );
+    assert!(pill.min.x >= rect_of(&h, "Tool: Line").max.x);
+}

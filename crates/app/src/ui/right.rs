@@ -1,66 +1,14 @@
-//! Entity Info and the right panel that holds it, the Materials list and the Outliner.
+//! Entity Info: what is selected, the Soft checkbox for edges and the texture position for
+//! faces.
 
 use egui::Ui;
 use kernel::EntityId;
 
-use super::materials::materials;
-use super::outliner::outliner;
 use super::widgets::{self, take_row};
 use super::{TexturePosition, UiAction, View};
 
-/// The Materials list shows whole rows, at most this many and at least `MATERIAL_ROWS_MIN`.
-pub(super) const MATERIAL_ROWS_MAX: usize = 8;
-pub(super) const MATERIAL_ROWS_MIN: usize = 2;
-/// The Outliner keeps room for at least this many rows.
-pub(super) const OUTLINER_ROWS_MIN: usize = 5;
-
-/// A list row's height and the gap under it: the rows are controls.
-pub(super) fn row_pitch(style: &egui::Style) -> f32 {
-    style.spacing.interact_size.y + style.spacing.item_spacing.y
-}
-
-/// What the last frame measured of the right panel's fixed parts, in points.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct Measured {
-    /// From the panel's top to the Materials list: Entity Info and the Materials title.
-    pub above_list: f32,
-    /// From under the Materials list to the Outliner's list: the material's controls and the
-    /// Outliner's title.
-    pub below_list: f32,
-}
-
-fn measured_id() -> egui::Id {
-    egui::Id::new("right-panel-measured")
-}
-
-pub(super) fn measured(ctx: &egui::Context) -> Measured {
-    ctx.data(|d| d.get_temp(measured_id())).unwrap_or_default()
-}
-
-/// The least height the panel lays out in: its fixed parts and both lists' least rows.
-pub(super) fn least_height(ui: &Ui) -> f32 {
-    let m = measured(ui.ctx());
-    let rows = (MATERIAL_ROWS_MIN + OUTLINER_ROWS_MIN) as f32;
-    m.above_list + m.below_list + rows * row_pitch(ui.style())
-}
-
-/// Keeps this frame's measurement. When it moved, egui lays the frame out again at once with
-/// it (a discarded pass, not a repaint), so nothing is drawn from a stale measure.
-fn remember(ui: &Ui, now: Measured) {
-    let last = measured(ui.ctx());
-    let moved = (now.above_list - last.above_list).abs() > 0.5
-        || (now.below_list - last.below_list).abs() > 0.5;
-    if moved {
-        ui.data_mut(|d| d.insert_temp(measured_id(), now));
-        ui.ctx()
-            .request_discard("the right panel measured its sections");
-    }
-}
-
-/// Entity Info, the Materials list and the Outliner.
-pub(super) fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
-    let top = ui.cursor().top();
-    widgets::section_header(ui, "Entity Info");
+/// Entity Info, the dock's first tab (the tab is its title).
+pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     for line in view.info {
         ui.label(line);
     }
@@ -78,17 +26,6 @@ pub(super) fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
         Some(t) => texture_position(ui, t, actions),
         None => end_texture_position_edit(ui, actions),
     }
-    ui.separator();
-    let (list_top, list_bottom) = materials(ui, view, actions);
-    ui.separator();
-    let outliner_list = outliner(ui, view, actions);
-    remember(
-        ui,
-        Measured {
-            above_list: list_top - top,
-            below_list: outliner_list - list_bottom,
-        },
-    );
 }
 
 /// After the texture position fields go away (the selection is no longer only faces) with an

@@ -769,6 +769,19 @@ impl State {
         }
     }
 
+    /// Writes the preferences, when the window has a prefs file. A failed save leaves the
+    /// change for this session, with a warning.
+    fn save_prefs(&self) {
+        if let Some(path) = &self.prefs_path
+            && let Err(e) = prefs::save(path, &self.prefs)
+        {
+            eprintln!(
+                "warning: cannot save the preferences to {}: {e}",
+                path.display()
+            );
+        }
+    }
+
     fn apply(&mut self, action: UiAction) {
         match action {
             UiAction::NewModel => self.new_model(),
@@ -866,14 +879,12 @@ impl State {
             UiAction::SetTheme(choice) => {
                 self.prefs.theme = choice;
                 self.gui.set_theme(choice);
-                // A failed save leaves the choice for this session.
-                if let Some(path) = &self.prefs_path
-                    && let Err(e) = prefs::save(path, &self.prefs)
-                {
-                    eprintln!(
-                        "warning: cannot save the preferences to {}: {e}",
-                        path.display()
-                    );
+                self.save_prefs();
+            }
+            UiAction::SetDock(dock) => {
+                if self.prefs.dock != dock {
+                    self.prefs.dock = dock;
+                    self.save_prefs();
                 }
             }
             UiAction::ShowSoften(open) => {
@@ -1072,6 +1083,7 @@ impl State {
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
             theme: self.prefs.theme,
+            dock: self.prefs.dock,
             // Task 9: !cfg!(target_os = "macos")
             shortcuts: self.shortcuts_window,
             egui_menus: true,

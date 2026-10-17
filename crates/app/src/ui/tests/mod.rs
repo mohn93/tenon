@@ -2,6 +2,7 @@
 //! AccessKit tree, so the tests do not depend on where the layout puts them.
 
 mod context;
+mod dock;
 mod entity;
 mod layout;
 mod materials;
@@ -21,7 +22,9 @@ use session::{Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection};
 use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
-use super::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View, draw};
+use super::{
+    Agents, DockLayout, DockTab, MaterialRow, TexturePosition, TextureRow, UiAction, View, draw,
+};
 use crate::editor::{ImportUnits, Status};
 
 /// Everything a test's `View` borrows, owned, and what the panels reported.
@@ -55,6 +58,11 @@ pub(super) struct Fixture {
     pub theme: ThemeChoice,
     /// Whether the menus are egui's (the window has no native ones).
     pub egui_menus: bool,
+    /// The dock's width, split and tab.
+    pub dock: DockLayout,
+    /// Asks egui to lay the next frame out again after its first pass, as egui may do by
+    /// itself (the flag is then cleared).
+    pub discard_once: bool,
     /// Every action the panels reported since the last `take`.
     pub actions: Vec<UiAction>,
     /// The 3D view's rectangle in the last frame.
@@ -101,6 +109,8 @@ impl Default for Fixture {
             shortcuts: false,
             theme: ThemeChoice::System,
             egui_menus: true,
+            dock: DockLayout::default(),
+            discard_once: false,
             actions: Vec::new(),
             central: Rect::NOTHING,
         }
@@ -139,6 +149,7 @@ impl Fixture {
             shortcuts: self.shortcuts,
             theme: self.theme,
             egui_menus: self.egui_menus,
+            dock: self.dock,
         }
     }
 
@@ -182,6 +193,9 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
                 let mut actions = std::mem::take(&mut f.actions);
                 f.central = draw(&mut root, &f.view(), &mut actions);
                 f.actions = actions;
+                if std::mem::take(&mut f.discard_once) {
+                    ctx.request_discard("a test asked for another pass");
+                }
             },
             f,
         );

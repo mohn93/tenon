@@ -155,9 +155,9 @@ fn a_stepped_texture_value_applies_when_its_fields_go_away() {
 
 #[test]
 fn an_edit_ended_in_a_discarded_pass_is_reported_once() {
-    // Dragging an Offset field on face 3, then selecting something else in the same frame: the
-    // fields go away, Entity Info gets shorter and the right panel lays the frame out again. The
-    // first pass ends the edit; its action must survive the second pass, and only once.
+    // Dragging an Offset field on face 3, then selecting something else in a frame egui lays
+    // out twice: the fields go away and the first pass ends the edit; its action must survive
+    // the second pass, and only once.
     let three = faces(&[3]);
     let mut h = harness(with_texture_position(
         three.clone(),
@@ -183,6 +183,7 @@ fn an_edit_ended_in_a_discarded_pass_is_reported_once() {
     // One frame: the selection is no longer faces.
     h.state_mut().texture_position = None;
     h.state_mut().info = vec!["1 edge".into()];
+    h.state_mut().discard_once = true;
     h.step();
     assert_eq!(
         h.output().platform_output.num_completed_passes,

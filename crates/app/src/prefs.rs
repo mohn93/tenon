@@ -8,13 +8,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ui::DockLayout;
 use crate::ui::theme::ThemeChoice;
 
-/// What the prefs file keeps. Keys it does not know are ignored, and dropped at the next save.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// What the prefs file keeps. Keys it does not know are ignored, and dropped at the next save;
+/// a key missing (a file from before it) is its default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
     pub theme: ThemeChoice,
+    /// The dock's width, split and tab.
+    pub dock: DockLayout,
 }
 
 /// The largest prefs file read; anything larger is not one this app wrote.
@@ -27,7 +31,7 @@ pub fn path_in(home: &Path) -> PathBuf {
 
 /// The prefs at `path`: the defaults when there is no file, and the defaults with a warning
 /// on stderr when it cannot be read or is not valid (it is replaced at the next change). The
-/// warning never quotes the file.
+/// warning never quotes the file. Dock values out of range are brought into it.
 pub fn load(path: &Path) -> Prefs {
     let bytes = match read(path) {
         Ok(Some(bytes)) => bytes,
@@ -40,7 +44,7 @@ pub fn load(path: &Path) -> Prefs {
             return Prefs::default();
         }
     };
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+    let prefs: Prefs = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
         eprintln!(
             "warning: {} is not valid preferences (line {}, column {}); using the defaults",
             path.display(),
@@ -48,7 +52,11 @@ pub fn load(path: &Path) -> Prefs {
             e.column()
         );
         Prefs::default()
-    })
+    });
+    Prefs {
+        dock: prefs.dock.clamped(),
+        ..prefs
+    }
 }
 
 /// The bytes of the regular file at `path`, or None when there is nothing there. A link, a
@@ -131,6 +139,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::{DockLayout, DockTab};
     use std::os::unix::fs::PermissionsExt;
 
     /// A fresh folder standing in for HOME.
@@ -151,13 +160,14 @@ mod tests {
             &path,
             &Prefs {
                 theme: ThemeChoice::Light,
+                ..Default::default()
             },
         )
         .unwrap();
         assert_eq!(load(&path).theme, ThemeChoice::Light);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"theme\": \"light\"\n}"
+            "{\n  \"theme\": \"light\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  }\n}"
         );
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&path), 0o600);
@@ -166,6 +176,7 @@ mod tests {
             &path,
             &Prefs {
                 theme: ThemeChoice::Dark,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -175,6 +186,45 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(left, ["prefs.json"], "no temporary file is left");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn dock_prefs_load_old_files_and_clamp_bad_values() {
+        let home = home("dock");
+        let path = path_in(&home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{\"theme\": \"dark\"}").unwrap();
+        assert_eq!(
+            load(&path),
+            Prefs {
+                theme: ThemeChoice::Dark,
+                dock: DockLayout::default()
+            }
+        );
+        std::fs::write(
+            &path,
+            b"{\"dock\": {\"width\": 9000, \"split\": -3, \"tab\": \"materials\"}}",
+        )
+        .unwrap();
+        assert_eq!(
+            load(&path).dock,
+            DockLayout {
+                width: 420.0,
+                split: 0.2,
+                tab: DockTab::Materials
+            }
+        );
+        std::fs::write(
+            &path,
+            b"{\"theme\": \"light\", \"dock\": {\"width\": \"wide\"}}",
+        )
+        .unwrap();
+        assert_eq!(
+            load(&path),
+            Prefs::default(),
+            "a wrong type is an invalid file"
+        );
         std::fs::remove_dir_all(home).unwrap();
     }
 
@@ -228,6 +278,7 @@ mod tests {
             &path,
             &Prefs {
                 theme: ThemeChoice::Light,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -246,7 +297,8 @@ mod tests {
             save(
                 &path,
                 &Prefs {
-                    theme: ThemeChoice::Dark
+                    theme: ThemeChoice::Dark,
+                    ..Default::default()
                 }
             )
             .is_err()
@@ -273,7 +325,8 @@ mod tests {
             save(
                 &path,
                 &Prefs {
-                    theme: ThemeChoice::Dark
+                    theme: ThemeChoice::Dark,
+                    ..Default::default()
                 }
             )
             .is_err()

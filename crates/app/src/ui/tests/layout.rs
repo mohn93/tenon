@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::right::{OUTLINER_ROWS_MIN, row_pitch};
+use crate::ui::dock::{AREA_MIN, DIVIDER};
 use kernel::DefinitionKind;
 use session::OutlinerRow;
 
@@ -122,10 +122,11 @@ fn the_toolbar_without_tools_is_one_row_at_the_smallest_width() {
 }
 
 #[test]
-fn the_right_panel_keeps_its_width_with_a_texture_shown() {
+fn the_dock_keeps_its_width_with_a_texture_shown() {
     let mut h = harness(Fixture {
         materials: vec![brick()],
         material: Some(MaterialId(31)),
+        dock: materials_tab(),
         ..Default::default()
     });
     let width = |h: &mut H| {
@@ -186,72 +187,82 @@ pub(super) fn many_groups(n: u64) -> OutlinerTable {
     }
 }
 
-/// A fixture with 40 materials (the first chosen) and `groups` groups.
+/// The dock at its default width and split, on the Materials tab.
+pub(super) fn materials_tab() -> DockLayout {
+    DockLayout {
+        tab: DockTab::Materials,
+        ..Default::default()
+    }
+}
+
+/// A fixture with 40 materials (the first chosen) and `groups` groups, on the Materials tab.
 pub(super) fn crowded(groups: u64) -> Fixture {
     Fixture {
         info: vec!["1 group".into()],
         materials: many_materials(40),
         material: Some(MaterialId(100)),
         outliner: many_groups(groups),
+        dock: materials_tab(),
         ..Default::default()
     }
 }
 
 #[test]
-fn a_short_window_leaves_the_outliner_its_minimum_height() {
-    // Short enough that the Materials list is down to its least rows, tall enough that the
-    // panel is not yet scrolled (with the 36 pt context bar, 28 pt controls and section titles it
-    // needs about 655 points).
-    let height = 660.0;
-    let h = harness_sized(crowded(40), Vec2::new(1280.0, height));
+fn the_outliner_keeps_its_least_area_in_the_smallest_window() {
+    let h = harness_sized(crowded(40), Vec2::new(960.0, 600.0));
     let model = rect_of(&h, "Model");
-    let least = OUTLINER_ROWS_MIN as f32 * row_pitch(&h.ctx.global_style());
-    // The panel ends where the status bar begins, as the 3D view does.
+    // The dock ends where the status bar begins, as the 3D view does.
     let bottom = h.state().central.max.y;
     assert!(
-        model.min.y <= bottom - least,
-        "the Outliner starts at {} over a panel ending at {bottom} in a {height} point window",
+        model.min.y + AREA_MIN - DIVIDER <= bottom,
+        "the Outliner's list starts at {} over a dock ending at {bottom}",
         model.min.y
     );
 }
 
-#[test]
-fn a_very_short_window_scrolls_the_right_panel() {
-    let height = 300.0;
-    let mut h = harness_sized(crowded(1), Vec2::new(1280.0, height));
-    let before = rect_of(&h, "Model").min.y;
-    assert!(
-        before > height,
-        "the Outliner is below the window at {before}"
-    );
-    // Scroll with the pointer over Entity Info.
-    h.event(egui::Event::PointerMoved(Pos2::new(1200.0, 60.0)));
+/// Turns the wheel by `dy` points with the pointer at `at`, then runs.
+fn wheel(h: &mut H, at: Pos2, dy: f32) {
+    h.event(egui::Event::PointerMoved(at));
     h.event(egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
-        delta: Vec2::new(0.0, -400.0),
+        delta: Vec2::new(0.0, dy),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
     });
     h.run_ok();
-    let after = rect_of(&h, "Model").min.y;
-    assert!(
-        after < before - 100.0,
-        "the panel scrolled from {before} to {after}"
-    );
 }
 
 #[test]
-fn no_material_row_is_cut_by_the_list_bottom() {
-    for height in [800.0, 600.0, 520.0] {
-        let h = harness_sized(crowded(40), Vec2::new(1280.0, height));
-        let bottom = rect_of(&h, "Add").min.y - h.ctx.global_style().spacing.item_spacing.y;
-        for k in 0..40 {
-            let row = rect_of(&h, &format!("Material {k}"));
-            assert!(
-                !(row.min.y < bottom - 0.5 && row.max.y > bottom + 0.5),
-                "Material {k} straddles the list's bottom {bottom} at {height} points: {row:?}"
-            );
+fn a_long_tab_scrolls_inside_the_top_area() {
+    let mut h = harness(crowded(1));
+    let before = rect_of(&h, "Material 39").min.y;
+    let model = rect_of(&h, "Model").min.y;
+    let over_top = Pos2::new(SCREEN.x - 100.0, rect_of(&h, "Default").center().y);
+    wheel(&mut h, over_top, -400.0);
+    let after = rect_of(&h, "Material 39").min.y;
+    assert!(
+        after < before - 100.0,
+        "the top area scrolled from {before} to {after}"
+    );
+    assert_eq!(rect_of(&h, "Model").min.y, model, "the Outliner stays put");
+}
+
+#[test]
+fn every_material_is_reachable_by_scrolling() {
+    for height in [800.0, 600.0] {
+        let mut h = harness_sized(crowded(40), Vec2::new(1280.0, height));
+        let top = rect_of(&h, "Materials").max.y;
+        let divider = rect_of(&h, "Resize Outliner").min.y;
+        assert!(rect_of(&h, "Default").min.y >= top, "the list starts shown");
+        let over_top = Pos2::new(1200.0, rect_of(&h, "Default").center().y);
+        for _ in 0..10 {
+            wheel(&mut h, over_top, -400.0);
         }
+        let last = rect_of(&h, "Material 39");
+        assert!(
+            last.min.y >= top && last.max.y <= divider,
+            "the last material shows above the divider at {divider} at {height} points: {last:?}"
+        );
     }
 }
 
@@ -282,7 +293,7 @@ fn the_panels_fit_the_smallest_window() {
     let h = harness_sized(crowded(40), size);
     let view = h.state().central;
     assert!(
-        view.width() >= 600.0 && view.height() >= 350.0,
+        view.width() >= 600.0 && view.height() >= 500.0,
         "a usable 3D view: {view:?}"
     );
     h.get_by_label("Model");

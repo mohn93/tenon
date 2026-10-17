@@ -12,6 +12,7 @@ fn two_materials() -> Fixture {
     Fixture {
         materials: vec![brick(), glass],
         material: Some(MaterialId(31)),
+        dock: super::layout::materials_tab(),
         ..Default::default()
     }
 }
@@ -23,6 +24,7 @@ fn brick_with(texture: Option<TextureRow>) -> Fixture {
     Fixture {
         materials: vec![row],
         material: Some(MaterialId(31)),
+        dock: super::layout::materials_tab(),
         ..Default::default()
     }
 }
@@ -263,13 +265,11 @@ fn sections_are_titled_and_the_chosen_material_and_color_are_marked() {
     let mut f = brick_with(None);
     f.materials[0].color = MATERIAL_PALETTE[2];
     let h = harness(f);
+    // The tabs title the dock's top area; the Outliner keeps its section title.
     for title in ["Entity Info", "Materials", "Outliner"] {
         h.get_by_label(title);
     }
-    let texts = drawn_texts(&h);
-    for title in ["ENTITY INFO", "MATERIALS", "OUTLINER"] {
-        assert!(texts.iter().any(|t| t == title), "{title}");
-    }
+    assert!(drawn_texts(&h).iter().any(|t| t == "OUTLINER"));
     assert_eq!(
         is_on(&h, &palette_label(MATERIAL_PALETTE[2])),
         Some(true),

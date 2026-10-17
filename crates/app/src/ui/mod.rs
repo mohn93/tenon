@@ -1,10 +1,10 @@
 //! The window's panels: the context bar, the tool rail, the status bar with the measurements
-//! box, and on the right Entity Info, the Materials list and the Outliner.
+//! box, and on the right the dock: Entity Info and Materials as tabs over the Outliner.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use egui::{Panel, Ui, Vec2};
+use egui::{Panel, Ui};
 use kernel::{EntityId, TexturePlacement};
 use session::{Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
@@ -14,6 +14,7 @@ use theme::ThemeChoice;
 
 pub(crate) mod context_bar;
 mod dialogs;
+mod dock;
 mod fonts;
 mod icons;
 mod materials;
@@ -26,10 +27,14 @@ mod status;
 mod tests;
 pub mod theme;
 pub(crate) use context_bar::step_name;
+pub use dock::DockLayout;
+// Only the tests name a tab outside the dock.
+#[cfg(test)]
+pub use dock::DockTab;
 pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UiAction {
     Tool(ToolKind),
     Undo,
@@ -85,6 +90,9 @@ pub enum UiAction {
     ShowAgentActivity(bool),
     /// Draw the window in this theme, and keep it in the preferences.
     SetTheme(ThemeChoice),
+    /// Lay the dock out so (a resize, a divider drag or a tab chosen), and keep it in the
+    /// preferences.
+    SetDock(DockLayout),
     /// Open or close the Keyboard Shortcuts window.
     ShowShortcuts(bool),
     /// Open or close the Soften Edges window.
@@ -134,10 +142,6 @@ pub struct TextureRow {
     /// The image's size in pixels.
     pub pixels: [u32; 2],
 }
-
-/// The right panel's width, in points. Room for two value fields side by side at 13 pt in the
-/// value font (JetBrains Mono is wider than Inter).
-const RIGHT_PANEL_WIDTH: f32 = 220.0;
 
 /// What the window shows of the agents using the API.
 pub struct Agents<'a> {
@@ -196,6 +200,8 @@ pub struct View<'a> {
     pub shortcuts: bool,
     /// Whether the menus are drawn by egui (otherwise the window has native ones).
     pub egui_menus: bool,
+    /// The dock's width, split and tab, as kept in the preferences.
+    pub dock: DockLayout,
 }
 
 /// What Entity Info's texture position fields show and apply to.
@@ -219,9 +225,8 @@ pub const FLY_HELP: &str = "Walk or fly through the model.\n\
 /// Lays out the panels for one pass, appending the actions asked for to `actions`. Returns the
 /// rectangle left for the 3D view, in points.
 ///
-/// egui can lay a frame out more than once (the right panel asks for that when its measurement
-/// moved), and only the first pass sees the frame's input; so a caller keeps every pass's actions
-/// and the last pass's rectangle.
+/// egui can lay a frame out more than once, and only the first pass sees the frame's input; so
+/// a caller keeps every pass's actions and the last pass's rectangle.
 pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect {
     let t = theme::tokens(ui.ctx().theme());
     Panel::top("context")
@@ -251,26 +256,26 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
                 .inner_margin(egui::Margin::symmetric(6, 8)),
         )
         .show(ui, |ui| rail::rail(ui, view, actions));
-    // A fixed width: egui grows a panel to fit wide content and keeps the width after, which
-    // would narrow the 3D view for good once a wide row was shown.
-    Panel::right("entity_info")
-        .resizable(false)
-        .exact_size(RIGHT_PANEL_WIDTH)
-        .show(ui, |ui| {
-            let least = right::least_height(ui);
-            if ui.available_height() >= least {
-                right::right_panel(ui, view, actions);
-            } else {
-                // A short window: lay the panel out at its least height and let it scroll.
-                egui::ScrollArea::vertical()
-                    .id_salt("right-panel")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let size = Vec2::new(ui.available_width(), least);
-                        ui.allocate_ui(size, |ui| right::right_panel(ui, view, actions));
-                    });
-            }
-        });
+    let panel = Panel::right("dock")
+        .resizable(true)
+        .default_size(view.dock.width)
+        .size_range(dock::DOCK_WIDTH)
+        .frame(
+            egui::Frame::new()
+                .fill(t.bg_panel)
+                .inner_margin(egui::Margin::same(dock::DOCK_MARGIN)),
+        )
+        .show(ui, |ui| dock::dock(ui, view, actions));
+    let mut layout = panel.inner;
+    // The width the panel was dragged to, once the button is released: not while dragging,
+    // and not a width that only rounding moved.
+    let width = panel.response.rect.width();
+    if ui.input(|i| i.pointer.primary_released()) && (width - view.dock.width).abs() > 0.5 {
+        layout.width = width.round();
+    }
+    if layout != view.dock {
+        actions.push(UiAction::SetDock(layout));
+    }
     if let Some(angle) = view.soften {
         dialogs::soften_window(ui, angle, actions);
     }
