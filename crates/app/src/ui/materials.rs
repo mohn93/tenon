@@ -1,30 +1,15 @@
 //! The Materials list and its controls.
 
-use egui::{Color32, RichText, Sense, Ui, Vec2};
+use egui::{Color32, RichText, Ui};
 use session::MaterialId;
 
-use super::fields::{drag_row, take_row};
 use super::right::{MATERIAL_ROWS_MAX, MATERIAL_ROWS_MIN, OUTLINER_ROWS_MIN, measured, row_pitch};
+use super::widgets::{self, Fill, take_row};
 use super::{MaterialRow, UiAction, View};
 use crate::editor::MATERIAL_PALETTE;
 
 /// The default material's swatch: its front color.
 const DEFAULT_SWATCH: Color32 = Color32::from_rgb(237, 237, 230);
-
-/// A small square of `color` that can be clicked.
-fn swatch(ui: &mut Ui, color: Color32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
-    ui.painter().rect_filled(rect, 2.0, color);
-    response
-}
-
-/// A small square showing `image` that can be clicked.
-fn image_swatch(ui: &mut Ui, image: egui::TextureId) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
-    let whole = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-    ui.painter().image(image, rect, whole, Color32::WHITE);
-    response
-}
 
 /// How a palette swatch is named for AccessKit: `Color #C45440`.
 pub(super) fn palette_label(c: [u8; 3]) -> String {
@@ -42,7 +27,7 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// follows it, in points.
 pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> (f32, f32) {
     end_texture_size_edit(ui, view.material, actions);
-    ui.heading("Materials");
+    widgets::section_header(ui, "Materials");
     // Whole rows only: as many as leave the controls below and the Outliner's least rows room.
     let pitch = row_pitch(ui.style());
     let below = measured(ui.ctx()).below_list + OUTLINER_ROWS_MIN as f32 * pitch;
@@ -53,22 +38,22 @@ pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -
         .id_salt("materials")
         .max_height(shown as f32 * pitch - ui.spacing().item_spacing.y)
         .show(ui, |ui| {
-            let rows = std::iter::once((None, "Default", DEFAULT_SWATCH, None)).chain(
+            let rows = std::iter::once((None, "Default", Fill::Color(DEFAULT_SWATCH))).chain(
                 view.materials.iter().map(|m| {
-                    let image = m.texture.as_ref().map(|t| t.swatch);
-                    (Some(m.id), m.name.as_str(), rgb(m.color), image)
+                    let fill = match &m.texture {
+                        Some(t) => Fill::Image(t.swatch),
+                        None => Fill::Color(rgb(m.color)),
+                    };
+                    (Some(m.id), m.name.as_str(), fill)
                 }),
             );
-            for (id, name, color, image) in rows {
+            for (id, name, fill) in rows {
                 ui.horizontal(|ui| {
-                    let picked = match image {
-                        Some(image) => image_swatch(ui, image),
-                        None => swatch(ui, color),
-                    }
-                    .clicked();
+                    let chosen = view.material == id;
+                    let picked =
+                        widgets::swatch(ui, fill, &format!("{name} color"), chosen).clicked();
                     // Cut short, not wider than the panel: a wide row would push it aside.
-                    let label =
-                        ui.add(egui::Button::selectable(view.material == id, name).truncate());
+                    let label = ui.add(egui::Button::selectable(chosen, name).truncate());
                     if picked || label.clicked() {
                         actions.push(UiAction::ChooseMaterial(id));
                     }
@@ -125,10 +110,12 @@ fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     }
     ui.horizontal_wrapped(|ui| {
         for color in MATERIAL_PALETTE {
-            let response = swatch(ui, rgb(color));
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, palette_label(color))
-            });
+            let response = widgets::swatch(
+                ui,
+                Fill::Color(rgb(color)),
+                &palette_label(color),
+                color == m.color,
+            );
             if response.clicked() && color != m.color {
                 actions.push(UiAction::RecolorMaterial(m.id, color));
             }
@@ -243,7 +230,7 @@ fn texture_controls(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
     let Some(t) = &m.texture else { return };
     ui.label(RichText::new(format!("{} x {} px", t.pixels[0], t.pixels[1])).weak());
     // One change per drag or entered value, like the texture position fields.
-    let row = drag_row(
+    let row = widgets::numeric_row(
         ui,
         texture_size_key(m.id),
         "Size (m)",

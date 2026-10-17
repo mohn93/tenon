@@ -12,7 +12,6 @@ use tools::ToolKind;
 use crate::editor::{ImportUnits, Status};
 
 mod dialogs;
-mod fields;
 mod fonts;
 mod materials;
 mod outliner;

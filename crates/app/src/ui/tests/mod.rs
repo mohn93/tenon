@@ -149,6 +149,9 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
                 // A root over the whole window, as `Context::run_ui` gives the app: the
                 // harness's own Ui has a margin.
                 let ctx = ui.ctx().clone();
+                if themed_first_pass(&ctx) {
+                    return;
+                }
                 let mut root = Ui::new(
                     ctx.clone(),
                     egui::Id::new("panels"),
@@ -169,6 +172,20 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
     assert_eq!(h.state().actions, [], "actions from the first frames");
     h.state_mut().actions.clear();
     h
+}
+
+/// On the first pass of a harness, which runs before a test can install the theme: installs it
+/// (the fonts take effect on the next pass) and asks for that pass. True when the caller should
+/// draw nothing in this one.
+pub(super) fn themed_first_pass(ctx: &egui::Context) -> bool {
+    let key = egui::Id::new("themed-first-pass");
+    if ctx.data(|d| d.get_temp::<bool>(key)).is_some() {
+        return false;
+    }
+    ctx.data_mut(|d| d.insert_temp(key, true));
+    install_theme(ctx);
+    ctx.request_discard("the theme's fonts");
+    true
 }
 
 /// The dark theme, without animations as the harness set it up, so one run settles everything.

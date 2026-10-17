@@ -6,13 +6,13 @@ use kernel::{DefinitionKind, EntityId};
 use session::OutlinerRow;
 
 use super::right::{OUTLINER_ROWS_MIN, row_pitch};
-use super::{UiAction, View};
+use super::{UiAction, View, widgets};
 
 /// The Outliner: a Model row (back to the root) and the tree of groups and components, the
 /// selected ones highlighted and the open ones bold. A click selects a node, a double-click
 /// opens it. Only expanded nodes' children are laid out. Returns the list's top, in points.
 pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> f32 {
-    ui.heading("Outliner");
+    widgets::section_header(ui, "Outliner");
     expand_open_path(ui.ctx(), view.context);
     #[cfg(test)]
     ui.data_mut(|d| d.remove::<Vec<super::tests::Recorded>>(super::tests::recorded_id()));

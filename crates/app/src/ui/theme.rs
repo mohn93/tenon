@@ -117,6 +117,11 @@ pub const SWATCH_RADIUS: u8 = 4;
 pub const FOCUS_RING: f32 = 2.0;
 pub const BODY_SIZE: f32 = 13.0;
 pub const SMALL_SIZE: f32 = 11.0;
+/// Section titles, shown uppercase.
+pub const SECTION_SIZE: f32 = 11.0;
+/// The gap above a section title.
+pub const SECTION_GAP: f32 = 12.0;
+pub const SWATCH_SIZE: f32 = 16.0;
 
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {

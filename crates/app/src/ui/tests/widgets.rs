@@ -1,10 +1,17 @@
 use super::*;
 use crate::shortcuts::{Bound, chord};
-use crate::ui::widgets;
+use crate::ui::widgets::{self, Fill};
 
 /// A themed harness around `f`, settled; frames 50 ms apart.
 pub(super) fn kit<'a>(f: impl FnMut(&mut Ui) + 'a) -> Harness<'a> {
-    let mut h = Harness::builder().with_step_dt(0.05).build_ui(f);
+    let mut f = f;
+    let mut h = Harness::builder()
+        .with_step_dt(0.05)
+        .build_ui(move |ui: &mut Ui| {
+            if !themed_first_pass(ui.ctx()) {
+                f(ui);
+            }
+        });
     install_theme(&h.ctx);
     h.run_ok();
     h
@@ -48,4 +55,44 @@ fn a_menu_item_is_named_without_its_key_and_shows_it() {
     );
     let key = chord(Bound::SaveFileAs).unwrap().text();
     assert!(drawn_texts_of(&h).contains(&key));
+}
+
+#[test]
+fn a_section_header_is_named_as_written_and_drawn_uppercase() {
+    let h = kit(|ui| {
+        widgets::section_header(ui, "Entity Info");
+    });
+    h.get_by_label("Entity Info");
+    assert!(drawn_texts_of(&h).iter().any(|t| t == "ENTITY INFO"));
+}
+
+#[test]
+fn a_swatch_is_named_and_marked_when_chosen() {
+    let h = kit(|ui| {
+        widgets::swatch(ui, Fill::Color(egui::Color32::RED), "Brick color", true);
+        widgets::swatch(ui, Fill::Color(egui::Color32::BLUE), "Glass color", false);
+    });
+    assert_eq!(is_on(&h, "Brick color"), Some(true));
+    assert_eq!(is_on(&h, "Glass color"), Some(false));
+}
+
+#[test]
+fn a_numeric_row_reports_a_typed_value_once_entered() {
+    let key = egui::Id::new("test-row");
+    let mut done = Vec::new();
+    let mut h = kit(|ui| {
+        if let Some(d) =
+            widgets::numeric_row(ui, key, "Size (m)", [1.0, 0.5], 0.0..=10.0, 0.01).done
+        {
+            done.push(d);
+        }
+    });
+    h.get_all_by_label("Size (m)").nth(1).unwrap().click();
+    h.run_ok();
+    h.event(egui::Event::Text("2".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    drop(h);
+    assert_eq!(done, [([1.0, 0.5], [1.0, 2.0])]);
 }

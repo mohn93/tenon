@@ -3,9 +3,9 @@
 use egui::Ui;
 use kernel::EntityId;
 
-use super::fields::{drag_row, take_row};
 use super::materials::materials;
 use super::outliner::outliner;
+use super::widgets::{self, take_row};
 use super::{TexturePosition, UiAction, View};
 
 /// The Materials list shows whole rows, at most this many and at least `MATERIAL_ROWS_MIN`.
@@ -60,7 +60,7 @@ fn remember(ui: &Ui, now: Measured) {
 /// Entity Info, the Materials list and the Outliner.
 pub(super) fn right_panel(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     let top = ui.cursor().top();
-    ui.heading("Entity Info");
+    widgets::section_header(ui, "Entity Info");
     for line in view.info {
         ui.label(line);
     }
@@ -157,7 +157,7 @@ fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction
     let offset_range = -kernel::MAX_TEXTURE_OFFSET..=kernel::MAX_TEXTURE_OFFSET;
     let mm = millimeters;
     let p = &t.placement;
-    let row = drag_row(
+    let row = widgets::numeric_row(
         ui,
         egui::Id::new(OFFSET_KEY),
         "Offset",
@@ -172,7 +172,7 @@ fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction
         done.push(Field::Offset(offset.map(mm)));
     }
     let tenths = degree_tenths;
-    let row = drag_row(
+    let row = widgets::numeric_row(
         ui,
         egui::Id::new(ROTATION_KEY),
         "Rotation",
@@ -187,7 +187,7 @@ fn texture_position(ui: &mut Ui, t: &TexturePosition, actions: &mut Vec<UiAction
         done.push(Field::Rotation(tenths(deg)));
     }
     let scale_range = kernel::MIN_TEXTURE_SCALE..=kernel::MAX_TEXTURE_SCALE;
-    let row = drag_row(
+    let row = widgets::numeric_row(
         ui,
         egui::Id::new(SCALE_KEY),
         "Scale",

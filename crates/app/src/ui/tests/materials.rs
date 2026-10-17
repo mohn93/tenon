@@ -257,3 +257,34 @@ fn deleting_a_material_does_not_also_rename_it() {
         "{actions:?}"
     );
 }
+
+#[test]
+fn sections_are_titled_and_the_chosen_material_and_color_are_marked() {
+    let mut f = brick_with(None);
+    f.materials[0].color = MATERIAL_PALETTE[2];
+    let h = harness(f);
+    for title in ["Entity Info", "Materials", "Outliner"] {
+        h.get_by_label(title);
+    }
+    let texts = drawn_texts(&h);
+    for title in ["ENTITY INFO", "MATERIALS", "OUTLINER"] {
+        assert!(texts.iter().any(|t| t == title), "{title}");
+    }
+    assert_eq!(
+        is_on(&h, &palette_label(MATERIAL_PALETTE[2])),
+        Some(true),
+        "the material's color"
+    );
+    assert_eq!(is_on(&h, &palette_label(MATERIAL_PALETTE[0])), Some(false));
+    assert_eq!(is_on(&h, "Brick color"), Some(true), "the chosen material");
+    assert_eq!(is_on(&h, "Default color"), Some(false));
+}
+
+#[test]
+fn a_material_swatch_chooses_it() {
+    let mut h = harness(two_materials());
+    assert_eq!(
+        click(&mut h, "Glass color"),
+        [UiAction::ChooseMaterial(Some(MaterialId(32)))]
+    );
+}
