@@ -1,6 +1,7 @@
 //! Geometry kernel: vertices, edges and faces with SketchUp-style sticky geometry.
 //! No GPU or UI dependencies.
 
+mod connected;
 mod curves;
 mod data;
 mod edit;
