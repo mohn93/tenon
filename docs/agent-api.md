@@ -627,8 +627,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   `infer` use when not given a size.
 - `status` is the status bar's line as the window shows it; `prompt`, `message` (feedback from
   the last tool action or failed command), `lock` (e.g. `Locked: red axis`) are its parts.
-  `message_kind` is `"error"` or `"info"`, or `null` when there is no message; only errors flash
-  in the window (see Window actions below).
+  `message_kind` is `"error"` or `"info"`, or `null` when there is no message; only an error left by a
+  typed value flashes in the window (see Window actions below).
   `measurement_label` and `measurement` are the measurements box: the typed text while
   `typing`, else the live measurement (`null` when there is none).
 - `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
@@ -640,6 +640,9 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   the open context, `null` otherwise), and `snap_label` is the snap the window names by the
   cursor ("Endpoint", "On Red Axis", "Parallel to Edge", "Midpoint in Group"; `null` when none,
   and always in Select). Both are as the window last drew them, and change as the cursor moves.
+  Both are also `null` while flying, while the cursor is outside the view, and while the pointer
+  is over a window, a menu or the gizmo above the view, where the window shows neither.
+  `tool_input` puts the cursor in the view under no window, so its result reports both.
 
 Editor commands go through `execute` (not `batch`), are not undo steps and do not change the
 revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
@@ -999,9 +1002,10 @@ the theme (its day background, the selection's color and width, and the axes, dr
 and blue in the theme's axis colors); `render_view` keeps one
 fixed look, so its images do not depend on the window. The view's feedback is chrome too: the
 pointer's shape per tool (a grabbing hand while orbiting or panning), the snap chip, which
-appears once the cursor has rested 150 ms, the 2.5 s flash by the cursor of a refused typed value
-(its message is `editor.message`; informational messages do not flash), the
-Push/Pull solid preview (`tool_input`'s `preview` has its edges), and the orientation gizmo in
+appears once the cursor has rested 150 ms, the 2.5 s flash by the cursor (the error a typed value leaves: the tool refusing it or its
+command failing. Clicks and informational messages do not flash. The text is `editor.message`),
+the Push/Pull solid preview (its triangles are not reported; `tool_input`'s `preview` has its
+outline: the face's loops, the pulled loops and the edges joining them), and the orientation gizmo in
 the view's corner. `render_view` never shows the hover highlight, markers, preview lines, solid
 or gizmo. The file dialogs are chrome too (commands
 take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.
