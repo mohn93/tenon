@@ -106,8 +106,15 @@ fn count(e: &mut Editor, kind: &str) -> u64 {
 }
 
 #[test]
+fn a_fresh_editor_reports_the_select_tool() {
+    let mut e = editor();
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["tool"], "select");
+}
+
+#[test]
 fn the_line_tool_draws_by_clicks_and_a_typed_length() {
     let mut e = editor();
+    tool(&mut e, "line");
     let r = input(
         &mut e,
         json!([
@@ -472,6 +479,7 @@ fn a_double_click_under_alt_is_a_view_action_and_opens_nothing() {
 #[test]
 fn shift_and_arrow_keys_lock_the_direction() {
     let mut e = editor();
+    tool(&mut e, "line");
     // Shift pressed over the red axis holds the cursor to it while it clicks off the axis.
     let r = input(
         &mut e,
@@ -535,6 +543,7 @@ fn keys_switch_tools_group_and_undo() {
 #[test]
 fn pixels_scale_from_the_view_given_and_pixels_outside_it_are_refused() {
     let mut e = editor();
+    tool(&mut e, "line");
     let a = e.doc().camera.project(DVec3::ZERO).unwrap();
     // The same spot in a view half the size.
     let r = input_in(
@@ -593,6 +602,7 @@ fn input_in(e: &mut Editor, events: Value, width: u32, height: u32) -> Value {
 #[test]
 fn a_middle_drag_orbits_and_draws_nothing() {
     let mut e = editor();
+    tool(&mut e, "line");
     square(&mut e);
     let eye = e.doc().camera.eye;
     let r = input(
@@ -732,6 +742,7 @@ fn a_point_is_found_where_it_is_even_behind_other_geometry() {
 #[test]
 fn modifiers_stay_held_across_calls_until_let_go() {
     let mut e = editor();
+    tool(&mut e, "line");
     // Shift pressed in one call locks the red axis; the next call moves off it and types.
     let r = input(
         &mut e,
@@ -838,6 +849,7 @@ fn a_rectangle_from_a_walls_foot_stands_in_the_wall() {
 #[test]
 fn the_hover_waits_while_a_middle_drag_turns_the_view() {
     let mut e = editor();
+    tool(&mut e, "line");
     let r = input(
         &mut e,
         json!([
@@ -867,6 +879,7 @@ fn the_hover_waits_while_a_middle_drag_turns_the_view() {
 #[test]
 fn losing_focus_keeps_a_shift_lock_tool_input_holds() {
     let mut e = editor();
+    tool(&mut e, "line");
     input(
         &mut e,
         json!([

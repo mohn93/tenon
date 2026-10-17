@@ -382,6 +382,7 @@ mod tests {
     #[test]
     fn the_state_shows_the_tool_its_points_and_the_measurements_box() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let a = DVec3::new(1.0, 1.0, 0.0);
         let px = e.doc().camera.project(a).unwrap();
         e.cursor_moved(px);
@@ -495,6 +496,7 @@ mod tests {
     #[test]
     fn after_an_accepted_quit_nothing_more_is_done() {
         let (mut e, mut quit) = (editor(), false);
+        e.select_tool(ToolKind::Line);
         let r = call(&mut e, &mut quit, "quit", json!({}));
         assert_eq!(r["result"], json!({}));
         let r = call(

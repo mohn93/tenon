@@ -121,6 +121,7 @@ mod tests {
     #[test]
     fn the_phase_follows_the_tools_clicks() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         assert_eq!(e.phase(), Phase::Idle);
         let a = DVec3::new(1.0, 1.0, 0.0);
         click_at(&mut e, a);
@@ -181,6 +182,7 @@ mod tests {
     #[test]
     fn the_paint_material_is_set_without_switching_tools() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let out = e
             .execute(Command::AddMaterial {
                 name: Some("Brick".into()),

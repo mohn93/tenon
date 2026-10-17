@@ -221,8 +221,8 @@ impl Editor {
         Self {
             doc: Document::new(viewport),
             nav,
-            tool: ToolKind::Line.make(),
-            kind: ToolKind::Line,
+            tool: ToolKind::Select.make(),
+            kind: ToolKind::Select,
             remembered: Remembered::default(),
             shift: false,
             tool_pressed: false,
@@ -1885,8 +1885,16 @@ mod tests {
     }
 
     #[test]
+    fn the_editor_starts_in_select() {
+        let e = editor();
+        assert_eq!(e.tool_kind(), ToolKind::Select);
+        assert_eq!(e.status_parts().tool, "Select");
+    }
+
+    #[test]
     fn clicking_four_corners_draws_a_face() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         assert_eq!(stats(&e), (4, 1));
         let model = e.doc().model();
@@ -1897,6 +1905,7 @@ mod tests {
     #[test]
     fn undo_and_redo_step_through_edges() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.undo();
         assert_eq!(stats(&e), (3, 0));
@@ -1907,6 +1916,7 @@ mod tests {
     #[test]
     fn preview_follows_the_cursor_until_cancelled() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         let px = e.doc().camera.project(DVec3::new(-2.0, 4.0, 0.0)).unwrap();
         assert!(e.cursor_moved(px));
@@ -1922,6 +1932,7 @@ mod tests {
     #[test]
     fn undo_mid_chain_cancels_the_chain() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         for (x, y) in [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0)] {
             click_at(&mut e, DVec3::new(x, y, 0.0));
         }
@@ -1933,6 +1944,7 @@ mod tests {
     #[test]
     fn alt_left_drag_orbits_without_drawing() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let before = e.doc().camera.clone();
         e.cursor_moved(DVec2::new(400.0, 300.0));
         e.set_modifiers(false, true);
@@ -2085,6 +2097,7 @@ mod tests {
     #[test]
     fn losing_focus_cancels_a_pending_tool_press() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let a = e.doc().camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap();
         let b = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(a);
@@ -2106,6 +2119,7 @@ mod tests {
     #[test]
     fn hovering_an_endpoint_shows_a_marker() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(px + DVec2::new(3.0, 0.0));
@@ -2119,6 +2133,7 @@ mod tests {
     #[test]
     fn select_shows_no_marker_and_a_typed_error_flashes_once() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let corner = DVec3::new(1.0, 1.0, 0.0);
         move_to(&mut e, corner);
@@ -2160,6 +2175,7 @@ mod tests {
     #[test]
     fn the_chip_names_the_snap_and_shows_the_value() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.select_tool(ToolKind::Line);
         move_to(&mut e, DVec3::new(3.0, 1.0, 0.0));
@@ -2185,6 +2201,7 @@ mod tests {
     #[test]
     fn the_hover_stays_hidden_until_the_cursor_comes_back() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.select_tool(ToolKind::Select);
         let px = e.doc().camera.project(DVec3::new(2.0, 1.0, 0.0)).unwrap();
@@ -2235,6 +2252,7 @@ mod tests {
         // view pixel; its size is in points (`ui::viewport`).
         let at = |scale: f64| {
             let mut e = Editor::new(DVec2::new(800.0, 600.0) * scale, scale);
+            e.select_tool(ToolKind::Line);
             square(&mut e);
             move_to(&mut e, DVec3::new(3.0, 1.0, 0.0));
             shown(&mut e).marker.expect("the endpoint").0
@@ -2246,6 +2264,7 @@ mod tests {
     #[test]
     fn api_edit_mid_chain_cancels_the_chain() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         let out = e.execute(Command::AddEdge {
             start: [5.0, 5.0, 0.0],
@@ -2263,6 +2282,7 @@ mod tests {
     #[test]
     fn api_camera_move_keeps_the_chain() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         e.execute(Command::SetCamera {
             eye: [-6.0, -10.0, 6.0],
@@ -2296,6 +2316,7 @@ mod tests {
     #[test]
     fn typing_shows_in_the_status_and_escape_clears_it_first() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
         e.key(EditorKey::Char('2'));
         e.key(EditorKey::Char('.'));
@@ -2312,6 +2333,7 @@ mod tests {
     #[test]
     fn typed_length_draws_the_next_edge() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         move_to(&mut e, DVec3::new(4.0, 1.0, 0.0));
         type_text(&mut e, "2");
@@ -2324,6 +2346,7 @@ mod tests {
     #[test]
     fn letters_are_shortcuts_only_when_nothing_is_typed() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
         assert!(
             e.key(EditorKey::Char('l')),
@@ -2417,6 +2440,7 @@ mod tests {
     #[test]
     fn failed_clicks_keep_their_message_after_release() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char('p'));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2443,6 +2467,7 @@ mod tests {
     #[test]
     fn leaving_the_window_hides_the_marker() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(px);
@@ -2461,6 +2486,7 @@ mod tests {
     #[test]
     fn the_hover_is_worked_out_once_per_frame() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         for k in 0..5 {
@@ -2482,6 +2508,7 @@ mod tests {
     #[test]
     fn api_commands_leave_the_hover_to_the_next_frame() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let end = DVec3::new(2.0, 1.0, 0.0);
         e.cursor_moved(e.doc().camera.project(end).unwrap());
         e.refresh_hover();
@@ -2503,6 +2530,7 @@ mod tests {
     #[test]
     fn navigation_puts_the_hover_off_until_it_stops() {
         let (mut e, p) = raised_face();
+        e.select_tool(ToolKind::Line);
         let px = e.doc().camera.project(p).unwrap();
         e.cursor_moved(px);
         e.refresh_hover();
@@ -2554,6 +2582,7 @@ mod tests {
     #[test]
     fn select_tool_clicks_pick_and_delete_erases_them() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         assert!(e.key(EditorKey::Char(' ')));
         assert!(e.status().starts_with("Select"), "{}", e.status());
@@ -2569,6 +2598,7 @@ mod tests {
     #[test]
     fn lines_snap_to_guides_and_select_picks_and_erases_them() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         e.execute(Command::AddGuidePoint {
             position: [1.0, 1.0, 0.0],
         })
@@ -2610,6 +2640,7 @@ mod tests {
     #[test]
     fn t_measures_from_an_edge_to_a_parallel_guide_and_ctrl_measures_only() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         assert!(e.key(EditorKey::Char('t')));
         assert_eq!(e.tool_kind(), ToolKind::TapeMeasure);
@@ -2655,6 +2686,7 @@ mod tests {
     #[test]
     fn a_refused_retyped_guide_distance_keeps_the_guide_and_the_selection() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let face = e
             .doc()
@@ -2692,6 +2724,7 @@ mod tests {
     #[test]
     fn backspace_erases_the_selection_only_when_nothing_is_typed() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2710,6 +2743,7 @@ mod tests {
     #[test]
     fn repeated_backspace_and_delete_never_erase_the_selection() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2730,6 +2764,7 @@ mod tests {
     #[test]
     fn held_letter_shortcuts_act_once() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2755,6 +2790,7 @@ mod tests {
     #[test]
     fn erasing_the_selection_clears_typed_text() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2774,6 +2810,7 @@ mod tests {
     #[test]
     fn dragging_a_box_selects_what_is_inside() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         let corners: Vec<DVec2> = [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]
@@ -2797,6 +2834,7 @@ mod tests {
     #[test]
     fn erase_tool_click_erases_an_edge_and_its_face() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         assert!(e.key(EditorKey::Char('e')));
         click_at(&mut e, DVec3::new(3.0, 2.0, 0.0));
@@ -2806,6 +2844,7 @@ mod tests {
     #[test]
     fn move_tool_moves_the_selection_by_a_typed_distance() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2826,6 +2865,7 @@ mod tests {
     #[test]
     fn copies_are_selected_and_arrays_replace_them() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -2861,6 +2901,7 @@ mod tests {
     #[test]
     fn a_rejected_array_keeps_the_copy_and_disarms_the_array() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         start_copy(&mut e);
         type_text(&mut e, "50000");
         assert_eq!(stats(&e), (8, 2));
@@ -2896,6 +2937,7 @@ mod tests {
     #[test]
     fn a_copy_that_changes_nothing_does_not_arm_an_array() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         click_at(&mut e, DVec3::new(2.0, 1.0, 0.0));
@@ -2922,6 +2964,7 @@ mod tests {
     fn typed_arrays_can_start_with_a_symbol_or_x() {
         for (distance, array) in [("6", "/3"), ("2", "*3"), ("2", "x3")] {
             let mut e = editor();
+            e.select_tool(ToolKind::Line);
             start_copy(&mut e);
             type_text(&mut e, distance);
             assert_eq!(stats(&e).1, 2, "{array}");
@@ -2933,6 +2976,7 @@ mod tests {
     #[test]
     fn x_starts_typing_only_in_the_move_tool() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         assert!(!e.key(EditorKey::Char('x')));
         assert!(!e.status().contains("x_"), "{}", e.status());
         e.key(EditorKey::Char('m'));
@@ -2943,6 +2987,7 @@ mod tests {
     #[test]
     fn ctrl_outside_the_move_tool_keeps_the_message() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         type_text(&mut e, "2");
         let message = e.status_parts().message;
         assert!(message.is_some(), "the line tool needs a start point");
@@ -2953,6 +2998,7 @@ mod tests {
     #[test]
     fn a_rejected_copy_does_not_arm_an_array() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         start_copy(&mut e);
         type_text(&mut e, "2000000");
         assert_eq!(stats(&e), (4, 1), "the copy was rejected");
@@ -2965,6 +3011,7 @@ mod tests {
     #[test]
     fn a_release_without_its_press_is_not_sent_to_the_tool() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Char(' '));
         assert!(!e.button(Button::Left, false));
@@ -2982,6 +3029,7 @@ mod tests {
     #[test]
     fn shift_locks_the_direction_under_the_cursor() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         let up = e.doc().camera.project(DVec3::new(1.0, 1.0, 2.5)).unwrap();
         e.cursor_moved(up + DVec2::new(4.0, 0.0));
@@ -2999,6 +3047,7 @@ mod tests {
     #[test]
     fn arrow_keys_lock_an_axis_during_an_operation() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         assert!(!e.key(EditorKey::LockAxis(Axis::X)), "nothing to lock yet");
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         assert!(e.key(EditorKey::LockAxis(Axis::X)));
@@ -3022,6 +3071,7 @@ mod tests {
     #[test]
     fn hovering_an_edge_teaches_parallel_snaps() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         e.execute(Command::AddEdge {
             start: [0.0, 0.0, 0.0],
             end: [2.0, 1.0, 0.0],
@@ -3040,6 +3090,7 @@ mod tests {
     #[test]
     fn held_arrow_key_does_not_toggle_the_lock() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         assert!(e.key(EditorKey::LockAxis(Axis::X)));
         for _ in 0..3 {
@@ -3278,6 +3329,7 @@ mod tests {
         use crate::shortcuts::Bound;
         // Erase Selection's key erases a selected edge.
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         e.execute(Command::AddEdge {
             start: [0.0, 0.0, 0.0],
             end: [1.0, 0.0, 0.0],
@@ -3440,6 +3492,7 @@ mod tests {
     #[test]
     fn a_refused_retyped_angle_keeps_the_selection() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let face = EntityId::Face(e.doc().model().faces().next().unwrap().0);
         e.execute(Command::Select {
@@ -3585,6 +3638,7 @@ mod tests {
     #[test]
     fn shift_z_zooms_to_the_model_and_keeps_the_line_going() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         click_at(&mut e, DVec3::new(5.0, 1.0, 0.0));
         let before = stats(&e);
@@ -3602,6 +3656,7 @@ mod tests {
     #[test]
     fn standard_views_and_projection_come_from_the_editor() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         assert!(e.standard_view(StandardView::Top));
         assert!(e.doc().camera.is_vertical());
         assert!(e.set_projection(Projection::Parallel));
@@ -3624,6 +3679,7 @@ mod tests {
     #[test]
     fn night_lighting_comes_from_the_editor_and_is_not_an_edit() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let before = stats(&e);
         let revision = e.doc().revision();
@@ -3640,6 +3696,7 @@ mod tests {
     #[test]
     fn zoom_extents_says_whether_the_view_changed() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         e.cursor_moved(DVec2::new(10.0, 10.0));
         assert!(!e.zoom_extents(), "nothing to fit");
         square(&mut e);
@@ -3650,6 +3707,7 @@ mod tests {
     #[test]
     fn g_and_shift_g_group_the_selection_and_explode_takes_it_apart() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         assert!(e.key(EditorKey::Char('g')), "the message needs a redraw");
         assert!(e.status().contains("Select geometry to make a group"));
         square(&mut e);
@@ -3745,6 +3803,7 @@ mod tests {
     #[test]
     fn outliner_double_clicks_open_the_node_and_end_the_tools_operation() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let (_, second, group) = two_boxes(&mut e);
         click_at(&mut e, DVec3::new(0.0, -3.0, 0.0));
         assert!(e.tool.anchor().is_some(), "a line is started");
@@ -3888,6 +3947,7 @@ mod tests {
     #[test]
     fn saving_opening_and_starting_over() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Escape);
         assert!(!e.save_file(None), "a model never saved needs a path");
@@ -3932,6 +3992,7 @@ mod tests {
     #[test]
     fn exporting_writes_the_file_its_extension_names() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         let path = temp_file("square.stl");
         assert!(
             !e.export_file(&path),
@@ -3960,6 +4021,7 @@ mod tests {
     #[test]
     fn the_export_dialog_suggests_the_last_format_exported() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         assert_eq!(e.export_formats()[0], ("OBJ", "obj"));
         let path = temp_file("suggest.STL");
@@ -4157,6 +4219,7 @@ mod tests {
     #[test]
     fn b_paints_faces_with_the_chosen_material_and_cmd_click_picks_one_up() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         assert!(e.key(EditorKey::Char('b')));
         assert_eq!(e.tool_kind(), ToolKind::Paint);
@@ -4317,6 +4380,7 @@ mod tests {
     #[test]
     fn clicking_a_selected_face_paints_the_whole_selection() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         for (x, y) in [(5.0, 1.0), (7.0, 1.0), (7.0, 3.0), (5.0, 3.0), (5.0, 1.0)] {
             click_at(&mut e, DVec3::new(x, y, 0.0));
@@ -4344,6 +4408,7 @@ mod tests {
     #[test]
     fn f_toggles_fly_mode_and_escape_leaves_it() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         assert!(!e.flying());
         assert!(e.key(EditorKey::Char('f')));
         assert!(e.flying());
@@ -4401,6 +4466,7 @@ mod tests {
     #[test]
     fn tool_keys_and_clicks_do_nothing_while_flying() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         // A line in progress.
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         move_to(&mut e, DVec3::new(2.0, 1.0, 0.0));
@@ -4441,6 +4507,7 @@ mod tests {
     #[test]
     fn cmd_shortcuts_keep_working_while_flying() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.toggle_fly();
         assert!(e.undo());
@@ -4541,6 +4608,7 @@ mod tests {
     #[test]
     fn shift_flies_faster_without_locking() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         e.toggle_fly();
         assert!(!e.set_modifiers(true, false), "no lock while flying");
@@ -4553,6 +4621,7 @@ mod tests {
     #[test]
     fn an_agent_edit_drops_the_highlight_until_the_next_frame() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.select_tool(ToolKind::Erase);
         // `square` draws 1..3 on both axes: the face's middle.
@@ -4570,6 +4639,7 @@ mod tests {
     #[test]
     fn the_hover_and_the_snap_label_hide_while_flying_and_outside_the_view() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.select_tool(ToolKind::Erase);
         move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -4588,6 +4658,7 @@ mod tests {
     #[test]
     fn a_window_over_the_view_hides_the_hover_and_the_snap_label() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.select_tool(ToolKind::Erase);
         move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -4609,6 +4680,7 @@ mod tests {
     #[test]
     fn pulling_a_face_previews_a_translucent_solid() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.select_tool(ToolKind::PushPull);
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -4631,6 +4703,7 @@ mod tests {
     fn the_solid_goes_with_a_tool_switch_an_agent_edit_and_fly_mode() {
         let pulling = || {
             let mut e = editor();
+            e.select_tool(ToolKind::Line);
             square(&mut e);
             e.select_tool(ToolKind::PushPull);
             click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
@@ -4663,6 +4736,7 @@ mod tests {
     #[test]
     fn the_solid_is_in_root_coordinates_inside_a_group() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         let face = e.doc().model().faces().next().unwrap().0;
         let outcome = e
