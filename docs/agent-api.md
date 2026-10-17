@@ -266,7 +266,7 @@ continue each other's pattern, and a component carries its pattern with it when 
 scaled. A face's texture position (below) moves, turns and scales its texture on top of this.
 The back side shows the image as seen from behind, not mirrored: its `u` runs the other way, so
 the image's left edge is on the left for a viewer behind the face.
-The material's `color` stays the color edges, the Materials list and formats without textures
+The material's `color` stays the color edges, the Materials tab and formats without textures
 show.
 
 The `materials` query adds `"texture": {"width": 0.6, "height": 0.3, "pixel_width": 1024,
@@ -356,8 +356,9 @@ material as their front, so the material on the side facing the pull ends up out
 In the window, the Paint tool (`b`) paints the side of a face facing the viewer with the
 current material (a click on something selected paints the whole selection's faces and
 groups, a click on a group paints the group), and Cmd-click on macOS (Ctrl-click on Windows
-and Linux) picks up the clicked side's material instead. The Materials list under Entity Info chooses the
-current material and adds, renames, recolors and deletes materials and sets their opacity (a
+and Linux) picks up the clicked side's material instead. The Materials tab of the dock (a grid of
+swatches) chooses the current material with a click, keeping the tool, and a double-click chooses it and
+switches to Paint (`set_paint_material`, then `set_tool` with `paint`); the tab also adds, renames, recolors and deletes materials and sets their opacity (a
 0-100% slider; one change per drag) and their emission (the Glow slider, 0 to 10 in tenths; one
 change per drag), all through these commands. A material with a texture
 shows a small copy of its image as its swatch; for the chosen material, Texture... loads a PNG
@@ -432,7 +433,7 @@ open:
   `definitions` to see what exists, then `open_path` and `entities` to look inside one
   placement at a time.
 
-In the window, the Outliner under the Materials list shows this tree (components as `<Name>`,
+In the window, the Outliner, in the dock under the Entity Info and Materials tabs, shows this tree (components as `<Name>`,
 groups by name or as `Group`, selected rows highlighted, open ones bold, nodes on the open path
 expanded whenever the open context changes) and sends these same commands: a click selects the
 node, with `open_path` first when it is in another context; Shift-click, or Cmd-click on macOS
@@ -637,8 +638,8 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 
 | Command | Effect |
 |---|---|
-| `{"type": "set_tool", "tool": "rectangle"}` | Switches to the tool (a fresh one, even if it is the active tool), dropping the operation in progress and anything typed, as the toolbar does. |
-| `{"type": "set_paint_material", "material": "m6"}` | The material the Paint tool paints with; `null` or absent for the default material. The tool does not change (the window's Materials list also switches to Paint). An unknown material is `not_found`. |
+| `{"type": "set_tool", "tool": "rectangle"}` | Switches to the tool (a fresh one, even if it is the active tool), dropping the operation in progress and anything typed, as the tool rail does. |
+| `{"type": "set_paint_material", "material": "m6"}` | The material the Paint tool paints with; `null` or absent for the default material. The tool does not change (a click on a swatch in the window's Materials tab does the same; a double-click then sets the Paint tool). An unknown material is `not_found`. |
 | `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
 | `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for), and lets go of the modifiers `tool_input` holds. It never closes the open group (`close_instance` does). |
 | `{"type": "set_fly_mode", "on": true, "speed": 6}` | Turns fly mode on or off, as F does (see Camera), and sets its speed in meters a second (0.25 to 60, else `invalid_input`; absent: unchanged). In the window the pointer is held while flying. |
@@ -950,32 +951,36 @@ under a pixel and where a click would snap.
 | File > New, Open..., Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt is `unsaved_changes` |
 | File > Import... (Cmd+I), File > Import Units | `import` (`scale`, `as`, `up`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
-| Quit (Cmd+Q, closing the window) | `quit` (`discard`) |
+| Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the status bar's `Agents: N` | none: they only show what agents do |
 | View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
-| Edit > Erase Selection (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
+| Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z; disabled when there is nothing to undo or redo, the tooltip naming the step) | `undo`, `redo`; `history` lists the steps |
-| Make group (G), Make component (Shift+G), Explode, Close group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
-| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
+| Group menu and context bar: Make Group (G), Make Component (Shift+G), Explode, Close Group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
+| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
-| The toolbar's tools and their keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
+| The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click to open a group | `tool_input` (`click`, `modifiers`, `drag`, `double_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Inference snapping, Shift and arrow-key locks, the marker under the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock) |
 | Typing into the measurements box, Escape | `tool_input` (`type`, `key`); the commands' explicit values; `cancel`; `editor.measurement`, `editor.typing` |
 | The status bar | `editor.status` (and `prompt`, `message`, `lock`) |
-| Materials list: choose (for Paint), Add, Delete, name, color, opacity, Glow, Texture..., Remove, texture size | `set_paint_material`, `add_material`, `delete_material`, `change_material` (`name`, `color`, `opacity`, `emission`, `texture`); `materials` |
+| Materials grid: click to choose (for editing and painting; the tool is unchanged), double-click to paint, Add, Delete, name, color, opacity, Glow, Texture..., Remove, texture size | `set_paint_material` (a double-click is `set_paint_material`, then `set_tool` `paint`), `add_material`, `delete_material`, `change_material` (`name`, `color`, `opacity`, `emission`, `texture`); `materials` |
 | Entity Info: what is selected, texture Offset / Rotation / Scale, Rotate 90, Reset | `entity`, `entities`, `curve`; `position_texture` (`offset`, `rotation_deg`, `rotate_by: 90`, `scale`, `reset`) |
 | Outliner: the tree, click to select, Shift/Cmd-click to toggle, double-click to open, the Model row | `outliner`; `open_path` then `select` (`toggle`); `open_path` (`[]` for the root) |
+| Context bar breadcrumb (`Model > House > Kitchen`), Esc | `open_path` with the crumb's path; `close_instance` |
 | The window's title (file name, unsaved mark) | `file` |
 | The 3D view's size | `editor.viewport` (the default view of `pick` and `infer`); `render_view` takes any size |
 
 Window chrome, which changes nothing in the model, its view or the editor, has no command: the
 window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
-which menus are open, tooltips, which Outliner rows are expanded, the export dialog's suggested
-format, keyboard focus, and the window's preferences: the theme (View > Theme), kept in
-`~/.sketchup-alt/prefs.json`, which the API never reads or writes. The window's 3D view follows
+which menus are open, tooltips, which Outliner rows are expanded, the Outliner's filter text (an agent filters the
+`outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export dialog's suggested
+format, keyboard focus, and the window's preferences: the theme (View > Theme) and the dock's width, divider position and tab, kept in
+`~/.sketchup-alt/prefs.json`, which the API never reads or writes. Whether the menus are the native macOS menu bar
+or the window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text field
+has focus, except Undo and Redo, which go to the field. The window's 3D view follows
 the theme (its day background and the selection's color and width); `render_view` keeps one
 fixed look, so its images do not depend on the window. The file dialogs are chrome too (commands
 take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.
