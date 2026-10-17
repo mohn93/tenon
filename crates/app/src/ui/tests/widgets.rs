@@ -23,6 +23,9 @@ fn a_tool_button_is_named_for_its_tool_and_shows_its_key() {
         clicked |= widgets::tool_button(ui, ToolKind::Rectangle, true).clicked();
     });
     assert_eq!(is_on(&h, "Rectangle"), Some(true));
+    let side = Vec2::splat(theme::RAIL_BUTTON);
+    assert_eq!(h.get_by_label("Rectangle").rect().size(), side);
+    assert!(drawn_texts_of(&h).contains(&crate::ui::icons::tool(ToolKind::Rectangle).to_string()));
     let key = chord(Bound::Tool(ToolKind::Rectangle)).unwrap().text();
     assert!(
         !drawn_texts_of(&h).contains(&key),

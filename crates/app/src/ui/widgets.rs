@@ -9,7 +9,7 @@ use egui::{
 };
 use tools::ToolKind;
 
-use super::{fonts, theme};
+use super::{fonts, icons, theme};
 use crate::shortcuts::Bound;
 
 /// A square button showing `icon`, named `label`; its tooltip is `tooltip` and the key bound
@@ -37,23 +37,33 @@ pub fn icon_button(
         .on_disabled_hover_ui(|ui| hint(ui, tooltip, bound))
 }
 
-/// A tool's button: its name, on an accent fill while it is the active tool (otherwise framed
-/// only under the pointer, as a selectable label is). The tooltip names the tool and its key.
+/// A tool's button on the rail: its glyph in a `RAIL_BUTTON` square, on an accent fill while
+/// it is the active tool (otherwise framed only under the pointer, as a selectable label is).
+/// Named for the tool; the tooltip names the tool and its key.
 pub fn tool_button(ui: &mut Ui, kind: ToolKind, selected: bool) -> Response {
     let t = theme::tokens(ui.ctx().theme());
-    let mut text = RichText::new(kind.label());
+    let mut glyph = RichText::new(icons::tool(kind)).size(theme::RAIL_ICON);
     if selected {
-        text = text.color(t.on_accent);
+        glyph = glyph.color(t.on_accent);
     }
-    // `selectable` reports the selected state to AccessKit and frames the button only when
-    // selected or under the pointer.
-    let mut button =
-        egui::Button::selectable(selected, text).min_size(Vec2::new(0.0, theme::CONTROL_HEIGHT));
-    if selected {
-        button = button.fill(t.accent);
-    }
-    ui.add(button)
-        .on_hover_ui(|ui| hint(ui, kind.label(), Some(Bound::Tool(kind))))
+    // The glyph and the padding around it add up to the button's side.
+    let line = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(theme::RAIL_ICON)));
+    let padding = Vec2::splat(((theme::RAIL_BUTTON - line) / 2.0).max(0.0));
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding = padding;
+            // `selectable` reports the selected state to AccessKit and frames the button only
+            // when selected or under the pointer.
+            let mut button =
+                egui::Button::selectable(selected, glyph).min_size(Vec2::splat(theme::RAIL_BUTTON));
+            if selected {
+                button = button.fill(t.accent);
+            }
+            ui.add(button)
+        })
+        .inner;
+    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, kind.label()));
+    response.on_hover_ui(|ui| hint(ui, kind.label(), Some(Bound::Tool(kind))))
 }
 
 /// A menu item showing the key bound to `bound` on its right; named `label` alone.

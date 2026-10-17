@@ -8,8 +8,8 @@ fn panels_leave_a_central_view_inside_the_window() {
     let h = harness(Fixture::default());
     let rect = h.state().central;
     assert!(
-        rect.min.x == 0.0 && rect.min.y > 0.0,
-        "toolbar above: {rect:?}"
+        rect.min.x == theme::RAIL_WIDTH && rect.min.y > 0.0,
+        "rail at the left, toolbar above: {rect:?}"
     );
     assert!(rect.max.x < 1280.0, "info panel on the right: {rect:?}");
     assert!(rect.max.y < 800.0, "status bar below: {rect:?}");
@@ -67,35 +67,51 @@ fn view_top(width: f32) -> f32 {
 }
 
 #[test]
-fn clicking_a_tool_button_reports_it() {
-    every_toolbar_button_works(SCREEN);
-    // The default window keeps the toolbar on one row, as a very wide one does.
-    assert_eq!(
-        view_top(1280.0),
-        view_top(2400.0),
-        "one toolbar row at 1280 points"
-    );
+fn the_rail_holds_every_tool_in_one_column_by_group() {
+    for size in [SCREEN, Vec2::new(960.0, 600.0)] {
+        every_toolbar_button_works(size);
+        let h = harness_sized(toolbar_fixture(), size);
+        let order: Vec<ToolKind> = crate::ui::rail::GROUPS
+            .iter()
+            .flat_map(|g| g.iter().copied())
+            .collect();
+        assert_eq!(order.len(), ToolKind::ALL.len());
+        for kind in ToolKind::ALL {
+            assert!(order.contains(&kind), "{kind:?} on the rail");
+        }
+        let rects: Vec<Rect> = order.iter().map(|k| rect_of(&h, k.label())).collect();
+        for (k, r) in order.iter().zip(&rects) {
+            assert!(
+                r.min.x >= 0.0 && r.max.x <= theme::RAIL_WIDTH,
+                "{k:?} in the rail: {r:?}"
+            );
+            assert_eq!(
+                (r.width(), r.height()),
+                (theme::RAIL_BUTTON, theme::RAIL_BUTTON),
+                "{k:?}"
+            );
+            assert!(
+                r.max.y <= h.state().central.max.y,
+                "{k:?} above the status bar at {size:?}"
+            );
+        }
+        for pair in rects.windows(2) {
+            assert_eq!(pair[0].center().x, pair[1].center().x, "one column");
+            assert!(pair[1].min.y > pair[0].max.y, "top to bottom");
+        }
+        // Wider gaps between groups than within them.
+        let gap =
+            |a: ToolKind, b: ToolKind| rect_of(&h, b.label()).min.y - rect_of(&h, a.label()).max.y;
+        assert!(
+            gap(ToolKind::Paint, ToolKind::Line)
+                >= gap(ToolKind::Select, ToolKind::Erase) + theme::RAIL_GROUP_GAP - 0.5
+        );
+    }
 }
 
 #[test]
-fn a_narrow_window_wraps_the_toolbar_and_keeps_every_button() {
-    let one_row = view_top(2400.0);
-    for width in [900.0, 640.0] {
-        every_toolbar_button_works(Vec2::new(width, 800.0));
-        let top = view_top(width);
-        assert!(
-            top > one_row + 10.0,
-            "the toolbar wraps at {width} points: {top} vs {one_row}"
-        );
-        assert!(top < 200.0, "{top} points of toolbar at {width}");
-        let central = harness_sized(toolbar_fixture(), Vec2::new(width, 800.0))
-            .state()
-            .central;
-        assert!(
-            central.width() > 0.0 && central.height() > 0.0,
-            "a 3D view at {width}: {central:?}"
-        );
-    }
+fn the_toolbar_without_tools_is_one_row_at_the_smallest_width() {
+    assert_eq!(view_top(960.0), view_top(2400.0));
 }
 
 #[test]
@@ -254,13 +270,7 @@ fn the_panels_settle_in_one_frame() {
 fn the_panels_fit_the_smallest_window() {
     let size = Vec2::new(960.0, 600.0);
     every_toolbar_button_works(size);
-    // The toolbar wraps onto a second row at this width (until M11b's rail), no more.
-    let one_row = view_top(2400.0);
-    let top = view_top(size.x);
-    assert!(
-        top <= 2.0 * one_row,
-        "at most two toolbar rows: {top} vs {one_row}"
-    );
+    assert_eq!(view_top(size.x), view_top(2400.0), "one toolbar row");
     let h = harness_sized(crowded(40), size);
     let view = h.state().central;
     assert!(

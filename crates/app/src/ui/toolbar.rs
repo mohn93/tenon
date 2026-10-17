@@ -1,7 +1,6 @@
-//! The toolbar: menus, tool buttons, Undo and Redo, and the group buttons.
+//! The toolbar: menus, Undo and Redo, and the group buttons.
 
 use egui::Ui;
-use tools::ToolKind;
 
 use super::{UiAction, View, icons, menu_bar, widgets};
 use crate::shortcuts::Bound;
@@ -9,18 +8,11 @@ use crate::shortcuts::Bound;
 pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
     ui.horizontal_wrapped(|ui| {
-        // Tighter than the theme so the default window's toolbar, with all of the menus, stays on
-        // one row, until M11b moves the tools to a rail.
+        // Tighter than the theme so the toolbar, with all of the menus, stays on one row.
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.spacing_mut().button_padding.x = 2.0;
         if view.egui_menus {
             menu_bar::show(ui, &crate::menus::menu_bar(view, false), actions);
-        }
-        ui.separator();
-        for kind in ToolKind::ALL {
-            if widgets::tool_button(ui, kind, view.tool == kind).clicked() {
-                actions.push(UiAction::Tool(kind));
-            }
         }
         ui.separator();
         let undo = view.undo.map_or("Nothing to undo".into(), |l| {

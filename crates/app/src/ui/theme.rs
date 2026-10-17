@@ -163,6 +163,11 @@ pub const SECTION_GAP: f32 = 12.0;
 pub const SWATCH_SIZE: f32 = 16.0;
 /// Icon glyphs in buttons.
 pub const ICON_SIZE: f32 = 16.0;
+/// The tool rail's width, its buttons' side, their glyph size, and the gap between groups.
+pub const RAIL_WIDTH: f32 = 44.0;
+pub const RAIL_BUTTON: f32 = 32.0;
+pub const RAIL_ICON: f32 = 18.0;
+pub const RAIL_GROUP_GAP: f32 = 8.0;
 
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {

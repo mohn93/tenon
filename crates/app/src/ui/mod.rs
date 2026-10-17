@@ -18,6 +18,7 @@ mod icons;
 mod materials;
 mod menu_bar;
 mod outliner;
+mod rail;
 mod right;
 mod status;
 #[cfg(test)]
@@ -224,6 +225,15 @@ pub const FLY_HELP: &str = "Walk or fly through the model.\n\
 pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect {
     Panel::top("toolbar").show(ui, |ui| toolbar::toolbar(ui, view, actions));
     Panel::bottom("status").show(ui, |ui| status::status_bar(ui, view, actions));
+    Panel::left("rail")
+        .resizable(false)
+        .exact_size(theme::RAIL_WIDTH)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::tokens(ui.ctx().theme()).bg_panel)
+                .inner_margin(egui::Margin::symmetric(6, 8)),
+        )
+        .show(ui, |ui| rail::rail(ui, view, actions));
     // A fixed width: egui grows a panel to fit wide content and keeps the width after, which
     // would narrow the 3D view for good once a wide row was shown.
     Panel::right("entity_info")
