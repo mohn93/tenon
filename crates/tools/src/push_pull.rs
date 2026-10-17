@@ -250,15 +250,19 @@ impl Tool for PushPullTool {
                     } else {
                         // Say what Push/Pull works on (informing, not refusing).
                         out.info = true;
-                        let grouped = matches!(
-                            face_under_in(ctx.scenery, ctx.camera, ctx.cursor),
-                            Some((Owner::Instance(_), ..))
+                        let under = face_under_in(ctx.scenery, ctx.camera, ctx.cursor);
+                        out.message = Some(
+                            match under {
+                                Some((Owner::Instance(_), ..)) => {
+                                    "Open the group to push or pull its faces"
+                                }
+                                Some((Owner::Outside, ..)) => {
+                                    "Close the group to push or pull faces outside it"
+                                }
+                                _ => "Push/Pull works on faces: click a face to push or pull it",
+                            }
+                            .into(),
                         );
-                        out.message = Some(if grouped {
-                            "Open the group to push or pull its faces".into()
-                        } else {
-                            "Push/Pull works on faces: click a face to push or pull it".into()
-                        });
                     }
                     self.hovered = None;
                 }
@@ -597,6 +601,64 @@ mod tests {
         assert_eq!(
             out.message.as_deref(),
             Some("Open the group to push or pull its faces")
+        );
+        assert_eq!(tool.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn clicking_a_face_outside_the_open_group_says_to_close_it() {
+        let r = Rig::new();
+        // The rig's square in the root, and a second square in a group that is open.
+        let mut model = r.model.clone();
+        let before: Vec<_> = model.edges().map(|(id, _)| id).collect();
+        let far = [
+            DVec3::new(5.0, 0.0, 0.0),
+            DVec3::new(7.0, 0.0, 0.0),
+            DVec3::new(7.0, 2.0, 0.0),
+            DVec3::new(5.0, 2.0, 0.0),
+        ];
+        model.add_polygon(&far).unwrap();
+        let edges: Vec<_> = model
+            .edges()
+            .map(|(id, _)| id)
+            .filter(|e| !before.contains(e))
+            .collect();
+        let faces: Vec<_> = model
+            .faces()
+            .map(|(id, _)| id)
+            .filter(|&f| f != r.face)
+            .collect();
+        let mut s = kernel::Scene::from_root(model);
+        let (group, _) = s
+            .make_group(
+                kernel::MeshId::Root,
+                &edges,
+                &faces,
+                &[],
+                kernel::DefinitionKind::Group,
+                "",
+            )
+            .unwrap();
+        let scenery = crate::scenery::Scenery::of(&s, &[group]).unwrap();
+        let (open, _) = s.resolve(&[group]).unwrap();
+        let ctx = ToolContext {
+            model: s.mesh(open).unwrap(),
+            scenery: &scenery,
+            camera: &r.camera,
+            cursor: r.camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap(),
+            pick_radius: 10.0,
+            drag_threshold: 4.0,
+            shift: false,
+            selection: &Default::default(),
+            material: None,
+            sample: false,
+        };
+        let mut tool = PushPullTool::new();
+        let out = tool.handle(ToolEvent::Click(r.hit(DVec3::new(1.0, 1.0, 0.0))), &ctx);
+        assert!(out.commands.is_empty() && out.info);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Close the group to push or pull faces outside it")
         );
         assert_eq!(tool.phase(), Phase::Idle);
     }

@@ -124,6 +124,14 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .enabled(view.redo.is_some())
             .entry(),
         Entry::Separator,
+        bound_item("Select All", Bound::SelectAll, UiAction::SelectAll).entry(),
+        bound_item("Select None", Bound::SelectNone, UiAction::SelectNone)
+            .enabled(view.has_selection)
+            .entry(),
+        bound_item("Duplicate", Bound::Duplicate, UiAction::Duplicate)
+            .enabled(view.has_selection)
+            .entry(),
+        Entry::Separator,
         bound_item("Erase", Bound::EraseSelection, UiAction::EraseSelection)
             .enabled(view.has_selection)
             .entry(),
@@ -305,11 +313,11 @@ pub fn item_id(action: &UiAction) -> String {
     }
 }
 
-/// Whether a native item is enabled: as in the table, except Undo and Redo while a text field
-/// has focus, so Cmd+Z reaches the field.
+/// Whether a native item is enabled: as in the table, except those a text field takes while it
+/// has focus (`yields_to_text`), so Cmd+Z and Cmd+A reach the field.
 #[cfg(any(target_os = "macos", test))]
 pub fn native_enabled(item: &Item, text_focused: bool) -> bool {
-    item.enabled && !(text_focused && is_history(&item.action))
+    item.enabled && !(text_focused && yields_to_text(&item.action))
 }
 
 /// Whether a menu event raised by a held key acts: only for bindings that repeat.
@@ -321,14 +329,19 @@ pub fn accepts_repeat(action: &UiAction) -> bool {
 }
 
 /// Whether a native menu event for `action` acts. `repeat`: a held key raised it.
-/// `text_focused`: a text field has focus now, so Undo and Redo are the field's (the item may
-/// have been enabled when the key went down).
+/// `text_focused`: a text field has focus now, so Undo, Redo, Select All and Select None are
+/// the field's (the item may have been enabled when the key went down).
 #[cfg(any(target_os = "macos", test))]
 pub fn native_event_acts(action: &UiAction, repeat: bool, text_focused: bool) -> bool {
-    !(repeat && !accepts_repeat(action)) && !(text_focused && is_history(action))
+    !(repeat && !accepts_repeat(action)) && !(text_focused && yields_to_text(action))
 }
 
+/// Whether a focused text field takes the action's chord for itself: undo and redo its
+/// typing, select all or none of its text. Duplicate is not a field's (it has no Cmd+D).
 #[cfg(any(target_os = "macos", test))]
-fn is_history(action: &UiAction) -> bool {
-    matches!(action, UiAction::Undo | UiAction::Redo)
+fn yields_to_text(action: &UiAction) -> bool {
+    matches!(
+        action,
+        UiAction::Undo | UiAction::Redo | UiAction::SelectAll | UiAction::SelectNone
+    )
 }

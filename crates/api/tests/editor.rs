@@ -89,6 +89,8 @@ impl Host for Editing {
             }
             EditorCommand::SetDialog { dialog } => self.state.dialog = dialog,
             EditorCommand::SetSoftenAngle { angle } => self.state.soften_angle = angle,
+            // The window's Move tool copies; this host has none.
+            EditorCommand::Duplicate {} => {}
         }
         Ok(())
     }
@@ -171,6 +173,8 @@ fn editor_commands_set_the_editor_and_return_its_state() {
         json!({"type": "set_dialog", "dialog": null}),
     );
     assert_eq!(r["result"]["editor"]["dialog"], Value::Null, "{r}");
+    let r = call(&mut h, "execute", json!({"type": "duplicate"}));
+    assert_eq!(r["result"]["editor"]["tool"], "push_pull", "{r}");
 
     let state = call(&mut h, "query", json!({"type": "editor"}))["result"].clone();
     assert_eq!(state["type"], "editor");

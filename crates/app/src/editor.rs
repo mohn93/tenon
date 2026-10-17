@@ -1322,6 +1322,60 @@ impl Editor {
         true
     }
 
+    /// Selects every edge, face, group and guide of the open context (Cmd+A). The tool and
+    /// its operation stay. Always true.
+    pub fn select_all(&mut self) -> bool {
+        self.run(Command::Select {
+            ids: Vec::new(),
+            mode: SelectMode::Replace,
+            all: true,
+        });
+        // Move and Rotate prompt by whether something is selected.
+        self.invalidate_hover();
+        true
+    }
+
+    /// Selects nothing (Cmd+Shift+A). The tool and its operation stay. False if nothing was
+    /// selected.
+    pub fn select_none(&mut self) -> bool {
+        if self.doc.selection().is_empty() {
+            return false;
+        }
+        self.run(Command::Select {
+            ids: Vec::new(),
+            mode: SelectMode::Replace,
+            all: false,
+        });
+        self.invalidate_hover();
+        true
+    }
+
+    /// Duplicates the selection (Cmd+D): Move in copy mode, with the base point clicked under
+    /// the cursor when it is in the view and under no window, so the copy follows the cursor
+    /// and the next click or a typed distance places it as one undo step. With the cursor
+    /// elsewhere Move waits for a base point. Refused, with a message, when nothing is
+    /// selected.
+    pub fn duplicate(&mut self) -> Result<(), CommandError> {
+        if self.doc.selection().is_empty() {
+            self.message = Some(Message::error("Select geometry or a group to duplicate"));
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "select something to duplicate first",
+            ));
+        }
+        // Read before `hover_now`, which shows the hover again.
+        let in_view = !self.flying && !self.hover_hidden && !self.covered;
+        self.select_tool(ToolKind::Move);
+        self.send(ToolEvent::ToggleCopy);
+        if in_view {
+            self.hover_now();
+            if let Some(hit) = self.hit {
+                self.send(ToolEvent::Click(hit));
+            }
+        }
+        Ok(())
+    }
+
     /// The status as one line: tool, prompt, measurement and feedback separated by bars, as
     /// the next frame shows it.
     #[cfg(test)]
@@ -1349,7 +1403,12 @@ impl Editor {
         } else {
             Some(format!("{}_", self.typed))
         };
-        let plane = self.tool.plane_lock().map(SnapKind::Axis);
+        // The plane lock is shown until the first click; during the turn, the direction lock.
+        let plane = self
+            .tool
+            .plane_lock()
+            .filter(|_| self.tool.anchor().is_none())
+            .map(SnapKind::Axis);
         let lock = self.lock.map(|l| l.kind).or(plane).map(|kind| match kind {
             SnapKind::Axis(Axis::X) => "Locked: red axis",
             SnapKind::Axis(Axis::Y) => "Locked: green axis",
@@ -4936,5 +4995,100 @@ mod tests {
         let solid = e.solid_preview();
         assert!(!solid.is_empty());
         assert!(solid.iter().all(|v| v.pos[0] >= 10.9), "{solid:?}");
+    }
+
+    /// A 2 m square on the ground, at (0, 0) to (2, 2).
+    fn ground_square(e: &mut Editor) {
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn select_all_and_none_keep_the_tool() {
+        let mut e = editor();
+        ground_square(&mut e);
+        let face = e.doc().model().faces().next().unwrap().0;
+        e.execute(Command::PushPull {
+            face: EntityId::Face(face),
+            distance: 2.0,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Rectangle);
+        click_at(&mut e, DVec3::new(5.0, 5.0, 0.0));
+        assert!(matches!(e.phase(), tools::Phase::Active { .. }));
+        assert!(e.select_all());
+        let (edges, faces) = stats(&e);
+        assert_eq!((edges, faces), (12, 6), "a box");
+        assert_eq!(e.doc().selection().len(), edges + faces);
+        assert_eq!(e.tool_kind(), ToolKind::Rectangle);
+        assert!(
+            matches!(e.phase(), tools::Phase::Active { .. }),
+            "it goes on"
+        );
+        assert!(e.select_none());
+        assert!(e.doc().selection().is_empty());
+        assert!(!e.select_none(), "nothing was selected");
+        assert_eq!(e.tool_kind(), ToolKind::Rectangle);
+        assert!(matches!(e.phase(), tools::Phase::Active { .. }));
+    }
+
+    #[test]
+    fn duplicate_moves_a_copy_with_the_cursor() {
+        let mut e = editor();
+        ground_square(&mut e);
+        e.select_all();
+        let corner = DVec3::new(2.0, 2.0, 0.0);
+        move_to(&mut e, corner);
+        let before = stats(&e);
+        e.duplicate().unwrap();
+        assert_eq!(e.tool_kind(), ToolKind::Move);
+        let tools::Phase::Active { points } = e.phase() else {
+            panic!("the base point is clicked")
+        };
+        assert!(points[0].distance(corner) < 1e-9, "{points:?}");
+        assert!(
+            e.status_parts().prompt.starts_with("Copy:"),
+            "{}",
+            e.status()
+        );
+        click_at(&mut e, DVec3::new(5.0, 2.0, 0.0));
+        assert_eq!(
+            stats(&e),
+            (before.0 * 2, before.1 * 2),
+            "the original stays"
+        );
+        assert_eq!(e.doc().undo_label(), Some("copy"));
+        e.undo();
+        assert_eq!(stats(&e), before, "one undo step");
+        // With nothing selected it says so and keeps the tool.
+        e.select_none();
+        e.select_tool(ToolKind::Line);
+        let err = e.duplicate().unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert_eq!(e.tool_kind(), ToolKind::Line);
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Select geometry or a group to duplicate")
+        );
+    }
+
+    #[test]
+    fn duplicate_with_the_cursor_outside_waits_for_a_base_point() {
+        let mut e = editor();
+        ground_square(&mut e);
+        e.select_all();
+        move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.cursor_left();
+        e.duplicate().unwrap();
+        assert_eq!(e.tool_kind(), ToolKind::Move);
+        assert_eq!(e.phase(), tools::Phase::Idle);
+        assert_eq!(
+            e.status_parts().prompt,
+            "Copy: click a base point to copy the selection"
+        );
     }
 }

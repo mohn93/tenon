@@ -865,6 +865,16 @@ impl State {
             UiAction::Redo => {
                 self.editor.redo();
             }
+            UiAction::SelectAll => {
+                self.editor.select_all();
+            }
+            UiAction::SelectNone => {
+                self.editor.select_none();
+            }
+            // A refusal is in the status: nothing was selected.
+            UiAction::Duplicate => {
+                let _ = self.editor.duplicate();
+            }
             UiAction::EraseSelection => {
                 self.editor.erase_selection();
             }
@@ -1398,6 +1408,8 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
             PhysicalKey::Code(KeyCode::KeyS) => Some('s'),
             PhysicalKey::Code(KeyCode::KeyE) => Some('e'),
             PhysicalKey::Code(KeyCode::KeyQ) => Some('q'),
+            PhysicalKey::Code(KeyCode::KeyA) => Some('a'),
+            PhysicalKey::Code(KeyCode::KeyD) => Some('d'),
             _ => None,
         },
     }
@@ -1586,7 +1598,7 @@ impl App {
     }
 
     /// A native menu item was chosen. Acts unless a held key raised it and the binding does
-    /// not repeat, or it is Undo or Redo while a text field has focus (Cmd+Z is the field's).
+    /// not repeat, or a text field has focus and takes the chord itself (Cmd+Z, Cmd+A).
     #[cfg(target_os = "macos")]
     fn menu_event(&mut self, event_loop: &ActiveEventLoop, id: &str, repeat: bool) {
         let Some(s) = self.state.as_mut() else { return };
@@ -2190,6 +2202,8 @@ mod tests {
             'e' => KeyCode::KeyE,
             'q' => KeyCode::KeyQ,
             'z' => KeyCode::KeyZ,
+            'a' => KeyCode::KeyA,
+            'd' => KeyCode::KeyD,
             other => panic!("add {other} to shortcut_letter's fallbacks and here"),
         };
         let arabic = Key::Character(SmolStr::new("ب"));

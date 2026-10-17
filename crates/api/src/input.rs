@@ -94,9 +94,10 @@ pub enum InputEvent {
     /// letter holds Shift: "G" makes a component), or `enter`, `backspace`, `delete`,
     /// `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis), `down`
     /// (unlock), or `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure
-    /// guide making). With `cmd` (or `ctrl`) only `z` (undo; with `shift` redo) is taken, and
-    /// with `alt` (Cmd or Ctrl not held) no key: others are `invalid_input`, also when a
-    /// `modifiers` event holds them.
+    /// guide making). With `cmd` (or `ctrl`) only `z` (undo; with `shift` redo), `a` (select
+    /// all; with `shift` none) and `d` (duplicate; not with `shift`) are taken, and with `alt`
+    /// (Cmd or Ctrl not held) no key: others are `invalid_input`, also when a `modifiers`
+    /// event holds them.
     Key {
         key: String,
         #[serde(default)]
@@ -328,10 +329,11 @@ fn event(e: InputEvent) -> Result<Input, CommandError> {
                 cmd: cmd || ctrl,
             };
             let (key, mods) = key_named(&key, mods)?;
-            if mods.cmd && !matches!(key, Key::Char('z' | 'Z')) {
+            // Cmd+Shift+D is no chord of the window's.
+            if mods.cmd && !matches!(key, Key::Char('z' | 'Z' | 'a' | 'A' | 'd')) {
                 return Err(invalid(
-                    "with cmd or ctrl only z (undo, with shift redo) is taken; file actions \
-                     are commands",
+                    "with cmd or ctrl only z (undo, with shift redo), a (select all, with \
+                     shift none) and d (duplicate) are taken; file actions are commands",
                 ));
             }
             if mods.alt && !mods.cmd {
@@ -495,8 +497,13 @@ mod tests {
             ),
             (
                 json!({"type": "key", "key": "s", "cmd": true}),
-                "event 0: with cmd or ctrl only z (undo, with shift redo) is taken; file \
-                 actions are commands",
+                "event 0: with cmd or ctrl only z (undo, with shift redo), a (select all, with \
+                 shift none) and d (duplicate) are taken; file actions are commands",
+            ),
+            (
+                json!({"type": "key", "key": "d", "cmd": true, "shift": true}),
+                "event 0: with cmd or ctrl only z (undo, with shift redo), a (select all, with \
+                 shift none) and d (duplicate) are taken; file actions are commands",
             ),
             (
                 json!({"type": "key", "key": "r", "alt": true}),

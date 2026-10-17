@@ -19,6 +19,9 @@ pub enum Bound {
     Quit,
     Undo,
     Redo,
+    SelectAll,
+    SelectNone,
+    Duplicate,
     EraseSelection,
     MakeGroup,
     MakeComponent,
@@ -76,7 +79,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 26] = [
+pub const TABLE: [Shortcut; 29] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -97,6 +100,9 @@ pub const TABLE: [Shortcut; 26] = [
     on(Bound::Quit, true, false, Key::Letter('q')),
     repeating(on(Bound::Undo, true, false, Key::Letter('z'))),
     repeating(on(Bound::Redo, true, true, Key::Letter('z'))),
+    on(Bound::SelectAll, true, false, Key::Letter('a')),
+    on(Bound::SelectNone, true, true, Key::Letter('a')),
+    on(Bound::Duplicate, true, false, Key::Letter('d')),
     on(Bound::EraseSelection, false, false, Key::Delete),
     on(Bound::MakeGroup, false, false, Key::Letter('g')),
     on(Bound::MakeComponent, false, true, Key::Letter('g')),
@@ -221,6 +227,9 @@ impl Bound {
             Bound::Quit => "Quit",
             Bound::Undo => "Undo",
             Bound::Redo => "Redo",
+            Bound::SelectAll => "Select All",
+            Bound::SelectNone => "Select None",
+            Bound::Duplicate => "Duplicate",
             Bound::EraseSelection => "Erase selection",
             Bound::MakeGroup => "Make Group",
             Bound::MakeComponent => "Make Component",
@@ -241,7 +250,12 @@ impl Bound {
             | Bound::ImportFile
             | Bound::ExportFile
             | Bound::Quit => "File",
-            Bound::Undo | Bound::Redo | Bound::EraseSelection => "Edit",
+            Bound::Undo
+            | Bound::Redo
+            | Bound::SelectAll
+            | Bound::SelectNone
+            | Bound::Duplicate
+            | Bound::EraseSelection => "Edit",
             Bound::MakeGroup | Bound::MakeComponent | Bound::CloseInstance => "Group",
             Bound::ZoomExtents | Bound::ToggleFly => "Camera",
         }
@@ -260,6 +274,9 @@ impl Bound {
             Bound::Quit => UiAction::Quit,
             Bound::Undo => UiAction::Undo,
             Bound::Redo => UiAction::Redo,
+            Bound::SelectAll => UiAction::SelectAll,
+            Bound::SelectNone => UiAction::SelectNone,
+            Bound::Duplicate => UiAction::Duplicate,
             Bound::EraseSelection => UiAction::EraseSelection,
             Bound::MakeGroup => UiAction::MakeGroup,
             Bound::MakeComponent => UiAction::MakeComponent,
@@ -356,6 +373,15 @@ mod tests {
         assert_eq!(command('e', false, false), None);
         assert_eq!(command('q', false, false), Some(Bound::Quit));
         assert_eq!(command('l', false, false), None);
+        assert_eq!(command('a', false, false), Some(Bound::SelectAll));
+        assert_eq!(command('a', true, false), Some(Bound::SelectNone));
+        assert_eq!(command('d', false, false), Some(Bound::Duplicate));
+        assert_eq!(command('a', false, true), None, "held Cmd+A selects once");
+        assert_eq!(
+            plain('a'),
+            Some(Bound::Tool(ToolKind::Arc)),
+            "plain a is still Arc"
+        );
     }
 
     #[test]
@@ -417,6 +443,8 @@ mod tests {
         assert_eq!(text(Bound::EraseSelection, true), "⌫");
         assert_eq!(text(Bound::EraseSelection, false), "Delete");
         assert_eq!(text(Bound::CloseInstance, true), "Esc");
+        assert_eq!(text(Bound::SelectNone, true), "⇧⌘A");
+        assert_eq!(text(Bound::Duplicate, false), "Ctrl+D");
     }
 
     #[test]

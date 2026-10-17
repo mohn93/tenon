@@ -270,10 +270,18 @@ impl Editor {
     fn press(&mut self, key: Key, mods: Mods) -> Result<(), String> {
         let held = self.modifiers();
         let (cmd, alt) = (held.cmd || mods.cmd, held.alt || mods.alt);
-        let is_z = matches!(key, Key::Char('z' | 'Z'));
-        if key != Key::CtrlTap && !(is_z && cmd) {
+        let shift = held.shift || mods.shift;
+        // The Cmd chords of the window's Edit menu: Undo and Redo, Select All and None,
+        // Duplicate (not with Shift).
+        let edit_chord = matches!(key, Key::Char('z' | 'Z' | 'a' | 'A'))
+            || matches!(key, Key::Char('d')) && !shift;
+        if key != Key::CtrlTap && !(edit_chord && cmd) {
             if cmd {
-                return Err("with cmd or ctrl held only z (undo, with shift redo) is taken".into());
+                return Err(
+                    "with cmd or ctrl held only z (undo, with shift redo), a (select \
+                            all, with shift none) and d (duplicate) are taken"
+                        .into(),
+                );
             }
             if alt {
                 return Err("with alt held no key is taken".into());
@@ -292,6 +300,17 @@ impl Editor {
                 } else {
                     self.undo();
                 }
+            }
+            Key::Char('a' | 'A') if cmd => {
+                if shift {
+                    self.select_none();
+                } else {
+                    self.select_all();
+                }
+            }
+            Key::Char('d') if cmd => {
+                // Refused with nothing selected; the status says so, as in the window.
+                let _ = self.duplicate();
             }
             key => {
                 self.key(editor_key(key, shift));

@@ -615,7 +615,7 @@ fn every_cmd_chord_is_a_native_menu_accelerator() {
 }
 
 #[test]
-fn undo_and_redo_menu_items_are_off_while_typing() {
+fn text_actions_are_off_while_typing() {
     use crate::menus::{items, menu_bar, native_enabled};
     let f = Fixture {
         undo: Some("paint".into()),
@@ -625,14 +625,63 @@ fn undo_and_redo_menu_items_are_off_while_typing() {
     };
     let bar = menu_bar(&f.view(), true);
     for i in items(&bar) {
-        let history = matches!(i.action, UiAction::Undo | UiAction::Redo);
-        assert_eq!(
-            native_enabled(i, true),
-            i.enabled && !history,
-            "{}",
-            i.label
+        let text = matches!(
+            i.action,
+            UiAction::Undo | UiAction::Redo | UiAction::SelectAll | UiAction::SelectNone
         );
+        assert_eq!(native_enabled(i, true), i.enabled && !text, "{}", i.label);
         assert_eq!(native_enabled(i, false), i.enabled, "{}", i.label);
+    }
+}
+
+#[test]
+fn select_all_and_none_yield_to_a_focused_text_field() {
+    use crate::menus::{items, menu_bar, native_enabled};
+    let f = edit_fixture(true, false);
+    let bar = menu_bar(&f.view(), true);
+    let item = |action: UiAction| {
+        *items(&bar)
+            .iter()
+            .find(|i| i.action == action)
+            .expect("an item")
+    };
+    for action in [UiAction::SelectAll, UiAction::SelectNone] {
+        assert!(native_enabled(item(action.clone()), false), "{action:?}");
+        assert!(!native_enabled(item(action.clone()), true), "{action:?}");
+    }
+    // A text field has no Cmd+D: Duplicate stays on.
+    assert!(native_enabled(item(UiAction::Duplicate), true));
+}
+
+#[test]
+fn the_edit_menu_selects_all_none_and_duplicates() {
+    for (item, action) in [
+        ("Select All", UiAction::SelectAll),
+        ("Select None", UiAction::SelectNone),
+        ("Duplicate", UiAction::Duplicate),
+    ] {
+        let mut h = harness(edit_fixture(true, false));
+        assert_eq!(click_menu(&mut h, &["Edit", item]), [action], "{item}");
+    }
+    // Without a selection only Select All is on.
+    for (item, off) in [
+        ("Select All", false),
+        ("Select None", true),
+        ("Duplicate", true),
+    ] {
+        let mut h = harness(edit_fixture(false, false));
+        let there = rects_named(&h, item);
+        click(&mut h, "Edit");
+        let node = new_node(&h, item, &there);
+        assert_eq!(node.accesskit_node().is_disabled(), off, "{item}");
+    }
+    // Their keys are the table's.
+    let mut h = harness(edit_fixture(true, false));
+    click(&mut h, "Edit");
+    let texts = drawn_texts(&h);
+    for bound in [Bound::SelectAll, Bound::SelectNone, Bound::Duplicate] {
+        let key = chord(bound).unwrap().text();
+        assert!(texts.contains(&key), "{key} in {texts:?}");
     }
 }
 
@@ -665,4 +714,10 @@ fn native_menu_events_act_once_and_leave_typing_alone() {
     assert!(!native_event_acts(&UiAction::Undo, false, true));
     assert!(!native_event_acts(&UiAction::Redo, true, true));
     assert!(native_event_acts(&UiAction::SaveFile, false, true));
+    // Cmd+A is the field's too; Cmd+D is not a field's, and a held one duplicates once.
+    assert!(!native_event_acts(&UiAction::SelectAll, false, true));
+    assert!(!native_event_acts(&UiAction::SelectNone, false, true));
+    assert!(native_event_acts(&UiAction::Duplicate, false, true));
+    assert!(!native_event_acts(&UiAction::Duplicate, true, false));
+    assert!(!native_event_acts(&UiAction::SelectAll, true, false));
 }

@@ -228,6 +228,7 @@ impl Host for AppHost<'_> {
             EditorCommand::SetSoftenAngle { angle } => {
                 self.editor.set_soften_angle_checked(angle)?
             }
+            EditorCommand::Duplicate {} => self.editor.duplicate()?,
         }
         Ok(())
     }

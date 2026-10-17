@@ -784,7 +784,8 @@ fn modifiers_stay_held_across_calls_until_let_go() {
     );
     assert_eq!(
         r["error"]["data"]["message"],
-        "event 1: with cmd or ctrl held only z (undo, with shift redo) is taken",
+        "event 1: with cmd or ctrl held only z (undo, with shift redo), a (select all, with \
+         shift none) and d (duplicate) are taken",
         "{r}"
     );
     assert_eq!(
@@ -1271,4 +1272,69 @@ fn dead_end_clicks_explain_without_flashing() {
     // A refusal is still an error.
     let r = input(&mut e, json!([{"type": "type", "text": "abc"}]));
     assert_eq!(r["editor"]["message_kind"], "error", "{r}");
+}
+
+#[test]
+fn cmd_keys_select_all_none_and_duplicate() {
+    let mut e = editor();
+    square(&mut e);
+    let selected = |e: &mut Editor| {
+        ask(e, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let cmd = |e: &mut Editor, key: &str, shift: bool| {
+        call(
+            e,
+            "tool_input",
+            json!({"events": [{"type": "key", "key": key, "cmd": true, "shift": shift}]}),
+        )
+    };
+    // Four edges and a face.
+    assert!(cmd(&mut e, "a", false)["error"].is_null());
+    assert_eq!(selected(&mut e), 5);
+    assert!(cmd(&mut e, "a", true)["error"].is_null());
+    assert_eq!(selected(&mut e), 0);
+    // Cmd+D with nothing selected: refused in the status, as in the window.
+    let r = cmd(&mut e, "d", false);
+    assert_eq!(r["result"]["editor"]["tool"], "select", "{r}");
+    cmd(&mut e, "a", false);
+    input(&mut e, json!([{"type": "move", "point": [2, 2, 0]}]));
+    let r = cmd(&mut e, "d", false);
+    assert_eq!(r["result"]["editor"]["tool"], "move", "{r}");
+    assert_eq!(r["result"]["editor"]["phase"], "active", "{r}");
+    let prompt = r["result"]["editor"]["prompt"].as_str().unwrap();
+    assert!(prompt.starts_with("Copy:"), "{prompt}");
+    // Cmd+Shift+D is no chord.
+    let r = cmd(&mut e, "d", true);
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    // The editor command, with nothing selected, is refused.
+    exec(&mut e, json!({"type": "cancel"}));
+    exec(&mut e, json!({"type": "select", "ids": []}));
+    let r = call(&mut e, "execute", json!({"type": "duplicate"}));
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+}
+
+#[test]
+fn a_turn_shows_only_its_direction_lock() {
+    let mut e = editor();
+    cube(&mut e);
+    select_all(&mut e);
+    tool(&mut e, "rotate");
+    let key = |e: &mut Editor, k: &str| input(e, json!([{"type": "key", "key": k}]));
+    assert_eq!(key(&mut e, "up")["editor"]["lock"], "Locked: blue axis");
+    let r = input(&mut e, json!([{"type": "click", "point": [2, 1, 0.5]}]));
+    assert_eq!(r["editor"]["phase"], "active", "{r}");
+    assert_eq!(
+        r["editor"]["lock"],
+        Value::Null,
+        "the plane lock is not a direction lock"
+    );
+    assert_eq!(key(&mut e, "right")["editor"]["lock"], "Locked: red axis");
+    // The turn done, the plane lock is still there for the next one.
+    let r = input(&mut e, json!([{"type": "type", "text": "90"}]));
+    assert_eq!(ran(&r), ["rotate"], "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert_eq!(r["editor"]["lock"], "Locked: blue axis", "{r}");
 }

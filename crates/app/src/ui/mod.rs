@@ -43,6 +43,12 @@ pub enum UiAction {
     Tool(ToolKind),
     Undo,
     Redo,
+    /// Select everything in the open context, keeping the tool.
+    SelectAll,
+    /// Select nothing, keeping the tool.
+    SelectNone,
+    /// Copy the selection with Move, the base point under the cursor.
+    Duplicate,
     EraseSelection,
     MakeGroup,
     MakeComponent,

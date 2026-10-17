@@ -172,10 +172,15 @@ pub enum EditorCommand {
     SetDialog { dialog: Option<Dialog> },
     /// The Soften Edges window's angle, in whole degrees (0 to 180).
     SetSoftenAngle { angle: u32 },
+    /// Edit > Duplicate (Cmd+D): the Move tool, copying the selection. With the cursor in the
+    /// view the base point is clicked there, so the copy follows the cursor until a click or
+    /// a typed distance places it (one undo step); otherwise Move waits for a base point.
+    /// `invalid_input` with nothing selected.
+    Duplicate {},
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 7] = [
+pub const EDITOR_COMMANDS: [&str; 8] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
@@ -183,6 +188,7 @@ pub const EDITOR_COMMANDS: [&str; 7] = [
     "set_fly_mode",
     "set_dialog",
     "set_soften_angle",
+    "duplicate",
 ];
 
 #[cfg(test)]
