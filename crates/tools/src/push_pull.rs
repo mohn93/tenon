@@ -3,12 +3,12 @@
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
-use kernel::{EntityId, FaceId, Model};
+use kernel::{EntityId, FaceId, MaterialId, Model};
 use session::Command;
 
 use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
 use crate::scenery::Owner;
-use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, toward_cursor};
 
 /// A push/pull in progress.
@@ -20,6 +20,10 @@ struct Drag {
     start: DVec3,
     /// The face's loops (outer first), for the preview.
     loops: Vec<Vec<DVec3>>,
+    /// The face's triangles, for the preview solid's cap.
+    triangles: Vec<[DVec3; 3]>,
+    /// The face's front material, for the preview solid.
+    material: Option<MaterialId>,
     distance: f64,
 }
 
@@ -65,6 +69,30 @@ fn outline(loops: &[Vec<DVec3>], offset: DVec3, out: &mut Vec<[DVec3; 2]>) {
         for i in 0..l.len() {
             out.push([l[i] + offset, l[(i + 1) % l.len()] + offset]);
         }
+    }
+}
+
+/// The solid a pull by `drag.distance` adds: the face's triangles moved by the distance (the
+/// cap) and two triangles per loop edge (the sides), wound outward. The base is left out.
+fn solid(drag: &Drag) -> Solid {
+    let o = drag.normal * drag.distance;
+    let cap = drag.triangles.iter().map(|t| t.map(|p| p + o));
+    let sides = drag.loops.iter().flat_map(|l| {
+        (0..l.len()).flat_map(move |i| {
+            let (p, q) = (l[i], l[(i + 1) % l.len()]);
+            [[p, q, q + o], [p, q + o, p + o]]
+        })
+    });
+    // Loops and triangles wind counter-clockwise around the normal (holes clockwise), so
+    // these face outward when pulled along it; a push turns them inside out.
+    let flip = drag.distance < 0.0;
+    let triangles = cap
+        .chain(sides)
+        .map(|[a, b, c]| if flip { [a, c, b] } else { [a, b, c] })
+        .collect();
+    Solid {
+        triangles,
+        material: drag.material,
     }
 }
 
@@ -131,11 +159,14 @@ impl Tool for PushPullTool {
             ToolEvent::Click(hit) => match self.drag.as_ref() {
                 None => {
                     if let Some((face, start)) = open_face_under(ctx) {
+                        let f = ctx.model.face(face).unwrap();
                         self.drag = Some(Drag {
                             face,
-                            normal: ctx.model.face(face).unwrap().normal,
+                            normal: f.normal,
                             start,
                             loops: loops(ctx.model, face),
+                            triangles: ctx.model.triangulate(face).unwrap_or_default(),
+                            material: f.front,
                             distance: 0.0,
                         });
                     }
@@ -171,6 +202,7 @@ impl Tool for PushPullTool {
                 for p in d.loops.iter().flatten() {
                     out.preview.push([*p, *p + offset]);
                 }
+                out.solid = Some(solid(d));
             }
         }
         out
@@ -291,6 +323,54 @@ mod tests {
         assert_eq!(*face, EntityId::Face(r.face));
         assert!((distance - 1.5).abs() < 1e-6);
         assert!(r.tool.measurement().1.is_none(), "the drag ended");
+    }
+
+    #[test]
+    fn a_pull_previews_its_cap_and_sides_in_the_faces_material() {
+        let mut r = Rig::new();
+        let red = Some(MaterialId(5));
+        r.model.paint_faces(&[r.face], kernel::Side::Front, red);
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        let out = r.at(DVec3::new(1.0, 1.0, 2.0), ToolEvent::Move);
+        let solid = out.solid.expect("a solid while pulling");
+        // A square: 2 cap triangles and 2 per side.
+        assert_eq!(solid.triangles.len(), 2 + 4 * 2);
+        let tops = solid
+            .triangles
+            .iter()
+            .flatten()
+            .filter(|p| (p.z - 2.0).abs() < 1e-9)
+            .count();
+        assert!(tops >= 6, "the cap is moved by the distance");
+        assert!(
+            solid
+                .triangles
+                .iter()
+                .flatten()
+                .all(|p| p.z > -1e-9 && p.z < 2.0 + 1e-9)
+        );
+        assert_eq!(solid.material, r.model.face(r.face).unwrap().front);
+        assert_eq!(solid.material, red);
+        // No pull yet: no solid.
+        let mut r = Rig::new();
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        assert_eq!(r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Move).solid, None);
+    }
+
+    #[test]
+    fn the_pulled_solid_winds_outward_both_ways() {
+        for height in [1.5, -1.5] {
+            let mut r = Rig::new();
+            r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+            let out = r.at(DVec3::new(1.0, 1.0, height), ToolEvent::Move);
+            let solid = out.solid.expect("a solid while pulling");
+            let centre = DVec3::new(1.0, 1.0, height / 2.0);
+            for [a, b, c] in &solid.triangles {
+                let normal = (*b - *a).cross(*c - *a);
+                let middle = (*a + *b + *c) / 3.0;
+                assert!(normal.dot(middle - centre) > 0.0, "{height}: {a} {b} {c}");
+            }
+        }
     }
 
     #[test]

@@ -72,10 +72,21 @@ pub struct ToolOutput {
     pub commands: Vec<Command>,
     /// Segments to draw as a live preview.
     pub preview: Vec<[DVec3; 2]>,
+    /// A solid to draw as a live preview.
+    pub solid: Option<Solid>,
     /// Feedback for the user, e.g. why typed text was ignored.
     pub message: Option<String>,
     /// A material the tool picked up to paint with next (Some(None): the default material).
     pub sampled: Option<Option<MaterialId>>,
+}
+
+/// A translucent solid a tool previews (Push/Pull's pulled shape), in the open context's
+/// coordinates, shown in `material`'s color (None: the default material). Its triangles wind
+/// counter-clockwise seen from outside the solid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Solid {
+    pub triangles: Vec<[DVec3; 3]>,
+    pub material: Option<MaterialId>,
 }
 
 /// Where a tool is in its operation.
