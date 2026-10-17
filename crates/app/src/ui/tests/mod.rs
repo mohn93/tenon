@@ -155,9 +155,10 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
                         .layer_id(egui::LayerId::background())
                         .max_rect(ctx.viewport_rect()),
                 );
-                let (actions, central) = draw(&mut root, &f.view());
-                f.actions.extend(actions);
-                f.central = central;
+                // As `Gui::frame` does: every pass appends, the last pass's rectangle stays.
+                let mut actions = std::mem::take(&mut f.actions);
+                f.central = draw(&mut root, &f.view(), &mut actions);
+                f.actions = actions;
             },
             f,
         );

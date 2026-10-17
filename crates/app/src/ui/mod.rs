@@ -194,12 +194,15 @@ pub const FLY_HELP: &str = "Walk or fly through the model.\n\
     Shift: 3x faster; Option/Alt: slower\n\
     Esc or F: leave fly mode";
 
-/// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
-/// the 3D view, in points.
-pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
-    let mut actions = Vec::new();
-    Panel::top("toolbar").show(ui, |ui| toolbar::toolbar(ui, view, &mut actions));
-    Panel::bottom("status").show(ui, |ui| status::status_bar(ui, view, &mut actions));
+/// Lays out the panels for one pass, appending the actions asked for to `actions`. Returns the
+/// rectangle left for the 3D view, in points.
+///
+/// egui can lay a frame out more than once (the right panel asks for that when its measurement
+/// moved), and only the first pass sees the frame's input; so a caller keeps every pass's actions
+/// and the last pass's rectangle.
+pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect {
+    Panel::top("toolbar").show(ui, |ui| toolbar::toolbar(ui, view, actions));
+    Panel::bottom("status").show(ui, |ui| status::status_bar(ui, view, actions));
     // A fixed width: egui grows a panel to fit wide content and keeps the width after, which
     // would narrow the 3D view for good once a wide row was shown.
     Panel::right("entity_info")
@@ -208,7 +211,7 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
         .show(ui, |ui| {
             let least = right::least_height(ui);
             if ui.available_height() >= least {
-                right::right_panel(ui, view, &mut actions);
+                right::right_panel(ui, view, actions);
             } else {
                 // A short window: lay the panel out at its least height and let it scroll.
                 egui::ScrollArea::vertical()
@@ -216,15 +219,15 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         let size = Vec2::new(ui.available_width(), least);
-                        ui.allocate_ui(size, |ui| right::right_panel(ui, view, &mut actions));
+                        ui.allocate_ui(size, |ui| right::right_panel(ui, view, actions));
                     });
             }
         });
     if let Some(angle) = view.soften {
-        dialogs::soften_window(ui, angle, &mut actions);
+        dialogs::soften_window(ui, angle, actions);
     }
     if let Some(log) = view.agents.log {
-        dialogs::agent_activity(ui, &view.agents, log, &mut actions);
+        dialogs::agent_activity(ui, &view.agents, log, actions);
     }
-    (actions, ui.available_rect_before_wrap())
+    ui.available_rect_before_wrap()
 }

@@ -180,9 +180,11 @@ fn a_short_window_leaves_the_outliner_its_minimum_height() {
     let h = harness_sized(crowded(40), Vec2::new(1280.0, height));
     let model = rect_of(&h, "Model");
     let least = OUTLINER_ROWS_MIN as f32 * row_pitch(&h.ctx.global_style());
+    // The panel ends where the status bar begins, as the 3D view does.
+    let bottom = h.state().central.max.y;
     assert!(
-        model.min.y <= height - least,
-        "the Outliner starts at {} in a {height} point window",
+        model.min.y <= bottom - least,
+        "the Outliner starts at {} over a panel ending at {bottom} in a {height} point window",
         model.min.y
     );
 }

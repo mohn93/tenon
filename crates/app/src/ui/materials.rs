@@ -47,11 +47,11 @@ pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -
     let pitch = row_pitch(ui.style());
     let below = measured(ui.ctx()).below_list + OUTLINER_ROWS_MIN as f32 * pitch;
     let fit = ((ui.available_height() - below) / pitch).floor().max(0.0) as usize;
-    let rows = fit.clamp(MATERIAL_ROWS_MIN, MATERIAL_ROWS_MAX);
+    let shown = fit.clamp(MATERIAL_ROWS_MIN, MATERIAL_ROWS_MAX);
     let list_top = ui.cursor().top();
     egui::ScrollArea::vertical()
         .id_salt("materials")
-        .max_height(rows as f32 * pitch - ui.spacing().item_spacing.y)
+        .max_height(shown as f32 * pitch - ui.spacing().item_spacing.y)
         .show(ui, |ui| {
             let rows = std::iter::once((None, "Default", DEFAULT_SWATCH, None)).chain(
                 view.materials.iter().map(|m| {

@@ -81,9 +81,12 @@ impl Gui {
     /// Lays out the panels for this frame.
     pub fn frame(&mut self, window: &Window, view: &View) -> GuiFrame {
         let input = self.state.take_egui_input(window);
-        let mut laid_out = (Vec::new(), egui::Rect::NOTHING);
-        let output = self.ctx.run_ui(input, |ui| laid_out = draw(ui, view));
-        let (actions, central) = laid_out;
+        // Every pass's actions (a discarded pass's too), the last pass's view rectangle.
+        let mut actions = Vec::new();
+        let mut central = egui::Rect::NOTHING;
+        let output = self
+            .ctx
+            .run_ui(input, |ui| central = draw(ui, view, &mut actions));
         let ppp = output.pixels_per_point;
         let px = |v: f32| (v * ppp).round().max(0.0) as u32;
         let viewport = Viewport {
