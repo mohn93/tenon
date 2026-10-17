@@ -1165,6 +1165,38 @@ fn a_double_click_repeats_the_last_pull() {
 }
 
 #[test]
+fn separate_clicks_are_never_a_double_click_for_push_pull() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    let px = e.doc().camera.project(DVec3::new(1.0, 1.0, 0.0)).unwrap();
+    let near = px - DVec2::new(0.0, 5.0);
+    // Two `click` events 5 px apart: the second finishes the pull, however soon it is sent.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "pixel": px.to_array()},
+            {"type": "click", "pixel": near.to_array()}
+        ]),
+    );
+    assert_eq!(ran(&r), ["push_pull"], "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    // A `click`, then a `double_click`: the double-click's first press finishes the pull, its
+    // second (quick) press starts one on the cap and the double-click repeats on it.
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "pixel": px.to_array()},
+            {"type": "double_click", "pixel": near.to_array()}
+        ]),
+    );
+    assert_eq!(ran(&r), ["push_pull", "push_pull"], "{r}");
+}
+
+#[test]
 fn a_retype_after_an_agent_edit_undoes_nothing() {
     let mut e = editor();
     square(&mut e);
