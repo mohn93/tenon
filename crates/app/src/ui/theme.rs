@@ -170,6 +170,14 @@ pub const RAIL_ICON: f32 = 18.0;
 pub const RAIL_GROUP_GAP: f32 = 8.0;
 /// The context bar's height, under the menus at the window's top.
 pub const CONTEXT_BAR_HEIGHT: f32 = 36.0;
+/// The status bar's height, and the measurements box's size in it.
+pub const STATUS_HEIGHT: f32 = 28.0;
+pub const MEASUREMENTS_WIDTH: f32 = 180.0;
+pub const MEASUREMENTS_HEIGHT: f32 = 24.0;
+/// The axis colors of a lock: red x, green y, blue z.
+pub const AXIS_X: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
+pub const AXIS_Y: Color32 = Color32::from_rgb(0x30, 0xA4, 0x6C);
+pub const AXIS_Z: Color32 = Color32::from_rgb(0x3E, 0x63, 0xDD);
 
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {

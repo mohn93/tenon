@@ -7,6 +7,7 @@ mod layout;
 mod materials;
 mod menus;
 mod outliner;
+mod status;
 mod widgets;
 
 use std::collections::{BTreeMap, BTreeSet};

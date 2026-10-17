@@ -233,7 +233,15 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
                 .inner_margin(egui::Margin::symmetric(8, 0)),
         )
         .show(ui, |ui| context_bar::context_bar(ui, view, actions));
-    Panel::bottom("status").show(ui, |ui| status::status_bar(ui, view, actions));
+    Panel::bottom("status")
+        .resizable(false)
+        .exact_size(theme::STATUS_HEIGHT)
+        .frame(
+            egui::Frame::new()
+                .fill(t.bg_panel)
+                .inner_margin(egui::Margin::symmetric(8, 0)),
+        )
+        .show(ui, |ui| status::status_bar(ui, view, actions));
     Panel::left("rail")
         .resizable(false)
         .exact_size(theme::RAIL_WIDTH)
