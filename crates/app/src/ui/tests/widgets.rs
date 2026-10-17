@@ -171,3 +171,56 @@ fn an_icon_button_is_named_and_can_be_disabled() {
     h.run_steps(20);
     assert!(drawn_texts_of(&h).iter().any(|t| t == "Nothing to undo"));
 }
+
+#[test]
+fn the_panels_draw_every_icon_in_the_icon_family() {
+    use crate::ui::{fonts, icons};
+    // The rail, Undo and Redo, the three group buttons, the breadcrumb's carets, the night
+    // toggle, the agents indicator and the Outliner's Clear filter.
+    let mut h = harness(Fixture {
+        has_selection: true,
+        has_instance_selected: true,
+        lighting: Lighting::Night,
+        ..house_fixture(&["i1", "i3"])
+    });
+    type_into(&mut h, "Filter outliner", 0, "kit", egui::Key::Enter);
+    h.get_by_label("Clear filter");
+    let glyphs: BTreeSet<char> = icons::all()
+        .iter()
+        .map(|icon| icon.chars().next().unwrap())
+        .collect();
+    // Each icon glyph drawn, with the family it was laid out in.
+    fn collect(
+        shape: &egui::Shape,
+        glyphs: &BTreeSet<char>,
+        out: &mut Vec<(char, egui::FontFamily)>,
+    ) {
+        match shape {
+            egui::Shape::Text(t) => {
+                let job = &t.galley.job;
+                for section in &job.sections {
+                    for c in job.text[section.byte_range.start.0..section.byte_range.end.0].chars()
+                    {
+                        if glyphs.contains(&c) {
+                            out.push((c, section.format.font_id.family.clone()));
+                        }
+                    }
+                }
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, glyphs, out)),
+            _ => {}
+        }
+    }
+    let mut drawn = Vec::new();
+    for clipped in &h.output().shapes {
+        collect(&clipped.shape, &glyphs, &mut drawn);
+    }
+    let wrong: Vec<_> = drawn.iter().filter(|(_, f)| *f != fonts::icons()).collect();
+    assert_eq!(wrong, Vec::<&(char, egui::FontFamily)>::new());
+    let seen: BTreeSet<char> = drawn.iter().map(|(c, _)| *c).collect();
+    let unseen: Vec<_> = glyphs
+        .iter()
+        .filter(|c| !seen.contains(c) && **c != icons::SUN.chars().next().unwrap())
+        .collect();
+    assert_eq!(unseen, Vec::<&char>::new(), "icons not drawn");
+}

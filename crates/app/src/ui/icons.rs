@@ -1,4 +1,4 @@
-//! The Phosphor glyphs the panels use.
+//! The Phosphor glyphs the panels use, drawn in `fonts::icons()`.
 
 use egui_phosphor::regular as ph;
 use tools::ToolKind;
@@ -34,4 +34,23 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Rotate => ph::ARROW_CLOCKWISE,
         ToolKind::TapeMeasure => ph::RULER,
     }
+}
+
+/// Every glyph the panels draw: the constants above, then each tool's.
+#[cfg(test)]
+pub fn all() -> Vec<&'static str> {
+    let mut all = vec![
+        UNDO,
+        REDO,
+        BOUNDING_BOX,
+        CUBE,
+        ARROWS_OUT,
+        SUN,
+        MOON,
+        ROBOT,
+        CARET_RIGHT,
+        X_CIRCLE,
+    ];
+    all.extend(ToolKind::ALL.map(tool));
+    all
 }

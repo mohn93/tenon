@@ -23,7 +23,9 @@ pub fn icon_button(
     enabled: bool,
 ) -> Response {
     let t = theme::tokens(ui.ctx().theme());
-    let mut glyph = RichText::new(icon).size(theme::ICON_SIZE);
+    let mut glyph = RichText::new(icon)
+        .family(fonts::icons())
+        .size(theme::ICON_SIZE);
     if !enabled {
         glyph = glyph.color(t.text_disabled);
     }
@@ -42,12 +44,14 @@ pub fn icon_button(
 /// Named for the tool; the tooltip names the tool and its key.
 pub fn tool_button(ui: &mut Ui, kind: ToolKind, selected: bool) -> Response {
     let t = theme::tokens(ui.ctx().theme());
-    let mut glyph = RichText::new(icons::tool(kind)).size(theme::RAIL_ICON);
+    let mut glyph = RichText::new(icons::tool(kind))
+        .family(fonts::icons())
+        .size(theme::RAIL_ICON);
     if selected {
         glyph = glyph.color(t.on_accent);
     }
     // The glyph and the padding around it add up to the button's side.
-    let line = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(theme::RAIL_ICON)));
+    let line = ui.fonts_mut(|f| f.row_height(&egui::FontId::new(theme::RAIL_ICON, fonts::icons())));
     let padding = Vec2::splat(((theme::RAIL_BUTTON - line) / 2.0).max(0.0));
     let response = ui
         .scope(|ui| {

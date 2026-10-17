@@ -5,7 +5,7 @@ use egui::{Align, Button, Layout, RichText, Sense, TextStyle, Ui, Vec2, WidgetIn
 use kernel::EntityId;
 use session::Lighting;
 
-use super::{UiAction, View, icons, menu_bar, outliner, theme, widgets};
+use super::{UiAction, View, fonts, icons, menu_bar, outliner, theme, widgets};
 use crate::shortcuts::Bound;
 
 /// The longest crumb name drawn whole, in characters.
@@ -98,8 +98,13 @@ fn night_toggle(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     let night = view.lighting == Lighting::Night;
     let glyph = if night { icons::MOON } else { icons::SUN };
     let response = ui.add(
-        Button::selectable(night, RichText::new(glyph).size(theme::ICON_SIZE))
-            .min_size(Vec2::splat(theme::CONTROL_HEIGHT)),
+        Button::selectable(
+            night,
+            RichText::new(glyph)
+                .family(fonts::icons())
+                .size(theme::ICON_SIZE),
+        )
+        .min_size(Vec2::splat(theme::CONTROL_HEIGHT)),
     );
     response
         .widget_info(|| WidgetInfo::selected(WidgetType::Button, true, night, "Night Lighting"));
@@ -118,7 +123,9 @@ fn night_toggle(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
 fn agents_indicator(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     let t = theme::tokens(ui.ctx().theme());
     let connected = view.agents.connected;
-    let glyph = RichText::new(icons::ROBOT).size(theme::ICON_SIZE);
+    let glyph = RichText::new(icons::ROBOT)
+        .family(fonts::icons())
+        .size(theme::ICON_SIZE);
     let button = if connected > 0 {
         let count = RichText::new(connected.to_string()).color(t.accent);
         Button::new((glyph, count))
@@ -209,7 +216,13 @@ fn breadcrumb(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     };
     let gap = ui.spacing().item_spacing.x;
     let padding = 2.0 * ui.spacing().button_padding.x;
-    let separator = width(icons::CARET_RIGHT) + gap;
+    let caret = egui::FontId::new(font.size, fonts::icons());
+    let separator = ui
+        .painter()
+        .layout_no_wrap(icons::CARET_RIGHT.into(), caret.clone(), t.text_secondary)
+        .size()
+        .x
+        + gap;
     let widths: Vec<f32> = names
         .iter()
         .enumerate()
@@ -220,7 +233,11 @@ fn breadcrumb(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     let last = crumbs.len() - 1;
     for (k, entry) in shown.iter().enumerate() {
         if k > 0 {
-            ui.label(RichText::new(icons::CARET_RIGHT).color(t.text_secondary));
+            ui.label(
+                RichText::new(icons::CARET_RIGHT)
+                    .font(caret.clone())
+                    .color(t.text_secondary),
+            );
         }
         match *entry {
             Some(i) if i == last => {
