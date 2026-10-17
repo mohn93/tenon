@@ -18,8 +18,6 @@ mod outliner;
 mod right;
 mod status;
 #[cfg(test)]
-mod sweep_tests;
-#[cfg(test)]
 mod tests;
 mod toolbar;
 
