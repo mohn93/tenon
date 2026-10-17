@@ -6,7 +6,8 @@ use super::{UiAction, View, icons, menu_bar, widgets};
 use crate::shortcuts::Bound;
 
 pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
-    // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
+    // Wraps only if the window is narrower than the menus and buttons together; the tests keep
+    // it on one row down to the smallest window.
     ui.horizontal_wrapped(|ui| {
         // Tighter than the theme so the toolbar, with all of the menus, stays on one row.
         ui.spacing_mut().item_spacing.x = 2.0;

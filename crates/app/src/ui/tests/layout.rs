@@ -99,13 +99,21 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
             assert_eq!(pair[0].center().x, pair[1].center().x, "one column");
             assert!(pair[1].min.y > pair[0].max.y, "top to bottom");
         }
-        // Wider gaps between groups than within them.
+        // 4 pt between buttons in a group, exactly `RAIL_GROUP_GAP` between groups.
         let gap =
             |a: ToolKind, b: ToolKind| rect_of(&h, b.label()).min.y - rect_of(&h, a.label()).max.y;
-        assert!(
-            gap(ToolKind::Paint, ToolKind::Line)
-                >= gap(ToolKind::Select, ToolKind::Erase) + theme::RAIL_GROUP_GAP - 0.5
-        );
+        assert!((gap(ToolKind::Select, ToolKind::Erase) - 4.0).abs() < 0.5);
+        for (a, b) in [
+            (ToolKind::Paint, ToolKind::Line),
+            (ToolKind::Arc, ToolKind::PushPull),
+            (ToolKind::Rotate, ToolKind::TapeMeasure),
+        ] {
+            let between = gap(a, b);
+            assert!(
+                (between - theme::RAIL_GROUP_GAP).abs() < 0.5,
+                "{a:?} to {b:?}: {between}"
+            );
+        }
     }
 }
 

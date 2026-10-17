@@ -181,7 +181,9 @@ impl Chord {
     }
 }
 
-/// The groups the Keyboard Shortcuts window lists, in order.
+/// The groups the Keyboard Shortcuts window lists, in order. The window lays them out by name
+/// (`dialogs::SHORTCUT_COLUMNS`); tests check that covers all of them.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const GROUPS: [&str; 5] = ["Tools", "File", "Edit", "Group", "Camera"];
 
 impl Bound {

@@ -447,6 +447,12 @@ fn the_shortcuts_window_fits_a_short_window() {
         let screen = Rect::from_min_size(Pos2::ZERO, size);
         let close = rect_of(&h, "Close window");
         assert!(screen.contains_rect(close), "the close button: {close:?}");
+        if height < 500.0 {
+            assert!(
+                !drawn_texts(&h).iter().any(|t| t == "Fly Mode"),
+                "Fly Mode is below the fold before scrolling"
+            );
+        }
         // Short of room for every row: the list scrolls to the last one.
         h.event(egui::Event::PointerMoved(
             close.center() + Vec2::new(0.0, 100.0),
@@ -463,6 +469,44 @@ fn the_shortcuts_window_fits_a_short_window() {
             "Fly Mode at {height}"
         );
     }
+}
+
+#[test]
+fn the_shortcuts_window_can_be_dragged_by_its_title() {
+    let mut h = harness(Fixture {
+        shortcuts: true,
+        ..Default::default()
+    });
+    let before = rect_of(&h, "Close window");
+    // The node named for the window covers it all; its title bar is the top strip.
+    let from = h.get_by_label("Keyboard Shortcuts").rect().center_top() + Vec2::new(0.0, 12.0);
+    let to = from + Vec2::new(-120.0, 60.0);
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_ok();
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(
+            from + (to - from) * (k as f32 / 4.0),
+        ));
+        h.run_ok();
+    }
+    h.event(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_ok();
+    let moved = rect_of(&h, "Close window").min - before.min;
+    assert!(
+        (moved - Vec2::new(-120.0, 60.0)).length() < 2.0,
+        "{moved:?}"
+    );
 }
 
 #[test]
