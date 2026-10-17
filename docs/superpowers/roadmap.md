@@ -37,6 +37,7 @@ Status values: `todo`, `planned <plan file>`, `done <first>..<last commit>`.
 | M11c | Viewport feedback: shape-coded snap markers, snap label and live value at the cursor, hover highlight, solid Push/Pull preview, tool cursors, orientation gizmo | planned |
 | M11d | Interaction conventions: drag to draw, Push/Pull retype and repeat, double/triple-click select, Select All/None, Duplicate, Rotate axis lock, start in Select, no silent dead ends, empty-model card | planned |
 | M11e | App basics: Open Recent, Save/Don't Save prompt, macOS edited dot, import options sheet, rename and purge components, field of view, Settings, AccessKit | planned |
+| M12a | MCP adapter: an `mcp` stdio server (`app -- --mcp`, headless by default, `--live` attaches to a running window's socket) exposing a small tool set (transact as an atomic batch, query, describe/capabilities, render_view as MCP image content, tool_input, pick/infer) rather than one tool per command; per-method params/result schemas in `describe` (revision in Outcome, coordinate min/max, Command oneOf under an object root), batch results with net `changes`; undo history labels carry an origin (user or connection) and `undo` takes an expected label; setup docs for Claude Code/Desktop | todo |
 
 ## Rules for the loop
 
