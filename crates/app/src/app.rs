@@ -707,8 +707,18 @@ impl State {
         if !self.settle_changes() {
             return;
         }
-        if let Some(path) = skr_dialog().pick_file() {
-            self.editor.open_file(&path);
+        if let Some(path) = skr_dialog().pick_file()
+            && self.editor.open_file(&path)
+        {
+            self.remember_file();
+        }
+    }
+
+    /// Puts the model's file first in the recent files, and keeps that in the preferences.
+    fn remember_file(&mut self) {
+        if let Some(path) = self.editor.doc().path() {
+            prefs::remember_recent(&mut self.prefs.recent, path);
+            self.save_prefs();
         }
     }
 
@@ -724,7 +734,11 @@ impl State {
         } else {
             None
         };
-        self.editor.save_file(path.as_deref())
+        let saved = self.editor.save_file(path.as_deref());
+        if saved {
+            self.remember_file();
+        }
+        saved
     }
 
     /// Gives a material the PNG or JPEG image chosen in a dialog as its texture.
@@ -1682,8 +1696,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // A fresh model: nothing to lose.
                 discard: false,
             };
-            if let Err(e) = state.editor.execute(open) {
-                eprintln!("cannot open {}", e.message);
+            match state.editor.execute(open) {
+                Ok(_) => state.remember_file(),
+                Err(e) => eprintln!("cannot open {}", e.message),
             }
         }
         state.window.request_redraw();

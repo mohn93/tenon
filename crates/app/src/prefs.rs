@@ -13,12 +13,41 @@ use crate::ui::theme::ThemeChoice;
 
 /// What the prefs file keeps. Keys it does not know are ignored, and dropped at the next save;
 /// a key missing (a file from before it) is its default.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
     pub theme: ThemeChoice,
     /// The dock's width, split and tab.
     pub dock: DockLayout,
+    /// Files opened or saved in the window, newest first, absolute, at most `RECENT_LEN`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<PathBuf>,
+}
+
+/// How many recent files the prefs keep.
+pub const RECENT_LEN: usize = 10;
+
+/// Puts `path` (made absolute) first in `recent`, dropping an equal entry and any past
+/// `RECENT_LEN`. A path that cannot be made absolute is left out.
+pub fn remember_recent(recent: &mut Vec<PathBuf>, path: &Path) {
+    let Ok(path) = std::path::absolute(path) else {
+        return;
+    };
+    recent.retain(|p| *p != path);
+    recent.insert(0, path);
+    recent.truncate(RECENT_LEN);
+}
+
+/// `recent` as `load` keeps it: absolute paths only, each once (the first kept), at most
+/// `RECENT_LEN`.
+fn cleaned(recent: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for path in recent {
+        if path.is_absolute() && !kept.contains(&path) && kept.len() < RECENT_LEN {
+            kept.push(path);
+        }
+    }
+    kept
 }
 
 /// The largest prefs file read; anything larger is not one this app wrote.
@@ -31,7 +60,8 @@ pub fn path_in(home: &Path) -> PathBuf {
 
 /// The prefs at `path`: the defaults when there is no file, and the defaults with a warning
 /// on stderr when it cannot be read or is not valid (it is replaced at the next change). The
-/// warning never quotes the file. Dock values out of range are brought into it.
+/// warning never quotes the file. Dock values out of range are brought into it, and the
+/// recent files are cleaned (see `cleaned`).
 pub fn load(path: &Path) -> Prefs {
     let bytes = match read(path) {
         Ok(Some(bytes)) => bytes,
@@ -55,6 +85,7 @@ pub fn load(path: &Path) -> Prefs {
     });
     Prefs {
         dock: prefs.dock.clamped(),
+        recent: cleaned(prefs.recent),
         ..prefs
     }
 }
@@ -140,6 +171,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
 mod tests {
     use super::*;
     use crate::ui::{DockLayout, DockTab};
+    use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
     /// A fresh folder standing in for HOME.
@@ -200,6 +232,7 @@ mod tests {
                 split: 0.3,
                 tab: DockTab::Materials,
             },
+            recent: Vec::new(),
         };
         assert_ne!(prefs.theme, ThemeChoice::default());
         assert_ne!(prefs.dock, DockLayout::default());
@@ -218,7 +251,8 @@ mod tests {
             load(&path),
             Prefs {
                 theme: ThemeChoice::Dark,
-                dock: DockLayout::default()
+                dock: DockLayout::default(),
+                recent: Vec::new(),
             }
         );
         std::fs::write(
@@ -352,5 +386,74 @@ mod tests {
         );
         assert!(!path.exists());
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn recent_files_round_trip_newest_first() {
+        let mut recent = Vec::new();
+        for p in ["/a/1.skr", "/a/2.skr", "/a/1.skr"] {
+            remember_recent(&mut recent, Path::new(p));
+        }
+        assert_eq!(
+            recent,
+            [PathBuf::from("/a/1.skr"), PathBuf::from("/a/2.skr")]
+        );
+        let mut recent = Vec::new();
+        for i in 1..=12 {
+            remember_recent(&mut recent, Path::new(&format!("/a/{i}.skr")));
+        }
+        let want: Vec<PathBuf> = (3..=12)
+            .rev()
+            .map(|i| PathBuf::from(format!("/a/{i}.skr")))
+            .collect();
+        assert_eq!(recent, want, "the last ten, newest first");
+        let home = home("recent");
+        let path = path_in(&home);
+        let prefs = Prefs {
+            recent,
+            ..Default::default()
+        };
+        save(&path, &prefs).unwrap();
+        assert_eq!(load(&path), prefs);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn recent_files_load_clean() {
+        let home = home("recent-clean");
+        let path = path_in(&home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut list = vec!["rel.skr".to_string(), "/x/a.skr".into(), "/x/a.skr".into()];
+        list.extend((0..12).map(|i| format!("/y/{i}.skr")));
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({ "recent": list })).unwrap(),
+        )
+        .unwrap();
+        let mut want = vec![PathBuf::from("/x/a.skr")];
+        want.extend((0..9).map(|i| PathBuf::from(format!("/y/{i}.skr"))));
+        assert_eq!(load(&path).recent, want);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn old_prefs_files_have_no_recent_files() {
+        let home = home("recent-old");
+        let path = path_in(&home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{\"theme\": \"dark\"}").unwrap();
+        assert!(load(&path).recent.is_empty());
+        // A wrong type is an invalid file, as for any key.
+        std::fs::write(&path, b"{\"theme\": \"dark\", \"recent\": \"/a.skr\"}").unwrap();
+        assert_eq!(load(&path), Prefs::default());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn a_relative_path_is_remembered_absolute() {
+        let mut recent = Vec::new();
+        remember_recent(&mut recent, Path::new("x.skr"));
+        assert_eq!(recent, [std::path::absolute("x.skr").unwrap()]);
+        assert!(recent[0].is_absolute());
     }
 }
