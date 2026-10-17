@@ -84,7 +84,7 @@ fn vs_edge(
     );
 }
 
-// Selected edges drawn again one pixel across (instance 0) and one pixel down (instance 1), so
+// Selected edges drawn again one pixel across (instance 0) and one pixel up (instance 1), so
 // they read about 2 px wide; the other edges are moved outside the view and clipped away.
 @vertex
 fn vs_edge_wide(
@@ -232,8 +232,9 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // Each side shows its own color (its material's, or the default: light in front, blue-gray
 // behind), or its material's texture instead; ambient light, a headlight at the eye (from the
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
-// unshaded. Selected faces are tinted toward the style's color. Call it before any discard: the texture lookup needs
-// every pixel of its quad.
+// unshaded. Selected faces are tinted toward the style's color; unselected ones skip the mix so
+// their arithmetic stays exactly as before the tint came from a uniform. Call it before any
+// discard: the texture lookup needs every pixel of its quad.
 fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
@@ -241,7 +242,8 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     let uv = select(in.uv.zw, in.uv.xy, front);
     let texel = textureSample(textures, texture_sampler, uv, i32(max(layer, 0.0))).rgb;
     let color = select(select(in.back_color, in.front_color, front), texel, layer >= 0.0);
-    let base = mix(color, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
+    let tinted = mix(color, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
+    let base = select(color, tinted, in.selected > 0.0);
     if select(in.glow.y, in.glow.x, front) > 0.5 {
         return base;
     }

@@ -336,7 +336,7 @@ pub struct Renderer {
     solid_side_pipeline: wgpu::RenderPipeline,
     glass_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
-    /// Selected edges again, a pixel across and a pixel down, when the style widens them.
+    /// Selected edges again, a pixel across and a pixel up, when the style widens them.
     wide_edge_pipeline: wgpu::RenderPipeline,
     /// The day canvas's gradient, when the style has one.
     canvas_pipeline: wgpu::RenderPipeline,
