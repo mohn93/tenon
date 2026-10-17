@@ -609,7 +609,7 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
  "prompt": "Click an edge, face or group, or drag a box; Shift adds or removes; double-click a group to edit it", "message": null, "lock": null,
  "measurement_label": "", "measurement": null, "typing": false, "soften_angle": 20,
  "message_kind": null, "dialog": null, "modifiers": {"shift": false, "alt": false, "cmd": false},
- "hovered": "f3", "snap_label": "Endpoint"}
+ "hovered": "f3", "snap_label": null}
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `arc`, `push_pull`, `move`, `rotate`,
@@ -689,16 +689,12 @@ Events, run in order:
 | `{"type": "move", "pixel": [320, 200]}` | Moves the cursor there: the inference and the tool's preview follow. |
 | `{"type": "down", "point": [1, 2, 0], "button": "left"}`, `{"type": "up", ...}` | Presses or releases a button there (`left` default, `middle`, `right`). A middle drag orbits and Shift+middle pans, as in the window; Alt+left orbits. A button left down stays down for a later call. |
 | `{"type": "click", "point": [1, 2, 0]}` | Moves there, presses and releases. |
-| `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool selects a face with its edges, or an edge with its faces, opens the group under it, or closes the open one when there is nothing of it there. Push/Pull repeats the last pull distance on the face (the one being pulled, else the one under the cursor). |
+| `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool selects a face with its edges, or an edge with its faces, opens the group under it, or closes the open one when there is nothing of it there. Push/Pull repeats the last pull distance on the face (the one being pulled, else the one under the cursor). In Push/Pull, a click that finishes a pull, followed within the double-click time by another click, repeats the pull (the SketchUp convention). |
 | `{"type": "triple_click", "point": [1, 2, 0]}` | Three left clicks there: the Select tool selects everything connected to the edge or face under it (a triple-click that follows a double-click that opened or closed a group does nothing more). |
 | `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. With Line, Rectangle, Circle, Arc or Push/Pull, a drag draws as two clicks when the release is at least the drag threshold (4 px) from the press, inside the view. While a navigation drag turns the view, the hover waits, as in the window. |
 | `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none) and `d` (duplicate, as the `duplicate` command; not with `shift`) are taken; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
 | `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go, so `{"type": "modifiers"}` lets go of all): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Cmd or Ctrl makes a Paint click sample the material. They stay held across calls (see Modifiers below). |
-| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. |
-
-Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as
-Move and Rotate allow for their last step; it is refused ("Click a face first") if another
-step has come in between.
+| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as Rotate retypes its last angle; Move only replaces a copy with an array (`5x`, `/5`). A retyped pull is refused ("Click a face first") if another step has come in between. |
 
 - **Where**: a `pixel` is in a view of `width` x `height` (both or neither; default the 3D view,
   `editor.viewport`, 1280 x 800 headless), scaled to the 3D view, which must have the same
