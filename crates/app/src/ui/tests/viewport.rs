@@ -1,13 +1,15 @@
 //! What is drawn over the 3D view: the snap marker and its halo, the preview lines, the snap
-//! chip and the flash, and the view's cursor.
+//! chip and the flash, the view's cursor, and the orientation gizmo.
 
 use egui::{Color32, FontFamily, Pos2, Rect, Vec2};
 use glam::DVec2;
+use session::{Camera, StandardView};
 use tools::overlay::{ENDPOINT, HALO_PT, INTERSECTION, LINE_PT, MARKER_PT, ScreenLine, Shape};
 
 use super::*;
 use crate::feedback::{Chip, Hud};
-use crate::ui::viewport::{chip_rect, cursor_icon};
+use crate::ui::theme::GIZMO_AXIS;
+use crate::ui::viewport::{chip_rect, cursor_icon, gizmo_ends};
 
 /// The text shapes painted with `text`.
 fn texts_named(h: &H, text: &str) -> Vec<egui::epaint::TextShape> {
@@ -274,10 +276,17 @@ fn the_hud_lands_on_its_pixels_at_2x() {
     assert_eq!(dots[0].center, view.min + Vec2::new(100.0, 50.0));
     assert_eq!(dots[0].radius, MARKER_PT / 2.0);
     let red = Color32::from_rgb(0xE5, 0x48, 0x4D);
+    // The gizmo's X axis is red too.
+    let gizmo = Rect::from_center_size(
+        rect_of(&h, "Switch Projection").center(),
+        Vec2::splat(theme::GIZMO),
+    );
     let lines: Vec<_> = drawn_shapes(&h)
         .into_iter()
         .filter_map(|s| match s {
-            egui::Shape::LineSegment { points, stroke } if stroke.color == red => {
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == red && !gizmo.contains(points[0]) =>
+            {
                 Some((points, stroke.width))
             }
             _ => None,
@@ -324,4 +333,96 @@ fn the_hud_settles_in_one_frame() {
     });
     let mut h = harness(f);
     assert_eq!(h.try_run().unwrap(), 1);
+}
+
+#[test]
+fn the_gizmo_sets_standard_views_and_switches_projection() {
+    let mut h = harness(Fixture::default());
+    assert_eq!(
+        click(&mut h, "Front View"),
+        [UiAction::StandardView(StandardView::Front)]
+    );
+    assert_eq!(is_on(&h, "Switch Projection"), Some(false));
+    assert_eq!(
+        click(&mut h, "Switch Projection"),
+        [UiAction::SetProjection(Projection::Parallel)]
+    );
+    let mut h = harness(Fixture {
+        projection: Projection::Parallel,
+        ..Default::default()
+    });
+    assert_eq!(is_on(&h, "Switch Projection"), Some(true));
+    assert_eq!(
+        click(&mut h, "Switch Projection"),
+        [UiAction::SetProjection(Projection::Perspective)]
+    );
+}
+
+#[test]
+fn the_gizmo_sits_in_the_views_top_right() {
+    let h = harness(Fixture::default());
+    let (view, centre) = (h.state().central, rect_of(&h, "Switch Projection").center());
+    let expected = Pos2::new(view.max.x - 12.0 - 36.0, view.min.y + 12.0 + 36.0);
+    assert!(
+        centre.distance(expected) < 1.0,
+        "{centre:?} vs {expected:?}"
+    );
+}
+
+#[test]
+fn the_axis_ends_set_the_views_they_look_from() {
+    let ends = gizmo_ends(&Camera::new(DVec2::new(800.0, 600.0)));
+    let end = |v: StandardView| *ends.iter().find(|e| e.0 == v).unwrap();
+    for (pos, neg) in [
+        (StandardView::Right, StandardView::Left),
+        (StandardView::Back, StandardView::Front),
+        (StandardView::Top, StandardView::Bottom),
+    ] {
+        let (p, n) = (end(pos), end(neg));
+        assert!(
+            (p.1 + n.1).length() < 1e-3,
+            "{pos:?} and {neg:?} are opposite"
+        );
+        assert!((p.2 + n.2).abs() < 1e-3);
+        assert!(p.1.length() <= GIZMO_AXIS + 1e-3);
+    }
+    assert!(
+        end(StandardView::Right).1.x > 0.0,
+        "+X on the right in the default view"
+    );
+    assert!(end(StandardView::Top).1.y < 0.0, "+Z up the screen");
+}
+
+#[test]
+fn an_axis_pointing_at_the_viewer_leaves_the_centre_clickable() {
+    let mut camera = Camera::new(DVec2::new(1280.0, 800.0));
+    camera.look_from(StandardView::Top);
+    let mut h = harness(Fixture {
+        camera,
+        ..Default::default()
+    });
+    assert!(h.query_by_label("Top View").is_none());
+    assert!(h.query_by_label("Bottom View").is_none());
+    assert_eq!(
+        click(&mut h, "Switch Projection"),
+        [UiAction::SetProjection(Projection::Parallel)]
+    );
+}
+
+#[test]
+fn the_gizmo_takes_the_pointer_from_the_tools() {
+    let h = harness(Fixture::default());
+    let at = rect_of(&h, "Front View").center();
+    let layer = h.ctx.layer_id_at(at).expect("the gizmo's area");
+    assert_ne!(
+        layer.order,
+        egui::Order::Background,
+        "Gui::wants_pointer_at is true there"
+    );
+    assert!(h.query_by_label("Switch Projection").is_some());
+    let flying = harness(Fixture {
+        flying: true,
+        ..Default::default()
+    });
+    assert!(flying.query_by_label("Switch Projection").is_none());
 }

@@ -234,6 +234,17 @@ pub const CHIP_GAP: f32 = GRID;
 pub const AXIS_X: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
 pub const AXIS_Y: Color32 = Color32::from_rgb(0x30, 0xA4, 0x6C);
 pub const AXIS_Z: Color32 = Color32::from_rgb(0x3E, 0x63, 0xDD);
+/// The orientation gizmo: its size, its inset from the view's top-right corner, the length of
+/// an axis seen side-on, the radii of a positive end's cap, a negative end's ring and the
+/// centre, and how near the centre an end is hidden (its axis points at or away from the
+/// viewer).
+pub const GIZMO: f32 = 72.0;
+pub const GIZMO_INSET: f32 = 12.0;
+pub const GIZMO_AXIS: f32 = 26.0;
+pub const GIZMO_CAP: f32 = 8.0;
+pub const GIZMO_NEG_CAP: f32 = 5.0;
+pub const GIZMO_CENTRE: f32 = 7.0;
+pub const GIZMO_HIDE: f32 = 10.0;
 
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {

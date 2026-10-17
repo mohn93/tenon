@@ -1,5 +1,6 @@
 //! What egui draws over the 3D view for the tools: the preview lines, the snap marker with its
-//! halo, the snap chip by the cursor and the flash of a refused value; and the view's cursor.
+//! halo, the snap chip by the cursor and the flash of a refused value; the view's cursor; and
+//! the orientation gizmo in the view's top right.
 
 use std::f32::consts::SQRT_2;
 use std::sync::Arc;
@@ -8,11 +9,12 @@ use egui::{
     Color32, CornerRadius, CursorIcon, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Ui,
 };
 use egui::{Vec2, vec2};
-use glam::DVec2;
+use glam::{DVec2, DVec3};
+use session::{Camera, Projection, StandardView};
 use tools::ToolKind;
 use tools::overlay::{HALO_PT, MARKER_PT, Rgba, Shape};
 
-use super::theme;
+use super::{UiAction, fonts, theme};
 use crate::feedback::Hud;
 
 /// The stroke of an X or + marker, and of a square's outline, in points.
@@ -152,6 +154,135 @@ pub fn set_cursor(ctx: &egui::Context, view_rect: Rect, cursor: CursorIcon) {
             .is_none_or(|layer| layer.order == egui::Order::Background);
     if in_view && ctx.output(|o| o.cursor_icon) == CursorIcon::Default {
         ctx.set_cursor_icon(cursor);
+    }
+}
+
+/// The gizmo's axis ends, each as the standard view that looks from it, its offset from the
+/// gizmo's centre in points (y down), and how far it points toward the viewer
+/// (`-dir.dot(forward)`): +X, -X, +Y, -Y, +Z, -Z.
+pub fn gizmo_ends(camera: &Camera) -> [(StandardView, Vec2, f32); 6] {
+    let (right, up, forward) = (camera.right(), camera.up(), camera.forward());
+    [
+        StandardView::Right,
+        StandardView::Left,
+        StandardView::Back,
+        StandardView::Front,
+        StandardView::Top,
+        StandardView::Bottom,
+    ]
+    .map(|view| {
+        let dir: DVec3 = view.direction().0;
+        let offset = vec2(dir.dot(right) as f32, -dir.dot(up) as f32) * theme::GIZMO_AXIS;
+        (view, offset, -dir.dot(forward) as f32)
+    })
+}
+
+/// The orientation gizmo in the top right of the view (`view_rect`), in its own `Area` so that
+/// no press on it reaches the tools. Clicking an axis end asks for the standard view that looks
+/// from it; clicking the centre switches `projection`.
+pub fn gizmo(
+    ui: &Ui,
+    view_rect: Rect,
+    camera: &Camera,
+    projection: Projection,
+    actions: &mut Vec<UiAction>,
+) {
+    let size = Vec2::splat(theme::GIZMO);
+    let min = view_rect.right_top() + vec2(-theme::GIZMO_INSET - theme::GIZMO, theme::GIZMO_INSET);
+    let t = theme::tokens(ui.ctx().theme());
+    egui::Area::new(egui::Id::new("gizmo"))
+        .order(egui::Order::Middle)
+        .movable(false)
+        .constrain(false)
+        .fixed_pos(min)
+        .show(ui.ctx(), |ui| {
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let centre = rect.center();
+            let painter = ui.painter();
+            let [r, g, b, _] = t.bg_panel.to_srgba_unmultiplied();
+            painter.circle_filled(
+                centre,
+                theme::GIZMO / 2.0,
+                Color32::from_rgba_unmultiplied(r, g, b, 160),
+            );
+
+            let mut ends = gizmo_ends(camera);
+            ends.sort_by(|a, b| a.2.total_cmp(&b.2));
+            for (view, offset, _) in ends {
+                if offset.length() < theme::GIZMO_HIDE {
+                    continue;
+                }
+                let (color, letter) = match view {
+                    StandardView::Right | StandardView::Left => (theme::AXIS_X, "X"),
+                    StandardView::Back | StandardView::Front => (theme::AXIS_Y, "Y"),
+                    _ => (theme::AXIS_Z, "Z"),
+                };
+                let positive = matches!(
+                    view,
+                    StandardView::Right | StandardView::Back | StandardView::Top
+                );
+                let end = centre + offset;
+                let radius = if positive {
+                    painter.line_segment([centre, end], Stroke::new(3.0, color));
+                    painter.circle_filled(end, theme::GIZMO_CAP, color);
+                    painter.text(
+                        end,
+                        egui::Align2::CENTER_CENTER,
+                        letter,
+                        FontId::new(theme::SMALL_SIZE, fonts::semibold()),
+                        t.on_accent,
+                    );
+                    theme::GIZMO_CAP
+                } else {
+                    painter.circle_stroke(end, theme::GIZMO_NEG_CAP, Stroke::new(1.5, color));
+                    theme::GIZMO_NEG_CAP
+                };
+                let name = view_name(view);
+                let hit = Rect::from_center_size(end, Vec2::splat(2.0 * radius));
+                if gizmo_button(ui, hit, name, false).clicked() {
+                    actions.push(UiAction::StandardView(view));
+                }
+            }
+
+            painter.circle(
+                centre,
+                theme::GIZMO_CENTRE,
+                t.bg_raised,
+                Stroke::new(1.0, t.border),
+            );
+            let parallel = projection == Projection::Parallel;
+            let hit = Rect::from_center_size(centre, Vec2::splat(2.0 * theme::GIZMO_CENTRE));
+            if gizmo_button(ui, hit, "Switch Projection", parallel).clicked() {
+                actions.push(UiAction::SetProjection(if parallel {
+                    Projection::Perspective
+                } else {
+                    Projection::Parallel
+                }));
+            }
+        });
+}
+
+/// A clickable part of the gizmo over `rect`, named `name` for AccessKit (`selected`: toggled
+/// on), with the pointing hand while hovered.
+fn gizmo_button(ui: &Ui, rect: Rect, name: &str, selected: bool) -> egui::Response {
+    let response = ui
+        .interact(rect, ui.id().with(name), egui::Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand);
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name));
+    response
+}
+
+/// The name of the gizmo end that looks from `view`.
+fn view_name(view: StandardView) -> &'static str {
+    match view {
+        StandardView::Right => "Right View",
+        StandardView::Left => "Left View",
+        StandardView::Back => "Back View",
+        StandardView::Front => "Front View",
+        StandardView::Top => "Top View",
+        StandardView::Bottom => "Bottom View",
+        StandardView::Iso => unreachable!("no axis end looks from Iso"),
     }
 }
 

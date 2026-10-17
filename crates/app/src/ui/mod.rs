@@ -1,13 +1,14 @@
 //! The window's panels: the context bar, the tool rail, the status bar with the measurements
 //! box, and on the right the dock: Entity Info and Materials as tabs over the Outliner. Over
-//! the 3D view, the tools' snap marker, preview lines and chip.
+//! the 3D view, the tools' snap marker, preview lines and chip, the tool's cursor and the
+//! orientation gizmo.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use egui::{Panel, Ui};
 use kernel::{EntityId, TexturePlacement};
-use session::{Lighting, MaterialId, OutlinerTable, Projection, StandardView};
+use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::editor::{ImportUnits, Status};
@@ -211,6 +212,8 @@ pub struct View<'a> {
     pub hud: &'a Hud,
     /// The pointer over the 3D view (`viewport::cursor_icon`).
     pub cursor: egui::CursorIcon,
+    /// The camera the orientation gizmo follows (its projection is `projection`).
+    pub camera: &'a Camera,
 }
 
 /// What Entity Info's texture position fields show and apply to.
@@ -311,6 +314,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     let central = ui.available_rect_before_wrap();
     // In the root's own layer, under every window and menu.
     viewport::hud(ui, central, view.hud);
+    if !view.flying {
+        viewport::gizmo(ui, central, view.camera, view.projection, actions);
+    }
     viewport::set_cursor(ui.ctx(), central, view.cursor);
     central
 }

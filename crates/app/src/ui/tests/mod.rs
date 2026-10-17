@@ -19,7 +19,7 @@ use egui::{Pos2, Rect, Ui, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use kernel::{DefinitionKind, EntityId, TexturePlacement};
-use session::{Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection};
+use session::{Camera, Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection};
 use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
@@ -73,6 +73,8 @@ pub(super) struct Fixture {
     pub hud: Hud,
     /// The pointer over the 3D view.
     pub cursor: egui::CursorIcon,
+    /// The camera the orientation gizmo follows.
+    pub camera: Camera,
 }
 
 impl Default for Fixture {
@@ -121,6 +123,7 @@ impl Default for Fixture {
             central: Rect::NOTHING,
             hud: Hud::default(),
             cursor: egui::CursorIcon::Default,
+            camera: Camera::new(glam::DVec2::new(1280.0, 800.0)),
         }
     }
 }
@@ -160,6 +163,7 @@ impl Fixture {
             dock: self.dock,
             hud: &self.hud,
             cursor: self.cursor,
+            camera: &self.camera,
         }
     }
 

@@ -1173,6 +1173,7 @@ impl State {
                 self.editor.hovered().is_some(),
                 navigating,
             ),
+            camera: &self.editor.doc().camera,
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
