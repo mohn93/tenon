@@ -230,8 +230,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Item::new("Agent Activity", UiAction::ShowAgentActivity(true)).entry(),
     ];
 
-    // Task 2 fills Help; until then it is not drawn.
-    let help: Vec<Entry> = Vec::new();
+    let help = vec![Item::new("Keyboard Shortcuts", UiAction::ShowShortcuts(true)).entry()];
 
     let mut menus = Vec::new();
     if native {
@@ -270,12 +269,10 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             entries: view_menu,
         },
     ]);
-    if !help.is_empty() {
-        menus.push(Menu {
-            title: "Help",
-            entries: help,
-        });
-    }
+    menus.push(Menu {
+        title: "Help",
+        entries: help,
+    });
     menus
 }
 

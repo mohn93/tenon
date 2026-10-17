@@ -137,13 +137,14 @@ fn the_edit_menu_erases_the_selection_and_deletes_guides() {
 fn the_edit_menu_items_need_a_selection_and_guides() {
     for item in ["Erase", "Delete Guides"] {
         let mut h = harness(edit_fixture(false, false));
+        let there = rects_named(&h, item);
         click(&mut h, "Edit");
-        let disabled = h
-            .get_all_by_label(item)
-            .any(|n| n.accesskit_node().is_disabled());
-        assert!(disabled, "{item}");
+        assert!(
+            new_node(&h, item, &there).accesskit_node().is_disabled(),
+            "{item}"
+        );
         // A disabled item does nothing.
-        h.get_all_by_label(item).last().unwrap().click();
+        new_node(&h, item, &there).click();
         h.run_ok();
         assert_eq!(h.state_mut().take(), [], "{item}");
     }
@@ -213,6 +214,61 @@ fn menu_items_show_the_tables_keys() {
     let fly = chord(Bound::ToggleFly).unwrap().text();
     assert!(drawn_texts(&h).contains(&fly), "{fly}");
     h.get_by_label("Fly Mode");
+}
+
+#[test]
+fn checked_menu_items_show_the_state() {
+    let checked = |f: Fixture, menu: &str, items: &[(&str, bool)]| {
+        let mut h = harness(f);
+        let there: Vec<_> = items.iter().map(|(i, _)| rects_named(&h, i)).collect();
+        click(&mut h, menu);
+        for ((item, want), there) in items.iter().zip(&there) {
+            let on = new_node(&h, item, there)
+                .accesskit_node()
+                .toggled()
+                .map(|t| t == egui::accesskit::Toggled::True);
+            assert_eq!(on, Some(*want), "{item}");
+        }
+    };
+    checked(
+        Fixture {
+            flying: true,
+            lighting: Lighting::Night,
+            projection: Projection::Parallel,
+            ..Default::default()
+        },
+        "Camera",
+        &[
+            ("Fly Mode", true),
+            ("Night Lighting", true),
+            ("Perspective", false),
+            ("Parallel Projection", true),
+        ],
+    );
+    checked(
+        Fixture::default(),
+        "Camera",
+        &[
+            ("Fly Mode", false),
+            ("Night Lighting", false),
+            ("Perspective", true),
+            ("Parallel Projection", false),
+        ],
+    );
+    // Import Units is a submenu of File.
+    let mut h = harness(Fixture {
+        import_units: ImportUnits::Millimeters,
+        ..Default::default()
+    });
+    click(&mut h, "File");
+    click(&mut h, "Import Units \u{23F5}");
+    for units in ImportUnits::ALL {
+        assert_eq!(
+            is_on(&h, units.label()),
+            Some(units == ImportUnits::Millimeters),
+            "{units:?}"
+        );
+    }
 }
 
 #[test]
@@ -345,9 +401,68 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
             "{item}"
         );
     }
-    // Help has no items yet, so it is not drawn.
-    let h = harness(f());
-    assert!(h.query_by_label("Help").is_none());
+}
+
+#[test]
+fn help_opens_a_window_listing_every_binding() {
+    let mut h = harness(Fixture::default());
+    assert_eq!(
+        click_menu(&mut h, &["Help", "Keyboard Shortcuts"]),
+        [UiAction::ShowShortcuts(true)]
+    );
+    // A window tall enough to draw every row.
+    let tall = Vec2::new(1280.0, 1600.0);
+    let mut h = harness_sized(
+        Fixture {
+            shortcuts: true,
+            ..Default::default()
+        },
+        tall,
+    );
+    let texts = drawn_texts(&h);
+    for s in crate::shortcuts::TABLE {
+        assert!(texts.iter().any(|t| t == s.bound.label()), "{:?}", s.bound);
+        assert!(texts.contains(&s.chord.text()), "{:?} {texts:?}", s.bound);
+    }
+    for group in crate::shortcuts::GROUPS {
+        assert!(texts.iter().any(|t| *t == group.to_uppercase()), "{group}");
+    }
+    assert_eq!(
+        click(&mut h, "Close window"),
+        [UiAction::ShowShortcuts(false)]
+    );
+}
+
+#[test]
+fn the_shortcuts_window_fits_a_short_window() {
+    for height in [600.0, 400.0] {
+        let size = Vec2::new(960.0, height);
+        let mut h = harness_sized(
+            Fixture {
+                shortcuts: true,
+                ..Default::default()
+            },
+            size,
+        );
+        let screen = Rect::from_min_size(Pos2::ZERO, size);
+        let close = rect_of(&h, "Close window");
+        assert!(screen.contains_rect(close), "the close button: {close:?}");
+        // Short of room for every row: the list scrolls to the last one.
+        h.event(egui::Event::PointerMoved(
+            close.center() + Vec2::new(0.0, 100.0),
+        ));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_ok();
+        assert!(
+            drawn_texts(&h).iter().any(|t| t == "Fly Mode"),
+            "Fly Mode at {height}"
+        );
+    }
 }
 
 #[test]
@@ -423,7 +538,9 @@ fn no_egui_menus_when_the_window_has_native_ones() {
         egui_menus: false,
         ..Default::default()
     });
-    for title in ["File", "Edit", "Draw", "Tools", "Group", "Camera", "View"] {
+    for title in [
+        "File", "Edit", "Draw", "Tools", "Group", "Camera", "View", "Help",
+    ] {
         assert!(h.query_by_label(title).is_none(), "{title}");
     }
 }

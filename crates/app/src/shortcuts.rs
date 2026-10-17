@@ -181,7 +181,51 @@ impl Chord {
     }
 }
 
+/// The groups the Keyboard Shortcuts window lists, in order.
+pub const GROUPS: [&str; 5] = ["Tools", "File", "Edit", "Group", "Camera"];
+
 impl Bound {
+    /// What the binding is called in the Keyboard Shortcuts window. The Erase tool and the
+    /// Erase command have distinct names there.
+    pub fn label(self) -> &'static str {
+        match self {
+            Bound::Tool(ToolKind::Erase) => "Erase tool",
+            Bound::Tool(kind) => kind.label(),
+            Bound::NewModel => "New",
+            Bound::OpenFile => "Open",
+            Bound::SaveFile => "Save",
+            Bound::SaveFileAs => "Save As",
+            Bound::ImportFile => "Import",
+            Bound::ExportFile => "Export",
+            Bound::Quit => "Quit",
+            Bound::Undo => "Undo",
+            Bound::Redo => "Redo",
+            Bound::EraseSelection => "Erase selection",
+            Bound::MakeGroup => "Make Group",
+            Bound::MakeComponent => "Make Component",
+            Bound::CloseInstance => "Close Group",
+            Bound::ZoomExtents => "Zoom Extents",
+            Bound::ToggleFly => "Fly Mode",
+        }
+    }
+
+    /// Which of `GROUPS` the binding is listed under.
+    pub fn group(self) -> &'static str {
+        match self {
+            Bound::Tool(_) => "Tools",
+            Bound::NewModel
+            | Bound::OpenFile
+            | Bound::SaveFile
+            | Bound::SaveFileAs
+            | Bound::ImportFile
+            | Bound::ExportFile
+            | Bound::Quit => "File",
+            Bound::Undo | Bound::Redo | Bound::EraseSelection => "Edit",
+            Bound::MakeGroup | Bound::MakeComponent | Bound::CloseInstance => "Group",
+            Bound::ZoomExtents | Bound::ToggleFly => "Camera",
+        }
+    }
+
     /// The panels' action for the binding.
     pub fn action(self) -> Option<UiAction> {
         Some(match self {
@@ -225,6 +269,20 @@ mod tests {
                     a.bound, b.bound
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_binding_has_a_label_and_a_listed_group() {
+        for s in TABLE {
+            assert!(!s.bound.label().is_empty());
+            assert!(GROUPS.contains(&s.bound.group()), "{:?}", s.bound);
+        }
+        assert_eq!(Bound::SaveFileAs.label(), "Save As");
+        assert_eq!(Bound::Tool(ToolKind::TapeMeasure).group(), "Tools");
+        let labels: Vec<_> = TABLE.iter().map(|s| s.bound.label()).collect();
+        for (i, l) in labels.iter().enumerate() {
+            assert!(!labels[i + 1..].contains(l), "{l} twice");
         }
     }
 

@@ -48,6 +48,8 @@ pub(super) struct Fixture {
     pub soften: Option<u8>,
     pub edges_soft: Option<bool>,
     pub texture_position: Option<TexturePosition>,
+    /// Whether the Keyboard Shortcuts window is open.
+    pub shortcuts: bool,
     pub theme: ThemeChoice,
     /// Whether the menus are egui's (the window has no native ones).
     pub egui_menus: bool,
@@ -94,6 +96,7 @@ impl Default for Fixture {
             soften: None,
             edges_soft: None,
             texture_position: None,
+            shortcuts: false,
             theme: ThemeChoice::System,
             egui_menus: true,
             actions: Vec::new(),
@@ -131,6 +134,7 @@ impl Fixture {
             soften: self.soften,
             edges_soft: self.edges_soft,
             texture_position: self.texture_position.clone(),
+            shortcuts: self.shortcuts,
             theme: self.theme,
             egui_menus: self.egui_menus,
         }
@@ -209,6 +213,20 @@ pub(super) fn install_theme(ctx: &egui::Context) {
     });
 }
 
+/// The node named `label` that appeared when something opened after `there` (the rectangles
+/// of the nodes with that name before): an item of the open menu, not a bar or rail button
+/// that shares its name.
+pub(super) fn new_node<'a>(h: &'a H, label: &'a str, there: &[Rect]) -> egui_kittest::Node<'a> {
+    h.get_all_by_label(label)
+        .find(|n| !there.contains(&n.rect()))
+        .unwrap_or_else(|| panic!("{label} in the menu that opened"))
+}
+
+/// The rectangles of the nodes named `label` now.
+pub(super) fn rects_named(h: &H, label: &str) -> Vec<Rect> {
+    h.query_all_by_label(label).map(|n| n.rect()).collect()
+}
+
 /// Clicks the widget named `label` and runs the frames that follow. Returns the actions.
 pub(super) fn click(h: &mut H, label: &str) -> Vec<UiAction> {
     h.get_by_label(label).click();
@@ -225,13 +243,9 @@ pub(super) fn click_menu(h: &mut H, path: &[&str]) -> Vec<UiAction> {
     for m in before {
         click(h, m);
     }
-    let there: Vec<Rect> = h.query_all_by_label(item).map(|n| n.rect()).collect();
+    let there = rects_named(h, item);
     click(h, last);
-    let node = h
-        .get_all_by_label(item)
-        .find(|n| !there.contains(&n.rect()))
-        .unwrap_or_else(|| panic!("{item} in {path:?}"));
-    node.click();
+    new_node(h, item, &there).click();
     h.run_ok();
     h.state_mut().take()
 }

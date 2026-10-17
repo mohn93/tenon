@@ -84,6 +84,8 @@ pub enum UiAction {
     ShowAgentActivity(bool),
     /// Draw the window in this theme, and keep it in the preferences.
     SetTheme(ThemeChoice),
+    /// Open or close the Keyboard Shortcuts window.
+    ShowShortcuts(bool),
     /// Open or close the Soften Edges window.
     ShowSoften(bool),
     /// Set the Soften Edges window's angle, in degrees (0 to 180).
@@ -189,6 +191,8 @@ pub struct View<'a> {
     pub texture_position: Option<TexturePosition>,
     /// The theme chosen in View > Theme.
     pub theme: ThemeChoice,
+    /// Whether the Keyboard Shortcuts window is open.
+    pub shortcuts: bool,
     /// Whether the menus are drawn by egui (otherwise the window has native ones).
     pub egui_menus: bool,
 }
@@ -245,6 +249,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     if let Some(log) = view.agents.log {
         dialogs::agent_activity(ui, &view.agents, log, actions);
+    }
+    if view.shortcuts {
+        dialogs::shortcuts_window(ui, actions);
     }
     ui.available_rect_before_wrap()
 }

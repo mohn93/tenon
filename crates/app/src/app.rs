@@ -442,7 +442,8 @@ struct State {
     /// What `render_view` renders with, on the window's device.
     offscreen: Offscreen,
     editor: Editor,
-    /// An agent asked the app to quit.
+    /// The app should end: an agent's `quit`, or the Quit action once any unsaved changes were
+    /// saved or discarded.
     quit: bool,
     /// The folders the API's file paths must lie within (empty: no limit).
     roots: ApiRoots,
@@ -454,6 +455,8 @@ struct State {
     prefs_path: Option<PathBuf>,
     /// The Agent Activity window is open.
     agent_activity: bool,
+    /// Whether the Keyboard Shortcuts window is open.
+    shortcuts_window: bool,
     /// How many of the editor's recovery files the window has already shown.
     recovered_seen: usize,
     gui: Gui,
@@ -535,6 +538,7 @@ impl State {
             prefs,
             prefs_path,
             agent_activity: false,
+            shortcuts_window: false,
             recovered_seen: 0,
             gui,
             drawn: None,
@@ -858,6 +862,7 @@ impl State {
                 }
             }
             UiAction::ShowAgentActivity(open) => self.agent_activity = open,
+            UiAction::ShowShortcuts(open) => self.shortcuts_window = open,
             UiAction::SetTheme(choice) => {
                 self.prefs.theme = choice;
                 self.gui.set_theme(choice);
@@ -1068,6 +1073,7 @@ impl State {
             edges_soft: self.editor.selection_soft(),
             theme: self.prefs.theme,
             // Task 9: !cfg!(target_os = "macos")
+            shortcuts: self.shortcuts_window,
             egui_menus: true,
             texture_position: self.editor.selection_texture_position().map(|placement| {
                 TexturePosition {
