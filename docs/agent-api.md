@@ -952,9 +952,10 @@ under a pixel and where a click would snap.
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (Cmd+Q, closing the window) | `quit` (`discard`) |
 | View > Agent Activity; the status bar's `Agents: N` | none: they only show what agents do |
+| View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
 | Edit > Erase Selection (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
-| Undo, Redo (Cmd+Z, Shift+Cmd+Z) | `undo`, `redo`; `history` lists the steps |
+| Undo, Redo (Cmd+Z, Shift+Cmd+Z; disabled when there is nothing to undo or redo, the tooltip naming the step) | `undo`, `redo`; `history` lists the steps |
 | Make group (G), Make component (Shift+G), Explode, Close group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
@@ -971,10 +972,13 @@ under a pixel and where a click would snap.
 | The 3D view's size | `editor.viewport` (the default view of `pick` and `infer`); `render_view` takes any size |
 
 Window chrome, which changes nothing in the model, its view or the editor, has no command: the
-window's size and position, the panels' sizes and scroll positions, which menus are open,
-tooltips, which Outliner rows are expanded, the export dialog's suggested format, and keyboard
-focus. The file dialogs are chrome too (commands take paths); while one, or the unsaved-changes
-prompt, is open, the window answers no requests.
+window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
+which menus are open, tooltips, which Outliner rows are expanded, the export dialog's suggested
+format, keyboard focus, and the window's preferences: the theme (View > Theme), kept in
+`~/.sketchup-alt/prefs.json`, which the API never reads or writes. The window's 3D view follows
+the theme (its day background and the selection's color and width); `render_view` keeps one
+fixed look, so its images do not depend on the window. The file dialogs are chrome too (commands
+take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.
 
 ## Example
 
