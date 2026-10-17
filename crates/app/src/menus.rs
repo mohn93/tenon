@@ -1,5 +1,5 @@
 //! The menu bar as data: one table built from the panels' `View`, drawn as egui menus by
-//! `ui::menu_bar` (and, later, as the native menu bar).
+//! `ui::menu_bar` and, on macOS, as the native menu bar by `native_menu`.
 
 use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
@@ -10,7 +10,6 @@ use crate::ui::theme::ThemeChoice;
 use crate::ui::{FLY_HELP, UiAction, View, step_name};
 
 /// The title of the native app menu (macOS), which holds Quit.
-#[cfg_attr(not(test), allow(dead_code))]
 pub const APP_MENU: &str = "sketchup-alt";
 
 /// One menu of the bar.
@@ -277,7 +276,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
 }
 
 /// Every item, depth first.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(any(target_os = "macos", test))]
 pub fn items(menus: &[Menu]) -> Vec<&Item> {
     fn walk<'a>(entries: &'a [Entry], out: &mut Vec<&'a Item>) {
         for entry in entries {
@@ -297,10 +296,38 @@ pub fn items(menus: &[Menu]) -> Vec<&Item> {
 
 /// A stable id for the item: its action's Debug text. The lighting toggle's action flips
 /// between day and night, so it has one id for both.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(any(target_os = "macos", test))]
 pub fn item_id(action: &UiAction) -> String {
     match action {
         UiAction::SetLighting(_) => "ToggleNightLighting".into(),
         _ => format!("{action:?}"),
     }
+}
+
+/// Whether a native item is enabled: as in the table, except Undo and Redo while a text field
+/// has focus, so Cmd+Z reaches the field.
+#[cfg(any(target_os = "macos", test))]
+pub fn native_enabled(item: &Item, text_focused: bool) -> bool {
+    item.enabled && !(text_focused && is_history(&item.action))
+}
+
+/// Whether a menu event raised by a held key acts: only for bindings that repeat.
+#[cfg(any(target_os = "macos", test))]
+pub fn accepts_repeat(action: &UiAction) -> bool {
+    crate::shortcuts::TABLE
+        .iter()
+        .any(|s| s.repeats && s.bound.action().as_ref() == Some(action))
+}
+
+/// Whether a native menu event for `action` acts. `repeat`: a held key raised it.
+/// `text_focused`: a text field has focus now, so Undo and Redo are the field's (the item may
+/// have been enabled when the key went down).
+#[cfg(any(target_os = "macos", test))]
+pub fn native_event_acts(action: &UiAction, repeat: bool, text_focused: bool) -> bool {
+    !(repeat && !accepts_repeat(action)) && !(text_focused && is_history(action))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn is_history(action: &UiAction) -> bool {
+    matches!(action, UiAction::Undo | UiAction::Redo)
 }

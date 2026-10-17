@@ -597,3 +597,69 @@ fn no_egui_menus_when_the_window_has_native_ones() {
         assert!(h.query_by_label(title).is_none(), "{title}");
     }
 }
+
+#[test]
+fn every_cmd_chord_is_a_native_menu_accelerator() {
+    let f = Fixture::default();
+    let bar = crate::menus::menu_bar(&f.view(), true);
+    let bound: Vec<Bound> = crate::menus::items(&bar)
+        .iter()
+        .filter_map(|i| i.bound)
+        .collect();
+    for s in crate::shortcuts::TABLE.iter().filter(|s| s.chord.command) {
+        assert!(bound.contains(&s.bound), "{:?} has no menu item", s.bound);
+    }
+}
+
+#[test]
+fn undo_and_redo_menu_items_are_off_while_typing() {
+    use crate::menus::{items, menu_bar, native_enabled};
+    let f = Fixture {
+        undo: Some("paint".into()),
+        redo: Some("erase".into()),
+        has_selection: true,
+        ..Default::default()
+    };
+    let bar = menu_bar(&f.view(), true);
+    for i in items(&bar) {
+        let history = matches!(i.action, UiAction::Undo | UiAction::Redo);
+        assert_eq!(
+            native_enabled(i, true),
+            i.enabled && !history,
+            "{}",
+            i.label
+        );
+        assert_eq!(native_enabled(i, false), i.enabled, "{}", i.label);
+    }
+}
+
+#[test]
+fn held_keys_repeat_only_undo_and_redo_through_the_menu() {
+    use crate::menus::accepts_repeat;
+    assert!(accepts_repeat(&UiAction::Undo) && accepts_repeat(&UiAction::Redo));
+    for a in [
+        UiAction::SaveFile,
+        UiAction::NewModel,
+        UiAction::Quit,
+        UiAction::Tool(ToolKind::Line),
+    ] {
+        assert!(!accepts_repeat(&a), "{a:?}");
+    }
+}
+
+#[test]
+fn native_menu_events_act_once_and_leave_typing_alone() {
+    use crate::menus::native_event_acts;
+    // A click or a first key press acts.
+    assert!(native_event_acts(&UiAction::SaveFile, false, false));
+    assert!(native_event_acts(&UiAction::Undo, false, false));
+    // Held Cmd+S saves once; held Cmd+Z keeps undoing.
+    assert!(!native_event_acts(&UiAction::SaveFile, true, false));
+    assert!(!native_event_acts(&UiAction::NewModel, true, false));
+    assert!(native_event_acts(&UiAction::Undo, true, false));
+    assert!(native_event_acts(&UiAction::Redo, true, false));
+    // While a text field has focus Cmd+Z is the field's, even if the menu raced it.
+    assert!(!native_event_acts(&UiAction::Undo, false, true));
+    assert!(!native_event_acts(&UiAction::Redo, true, true));
+    assert!(native_event_acts(&UiAction::SaveFile, false, true));
+}

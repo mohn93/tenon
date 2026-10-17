@@ -128,6 +128,25 @@ pub fn command(letter: char, shift: bool, repeat: bool) -> Option<Bound> {
         .map(|s| s.bound)
 }
 
+/// Whether the window has native menus (macOS's menu bar), which take the Cmd chords.
+pub const NATIVE_MENUS: bool = cfg!(target_os = "macos");
+
+/// What a Cmd or Ctrl chord does in the window's key path. `cmd`: Cmd is held (Ctrl may be
+/// too). With native menus the menu bar has every Cmd chord as an accelerator and acts on it
+/// itself, so the key path leaves those alone; Ctrl chords still act here, as before.
+pub fn window_command(
+    letter: char,
+    shift: bool,
+    repeat: bool,
+    cmd: bool,
+    native_menus: bool,
+) -> Option<Bound> {
+    if native_menus && cmd {
+        return None;
+    }
+    command(letter, shift, repeat)
+}
+
 /// What a key typed without Cmd does, as the editor gets it: `' '` for Space, a letter
 /// uppercase exactly when Shift is held. An uppercase letter with no binding of its own acts
 /// as its lowercase one, so Shift+L picks Line while Shift+G makes a component.
@@ -337,6 +356,52 @@ mod tests {
         assert_eq!(command('e', false, false), None);
         assert_eq!(command('q', false, false), Some(Bound::Quit));
         assert_eq!(command('l', false, false), None);
+    }
+
+    #[test]
+    fn with_native_menus_the_key_path_leaves_cmd_chords_to_the_menu() {
+        for s in TABLE.iter().filter(|s| s.chord.command) {
+            let Key::Letter(c) = s.chord.key else {
+                panic!("{:?}", s.bound)
+            };
+            let shift = s.chord.shift;
+            let both = command(c, shift, false);
+            assert_eq!(
+                window_command(c, shift, false, true, true),
+                None,
+                "{:?}",
+                s.bound
+            );
+            // Ctrl chords are not the native menu's: they keep working through the key path.
+            assert_eq!(
+                window_command(c, shift, false, false, true),
+                both,
+                "{:?}",
+                s.bound
+            );
+            // Without native menus the key path takes Cmd and Ctrl alike.
+            assert_eq!(
+                window_command(c, shift, false, true, false),
+                both,
+                "{:?}",
+                s.bound
+            );
+            assert_eq!(
+                window_command(c, shift, false, false, false),
+                both,
+                "{:?}",
+                s.bound
+            );
+        }
+        // Held keys still repeat only Undo and Redo on the key path.
+        assert_eq!(window_command('s', false, true, false, true), None);
+        assert_eq!(
+            window_command('z', false, true, false, true),
+            Some(Bound::Undo)
+        );
+        // Plain keys never go through here; they stay the editor's on every system.
+        assert_eq!(plain('l'), Some(Bound::Tool(ToolKind::Line)));
+        assert_eq!(NATIVE_MENUS, cfg!(target_os = "macos"));
     }
 
     #[test]

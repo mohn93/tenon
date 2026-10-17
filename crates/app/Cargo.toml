@@ -25,6 +25,8 @@ rfd.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 objc2-foundation.workspace = true
+objc2-app-kit.workspace = true
+muda.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true

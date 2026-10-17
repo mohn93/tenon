@@ -8,6 +8,8 @@ mod headless;
 mod host;
 mod info;
 mod menus;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod navigation;
 mod prefs;
 mod shortcuts;
@@ -76,9 +78,9 @@ fn main() {
                 }
                 _ => Some(socket),
             };
-            let mut builder = EventLoop::<app::ApiWake>::with_user_event();
-            // The default macOS menu's Quit would exit without the unsaved-changes prompt;
-            // Cmd+Q is handled by the app instead.
+            let mut builder = EventLoop::<app::AppEvent>::with_user_event();
+            // The app builds its own macOS menu bar (`native_menu`), whose Quit asks about
+            // unsaved changes; winit's default one would exit without asking.
             #[cfg(target_os = "macos")]
             winit::platform::macos::EventLoopBuilderExtMacOS::with_default_menu(
                 &mut builder,

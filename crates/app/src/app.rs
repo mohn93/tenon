@@ -15,6 +15,8 @@ use winit::dpi::LogicalSize;
 use winit::event::{
     DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
@@ -25,6 +27,10 @@ use crate::fly::FlyKey;
 use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
+#[cfg(target_os = "macos")]
+use crate::menus;
+#[cfg(target_os = "macos")]
+use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
@@ -45,9 +51,15 @@ fn window_attributes() -> WindowAttributes {
 /// The side of a texture's swatch image in the Materials list, in pixels.
 const SWATCH_PIXELS: u32 = 32;
 
-/// Sent to the event loop when an agent API request arrives.
+/// Sent to the event loop from other threads and from AppKit.
 #[derive(Debug)]
-pub struct ApiWake;
+pub enum AppEvent {
+    /// An agent API request arrived.
+    Api,
+    /// A native menu item was chosen; `repeat` when a held key chose it.
+    #[cfg(target_os = "macos")]
+    Menu { id: String, repeat: bool },
+}
 
 /// Longest delayed repaint worth scheduling; egui uses huge delays to mean "never".
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(60);
@@ -493,6 +505,9 @@ struct State {
     /// The left button is down in the view while flying without a grabbed pointer: mouse
     /// motion looks around.
     look_held: bool,
+    /// The native menu bar, built at the first frame.
+    #[cfg(target_os = "macos")]
+    native: Option<NativeMenu>,
 }
 
 impl State {
@@ -556,6 +571,8 @@ impl State {
             focused: true,
             capture: Capture::Free,
             look_held: false,
+            #[cfg(target_os = "macos")]
+            native: None,
         }
     }
 
@@ -1087,9 +1104,9 @@ impl State {
             edges_soft: self.editor.selection_soft(),
             theme: self.prefs.theme,
             dock: self.prefs.dock,
-            // Task 9: !cfg!(target_os = "macos")
             shortcuts: self.shortcuts_window,
-            egui_menus: true,
+            // macOS has the native menu bar instead.
+            egui_menus: !cfg!(target_os = "macos"),
             texture_position: self.editor.selection_texture_position().map(|placement| {
                 TexturePosition {
                     placement,
@@ -1098,6 +1115,13 @@ impl State {
             }),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
+        #[cfg(target_os = "macos")]
+        {
+            let bar = menus::menu_bar(&panels, true);
+            self.native
+                .get_or_insert_with(|| NativeMenu::new(&bar))
+                .sync(&bar, self.gui.wants_keyboard());
+        }
         gui_frame.hide_cursor = self.capture == Capture::Grabbed;
         // Applied once the frame is presented: some open modal dialogs, which must not run
         // while this frame's surface texture is held.
@@ -1410,13 +1434,16 @@ pub struct App {
     recovery: Option<PathBuf>,
     /// The window's preferences file (None: HOME is not set).
     prefs: Option<PathBuf>,
+    /// Carries native menu events to the loop.
+    #[cfg(target_os = "macos")]
+    menu_proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
     /// `socket` is where the agent API listens; None runs without it. `file` is a model to
     /// open at start.
     pub fn new(
-        event_loop: &EventLoop<ApiWake>,
+        event_loop: &EventLoop<AppEvent>,
         socket: Option<PathBuf>,
         file: Option<PathBuf>,
         roots: ApiRoots,
@@ -1424,8 +1451,10 @@ impl App {
         prefs: Option<PathBuf>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
+        #[cfg(target_os = "macos")]
+        let menu_proxy = proxy.clone();
         let hub = Hub::new(move || {
-            let _ = proxy.send_event(ApiWake);
+            let _ = proxy.send_event(AppEvent::Api);
         });
         let socket = socket.and_then(|socket| match listen_unix(&socket, hub.inbox()) {
             Ok(()) => {
@@ -1449,11 +1478,53 @@ impl App {
             roots,
             recovery,
             prefs,
+            #[cfg(target_os = "macos")]
+            menu_proxy,
+        }
+    }
+
+    /// Serves the agent API requests waiting in the hub.
+    fn serve_api(&mut self, event_loop: &ActiveEventLoop) {
+        // Wake before the work, not after: a napped app runs a request (a save, say) many
+        // times slower, and an agent's first request often arrives with its connection.
+        let state = &mut self.state;
+        let hub = &mut self.hub;
+        self.awake.serve(|_| {
+            if let Some(s) = state.as_mut() {
+                s.process_api(hub);
+            }
+            hub.open_connections() > 0
+        });
+        // An agent asked to quit; any unsaved changes were refused or discarded already.
+        if self.state.as_ref().is_some_and(|s| s.quit) {
+            event_loop.exit();
+        }
+    }
+
+    /// A native menu item was chosen. Acts unless a held key raised it and the binding does
+    /// not repeat, or it is Undo or Redo while a text field has focus (Cmd+Z is the field's).
+    #[cfg(target_os = "macos")]
+    fn menu_event(&mut self, event_loop: &ActiveEventLoop, id: &str, repeat: bool) {
+        let Some(s) = self.state.as_mut() else { return };
+        // The next frame syncs the items again: a check item toggles itself when clicked,
+        // even when nothing changes.
+        s.window.request_redraw();
+        let Some(action) = s.native.as_ref().and_then(|n| n.action(id)) else {
+            return;
+        };
+        if !menus::native_event_acts(&action, repeat, s.gui.wants_keyboard()) {
+            return;
+        }
+        s.apply(action);
+        s.sync_fly_cursor();
+        s.notify_api(&mut self.hub);
+        if s.quit {
+            event_loop.exit();
         }
     }
 }
 
-impl ApplicationHandler<ApiWake> for App {
+impl ApplicationHandler<AppEvent> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The last replies (a `quit`'s) reach their agents before the app ends.
         self.hub.close(CLOSE_WAIT);
@@ -1477,26 +1548,29 @@ impl ApplicationHandler<ApiWake> for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ApiWake) {
-        // Wake before the work, not after: a napped app runs a request (a save, say) many
-        // times slower, and an agent's first request often arrives with its connection.
-        let state = &mut self.state;
-        let hub = &mut self.hub;
-        self.awake.serve(|_| {
-            if let Some(s) = state.as_mut() {
-                s.process_api(hub);
-            }
-            hub.open_connections() > 0
-        });
-        // An agent asked to quit; any unsaved changes were refused or discarded already.
-        if self.state.as_ref().is_some_and(|s| s.quit) {
-            event_loop.exit();
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::Api => self.serve_api(event_loop),
+            #[cfg(target_os = "macos")]
+            AppEvent::Menu { id, repeat } => self.menu_event(event_loop, &id, repeat),
         }
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
+        }
+        // Menu items' actions run on the main thread inside AppKit; they reach the loop as
+        // events, with whether a held key raised them.
+        #[cfg(target_os = "macos")]
+        {
+            let proxy = self.menu_proxy.clone();
+            muda::MenuEvent::set_event_handler(Some(move |e: muda::MenuEvent| {
+                let _ = proxy.send_event(AppEvent::Menu {
+                    id: e.id.0,
+                    repeat: native_menu::current_event_repeats(),
+                });
+            }));
         }
         let attrs = window_attributes();
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
@@ -1663,7 +1737,18 @@ impl ApplicationHandler<ApiWake> for App {
                 let letter = shortcut_letter(&event.logical_key, event.physical_key);
                 if command_key {
                     let shift = s.modifiers.shift_key();
-                    match letter.and_then(|l| shortcuts::command(l, shift, event.repeat)) {
+                    // With native menus, Cmd chords are the menu bar's; Ctrl ones still act here.
+                    let cmd = s.modifiers.super_key();
+                    let bound = letter.and_then(|l| {
+                        shortcuts::window_command(
+                            l,
+                            shift,
+                            event.repeat,
+                            cmd,
+                            shortcuts::NATIVE_MENUS,
+                        )
+                    });
+                    match bound {
                         Some(Bound::Quit) => {
                             if s.settle_changes() {
                                 event_loop.exit();
