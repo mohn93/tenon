@@ -96,12 +96,12 @@ fn contents(ui: &mut Ui, card: &StartCard, actions: &mut Vec<UiAction>) {
     });
 }
 
-/// A recent file's row: its name, its full path in the tooltip.
+/// A recent file's row: its name (cut short to fit one row), its full path in the tooltip.
 fn recent_row(ui: &mut Ui, path: &Path) -> egui::Response {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into(),
     );
-    ui.add(egui::Button::new(name).frame(false))
+    ui.add(egui::Button::new(name).frame(false).truncate())
         .on_hover_text(path.display().to_string())
 }

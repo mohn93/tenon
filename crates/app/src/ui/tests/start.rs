@@ -112,3 +112,21 @@ fn the_card_settles_in_one_frame() {
         assert_eq!(h.try_run().unwrap(), 1);
     }
 }
+
+#[test]
+fn a_long_recent_name_stays_one_row_inside_the_card() {
+    let long = format!("/m/{}.skr", "a very long model name ".repeat(6));
+    let h = harness(with_card(&[&long, "/m/barn.skr"]));
+    let card = rect_of(&h, "Start card");
+    let name = long.trim_start_matches("/m/");
+    let row = rect_of(&h, name);
+    assert!(row.height() <= 18.5, "one 18 pt row: {row:?}");
+    assert!(card.contains_rect(row), "inside the card: {row:?}");
+    let texts = drawn_text_rects(&h);
+    let (_, drawn) = texts
+        .iter()
+        .find(|(t, _)| t.starts_with("a very long"))
+        .expect("the long name");
+    assert!(card.contains_rect(*drawn), "{drawn:?}");
+    assert!(drawn.height() < 20.0, "one line: {drawn:?}");
+}
