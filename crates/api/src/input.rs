@@ -68,8 +68,15 @@ pub enum InputEvent {
         #[serde(default)]
         button: MouseButton,
     },
-    /// Two left clicks in one place, then the double-click (the Select tool opens a group).
+    /// Two left clicks in one place, then the double-click (the Select tool opens a group, or
+    /// selects a face with its edges or an edge with its faces).
     DoubleClick {
+        pixel: Option<[f64; 2]>,
+        point: Option<[f64; 3]>,
+    },
+    /// Three left clicks in one place, then the double- and triple-click (the Select tool
+    /// selects everything connected).
+    TripleClick {
         pixel: Option<[f64; 2]>,
         point: Option<[f64; 3]>,
     },
@@ -160,6 +167,7 @@ pub enum Input {
     Up(Spot, MouseButton),
     Click(Spot, MouseButton),
     DoubleClick(Spot),
+    TripleClick(Spot),
     Drag(Vec<Spot>, MouseButton),
     Key(Key, Mods),
     Modifiers(Mods),
@@ -285,6 +293,7 @@ fn event(e: InputEvent) -> Result<Input, CommandError> {
             button,
         } => Input::Click(spot(pixel, point)?, button),
         InputEvent::DoubleClick { pixel, point } => Input::DoubleClick(spot(pixel, point)?),
+        InputEvent::TripleClick { pixel, point } => Input::TripleClick(spot(pixel, point)?),
         InputEvent::Drag {
             pixels,
             points,
@@ -446,6 +455,22 @@ mod tests {
         assert_eq!(t.events[3], Input::Key(Key::Char('Z'), redo));
         assert_eq!(t.events[4], Input::Key(Key::Right, Mods::default()));
         assert!(matches!(t.events[5], Input::Drag(ref p, MouseButton::Middle) if p.len() == 2));
+    }
+
+    #[test]
+    fn a_triple_click_takes_a_pixel_or_a_point() {
+        let t = checked(json!({"events": [
+            {"type": "double_click", "pixel": [10, 20]},
+            {"type": "triple_click", "pixel": [10, 20]},
+            {"type": "triple_click", "point": [1, 2, 3]}
+        ]}))
+        .unwrap();
+        let pixel = Spot::Pixel(DVec2::new(10.0, 20.0));
+        assert_eq!(t.events[0], Input::DoubleClick(pixel));
+        assert_eq!(t.events[1], Input::TripleClick(pixel));
+        assert!(matches!(t.events[2], Input::TripleClick(Spot::Point(_))));
+        let e = checked(json!({"events": [{"type": "triple_click"}]})).unwrap_err();
+        assert_eq!(e.message, "event 0: give a pixel or a point");
     }
 
     #[test]

@@ -122,7 +122,7 @@ impl Tool for LineTool {
                     }
                 }
             }
-            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.reset(),
         }
         if let (Some(a), Some(b)) = (self.last, self.hover)

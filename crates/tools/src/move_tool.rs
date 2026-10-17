@@ -200,7 +200,7 @@ impl Tool for MoveTool {
             },
             ToolEvent::ToggleCopy => self.copy = !self.copy,
             ToolEvent::Cancel => self.drag = None,
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) => {}
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) => {}
         }
         if let (Some(d), Some(hover)) = (&self.drag, self.hover) {
             let offset = hover - d.base;

@@ -176,7 +176,7 @@ impl Tool for RectangleTool {
                     return self.handle(ToolEvent::Click(hit), ctx);
                 }
             }
-            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((corner, normal)), Some(hover)) = (self.start, self.hover)

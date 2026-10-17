@@ -56,6 +56,9 @@ pub enum ToolEvent {
     /// The primary button was double-clicked at the current inference (sent after the second
     /// release).
     DoubleClick(Inference),
+    /// The primary button was clicked a third time in quick succession (sent after the third
+    /// release; the second sent `DoubleClick`).
+    TripleClick(Inference),
     /// Text typed into the measurements box, submitted with Enter.
     Value(String),
     /// Escape: abandon the operation in progress.

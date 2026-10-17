@@ -232,7 +232,7 @@ impl Tool for ArcTool {
                     return self.handle(ToolEvent::Click(hit), ctx);
                 }
             }
-            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         match (self.start, self.end, self.hover) {

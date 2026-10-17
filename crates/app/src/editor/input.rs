@@ -47,7 +47,8 @@ fn spots(event: &Input) -> &[Spot] {
         | Input::Down(at, _)
         | Input::Up(at, _)
         | Input::Click(at, _)
-        | Input::DoubleClick(at) => std::slice::from_ref(at),
+        | Input::DoubleClick(at)
+        | Input::TripleClick(at) => std::slice::from_ref(at),
         Input::Drag(path, _) => path,
         Input::Key(..) | Input::Modifiers(_) | Input::Type(_) => &[],
     }
@@ -125,6 +126,28 @@ impl Editor {
         }
     }
 
+    /// `n` (2 or 3) left clicks where the cursor is, with the double-click after the second and
+    /// the triple-click after the third. As in the window, only clicks that reached the tool
+    /// count.
+    fn clicks(&mut self, n: u8) {
+        for i in 1..=n {
+            self.button(Button::Left, true);
+            // The return value of `button` is a redraw flag; the press reached the tool if the
+            // editor now waits for its release.
+            let reached = self.tool_pressed;
+            self.button(Button::Left, false);
+            match i {
+                2 if reached => {
+                    self.double_click();
+                }
+                3 if reached => {
+                    self.triple_click();
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Works the hover out as a frame would: not while a navigation drag moves the camera.
     fn settle_hover(&mut self) {
         if !self.nav.dragging() {
@@ -153,18 +176,11 @@ impl Editor {
             }
             Input::DoubleClick(at) => {
                 self.move_to(at, view)?;
-                let mut reached = false;
-                for _ in 0..2 {
-                    self.button(Button::Left, true);
-                    // The return value of `button` is a redraw flag; the press reached the
-                    // tool if the editor now waits for its release.
-                    reached = self.tool_pressed;
-                    self.button(Button::Left, false);
-                }
-                // As in the window, only clicks that reached the tool can double-click.
-                if reached {
-                    self.double_click();
-                }
+                self.clicks(2);
+            }
+            Input::TripleClick(at) => {
+                self.move_to(at, view)?;
+                self.clicks(3);
             }
             Input::Drag(path, button) => {
                 let button = button_of(button);

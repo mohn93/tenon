@@ -312,7 +312,7 @@ impl Tool for RotateTool {
                 self.turn = None;
                 self.hover = None;
             }
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) => {}
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) => {}
         }
         if let Some(t) = &self.turn {
             let radius = PROTRACTOR * ctx.camera.eye_distance(t.center);

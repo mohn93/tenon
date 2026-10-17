@@ -56,7 +56,10 @@ impl Tool for EraseTool {
                 out.message = Some("The Erase tool takes no typed values".into());
             }
             ToolEvent::Cancel => self.hovered = None,
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(_)
+            | ToolEvent::DoubleClick(_)
+            | ToolEvent::TripleClick(_)
+            | ToolEvent::ToggleCopy => {}
         }
         out
     }

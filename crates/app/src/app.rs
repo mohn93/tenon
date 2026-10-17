@@ -437,15 +437,23 @@ fn grab_cursor(window: &Window) -> bool {
         || window.set_cursor_grab(CursorGrabMode::Confined).is_ok()
 }
 
-/// Longest time between the two releases of a double-click. The farthest the cursor may move
-/// between them, and from a press to its click's release, is the tools' drag threshold
+/// Longest time between two releases of a double- or triple-click. The farthest the cursor may
+/// move between them, and from a press to its click's release, is the tools' drag threshold
 /// (`DRAG_LOGICAL_PX`): a release the tools take as a drag is never a click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
-/// True if a release at `at` (physical pixels) at time `now` completes a double-click begun
-/// by the release `last`: less than `max_px` from it.
-fn is_double_click(last: Option<(Instant, DVec2)>, now: Instant, at: DVec2, max_px: f64) -> bool {
-    last.is_some_and(|(t, p)| now.duration_since(t) <= DOUBLE_CLICK && p.distance(at) < max_px)
+/// How many clicks a release at `at` (physical pixels) at `now` makes, counting `last` (the
+/// previous click's time, place and count): one more when within `DOUBLE_CLICK` and `max_px`
+/// of it, up to three; else, and after three, one.
+fn click_count(last: Option<(Instant, DVec2, u8)>, now: Instant, at: DVec2, max_px: f64) -> u8 {
+    match last {
+        Some((t, p, n))
+            if n < 3 && now.duration_since(t) <= DOUBLE_CLICK && p.distance(at) < max_px =>
+        {
+            n + 1
+        }
+        _ => 1,
+    }
 }
 
 /// True if a release at `at` ends a click, that is the cursor is less than `max_px` from where
@@ -512,8 +520,9 @@ struct State {
     timing: Timing,
     /// The window title last set.
     title: String,
-    /// When and where the left button was last released in the view, for double-clicks.
-    last_release: Option<(Instant, DVec2)>,
+    /// When and where the left button last ended a click in the view, and how many clicks in
+    /// a row that made, for double- and triple-clicks.
+    clicks: Option<(Instant, DVec2, u8)>,
     /// Where the left button was last pressed in the view, so a release that ends a drag does
     /// not count as a click.
     left_press: Option<DVec2>,
@@ -585,7 +594,7 @@ impl State {
             repaint_at: None,
             presented: None,
             timing: Timing::default(),
-            last_release: None,
+            clicks: None,
             title: String::new(),
             left_press: None,
             focused: true,
@@ -1736,7 +1745,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::Focused(false) => {
                 // Releases may never arrive: no click or double-click spans the focus change.
                 s.left_press = None;
-                s.last_release = None;
+                s.clicks = None;
                 s.focused = false;
                 s.editor.focus_lost()
             }
@@ -1772,13 +1781,20 @@ impl ApplicationHandler<AppEvent> for App {
                         let now = Instant::now();
                         let max = DRAG_LOGICAL_PX * s.window.scale_factor();
                         let click = is_click(s.left_press.take(), s.cursor, max);
-                        if click && is_double_click(s.last_release, now, s.cursor, max) {
-                            s.last_release = None;
-                            s.editor.double_click();
-                        } else if click {
-                            s.last_release = Some((now, s.cursor));
+                        if click {
+                            let n = click_count(s.clicks, now, s.cursor, max);
+                            s.clicks = Some((now, s.cursor, n));
+                            match n {
+                                2 => {
+                                    s.editor.double_click();
+                                }
+                                3 => {
+                                    s.editor.triple_click();
+                                }
+                                _ => {}
+                            }
                         } else {
-                            s.last_release = None;
+                            s.clicks = None;
                         }
                     }
                     handled
@@ -2077,33 +2093,44 @@ mod tests {
     }
 
     #[test]
-    fn double_clicks_are_two_quick_releases_in_one_place() {
+    fn clicks_count_up_to_three_then_start_over() {
         let now = Instant::now();
         let at = DVec2::new(100.0, 100.0);
         let soon = now + Duration::from_millis(300);
-        assert!(!is_double_click(None, now, at, 6.0));
-        assert!(is_double_click(
-            Some((now, at)),
-            soon,
-            at + DVec2::new(3.0, 3.0),
-            6.0
-        ));
-        assert!(!is_double_click(
-            Some((now, at)),
-            soon,
-            at + DVec2::new(10.0, 0.0),
-            6.0
-        ));
+        let near = at + DVec2::new(2.0, 2.0);
+        assert_eq!(click_count(None, now, at, DRAG_LOGICAL_PX), 1);
+        for (n, next) in [(1, 2), (2, 3), (3, 1)] {
+            assert_eq!(
+                click_count(Some((now, at, n)), soon, near, DRAG_LOGICAL_PX),
+                next
+            );
+        }
+        let far = at + DVec2::new(10.0, 0.0);
+        assert_eq!(
+            click_count(Some((now, at, 1)), soon, far, DRAG_LOGICAL_PX),
+            1
+        );
         let late = now + Duration::from_millis(800);
-        assert!(!is_double_click(Some((now, at)), late, at, 6.0));
+        assert_eq!(
+            click_count(Some((now, at, 1)), late, at, DRAG_LOGICAL_PX),
+            1
+        );
     }
 
     #[test]
     fn a_release_far_from_its_press_ends_a_drag_not_a_click() {
         let at = DVec2::new(100.0, 100.0);
-        assert!(!is_click(None, at, 6.0));
-        assert!(is_click(Some(at), at + DVec2::new(3.0, 3.0), 6.0));
-        assert!(!is_click(Some(at), at + DVec2::new(40.0, 0.0), 6.0));
+        assert!(!is_click(None, at, DRAG_LOGICAL_PX));
+        assert!(is_click(
+            Some(at),
+            at + DVec2::new(2.0, 2.0),
+            DRAG_LOGICAL_PX
+        ));
+        assert!(!is_click(
+            Some(at),
+            at + DVec2::new(40.0, 0.0),
+            DRAG_LOGICAL_PX
+        ));
         // The tools' drag threshold is the one radius: exactly that far is a drag.
         assert!(is_click(
             Some(at),
@@ -2115,12 +2142,15 @@ mod tests {
             at + DVec2::new(4.0, 0.0),
             DRAG_LOGICAL_PX
         ));
-        assert!(!is_double_click(
-            Some((Instant::now(), at)),
-            Instant::now(),
-            at + DVec2::new(0.0, 5.0),
-            DRAG_LOGICAL_PX
-        ));
+        assert_eq!(
+            click_count(
+                Some((Instant::now(), at, 1)),
+                Instant::now(),
+                at + DVec2::new(0.0, 4.0),
+                DRAG_LOGICAL_PX
+            ),
+            1
+        );
     }
 
     #[test]

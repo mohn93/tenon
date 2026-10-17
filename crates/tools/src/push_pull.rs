@@ -20,8 +20,9 @@ struct Drag {
     normal: DVec3,
     /// Where the face was clicked; the cursor is tracked along the normal line through it.
     start: DVec3,
-    /// Where the drag's first click was, on screen.
+    /// Where the drag's first click was pressed and released, on screen.
     press: DVec2,
+    release: Option<DVec2>,
     /// The face's loops (outer first), for the preview.
     loops: Vec<Vec<DVec3>>,
     /// The face's triangles, for the preview solid's cap.
@@ -238,6 +239,7 @@ impl Tool for PushPullTool {
                             normal: f.normal,
                             start,
                             press: ctx.cursor,
+                            release: None,
                             loops: loops(ctx.model, face),
                             triangles: ctx.model.triangulate(face).unwrap_or_default(),
                             material: f.front,
@@ -248,9 +250,12 @@ impl Tool for PushPullTool {
                     }
                     self.hovered = None;
                 }
-                // A click a few pixels from the first (a double-click's second press) never
-                // finishes the pull.
-                Some(d) if d.press.distance(ctx.cursor) < ctx.drag_threshold => {}
+                // A click a few pixels from the first's press or release (a double-click's
+                // second press) never finishes the pull.
+                Some(d)
+                    if std::iter::once(d.press)
+                        .chain(d.release)
+                        .any(|p| p.distance(ctx.cursor) < ctx.drag_threshold) => {}
                 Some(d) => {
                     let distance = measure(d, &hit, ctx);
                     if distance.abs() >= LENGTH_TOL {
@@ -274,9 +279,12 @@ impl Tool for PushPullTool {
                 if self.drag_start.released(ctx) {
                     return self.handle(ToolEvent::Click(hit), ctx);
                 }
+                if let Some(d) = self.drag.as_mut() {
+                    d.release.get_or_insert(ctx.cursor);
+                }
             }
             ToolEvent::DoubleClick(_) => self.repeat(ctx, &mut out),
-            ToolEvent::ToggleCopy => {}
+            ToolEvent::TripleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let Some(d) = &self.drag {
@@ -619,6 +627,26 @@ mod tests {
         r.at(p, ToolEvent::Release);
         // The second press lands 3 px higher on screen (under the 4 px threshold).
         r.cursor_offset(DVec2::new(0.0, -3.0));
+        let second = r.send(ToolEvent::Click(r.hit(p)));
+        assert!(
+            second.commands.is_empty(),
+            "no pull of a few pixels: {:?}",
+            second.commands
+        );
+        r.send(ToolEvent::Release(r.hit(p)));
+        let out = r.send(ToolEvent::DoubleClick(r.hit(p)));
+        assert_eq!(out.commands, vec![push_pull(r.face, 1.0)]);
+    }
+
+    #[test]
+    fn a_double_click_whose_first_release_slid_pulls_nothing_tiny() {
+        // Press at P, release 3 px away, second press 5 px from P (2 px from the release).
+        let mut r = Rig::with_distance(Some(1.0));
+        let p = DVec3::new(1.0, 1.0, 0.0);
+        r.at(p, ToolEvent::Click);
+        r.cursor_offset(DVec2::new(0.0, -3.0));
+        r.send(ToolEvent::Release(r.hit(p)));
+        r.cursor_offset(DVec2::new(0.0, -2.0));
         let second = r.send(ToolEvent::Click(r.hit(p)));
         assert!(
             second.commands.is_empty(),

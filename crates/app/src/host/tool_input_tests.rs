@@ -1185,3 +1185,45 @@ fn a_retype_after_an_agent_edit_undoes_nothing() {
     assert_eq!(count(&mut e, "edges"), edges, "the edge is still there");
     assert_eq!(r["editor"]["message"], "Click a face first", "{r}");
 }
+
+#[test]
+fn double_and_triple_clicks_select_bounds_and_connected() {
+    let mut e = editor();
+    let face = square(&mut e);
+    exec(
+        &mut e,
+        json!({"type": "push_pull", "face": face, "distance": 1}),
+    );
+    tool(&mut e, "select");
+    let selected = |e: &mut Editor| {
+        ask(e, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    input(
+        &mut e,
+        json!([{"type": "double_click", "point": [1, 1, 1]}]),
+    );
+    assert_eq!(selected(&mut e), 5, "the top face and its edges");
+    input(
+        &mut e,
+        json!([{"type": "triple_click", "point": [1, 1, 1]}]),
+    );
+    assert_eq!(selected(&mut e), 18, "the whole box");
+    // A double-click on a group still opens it.
+    select_all(&mut e);
+    let all = ask(&mut e, json!({"type": "selection"}))["ids"].clone();
+    exec(&mut e, json!({"type": "make_group", "ids": all}));
+    input(
+        &mut e,
+        json!([{"type": "double_click", "point": [1, 1, 1]}]),
+    );
+    assert_eq!(
+        ask(&mut e, json!({"type": "context"}))["path"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

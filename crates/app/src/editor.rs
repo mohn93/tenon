@@ -726,6 +726,19 @@ impl Editor {
         true
     }
 
+    /// The primary button was triple-clicked (call it after the third release, the second having
+    /// called `double_click`). The Select tool selects everything connected to what is under
+    /// the cursor.
+    pub fn triple_click(&mut self) -> bool {
+        if self.flying {
+            return false;
+        }
+        self.hover_now();
+        let Some(hit) = self.hit else { return false };
+        self.send(ToolEvent::TripleClick(hit));
+        true
+    }
+
     /// A scroll event: the wheel zooms, a trackpad orbits, pans or zooms (see `Navigation`).
     /// Returns true if the camera moved.
     pub fn scroll(&mut self, scroll: Scroll) -> bool {
@@ -1565,7 +1578,7 @@ impl Editor {
     /// fails after an undo from the same list (an array replacing a copy), the undo is redone
     /// and the copy reselected; either way the tool drops its state.
     fn apply(&mut self, out: ToolOutput) {
-        let ran = !out.commands.is_empty();
+        let start = self.doc.revision();
         let mut undone = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         for command in out.commands {
@@ -1612,7 +1625,8 @@ impl Editor {
                 self.select_created(outcome);
             }
         }
-        if ran {
+        // Only a step that changed the model is the tool's own (a selection is not).
+        if self.doc.revision() != start {
             self.tool_step = Some(self.doc.revision());
         }
         self.preview = out.preview;
@@ -3377,6 +3391,49 @@ mod tests {
             e.doc().selection().iter().copied().collect::<Vec<_>>(),
             [group]
         );
+    }
+
+    #[test]
+    fn a_triple_click_after_opening_a_group_selects_only_the_click() {
+        let mut e = editor();
+        let group = moved_group(&mut e);
+        e.select_tool(ToolKind::Select);
+        let top = DVec3::new(11.0, 1.0, 1.0);
+        double_click_at(&mut e, top);
+        click_at(&mut e, top);
+        e.triple_click();
+        let open: Vec<EntityId> = e
+            .doc()
+            .context()
+            .iter()
+            .map(|i| EntityId::Instance(*i))
+            .collect();
+        assert_eq!(open, [group]);
+        let selected: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        assert!(
+            matches!(selected[..], [EntityId::Face(_)]),
+            "the face clicked, not what is connected to it: {selected:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_step_that_changed_the_model_is_the_tools_own() {
+        let mut e = editor();
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Select);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert_eq!(e.doc().selection().len(), 1);
+        assert_eq!(e.tool_step, None, "a selection is not a step");
+        e.select_tool(ToolKind::PushPull);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        e.key(EditorKey::Char('1'));
+        e.key(EditorKey::Enter);
+        assert_eq!(e.tool_step, Some(e.doc().revision()));
     }
 
     #[test]

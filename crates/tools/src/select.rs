@@ -2,8 +2,9 @@
 //! an edge of a curve (a circle or arc) selects the whole curve. Dragging right selects what
 //! lies entirely inside the box; dragging left also selects what the box touches.
 //! With Shift held, clicked or boxed entities are toggled instead of replacing the selection.
-//! Double-clicking a group opens it for editing; double-clicking outside it, or Escape, closes
-//! it.
+//! Double-clicking a face selects it with its edges, an edge with its faces; triple-clicking
+//! selects everything connected. Double-clicking a group opens it for editing; double-clicking
+//! outside it, or Escape, closes it.
 
 use glam::{DVec2, DVec3};
 use kernel::geom::point_in_polygon;
@@ -21,6 +22,9 @@ pub struct SelectTool {
     cursor: DVec2,
     /// What a click would select, while the button is up.
     hovered: Option<EntityId>,
+    /// The last double-click opened or closed a group: the triple-click that follows it does
+    /// nothing more than its click.
+    opened: bool,
 }
 
 impl SelectTool {
@@ -66,6 +70,43 @@ pub(crate) fn whole_curve(model: &Model, id: EntityId) -> Vec<EntityId> {
         }),
         _ => vec![id],
     }
+}
+
+/// What a double-click on `id` selects: a face with its edges, an edge with its whole curve
+/// and the faces along each of its edges, a guide alone; sorted. Empty for anything else.
+fn bounded(model: &Model, id: EntityId) -> Vec<EntityId> {
+    let mut ids = std::collections::BTreeSet::from([id]);
+    match id {
+        EntityId::Face(f) => ids.extend(model.face_edges(f).into_iter().map(EntityId::Edge)),
+        EntityId::Edge(_) => {
+            for e in whole_curve(model, id) {
+                ids.insert(e);
+                if let EntityId::Edge(e) = e {
+                    ids.extend(model.faces_of_edge(e).into_iter().map(EntityId::Face));
+                }
+            }
+        }
+        EntityId::Guide(_) => {}
+        _ => return Vec::new(),
+    }
+    ids.into_iter().collect()
+}
+
+/// A double- or triple-click's selection: replaces it, or with Shift adds to it.
+fn widen(ids: Vec<EntityId>, ctx: &ToolContext, out: &mut ToolOutput) {
+    if ids.is_empty() {
+        return;
+    }
+    let mode = if ctx.shift {
+        SelectMode::Add
+    } else {
+        SelectMode::Replace
+    };
+    out.commands.push(Command::Select {
+        ids,
+        mode,
+        all: false,
+    });
 }
 
 /// True when some, but not all, of `ids` are selected.
@@ -311,15 +352,30 @@ impl Tool for SelectTool {
             ToolEvent::Value(_) => {
                 out.message = Some("The Select tool takes no typed values".into());
             }
-            ToolEvent::DoubleClick(_) => match pick(ctx) {
-                Some(id @ EntityId::Instance(_)) => {
-                    out.commands.push(Command::OpenInstance { id });
+            // The click's own release selected what is under the cursor; a double- or
+            // triple-click widens that.
+            ToolEvent::DoubleClick(_) => {
+                self.opened = false;
+                match pick(ctx) {
+                    Some(id @ EntityId::Instance(_)) => {
+                        out.commands.push(Command::OpenInstance { id });
+                        self.opened = true;
+                    }
+                    None if ctx.scenery.inside_instance() => {
+                        out.commands.push(Command::CloseInstance {});
+                        self.opened = true;
+                    }
+                    Some(id) => widen(bounded(ctx.model, id), ctx, &mut out),
+                    None => {}
                 }
-                None if ctx.scenery.inside_instance() => {
-                    out.commands.push(Command::CloseInstance {});
+            }
+            ToolEvent::TripleClick(_) => {
+                if !std::mem::take(&mut self.opened)
+                    && let Some(id @ (EntityId::Edge(_) | EntityId::Face(_))) = pick(ctx)
+                {
+                    widen(ctx.model.connected(id), ctx, &mut out);
                 }
-                _ => {}
-            },
+            }
             // Escape with nothing in progress closes the open instance.
             ToolEvent::Cancel => {
                 self.hovered = None;
@@ -419,8 +475,51 @@ mod tests {
             }
         }
 
+        /// The square, a 1 m box beside it (x 3 to 4, y -2 to -1) and an 8-sided circle of
+        /// radius 0.5 m at (-1.5, -2.5) on the ground.
+        fn boxed() -> Self {
+            let mut r = Self::new();
+            let p = |x, y| DVec3::new(x, y, 0.0);
+            let c = r
+                .model
+                .add_polygon(&[p(3.0, -2.0), p(4.0, -2.0), p(4.0, -1.0), p(3.0, -1.0)])
+                .unwrap();
+            let base = c
+                .summary()
+                .created
+                .iter()
+                .find_map(|id| match id {
+                    EntityId::Face(f) => Some(*f),
+                    _ => None,
+                })
+                .unwrap();
+            r.model.push_pull(base, 1.0).unwrap();
+            let ring: Vec<DVec3> = (0..8)
+                .map(|k| {
+                    let a = std::f64::consts::TAU * k as f64 / 8.0;
+                    p(-1.5 + 0.5 * a.cos(), -2.5 + 0.5 * a.sin())
+                })
+                .collect();
+            r.model.add_curve(&ring, true).unwrap();
+            r
+        }
+
         fn px(&self, p: DVec3) -> DVec2 {
             self.camera.project(p).unwrap()
+        }
+
+        /// Clicks twice at `p`, then double-clicks there.
+        fn double_click(&mut self, p: DVec3) -> ToolOutput {
+            self.click(p);
+            self.click(p);
+            self.send(ToolEvent::DoubleClick(Self::hit()))
+        }
+
+        /// Clicks three times at `p`, double-clicking after the second, then triple-clicks.
+        fn triple_click(&mut self, p: DVec3) -> ToolOutput {
+            self.double_click(p);
+            self.click(p);
+            self.send(ToolEvent::TripleClick(Self::hit()))
         }
 
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
@@ -468,6 +567,127 @@ mod tests {
             mode,
             all: false,
         }]
+    }
+
+    /// The ids of a single `Select` command, and its mode.
+    fn selected(out: &ToolOutput) -> (Vec<EntityId>, SelectMode) {
+        match &out.commands[..] {
+            [Command::Select { ids, mode, .. }] => (ids.clone(), *mode),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_double_click_on_a_face_selects_it_with_its_edges() {
+        let mut r = Rig::new();
+        let out = r.double_click(DVec3::new(1.0, 1.0, 0.0));
+        assert_eq!(
+            out.commands,
+            select(&["e2", "e4", "e6", "e7", "f8"], SelectMode::Replace)
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_an_edge_selects_it_with_its_faces() {
+        let mut r = Rig::boxed();
+        // The box's vertical edge nearest the camera, between its x = 3 and y = -2 sides.
+        let (ids, mode) = selected(&r.double_click(DVec3::new(3.0, -2.0, 0.5)));
+        assert_eq!(mode, SelectMode::Replace);
+        let [EntityId::Edge(e), EntityId::Face(a), EntityId::Face(b)] = ids[..] else {
+            panic!("{ids:?}");
+        };
+        let edge = r.model.edge(e).unwrap();
+        let ends = edge.v.map(|v| r.model.position(v).unwrap());
+        assert!(ends.iter().all(|p| p.x == 3.0 && p.y == -2.0), "{ends:?}");
+        let normals = [a, b].map(|f| r.model.face(f).unwrap().normal);
+        assert!(normals.contains(&DVec3::NEG_X) && normals.contains(&DVec3::NEG_Y));
+        // A circle's edge: the whole curve and its face.
+        let at = |deg: f64| {
+            let a = deg.to_radians();
+            DVec3::new(-1.5 + 0.5 * a.cos(), -2.5 + 0.5 * a.sin(), 0.0)
+        };
+        let rim = (at(225.0) + at(270.0)) / 2.0;
+        let (ids, _) = selected(&r.double_click(rim));
+        let edges = ids
+            .iter()
+            .filter(|id| matches!(id, EntityId::Edge(_)))
+            .count();
+        let faces: Vec<_> = ids
+            .iter()
+            .filter(|id| matches!(id, EntityId::Face(_)))
+            .collect();
+        assert_eq!((edges, faces.len()), (8, 1), "{ids:?}");
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+    }
+
+    #[test]
+    fn a_triple_click_selects_everything_connected() {
+        let mut r = Rig::boxed();
+        let top = DVec3::new(3.5, -1.5, 1.0);
+        let (ids, mode) = selected(&r.triple_click(top));
+        assert_eq!(mode, SelectMode::Replace);
+        let edges = ids
+            .iter()
+            .filter(|id| matches!(id, EntityId::Edge(_)))
+            .count();
+        let faces = ids
+            .iter()
+            .filter(|id| matches!(id, EntityId::Face(_)))
+            .count();
+        assert_eq!((edges, faces), (12, 6), "{ids:?}");
+        assert!(!ids.contains(&"f8".parse().unwrap()), "not the square");
+        r.shift = true;
+        let (again, mode) = selected(&r.triple_click(top));
+        assert_eq!((again, mode), (ids, SelectMode::Add));
+        // A triple-click on nothing does nothing more than its click.
+        r.shift = false;
+        assert!(
+            r.triple_click(DVec3::new(-3.0, 4.0, 0.0))
+                .commands
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_a_group_still_opens_it() {
+        let scene = scene_with_a_guide_in_a_group();
+        let scenery = crate::scenery::Scenery::of(&scene, &[]).unwrap();
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let mut tool = SelectTool::new();
+        let send = |tool: &mut SelectTool, event: ToolEvent| {
+            let ctx = ToolContext {
+                model: scene.root(),
+                scenery: &scenery,
+                camera: &camera,
+                cursor: camera.project(DVec3::new(0.5, 0.5, 0.0)).unwrap(),
+                pick_radius: 10.0,
+                drag_threshold: 4.0,
+                shift: false,
+                selection: &Default::default(),
+                material: None,
+                sample: false,
+            };
+            tool.handle(event, &ctx)
+        };
+        let out = send(&mut tool, ToolEvent::DoubleClick(Rig::hit()));
+        let id = scene.root().instances().next().unwrap().0;
+        assert_eq!(
+            out.commands,
+            vec![Command::OpenInstance {
+                id: EntityId::Instance(id)
+            }]
+        );
+        // The third click of a triple-click lands in what just opened: it does nothing more.
+        send(&mut tool, ToolEvent::Click(Rig::hit()));
+        send(&mut tool, ToolEvent::Release(Rig::hit()));
+        assert!(
+            send(&mut tool, ToolEvent::TripleClick(Rig::hit()))
+                .commands
+                .is_empty()
+        );
+        assert!(!tool.opened, "the triple-click clears it");
     }
 
     #[test]

@@ -229,7 +229,7 @@ impl Tool for TapeMeasureTool {
                 out.info = true;
             }
             ToolEvent::Cancel => self.on_external_change(),
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) => {}
+            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::TripleClick(_) => {}
         }
         if let (Some(start), Some(hover)) = (self.start, self.hover) {
             let offset = start.offset(hover);
