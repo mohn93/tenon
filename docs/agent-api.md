@@ -603,7 +603,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
  "viewport": [1280.0, 800.0], "status": "Line  |  Click the next point, or type a length  |  Length: 2 m",
  "prompt": "Click the next point, or type a length", "message": null, "lock": null,
  "measurement_label": "Length", "measurement": "2 m", "typing": false, "soften_angle": 20,
- "dialog": null, "modifiers": {"shift": false, "alt": false, "cmd": false}}
+ "message_kind": null, "dialog": null, "modifiers": {"shift": false, "alt": false, "cmd": false},
+ "hovered": "f3", "snap_label": "Endpoint"}
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `arc`, `push_pull`, `move`, `rotate`,
@@ -626,6 +627,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   `infer` use when not given a size.
 - `status` is the status bar's line as the window shows it; `prompt`, `message` (feedback from
   the last tool action or failed command), `lock` (e.g. `Locked: red axis`) are its parts.
+  `message_kind` is `"error"` or `"info"`, or `null` when there is no message; only errors flash
+  in the window (see Window actions below).
   `measurement_label` and `measurement` are the measurements box: the typed text while
   `typing`, else the live measurement (`null` when there is none).
 - `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
@@ -633,6 +636,10 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   modal: while one is open the window handles no requests, which wait until it closes.
 - `modifiers` are the modifier keys held (`cmd` is Cmd or Ctrl): the user's in the window and
   those a `tool_input` `modifiers` event holds (see Driving the tools).
+- `hovered` is what a click would act on now with Select, Push/Pull, Paint or Erase (an id of
+  the open context, `null` otherwise), and `snap_label` is the snap the window names by the
+  cursor ("Endpoint", "On Red Axis", "Parallel to Edge", "Midpoint in Group"; `null` when none,
+  and always in Select). Both are as the window last drew them, and change as the cursor moves.
 
 Editor commands go through `execute` (not `batch`), are not undo steps and do not change the
 revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
@@ -723,6 +730,10 @@ command the events ran, in order, each with its `outcome` or `error` (a CommandE
 tool's, a copy's selection of what it made, a shortcut's (`make_group`), an undo. The window
 also shows a failed command's message in `editor.message`. Subscribers get the usual `changed`,
 `selection`, `camera` and `editor` notifications.
+
+`editor.hovered` and `editor.snap_label` in the result say what the window highlights and names
+after the events. `inference` is reported in Select too, though the window draws no marker
+there. `preview` no longer outlines the hovered target; agents read `editor.hovered` for that.
 
 ### Files
 
@@ -919,7 +930,7 @@ agent or the person at the window):
 | `resync` | `{revision}` | changes were missed: read the model again |
 | `selection` | `{ids, revision}`, as the `selection` query returns | the selection changed |
 | `camera` | the `camera` query's result (without `type`) | the camera or the lighting changed: navigating in the window, fly mode, camera commands |
-| `editor` | the `editor` query's result (without `type`) | anything in it changed: the tool, its phase or points, the status bar or measurements box (which follow the cursor in the window), the paint material, import units, fly mode, the view's size, the Soften Edges window |
+| `editor` | the `editor` query's result (without `type`) | anything in it changed: the tool, its phase or points, what is under the cursor, the status bar or measurements box (which follow the cursor in the window), the paint material, import units, fly mode, the view's size, the Soften Edges window |
 
 `selection`, `camera` and `editor` are coalesced: at most one of each per frame the window draws
 (so a drag sends one per frame, not one per mouse event), or per round of requests in headless
@@ -964,7 +975,9 @@ under a pixel and where a click would snap.
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click to open a group | `tool_input` (`click`, `modifiers`, `drag`, `double_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
-| Inference snapping, Shift and arrow-key locks, the marker under the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock) |
+| Inference snapping, Shift and arrow-key locks, the marker and the snap label by the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock); `editor.snap_label` |
+| Hover highlight (Select, Push/Pull, Paint, Erase) | `editor.hovered`; `pick` for any pixel |
+| The orientation gizmo: an axis end, the centre | `standard_view`, `set_projection` |
 | Typing into the measurements box, Escape | `tool_input` (`type`, `key`); the commands' explicit values; `cancel`; `editor.measurement`, `editor.typing` |
 | The status bar | `editor.status` (and `prompt`, `message`, `lock`) |
 | Materials grid: click to choose (for editing and painting; the tool is unchanged), double-click to paint, Add, Delete, name, color, opacity, Glow, Texture..., Remove, texture size | `set_paint_material` (a double-click is `set_paint_material`, then `set_tool` `paint`), `add_material`, `delete_material`, `change_material` (`name`, `color`, `opacity`, `emission`, `texture`); `materials` |
@@ -982,8 +995,15 @@ format, keyboard focus, and the window's preferences: the theme (View > Theme) a
 `~/.sketchup-alt/prefs.json`, which the API never reads or writes. Whether the menus are the native macOS menu bar
 or the window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text field
 has focus, except Undo and Redo, which go to the field. The window's 3D view follows
-the theme (its day background and the selection's color and width); `render_view` keeps one
-fixed look, so its images do not depend on the window. The file dialogs are chrome too (commands
+the theme (its day background, the selection's color and width, and the axes, drawn red, green
+and blue in the theme's axis colors); `render_view` keeps one
+fixed look, so its images do not depend on the window. The view's feedback is chrome too: the
+pointer's shape per tool (a grabbing hand while orbiting or panning), the snap chip, which
+appears once the cursor has rested 150 ms, the 2.5 s flash by the cursor of a refused typed value
+(its message is `editor.message`; informational messages do not flash), the
+Push/Pull solid preview (`tool_input`'s `preview` has its edges), and the orientation gizmo in
+the view's corner. `render_view` never shows the hover highlight, markers, preview lines, solid
+or gizmo. The file dialogs are chrome too (commands
 take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.
 
 ## Example
