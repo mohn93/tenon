@@ -5,23 +5,22 @@ use egui::{RichText, Ui, Vec2};
 use kernel::{DefinitionKind, EntityId};
 use session::OutlinerRow;
 
+use super::right::{OUTLINER_ROWS_MIN, row_pitch};
 use super::{UiAction, View};
-
-/// The least height the Outliner's list keeps when the panel is short, in points.
-pub(super) const OUTLINER_MIN_HEIGHT: f32 = 120.0;
 
 /// The Outliner: a Model row (back to the root) and the tree of groups and components, the
 /// selected ones highlighted and the open ones bold. A click selects a node, a double-click
-/// opens it. Only expanded nodes' children are laid out.
-pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+/// opens it. Only expanded nodes' children are laid out. Returns the list's top, in points.
+pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> f32 {
     ui.heading("Outliner");
     expand_open_path(ui.ctx(), view.context);
     #[cfg(test)]
     ui.data_mut(|d| d.remove::<Vec<super::tests::Recorded>>(super::tests::recorded_id()));
+    let list_top = ui.cursor().top();
     egui::ScrollArea::vertical()
         .id_salt("outliner")
         .auto_shrink([false, true])
-        .min_scrolled_height(OUTLINER_MIN_HEIGHT)
+        .min_scrolled_height(OUTLINER_ROWS_MIN as f32 * row_pitch(ui.style()))
         .show(ui, |ui| {
             let at_root = view.context.is_empty();
             let mut model = RichText::new("Model");
@@ -40,6 +39,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
                 outliner_node(ui, view, row, &mut path, actions);
             }
         });
+    list_top
 }
 
 /// The collapsing state's id of the node at `path`.

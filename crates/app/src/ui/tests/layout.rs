@@ -1,5 +1,5 @@
 use super::*;
-use crate::ui::outliner::OUTLINER_MIN_HEIGHT;
+use crate::ui::right::{OUTLINER_ROWS_MIN, row_pitch};
 use kernel::DefinitionKind;
 use session::OutlinerRow;
 
@@ -174,11 +174,14 @@ pub(super) fn crowded(groups: u64) -> Fixture {
 
 #[test]
 fn a_short_window_leaves_the_outliner_its_minimum_height() {
-    let height = 520.0;
+    // Short enough that the Materials list is down to its least rows, tall enough that the
+    // panel is not yet scrolled (at 28 pt controls it needs about 610 points).
+    let height = 620.0;
     let h = harness_sized(crowded(40), Vec2::new(1280.0, height));
     let model = rect_of(&h, "Model");
+    let least = OUTLINER_ROWS_MIN as f32 * row_pitch(&h.ctx.global_style());
     assert!(
-        model.min.y <= height - OUTLINER_MIN_HEIGHT,
+        model.min.y <= height - least,
         "the Outliner starts at {} in a {height} point window",
         model.min.y
     );
@@ -207,4 +210,38 @@ fn a_very_short_window_scrolls_the_right_panel() {
         after < before - 100.0,
         "the panel scrolled from {before} to {after}"
     );
+}
+
+#[test]
+fn no_material_row_is_cut_by_the_list_bottom() {
+    for height in [800.0, 600.0, 520.0] {
+        let h = harness_sized(crowded(40), Vec2::new(1280.0, height));
+        let bottom = rect_of(&h, "Add").min.y - h.ctx.global_style().spacing.item_spacing.y;
+        for k in 0..40 {
+            let row = rect_of(&h, &format!("Material {k}"));
+            assert!(
+                !(row.min.y < bottom - 0.5 && row.max.y > bottom + 0.5),
+                "Material {k} straddles the list's bottom {bottom} at {height} points: {row:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn long_names_keep_the_panel_width() {
+    let long = "A material whose name is far longer than the panel is wide";
+    let mut f = crowded(3);
+    f.materials[0].name = long.into();
+    f.outliner.roots[0].name = long.into();
+    let width = harness(f).state().central.width();
+    assert_eq!(width, harness(crowded(3)).state().central.width());
+}
+
+#[test]
+fn the_panels_settle_in_one_frame() {
+    // Nothing changed: one frame and no request for another (the window can go idle).
+    for f in [Fixture::default(), crowded(40)] {
+        let mut h = harness(f);
+        assert_eq!(h.try_run().unwrap(), 1);
+    }
 }

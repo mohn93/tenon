@@ -10,8 +10,10 @@ use crate::editor::ImportUnits;
 pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     // Wraps onto more rows when the window is narrower than the buttons (see the ui tests).
     ui.horizontal_wrapped(|ui| {
-        // Tighter than the default so the default window's toolbar stays on one row.
-        ui.spacing_mut().item_spacing.x = 7.0;
+        // Tighter than the theme so the default window's toolbar stays on one row (M8b), until
+        // M11b moves the tools to a rail.
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().button_padding.x = 4.0;
         ui.menu_button("File", |ui| {
             let items = [
                 ("New", "Cmd+N", UiAction::NewModel),

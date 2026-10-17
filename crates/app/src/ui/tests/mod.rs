@@ -17,6 +17,7 @@ use kernel::{EntityId, TexturePlacement};
 use session::{Lighting, MaterialId, OutlinerTable, Projection};
 use tools::ToolKind;
 
+use super::theme::{self, ThemeChoice};
 use super::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View, draw};
 use crate::editor::{ImportUnits, Status};
 
@@ -160,7 +161,15 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
             },
             f,
         );
+    theme::install(&h.ctx, ThemeChoice::Dark);
+    // As the harness set it up: no animations, so one run settles everything.
+    h.ctx.all_styles_mut(|s| {
+        s.animation_time = 0.0;
+        s.scroll_animation = egui::style::ScrollAnimation::none();
+    });
     h.run_ok();
+    // Laying the panels out reports nothing by itself.
+    assert_eq!(h.state().actions, [], "actions from the first frames");
     h.state_mut().actions.clear();
     h
 }

@@ -89,6 +89,11 @@ fn the_camera_menu_has_views_zoom_extents_and_projections() {
         camera_menu(plain, "Parallel Projection"),
         [UiAction::SetProjection(Projection::Parallel)]
     );
+    // Picking the projection already in use still reports it.
+    assert_eq!(
+        camera_menu(plain, "Perspective"),
+        [UiAction::SetProjection(Projection::Perspective)]
+    );
     assert_eq!(camera_menu(plain, "Fly mode (F)"), [UiAction::ToggleFly]);
     assert_eq!(
         camera_menu(plain, "Night lighting"),

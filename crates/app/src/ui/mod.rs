@@ -13,12 +13,14 @@ use crate::editor::{ImportUnits, Status};
 
 mod dialogs;
 mod fields;
+mod fonts;
 mod materials;
 mod outliner;
 mod right;
 mod status;
 #[cfg(test)]
 mod tests;
+pub mod theme;
 mod toolbar;
 
 /// What the user asked for through the panels this frame.
@@ -122,8 +124,8 @@ pub struct TextureRow {
     pub pixels: [u32; 2],
 }
 
-/// The right panel's width, in points.
-const RIGHT_PANEL_WIDTH: f32 = 180.0;
+/// The right panel's width, in points. Room for two value fields side by side at 13 pt.
+const RIGHT_PANEL_WIDTH: f32 = 200.0;
 
 /// What the window shows of the agents using the API.
 pub struct Agents<'a> {
@@ -192,9 +194,6 @@ pub const FLY_HELP: &str = "Walk or fly through the model.\n\
     Shift: 3x faster; Option/Alt: slower\n\
     Esc or F: leave fly mode";
 
-/// The least height the right panel lays out its contents in; a shorter panel scrolls them.
-const PANEL_MIN_HEIGHT: f32 = 480.0;
-
 /// Lays out the panels for one frame. Returns the actions clicked and the rectangle left for
 /// the 3D view, in points.
 pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
@@ -207,7 +206,8 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
         .resizable(false)
         .exact_size(RIGHT_PANEL_WIDTH)
         .show(ui, |ui| {
-            if ui.available_height() >= PANEL_MIN_HEIGHT {
+            let least = right::least_height(ui);
+            if ui.available_height() >= least {
                 right::right_panel(ui, view, &mut actions);
             } else {
                 // A short window: lay the panel out at its least height and let it scroll.
@@ -215,7 +215,7 @@ pub fn draw(ui: &mut Ui, view: &View) -> (Vec<UiAction>, egui::Rect) {
                     .id_salt("right-panel")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        let size = Vec2::new(ui.available_width(), PANEL_MIN_HEIGHT);
+                        let size = Vec2::new(ui.available_width(), least);
                         ui.allocate_ui(size, |ui| right::right_panel(ui, view, &mut actions));
                     });
             }

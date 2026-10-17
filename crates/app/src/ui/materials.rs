@@ -4,19 +4,12 @@ use egui::{Color32, RichText, Sense, Ui, Vec2};
 use session::MaterialId;
 
 use super::fields::{drag_row, take_row};
-use super::outliner::OUTLINER_MIN_HEIGHT;
+use super::right::{MATERIAL_ROWS_MAX, MATERIAL_ROWS_MIN, OUTLINER_ROWS_MIN, measured, row_pitch};
 use super::{MaterialRow, UiAction, View};
 use crate::editor::MATERIAL_PALETTE;
 
 /// The default material's swatch: its front color.
 const DEFAULT_SWATCH: Color32 = Color32::from_rgb(237, 237, 230);
-
-/// The Materials list's greatest height, in points.
-const MATERIALS_MAX_HEIGHT: f32 = 220.0;
-
-/// Room kept below the Materials list for its buttons, name field, colors, opacity, glow and
-/// texture controls, and for the Outliner's heading and minimum height, in points.
-const BELOW_MATERIALS_LIST: f32 = 246.0 + OUTLINER_MIN_HEIGHT;
 
 /// A small square of `color` that can be clicked.
 fn swatch(ui: &mut Ui, color: Color32) -> egui::Response {
@@ -45,15 +38,20 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// The Materials list: the default material and every material, the one painted with
 /// highlighted (clicking one chooses it and the Paint tool); Add and Delete; and for the
 /// chosen material its name (renamed on Enter or leaving the field), colors to pick from and
-/// its opacity (set when a drag of the slider ends).
-pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+/// its opacity (set when a drag of the slider ends). Returns the list's top and the top of what
+/// follows it, in points.
+pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> (f32, f32) {
     end_texture_size_edit(ui, view.material, actions);
     ui.heading("Materials");
-    // Shorter when the panel is short, so the Outliner below keeps its minimum height.
-    let max_height =
-        (ui.available_height() - BELOW_MATERIALS_LIST).clamp(48.0, MATERIALS_MAX_HEIGHT);
+    // Whole rows only: as many as leave the controls below and the Outliner's least rows room.
+    let pitch = row_pitch(ui.style());
+    let below = measured(ui.ctx()).below_list + OUTLINER_ROWS_MIN as f32 * pitch;
+    let fit = ((ui.available_height() - below) / pitch).floor().max(0.0) as usize;
+    let rows = fit.clamp(MATERIAL_ROWS_MIN, MATERIAL_ROWS_MAX);
+    let list_top = ui.cursor().top();
     egui::ScrollArea::vertical()
-        .max_height(max_height)
+        .id_salt("materials")
+        .max_height(rows as f32 * pitch - ui.spacing().item_spacing.y)
         .show(ui, |ui| {
             let rows = std::iter::once((None, "Default", DEFAULT_SWATCH, None)).chain(
                 view.materials.iter().map(|m| {
@@ -68,13 +66,22 @@ pub(super) fn materials(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
                         None => swatch(ui, color),
                     }
                     .clicked();
-                    let label = ui.selectable_label(view.material == id, name);
+                    // Cut short, not wider than the panel: a wide row would push it aside.
+                    let label =
+                        ui.add(egui::Button::selectable(view.material == id, name).truncate());
                     if picked || label.clicked() {
                         actions.push(UiAction::ChooseMaterial(id));
                     }
                 });
             }
         });
+    let list_bottom = ui.cursor().top();
+    material_controls(ui, view, actions);
+    (list_top, list_bottom)
+}
+
+/// Add and Delete, and the chosen material's name, colors, sliders and texture.
+fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.horizontal(|ui| {
         if ui.button("Add").clicked() {
             actions.push(UiAction::AddMaterial);

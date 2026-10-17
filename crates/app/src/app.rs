@@ -26,6 +26,7 @@ use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
+use crate::ui::theme::ThemeChoice;
 use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
 
 /// The side of a texture's swatch image in the Materials list, in pixels.
@@ -486,7 +487,7 @@ impl State {
         } = gpu(&instance, &window).unwrap_or_else(|e| panic!("{e}"));
 
         let renderer = Renderer::new(&device, &queue, config.format);
-        let gui = Gui::new(&window, &device, config.format);
+        let gui = Gui::new(&window, &device, config.format, ThemeChoice::System);
         let view = Viewport::full((config.width, config.height));
         let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
         let editor = Editor::new(
@@ -888,7 +889,7 @@ impl State {
         eprintln!("GPU device made again");
         self.renderer = Renderer::new(&device, &queue, config.format);
         self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
-        self.gui = Gui::new(&self.window, &device, config.format);
+        self.gui = Gui::new(&self.window, &device, config.format, ThemeChoice::System);
         // The swatches belonged to the old panels' context.
         self.swatches.clear();
         self.drawn = None;

@@ -8,6 +8,7 @@ use render::Viewport;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::ui::theme::{self, ThemeChoice};
 use crate::ui::{UiAction, View, draw};
 
 pub struct Gui {
@@ -28,14 +29,21 @@ pub struct GuiFrame {
 }
 
 impl Gui {
-    pub fn new(window: &Window, device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        window: &Window,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        theme: ThemeChoice,
+    ) -> Self {
         let ctx = egui::Context::default();
+        theme::install(&ctx, theme);
         let state = egui_winit::State::new(
             ctx.clone(),
             ViewportId::ROOT,
             window,
             Some(window.scale_factor() as f32),
-            None,
+            // So System starts with the window's appearance; egui-winit follows `ThemeChanged`.
+            window.theme(),
             Some(device.limits().max_texture_dimension_2d as usize),
         );
         let renderer = egui_wgpu::Renderer::new(device, format, RendererOptions::default());
