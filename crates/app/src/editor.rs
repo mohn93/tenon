@@ -128,6 +128,10 @@ pub struct Editor {
     shift: bool,
     /// Whether the left-button press reached the tool, so its release should too.
     tool_pressed: bool,
+    /// The document revision right after the tool's own last commands ran. A tool's retype
+    /// or array starts with an Undo of that step; it runs only while the revision is still
+    /// this one, so it never undoes a step made since (a material change, an undo, an edit).
+    tool_step: Option<u64>,
     /// Direction of the last edge the cursor rested on, for parallel/perpendicular snaps.
     reference: Option<DVec3>,
     /// The direction lock in force during the current operation.
@@ -228,6 +232,7 @@ impl Editor {
             remembered: Remembered::default(),
             shift: false,
             tool_pressed: false,
+            tool_step: None,
             reference: None,
             lock: None,
             shift_lock: false,
@@ -1470,7 +1475,16 @@ impl Editor {
         self.flush_hover();
         let is_release = matches!(event, ToolEvent::Release(_));
         let is_value = matches!(event, ToolEvent::Value(_));
-        let out = self.handle(event);
+        let mut out = self.handle(event.clone());
+        if matches!(out.commands.first(), Some(Command::Undo { .. }))
+            && self.tool_step != Some(self.doc.revision())
+        {
+            // The step the tool would undo is not its own last one: the tool forgets it and
+            // says, as for a value typed with nothing to change, what to do instead.
+            self.tool.on_external_change();
+            out = self.handle(event);
+            out.commands.clear();
+        }
         // A release that did nothing keeps the message from the click that preceded it.
         let keep = is_release && out.commands.is_empty() && out.message.is_none();
         if !keep {
@@ -1551,6 +1565,7 @@ impl Editor {
     /// fails after an undo from the same list (an array replacing a copy), the undo is redone
     /// and the copy reselected; either way the tool drops its state.
     fn apply(&mut self, out: ToolOutput) {
+        let ran = !out.commands.is_empty();
         let mut undone = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         for command in out.commands {
@@ -1596,6 +1611,9 @@ impl Editor {
             if is_copy {
                 self.select_created(outcome);
             }
+        }
+        if ran {
+            self.tool_step = Some(self.doc.revision());
         }
         self.preview = out.preview;
         self.solid = out.solid;
@@ -2476,6 +2494,57 @@ mod tests {
         move_to(&mut e, DVec3::new(2.0, 1.0, 0.0));
         e.button(Button::Left, false);
         assert_eq!(stats(&e), (4, 1));
+    }
+
+    /// The top of the model: the highest vertex.
+    fn top(e: &Editor) -> f64 {
+        e.doc()
+            .model()
+            .vertices()
+            .map(|(_, v)| v.pos.z)
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn a_retyped_pull_redoes_only_its_own_step() {
+        let mut e = editor();
+        assert!(e.add_material());
+        let material = e.current_material().unwrap();
+        square_then_push_pull(&mut e);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        type_text(&mut e, "1");
+        type_text(&mut e, "2");
+        assert_eq!(stats(&e), (12, 6));
+        assert!((top(&e) - 2.0).abs() < 1e-9, "the pull was redone");
+        // A material change after the pull: a typed value no longer undoes anything.
+        e.recolor_material(material, [1, 2, 3]);
+        type_text(&mut e, "3");
+        assert_eq!(e.doc().scene().material(material).unwrap().color, [1, 2, 3]);
+        assert!((top(&e) - 2.0).abs() < 1e-9);
+        assert_eq!(stats(&e), (12, 6));
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Click a face first")
+        );
+    }
+
+    #[test]
+    fn an_array_after_another_step_undoes_nothing() {
+        let mut e = editor();
+        assert!(e.add_material());
+        let material = e.current_material().unwrap();
+        e.select_tool(ToolKind::Line);
+        start_copy(&mut e);
+        type_text(&mut e, "3");
+        assert_eq!(stats(&e), (8, 2));
+        e.recolor_material(material, [1, 2, 3]);
+        type_text(&mut e, "3x");
+        assert_eq!(e.doc().scene().material(material).unwrap().color, [1, 2, 3]);
+        assert_eq!(stats(&e), (8, 2), "nothing was undone or copied");
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Make a copy first, then type 5x or /5")
+        );
     }
 
     #[test]

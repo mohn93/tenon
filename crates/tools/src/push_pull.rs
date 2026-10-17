@@ -1,14 +1,16 @@
 //! The Push/Pull tool: click a face, move to set the distance along its normal, click again (or
-//! type the distance). A drag off the face works as the two clicks.
+//! type the distance). A drag off the face works as the two clicks. Right after a pull, a typed
+//! distance redoes it at that distance; a double-click on a face repeats the last pull distance
+//! (kept for the session).
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{EntityId, FaceId, MaterialId, Model};
 use session::Command;
 
 use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
 use crate::scenery::Owner;
-use crate::tool::{DragStart, Phase, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{DragStart, Phase, Remembered, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, toward_cursor};
 
 /// A push/pull in progress.
@@ -18,6 +20,8 @@ struct Drag {
     normal: DVec3,
     /// Where the face was clicked; the cursor is tracked along the normal line through it.
     start: DVec3,
+    /// Where the drag's first click was, on screen.
+    press: DVec2,
     /// The face's loops (outer first), for the preview.
     loops: Vec<Vec<DVec3>>,
     /// The face's triangles, for the preview solid's cap.
@@ -33,6 +37,11 @@ pub struct PushPullTool {
     /// The face a click would push or pull, while no push/pull is in progress.
     hovered: Option<FaceId>,
     drag_start: DragStart,
+    /// The pull a typed value redoes: the face (its id before the pull, which an undo
+    /// restores) and the distance.
+    last: Option<(FaceId, f64)>,
+    /// The distance a double-click repeats.
+    repeat: Option<f64>,
 }
 
 impl PushPullTool {
@@ -40,12 +49,74 @@ impl PushPullTool {
         Self::default()
     }
 
+    /// A Push/Pull tool whose double-click repeats `distance`.
+    pub fn with_distance(distance: Option<f64>) -> Self {
+        PushPullTool {
+            repeat: distance,
+            ..Self::default()
+        }
+    }
+
     fn finish(&mut self, distance: f64, out: &mut ToolOutput) {
         if let Some(d) = self.drag.take() {
-            out.commands.push(Command::PushPull {
-                face: EntityId::Face(d.face),
-                distance,
-            });
+            self.pull(d.face, distance, out);
+        }
+    }
+
+    /// Pulls `face` by `distance`, as the pull a typed value redoes and a double-click repeats.
+    fn pull(&mut self, face: FaceId, distance: f64, out: &mut ToolOutput) {
+        self.last = Some((face, distance));
+        self.repeat = Some(distance);
+        out.commands.push(Command::PushPull {
+            face: EntityId::Face(face),
+            distance,
+        });
+    }
+
+    /// Redoes the last pull at the typed `text`, keeping its direction.
+    fn retype(&mut self, text: &str, out: &mut ToolOutput) {
+        let Some((face, last)) = self.last else {
+            out.message = Some("Click a face first".into());
+            return;
+        };
+        match parse_length(text) {
+            None => out.message = Some(format!("Not a length: {text}")),
+            Some(v) if v.abs() < LENGTH_TOL => {
+                out.message = Some("Distance must not be zero".into());
+            }
+            Some(v) => {
+                out.commands.push(Command::Undo { count: None });
+                self.pull(face, if last < 0.0 { -v } else { v }, out);
+            }
+        }
+    }
+
+    /// Repeats the last pull distance on the face of the pull in progress, else on the face
+    /// under the cursor.
+    fn repeat(&mut self, ctx: &ToolContext, out: &mut ToolOutput) {
+        let face = match &self.drag {
+            Some(d) => Some(d.face),
+            None => open_face_under(ctx).map(|(f, _)| f),
+        };
+        out.info = true;
+        match (self.repeat, face) {
+            (None, _) => {
+                out.message =
+                    Some("Pull a face first; a double-click then repeats that distance".into());
+            }
+            (Some(_), None) => {
+                out.message = Some(
+                    "Push/Pull works on faces: double-click a face to repeat the last pull".into(),
+                );
+            }
+            (Some(distance), Some(face)) => {
+                out.info = false;
+                self.drag = None;
+                self.drag_start = DragStart::default();
+                self.hovered = None;
+                self.pull(face, distance, out);
+                self.last = None;
+            }
         }
     }
 }
@@ -123,9 +194,10 @@ impl Tool for PushPullTool {
     }
 
     fn prompt(&self) -> &'static str {
-        match self.drag {
-            None => "Click a face to push or pull",
-            Some(_) => "Move to set the distance, then click or type it",
+        match (&self.drag, self.last) {
+            (None, None) => "Click a face to push or pull",
+            (None, Some(_)) => "Type a distance to change the pull, or click a face",
+            (Some(_), _) => "Move to set the distance, then click or type it",
         }
     }
 
@@ -165,15 +237,20 @@ impl Tool for PushPullTool {
                             face,
                             normal: f.normal,
                             start,
+                            press: ctx.cursor,
                             loops: loops(ctx.model, face),
                             triangles: ctx.model.triangulate(face).unwrap_or_default(),
                             material: f.front,
                             distance: 0.0,
                         });
                         self.drag_start.arm(ctx.cursor);
+                        self.last = None;
                     }
                     self.hovered = None;
                 }
+                // A click a few pixels from the first (a double-click's second press) never
+                // finishes the pull.
+                Some(d) if d.press.distance(ctx.cursor) < ctx.drag_threshold => {}
                 Some(d) => {
                     let distance = measure(d, &hit, ctx);
                     if distance.abs() >= LENGTH_TOL {
@@ -182,7 +259,7 @@ impl Tool for PushPullTool {
                 }
             },
             ToolEvent::Value(text) => match (self.drag.as_ref(), parse_length(&text)) {
-                (None, _) => out.message = Some("Click a face first".into()),
+                (None, _) => self.retype(&text, &mut out),
                 (Some(_), None) => out.message = Some(format!("Not a length: {text}")),
                 (Some(_), Some(v)) if v.abs() < LENGTH_TOL => {
                     out.message = Some("Distance must not be zero".into());
@@ -198,7 +275,8 @@ impl Tool for PushPullTool {
                     return self.handle(ToolEvent::Click(hit), ctx);
                 }
             }
-            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::DoubleClick(_) => self.repeat(ctx, &mut out),
+            ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let Some(d) = &self.drag {
@@ -219,10 +297,15 @@ impl Tool for PushPullTool {
         self.drag = None;
         self.hovered = None;
         self.drag_start = DragStart::default();
+        self.last = None;
     }
 
     fn hovered(&self) -> Option<EntityId> {
         self.hovered.map(EntityId::Face)
+    }
+
+    fn remember(&self, r: &mut Remembered) {
+        r.pull_distance = self.repeat;
     }
 }
 
@@ -230,6 +313,7 @@ impl Tool for PushPullTool {
 mod tests {
     use super::*;
     use crate::inference::face_under;
+    use crate::tool::{Remembered, ToolKind};
     use glam::DVec2;
     use session::Camera;
 
@@ -243,6 +327,14 @@ mod tests {
     }
 
     impl Rig {
+        /// A rig whose tool repeats `distance` on a double-click.
+        fn with_distance(distance: Option<f64>) -> Self {
+            Self {
+                tool: PushPullTool::with_distance(distance),
+                ..Self::new()
+            }
+        }
+
         fn new() -> Self {
             let mut model = Model::new();
             let pts = [
@@ -265,12 +357,22 @@ mod tests {
         /// Puts the cursor over `p` and sends the event built from the inference there.
         fn at(&mut self, p: DVec3, make: fn(Inference) -> ToolEvent) -> ToolOutput {
             self.cursor = self.camera.project(p).unwrap();
-            let hit = Inference {
+            let hit = self.hit(p);
+            self.send(make(hit))
+        }
+
+        /// The inference at `p`, with the face under the cursor (which stays where it is).
+        fn hit(&self, p: DVec3) -> Inference {
+            Inference {
                 point: p,
                 kind: SnapKind::OnFace,
                 face: face_under(&self.model, &self.camera, self.cursor).map(|(f, _)| f),
-            };
-            self.send(make(hit))
+            }
+        }
+
+        /// Moves the cursor by `offset` pixels.
+        fn cursor_offset(&mut self, offset: DVec2) {
+            self.cursor += offset;
         }
 
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
@@ -390,6 +492,8 @@ mod tests {
             kind: SnapKind::Endpoint,
             face: None,
         };
+        // The cursor is over the corner it snapped to.
+        r.cursor = r.camera.project(corner.point).unwrap();
         let out = r.send(ToolEvent::Click(corner));
         assert_eq!(out.commands, vec![push_pull(r.face, 0.75)]);
     }
@@ -429,6 +533,134 @@ mod tests {
         assert!(r.tool.measurement().1.is_none());
         let out = r.send(ToolEvent::Value("1".into()));
         assert_eq!(out.message.as_deref(), Some("Click a face first"));
+    }
+
+    #[test]
+    fn a_typed_distance_after_a_pull_redoes_it() {
+        let mut r = Rig::new();
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(1.0, 1.0, 1.0), ToolEvent::Move);
+        let first = r.at(DVec3::new(1.0, 1.0, 1.0), ToolEvent::Click);
+        assert!(matches!(first.commands[..], [Command::PushPull { .. }]));
+        assert_eq!(
+            r.tool.prompt(),
+            "Type a distance to change the pull, or click a face"
+        );
+        let out = r.send(ToolEvent::Value("2.5".into()));
+        assert_eq!(
+            out.commands,
+            vec![Command::Undo { count: None }, push_pull(r.face, 2.5)]
+        );
+        // Typed again, it redoes the redone pull; bad values change nothing.
+        let out = r.send(ToolEvent::Value("3".into()));
+        assert_eq!(
+            out.commands,
+            vec![Command::Undo { count: None }, push_pull(r.face, 3.0)]
+        );
+        let out = r.send(ToolEvent::Value("abc".into()));
+        assert!(out.commands.is_empty());
+        assert_eq!(out.message.as_deref(), Some("Not a length: abc"));
+        let out = r.send(ToolEvent::Value("0".into()));
+        assert_eq!(out.message.as_deref(), Some("Distance must not be zero"));
+        // A pull down keeps its direction; a negative value reverses it.
+        let mut r = Rig::new();
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(1.0, 1.0, -1.0), ToolEvent::Move);
+        let first = r.at(DVec3::new(1.0, 1.0, -1.0), ToolEvent::Click);
+        let [Command::PushPull { distance, .. }] = first.commands[..] else {
+            panic!("{:?}", first.commands);
+        };
+        assert!((distance + 1.0).abs() < 1e-6, "{distance}");
+        let out = r.send(ToolEvent::Value("2".into()));
+        assert_eq!(out.commands[1], push_pull(r.face, -2.0));
+        let out = r.send(ToolEvent::Value("-2".into()));
+        assert_eq!(out.commands[1], push_pull(r.face, 2.0));
+        // A new pull's first click forgets the last one.
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.send(ToolEvent::Cancel);
+        let out = r.send(ToolEvent::Value("2".into()));
+        assert!(out.commands.is_empty());
+        assert_eq!(out.message.as_deref(), Some("Click a face first"));
+    }
+
+    #[test]
+    fn a_double_click_repeats_the_last_pull_distance() {
+        let mut r = Rig::with_distance(Some(1.5));
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Release);
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Release);
+        let out = r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::DoubleClick);
+        assert_eq!(out.commands, vec![push_pull(r.face, 1.5)]);
+        assert_eq!(r.tool.phase(), Phase::Idle);
+        // Without a distance to repeat, it explains (info) and pulls nothing.
+        let mut r = Rig::new();
+        let out = r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::DoubleClick);
+        assert!(out.commands.is_empty() && out.info);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Pull a face first; a double-click then repeats that distance")
+        );
+        // Over no face, it says what it works on.
+        let mut r = Rig::with_distance(Some(1.5));
+        let out = r.at(DVec3::new(-3.0, 4.0, 0.0), ToolEvent::DoubleClick);
+        assert!(out.commands.is_empty() && out.info);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Push/Pull works on faces: double-click a face to repeat the last pull")
+        );
+    }
+
+    #[test]
+    fn a_jittery_double_click_repeats_without_a_tiny_pull() {
+        let mut r = Rig::with_distance(Some(1.0));
+        let p = DVec3::new(1.0, 1.0, 0.0);
+        r.at(p, ToolEvent::Click);
+        r.at(p, ToolEvent::Release);
+        // The second press lands 3 px higher on screen (under the 4 px threshold).
+        r.cursor_offset(DVec2::new(0.0, -3.0));
+        let second = r.send(ToolEvent::Click(r.hit(p)));
+        assert!(
+            second.commands.is_empty(),
+            "no pull of a few pixels: {:?}",
+            second.commands
+        );
+        r.send(ToolEvent::Release(r.hit(p)));
+        let out = r.send(ToolEvent::DoubleClick(r.hit(p)));
+        assert_eq!(out.commands, vec![push_pull(r.face, 1.0)]);
+    }
+
+    #[test]
+    fn a_retype_after_an_undo_explains_instead_of_undoing() {
+        let mut r = Rig::new();
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.send(ToolEvent::Value("1".into()));
+        // What the editor's undo calls.
+        r.tool.on_external_change();
+        let out = r.send(ToolEvent::Value("2".into()));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert_eq!(out.message.as_deref(), Some("Click a face first"));
+        assert_eq!(r.tool.prompt(), "Click a face to push or pull");
+    }
+
+    #[test]
+    fn the_pull_distance_is_remembered_across_tools() {
+        let mut r = Rig::new();
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.send(ToolEvent::Value("1.25".into()));
+        let mut remembered = Remembered::default();
+        assert_eq!(remembered.pull_distance, None);
+        r.tool.remember(&mut remembered);
+        assert_eq!(remembered.pull_distance, Some(1.25));
+        // The tool made with it starts with that distance.
+        let mut again = Remembered::default();
+        ToolKind::PushPull
+            .make_with(&remembered)
+            .remember(&mut again);
+        assert_eq!(again.pull_distance, Some(1.25));
+        let mut r = Rig::with_distance(remembered.pull_distance);
+        let out = r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::DoubleClick);
+        assert_eq!(out.commands, vec![push_pull(r.face, 1.25)]);
     }
 
     #[test]

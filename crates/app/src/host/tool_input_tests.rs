@@ -1102,3 +1102,86 @@ fn a_release_whose_press_was_not_the_tools_draws_nothing() {
     assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
     assert_eq!(r["editor"]["phase"], "active", "{r}");
 }
+
+#[test]
+fn a_typed_distance_after_a_pull_redoes_it_in_one_step() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [1, 1, 0]},
+            {"type": "click", "point": [1, 1, 1]},
+            {"type": "type", "text": "2"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["push_pull", "undo", "push_pull"], "{r}");
+    let history = ask(&mut e, json!({"type": "history"}));
+    let pulls = history["undo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| *l == "push_pull")
+        .count();
+    assert_eq!(pulls, 1, "{history}");
+    let all = ask(&mut e, json!({"type": "entities", "kinds": ["vertex"]}));
+    assert!(
+        all["vertices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| (v["position"][2].as_f64().unwrap() - 2.0).abs() < 1e-6),
+        "{all}"
+    );
+}
+
+#[test]
+fn a_double_click_repeats_the_last_pull() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [1, 1, 0]},
+            {"type": "type", "text": "1"}
+        ]),
+    );
+    let r = exec(
+        &mut e,
+        json!({"type": "add_rectangle", "corner": [5, 0, 0], "opposite": [7, 2, 0]}),
+    );
+    let second = created(&r, 'f')[0].clone();
+    let r = input(
+        &mut e,
+        json!([{"type": "double_click", "point": [6, 1, 0]}]),
+    );
+    assert_eq!(ran(&r), ["push_pull"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert_eq!(c["face"], second, "{r}");
+    assert!((c["distance"].as_f64().unwrap() - 1.0).abs() < 1e-9, "{r}");
+}
+
+#[test]
+fn a_retype_after_an_agent_edit_undoes_nothing() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [1, 1, 0]},
+            {"type": "type", "text": "1"}
+        ]),
+    );
+    exec(
+        &mut e,
+        json!({"type": "add_edge", "start": [5, 5, 0], "end": [6, 5, 0]}),
+    );
+    let edges = count(&mut e, "edges");
+    let r = input(&mut e, json!([{"type": "type", "text": "2"}]));
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(count(&mut e, "edges"), edges, "the edge is still there");
+    assert_eq!(r["editor"]["message"], "Click a face first", "{r}");
+}

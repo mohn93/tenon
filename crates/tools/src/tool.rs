@@ -150,12 +150,14 @@ impl DragStart {
 }
 
 /// Tool settings kept for the session, across switching tools.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Remembered {
     /// Sides of the circles the Circle tool draws.
     pub circle_sides: u32,
     /// Segments of the arcs the Arc tool draws.
     pub arc_segments: u32,
+    /// The last Push/Pull distance, which a double-click on a face repeats.
+    pub pull_distance: Option<f64>,
 }
 
 impl Default for Remembered {
@@ -163,6 +165,7 @@ impl Default for Remembered {
         Remembered {
             circle_sides: DEFAULT_CIRCLE_SEGMENTS,
             arc_segments: DEFAULT_ARC_SEGMENTS,
+            pull_distance: None,
         }
     }
 }
@@ -211,7 +214,7 @@ impl ToolKind {
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
             ToolKind::Circle => Box::new(CircleTool::with_sides(r.circle_sides)),
             ToolKind::Arc => Box::new(ArcTool::with_segments(r.arc_segments)),
-            ToolKind::PushPull => Box::new(PushPullTool::new()),
+            ToolKind::PushPull => Box::new(PushPullTool::with_distance(r.pull_distance)),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
