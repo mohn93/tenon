@@ -145,6 +145,9 @@ pub struct Editor {
     hover_dirty: bool,
     /// The cursor left the view since the hover was last asked for: the marker stays hidden.
     hover_hidden: bool,
+    /// A window, a menu or the gizmo lies over the cursor in the view: the window shows no
+    /// highlight, marker or chip there (`set_covered`).
+    covered: bool,
     /// Navigation moved the camera since the last frame: the hover waits until it stops.
     navigated: bool,
     /// Where the scene's meshes lie seen from the open context (see `cached_layout`).
@@ -233,6 +236,7 @@ impl Editor {
             solid: None,
             hover_dirty: false,
             hover_hidden: false,
+            covered: false,
             navigated: false,
             layout: RefCell::new(None),
             typed: String::new(),
@@ -1329,23 +1333,32 @@ impl Editor {
 
     /// What a click would act on now (Select, Push/Pull, Paint, Erase), as of the last
     /// `refresh_hover`: an id of the open context. None while flying, with the cursor outside
-    /// the view, and for the other tools.
+    /// the view or under a window (`set_covered`), and for the other tools.
     pub fn hovered(&self) -> Option<EntityId> {
-        if self.flying || self.hover_hidden {
+        if self.flying || self.hover_hidden || self.covered {
             return None;
         }
         self.tool.hovered()
     }
 
     /// The name of the snap under the cursor, e.g. "Endpoint" or "Midpoint in Group", as of
-    /// the last `refresh_hover`. None in Select (which shows no marker), while flying, and
-    /// when there is no snap to name.
+    /// the last `refresh_hover`. None in Select (which shows no marker), while flying, with
+    /// the cursor outside the view or under a window (`set_covered`), and when there is no
+    /// snap to name.
     pub fn snap_label(&self) -> Option<String> {
-        if self.kind == ToolKind::Select || self.flying {
+        if self.kind == ToolKind::Select || self.flying || self.covered {
             return None;
         }
         let hit = self.hit?;
         snap_label(hit.kind, self.within)
+    }
+
+    /// Whether a window, a menu or the gizmo lies over the cursor in the view, as the window
+    /// works it out each frame. While it does, `hovered` and `snap_label` are None, as the
+    /// window shows neither there. `tool_input` clears it: an agent's pointer is under no
+    /// window.
+    pub fn set_covered(&mut self, covered: bool) {
+        self.covered = covered;
     }
 
     /// The triangles of the solid the tool previews (Push/Pull's pulled shape), as of the last
@@ -4560,6 +4573,27 @@ mod tests {
         assert_eq!(e.snap_label().as_deref(), Some("Endpoint"));
         e.toggle_fly();
         assert_eq!(e.snap_label(), None, "no label while flying");
+    }
+
+    #[test]
+    fn a_window_over_the_view_hides_the_hover_and_the_snap_label() {
+        let mut e = editor();
+        square(&mut e);
+        e.select_tool(ToolKind::Erase);
+        move_to(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        e.refresh_hover();
+        let face = e.hovered().expect("the face");
+        e.set_covered(true);
+        assert_eq!(e.hovered(), None, "a window lies over the cursor");
+        e.set_covered(false);
+        assert_eq!(e.hovered(), Some(face), "the window moved away");
+        e.select_tool(ToolKind::Line);
+        move_to(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        e.refresh_hover();
+        e.set_covered(true);
+        assert_eq!(e.snap_label(), None, "no label under a window");
+        e.set_covered(false);
+        assert_eq!(e.snap_label().as_deref(), Some("Endpoint"));
     }
 
     #[test]

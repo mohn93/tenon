@@ -969,6 +969,30 @@ fn results_report_the_hovered_target_and_the_snap_label() {
 }
 
 #[test]
+fn a_window_over_the_view_hides_the_hover_but_not_from_tool_input() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    input(&mut e, json!([{"type": "move", "point": [1, 1, 0]}]));
+    e.refresh_hover();
+    e.set_covered(true);
+    assert_eq!(
+        ask(&mut e, json!({"type": "editor"}))["hovered"],
+        Value::Null,
+        "the window shows no highlight under a window"
+    );
+    let r = input(&mut e, json!([{"type": "move", "point": [1, 1, 0]}]));
+    assert!(
+        r["editor"]["hovered"].as_str().unwrap().starts_with('f'),
+        "an agent's pointer is never under a window: {r}"
+    );
+    assert_eq!(
+        ask(&mut e, json!({"type": "editor"}))["hovered"],
+        r["editor"]["hovered"]
+    );
+}
+
+#[test]
 fn a_snap_inside_a_group_says_so() {
     let mut e = editor();
     let face = square(&mut e);

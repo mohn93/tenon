@@ -1107,6 +1107,8 @@ impl State {
         // Over a window, a menu or the gizmo a press never reaches the tools: no marker, chip
         // or highlight there. The gizmo (Task 11) is an egui Area, so this test covers it.
         let covered = self.in_view(self.cursor) && self.gui.wants_pointer_at(self.cursor);
+        // The renderer and the API read the hover through the editor: one answer for both.
+        self.editor.set_covered(covered);
         let dark_canvas =
             self.editor.doc().lighting == Lighting::Night || self.gui.theme() == egui::Theme::Dark;
         let navigating = self.editor.navigating();
@@ -1222,7 +1224,6 @@ impl State {
         self.renderer.set_hover(
             self.editor
                 .hovered()
-                .filter(|_| !covered)
                 .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint, sampling))),
         );
         self.renderer.set_preview(&self.editor.solid_preview());

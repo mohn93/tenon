@@ -91,6 +91,8 @@ impl Editor {
                 }
             }
         }
+        // No window lies over an agent's pointer.
+        self.covered = false;
         self.issued = Some(Vec::new());
         let mut stopped = None;
         for (i, event) in input.events.into_iter().enumerate() {
