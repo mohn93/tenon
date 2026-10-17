@@ -17,7 +17,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
-use winit::window::{CursorGrabMode, Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 use crate::awake::Awake;
 use crate::editor::{Editor, EditorKey};
@@ -29,6 +29,17 @@ use crate::navigation::{Button, Scroll};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::{self, ThemeChoice};
 use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
+
+/// The window's least size, in points: the panels and a usable 3D view.
+const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
+
+/// The window as it opens: title, default size and least size.
+fn window_attributes() -> WindowAttributes {
+    Window::default_attributes()
+        .with_title("sketchup-alt")
+        .with_inner_size(LogicalSize::new(1280.0, 800.0))
+        .with_min_inner_size(MIN_WINDOW)
+}
 
 /// The side of a texture's swatch image in the Materials list, in pixels.
 const SWATCH_PIXELS: u32 = 32;
@@ -1428,9 +1439,7 @@ impl ApplicationHandler<ApiWake> for App {
         if self.state.is_some() {
             return;
         }
-        let attrs = Window::default_attributes()
-            .with_title("sketchup-alt")
-            .with_inner_size(LogicalSize::new(1280.0, 800.0));
+        let attrs = window_attributes();
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let mut state = State::new(window, self.roots.clone(), self.recovery.clone());
         if let Some(path) = self.file.take() {
@@ -1682,6 +1691,20 @@ mod tests {
 
     use super::*;
     use winit::keyboard::SmolStr;
+
+    #[test]
+    fn the_window_cannot_shrink_below_960_by_600() {
+        use winit::dpi::Size;
+        let attrs = window_attributes();
+        assert_eq!(
+            attrs.min_inner_size,
+            Some(Size::Logical(LogicalSize::new(960.0, 600.0)))
+        );
+        assert_eq!(
+            attrs.inner_size,
+            Some(Size::Logical(LogicalSize::new(1280.0, 800.0)))
+        );
+    }
 
     #[test]
     fn a_request_that_changes_only_the_editor_still_shows() {

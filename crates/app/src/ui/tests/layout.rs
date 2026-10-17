@@ -249,3 +249,23 @@ fn the_panels_settle_in_one_frame() {
         assert_eq!(h.try_run().unwrap(), 1);
     }
 }
+
+#[test]
+fn the_panels_fit_the_smallest_window() {
+    let size = Vec2::new(960.0, 600.0);
+    every_toolbar_button_works(size);
+    // The toolbar wraps onto a second row at this width (until M11b's rail), no more.
+    let one_row = view_top(2400.0);
+    let top = view_top(size.x);
+    assert!(
+        top <= 2.0 * one_row,
+        "at most two toolbar rows: {top} vs {one_row}"
+    );
+    let h = harness_sized(crowded(40), size);
+    let view = h.state().central;
+    assert!(
+        view.width() >= 600.0 && view.height() >= 350.0,
+        "a usable 3D view: {view:?}"
+    );
+    h.get_by_label("Model");
+}
