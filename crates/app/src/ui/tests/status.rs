@@ -78,3 +78,26 @@ fn a_long_prompt_leaves_the_lock_pill_clear_of_the_measurements_box() {
     );
     assert!(pill.min.x >= rect_of(&h, "Tool: Line").max.x);
 }
+
+#[test]
+fn a_long_prompt_leaves_the_message_whole_at_960() {
+    let mut f = Fixture {
+        connected: 1,
+        selection: faces(&[3]).into_iter().collect(),
+        ..Default::default()
+    };
+    f.status.prompt = "Click to start a line, or type a length and press Enter; ".repeat(4);
+    f.status.lock = Some("Locked: red axis");
+    f.status.message = Some("Cannot push a face along itself".into());
+    let h = harness_sized(f, Vec2::new(960.0, 600.0));
+    assert!(
+        drawn_texts(&h)
+            .iter()
+            .any(|t| t == "Cannot push a face along itself"),
+        "the message is cut: {:?}",
+        drawn_texts(&h)
+    );
+    let message = rect_of(&h, "Cannot push a face along itself");
+    assert!(message.min.x >= rect_of(&h, "Locked: red axis").max.x);
+    assert!(message.max.x <= rect_of(&h, "Length").min.x);
+}

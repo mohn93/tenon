@@ -34,12 +34,25 @@ pub(super) fn status_bar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) 
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let name = format!("Tool: {}", view.status.tool);
                 pill(ui, view.status.tool, t.bg_hover, t.text_primary, &name);
-                // The lock pill's room is kept, so a long prompt is cut short before it.
-                let lock_room = view.status.lock.map_or(0.0, |lock| {
-                    pill_size(ui, lock).x + ui.spacing().item_spacing.x
+                // The lock pill's and the message's room is kept, so a long prompt is cut short
+                // before them: the message reports what the user just did wrong.
+                let gap = ui.spacing().item_spacing.x;
+                let lock_room = view
+                    .status
+                    .lock
+                    .map_or(0.0, |lock| pill_size(ui, lock).x + gap);
+                let message_room = view.status.message.as_ref().map_or(0.0, |message| {
+                    let font = TextStyle::Body.resolve(ui.style());
+                    let width = ui
+                        .painter()
+                        .layout_no_wrap(message.clone(), font, Color32::PLACEHOLDER)
+                        .size()
+                        .x;
+                    // A message longer than the room is cut itself, after the prompt is gone.
+                    (width + gap).min((ui.available_width() - lock_room).max(0.0))
                 });
                 ui.scope(|ui| {
-                    ui.set_max_width((ui.available_width() - lock_room).max(0.0));
+                    ui.set_max_width((ui.available_width() - lock_room - message_room).max(0.0));
                     ui.add(
                         egui::Label::new(
                             RichText::new(&view.status.prompt).color(t.text_secondary),
