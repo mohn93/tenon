@@ -356,11 +356,12 @@ material as their front, so the material on the side facing the pull ends up out
 In the window, the Paint tool (`b`) paints the side of a face facing the viewer with the
 current material (a click on something selected paints the whole selection's faces and
 groups, a click on a group paints the group), and Cmd-click on macOS (Ctrl-click on Windows
-and Linux) picks up the clicked side's material instead. The Materials tab of the dock (a grid of
-swatches) chooses the current material with a click, keeping the tool, and a double-click chooses it and
-switches to Paint (`set_paint_material`, then `set_tool` with `paint`); the tab also adds, renames, recolors and deletes materials and sets their opacity (a
-0-100% slider; one change per drag) and their emission (the Glow slider, 0 to 10 in tenths; one
-change per drag), all through these commands. A material with a texture
+and Linux) picks up the clicked side's material instead. The Materials tab of the dock (a grid
+of swatches) chooses the current material with a click, keeping the tool, and a double-click
+chooses it and switches to Paint (`set_paint_material`, then `set_tool` with `paint`); the tab
+also adds, renames, recolors and deletes materials and sets their opacity (a 0-100% slider; one
+change per drag) and their emission (the Glow slider, 0 to 10 in tenths; one change per drag),
+all through these commands. A material with a texture
 shows a small copy of its image as its swatch; for the chosen material, Texture... loads a PNG
 or JPEG image from a file dialog (as wide as the texture it replaces, or 1 m, and as high as the
 new image's proportions make it), Remove takes the
@@ -433,14 +434,14 @@ open:
   `definitions` to see what exists, then `open_path` and `entities` to look inside one
   placement at a time.
 
-In the window, the Outliner, in the dock under the Entity Info and Materials tabs, shows this tree (components as `<Name>`,
-groups by name or as `Group`, selected rows highlighted, open ones bold, nodes on the open path
-expanded whenever the open context changes) and sends these same commands: a click selects the
-node, with `open_path` first when it is in another context; Shift-click, or Cmd-click on macOS
-(Ctrl-click on Windows and Linux), adds it to or removes it from the selection when it is in the open
-context (`select` with mode `toggle`); a double-click opens it (`open_path` with its whole path);
-the Model row at the top goes back to the root (`open_path` with `[]`; nothing when already
-there).
+In the window, the Outliner, in the dock under the Entity Info and Materials tabs, shows this
+tree (components as `<Name>`, groups by name or as `Group`, selected rows highlighted, open ones
+bold, nodes on the open path expanded whenever the open context changes) and sends these same
+commands: a click selects the node, with `open_path` first when it is in another context;
+Shift-click, or Cmd-click on macOS (Ctrl-click on Windows and Linux), adds it to or removes it
+from the selection when it is in the open context (`select` with mode `toggle`); a double-click
+opens it (`open_path` with its whole path); the Model row at the top goes back to the root
+(`open_path` with `[]`; nothing when already there).
 
 `{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
 undo step; a component's name must not be empty; an unknown definition is `not_found`).
@@ -486,7 +487,7 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day` or by `night` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
-standard views, the two projections and Night lighting (checked at night; `set_lighting`); it
+standard views, the two projections and Night Lighting (checked at night; `set_lighting`); it
 sends these same commands.
 
 Navigating in the window moves the same document camera, about the point under the cursor:
@@ -952,13 +953,13 @@ under a pixel and where a click would snap.
 | File > Import... (Cmd+I), File > Import Units | `import` (`scale`, `as`, `up`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
-| View > Agent Activity; the status bar's `Agents: N` | none: they only show what agents do |
+| View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
 | View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z; disabled when there is nothing to undo or redo, the tooltip naming the step) | `undo`, `redo`; `history` lists the steps |
-| Group menu and context bar: Make Group (G), Make Component (Shift+G), Explode, Close Group (Escape) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
-| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
+| Group menu and context bar: Make Group (G), Make Component (Shift+G), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
+| Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night Lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click to open a group | `tool_input` (`click`, `modifiers`, `drag`, `double_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
