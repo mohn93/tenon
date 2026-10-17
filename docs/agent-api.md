@@ -37,7 +37,7 @@ all commands and results.
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
 | `subscribe` | none | `{revision}`, then `changed` notifications after every model change; a `resync` notification (`{revision}`) means changes were missed, so re-read with `{"type": "entities"}` (its `revision` tells you where you are). Also `selection`, `camera` and `editor` notifications; see Notifications below |
-| `tool_input` | `{"events": [{"type": "click", "point": [0,0,0]}, {"type": "type", "text": "3"}], "width": 640, "height": 400}` (size optional) | `{editor, inference, preview, commands, revision}`: the active tool fed the events as the window feeds a user's; see Driving the tools below |
+| `tool_input` | `{"events": [{"type": "click", "point": [0,0,0]}, {"type": "type", "text": "3"}], "width": 640, "height": 400}` (size optional; as written this draws a line, so the Line tool must be active: the editor starts in Select) | `{editor, inference, preview, commands, revision}`: the active tool fed the events as the window feeds a user's; see Driving the tools below |
 | `describe` | none | the API description |
 | `quit` | `{"discard": true}` (optional; default false) | `{}`, then the app ends once its replies are sent (window or headless; a headless socket's file is removed). With unsaved changes and no `discard` it fails with `unsaved_changes` and goes on. In the window it ends without asking about unsaved changes. Once it is accepted, every later request, including those already waiting with it, is refused (`-32000`, `invalid_input`, "the program is quitting"), so no edit is made that would not be saved. Camera changes do not count as unsaved (see Camera), so `quit` without `discard` does not keep a view moved since the last save; `save` first to keep it. Params go by name: `[true]` is `-32602` |
 
@@ -102,7 +102,12 @@ Modeling commands, each one undo step:
 instances and guides; `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and
 does not change the revision. The window shows the selection and agents see what the user
 selected with the `selection` query. Vertex ids are `invalid_input` and unknown ids are
-`not_found`, both with `ids`. Empty `ids` with mode `replace` clears the selection.
+`not_found`, both with `ids`. Empty or absent `ids` with mode `replace` clears the selection
+(Select None).
+
+`{"type": "select", "all": true, "mode": "replace"}` selects every edge, face, instance and guide
+of the open context, combined with the current selection by `mode` as `ids` are. `ids` must then
+be absent or empty: giving both is `invalid_input` ("select takes ids or all, not both").
 
 `{"type": "select", "box": {"from": [100, 80], "to": [300, 240]}, "mode": "add"}` selects by a box
 on screen instead of `ids`, as the Select tool's box does: of the open context, the edges, faces,
@@ -598,17 +603,17 @@ editor without one): the active tool and what it is doing, the material the Pain
 with, the units imports are read in, and the status bar. `{"type": "editor"}` returns:
 
 ```
-{"type": "editor", "tool": "line", "phase": "active", "points": [[0,0,0]],
+{"type": "editor", "tool": "select", "phase": "idle", "points": [],
  "paint_material": null, "import_units": "meters", "flying": false, "fly_speed": 3.0,
- "viewport": [1280.0, 800.0], "status": "Line  |  Click the next point, or type a length  |  Length: 2 m",
- "prompt": "Click the next point, or type a length", "message": null, "lock": null,
- "measurement_label": "Length", "measurement": "2 m", "typing": false, "soften_angle": 20,
+ "viewport": [1280.0, 800.0], "status": "Select  |  Click an edge, face or group, or drag a box; Shift adds or removes; double-click a group to edit it",
+ "prompt": "Click an edge, face or group, or drag a box; Shift adds or removes; double-click a group to edit it", "message": null, "lock": null,
+ "measurement_label": "", "measurement": null, "typing": false, "soften_angle": 20,
  "message_kind": null, "dialog": null, "modifiers": {"shift": false, "alt": false, "cmd": false},
  "hovered": "f3", "snap_label": "Endpoint"}
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `arc`, `push_pull`, `move`, `rotate`,
-  `tape_measure`, `erase` or `paint`.
+  `tape_measure`, `erase` or `paint`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle, the
@@ -626,9 +631,11 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   points; 1280 x 800 headless): the view `pick` and
   `infer` use when not given a size.
 - `status` is the status bar's line as the window shows it; `prompt`, `message` (feedback from
-  the last tool action or failed command), `lock` (e.g. `Locked: red axis`) are its parts.
+  the last tool action or failed command), `lock` (e.g. `Locked: red axis`, also Rotate's plane
+  lock before its first click) are its parts.
   `message_kind` is `"error"` or `"info"`, or `null` when there is no message; only an error left by a
-  typed value flashes in the window (see Window actions below).
+  typed value flashes in the window (see Window actions below). A tool's dead-end messages (Push/Pull's
+  double-click with no pull to repeat, say) are `info`.
   `measurement_label` and `measurement` are the measurements box: the typed text while
   `typing`, else the live measurement (`null` when there is none).
 - `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
@@ -654,6 +661,7 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 | `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
 | `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for), and lets go of the modifiers `tool_input` holds. It never closes the open group (`close_instance` does). |
 | `{"type": "set_fly_mode", "on": true, "speed": 6}` | Turns fly mode on or off, as F does (see Camera), and sets its speed in meters a second (0.25 to 60, else `invalid_input`; absent: unchanged). In the window the pointer is held while flying. |
+| `{"type": "duplicate"}` | Starts Move copying the selection, as Edit > Duplicate (Cmd+D) does: with the cursor in the view the base point is the point under it, so the copy follows the cursor; otherwise Move waits for a base point. With nothing selected it is `invalid_input`. The copy is made by the next click or typed distance (one `copy` step). |
 | `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
 | `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
 
@@ -662,7 +670,10 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 `tool_input` feeds the active tool the events a user makes in the 3D view, through the same
 editor code the window runs: the same inference and snapping, Shift and arrow-key locks, typed
 values ("3", "2,3", "24s", "5x", "/5", angles), Ctrl copying, Cmd sampling and double-click
-opening. Every tool behaviour is reachable this way, in the window and headless alike.
+opening. Every tool behaviour is reachable this way, in the window and headless alike. The editor
+starts in the Select tool, so the examples that draw first switch tool with `set_tool`.
+
+With the Line tool active (`{"type": "set_tool", "tool": "line"}` through `execute`):
 
 ```
 {"jsonrpc": "2.0", "id": 9, "method": "tool_input", "params": {"events": [
@@ -678,11 +689,16 @@ Events, run in order:
 | `{"type": "move", "pixel": [320, 200]}` | Moves the cursor there: the inference and the tool's preview follow. |
 | `{"type": "down", "point": [1, 2, 0], "button": "left"}`, `{"type": "up", ...}` | Presses or releases a button there (`left` default, `middle`, `right`). A middle drag orbits and Shift+middle pans, as in the window; Alt+left orbits. A button left down stays down for a later call. |
 | `{"type": "click", "point": [1, 2, 0]}` | Moves there, presses and releases. |
-| `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool opens the group under it, or closes the open one when there is nothing of it there. |
-| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. While a navigation drag turns the view, the hover waits, as in the window. |
-| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` is taken (undo; with `shift` redo); the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
+| `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool selects a face with its edges, or an edge with its faces, opens the group under it, or closes the open one when there is nothing of it there. Push/Pull repeats the last pull distance on the face (the one being pulled, else the one under the cursor). |
+| `{"type": "triple_click", "point": [1, 2, 0]}` | Three left clicks there: the Select tool selects everything connected to the edge or face under it (a triple-click that follows a double-click that opened or closed a group does nothing more). |
+| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. With Line, Rectangle, Circle, Arc or Push/Pull, a drag draws as two clicks when the release is at least the drag threshold (4 px) from the press, inside the view. While a navigation drag turns the view, the hover waits, as in the window. |
+| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none) and `d` (duplicate, as the `duplicate` command; not with `shift`) are taken; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
 | `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go, so `{"type": "modifiers"}` lets go of all): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Cmd or Ctrl makes a Paint click sample the material. They stay held across calls (see Modifiers below). |
 | `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. |
+
+Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as
+Move and Rotate allow for their last step; it is refused ("Click a face first") if another
+step has come in between.
 
 - **Where**: a `pixel` is in a view of `width` x `height` (both or neither; default the 3D view,
   `editor.viewport`, 1280 x 800 headless), scaled to the 3D view, which must have the same
@@ -964,6 +980,7 @@ under a pixel and where a click would snap.
 | In the window | Through the API |
 |---|---|
 | File > New, Open..., Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt is `unsaved_changes` |
+| The empty-model card's New, Open... and recent files | `new`, `open` (`path`) |
 | File > Import... (Cmd+I), File > Import Units | `import` (`scale`, `as`, `up`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
@@ -971,12 +988,15 @@ under a pixel and where a click would snap.
 | View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
+| Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |
+| Edit > Duplicate (Cmd+D) | `duplicate`, or `copy` with an explicit offset |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z; disabled when there is nothing to undo or redo, the tooltip naming the step) | `undo`, `redo`; `history` lists the steps |
 | Group menu and context bar: Make Group (G), Make Component (Shift+G), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night Lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
+| Drawing by dragging (Line, Rectangle, Circle, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
-| Select: click, Shift-click, box (inside or crossing), double-click to open a group | `tool_input` (`click`, `modifiers`, `drag`, `double_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
+| Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Inference snapping, Shift and arrow-key locks, the marker and the snap label by the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock); `editor.snap_label` |
 | Hover highlight (Select, Push/Pull, Paint, Erase) | `editor.hovered`; `pick` for any pixel |
@@ -994,10 +1014,11 @@ Window chrome, which changes nothing in the model, its view or the editor, has n
 window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
 which menus are open, tooltips, which Outliner rows are expanded, the Outliner's filter text (an agent filters the
 `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export dialog's suggested
-format, keyboard focus, and the window's preferences: the theme (View > Theme) and the dock's width, divider position and tab, kept in
-`~/.sketchup-alt/prefs.json`, which the API never reads or writes. Whether the menus are the native macOS menu bar
+format, keyboard focus, and the window's preferences: the theme (View > Theme), the dock's width, divider position and tab, and the recent files list, kept in
+`~/.sketchup-alt/prefs.json`, which the API never reads or writes (files an agent opens or saves are not added to the list). The card
+the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is chrome too, and so is dismissing it. Whether the menus are the native macOS menu bar
 or the window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text field
-has focus, except Undo and Redo, which go to the field. The window's 3D view follows
+has focus, except Undo, Redo, Select All and Select None, which go to the field. The window's 3D view follows
 the theme (its day background, the selection's color and width, and the axes, drawn red, green
 and blue in the theme's axis colors); `render_view` keeps one
 fixed look, so its images do not depend on the window. The view's feedback is chrome too: the
