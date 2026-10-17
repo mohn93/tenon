@@ -26,8 +26,9 @@ use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
 use crate::info::entity_info;
 use crate::navigation::{Button, Scroll};
+use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
-use crate::ui::theme::{self, ThemeChoice};
+use crate::ui::theme;
 use crate::ui::{Agents, MaterialRow, TexturePosition, TextureRow, UiAction, View};
 
 /// The window's least size, in points: the panels and a usable 3D view.
@@ -447,6 +448,10 @@ struct State {
     roots: ApiRoots,
     /// Where discarded work is kept (None: nowhere).
     recovery: Option<PathBuf>,
+    /// The window's preferences, as chosen in this session.
+    prefs: Prefs,
+    /// Where they are kept between sessions (None: HOME is not set; they last the session).
+    prefs_path: Option<PathBuf>,
     /// The Agent Activity window is open.
     agent_activity: bool,
     /// How many of the editor's recovery files the window has already shown.
@@ -488,7 +493,13 @@ struct State {
 }
 
 impl State {
-    fn new(window: Arc<Window>, roots: ApiRoots, recovery: Option<PathBuf>) -> Self {
+    fn new(
+        window: Arc<Window>,
+        roots: ApiRoots,
+        recovery: Option<PathBuf>,
+        prefs_path: Option<PathBuf>,
+    ) -> Self {
+        let prefs = prefs_path.as_deref().map(prefs::load).unwrap_or_default();
         let instance = wgpu::Instance::default();
         let Gpu {
             surface,
@@ -499,7 +510,7 @@ impl State {
         } = gpu(&instance, &window).unwrap_or_else(|e| panic!("{e}"));
 
         let renderer = Renderer::new(&device, &queue, config.format);
-        let gui = Gui::new(&window, &device, config.format, ThemeChoice::System);
+        let gui = Gui::new(&window, &device, config.format, prefs.theme);
         let view = Viewport::full((config.width, config.height));
         let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
         let editor = Editor::new(
@@ -521,6 +532,8 @@ impl State {
             quit: false,
             roots,
             recovery,
+            prefs,
+            prefs_path,
             agent_activity: false,
             recovered_seen: 0,
             gui,
@@ -840,6 +853,19 @@ impl State {
                 self.editor.toggle_fly();
             }
             UiAction::ShowAgentActivity(open) => self.agent_activity = open,
+            UiAction::SetTheme(choice) => {
+                self.prefs.theme = choice;
+                self.gui.set_theme(choice);
+                // A failed save leaves the choice for this session.
+                if let Some(path) = &self.prefs_path
+                    && let Err(e) = prefs::save(path, &self.prefs)
+                {
+                    eprintln!(
+                        "warning: cannot save the preferences to {}: {e}",
+                        path.display()
+                    );
+                }
+            }
             UiAction::ShowSoften(open) => {
                 self.editor.show_soften(open);
             }
@@ -901,7 +927,7 @@ impl State {
         eprintln!("GPU device made again");
         self.renderer = Renderer::new(&device, &queue, config.format);
         self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
-        self.gui = Gui::new(&self.window, &device, config.format, ThemeChoice::System);
+        self.gui = Gui::new(&self.window, &device, config.format, self.prefs.theme);
         // The swatches belonged to the old panels' context.
         self.swatches.clear();
         self.drawn = None;
@@ -1035,6 +1061,7 @@ impl State {
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
+            theme: self.prefs.theme,
             texture_position: self.editor.selection_texture_position().map(|placement| {
                 TexturePosition {
                     placement,
@@ -1353,6 +1380,8 @@ pub struct App {
     roots: ApiRoots,
     /// Where work an agent discards is kept.
     recovery: Option<PathBuf>,
+    /// The window's preferences file (None: HOME is not set).
+    prefs: Option<PathBuf>,
 }
 
 impl App {
@@ -1364,6 +1393,7 @@ impl App {
         file: Option<PathBuf>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
+        prefs: Option<PathBuf>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
         let hub = Hub::new(move || {
@@ -1390,6 +1420,7 @@ impl App {
             file,
             roots,
             recovery,
+            prefs,
         }
     }
 }
@@ -1441,7 +1472,12 @@ impl ApplicationHandler<ApiWake> for App {
         }
         let attrs = window_attributes();
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        let mut state = State::new(window, self.roots.clone(), self.recovery.clone());
+        let mut state = State::new(
+            window,
+            self.roots.clone(),
+            self.recovery.clone(),
+            self.prefs.clone(),
+        );
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),

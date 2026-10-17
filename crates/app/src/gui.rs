@@ -54,6 +54,11 @@ impl Gui {
         }
     }
 
+    /// Draws the panels in `choice` from the next frame on.
+    pub fn set_theme(&self, choice: ThemeChoice) {
+        theme::set_choice(&self.ctx, choice);
+    }
+
     /// The egui context, for loading images the panels show.
     pub fn ctx(&self) -> &egui::Context {
         &self.ctx

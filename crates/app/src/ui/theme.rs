@@ -16,6 +16,19 @@ pub enum ThemeChoice {
     Light,
 }
 
+impl ThemeChoice {
+    pub const ALL: [ThemeChoice; 3] = [ThemeChoice::System, ThemeChoice::Dark, ThemeChoice::Light];
+
+    /// The name in View > Theme.
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "System",
+            ThemeChoice::Dark => "Dark",
+            ThemeChoice::Light => "Light",
+        }
+    }
+}
+
 /// One theme's colors. The whole set the spec names is defined here; a few tokens (`success`)
 /// get their first user in a later milestone.
 #[allow(dead_code)]

@@ -273,3 +273,28 @@ fn history_labels_read_as_words() {
     assert_eq!(step_name("batch"), "Batch");
     assert_eq!(step_name(""), "");
 }
+
+#[test]
+fn the_view_menu_sets_the_theme() {
+    // egui names a submenu's button with its arrow.
+    const THEME: &str = "Theme \u{23F5}";
+    for (item, choice) in [
+        ("System", ThemeChoice::System),
+        ("Dark", ThemeChoice::Dark),
+        ("Light", ThemeChoice::Light),
+    ] {
+        let mut h = harness(Fixture::default());
+        click(&mut h, "View");
+        click(&mut h, THEME);
+        assert_eq!(click(&mut h, item), [UiAction::SetTheme(choice)], "{item}");
+    }
+    let mut h = harness(Fixture {
+        theme: ThemeChoice::Dark,
+        ..Default::default()
+    });
+    click(&mut h, "View");
+    click(&mut h, THEME);
+    assert_eq!(is_on(&h, "Dark"), Some(true));
+    assert_eq!(is_on(&h, "Light"), Some(false));
+    assert_eq!(is_on(&h, "System"), Some(false));
+}

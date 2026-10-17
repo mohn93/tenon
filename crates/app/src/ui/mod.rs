@@ -10,6 +10,7 @@ use session::{Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::editor::{ImportUnits, Status};
+use theme::ThemeChoice;
 
 mod dialogs;
 mod fonts;
@@ -77,6 +78,8 @@ pub enum UiAction {
     ToggleFly,
     /// Open or close the Agent Activity window.
     ShowAgentActivity(bool),
+    /// Draw the window in this theme, and keep it in the preferences.
+    SetTheme(ThemeChoice),
     /// Open or close the Soften Edges window.
     ShowSoften(bool),
     /// Set the Soften Edges window's angle, in degrees (0 to 180).
@@ -180,6 +183,8 @@ pub struct View<'a> {
     pub edges_soft: Option<bool>,
     /// The first selected face's texture placement, when only faces are selected.
     pub texture_position: Option<TexturePosition>,
+    /// The theme chosen in View > Theme.
+    pub theme: ThemeChoice,
 }
 
 /// What Entity Info's texture position fields show and apply to.

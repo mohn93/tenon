@@ -4,6 +4,7 @@ use egui::Ui;
 use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
 
+use super::theme::ThemeChoice;
 use super::{FLY_HELP, UiAction, View, icons, widgets};
 use crate::editor::ImportUnits;
 use crate::shortcuts::Bound;
@@ -103,6 +104,16 @@ pub(super) fn toolbar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             if widgets::menu_item(ui, "Agent Activity", None, true).clicked() {
                 actions.push(UiAction::ShowAgentActivity(true));
             }
+            ui.menu_button("Theme", |ui| {
+                for choice in ThemeChoice::ALL {
+                    if ui
+                        .selectable_label(view.theme == choice, choice.label())
+                        .clicked()
+                    {
+                        actions.push(UiAction::SetTheme(choice));
+                    }
+                }
+            });
         });
         ui.separator();
         for kind in ToolKind::ALL {

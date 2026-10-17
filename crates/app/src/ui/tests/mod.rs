@@ -48,6 +48,7 @@ pub(super) struct Fixture {
     pub soften: Option<u8>,
     pub edges_soft: Option<bool>,
     pub texture_position: Option<TexturePosition>,
+    pub theme: ThemeChoice,
     /// Every action the panels reported since the last `take`.
     pub actions: Vec<UiAction>,
     /// The 3D view's rectangle in the last frame.
@@ -91,6 +92,7 @@ impl Default for Fixture {
             soften: None,
             edges_soft: None,
             texture_position: None,
+            theme: ThemeChoice::System,
             actions: Vec::new(),
             central: Rect::NOTHING,
         }
@@ -126,6 +128,7 @@ impl Fixture {
             soften: self.soften,
             edges_soft: self.edges_soft,
             texture_position: self.texture_position.clone(),
+            theme: self.theme,
         }
     }
 
