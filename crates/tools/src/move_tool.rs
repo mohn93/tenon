@@ -26,6 +26,8 @@ pub struct MoveTool {
     drag: Option<Drag>,
     hover: Option<DVec3>,
     copy: bool,
+    /// Whether something was selected at the last event, for the idle prompt.
+    selected: bool,
     /// The last copy made (what and how far), which a typed array replaces.
     last_copy: Option<(Vec<EntityId>, DVec3)>,
 }
@@ -116,10 +118,16 @@ impl Tool for MoveTool {
             (Some(_), false, _) => "Click the destination, or type a distance",
             (Some(_), true, _) => "Copy: click the destination, or type a distance",
             (None, _, Some(_)) => "Type 5x or /5 for more copies, or click a new base point",
-            (None, false, None) => {
-                "Select geometry or a group, then click a base point (Ctrl copies)"
+            (None, false, None) if self.selected => {
+                "Click a base point to move the selection (Ctrl copies)"
             }
-            (None, true, None) => "Copy: select geometry or a group, then click a base point",
+            (None, true, None) if self.selected => "Copy: click a base point to copy the selection",
+            (None, false, None) => {
+                "Click an edge, face or group to pick it up, or select first (Ctrl copies)"
+            }
+            (None, true, None) => {
+                "Copy: click an edge, face or group to pick it up, or select first"
+            }
         }
     }
 
@@ -148,6 +156,7 @@ impl Tool for MoveTool {
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
+        self.selected = !ctx.selection.is_empty();
         match event {
             ToolEvent::Move(hit) => self.hover = Some(hit.point),
             ToolEvent::Click(hit) => match &self.drag {
@@ -289,6 +298,32 @@ mod tests {
 
     fn ids(s: &[&str]) -> Vec<EntityId> {
         s.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn the_idle_prompt_says_what_a_click_moves() {
+        let prompts = |selected: &[&str]| {
+            let mut r = Rig::new(selected);
+            r.send(ToolEvent::Move(at(DVec3::ZERO)));
+            let moving = r.tool.prompt();
+            r.send(ToolEvent::ToggleCopy);
+            r.send(ToolEvent::Move(at(DVec3::ZERO)));
+            (moving, r.tool.prompt())
+        };
+        assert_eq!(
+            prompts(&["f8"]),
+            (
+                "Click a base point to move the selection (Ctrl copies)",
+                "Copy: click a base point to copy the selection"
+            )
+        );
+        assert_eq!(
+            prompts(&[]),
+            (
+                "Click an edge, face or group to pick it up, or select first (Ctrl copies)",
+                "Copy: click an edge, face or group to pick it up, or select first"
+            )
+        );
     }
 
     #[test]

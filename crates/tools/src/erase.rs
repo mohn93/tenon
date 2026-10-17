@@ -47,8 +47,15 @@ impl Tool for EraseTool {
         match event {
             ToolEvent::Move(_) => self.hovered = pick(ctx),
             ToolEvent::Click(_) => {
-                if let Some(id) = pick(ctx) {
-                    out.commands.push(Command::Erase { ids: vec![id] });
+                match pick(ctx) {
+                    Some(id) => out.commands.push(Command::Erase { ids: vec![id] }),
+                    None => {
+                        out.info = true;
+                        out.message = Some(
+                            "Erase works on edges, faces, guides and groups: click one to erase it"
+                                .into(),
+                        );
+                    }
                 }
                 self.hovered = None;
             }
@@ -149,6 +156,20 @@ mod tests {
             send(&mut t, &m, &cam, off, ToolEvent::Click(hit()))
                 .commands
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn clicking_nothing_says_what_erase_works_on() {
+        let m = Model::new();
+        let cam = Camera::new(DVec2::new(800.0, 600.0));
+        let mut t = EraseTool::new();
+        let off = DVec3::new(-3.0, 4.0, 0.0);
+        let out = send(&mut t, &m, &cam, off, ToolEvent::Click(hit()));
+        assert!(out.commands.is_empty() && out.info);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Erase works on edges, faces, guides and groups: click one to erase it")
         );
     }
 }

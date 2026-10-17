@@ -1256,3 +1256,19 @@ fn arrow_keys_lock_rotates_plane_before_the_first_click() {
         "{r}"
     );
 }
+
+#[test]
+fn dead_end_clicks_explain_without_flashing() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "push_pull");
+    let r = input(&mut e, json!([{"type": "click", "point": [-3, 4, 0]}]));
+    assert_eq!(
+        r["editor"]["message"], "Push/Pull works on faces: click a face to push or pull it",
+        "{r}"
+    );
+    assert_eq!(r["editor"]["message_kind"], "info", "{r}");
+    // A refusal is still an error.
+    let r = input(&mut e, json!([{"type": "type", "text": "abc"}]));
+    assert_eq!(r["editor"]["message_kind"], "error", "{r}");
+}

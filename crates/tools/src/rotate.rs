@@ -61,6 +61,8 @@ pub struct RotateTool {
     /// exactly instead of snapping to steps.
     on_point: bool,
     copy: bool,
+    /// Whether something was selected at the last event, for the idle prompt.
+    selected: bool,
     last: Option<Last>,
     /// The axis the rotation's plane is locked square to, set before the center click; it
     /// lasts across rotations until unlocked or cancelled.
@@ -213,8 +215,18 @@ impl Tool for RotateTool {
                 "Type an angle, 5x or /5, or click a new center"
             }
             (None, _) if self.last.is_some() => "Type an angle to change it, or click a new center",
-            (None, false) => "Select geometry or a group, then click the center (Ctrl copies)",
-            (None, true) => "Copy: select geometry or a group, then click the center",
+            (None, false) if self.selected => {
+                "Click the center to turn the selection; arrows lock the axis (Ctrl copies)"
+            }
+            (None, true) if self.selected => {
+                "Copy: click the center to turn the selection; arrows lock the axis"
+            }
+            (None, false) => {
+                "Click the center on an edge, face or group to turn it; arrows lock the axis"
+            }
+            (None, true) => {
+                "Copy: click the center on an edge, face or group; arrows lock the axis"
+            }
         }
     }
 
@@ -238,6 +250,7 @@ impl Tool for RotateTool {
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
+        self.selected = !ctx.selection.is_empty();
         match event {
             ToolEvent::Move(hit) => {
                 self.on_point = is_point(hit.kind);
@@ -447,6 +460,32 @@ mod tests {
 
     fn ids(s: &[&str]) -> Vec<EntityId> {
         s.iter().map(|s| s.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn the_idle_prompt_says_what_a_click_turns() {
+        let prompts = |selected: &[&str]| {
+            let mut r = Rig::new(selected);
+            r.hover(DVec3::ZERO);
+            let turning = r.tool.prompt();
+            r.send(ToolEvent::ToggleCopy);
+            r.hover(DVec3::ZERO);
+            (turning, r.tool.prompt())
+        };
+        assert_eq!(
+            prompts(&["f8"]),
+            (
+                "Click the center to turn the selection; arrows lock the axis (Ctrl copies)",
+                "Copy: click the center to turn the selection; arrows lock the axis"
+            )
+        );
+        assert_eq!(
+            prompts(&[]),
+            (
+                "Click the center on an edge, face or group to turn it; arrows lock the axis",
+                "Copy: click the center on an edge, face or group; arrows lock the axis"
+            )
+        );
     }
 
     fn rotate(ids_: &[&str], center: [f64; 3], angle: f64, copies: Option<u32>) -> Command {

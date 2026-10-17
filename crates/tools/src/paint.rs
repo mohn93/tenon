@@ -81,6 +81,9 @@ impl Tool for PaintTool {
             ToolEvent::Click(_) => {
                 self.hovered = None;
                 let Some(target) = target(ctx) else {
+                    out.info = true;
+                    out.message =
+                        Some("Paint works on faces and groups: click one to paint it".into());
                     return out;
                 };
                 let (id, side) = match target {
@@ -308,6 +311,21 @@ mod tests {
             ToolEvent::Click(hit()),
         );
         assert!(out.commands.is_empty() && out.sampled.is_none());
+    }
+
+    #[test]
+    fn clicking_nothing_says_what_paint_works_on() {
+        let s = scene();
+        let cam = Camera::new(DVec2::new(800.0, 600.0));
+        let mut t = PaintTool::new();
+        let off = DVec3::new(-3.0, 4.0, 0.0);
+        let none = BTreeSet::new();
+        let out = send(&mut t, &s, &cam, off, false, &none, ToolEvent::Click(hit()));
+        assert!(out.commands.is_empty() && out.info);
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Paint works on faces and groups: click one to paint it")
+        );
     }
 
     #[test]
