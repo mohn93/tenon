@@ -106,6 +106,7 @@ impl TapeMeasureTool {
             self.last = Some((start, offset / length));
         } else {
             out.message = Some(format!("Distance: {}", format_length(length)));
+            out.info = true;
         }
         self.start = None;
     }
@@ -225,6 +226,7 @@ impl Tool for TapeMeasureTool {
                 } else {
                     "Measuring only".into()
                 });
+                out.info = true;
             }
             ToolEvent::Cancel => self.on_external_change(),
             ToolEvent::Release(_) | ToolEvent::DoubleClick(_) => {}

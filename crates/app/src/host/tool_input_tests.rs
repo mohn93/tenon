@@ -977,3 +977,26 @@ fn a_snap_inside_a_group_says_so() {
     let r = input(&mut e, json!([{"type": "move", "point": [1, 0, 0]}]));
     assert_eq!(r["editor"]["snap_label"], "Midpoint in Group", "{r}");
 }
+
+#[test]
+fn results_say_whether_the_message_is_an_error() {
+    let mut e = editor();
+    tool(&mut e, "rectangle");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "type", "text": "2,x"}
+        ]),
+    );
+    assert_eq!(r["editor"]["message"], "Not width,height: 2,x", "{r}");
+    assert_eq!(r["editor"]["message_kind"], "error");
+    tool(&mut e, "circle");
+    let r = input(&mut e, json!([{"type": "type", "text": "8s"}]));
+    assert_eq!(r["editor"]["message_kind"], "info", "{r}");
+    tool(&mut e, "line");
+    assert_eq!(
+        ask(&mut e, json!({"type": "editor"}))["message_kind"],
+        Value::Null
+    );
+}

@@ -153,12 +153,14 @@ pub const HOVER_TINT: f32 = 0.25;
 
 /// How the entity a click of `tool` would act on (`target`) is highlighted in `theme`: faces
 /// tinted toward the accent with accent edges, in the danger color for Erase. Paint shows a
-/// face in the color it would paint (`paint`, sRGB) with accent edges; a group as Select.
+/// face in the color it would paint (`paint`, sRGB) with accent edges; a group, or anything
+/// while `sampling` (a click picks a material up), as Select.
 pub fn hover_look(
     theme: egui::Theme,
     tool: ToolKind,
     target: EntityId,
     paint: [u8; 3],
+    sampling: bool,
 ) -> render::HoverLook {
     let t = tokens(theme);
     let unit = |c: Color32| [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
@@ -173,7 +175,7 @@ pub fn hover_look(
                 edge: edge(danger),
             }
         }
-        (ToolKind::Paint, EntityId::Face(_)) => render::HoverLook {
+        (ToolKind::Paint, EntityId::Face(_)) if !sampling => render::HoverLook {
             face: paint.map(|u| f32::from(u) / 255.0),
             face_mix: 1.0,
             edge: edge(accent),
@@ -220,6 +222,14 @@ pub const CONTEXT_BAR_HEIGHT: f32 = 36.0;
 pub const STATUS_HEIGHT: f32 = 28.0;
 pub const MEASUREMENTS_WIDTH: f32 = 180.0;
 pub const MEASUREMENTS_HEIGHT: f32 = 24.0;
+/// The snap chip by the cursor: its top-left's offset from the cursor, its padding and its
+/// corner radius. The flash of a refused value has the same metrics.
+pub const CHIP_OFFSET: Vec2 = Vec2::new(14.0, 18.0);
+pub const CHIP_PADDING: Vec2 = Vec2::new(6.0, 4.0);
+pub const CHIP_RADIUS: u8 = SWATCH_RADIUS;
+/// The gap between the chip and the flash under it, and between the flash and the status
+/// bar when the cursor is not in the view.
+pub const CHIP_GAP: f32 = GRID;
 /// The axis colors of a lock: red x, green y, blue z.
 pub const AXIS_X: Color32 = Color32::from_rgb(0xE5, 0x48, 0x4D);
 pub const AXIS_Y: Color32 = Color32::from_rgb(0x30, 0xA4, 0x6C);
@@ -333,20 +343,43 @@ mod tests {
         let group = EntityId::Instance(kernel::InstanceId(2));
         let t = tokens(egui::Theme::Light);
         let rgb = |c: Color32| [c.r(), c.g(), c.b()].map(|u| f32::from(u) / 255.0);
-        let select = hover_look(egui::Theme::Light, ToolKind::Select, face, [0; 3]);
+        let select = hover_look(egui::Theme::Light, ToolKind::Select, face, [0; 3], false);
         assert_eq!((select.face, select.face_mix), (rgb(t.accent), HOVER_TINT));
         assert_eq!(&select.edge[..3], &rgb(t.accent)[..]);
-        let push = hover_look(egui::Theme::Light, ToolKind::PushPull, face, [0; 3]);
+        let push = hover_look(egui::Theme::Light, ToolKind::PushPull, face, [0; 3], false);
         assert_eq!(push, select);
-        let erase = hover_look(egui::Theme::Light, ToolKind::Erase, face, [0; 3]);
+        let erase = hover_look(egui::Theme::Light, ToolKind::Erase, face, [0; 3], false);
         assert_eq!(erase.face, rgb(t.danger));
         assert_eq!(&erase.edge[..3], &rgb(t.danger)[..]);
-        let paint = hover_look(egui::Theme::Light, ToolKind::Paint, face, [255, 0, 0]);
+        let paint = hover_look(
+            egui::Theme::Light,
+            ToolKind::Paint,
+            face,
+            [255, 0, 0],
+            false,
+        );
         assert_eq!((paint.face, paint.face_mix), ([1.0, 0.0, 0.0], 1.0));
         assert_eq!(&paint.edge[..3], &rgb(t.accent)[..]);
         assert_eq!(
-            hover_look(egui::Theme::Light, ToolKind::Paint, group, [255, 0, 0]),
+            hover_look(
+                egui::Theme::Light,
+                ToolKind::Paint,
+                group,
+                [255, 0, 0],
+                false
+            ),
             select
+        );
+    }
+
+    #[test]
+    fn paint_looks_like_select_while_sampling() {
+        let face = EntityId::Face(kernel::FaceId(1));
+        let select = hover_look(egui::Theme::Dark, ToolKind::Select, face, [0; 3], false);
+        assert_eq!(
+            hover_look(egui::Theme::Dark, ToolKind::Paint, face, [255, 0, 0], true),
+            select,
+            "a sampling click picks the material up, it paints nothing"
         );
     }
 

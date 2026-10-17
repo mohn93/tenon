@@ -327,6 +327,7 @@ pub fn editor_state(editor: &Editor) -> EditorState {
         status: status.to_string(),
         prompt: status.prompt.clone(),
         message: status.message.clone(),
+        message_kind: editor.message_kind(),
         lock: status.lock.map(str::to_string),
         measurement_label: status.label.to_string(),
         measurement: if typed.is_empty() {

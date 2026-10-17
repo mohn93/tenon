@@ -23,6 +23,7 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 use crate::awake::Awake;
 use crate::editor::{Editor, EditorKey};
+use crate::feedback::Timing;
 use crate::fly::FlyKey;
 use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
@@ -156,6 +157,15 @@ fn api_repaint(now: Instant, presented: Option<Instant>) -> Repaint {
 /// The earlier of a pending repaint deadline and `t`.
 fn earliest(deadline: Option<Instant>, t: Instant) -> Instant {
     deadline.map_or(t, |d| d.min(t))
+}
+
+/// The repaint deadline after a frame whose HUD was dressed at `shown_at`: `pending`, or
+/// sooner when the HUD changes by itself before (the chip's rest, the flash's end).
+fn with_feedback(pending: Option<Instant>, timing: &Timing, shown_at: Instant) -> Option<Instant> {
+    match timing.deadline(shown_at) {
+        Some(t) => Some(earliest(pending, t)),
+        None => pending,
+    }
 }
 
 /// What the event loop does before sleeping, given the pending repaint deadline.
@@ -491,6 +501,9 @@ struct State {
     repaint_at: Option<Instant>,
     /// When the last frame was presented.
     presented: Option<Instant>,
+    /// When the cursor last moved in the view and what flashes since when: the HUD's own
+    /// repaint deadlines.
+    timing: Timing,
     /// The window title last set.
     title: String,
     /// When and where the left button was last released in the view, for double-clicks.
@@ -565,6 +578,7 @@ impl State {
             cursor: DVec2::ZERO,
             repaint_at: None,
             presented: None,
+            timing: Timing::default(),
             last_release: None,
             title: String::new(),
             left_press: None,
@@ -638,6 +652,10 @@ impl State {
         let origin = DVec2::new(self.view.x as f64, self.view.y as f64);
         let moved = self.editor.cursor_moved(p - origin);
         if self.in_view(p) {
+            if moved {
+                // The chip waits for the cursor to rest again.
+                self.timing.moved(Instant::now());
+            }
             moved
         } else {
             self.editor.cursor_left() || moved
@@ -1077,6 +1095,18 @@ impl State {
             self.agent_activity = true;
         }
         let now = Instant::now();
+        if let Some(message) = self.editor.take_flash() {
+            self.timing.flash(message, now);
+        }
+        // Over a window, a menu or the gizmo a press never reaches the tools: no marker, chip
+        // or highlight there. The gizmo (Task 11) is an egui Area, so this test covers it.
+        let covered = self.in_view(self.cursor) && self.gui.wants_pointer_at(self.cursor);
+        let dark_canvas =
+            self.editor.doc().lighting == Lighting::Night || self.gui.theme() == egui::Theme::Dark;
+        // Editor::navigating comes with the cursors (Task 10); until then no navigation hides it.
+        let hud = self.timing.dress(self.editor.hud(dark_canvas), now, false);
+        let hud = if covered { hud.covered() } else { hud };
+        let dressed_at = now;
         let lines: Option<Vec<String>> = self.agent_activity.then(|| {
             hub.activity()
                 .iter()
@@ -1126,6 +1156,7 @@ impl State {
                     faces: self.editor.doc().selection().iter().copied().collect(),
                 }
             }),
+            hud: &hud,
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -1170,10 +1201,12 @@ impl State {
         let paint = self.paint_color();
         let tool = self.editor.tool_kind();
         let ui_theme = self.gui.theme();
+        let sampling = self.editor.sampling();
         self.renderer.set_hover(
             self.editor
                 .hovered()
-                .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint))),
+                .filter(|_| !covered)
+                .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint, sampling))),
         );
         self.renderer.set_preview(&self.editor.solid_preview());
         // The view follows the panels' theme; render_view keeps its own renderer's classic look.
@@ -1181,13 +1214,9 @@ impl State {
         self.renderer
             .set_pixels_per_point(self.window.scale_factor() as f32);
         self.renderer.set_lighting(doc.lighting);
-        self.renderer.render_in(
-            &target,
-            size,
-            self.view,
-            &self.editor.doc().camera,
-            &self.editor.overlay(),
-        );
+        // The tools' marker and lines are egui's (the HUD); the renderer draws no overlay.
+        self.renderer
+            .render_in(&target, size, self.view, &self.editor.doc().camera, &[]);
         let again = self.gui.paint(
             &self.window,
             &self.device,
@@ -1216,6 +1245,8 @@ impl State {
         if self.editor.hover_deferred() {
             self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
         }
+        // The chip's rest and the flash's end, as of the HUD this frame showed.
+        self.repaint_at = with_feedback(self.repaint_at, &self.timing, dressed_at);
         for action in actions {
             self.apply(action);
         }
@@ -1674,13 +1705,15 @@ impl ApplicationHandler<AppEvent> for App {
                 let locked = s
                     .editor
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
-                // Cmd or Ctrl held makes a Paint click pick up a material.
-                s.editor
+                // Cmd or Ctrl held makes a Paint click pick up a material (and changes how
+                // its target is highlighted).
+                let resampled = s
+                    .editor
                     .set_sample_modifier(m.state().super_key() || m.state().control_key());
                 // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and
                 // copying, and the Tape Measure between adding guides and measuring only.
                 let toggled = tapped && s.editor.toggle_copy();
-                locked || toggled
+                locked || toggled || resampled
             }
             WindowEvent::Focused(false) => {
                 // Releases may never arrive: no click or double-click spans the focus change.
@@ -1982,6 +2015,22 @@ mod tests {
         assert_eq!(after_skip(&S::Occluded), AfterSkip::RetrySoon);
         assert_eq!(after_skip(&S::Validation), AfterSkip::RetrySoon);
         assert_eq!(skip_name(&S::Validation), "a validation error");
+    }
+
+    #[test]
+    fn a_still_window_asks_for_no_repaint() {
+        let now = Instant::now();
+        let mut timing = Timing::default();
+        assert_eq!(with_feedback(None, &timing, now), None, "nothing pending");
+        assert_eq!(wake_decision(now, None), Wake::Wait);
+        // A move asks for the frame at the rest, and that frame for nothing more.
+        timing.moved(now);
+        let rest = now + crate::feedback::LABEL_REST;
+        assert_eq!(with_feedback(None, &timing, now), Some(rest));
+        assert_eq!(with_feedback(None, &timing, rest), None);
+        // An earlier deadline already pending stays.
+        let sooner = now + Duration::from_millis(10);
+        assert_eq!(with_feedback(Some(sooner), &timing, now), Some(sooner));
     }
 
     #[test]

@@ -1,29 +1,30 @@
 //! Window-independent editing state: routes input to navigation or the active tool, runs the
-//! resulting commands on the document, and produces the overlay and status text to show.
+//! resulting commands on the document, and produces what the view shows over the model (the
+//! HUD, the hover, the tool's solid) and the status text.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Instant;
 
-use api::Mods;
+use api::{MessageKind, Mods};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{DefinitionKind, EntityId, InstanceId, MaterialId};
 use render::PreviewVertex;
-use render::grid::LineVertex;
 use render::scene::DEFAULT_FRONT;
 pub use session::ImportUnits;
 use session::{
     BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Lighting, Outcome,
     Projection, SelectMode, StandardView, TextureSource,
 };
-use tools::overlay::{overlay, snap_label};
+use tools::overlay::{marker, preview_lines, snap_label};
 use tools::{
     Axis, Guides, Inference, Layout, Lock, Owner, Remembered, Scenery, Slab, SnapKind, Solid, Tool,
     ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in, face_under_in,
     infer_detail,
 };
 
+use crate::feedback::{Chip, Hud};
 use crate::fly::{self, Fly, FlyKey};
 use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
 use crate::shortcuts::{self, Bound};
@@ -91,6 +92,29 @@ impl std::fmt::Display for Status {
     }
 }
 
+/// Feedback in the status bar, and whether it reports an error.
+#[derive(Clone, Debug, PartialEq)]
+struct Message {
+    text: String,
+    kind: MessageKind,
+}
+
+impl Message {
+    fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kind: MessageKind::Error,
+        }
+    }
+
+    fn info(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kind: MessageKind::Info,
+        }
+    }
+}
+
 pub struct Editor {
     doc: Document,
     nav: Navigation,
@@ -128,7 +152,9 @@ pub struct Editor {
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
-    message: Option<String>,
+    message: Option<Message>,
+    /// The error a typed value just left, until the window takes it to flash.
+    flash: Option<String>,
     /// Recovery files an agent's discards were kept in this session.
     recovered: Vec<PathBuf>,
     /// Physical pixels per logical pixel.
@@ -211,6 +237,7 @@ impl Editor {
             layout: RefCell::new(None),
             typed: String::new(),
             message: None,
+            flash: None,
             recovered: Vec::new(),
             scale_factor,
             material: None,
@@ -363,9 +390,18 @@ impl Editor {
     /// Whether the sampling modifier (Cmd or Ctrl) is held: a Paint click then
     /// picks up a material instead of painting.
     /// It also makes trackpad scrolling zoom. The user's, as the window reports it.
-    pub fn set_sample_modifier(&mut self, held: bool) {
+    /// Returns true if that changes how the Paint tool's target is highlighted.
+    pub fn set_sample_modifier(&mut self, held: bool) -> bool {
+        let was = self.sampling();
         self.user_mods.cmd = held;
         self.apply_modifiers();
+        self.sampling() != was
+    }
+
+    /// Whether the Paint tool is picking up a material (the sampling modifier is held), so its
+    /// target is highlighted as Select's would be rather than in the paint's color.
+    pub fn sampling(&self) -> bool {
+        self.kind == ToolKind::Paint && self.sample
     }
 
     /// The material the Paint tool paints with; None (the default material) also when the
@@ -382,7 +418,7 @@ impl Editor {
         match self.set_paint_material(material) {
             Ok(()) => true,
             Err(e) => {
-                self.message = Some(e.message);
+                self.message = Some(Message::error(e.message));
                 false
             }
         }
@@ -599,6 +635,7 @@ impl Editor {
         }
         let moved = pos != self.cursor || self.hover_hidden;
         self.cursor = pos;
+        self.hover_hidden = false;
         let camera_moved = self.nav.cursor_moved(&mut self.doc.camera, pos);
         if camera_moved {
             self.navigated = true;
@@ -927,7 +964,7 @@ impl Editor {
     pub fn make_group(&mut self) -> bool {
         let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         if ids.is_empty() {
-            self.message = Some("Select geometry to make a group".into());
+            self.message = Some(Message::error("Select geometry to make a group"));
             return true;
         }
         self.run_selection_command(Command::MakeGroup { ids })
@@ -938,7 +975,7 @@ impl Editor {
     pub fn make_component(&mut self) -> bool {
         let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         if ids.is_empty() {
-            self.message = Some("Select geometry to make a component".into());
+            self.message = Some(Message::error("Select geometry to make a component"));
             return true;
         }
         let names: Vec<&str> = self
@@ -965,7 +1002,7 @@ impl Editor {
             .filter(|id| matches!(id, EntityId::Instance(_)))
             .collect();
         if ids.is_empty() {
-            self.message = Some("Select a group or component to explode".into());
+            self.message = Some(Message::error("Select a group or component to explode"));
             return true;
         }
         self.run_selection_command(Command::Explode { ids })
@@ -1088,7 +1125,7 @@ impl Editor {
             path.display()
         );
         eprintln!("{line}");
-        self.message = Some(line);
+        self.message = Some(Message::info(line));
         self.recovered.push(path);
     }
 
@@ -1132,12 +1169,12 @@ impl Editor {
             })
             .is_some();
         if saved {
-            self.message = Some(format!(
+            self.message = Some(Message::info(format!(
                 "Saved {}",
                 self.doc
                     .path()
                     .map_or_else(String::new, |p| p.display().to_string())
-            ));
+            )));
         }
         saved
     }
@@ -1157,7 +1194,7 @@ impl Editor {
             return false;
         };
         let skipped = outcome.export.map_or(0, |r| r.skipped_faces);
-        self.message = Some(export_message(path, skipped));
+        self.message = Some(Message::info(export_message(path, skipped)));
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
         if let Some((_, ext)) = EXPORT_FORMATS
             .iter()
@@ -1219,11 +1256,11 @@ impl Editor {
             ImportUnits::Meters => String::new(),
             u => format!(" in {}", u.label().to_lowercase()),
         };
-        self.message = Some(match report.skipped {
+        self.message = Some(Message::info(match report.skipped {
             0 => format!("Imported {name}{units}: {faces}"),
             1 => format!("Imported {name}{units}: {faces}; 1 polygon skipped"),
             n => format!("Imported {name}{units}: {faces}; {n} polygons skipped"),
-        });
+        }));
         true
     }
 
@@ -1280,7 +1317,7 @@ impl Editor {
             prompt: self.tool.prompt().to_string(),
             label,
             value,
-            message: self.message.clone(),
+            message: self.message.as_ref().map(|m| m.text.clone()),
             lock,
         }
     }
@@ -1338,14 +1375,22 @@ impl Editor {
             .collect()
     }
 
-    /// Line pairs for the renderer's overlay pass, as of the last `refresh_hover`. Tools work
-    /// in the open context's coordinates; the overlay is drawn in the root's.
-    pub fn overlay(&self) -> Vec<LineVertex> {
+    /// The marker, preview lines and chip contents as of the last `refresh_hover`, in view
+    /// pixels (the chip shown regardless of the rest; `Timing::dress` decides). Preview lines
+    /// and halos take the colors of a dark canvas when `dark_canvas`. Empty while flying; no
+    /// marker or chip in Select or with the cursor outside the view. The flash is the window's
+    /// (`take_flash`).
+    pub fn hud(&self, dark_canvas: bool) -> Hud {
+        let mut hud = Hud {
+            dark_canvas,
+            ..Hud::default()
+        };
         if self.flying {
-            // No marker or tool preview while flying.
-            return Vec::new();
+            return hud;
         }
+        // Tools work in the open context's coordinates; the view shows the root's.
         let t = self.doc.context_transform();
+        let camera = &self.doc.camera;
         let preview: Vec<[DVec3; 2]> = self
             .preview
             .iter()
@@ -1355,15 +1400,47 @@ impl Editor {
             point: t.transform_point3(h.point),
             ..h
         });
-        overlay(&preview, hit.as_ref(), &self.doc.camera, self.scale_factor)
-            .into_iter()
-            .flat_map(|s| {
-                [s.a, s.b].map(|p| LineVertex {
-                    pos: p.as_vec3().to_array(),
-                    color: s.color,
-                })
-            })
-            .collect()
+        hud.lines = preview_lines(
+            &preview,
+            hit.as_ref(),
+            self.lock.is_some(),
+            dark_canvas,
+            camera,
+        );
+        if self.hover_hidden {
+            return hud;
+        }
+        hud.cursor = Some(self.cursor);
+        if self.kind != ToolKind::Select {
+            hud.marker = hit.and_then(|h| {
+                let (shape, color) = marker(h.kind)?;
+                Some((camera.project(h.point)?, shape, color))
+            });
+        }
+        let label = self.snap_label();
+        let value = self.status_parts().value;
+        if label.is_some() || value.is_some() {
+            hud.chip = Some(Chip {
+                label,
+                value,
+                typing: !self.typed.is_empty(),
+            });
+        }
+        hud
+    }
+
+    /// The message of a typed value that just failed (the tool refused it or its command
+    /// failed), once.
+    pub fn take_flash(&mut self) -> Option<String> {
+        self.flash.take()
+    }
+
+    /// Whether the status bar's message reports an error or informs; None with no message.
+    pub fn message_kind(&self) -> Option<MessageKind> {
+        if self.flying {
+            return None;
+        }
+        self.message.as_ref().map(|m| m.kind)
     }
 
     /// Sends a click, release, typed value or cancel to the tool and runs what it asks for.
@@ -1371,20 +1448,35 @@ impl Editor {
         // The tool sees where the cursor is before anything else happens.
         self.flush_hover();
         let is_release = matches!(event, ToolEvent::Release(_));
+        let is_value = matches!(event, ToolEvent::Value(_));
         let out = self.handle(event);
         // A release that did nothing keeps the message from the click that preceded it.
         let keep = is_release && out.commands.is_empty() && out.message.is_none();
         if !keep {
-            self.message = out.message.clone();
+            self.message = out.message.clone().map(|text| Message {
+                text,
+                kind: if out.info {
+                    MessageKind::Info
+                } else {
+                    MessageKind::Error
+                },
+            });
         }
         if let Some(sampled) = out.sampled {
             self.material = sampled;
             let name = sampled
                 .and_then(|m| self.doc.scene().material(m))
                 .map_or("the default material", |m| m.name.as_str());
-            self.message = Some(format!("Painting with {name}"));
+            self.message = Some(Message::info(format!("Painting with {name}")));
         }
         self.apply(out);
+        if is_value {
+            self.flash = self
+                .message
+                .as_ref()
+                .filter(|m| m.kind == MessageKind::Error)
+                .map(|m| m.text.clone());
+        }
         self.invalidate_hover();
     }
 
@@ -1456,11 +1548,11 @@ impl Editor {
             let unchanged =
                 (is_copy || is_turn) && outcome.is_some() && self.doc.revision() == revision;
             if unchanged {
-                self.message = Some(if is_copy {
-                    "Nothing new to copy".into()
+                self.message = Some(Message::error(if is_copy {
+                    "Nothing new to copy"
                 } else {
-                    "Nothing turned: it lies on the axis".into()
-                });
+                    "Nothing turned: it lies on the axis"
+                }));
             }
             let Some(outcome) = outcome.filter(|_| !unchanged) else {
                 if undone && let Ok(redone) = self.execute_recorded(Command::Redo { count: None }) {
@@ -1532,17 +1624,16 @@ impl Editor {
             Ok(outcome) => Some(outcome),
             Err(e) if matches!(e.kind, ErrorKind::NothingToUndo | ErrorKind::NothingToRedo) => None,
             Err(e) => {
-                self.message = Some(e.message);
+                self.message = Some(Message::error(e.message));
                 None
             }
         }
     }
 
-    /// Marks the hover out of date (see `hover_dirty`); it shows again even if the cursor
-    /// left the view, as it did when worked out at once.
+    /// Marks the hover out of date (see `hover_dirty`). With the cursor outside the view it
+    /// stays hidden: only the cursor coming back (or input that acts where it is) shows it.
     fn invalidate_hover(&mut self) {
         self.hover_dirty = true;
-        self.hover_hidden = false;
     }
 
     /// Works the hover out if it is out of date. True if the marker or the preview changed.
@@ -1735,15 +1826,21 @@ mod tests {
     use super::*;
     use session::{Query, QueryResult};
     use tools::infer_in;
+    use tools::overlay::{ENDPOINT, PARALLEL, Shape};
 
     fn editor() -> Editor {
         Editor::new(DVec2::new(800.0, 600.0), 1.25)
     }
 
-    /// The overlay the next frame draws.
-    fn shown(e: &mut Editor) -> Vec<LineVertex> {
+    /// What the next frame draws over the view, on a light canvas.
+    fn shown(e: &mut Editor) -> Hud {
         e.refresh_hover();
-        e.overlay()
+        e.hud(false)
+    }
+
+    /// Neither a marker nor a preview line.
+    fn blank(hud: &Hud) -> bool {
+        hud.marker.is_none() && hud.lines.is_empty()
     }
 
     fn click_at(e: &mut Editor, p: DVec3) {
@@ -1792,10 +1889,10 @@ mod tests {
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         let px = e.doc().camera.project(DVec3::new(-2.0, 4.0, 0.0)).unwrap();
         assert!(e.cursor_moved(px));
-        assert!(!shown(&mut e).is_empty(), "preview line expected");
+        assert!(!shown(&mut e).lines.is_empty(), "preview line expected");
         e.key(EditorKey::Escape);
         assert!(
-            shown(&mut e).is_empty(),
+            blank(&shown(&mut e)),
             "ground hover has no marker and no preview after cancel"
         );
         assert_eq!(stats(&e), (0, 0));
@@ -1965,9 +2062,9 @@ mod tests {
         );
         assert_eq!(stats(&e), (0, 0));
         assert!(
-            shown(&mut e).is_empty(),
+            blank(&shown(&mut e)),
             "no line in progress: {:?}",
-            shown(&mut e).len()
+            shown(&mut e).lines
         );
     }
 
@@ -1977,7 +2074,138 @@ mod tests {
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(px + DVec2::new(3.0, 0.0));
-        assert_eq!(shown(&mut e).len(), 8, "a 4-sided marker, no preview");
+        let hud = shown(&mut e);
+        let (at, shape, color) = hud.marker.expect("the endpoint's marker");
+        assert_eq!((shape, color), (Shape::Dot, ENDPOINT));
+        assert!(at.distance(px) < 1e-6, "on the endpoint: {at} vs {px}");
+        assert_eq!(hud.lines, [], "no preview");
+    }
+
+    #[test]
+    fn select_shows_no_marker_and_a_typed_error_flashes_once() {
+        let mut e = editor();
+        square(&mut e);
+        let corner = DVec3::new(1.0, 1.0, 0.0);
+        move_to(&mut e, corner);
+        e.refresh_hover();
+        assert_eq!(
+            e.hud(false).marker.map(|m| (m.1, m.2)),
+            Some((Shape::Dot, ENDPOINT))
+        );
+        e.select_tool(ToolKind::Select);
+        move_to(&mut e, corner);
+        e.refresh_hover();
+        assert_eq!(e.hud(false).marker, None);
+        e.select_tool(ToolKind::Rectangle);
+        click_at(&mut e, DVec3::ZERO);
+        type_text(&mut e, "2,x");
+        let flash = e.take_flash().expect("the refused value");
+        assert!(e.status().contains(&flash), "it stays in the status bar");
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+        assert_eq!(e.take_flash(), None);
+    }
+
+    #[test]
+    fn only_errors_flash() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Circle);
+        type_text(&mut e, "8s");
+        assert!(e.status().contains("Circles get 8 sides"), "{}", e.status());
+        assert_eq!(e.message_kind(), Some(MessageKind::Info));
+        assert_eq!(e.take_flash(), None, "a side count is not an error");
+        // An error from a click (not a typed value) stays in the status bar only.
+        e.select_tool(ToolKind::Select);
+        e.make_group();
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+        assert_eq!(e.take_flash(), None);
+        e.select_tool(ToolKind::Line);
+        assert_eq!(e.message_kind(), None, "no message");
+    }
+
+    #[test]
+    fn the_chip_names_the_snap_and_shows_the_value() {
+        let mut e = editor();
+        square(&mut e);
+        e.select_tool(ToolKind::Line);
+        move_to(&mut e, DVec3::new(3.0, 1.0, 0.0));
+        let hud = shown(&mut e);
+        let chip = hud.chip.expect("a snap to name");
+        assert_eq!(chip.label.as_deref(), Some("Endpoint"));
+        assert_eq!(
+            (chip.value, chip.typing),
+            (None, false),
+            "nothing measured yet"
+        );
+        assert_eq!(hud.cursor, Some(e.cursor));
+        click(&mut e);
+        move_to(&mut e, DVec3::new(3.0, 2.0, 0.0));
+        e.key(EditorKey::Char('2'));
+        let chip = shown(&mut e).chip.expect("the typed text");
+        assert_eq!((chip.value.as_deref(), chip.typing), (Some("2_"), true));
+        // No chip with the cursor outside the view.
+        e.cursor_left();
+        assert_eq!(shown(&mut e).chip, None);
+    }
+
+    #[test]
+    fn the_hover_stays_hidden_until_the_cursor_comes_back() {
+        let mut e = editor();
+        square(&mut e);
+        e.select_tool(ToolKind::Select);
+        let px = e.doc().camera.project(DVec3::new(2.0, 1.0, 0.0)).unwrap();
+        e.cursor_moved(px);
+        e.refresh_hover();
+        assert!(e.hovered().is_some(), "the edge under the cursor");
+        e.cursor_left();
+        e.refresh_hover();
+        assert_eq!(e.hovered(), None);
+        // Neither a tool switch nor an agent's edit brings it back under the stale cursor.
+        e.select_tool(ToolKind::Erase);
+        e.refresh_hover();
+        assert_eq!(e.hovered(), None, "after a tool switch");
+        e.select_tool(ToolKind::Line);
+        e.execute(Command::AddEdge {
+            start: [5.0, 5.0, 0.0],
+            end: [6.0, 5.0, 0.0],
+        })
+        .unwrap();
+        let hud = shown(&mut e);
+        assert_eq!((hud.marker, hud.cursor, hud.chip), (None, None, None));
+        e.select_tool(ToolKind::Erase);
+        e.refresh_hover();
+        assert_eq!(e.hovered(), None, "after an agent's edit");
+        // The cursor coming back shows it.
+        e.cursor_moved(px);
+        e.refresh_hover();
+        assert!(e.hovered().is_some());
+    }
+
+    #[test]
+    fn paint_samples_while_the_modifier_is_held() {
+        let mut e = editor();
+        assert!(!e.set_sample_modifier(true), "the Line tool paints nothing");
+        assert!(!e.sampling());
+        e.set_sample_modifier(false);
+        e.select_tool(ToolKind::Paint);
+        assert!(e.set_sample_modifier(true), "the highlight changes");
+        assert!(e.sampling());
+        assert!(!e.set_sample_modifier(true), "held already");
+        assert!(e.set_sample_modifier(false));
+        assert!(!e.sampling());
+    }
+
+    #[test]
+    fn the_marker_lands_on_the_cursor_pixel_at_any_scale() {
+        // The same window on a 2x display: twice the pixels, and the marker at twice the
+        // view pixel; its size is in points (`ui::viewport`).
+        let at = |scale: f64| {
+            let mut e = Editor::new(DVec2::new(800.0, 600.0) * scale, scale);
+            square(&mut e);
+            move_to(&mut e, DVec3::new(3.0, 1.0, 0.0));
+            shown(&mut e).marker.expect("the endpoint").0
+        };
+        let (one, two) = (at(1.0), at(2.0));
+        assert!((two - one * 2.0).length() < 1e-6, "{one} {two}");
     }
 
     #[test]
@@ -2183,16 +2411,16 @@ mod tests {
         square(&mut e);
         let px = e.doc().camera.project(DVec3::new(3.0, 1.0, 0.0)).unwrap();
         e.cursor_moved(px);
-        assert!(!shown(&mut e).is_empty());
+        assert!(!blank(&shown(&mut e)));
         assert!(e.cursor_left());
-        assert!(shown(&mut e).is_empty());
+        assert!(blank(&shown(&mut e)));
         // Leaving before any frame showed the move hides it too.
         e.cursor_moved(px + DVec2::new(1.0, 0.0));
         assert!(e.cursor_left());
-        assert!(shown(&mut e).is_empty());
+        assert!(blank(&shown(&mut e)));
         // Coming back shows it again.
         assert!(e.cursor_moved(px));
-        assert!(!shown(&mut e).is_empty());
+        assert!(!blank(&shown(&mut e)));
     }
 
     #[test]
@@ -2207,7 +2435,11 @@ mod tests {
         assert!(e.refresh_hover(), "the marker appears");
         assert!(!e.hover_pending());
         assert!(!e.refresh_hover(), "nothing left to work out");
-        assert_eq!(e.overlay().len(), 8, "the endpoint marker");
+        assert_eq!(
+            e.hud(false).marker.map(|m| m.1),
+            Some(Shape::Dot),
+            "the endpoint marker"
+        );
         assert!(!e.cursor_moved(px + DVec2::new(4.0, 0.0)), "the same spot");
         assert!(!e.hover_pending());
     }
@@ -2517,7 +2749,11 @@ mod tests {
         e.cursor_moved(lo);
         e.button(Button::Left, true);
         e.cursor_moved(hi);
-        assert_eq!(shown(&mut e).len(), 8, "the box is drawn while dragging");
+        assert_eq!(
+            shown(&mut e).lines.len(),
+            4,
+            "the box is drawn while dragging"
+        );
         e.button(Button::Left, false);
         assert_eq!(e.doc().selection().len(), 5, "four edges and the face");
     }
@@ -2762,8 +2998,7 @@ mod tests {
         click_at(&mut e, DVec3::new(0.0, 3.0, 0.0));
         let along = DVec3::new(0.0, 3.0, 0.0) + DVec3::new(2.0, 1.0, 0.0).normalize() * 2.0;
         e.cursor_moved(e.doc().camera.project(along).unwrap());
-        let magenta = tools::overlay::MAGENTA;
-        assert!(shown(&mut e).iter().any(|v| v.color == magenta));
+        assert_eq!(shown(&mut e).lines[0].color, PARALLEL);
     }
 
     #[test]
@@ -2893,13 +3128,11 @@ mod tests {
         let corner = DVec3::new(10.0, 0.0, 1.0);
         let px = e.doc().camera.project(corner).unwrap();
         e.cursor_moved(px + DVec2::new(3.0, 2.0));
-        let overlay = shown(&mut e);
-        assert!(!overlay.is_empty());
+        let (at, shape, _) = shown(&mut e).marker.expect("the endpoint marker");
+        assert_eq!(shape, Shape::Dot);
         assert!(
-            overlay
-                .iter()
-                .all(|v| DVec3::from(v.pos.map(f64::from)).distance(corner) < 0.5),
-            "the endpoint marker is drawn at the corner in root coordinates"
+            at.distance(px) < 0.5,
+            "the endpoint marker is drawn at the corner in root coordinates: {at} vs {px}"
         );
     }
 
@@ -3052,12 +3285,12 @@ mod tests {
         // Make Group and Make Component's keys say what they need with nothing selected.
         e.key(table_key(Bound::MakeGroup));
         assert_eq!(
-            e.message.as_deref(),
+            e.message.as_ref().map(|m| m.text.as_str()),
             Some("Select geometry to make a group")
         );
         e.key(table_key(Bound::MakeComponent));
         assert_eq!(
-            e.message.as_deref(),
+            e.message.as_ref().map(|m| m.text.as_str()),
             Some("Select geometry to make a component")
         );
         assert!(e.key(table_key(Bound::ToggleFly)));
@@ -4129,12 +4362,13 @@ mod tests {
         // A line in progress.
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         move_to(&mut e, DVec3::new(2.0, 1.0, 0.0));
-        assert!(!shown(&mut e).is_empty());
+        assert!(!blank(&shown(&mut e)));
         let before = stats(&e);
         e.toggle_fly();
-        assert!(
-            shown(&mut e).is_empty(),
-            "no marker or preview while flying"
+        assert_eq!(
+            shown(&mut e),
+            Hud::default(),
+            "no marker, preview or chip while flying"
         );
         for c in ['r', 'e', 'q', ' ', 'g', 'G', 'Z', '5', 'm'] {
             assert!(!e.key(EditorKey::Char(c)), "{c:?}");

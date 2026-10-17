@@ -71,6 +71,17 @@ pub enum PhaseName {
     Active,
 }
 
+/// What the status bar's message is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKind {
+    /// Something was refused or failed: a typed value the tool would not take, a command
+    /// that failed. One from a typed value flashes by the cursor.
+    Error,
+    /// Information: a side count, a measured distance, a file saved.
+    Info,
+}
+
 /// A window the editor shows over the view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +116,8 @@ pub struct EditorState {
     pub prompt: String,
     /// Feedback from the last tool action or failed command.
     pub message: Option<String>,
+    /// Whether `message` reports an error or informs; null when there is no message.
+    pub message_kind: Option<MessageKind>,
     /// The direction lock in force, e.g. "Locked: red axis".
     pub lock: Option<String>,
     /// The measurements box's label, e.g. "Length"; empty when the tool measures nothing.

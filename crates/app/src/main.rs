@@ -2,6 +2,7 @@ mod app;
 mod awake;
 mod cli;
 mod editor;
+mod feedback;
 mod fly;
 mod gui;
 mod headless;

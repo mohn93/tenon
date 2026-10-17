@@ -76,6 +76,8 @@ pub struct ToolOutput {
     pub solid: Option<Solid>,
     /// Feedback for the user, e.g. why typed text was ignored.
     pub message: Option<String>,
+    /// `message` informs (a side count, a measured distance) rather than refuses.
+    pub info: bool,
     /// A material the tool picked up to paint with next (Some(None): the default material).
     pub sampled: Option<Option<MaterialId>>,
 }

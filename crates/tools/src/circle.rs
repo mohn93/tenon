@@ -123,6 +123,7 @@ impl Tool for CircleTool {
                         Ok(_) => {
                             self.segments = n;
                             out.message = Some(format!("Circles get {n} sides"));
+                            out.info = true;
                         }
                         Err(_) => out.message = Some(BAD_SIDES.into()),
                     }

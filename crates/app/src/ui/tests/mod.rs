@@ -9,6 +9,7 @@ mod materials;
 mod menus;
 mod outliner;
 mod status;
+mod viewport;
 mod widgets;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +27,7 @@ use super::{
     Agents, DockLayout, DockTab, MaterialRow, TexturePosition, TextureRow, UiAction, View, draw,
 };
 use crate::editor::{ImportUnits, Status};
+use crate::feedback::Hud;
 
 /// Everything a test's `View` borrows, owned, and what the panels reported.
 pub(super) struct Fixture {
@@ -67,6 +69,8 @@ pub(super) struct Fixture {
     pub actions: Vec<UiAction>,
     /// The 3D view's rectangle in the last frame.
     pub central: Rect,
+    /// What is drawn over the 3D view.
+    pub hud: Hud,
 }
 
 impl Default for Fixture {
@@ -113,6 +117,7 @@ impl Default for Fixture {
             discard_once: false,
             actions: Vec::new(),
             central: Rect::NOTHING,
+            hud: Hud::default(),
         }
     }
 }
@@ -150,6 +155,7 @@ impl Fixture {
             theme: self.theme,
             egui_menus: self.egui_menus,
             dock: self.dock,
+            hud: &self.hud,
         }
     }
 
@@ -168,11 +174,21 @@ pub(super) fn harness(f: Fixture) -> H {
     harness_sized(f, SCREEN)
 }
 
+/// `harness` on a display of `pixels_per_point` (2 for Retina).
+pub(super) fn harness_scaled(f: Fixture, pixels_per_point: f32) -> H {
+    harness_built(f, SCREEN, pixels_per_point)
+}
+
 /// A harness drawing the panels for `f` in a window of `size` points, settled, with nothing
 /// reported yet. Frames are 50 ms apart, so two clicks in a row are a double-click.
 pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
+    harness_built(f, size, 1.0)
+}
+
+fn harness_built(f: Fixture, size: Vec2, pixels_per_point: f32) -> H {
     let mut h = Harness::builder()
         .with_size(size)
+        .with_pixels_per_point(pixels_per_point)
         .with_step_dt(0.05)
         .build_ui_state(
             |ui: &mut Ui, f: &mut Fixture| {
@@ -334,11 +350,21 @@ pub(super) fn drawn_texts(h: &H) -> Vec<String> {
 
 /// `drawn_texts` for a harness with any state.
 pub(super) fn drawn_texts_of<S>(h: &Harness<'_, S>) -> Vec<String> {
-    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+    drawn_shapes(h)
+        .into_iter()
+        .filter_map(|s| match s {
+            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every shape the last frame painted, in points, with nested lists flattened.
+pub(super) fn drawn_shapes<S>(h: &Harness<'_, S>) -> Vec<egui::Shape> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<egui::Shape>) {
         match shape {
-            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
-            _ => {}
+            s => out.push(s.clone()),
         }
     }
     let mut out = Vec::new();

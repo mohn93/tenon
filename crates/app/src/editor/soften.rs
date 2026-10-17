@@ -3,7 +3,7 @@
 use kernel::{EntityId, SoftenReport};
 use session::Command;
 
-use super::Editor;
+use super::{Editor, Message};
 use crate::info::count;
 
 /// The angle the Soften Edges window starts with, in degrees.
@@ -53,7 +53,7 @@ impl Editor {
         };
         let max_angle_deg = f64::from(self.soften.angle);
         if let Some(r) = self.run_soften(Command::SoftenByAngle { ids, max_angle_deg }) {
-            self.message = Some(changed("Softened", r));
+            self.message = Some(Message::info(changed("Softened", r)));
         }
         true
     }
@@ -73,11 +73,11 @@ impl Editor {
                 .collect();
         }
         if ids.is_empty() {
-            self.message = Some("No edges to harden".into());
+            self.message = Some(Message::info("No edges to harden"));
             return true;
         }
         if let Some(r) = self.run_soften(Command::SoftenEdges { ids, soft: false }) {
-            self.message = Some(changed("Hardened", r));
+            self.message = Some(Message::info(changed("Hardened", r)));
         }
         true
     }
@@ -110,7 +110,7 @@ impl Editor {
         }
         if let Some(r) = self.run_soften(Command::SoftenEdges { ids, soft }) {
             self.message = (r.changed == 0 && r.skipped > 0)
-                .then(|| "Only an edge between two faces can be soft".into());
+                .then(|| Message::error("Only an edge between two faces can be soft"));
         }
         true
     }
@@ -125,7 +125,7 @@ impl Editor {
             .filter(|id| matches!(id, EntityId::Edge(_) | EntityId::Face(_)))
             .collect();
         if !selection.is_empty() && ids.is_empty() {
-            self.message = Some("Select edges or faces to soften or harden".into());
+            self.message = Some(Message::error("Select edges or faces to soften or harden"));
             return None;
         }
         Some(ids)

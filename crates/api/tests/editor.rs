@@ -2,7 +2,7 @@
 //! editor and against one without.
 
 use api::{
-    EditorCommand, EditorState, HeadlessHost, Host, Input, Mods, PhaseName, ToolInput,
+    EditorCommand, EditorState, HeadlessHost, Host, Input, MessageKind, Mods, PhaseName, ToolInput,
     ToolInputError, ToolInputResult, ToolName, codes, describe, handle,
 };
 use serde_json::{Value, json};
@@ -35,6 +35,7 @@ impl Editing {
                 status: "Line  |  Click to start a line".into(),
                 prompt: "Click to start a line".into(),
                 message: None,
+                message_kind: None,
                 lock: None,
                 measurement_label: "Length".into(),
                 measurement: None,
@@ -176,6 +177,14 @@ fn editor_commands_set_the_editor_and_return_its_state() {
     assert_eq!(state["tool"], "push_pull");
     assert_eq!(state["viewport"], json!([1280.0, 800.0]));
     assert_eq!(state["dialog"], Value::Null);
+    assert_eq!(state["message_kind"], Value::Null, "no message: {state}");
+    h.state.message = Some("Not a length: 2,x".into());
+    h.state.message_kind = Some(MessageKind::Error);
+    let state = call(&mut h, "query", json!({"type": "editor"}))["result"].clone();
+    assert_eq!(state["message_kind"], "error", "{state}");
+    h.state.message_kind = Some(MessageKind::Info);
+    let state = call(&mut h, "query", json!({"type": "editor"}))["result"].clone();
+    assert_eq!(state["message_kind"], "info", "{state}");
 }
 
 #[test]

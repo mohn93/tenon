@@ -1,5 +1,6 @@
 //! The window's panels: the context bar, the tool rail, the status bar with the measurements
-//! box, and on the right the dock: Entity Info and Materials as tabs over the Outliner.
+//! box, and on the right the dock: Entity Info and Materials as tabs over the Outliner. Over
+//! the 3D view, the tools' snap marker, preview lines and chip.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use session::{Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::editor::{ImportUnits, Status};
+use crate::feedback::Hud;
 use theme::ThemeChoice;
 
 pub(crate) mod context_bar;
@@ -26,6 +28,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 pub mod theme;
+pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
 // Only the tests name a tab outside the dock.
@@ -204,6 +207,8 @@ pub struct View<'a> {
     pub egui_menus: bool,
     /// The dock's width, split and tab, as kept in the preferences.
     pub dock: DockLayout,
+    /// What is drawn over the 3D view for the tools.
+    pub hud: &'a Hud,
 }
 
 /// What Entity Info's texture position fields show and apply to.
@@ -301,5 +306,8 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     if view.shortcuts {
         dialogs::shortcuts_window(ui, actions);
     }
-    ui.available_rect_before_wrap()
+    let central = ui.available_rect_before_wrap();
+    // In the root's own layer, under every window and menu.
+    viewport::hud(ui, central, view.hud);
+    central
 }

@@ -190,6 +190,7 @@ impl Tool for ArcTool {
                         Ok(_) => {
                             self.segments = n;
                             out.message = Some(format!("Arcs get {n} segments"));
+                            out.info = true;
                         }
                         Err(_) => out.message = Some(BAD_SEGMENTS.into()),
                     }
