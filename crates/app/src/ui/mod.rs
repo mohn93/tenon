@@ -1,5 +1,5 @@
-//! The window's panels: toolbar, status bar with the measurements box, and on the right Entity
-//! Info, the Materials list and the Outliner.
+//! The window's panels: the context bar, the tool rail, the status bar with the measurements
+//! box, and on the right Entity Info, the Materials list and the Outliner.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -12,6 +12,7 @@ use tools::ToolKind;
 use crate::editor::{ImportUnits, Status};
 use theme::ThemeChoice;
 
+pub(crate) mod context_bar;
 mod dialogs;
 mod fonts;
 mod icons;
@@ -24,8 +25,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 pub mod theme;
-mod toolbar;
-pub(crate) use toolbar::step_name;
+pub(crate) use context_bar::step_name;
 pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
@@ -223,14 +223,23 @@ pub const FLY_HELP: &str = "Walk or fly through the model.\n\
 /// moved), and only the first pass sees the frame's input; so a caller keeps every pass's actions
 /// and the last pass's rectangle.
 pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect {
-    Panel::top("toolbar").show(ui, |ui| toolbar::toolbar(ui, view, actions));
+    let t = theme::tokens(ui.ctx().theme());
+    Panel::top("context")
+        .resizable(false)
+        .exact_size(theme::CONTEXT_BAR_HEIGHT)
+        .frame(
+            egui::Frame::new()
+                .fill(t.bg_panel)
+                .inner_margin(egui::Margin::symmetric(8, 0)),
+        )
+        .show(ui, |ui| context_bar::context_bar(ui, view, actions));
     Panel::bottom("status").show(ui, |ui| status::status_bar(ui, view, actions));
     Panel::left("rail")
         .resizable(false)
         .exact_size(theme::RAIL_WIDTH)
         .frame(
             egui::Frame::new()
-                .fill(theme::tokens(ui.ctx().theme()).bg_panel)
+                .fill(t.bg_panel)
                 .inner_margin(egui::Margin::symmetric(6, 8)),
         )
         .show(ui, |ui| rail::rail(ui, view, actions));

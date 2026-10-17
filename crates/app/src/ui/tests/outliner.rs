@@ -1,17 +1,6 @@
 use super::*;
 use crate::ui::outliner::outliner_label;
 use kernel::DefinitionKind;
-use session::OutlinerRow;
-
-fn table_row(id: &str, definition: &str, kind: DefinitionKind, name: &str) -> OutlinerRow {
-    OutlinerRow {
-        id: id.parse().unwrap(),
-        definition: definition.parse().unwrap(),
-        kind,
-        name: name.into(),
-        material: None,
-    }
-}
 
 /// Two "Box" components (definition d1) each placing the group i27 (definition d2).
 fn boxes() -> OutlinerTable {
@@ -25,10 +14,6 @@ fn boxes() -> OutlinerTable {
         ]
         .into(),
     }
-}
-
-fn ids(ids: &[&str]) -> Vec<EntityId> {
-    ids.iter().map(|id| id.parse().unwrap()).collect()
 }
 
 /// The boxes with `context` open and `selection` selected.

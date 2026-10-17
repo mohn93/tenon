@@ -157,7 +157,14 @@ fn row_button(ui: &mut Ui, selected: bool, text: RichText) -> egui::Response {
 pub(super) fn outliner_label(row: &OutlinerRow) -> String {
     match row.kind {
         DefinitionKind::Component => format!("<{}>", row.name),
-        DefinitionKind::Group if row.name.is_empty() => "Group".to_string(),
-        DefinitionKind::Group => row.name.clone(),
+        DefinitionKind::Group => display_name(row).to_string(),
+    }
+}
+
+/// A node's name without the Outliner's angle brackets: "Group" for an unnamed group.
+pub(super) fn display_name(row: &OutlinerRow) -> &str {
+    match row.kind {
+        DefinitionKind::Group if row.name.is_empty() => "Group",
+        _ => &row.name,
     }
 }

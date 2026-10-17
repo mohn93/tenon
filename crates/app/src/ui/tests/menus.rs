@@ -28,6 +28,15 @@ fn the_view_menu_and_the_indicator_open_agent_activity() {
         [UiAction::ShowAgentActivity(true)]
     );
 
+    // The context bar's indicator, queried before a hover repeats its name in a tooltip.
+    let mut h = harness(Fixture::default());
+    let at = rect_of(&h, "Agent Activity");
+    assert!(at.max.y <= theme::CONTEXT_BAR_HEIGHT, "in the bar: {at:?}");
+    assert_eq!(
+        click(&mut h, "Agent Activity"),
+        [UiAction::ShowAgentActivity(true)]
+    );
+
     // Status bar: nothing at 0 agents, "Agents: 2" at 2, and a click on it opens the log.
     let h = harness(Fixture::default());
     assert!(h.query_by_label_contains("Agents:").is_none());
@@ -288,7 +297,7 @@ fn group_buttons_name_their_keys() {
         has_selection: true,
         ..Default::default()
     });
-    h.get_by_label("Make component").hover();
+    h.get_by_label("Make Component").hover();
     h.run_steps(20);
     let key = chord(Bound::MakeComponent).unwrap().text();
     assert!(drawn_texts(&h).contains(&key), "{key}");
@@ -323,7 +332,7 @@ fn undo_and_redo_are_disabled_when_empty_and_name_their_step() {
 
 #[test]
 fn history_labels_read_as_words() {
-    use crate::ui::toolbar::step_name;
+    use crate::ui::context_bar::step_name;
     assert_eq!(step_name("push_pull"), "Push pull");
     assert_eq!(step_name("batch"), "Batch");
     assert_eq!(step_name(""), "");

@@ -5,6 +5,17 @@ use tools::ToolKind;
 
 pub const UNDO: &str = ph::ARROW_U_UP_LEFT;
 pub const REDO: &str = ph::ARROW_U_UP_RIGHT;
+/// Make Group, Make Component and Explode.
+pub const BOUNDING_BOX: &str = ph::BOUNDING_BOX;
+pub const CUBE: &str = ph::CUBE;
+pub const ARROWS_OUT: &str = ph::ARROWS_OUT;
+/// The day/night toggle by day and at night.
+pub const SUN: &str = ph::SUN;
+pub const MOON: &str = ph::MOON;
+/// The agents indicator.
+pub const ROBOT: &str = ph::ROBOT;
+/// Between the breadcrumb's crumbs.
+pub const CARET_RIGHT: &str = ph::CARET_RIGHT;
 
 /// A tool's glyph on the rail.
 pub fn tool(kind: ToolKind) -> &'static str {

@@ -1,6 +1,7 @@
 //! The panels' tests, driven through egui_kittest: widgets are found by their names in the
 //! AccessKit tree, so the tests do not depend on where the layout puts them.
 
+mod context;
 mod entity;
 mod layout;
 mod materials;
@@ -14,8 +15,8 @@ use std::path::PathBuf;
 use egui::{Pos2, Rect, Ui, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use kernel::{EntityId, TexturePlacement};
-use session::{Lighting, MaterialId, OutlinerTable, Projection};
+use kernel::{DefinitionKind, EntityId, TexturePlacement};
+use session::{Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection};
 use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
@@ -411,6 +412,57 @@ pub(super) fn with_texture_position(faces: Vec<EntityId>, placement: TexturePlac
     Fixture {
         info: vec![format!("{} faces", faces.len())],
         texture_position: Some(TexturePosition { placement, faces }),
+        ..Default::default()
+    }
+}
+
+/// An Outliner row: instance `id` placing definition `definition`.
+pub(super) fn table_row(
+    id: &str,
+    definition: &str,
+    kind: DefinitionKind,
+    name: &str,
+) -> OutlinerRow {
+    OutlinerRow {
+        id: id.parse().unwrap(),
+        definition: definition.parse().unwrap(),
+        kind,
+        name: name.into(),
+        material: None,
+    }
+}
+
+/// Entity ids from their text, such as "i3".
+pub(super) fn ids(ids: &[&str]) -> Vec<EntityId> {
+    ids.iter().map(|id| id.parse().unwrap()).collect()
+}
+
+/// Two root groups, House (i1, d1) and Street (i2, d3); House places the component Kitchen
+/// (i3, d2).
+pub(super) fn house() -> OutlinerTable {
+    OutlinerTable {
+        roots: vec![
+            table_row("i1", "d1", DefinitionKind::Group, "House"),
+            table_row("i2", "d3", DefinitionKind::Group, "Street"),
+        ],
+        by_definition: [
+            (
+                "d1".parse().unwrap(),
+                vec![table_row("i3", "d2", DefinitionKind::Component, "Kitchen")],
+            ),
+            ("d2".parse().unwrap(), Vec::new()),
+            ("d3".parse().unwrap(), Vec::new()),
+        ]
+        .into(),
+    }
+}
+
+/// The house tree with `context` open.
+pub(super) fn house_fixture(context: &[&str]) -> Fixture {
+    Fixture {
+        outliner: house(),
+        context: ids(context),
+        inside_instance: !context.is_empty(),
         ..Default::default()
     }
 }

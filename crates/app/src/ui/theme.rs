@@ -168,6 +168,8 @@ pub const RAIL_WIDTH: f32 = 44.0;
 pub const RAIL_BUTTON: f32 = 32.0;
 pub const RAIL_ICON: f32 = 18.0;
 pub const RAIL_GROUP_GAP: f32 = 8.0;
+/// The context bar's height, under the menus at the window's top.
+pub const CONTEXT_BAR_HEIGHT: f32 = 36.0;
 
 /// egui's style for one theme's tokens.
 pub fn style(t: &Tokens, dark: bool) -> egui::Style {

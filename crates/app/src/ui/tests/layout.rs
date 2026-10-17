@@ -34,10 +34,9 @@ fn toolbar_buttons() -> Vec<(&'static str, UiAction)> {
     vec![
         ("Undo", UiAction::Undo),
         ("Redo", UiAction::Redo),
-        ("Make group", UiAction::MakeGroup),
-        ("Make component", UiAction::MakeComponent),
+        ("Make Group", UiAction::MakeGroup),
+        ("Make Component", UiAction::MakeComponent),
         ("Explode", UiAction::Explode),
-        ("Close group", UiAction::CloseInstance),
     ]
 }
 
@@ -201,8 +200,9 @@ pub(super) fn crowded(groups: u64) -> Fixture {
 #[test]
 fn a_short_window_leaves_the_outliner_its_minimum_height() {
     // Short enough that the Materials list is down to its least rows, tall enough that the
-    // panel is not yet scrolled (with 28 pt controls and section titles it needs about 650 points).
-    let height = 656.0;
+    // panel is not yet scrolled (with the 36 pt context bar, 28 pt controls and section titles it
+    // needs about 655 points).
+    let height = 660.0;
     let h = harness_sized(crowded(40), Vec2::new(1280.0, height));
     let model = rect_of(&h, "Model");
     let least = OUTLINER_ROWS_MIN as f32 * row_pitch(&h.ctx.global_style());
