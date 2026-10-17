@@ -127,6 +127,28 @@ pub trait Tool {
     fn remember(&self, _r: &mut Remembered) {}
 }
 
+/// Drag to draw: where the press that started an operation went down, until its release.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DragStart(Option<DVec2>);
+
+impl DragStart {
+    /// Remembers the press at `cursor` (call when a click started the operation).
+    pub(crate) fn arm(&mut self, cursor: DVec2) {
+        self.0 = Some(cursor);
+    }
+
+    /// Whether this release is the operation's next click: a press was armed and the cursor
+    /// is now `ctx.drag_threshold` or more from it, inside the view (a release over a panel
+    /// leaves the operation at its first point). Always disarms.
+    pub(crate) fn released(&mut self, ctx: &ToolContext) -> bool {
+        let c = ctx.cursor;
+        let in_view = c.cmpge(DVec2::ZERO).all() && c.cmple(ctx.camera.viewport).all();
+        self.0
+            .take()
+            .is_some_and(|press| in_view && press.distance(c) >= ctx.drag_threshold)
+    }
+}
+
 /// Tool settings kept for the session, across switching tools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Remembered {
@@ -303,6 +325,194 @@ mod tests {
             out.push(rounded(tool.phase()));
         }
         out
+    }
+
+    /// Builds a pointer event from the inference under the cursor.
+    type Event = fn(Inference) -> ToolEvent;
+
+    /// A fresh `kind` tool over the selected 2 m square of `phases`, sent `steps` in order: each
+    /// puts the cursor over its point and sends the event built from the inference there (on
+    /// the square for points on it, free otherwise). Returns every command and the phase after.
+    fn drive(kind: ToolKind, steps: &[(Event, DVec3)]) -> (Vec<Command>, Phase) {
+        let mut model = Model::new();
+        let p = |x, y| DVec3::new(x, y, 0.0);
+        model
+            .add_polygon(&[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0), p(0.0, 2.0)])
+            .unwrap();
+        let face: FaceId = model.faces().map(|(id, _)| id).next().unwrap();
+        let selection = BTreeSet::from([EntityId::Face(face)]);
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let scenery = Scenery::single(&model);
+        let mut tool = kind.make();
+        let mut commands = Vec::new();
+        for &(make, point) in steps {
+            let ctx = ToolContext {
+                model: &model,
+                scenery: &scenery,
+                camera: &camera,
+                cursor: camera.project(point).unwrap(),
+                pick_radius: 10.0,
+                drag_threshold: 4.0,
+                shift: false,
+                selection: &selection,
+                material: None,
+                sample: false,
+            };
+            let on_square = point.z.abs() < 1e-9
+                && (0.0..=2.0).contains(&point.x)
+                && (0.0..=2.0).contains(&point.y);
+            let hit = Inference {
+                point,
+                kind: if on_square {
+                    SnapKind::OnFace
+                } else {
+                    SnapKind::Free
+                },
+                face: on_square.then_some(face),
+            };
+            commands.extend(tool.handle(make(hit), &ctx).commands);
+        }
+        (commands, rounded(tool.phase()))
+    }
+
+    /// A fresh `kind` tool over the selected 2 m square of `phases`: pressed over `from`, the
+    /// cursor moved to `to`, released there. Returns every command and the phase after.
+    fn dragged(kind: ToolKind, from: DVec3, to: DVec3) -> (Vec<Command>, Phase) {
+        drive(
+            kind,
+            &[
+                (ToolEvent::Click, from),
+                (ToolEvent::Move, to),
+                (ToolEvent::Release, to),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_release_past_the_drag_threshold_is_the_second_click() {
+        let (a, b) = (DVec3::new(0.5, 0.5, 0.0), DVec3::new(1.5, 1.2, 0.0));
+        let (cmds, phase) = dragged(ToolKind::Rectangle, a, b);
+        assert!(
+            matches!(cmds[..], [Command::AddRectangle { .. }]),
+            "{cmds:?}"
+        );
+        assert_eq!(phase, Phase::Idle);
+        let (cmds, _) = dragged(ToolKind::Circle, a, b);
+        assert!(matches!(cmds[..], [Command::AddCircle { .. }]), "{cmds:?}");
+        // Line: one edge, and the chain goes on from its end.
+        let (cmds, phase) = dragged(ToolKind::Line, a, b);
+        assert!(matches!(cmds[..], [Command::AddEdge { .. }]), "{cmds:?}");
+        assert!(matches!(phase, Phase::Active { .. }));
+        // Arc: the drag gives the end; the bulge is still to come.
+        let (cmds, phase) = dragged(ToolKind::Arc, a, b);
+        assert!(cmds.is_empty());
+        assert!(matches!(phase, Phase::Active { ref points } if points.len() == 2));
+        // Push/Pull: dragged up off the face, it pulls.
+        let (cmds, _) = dragged(
+            ToolKind::PushPull,
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(1.0, 1.0, 0.8),
+        );
+        assert!(
+            matches!(cmds[..], [Command::PushPull { distance, .. }] if distance > 0.1),
+            "{cmds:?}"
+        );
+    }
+
+    #[test]
+    fn a_release_near_the_press_waits_for_the_next_click() {
+        // 1 mm on the ground is well under 4 px from the default camera.
+        let a = DVec3::new(0.5, 0.5, 0.0);
+        for kind in [
+            ToolKind::Line,
+            ToolKind::Rectangle,
+            ToolKind::Circle,
+            ToolKind::Arc,
+        ] {
+            let (cmds, phase) = dragged(kind, a, a + DVec3::new(0.001, 0.0, 0.0));
+            assert!(cmds.is_empty(), "{kind:?}");
+            assert!(matches!(phase, Phase::Active { .. }), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_press_that_starts_an_operation_drags() {
+        let a = DVec3::new(0.5, 0.5, 0.0);
+        let b = DVec3::new(1.5, 0.5, 0.0);
+        let c = DVec3::new(1.5, 1.5, 0.0);
+        let d = DVec3::new(0.2, 1.8, 0.0);
+        // Line: click a, click b (edge a-b), press at c (edge b-c: a press in a chain is a
+        // click), drag and release at d far away. The release adds nothing.
+        let (cmds, phase) = drive(
+            ToolKind::Line,
+            &[
+                (ToolEvent::Click, a),
+                (ToolEvent::Release, a),
+                (ToolEvent::Click, b),
+                (ToolEvent::Release, b),
+                (ToolEvent::Click, c),
+                (ToolEvent::Move, d),
+                (ToolEvent::Release, d),
+            ],
+        );
+        assert!(
+            matches!(cmds[..], [Command::AddEdge { .. }, Command::AddEdge { .. }]),
+            "{cmds:?}"
+        );
+        assert_eq!(phase, active(&[a, c]), "the chain goes on from c");
+        // Arc: the bulge press is a click too; dragging it does not finish the arc again.
+        let (cmds, phase) = drive(
+            ToolKind::Arc,
+            &[
+                (ToolEvent::Click, a),
+                (ToolEvent::Release, a),
+                (ToolEvent::Click, b),
+                (ToolEvent::Move, c),
+                (ToolEvent::Release, c),
+            ],
+        );
+        assert!(cmds.is_empty(), "{cmds:?}");
+        assert_eq!(phase, active(&[a, b]));
+    }
+
+    #[test]
+    fn a_drag_released_outside_the_view_leaves_the_first_point() {
+        // The press in the view, the release over a panel left of it: the operation stays at
+        // its first point, as after a click.
+        let (model, face) = square_model();
+        let camera = Camera::new(DVec2::new(800.0, 600.0));
+        let scenery = Scenery::single(&model);
+        let selection = BTreeSet::new();
+        let a = DVec3::new(0.5, 0.5, 0.0);
+        for kind in [ToolKind::Line, ToolKind::Rectangle, ToolKind::Circle] {
+            let mut tool = kind.make();
+            let ctx = |cursor| ToolContext {
+                model: &model,
+                scenery: &scenery,
+                camera: &camera,
+                cursor,
+                pick_radius: 10.0,
+                drag_threshold: 4.0,
+                shift: false,
+                selection: &selection,
+                material: None,
+                sample: false,
+            };
+            let press = Inference {
+                point: a,
+                kind: SnapKind::OnFace,
+                face: Some(face),
+            };
+            tool.handle(ToolEvent::Click(press), &ctx(camera.project(a).unwrap()));
+            let off = Inference {
+                point: DVec3::new(-3.0, 1.0, 0.0),
+                kind: SnapKind::Ground,
+                face: None,
+            };
+            let out = tool.handle(ToolEvent::Release(off), &ctx(DVec2::new(-40.0, 300.0)));
+            assert!(out.commands.is_empty(), "{kind:?}: {:?}", out.commands);
+            assert_eq!(rounded(tool.phase()), active(&[a]), "{kind:?}");
+        }
     }
 
     /// The 2 m square of `phases`, unselected, and its face.

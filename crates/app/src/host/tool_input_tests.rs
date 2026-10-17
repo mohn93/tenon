@@ -1037,3 +1037,68 @@ fn results_say_whether_the_message_is_an_error() {
         Value::Null
     );
 }
+
+#[test]
+fn a_drag_draws_like_two_clicks() {
+    let mut e = editor();
+    tool(&mut e, "rectangle");
+    let r = input(
+        &mut e,
+        json!([{"type": "drag", "points": [[0, 0, 0], [2, 3, 0]]}]),
+    );
+    assert_eq!(ran(&r), ["add_rectangle"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["corner"], [0.0, 0.0, 0.0]), "{c}");
+    assert!(near(&c["opposite"], [2.0, 3.0, 0.0]), "{c}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+
+    tool(&mut e, "push_pull");
+    let r = input(
+        &mut e,
+        json!([{"type": "drag", "points": [[1, 1, 0], [1, 1, 1]]}]),
+    );
+    assert_eq!(ran(&r), ["push_pull"], "{r}");
+    let distance = r["commands"][0]["command"]["distance"].as_f64().unwrap();
+    assert!((distance - 1.0).abs() < 1e-6, "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+}
+
+#[test]
+fn navigation_drags_draw_nothing() {
+    let mut e = editor();
+    tool(&mut e, "rectangle");
+    let middle = json!({"type": "drag", "pixels": [[300, 300], [500, 400]], "button": "middle"});
+    let left = json!({"type": "drag", "pixels": [[300, 300], [500, 400]]});
+    for events in [
+        json!([middle]),
+        json!([{"type": "modifiers", "shift": true}, middle]),
+        json!([{"type": "modifiers", "alt": true}, left]),
+    ] {
+        let r = input(&mut e, events.clone());
+        assert_eq!(ran(&r), Vec::<String>::new(), "{events}: {r}");
+        assert_eq!(r["editor"]["phase"], "idle", "{events}: {r}");
+        input(&mut e, json!([{"type": "modifiers"}]));
+    }
+    assert_eq!(e.modifiers(), api::Mods::default());
+}
+
+#[test]
+fn a_release_whose_press_was_not_the_tools_draws_nothing() {
+    let mut e = editor();
+    tool(&mut e, "rectangle");
+    input(&mut e, json!([{"type": "down", "pixel": [300, 300]}]));
+    exec(&mut e, json!({"type": "cancel"}));
+    let r = input(&mut e, json!([{"type": "up", "pixel": [600, 500]}]));
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    // A fresh press and a release 1 px away start a rectangle and wait for its corner.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "down", "pixel": [300, 300]},
+            {"type": "up", "pixel": [301, 300]}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(r["editor"]["phase"], "active", "{r}");
+}

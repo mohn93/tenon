@@ -1,13 +1,13 @@
-//! The Circle tool: click the center, then a point on the rim (or type the radius). The
-//! circle lies on the face under the center click, or on a horizontal plane. Typing "24s" sets
-//! the number of sides, before or during a circle; the count is kept for the session, also
-//! when another tool is selected in between.
+//! The Circle tool: click the center, then a point on the rim (or type the radius); a drag from the
+//! center to the rim works as the two clicks. The circle lies on the face under the center click,
+//! or on a horizontal plane. Typing "24s" sets the number of sides, before or during a circle; the
+//! count is kept for the session, also when another tool is selected in between.
 
 use glam::DVec3;
 use session::{Command, DEFAULT_CIRCLE_SEGMENTS, circle_points};
 
 use crate::rectangle::{on_plane, plane_normal};
-use crate::tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{DragStart, Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
 
 /// Shown for a side count that is not a whole number in range.
@@ -20,6 +20,7 @@ pub struct CircleTool {
     /// The point on the rim under the cursor, on that plane.
     hover: Option<DVec3>,
     segments: u32,
+    drag_start: DragStart,
 }
 
 impl Default for CircleTool {
@@ -28,6 +29,7 @@ impl Default for CircleTool {
             center: None,
             hover: None,
             segments: DEFAULT_CIRCLE_SEGMENTS,
+            drag_start: DragStart::default(),
         }
     }
 }
@@ -110,7 +112,10 @@ impl Tool for CircleTool {
                 }
             }
             ToolEvent::Click(hit) => match self.center {
-                None => self.center = Some((hit.point, plane_normal(&hit, ctx))),
+                None => {
+                    self.center = Some((hit.point, plane_normal(&hit, ctx)));
+                    self.drag_start.arm(ctx.cursor);
+                }
                 Some((center, normal)) => {
                     if let Some(p) = on_plane(center, normal, &hit, ctx) {
                         self.finish(center.distance(p), &mut out);
@@ -141,7 +146,12 @@ impl Tool for CircleTool {
                     }
                 }
             }
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(hit) => {
+                if self.drag_start.released(ctx) {
+                    return self.handle(ToolEvent::Click(hit), ctx);
+                }
+            }
+            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((center, normal)), Some(r)) = (self.center, self.radius())
@@ -157,6 +167,7 @@ impl Tool for CircleTool {
     fn on_external_change(&mut self) {
         self.center = None;
         self.hover = None;
+        self.drag_start = DragStart::default();
     }
 
     fn remember(&self, r: &mut Remembered) {

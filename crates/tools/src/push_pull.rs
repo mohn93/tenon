@@ -1,5 +1,5 @@
 //! The Push/Pull tool: click a face, move to set the distance along its normal, click again (or
-//! type the distance).
+//! type the distance). A drag off the face works as the two clicks.
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
@@ -8,7 +8,7 @@ use session::Command;
 
 use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
 use crate::scenery::Owner;
-use crate::tool::{Phase, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{DragStart, Phase, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length, toward_cursor};
 
 /// A push/pull in progress.
@@ -32,6 +32,7 @@ pub struct PushPullTool {
     drag: Option<Drag>,
     /// The face a click would push or pull, while no push/pull is in progress.
     hovered: Option<FaceId>,
+    drag_start: DragStart,
 }
 
 impl PushPullTool {
@@ -169,6 +170,7 @@ impl Tool for PushPullTool {
                             material: f.front,
                             distance: 0.0,
                         });
+                        self.drag_start.arm(ctx.cursor);
                     }
                     self.hovered = None;
                 }
@@ -191,7 +193,12 @@ impl Tool for PushPullTool {
                     self.finish(v, &mut out);
                 }
             },
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(hit) => {
+                if self.drag_start.released(ctx) {
+                    return self.handle(ToolEvent::Click(hit), ctx);
+                }
+            }
+            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let Some(d) = &self.drag {
@@ -211,6 +218,7 @@ impl Tool for PushPullTool {
     fn on_external_change(&mut self) {
         self.drag = None;
         self.hovered = None;
+        self.drag_start = DragStart::default();
     }
 
     fn hovered(&self) -> Option<EntityId> {

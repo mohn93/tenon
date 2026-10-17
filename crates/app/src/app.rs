@@ -22,7 +22,7 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 use crate::awake::Awake;
-use crate::editor::{Editor, EditorKey};
+use crate::editor::{DRAG_LOGICAL_PX, Editor, EditorKey};
 use crate::feedback::Timing;
 use crate::fly::FlyKey;
 use crate::gui::Gui;
@@ -437,21 +437,21 @@ fn grab_cursor(window: &Window) -> bool {
         || window.set_cursor_grab(CursorGrabMode::Confined).is_ok()
 }
 
-/// Longest time between the two releases of a double-click.
+/// Longest time between the two releases of a double-click. The farthest the cursor may move
+/// between them, and from a press to its click's release, is the tools' drag threshold
+/// (`DRAG_LOGICAL_PX`): a release the tools take as a drag is never a click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
-/// Farthest the cursor may move between them, in logical pixels.
-const DOUBLE_CLICK_LOGICAL_PX: f64 = 6.0;
 
 /// True if a release at `at` (physical pixels) at time `now` completes a double-click begun
-/// by the release `last`.
+/// by the release `last`: less than `max_px` from it.
 fn is_double_click(last: Option<(Instant, DVec2)>, now: Instant, at: DVec2, max_px: f64) -> bool {
-    last.is_some_and(|(t, p)| now.duration_since(t) <= DOUBLE_CLICK && p.distance(at) <= max_px)
+    last.is_some_and(|(t, p)| now.duration_since(t) <= DOUBLE_CLICK && p.distance(at) < max_px)
 }
 
-/// True if a release at `at` ends a click, that is the cursor is within `max_px` of where the
-/// button went down, rather than a drag.
+/// True if a release at `at` ends a click, that is the cursor is less than `max_px` from where
+/// the button went down, rather than a drag (the tools take `max_px` or more as a drag).
 fn is_click(press: Option<DVec2>, at: DVec2, max_px: f64) -> bool {
-    press.is_some_and(|p| p.distance(at) <= max_px)
+    press.is_some_and(|p| p.distance(at) < max_px)
 }
 
 struct State {
@@ -1770,7 +1770,7 @@ impl ApplicationHandler<AppEvent> for App {
                         s.left_press = Some(s.cursor);
                     } else if handled && button == MouseButton::Left {
                         let now = Instant::now();
-                        let max = DOUBLE_CLICK_LOGICAL_PX * s.window.scale_factor();
+                        let max = DRAG_LOGICAL_PX * s.window.scale_factor();
                         let click = is_click(s.left_press.take(), s.cursor, max);
                         if click && is_double_click(s.last_release, now, s.cursor, max) {
                             s.last_release = None;
@@ -2104,6 +2104,23 @@ mod tests {
         assert!(!is_click(None, at, 6.0));
         assert!(is_click(Some(at), at + DVec2::new(3.0, 3.0), 6.0));
         assert!(!is_click(Some(at), at + DVec2::new(40.0, 0.0), 6.0));
+        // The tools' drag threshold is the one radius: exactly that far is a drag.
+        assert!(is_click(
+            Some(at),
+            at + DVec2::new(3.9, 0.0),
+            DRAG_LOGICAL_PX
+        ));
+        assert!(!is_click(
+            Some(at),
+            at + DVec2::new(4.0, 0.0),
+            DRAG_LOGICAL_PX
+        ));
+        assert!(!is_double_click(
+            Some((Instant::now(), at)),
+            Instant::now(),
+            at + DVec2::new(0.0, 5.0),
+            DRAG_LOGICAL_PX
+        ));
     }
 
     #[test]

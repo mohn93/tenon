@@ -1,11 +1,12 @@
 //! The Line tool: click to start, click again to place each edge; edges chain from the last point.
-//! Typing a length places the next point that far along the current direction.
+//! A drag from the start works as two clicks: it draws one edge, and the chain goes on from its
+//! end. Typing a length places the next point that far along the current direction.
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::Command;
 
-use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length};
 
 #[derive(Clone, Debug, Default)]
@@ -16,6 +17,7 @@ pub struct LineTool {
     last: Option<DVec3>,
     /// Latest inferred cursor point.
     hover: Option<DVec3>,
+    drag_start: DragStart,
 }
 
 impl LineTool {
@@ -39,6 +41,7 @@ impl LineTool {
     fn reset(&mut self) {
         self.first = None;
         self.last = None;
+        self.drag_start = DragStart::default();
     }
 }
 
@@ -77,7 +80,7 @@ impl Tool for LineTool {
         }
     }
 
-    fn handle(&mut self, event: ToolEvent, _ctx: &ToolContext) -> ToolOutput {
+    fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
             ToolEvent::Move(hit) => self.hover = Some(hit.point),
@@ -88,9 +91,15 @@ impl Tool for LineTool {
                     None => {
                         self.first = Some(p);
                         self.last = Some(p);
+                        self.drag_start.arm(ctx.cursor);
                     }
                     Some(last) if last.distance(p) < LENGTH_TOL => {}
                     Some(last) => self.place(last, p, &mut out),
+                }
+            }
+            ToolEvent::Release(hit) => {
+                if self.drag_start.released(ctx) {
+                    return self.handle(ToolEvent::Click(hit), ctx);
                 }
             }
             ToolEvent::Value(text) => {
@@ -113,7 +122,7 @@ impl Tool for LineTool {
                     }
                 }
             }
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.reset(),
         }
         if let (Some(a), Some(b)) = (self.last, self.hover)

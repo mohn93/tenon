@@ -1,15 +1,16 @@
-//! The Arc tool (SketchUp's 2-point arc): click the start, click the end, then pull the bulge
-//! out and click (or type its height). The arc lies on the face under the start click, or on a
-//! horizontal plane. Before the end click, a typed length sets the chord along the cursor's
-//! direction. Typing "12s" sets the number of segments, before or during an arc; the count is
-//! kept for the session, also when another tool is selected in between.
+//! The Arc tool (SketchUp's 2-point arc): click the start, click the end, then pull the bulge out
+//! and click (or type its height). A drag from the start to the end works as the first two clicks.
+//! The arc lies on the face under the start click, or on a horizontal plane. Before the end click,
+//! a typed length sets the chord along the cursor's direction. Typing "12s" sets the number of
+//! segments, before or during an arc; the count is kept for the session, also when another tool is
+//! selected in between.
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, arc_from_bulge, arc_points};
 
 use crate::rectangle::{on_plane, plane_normal};
-use crate::tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{DragStart, Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
 
 /// Shown for a segment count that is not a whole number in range.
@@ -24,6 +25,7 @@ pub struct ArcTool {
     /// The cursor's point on the arc's plane.
     hover: Option<DVec3>,
     segments: u32,
+    drag_start: DragStart,
 }
 
 impl Default for ArcTool {
@@ -33,6 +35,7 @@ impl Default for ArcTool {
             end: None,
             hover: None,
             segments: DEFAULT_ARC_SEGMENTS,
+            drag_start: DragStart::default(),
         }
     }
 }
@@ -171,7 +174,10 @@ impl Tool for ArcTool {
                 }
             }
             ToolEvent::Click(hit) => match (self.start, self.end) {
-                (None, _) => self.start = Some((hit.point, plane_normal(&hit, ctx))),
+                (None, _) => {
+                    self.start = Some((hit.point, plane_normal(&hit, ctx)));
+                    self.drag_start.arm(ctx.cursor);
+                }
                 (Some((start, normal)), None) => {
                     if let Some(p) = on_plane(start, normal, &hit, ctx) {
                         self.set_end(p, &mut out);
@@ -221,7 +227,12 @@ impl Tool for ArcTool {
                     }
                 }
             }
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(hit) => {
+                if self.drag_start.released(ctx) {
+                    return self.handle(ToolEvent::Click(hit), ctx);
+                }
+            }
+            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         match (self.start, self.end, self.hover) {
@@ -256,6 +267,7 @@ impl Tool for ArcTool {
         self.start = None;
         self.end = None;
         self.hover = None;
+        self.drag_start = DragStart::default();
     }
 
     fn remember(&self, r: &mut Remembered) {

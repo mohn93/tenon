@@ -42,8 +42,10 @@ type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
 
 /// Snap radius in logical pixels (scaled to physical pixels by the display scale factor).
 const PICK_RADIUS_LOGICAL_PX: f64 = 8.0;
-/// How far (logical px) the cursor must travel from a press for it to be a drag.
-const DRAG_LOGICAL_PX: f64 = 4.0;
+/// How far (logical px) the cursor must travel from a press for it to be a drag. It is also
+/// the window's one "same place" radius: a release this far from its press is not a click, and
+/// a click this far from the last one does not count toward a double-click.
+pub(crate) const DRAG_LOGICAL_PX: f64 = 4.0;
 /// The opacity of the solid a tool previews.
 const SOLID_ALPHA: f32 = 0.7;
 
@@ -2451,6 +2453,32 @@ mod tests {
     }
 
     #[test]
+    fn a_drawing_drag_released_outside_the_view_keeps_its_first_point() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Rectangle);
+        move_to(&mut e, DVec3::ZERO);
+        e.button(Button::Left, true);
+        // Released over the dock, left of the view.
+        e.cursor_moved(DVec2::new(-60.0, 300.0));
+        e.cursor_left();
+        e.button(Button::Left, false);
+        assert_eq!(stats(&e), (0, 0));
+        assert_eq!(
+            e.phase(),
+            tools::Phase::Active {
+                points: vec![DVec3::ZERO]
+            }
+        );
+        // In the view, the same drag draws.
+        e.key(EditorKey::Escape);
+        move_to(&mut e, DVec3::ZERO);
+        e.button(Button::Left, true);
+        move_to(&mut e, DVec3::new(2.0, 1.0, 0.0));
+        e.button(Button::Left, false);
+        assert_eq!(stats(&e), (4, 1));
+    }
+
+    #[test]
     fn api_edit_ends_a_push_pull_in_progress() {
         let mut e = editor();
         square_then_push_pull(&mut e);
@@ -3973,6 +4001,7 @@ mod tests {
     #[test]
     fn a_new_or_opened_model_forgets_the_chosen_material() {
         let mut e = editor();
+        e.select_tool(ToolKind::Line);
         square(&mut e);
         e.key(EditorKey::Escape);
         assert!(e.add_material());

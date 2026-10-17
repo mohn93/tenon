@@ -1,15 +1,15 @@
-//! The Rectangle tool: click a corner, then the opposite corner (or type "width,height"). The
-//! rectangle lies on the face under the first click, or on a horizontal plane. A first corner
-//! on an edge or a point rather than inside a face (a wall's foot) can start a rectangle on
-//! any face through it: the rectangle lies on the face the cursor moves across, as in
-//! SketchUp.
+//! The Rectangle tool: click a corner, then the opposite corner (or type "width,height"); a drag
+//! from the first corner to the opposite one works as the two clicks. The rectangle lies on the
+//! face under the first click, or on a horizontal plane. A first corner on an edge or a point
+//! rather than inside a face (a wall's foot) can start a rectangle on any face through it: the
+//! rectangle lies on the face the cursor moves across, as in SketchUp.
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, rectangle_axes, rectangle_corners};
 
 use crate::inference::{Inference, SnapKind};
-use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_lengths, toward_cursor};
 
 #[derive(Clone, Debug, Default)]
@@ -21,6 +21,7 @@ pub struct RectangleTool {
     floating: bool,
     /// Opposite corner under the cursor, on that plane.
     hover: Option<DVec3>,
+    drag_start: DragStart,
 }
 
 impl RectangleTool {
@@ -146,6 +147,7 @@ impl Tool for RectangleTool {
                 None => {
                     self.start = Some((hit.point, plane_normal(&hit, ctx)));
                     self.floating = hit.kind != SnapKind::OnFace;
+                    self.drag_start.arm(ctx.cursor);
                 }
                 Some(_) => {
                     self.follow(&hit, ctx);
@@ -169,7 +171,12 @@ impl Tool for RectangleTool {
                 }
                 (Some(_), _) => out.message = Some(format!("Not width,height: {text}")),
             },
-            ToolEvent::Release(_) | ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
+            ToolEvent::Release(hit) => {
+                if self.drag_start.released(ctx) {
+                    return self.handle(ToolEvent::Click(hit), ctx);
+                }
+            }
+            ToolEvent::DoubleClick(_) | ToolEvent::ToggleCopy => {}
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((corner, normal)), Some(hover)) = (self.start, self.hover)
@@ -184,6 +191,7 @@ impl Tool for RectangleTool {
         self.start = None;
         self.hover = None;
         self.floating = false;
+        self.drag_start = DragStart::default();
     }
 }
 
