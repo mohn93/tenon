@@ -42,6 +42,25 @@ fn command_errors_carry_structured_data() {
 }
 
 #[test]
+fn undo_expect_with_an_unknown_key_is_invalid_and_undoes_nothing() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    );
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "undo", "expect": {"label": "add_edge", "orgin": "agent"}}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    let stats = call(&mut h, "query", json!({"type": "stats"}));
+    assert_eq!(stats["result"]["edges"], 1);
+    assert_eq!(stats["result"]["revision"], 1);
+}
+
+#[test]
 fn batch_and_query_round_trip() {
     let mut h = HeadlessHost::new();
     let r = call(

@@ -104,6 +104,16 @@ fn expect_parses_from_json() {
 }
 
 #[test]
+fn expect_refuses_an_unknown_key() {
+    // a misspelled origin must not silently skip the origin check
+    let r = serde_json::from_value::<Command>(serde_json::json!(
+        {"type": "undo", "expect": {"label": "add_edge", "orgin": "agent"}}
+    ));
+    let e = r.unwrap_err().to_string();
+    assert!(e.contains("orgin"), "{e}");
+}
+
+#[test]
 fn new_and_open_keep_the_current_origin() {
     let mut doc = doc();
     doc.set_origin(Origin::Agent);
