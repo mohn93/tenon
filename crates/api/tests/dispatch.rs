@@ -143,7 +143,7 @@ fn notifications_get_no_reply_but_still_run() {
 fn describe_lists_methods_and_schemas() {
     let mut h = HeadlessHost::new();
     let d = call(&mut h, "describe", json!(null))["result"].clone();
-    assert_eq!(d["schema_version"], 1);
+    assert_eq!(d["schema_version"], 2);
     for m in [
         "execute",
         "batch",
@@ -792,4 +792,130 @@ fn api_steps_are_agent_steps() {
     );
     let r = call(&mut h, "query", json!({"type": "history"}));
     assert_eq!(r["result"]["undo_origins"], json!(["agent"]));
+}
+
+#[test]
+fn describe_has_schemas_per_method() {
+    let d = api::describe();
+    assert_eq!(d["schema_version"], 2);
+    for m in [
+        "execute",
+        "batch",
+        "query",
+        "render_view",
+        "tool_input",
+        "quit",
+    ] {
+        assert!(d["methods"][m]["params_schema"].is_object(), "{m}");
+        assert!(d["methods"][m]["result_schema"].is_object(), "{m}");
+    }
+    for m in ["subscribe", "describe"] {
+        assert!(d["methods"][m]["params_schema"].is_null(), "{m}");
+    }
+    let exec = d["methods"]["execute"]["result_schema"].to_string();
+    assert!(exec.contains("\"revision\""));
+    assert!(
+        d["methods"]["batch"]["result_schema"]
+            .to_string()
+            .contains("\"changes\"")
+    );
+    // execute takes a Command, a ScreenCommand or an EditorCommand; query a Query or an
+    // EditorQuery.
+    let execute = &d["methods"]["execute"]["params_schema"];
+    assert_eq!(execute["type"], "object");
+    assert_eq!(execute["anyOf"].as_array().unwrap().len(), 3);
+    let query = &d["methods"]["query"]["params_schema"];
+    assert_eq!(query["type"], "object");
+    assert_eq!(query["anyOf"].as_array().unwrap().len(), 2);
+}
+
+/// Every `$ref` under `v`.
+fn refs(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m {
+                match (k.as_str(), x) {
+                    ("$ref", Value::String(r)) => out.push(r.clone()),
+                    _ => refs(x, out),
+                }
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| refs(x, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn method_schemas_are_self_contained() {
+    let d = api::describe();
+    let methods = d["methods"].as_object().unwrap();
+    for (name, method) in methods {
+        for key in ["params_schema", "result_schema"] {
+            let schema = &method[key];
+            if schema.is_null() {
+                continue;
+            }
+            let mut found = Vec::new();
+            refs(schema, &mut found);
+            for r in found {
+                let def = r
+                    .strip_prefix("#/$defs/")
+                    .unwrap_or_else(|| panic!("{name} {key}: ref {r} is not to $defs"));
+                assert!(
+                    schema["$defs"][def].is_object(),
+                    "{name} {key}: ref {r} does not resolve"
+                );
+            }
+        }
+    }
+}
+
+/// The variant of a tagged enum schema (`oneOf`/`anyOf` of objects) whose `type` is `tag`.
+fn variant<'a>(schema: &'a Value, tag: &str) -> &'a Value {
+    let variants = schema["oneOf"]
+        .as_array()
+        .or_else(|| schema["anyOf"].as_array())
+        .unwrap();
+    variants
+        .iter()
+        .map(|v| match v["$ref"].as_str() {
+            Some(r) => &schema["$defs"][r.trim_start_matches("#/$defs/")],
+            None => v,
+        })
+        .find(|v| {
+            let t = &v["properties"]["type"];
+            t["const"] == tag || t["enum"] == json!([tag])
+        })
+        .unwrap_or_else(|| panic!("no variant {tag}"))
+}
+
+#[test]
+fn command_schemas_have_an_object_root_and_bounded_points() {
+    let d = api::describe();
+    for name in [
+        "Command",
+        "Query",
+        "EditorCommand",
+        "EditorQuery",
+        "ScreenCommand",
+    ] {
+        assert_eq!(d["schemas"][name]["type"], "object", "{name}");
+    }
+    let bounded = |p: &Value| {
+        assert_eq!(p["items"]["minimum"], -1e6, "{p}");
+        assert_eq!(p["items"]["maximum"], 1e6, "{p}");
+    };
+    let command = &d["schemas"]["Command"];
+    let add_edge = variant(command, "add_edge");
+    bounded(&add_edge["properties"]["start"]);
+    bounded(&add_edge["properties"]["end"]);
+    bounded(&variant(command, "add_arc")["properties"]["through"]);
+    bounded(&variant(command, "set_camera")["properties"]["eye"]);
+    // Directions are not points: they stay unbounded.
+    let guide = variant(command, "add_guide_line");
+    bounded(&guide["properties"]["point"]);
+    assert!(guide["properties"]["direction"]["items"]["maximum"].is_null());
+    // The API's own model points carry the bounds too.
+    let tool_input = d["schemas"]["ToolInput"].to_string();
+    assert!(tool_input.contains("1000000.0"), "{tool_input}");
 }

@@ -7,10 +7,10 @@ use glam::{DVec2, DVec3};
 use kernel::EntityId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use session::SelectMode;
 use session::{
     Camera, CommandError, Document, ErrorKind, Projection, Ray, check_coordinates, unit_vector,
 };
+use session::{ModelPoint, SelectMode};
 use tools::{Axis, Guides, Reach, Scenery, Slab, SnapKind, infer_detail, pick, select_box};
 
 use crate::dispatch::MAX_IMAGE_SIDE;
@@ -34,7 +34,9 @@ pub const MAX_INFER_RADIUS: f64 = 100.0;
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct View {
+    #[schemars(with = "ModelPoint")]
     pub eye: [f64; 3],
+    #[schemars(with = "ModelPoint")]
     pub target: [f64; 3],
     pub fov_y_deg: Option<f64>,
     pub up: Option<[f64; 3]>,
@@ -58,6 +60,7 @@ impl View {
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RaySpec {
+    #[schemars(with = "ModelPoint")]
     pub origin: [f64; 3],
     /// Any finite, non-zero length.
     pub direction: [f64; 3],
@@ -89,12 +92,14 @@ pub struct InferQuery {
     /// A point of the view, in pixels from its top left corner. Give it or `point`.
     pub pixel: Option<[f64; 2]>,
     /// A model point, looked for where the view shows it.
+    #[schemars(with = "Option<ModelPoint>")]
     pub point: Option<[f64; 3]>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub camera: Option<View>,
     /// The point a tool is drawing from, as after a tool's first click: snaps along the axes
     /// from it are offered.
+    #[schemars(with = "Option<ModelPoint>")]
     pub from: Option<[f64; 3]>,
     /// How far from the pixel to snap, in pixels (default 8).
     pub radius: Option<f64>,

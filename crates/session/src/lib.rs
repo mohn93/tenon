@@ -11,6 +11,7 @@ mod import;
 mod query;
 mod rectangle;
 mod rotate;
+mod schema;
 mod sniff;
 pub mod texture;
 
@@ -35,3 +36,4 @@ pub use query::{
 };
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;
+pub use schema::ModelPoint;

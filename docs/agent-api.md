@@ -30,6 +30,16 @@ path is replaced on the next start).
 Call `describe` first: it returns every method, notification, error code and the JSON Schemas of
 all commands and results.
 
+- `schema_version` is 2.
+- Each method has `params_schema` and `result_schema`: JSON Schemas for its params and result,
+  each self-contained (its `$ref`s point into its own `$defs`). `execute` params are any of
+  Command, ScreenCommand and EditorCommand; `query` params any of Query and EditorQuery.
+  `subscribe` and `describe` take no params (`params_schema` null).
+- The `schemas` entries for Command, Query, EditorQuery, EditorCommand and ScreenCommand have
+  `"type": "object"` at the root beside their `oneOf`.
+- Model points (positions, not directions, normals or move offsets) are arrays of three numbers
+  each within +/-1e6 m, the limit commands check, and the schemas say so.
+
 | Method | Params | Result |
 |---|---|---|
 | `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, and `purged` for `purge_definitions` |

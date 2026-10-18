@@ -5,7 +5,7 @@ use kernel::ChangeSummary;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use session::{
     BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind, Lighting, Outcome,
     Query, QueryResult,
@@ -20,6 +20,7 @@ use crate::probe::{
 };
 use crate::protocol::{RpcError, codes, failure, parse, success};
 use crate::roots::ApiRoots;
+use crate::schema::{any_of_root, hoist, object_root};
 
 /// Largest image side `render_view` accepts, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 4096;
@@ -39,6 +40,32 @@ pub struct BatchResult {
     /// The net effect of the whole batch (made then erased is absent).
     pub changes: ChangeSummary,
     pub revision: u64,
+}
+
+/// The reply to `execute` of an editor command: the editor after it and the revision.
+#[derive(Serialize, JsonSchema)]
+struct EditorResult {
+    editor: Option<EditorState>,
+    revision: u64,
+}
+
+/// `batch`'s params.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BatchParams {
+    commands: Vec<Command>,
+    #[serde(default)]
+    atomic: bool,
+}
+
+/// `render_view`'s params.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RenderParams {
+    width: u32,
+    height: u32,
+    camera: Option<View>,
+    lighting: Option<Lighting>,
 }
 
 /// What the API needs from the program it runs in (the window app or headless mode).
@@ -177,7 +204,10 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
         "execute" if type_of(&params).is_some_and(|t| EDITOR_COMMANDS.contains(&t)) => {
             let command: EditorCommand = params_as(params)?;
             host.editor_command(command).map_err(command_failed)?;
-            Ok(json!({"editor": host.editor(), "revision": host.document().revision()}))
+            Ok(json!(EditorResult {
+                editor: host.editor(),
+                revision: host.document().revision(),
+            }))
         }
         "execute" if type_of(&params) == Some("select") && params.get("box").is_some() => {
             let ScreenCommand::Select { screen_box, mode } = params_as(params)?;
@@ -204,14 +234,7 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
             }))
         }
         "batch" => {
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Params {
-                commands: Vec<Command>,
-                #[serde(default)]
-                atomic: bool,
-            }
-            let p: Params = params_as(params)?;
+            let p: BatchParams = params_as(params)?;
             let mut commands = p.commands;
             for (index, command) in commands.iter_mut().enumerate() {
                 if let Err(error) = within_roots(host, command, true) {
@@ -320,15 +343,7 @@ fn editor_query(host: &mut dyn Host, query: EditorQuery) -> Result<Value, RpcErr
 }
 
 fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Params {
-        width: u32,
-        height: u32,
-        camera: Option<View>,
-        lighting: Option<Lighting>,
-    }
-    let p: Params = params_as(params)?;
+    let p: RenderParams = params_as(params)?;
     let sides = 1..=MAX_IMAGE_SIDE;
     if !sides.contains(&p.width) || !sides.contains(&p.height) {
         return Err(RpcError::new(
@@ -369,7 +384,7 @@ fn encode_png(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
 /// The machine-readable API description: methods, notifications and JSON Schemas.
 pub fn describe() -> Value {
     json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "protocol": "JSON-RPC 2.0, one JSON object per line (UTF-8, '\\n' terminated)",
         "units": "meters; Z is up; angles in degrees",
         "paths": "file paths are absolute or relative to the app's working directory; with --api-root, relative to the first root and kept within the roots after symlinks (query file lists them as api_roots); save and export refuse to replace a file of another format unless overwrite: true",
@@ -377,33 +392,72 @@ pub fn describe() -> Value {
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, revision})",
-                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, revision}: the Outcome plus revision"
+                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, revision}: the Outcome plus revision",
+                "params_schema": any_of_root(vec![
+                    schema::<Command>(),
+                    schema::<ScreenCommand>(),
+                    schema::<EditorCommand>(),
+                ]),
+                "result_schema": any_of_root(vec![schema::<ExecuteResult>(), schema::<EditorResult>()]),
             },
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
-                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed"
+                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed",
+                "params_schema": schema::<BatchParams>(),
+                "result_schema": schema::<BatchResult>(),
             },
             "query": {
                 "params": "Query or EditorQuery",
-                "result": "QueryResult, or for EditorQuery: pick {type, hits: [PickHit]}, infer {type, ...Inferred}, editor {type, ...EditorState}"
+                "result": "QueryResult, or for EditorQuery: pick {type, hits: [PickHit]}, infer {type, ...Inferred}, editor {type, ...EditorState}",
+                "params_schema": any_of_root(vec![schema::<Query>(), schema::<EditorQuery>()]),
+                "result_schema": query_result_schema(),
             },
             "render_view": {
                 "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\"}",
                 "result": "{width, height, png_base64}",
-                "notes": "does not move the document camera or change its lighting"
+                "notes": "does not move the document camera or change its lighting",
+                "params_schema": schema::<RenderParams>(),
+                "result_schema": {
+                    "type": "object",
+                    "properties": {
+                        "width": {"type": "integer"},
+                        "height": {"type": "integer"},
+                        "png_base64": {"type": "string"}
+                    },
+                    "required": ["width", "height", "png_base64"]
+                },
             },
             "tool_input": {
                 "params": "ToolInput: {events: [InputEvent], width?, height?}",
                 "result": "ToolInputResult: {editor, inference, preview, commands: [{command, outcome?, error?}], revision}",
-                "notes": "runs the events through the window's editor and active tool (inference, locks, typed values); a model point is looked for where it is, even behind other geometry, at the pixel the view shows it at its turn; an event that cannot run stops the rest (the ones before it stay done; data: ToolInputStopped); modifiers a modifiers event holds stay held across calls until another lets them go or cancel"
+                "notes": "runs the events through the window's editor and active tool (inference, locks, typed values); a model point is looked for where it is, even behind other geometry, at the pixel the view shows it at its turn; an event that cannot run stops the rest (the ones before it stay done; data: ToolInputStopped); modifiers a modifiers event holds stay held across calls until another lets them go or cancel",
+                "params_schema": schema::<ToolInputParams>(),
+                "result_schema": schema::<ToolInputResult>(),
             },
-            "subscribe": {"params": null, "result": "{revision}", "notes": "connection only"},
-            "describe": {"params": null, "result": "this document"},
+            "subscribe": {
+                "params": null,
+                "result": "{revision}",
+                "notes": "connection only",
+                "params_schema": null,
+                "result_schema": {
+                    "type": "object",
+                    "properties": {"revision": {"type": "integer", "minimum": 0}},
+                    "required": ["revision"]
+                },
+            },
+            "describe": {
+                "params": null,
+                "result": "this document",
+                "params_schema": null,
+                "result_schema": {"type": "object"},
+            },
             "quit": {
                 "params": "{discard?: bool}",
                 "result": "{}",
-                "notes": "ends the program after replying; fails with unsaved_changes unless discard (the window keeps discarded work in a recovery file); once accepted, every later request is refused"
+                "notes": "ends the program after replying; fails with unsaved_changes unless discard (the window keeps discarded work in a recovery file); once accepted, every later request is refused",
+                "params_schema": {"type": "object", "properties": {"discard": {"type": "boolean"}}},
+                "result_schema": {"type": "object"},
             }
         },
         "notifications": {
@@ -420,23 +474,59 @@ pub fn describe() -> Value {
             "-32001": "batch failed (data: BatchError)", "-32002": "rendering unavailable"
         },
         "schemas": {
-            "Command": schema_for!(Command),
-            "Query": schema_for!(Query),
-            "EditorQuery": schema_for!(EditorQuery),
+            "Command": object_root(schema::<Command>()),
+            "Query": object_root(schema::<Query>()),
+            "EditorQuery": object_root(schema::<EditorQuery>()),
             "PickHit": schema_for!(PickHit),
             "Inferred": schema_for!(Inferred),
-            "ScreenCommand": schema_for!(ScreenCommand),
-            "EditorCommand": schema_for!(EditorCommand),
+            "ScreenCommand": object_root(schema::<ScreenCommand>()),
+            "EditorCommand": object_root(schema::<EditorCommand>()),
             "EditorState": schema_for!(EditorState),
             "ToolInput": schema_for!(ToolInputParams),
             "ToolInputResult": schema_for!(ToolInputResult),
             "ToolInputStopped": schema_for!(ToolInputStopped),
             "QueryResult": schema_for!(QueryResult),
             "Outcome": schema_for!(Outcome),
+            "ExecuteResult": schema_for!(ExecuteResult),
+            "BatchResult": schema_for!(BatchResult),
             "CommandError": schema_for!(CommandError),
             "BatchError": schema_for!(BatchError),
             "ChangeEvent": schema_for!(ChangeEvent),
         }
+    })
+}
+
+/// `T`'s JSON Schema as JSON, self-contained (its definitions under `$defs`).
+fn schema<T: JsonSchema>() -> Value {
+    schema_for!(T).into()
+}
+
+/// What `query` returns: a `QueryResult`, or for an `EditorQuery` its pick, infer or editor
+/// reply, each tagged with `type`.
+fn query_result_schema() -> Value {
+    let mut defs = Map::new();
+    let tagged = |tag: &str| json!({"properties": {"type": {"const": tag}}, "required": ["type"]});
+    let query_result = hoist(&mut defs, schema::<QueryResult>());
+    let pick_hit = hoist(&mut defs, schema::<PickHit>());
+    let inferred = hoist(&mut defs, schema::<Inferred>());
+    let editor = hoist(&mut defs, schema::<EditorState>());
+    let pick = json!({
+        "type": "object",
+        "properties": {
+            "type": {"const": "pick"},
+            "hits": {"type": "array", "items": pick_hit}
+        },
+        "required": ["type", "hits"]
+    });
+    json!({
+        "type": "object",
+        "anyOf": [
+            query_result,
+            pick,
+            {"allOf": [inferred, tagged("infer")]},
+            {"allOf": [editor, tagged("editor")]}
+        ],
+        "$defs": defs
     })
 }
 

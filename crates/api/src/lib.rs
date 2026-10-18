@@ -9,6 +9,7 @@ mod input;
 mod probe;
 mod protocol;
 mod roots;
+pub mod schema;
 mod transport;
 
 pub use dispatch::{BatchResult, EditorQuery, ExecuteResult, Host, describe, handle};

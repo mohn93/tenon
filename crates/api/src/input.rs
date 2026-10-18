@@ -5,7 +5,7 @@
 use glam::{DVec2, DVec3};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use session::{Command, CommandError, ErrorKind, Outcome, check_coordinates};
+use session::{Command, CommandError, ErrorKind, ModelPoint, Outcome, check_coordinates};
 
 use crate::dispatch::MAX_IMAGE_SIDE;
 use crate::editor::EditorState;
@@ -45,11 +45,13 @@ pub enum InputEvent {
     /// The cursor moves there: the tool's preview and the inference follow.
     Move {
         pixel: Option<[f64; 2]>,
+        #[schemars(with = "Option<ModelPoint>")]
         point: Option<[f64; 3]>,
     },
     /// The button goes down there.
     Down {
         pixel: Option<[f64; 2]>,
+        #[schemars(with = "Option<ModelPoint>")]
         point: Option<[f64; 3]>,
         #[serde(default)]
         button: MouseButton,
@@ -57,6 +59,7 @@ pub enum InputEvent {
     /// The button comes up there.
     Up {
         pixel: Option<[f64; 2]>,
+        #[schemars(with = "Option<ModelPoint>")]
         point: Option<[f64; 3]>,
         #[serde(default)]
         button: MouseButton,
@@ -64,6 +67,7 @@ pub enum InputEvent {
     /// Move, down and up in one place.
     Click {
         pixel: Option<[f64; 2]>,
+        #[schemars(with = "Option<ModelPoint>")]
         point: Option<[f64; 3]>,
         #[serde(default)]
         button: MouseButton,
@@ -72,12 +76,14 @@ pub enum InputEvent {
     /// selects a face with its edges or an edge with its faces).
     DoubleClick {
         pixel: Option<[f64; 2]>,
+        #[schemars(with = "Option<ModelPoint>")]
         point: Option<[f64; 3]>,
     },
     /// Three left clicks in one place, then the double- and triple-click (the Select tool
     /// selects everything connected).
     TripleClick {
         pixel: Option<[f64; 2]>,
+        #[schemars(with = "Option<ModelPoint>")]
         point: Option<[f64; 3]>,
     },
     /// Down at the first place, moving through the others, up at the last (at least two):
@@ -86,6 +92,7 @@ pub enum InputEvent {
         #[serde(default)]
         pixels: Vec<[f64; 2]>,
         #[serde(default)]
+        #[schemars(with = "Vec<ModelPoint>")]
         points: Vec<[f64; 3]>,
         #[serde(default)]
         button: MouseButton,

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::camera::{Lighting, Projection, StandardView};
 use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
+use crate::schema::ModelPoint;
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
@@ -18,12 +19,19 @@ use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     /// Draw a straight edge. Sticky-geometry rules apply (merging, splitting, auto faces).
-    AddEdge { start: [f64; 3], end: [f64; 3] },
+    AddEdge {
+        #[schemars(with = "ModelPoint")]
+        start: [f64; 3],
+        #[schemars(with = "ModelPoint")]
+        end: [f64; 3],
+    },
     /// Draw a rectangle from one corner to the opposite one, as one undo step. Its sides follow
     /// the world axes on axis planes. `normal` picks the plane; without it the corners must
     /// differ in exactly two coordinates.
     AddRectangle {
+        #[schemars(with = "ModelPoint")]
         corner: [f64; 3],
+        #[schemars(with = "ModelPoint")]
         opposite: [f64; 3],
         #[serde(default)]
         normal: Option<[f64; 3]>,
@@ -32,6 +40,7 @@ pub enum Command {
     /// `center` with `radius`, in the plane with `normal` (default Z), as one undo step. The
     /// first corner lies along the plane's u axis (see `add_rectangle`).
     AddCircle {
+        #[schemars(with = "ModelPoint")]
         center: [f64; 3],
         radius: f64,
         #[serde(default)]
@@ -49,13 +58,17 @@ pub enum Command {
     /// the Arc tool draws it.
     AddArc {
         #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
         center: Option<[f64; 3]>,
+        #[schemars(with = "ModelPoint")]
         start: [f64; 3],
         #[serde(default)]
         angle: Option<f64>,
         #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
         end: Option<[f64; 3]>,
         #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
         through: Option<[f64; 3]>,
         #[serde(default)]
         bulge: Option<f64>,
@@ -71,11 +84,15 @@ pub enum Command {
     /// length), as one undo step. Guides are construction geometry: tools snap to them, they
     /// bound no faces and are not exported.
     AddGuideLine {
+        #[schemars(with = "ModelPoint")]
         point: [f64; 3],
         direction: [f64; 3],
     },
     /// Add a guide point at `position`, as one undo step.
-    AddGuidePoint { position: [f64; 3] },
+    AddGuidePoint {
+        #[schemars(with = "ModelPoint")]
+        position: [f64; 3],
+    },
     /// Erase every guide of the open context, as one undo step (nothing to erase is not an
     /// error and makes no undo step).
     DeleteGuides {},
@@ -107,6 +124,7 @@ pub enum Command {
     /// are made instead, copy k turned by `k * angle`, under the rules of `Copy`.
     Rotate {
         ids: Vec<EntityId>,
+        #[schemars(with = "ModelPoint")]
         center: [f64; 3],
         #[serde(default)]
         axis: Option<[f64; 3]>,
@@ -331,7 +349,9 @@ pub enum Command {
     /// `up` (default +Y); any other view has +Z up and ignores `up`. Camera commands are not
     /// recorded in undo history and do not change the model's revision.
     SetCamera {
+        #[schemars(with = "ModelPoint")]
         eye: [f64; 3],
+        #[schemars(with = "ModelPoint")]
         target: [f64; 3],
         fov_y_deg: Option<f64>,
         #[serde(default)]
@@ -349,6 +369,7 @@ pub enum Command {
         #[serde(default)]
         pitch: f64,
         #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
         about: Option<[f64; 3]>,
     },
     /// Move the eye and target together, `right` and `up` meters along the screen's right
@@ -370,6 +391,7 @@ pub enum Command {
     Zoom {
         factor: f64,
         #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
         about: Option<[f64; 3]>,
     },
     /// Keep the view direction and fit the whole model (every vertex and placed instance, in

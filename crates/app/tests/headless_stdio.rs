@@ -79,7 +79,7 @@ fn headless_stdio_session() {
         render["result"]["png_base64"].is_string() || render["error"]["code"] == -32002,
         "render_view: {render}"
     );
-    assert_eq!(replies[&5]["result"]["schema_version"], 1);
+    assert_eq!(replies[&5]["result"]["schema_version"], 2);
 
     let changed: Vec<&Value> = messages
         .iter()
