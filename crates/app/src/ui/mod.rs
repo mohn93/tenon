@@ -131,6 +131,8 @@ pub enum UiAction {
     ResetTexturePosition,
     /// Open this recent file (after asking about unsaved changes).
     OpenRecent(PathBuf),
+    /// Empty the recent files, and keep that in the preferences.
+    ClearRecent,
     /// Hide the empty-model card for the rest of the session.
     DismissStart,
 }
@@ -227,6 +229,8 @@ pub struct View<'a> {
     pub camera: &'a Camera,
     /// The card over an empty, unedited model; None: hidden.
     pub start: Option<StartCard<'a>>,
+    /// The recent files as kept in the preferences, newest first (File > Open Recent).
+    pub recent: &'a [PathBuf],
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.

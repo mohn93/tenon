@@ -1,15 +1,17 @@
 //! The menu bar as macOS's own, through muda: built once from `menus::menu_bar`, then synced
-//! each frame (labels, enabled flags, checks). Every Cmd chord is an item's accelerator, so the
-//! menu acts on it and the window's key path leaves it alone (`shortcuts::window_command`).
+//! each frame (labels, enabled flags, checks). Open Recent is the one submenu rebuilt, when its
+//! list changes. Every Cmd chord is an item's accelerator, so the menu acts on it and the
+//! window's key path leaves it alone (`shortcuts::window_command`).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSEventType};
 
-use crate::menus::{self, APP_MENU, Entry, item_id, native_enabled};
+use crate::menus::{self, APP_MENU, Entry, OPEN_RECENT, item_id, native_enabled};
 use crate::shortcuts::{Chord, Key};
 use crate::ui::UiAction;
 
@@ -18,6 +20,8 @@ pub struct NativeMenu {
     /// Kept alive: it is the app's main menu.
     _menu: Menu,
     items: HashMap<String, Native>,
+    /// The Open Recent submenu and the paths it lists now.
+    recent: Option<(Submenu, Vec<PathBuf>)>,
 }
 
 /// One item and what was last applied to it.
@@ -39,6 +43,7 @@ impl NativeMenu {
     pub fn new(bar: &[menus::Menu]) -> Self {
         let menu = Menu::new();
         let mut items = HashMap::new();
+        let mut recent = None;
         for m in bar {
             let submenu = Submenu::new(m.title, true);
             if m.title == APP_MENU {
@@ -59,16 +64,21 @@ impl NativeMenu {
                     append(&submenu, item);
                 }
             }
-            add_entries(&submenu, &m.entries, &mut items);
+            add_entries(&submenu, &m.entries, &mut items, &mut recent);
             menu.append(&submenu).expect("add a menu to the menu bar");
         }
         menu.init_for_nsapp();
-        Self { _menu: menu, items }
+        Self {
+            _menu: menu,
+            items,
+            recent,
+        }
     }
 
     /// Brings the items up to date with `bar`, touching only what changed. Checks are compared
     /// with the item's own state: a check item toggles itself when clicked.
     pub fn sync(&mut self, bar: &[menus::Menu], text_focused: bool) {
+        self.sync_recent(bar);
         for item in menus::items(bar) {
             let Some(native) = self.items.get_mut(&item_id(&item.action)) else {
                 continue;
@@ -97,6 +107,24 @@ impl NativeMenu {
         }
     }
 
+    /// Rebuilds the Open Recent submenu when `bar` lists other paths than it shows. Its new
+    /// items are then synced with the rest.
+    fn sync_recent(&mut self, bar: &[menus::Menu]) {
+        let Some((submenu, shown)) = &mut self.recent else {
+            return;
+        };
+        let paths = menus::recent_paths(bar);
+        if *shown == paths {
+            return;
+        }
+        while let Some(old) = submenu.remove_at(0) {
+            self.items.remove(old.id().as_ref());
+        }
+        let entries = menus::recent_entries_in(bar).unwrap_or_default();
+        add_entries(submenu, entries, &mut self.items, &mut None);
+        *shown = paths;
+    }
+
     /// What the item with `id` does now.
     pub fn action(&self, id: &str) -> Option<UiAction> {
         self.items.get(id).map(|n| n.action.clone())
@@ -107,7 +135,14 @@ fn append(submenu: &Submenu, item: &dyn IsMenuItem) {
     submenu.append(item).expect("add an item to a menu");
 }
 
-fn add_entries(submenu: &Submenu, entries: &[Entry], items: &mut HashMap<String, Native>) {
+/// Appends `entries` to `submenu`, recording each item in `items`. The Open Recent submenu,
+/// when met, is kept in `recent` with the paths it lists.
+fn add_entries(
+    submenu: &Submenu,
+    entries: &[Entry],
+    items: &mut HashMap<String, Native>,
+    recent: &mut Option<(Submenu, Vec<PathBuf>)>,
+) {
     for entry in entries {
         match entry {
             Entry::Item(item) => {
@@ -147,8 +182,11 @@ fn add_entries(submenu: &Submenu, entries: &[Entry], items: &mut HashMap<String,
             Entry::Separator => append(submenu, &PredefinedMenuItem::separator()),
             Entry::Submenu { label, entries } => {
                 let inner = Submenu::new(*label, true);
-                add_entries(&inner, entries, items);
+                add_entries(&inner, entries, items, recent);
                 append(submenu, &inner);
+                if *label == OPEN_RECENT {
+                    *recent = Some((inner, menus::recent_paths_of(entries)));
+                }
             }
         }
     }

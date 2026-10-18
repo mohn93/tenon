@@ -1,6 +1,8 @@
 //! The menu bar as data: one table built from the panels' `View`, drawn as egui menus by
 //! `ui::menu_bar` and, on macOS, as the native menu bar by `native_menu`.
 
+use std::path::{Path, PathBuf};
+
 use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
 
@@ -11,6 +13,9 @@ use crate::ui::{FLY_HELP, UiAction, View, step_name};
 
 /// The title of the native app menu (macOS), which holds Quit.
 pub const APP_MENU: &str = "sketchup-alt";
+
+/// The File submenu that lists the recent files: the one submenu whose items change.
+pub const OPEN_RECENT: &str = "Open Recent";
 
 /// One menu of the bar.
 pub struct Menu {
@@ -34,7 +39,7 @@ pub struct Item {
     pub enabled: bool,
     /// Some for an item drawn with a check (a choice or a mode).
     pub checked: Option<bool>,
-    pub tooltip: Option<&'static str>,
+    pub tooltip: Option<String>,
 }
 
 impl Item {
@@ -64,8 +69,8 @@ impl Item {
         self
     }
 
-    fn tooltip(mut self, tooltip: &'static str) -> Self {
-        self.tooltip = Some(tooltip);
+    fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
         self
     }
 
@@ -90,6 +95,10 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
     let mut file = vec![
         bound_item("New", Bound::NewModel, UiAction::NewModel).entry(),
         bound_item("Open...", Bound::OpenFile, UiAction::OpenFile).entry(),
+        Entry::Submenu {
+            label: OPEN_RECENT,
+            entries: recent_entries(view.recent),
+        },
         bound_item("Save", Bound::SaveFile, UiAction::SaveFile).entry(),
         bound_item("Save As...", Bound::SaveFileAs, UiAction::SaveFileAs).entry(),
         Entry::Separator,
@@ -282,6 +291,76 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         entries: help,
     });
     menus
+}
+
+/// The Open Recent rows, newest first, each with its full path as tooltip, then Clear Menu
+/// (disabled when there is nothing to clear).
+fn recent_entries(recent: &[PathBuf]) -> Vec<Entry> {
+    let mut entries: Vec<Entry> = recent
+        .iter()
+        .map(|p| {
+            Item::new(recent_label(p, recent), UiAction::OpenRecent(p.clone()))
+                .tooltip(p.display().to_string())
+                .entry()
+        })
+        .collect();
+    if !entries.is_empty() {
+        entries.push(Entry::Separator);
+    }
+    entries.push(
+        Item::new("Clear Menu", UiAction::ClearRecent)
+            .enabled(!recent.is_empty())
+            .entry(),
+    );
+    entries
+}
+
+/// A recent file's menu label: its file name, with " — <parent folder>" when another
+/// entry in `recent` has the same file name.
+pub fn recent_label(path: &Path, recent: &[PathBuf]) -> String {
+    let name = path.file_name().unwrap_or(path.as_os_str());
+    let label = name.to_string_lossy().into_owned();
+    let shared = recent
+        .iter()
+        .any(|p| p != path && p.file_name() == Some(name));
+    match path.parent().and_then(Path::file_name) {
+        Some(folder) if shared => format!("{label} \u{2014} {}", folder.to_string_lossy()),
+        _ => label,
+    }
+}
+
+/// The entries of the Open Recent submenu in `bar`.
+#[cfg(any(target_os = "macos", test))]
+pub fn recent_entries_in(bar: &[Menu]) -> Option<&[Entry]> {
+    fn find(entries: &[Entry]) -> Option<&[Entry]> {
+        entries.iter().find_map(|entry| match entry {
+            Entry::Submenu { label, entries } if *label == OPEN_RECENT => Some(entries.as_slice()),
+            Entry::Submenu { entries, .. } => find(entries),
+            _ => None,
+        })
+    }
+    bar.iter().find_map(|m| find(&m.entries))
+}
+
+/// The paths the Open Recent submenu lists in `bar`, in order.
+#[cfg(any(target_os = "macos", test))]
+pub fn recent_paths(bar: &[Menu]) -> Vec<PathBuf> {
+    recent_paths_of(recent_entries_in(bar).unwrap_or_default())
+}
+
+/// The paths of the Open Recent rows among `entries`, in order.
+#[cfg(any(target_os = "macos", test))]
+pub fn recent_paths_of(entries: &[Entry]) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Item(Item {
+                action: UiAction::OpenRecent(path),
+                ..
+            }) => Some(path.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Every item, depth first.

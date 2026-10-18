@@ -79,6 +79,8 @@ pub(super) struct Fixture {
     pub camera: Camera,
     /// The empty-model card's recent files, when it shows.
     pub start: Option<Vec<PathBuf>>,
+    /// The recent files File > Open Recent lists, newest first.
+    pub recent: Vec<PathBuf>,
 }
 
 impl Default for Fixture {
@@ -129,6 +131,7 @@ impl Default for Fixture {
             cursor: egui::CursorIcon::Default,
             camera: Camera::new(glam::DVec2::new(1280.0, 800.0)),
             start: None,
+            recent: Vec::new(),
         }
     }
 }
@@ -170,6 +173,7 @@ impl Fixture {
             cursor: self.cursor,
             camera: &self.camera,
             start: self.start.as_deref().map(|recent| StartCard { recent }),
+            recent: &self.recent,
         }
     }
 

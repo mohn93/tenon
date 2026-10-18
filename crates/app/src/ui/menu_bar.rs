@@ -37,8 +37,8 @@ fn entries(ui: &mut Ui, list: &[Entry], actions: &mut Vec<UiAction>) {
                         response
                     }
                 };
-                let response = match item.tooltip {
-                    Some(tip) => response.on_hover_text(tip),
+                let response = match &item.tooltip {
+                    Some(tip) => response.on_hover_text(tip.as_str()),
                     None => response,
                 };
                 if response.clicked() {

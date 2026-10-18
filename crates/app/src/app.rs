@@ -1037,6 +1037,13 @@ impl State {
                     self.remember_file();
                 }
             }
+            UiAction::ClearRecent => {
+                if !self.prefs.recent.is_empty() {
+                    self.prefs.recent.clear();
+                    self.recent_shown.clear();
+                    self.save_prefs();
+                }
+            }
             UiAction::DismissStart => self.start_dismissed = true,
         }
     }
@@ -1250,6 +1257,7 @@ impl State {
                 .then_some(StartCard {
                     recent: &self.recent_shown,
                 }),
+            recent: &self.prefs.recent,
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]

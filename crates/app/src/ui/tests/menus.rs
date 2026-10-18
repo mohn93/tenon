@@ -14,6 +14,91 @@ fn the_file_menu_reports_its_items() {
         let mut h = harness(Fixture::default());
         assert_eq!(click_menu(&mut h, &["File", item]), [action], "{item}");
     }
+    // Open Recent sits between Open... and Save.
+    let bar = crate::menus::menu_bar(&Fixture::default().view(), false);
+    let file = &bar.iter().find(|m| m.title == "File").unwrap().entries;
+    let labels: Vec<&str> = file
+        .iter()
+        .take(4)
+        .map(|entry| match entry {
+            crate::menus::Entry::Item(i) => i.label.as_str(),
+            crate::menus::Entry::Submenu { label, .. } => label,
+            crate::menus::Entry::Separator => "-",
+        })
+        .collect();
+    assert_eq!(labels, ["New", "Open...", "Open Recent", "Save"]);
+}
+
+// egui names a submenu's button with its arrow.
+const OPEN_RECENT: &str = "Open Recent \u{23F5}";
+
+fn with_recent(paths: &[&str]) -> Fixture {
+    Fixture {
+        recent: paths.iter().map(PathBuf::from).collect(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn open_recent_lists_the_recent_files_and_clears() {
+    let f = || with_recent(&["/a/house.skr", "/b/shed.skr"]);
+    let mut h = harness(f());
+    click(&mut h, "File");
+    click(&mut h, OPEN_RECENT);
+    assert!(
+        rect_of(&h, "house.skr").min.y < rect_of(&h, "shed.skr").min.y,
+        "newest first"
+    );
+    assert_eq!(
+        click_menu(&mut harness(f()), &["File", OPEN_RECENT, "shed.skr"]),
+        [UiAction::OpenRecent("/b/shed.skr".into())]
+    );
+    assert_eq!(
+        click_menu(&mut harness(f()), &["File", OPEN_RECENT, "Clear Menu"]),
+        [UiAction::ClearRecent]
+    );
+
+    // Nothing to list: no file rows, and Clear Menu does nothing.
+    let mut h = harness(Fixture::default());
+    let there = rects_named(&h, "Clear Menu");
+    click(&mut h, "File");
+    click(&mut h, OPEN_RECENT);
+    assert!(
+        new_node(&h, "Clear Menu", &there)
+            .accesskit_node()
+            .is_disabled()
+    );
+    new_node(&h, "Clear Menu", &there).click();
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+    let bar = crate::menus::menu_bar(&Fixture::default().view(), true);
+    let entries = crate::menus::recent_entries_in(&bar).unwrap();
+    assert!(matches!(entries, [crate::menus::Entry::Item(i)] if i.action == UiAction::ClearRecent));
+}
+
+#[test]
+fn recent_labels_tell_same_names_apart() {
+    use crate::menus::recent_label;
+    let twins = [
+        PathBuf::from("/a/Old/house.skr"),
+        PathBuf::from("/a/New/house.skr"),
+    ];
+    assert_eq!(recent_label(&twins[0], &twins), "house.skr \u{2014} Old");
+    assert_eq!(recent_label(&twins[1], &twins), "house.skr \u{2014} New");
+    let alone = [PathBuf::from("/a/shed.skr")];
+    assert_eq!(recent_label(&alone[0], &alone), "shed.skr");
+}
+
+#[test]
+fn recent_paths_reads_the_submenu() {
+    use crate::menus::{menu_bar, recent_paths};
+    let f = with_recent(&["/a/house.skr", "/b/shed.skr"]);
+    assert_eq!(recent_paths(&menu_bar(&f.view(), true)), f.recent);
+    let empty = Fixture::default();
+    assert_eq!(
+        recent_paths(&menu_bar(&empty.view(), true)),
+        Vec::<PathBuf>::new()
+    );
 }
 
 #[test]
@@ -560,9 +645,11 @@ fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
 #[test]
 fn the_menu_bar_has_the_same_items_in_every_state() {
     use crate::menus::{item_id, items, menu_bar};
+    // The Open Recent rows are the stated exception: that submenu is rebuilt when they change.
     let ids = |f: &Fixture| {
         items(&menu_bar(&f.view(), true))
             .iter()
+            .filter(|i| !matches!(i.action, UiAction::OpenRecent(_)))
             .map(|i| item_id(&i.action))
             .collect::<Vec<_>>()
     };
@@ -576,6 +663,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
         has_guides: true,
         flying: true,
         lighting,
+        recent: vec!["/a/house.skr".into(), "/b/shed.skr".into()],
         ..Default::default()
     };
     assert_eq!(
