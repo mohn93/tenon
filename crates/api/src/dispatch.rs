@@ -199,7 +199,8 @@ pub(crate) fn respond(host: &mut dyn Host, line: &str) -> Option<(String, Option
     })
 }
 
-fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcError> {
+/// Runs one request's method with its params and returns the result or the error to send.
+pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcError> {
     match method {
         "execute" if type_of(&params).is_some_and(|t| EDITOR_COMMANDS.contains(&t)) => {
             let command: EditorCommand = params_as(params)?;

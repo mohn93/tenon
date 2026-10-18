@@ -6,13 +6,14 @@ mod editor;
 mod headless;
 mod hub;
 mod input;
+pub mod mcp;
 mod probe;
 mod protocol;
 mod roots;
 pub mod schema;
 mod transport;
 
-pub use dispatch::{BatchResult, EditorQuery, ExecuteResult, Host, describe, handle};
+pub use dispatch::{BatchResult, EditorQuery, ExecuteResult, Host, call, describe, handle};
 pub use editor::{Dialog, EditorCommand, EditorState, MessageKind, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{ACTIVITY_LEN, Activity, Hub, Inbox};
@@ -24,6 +25,6 @@ pub use probe::{
     AxisName, InferQuery, Inferred, PickHit, PickQuery, Placed, RaySpec, ScreenBox, ScreenCommand,
     Snap, View, snap_name,
 };
-pub use protocol::{MAX_LINE_BYTES, codes};
+pub use protocol::{MAX_LINE_BYTES, RpcError, codes};
 pub use roots::ApiRoots;
 pub use transport::{listen_unix, serve_stdio, serve_stream};

@@ -18,6 +18,8 @@ pub mod codes {
     pub const BATCH_FAILED: i64 = -32001;
     /// `render_view` was asked for but no GPU is available.
     pub const RENDER_UNAVAILABLE: i64 = -32002;
+    /// The MCP adapter lost its connection to the app; every later call fails with it.
+    pub const CONNECTION_LOST: i64 = -32003;
 }
 
 /// An error to send back: code, message and optional structured data.
@@ -74,6 +76,11 @@ pub fn parse(line: &str) -> Result<Request, String> {
             RpcError::new(codes::PARSE_ERROR, format!("parse error: {e}")),
         )
     })?;
+    parse_value(&v)
+}
+
+/// [`parse`] for a line already parsed as JSON.
+pub fn parse_value(v: &Value) -> Result<Request, String> {
     let invalid = |id: &Value, why: &str| {
         failure(
             id,
