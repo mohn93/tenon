@@ -27,7 +27,7 @@ use tools::{
 
 use crate::feedback::{Chip, Hud};
 use crate::fly::{self, Fly, FlyKey};
-use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll};
+use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll, TrackpadScroll};
 use crate::shortcuts::{self, Bound};
 
 mod agent;
@@ -842,6 +842,12 @@ impl Editor {
             return self.fly_scroll(scroll);
         }
         self.navigate(|nav, cam, pick| nav.scroll(cam, scroll, pick))
+    }
+
+    /// Sets what a plain trackpad scroll does (the window's Settings; headless and the API
+    /// keep Orbit). Fly mode's scrolling is the same either way.
+    pub fn set_trackpad(&mut self, mode: TrackpadScroll) {
+        self.nav.set_trackpad(mode);
     }
 
     /// A new trackpad scroll began: its orbit or pan picks a fresh pivot.
@@ -2386,6 +2392,27 @@ mod tests {
             !e.doc().camera.forward().abs_diff_eq(forward, 1e-9),
             "orbits again"
         );
+    }
+
+    #[test]
+    fn the_editor_passes_the_trackpad_setting_on() {
+        let (mut e, p) = raised_face();
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        e.set_trackpad(TrackpadScroll::Zoom);
+        let d = e.doc().camera.eye.distance(p);
+        let forward = e.doc().camera.forward();
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(0.0, 125.0))));
+        assert!(e.doc().camera.eye.distance(p) < d, "zooms toward the face");
+        assert!(e.doc().camera.forward().abs_diff_eq(forward, 1e-12));
+        // Flying, a two-finger scroll still looks around.
+        e.toggle_fly();
+        let eye = e.doc().camera.eye;
+        let (yaw, _) = fly::heading(&e.doc().camera);
+        assert!(e.scroll(Scroll::Pixels(DVec2::new(50.0, 0.0))));
+        let (turned, _) = fly::heading(&e.doc().camera);
+        assert!(turned > yaw, "fingers right turn the view left");
+        assert_eq!(e.doc().camera.eye, eye);
     }
 
     #[test]

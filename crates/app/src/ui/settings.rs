@@ -1,11 +1,12 @@
 //! The Settings window: a non-modal window with an Appearance tab (theme and UI scale) and an
-//! Input tab. Each change is reported at once through `UiAction`; the window holds only which
-//! tab is showing, in egui's memory.
+//! Input tab (what trackpad scrolling does). Each change is reported at once through
+//! `UiAction`; the window holds only which tab is showing, in egui's memory.
 
 use egui::{Button, Id, Ui};
 
 use super::theme::{ThemeChoice, UiScale};
 use super::{SettingsView, UiAction, View};
+use crate::navigation::TrackpadScroll;
 
 /// The window's width, in points.
 const WIDTH: f32 = 380.0;
@@ -55,7 +56,7 @@ pub(super) fn settings_window(
             ui.separator();
             match tab {
                 Tab::Appearance => appearance(ui, view.theme, settings.ui_scale, actions),
-                Tab::Input => {}
+                Tab::Input => input(ui, settings.trackpad, actions),
             }
         });
     ctx.data_mut(|d| d.insert_temp(tab_id(), tab));
@@ -91,4 +92,28 @@ fn appearance(ui: &mut Ui, theme: ThemeChoice, scale: UiScale, actions: &mut Vec
             });
             ui.end_row();
         });
+}
+
+/// What a plain trackpad scroll does: two radio buttons, naming Ctrl for Cmd off macOS.
+fn input(ui: &mut Ui, trackpad: TrackpadScroll, actions: &mut Vec<UiAction>) {
+    let cmd = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else {
+        "Ctrl"
+    };
+    ui.label("Trackpad scroll");
+    for (mode, label) in [
+        (
+            TrackpadScroll::Orbit,
+            format!("Orbits (Shift pans, {cmd} zooms)"),
+        ),
+        (
+            TrackpadScroll::Zoom,
+            format!("Zooms (Shift pans, {cmd} orbits)"),
+        ),
+    ] {
+        if ui.radio(trackpad == mode, label).clicked() && trackpad != mode {
+            actions.push(UiAction::SetTrackpad(mode));
+        }
+    }
 }

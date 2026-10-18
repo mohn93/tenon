@@ -1,4 +1,5 @@
 use super::*;
+use crate::navigation::TrackpadScroll;
 use crate::ui::SettingsView;
 use crate::ui::theme::UiScale;
 
@@ -7,6 +8,7 @@ fn settings_fixture() -> Fixture {
     Fixture {
         settings: Some(SettingsView {
             ui_scale: UiScale::P100,
+            trackpad: TrackpadScroll::Orbit,
         }),
         ..Default::default()
     }
@@ -37,6 +39,55 @@ fn settings_sets_the_theme_and_the_ui_scale() {
 fn the_settings_window_settles_in_one_frame() {
     let mut h = harness(settings_fixture());
     assert_eq!(h.try_run().unwrap(), 1);
+}
+
+/// The Input tab's choice labels, with the window's word for Cmd.
+fn trackpad_labels() -> (String, String) {
+    let cmd = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else {
+        "Ctrl"
+    };
+    (
+        format!("Orbits (Shift pans, {cmd} zooms)"),
+        format!("Zooms (Shift pans, {cmd} orbits)"),
+    )
+}
+
+#[test]
+fn the_input_tab_sets_the_trackpad() {
+    let (orbits, zooms) = trackpad_labels();
+    let mut h = harness(settings_fixture());
+    assert!(h.query_by_label(&orbits).is_none(), "on the Input tab");
+    assert_eq!(click(&mut h, "Input"), []);
+    assert_eq!(is_on(&h, "Input"), Some(true));
+    assert!(
+        h.query_by_label("125%").is_none(),
+        "not on the Appearance tab"
+    );
+    assert!(drawn_texts(&h).iter().any(|t| t == "Trackpad scroll"));
+    assert_eq!(is_on(&h, &orbits), Some(true));
+    assert_eq!(is_on(&h, &zooms), Some(false));
+    assert_eq!(
+        click(&mut h, &zooms),
+        [UiAction::SetTrackpad(TrackpadScroll::Zoom)]
+    );
+    // The tab stays chosen while the window is open.
+    h.run_ok();
+    assert_eq!(is_on(&h, "Input"), Some(true));
+    let mut h = harness(Fixture {
+        settings: Some(SettingsView {
+            ui_scale: UiScale::P100,
+            trackpad: TrackpadScroll::Zoom,
+        }),
+        ..Default::default()
+    });
+    click(&mut h, "Input");
+    assert_eq!(is_on(&h, &zooms), Some(true));
+    assert_eq!(
+        click(&mut h, &orbits),
+        [UiAction::SetTrackpad(TrackpadScroll::Orbit)]
+    );
 }
 
 #[test]

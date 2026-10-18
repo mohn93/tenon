@@ -614,6 +614,7 @@ impl State {
             window.scale_factor(),
         );
         editor.set_import_options(prefs.import);
+        editor.set_trackpad(prefs.trackpad);
         Self {
             window,
             instance,
@@ -1139,6 +1140,13 @@ impl State {
                     self.save_prefs();
                 }
             }
+            UiAction::SetTrackpad(mode) => {
+                if self.prefs.trackpad != mode {
+                    self.prefs.trackpad = mode;
+                    self.editor.set_trackpad(mode);
+                    self.save_prefs();
+                }
+            }
             UiAction::SetDock(dock) => {
                 if self.prefs.dock != dock {
                     self.prefs.dock = dock;
@@ -1413,6 +1421,7 @@ impl State {
             rename: rename.as_ref(),
             settings: self.settings_open.then_some(SettingsView {
                 ui_scale: self.prefs.ui_scale,
+                trackpad: self.prefs.trackpad,
             }),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);

@@ -13,6 +13,7 @@ use tools::ToolKind;
 
 use crate::editor::{ImportOptions, RenameTarget, Status};
 use crate::feedback::Hud;
+use crate::navigation::TrackpadScroll;
 use theme::{ThemeChoice, UiScale};
 
 pub(crate) mod context_bar;
@@ -125,6 +126,8 @@ pub enum UiAction {
     ShowSettings(bool),
     /// Draw the panels at this scale, and keep it in the preferences.
     SetUiScale(UiScale),
+    /// Make plain trackpad scrolling do this, and keep it in the preferences.
+    SetTrackpad(TrackpadScroll),
     /// Lay the dock out so (a resize, a divider drag or a tab chosen), and keep it in the
     /// preferences.
     SetDock(DockLayout),
@@ -264,6 +267,7 @@ pub struct View<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SettingsView {
     pub ui_scale: UiScale,
+    pub trackpad: TrackpadScroll,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.

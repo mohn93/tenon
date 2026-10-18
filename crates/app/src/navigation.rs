@@ -1,4 +1,5 @@
 use glam::{DVec2, DVec3};
+use serde::{Deserialize, Serialize};
 use session::Camera;
 use session::camera::{MIN_DOLLY_DISTANCE, ZOOM_STEP};
 
@@ -25,7 +26,19 @@ pub enum Scroll {
     Pixels(DVec2),
 }
 
-/// Logical pixels of Cmd/Ctrl + trackpad scroll per zoom step.
+/// What a plain two-finger trackpad scroll does (Settings > Input). Shift+scroll pans either
+/// way; Cmd or Ctrl swaps orbiting and zooming.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackpadScroll {
+    /// Orbit; Cmd+scroll zooms.
+    #[default]
+    Orbit,
+    /// Zoom toward the cursor; Cmd+scroll orbits.
+    Zoom,
+}
+
+/// Logical pixels of trackpad scroll per zoom step.
 pub const LOGICAL_PX_PER_ZOOM_STEP: f64 = 100.0;
 /// Most zoom steps one scroll or pinch event may apply, so a hard flick or an accelerated
 /// wheel cannot jump.
@@ -37,7 +50,8 @@ pub const MAX_ZOOM_STEPS_PER_EVENT: f64 = 3.0;
 /// same without a middle button, and the wheel zooms toward the cursor.
 ///
 /// Trackpad (Blender style): two-finger scroll orbits as if dragging the scene, Shift+scroll
-/// pans, Cmd/Ctrl+scroll and pinch zoom toward the cursor.
+/// pans, Cmd/Ctrl+scroll and pinch zoom toward the cursor. With `TrackpadScroll::Zoom`, plain
+/// scroll zooms and Cmd/Ctrl+scroll orbits instead.
 ///
 /// Every move centers on what is under the cursor: the model point the caller picks there,
 /// else the ground within reach, else the point as deep as the target (see
@@ -48,6 +62,8 @@ pub struct Navigation {
     alt: bool,
     /// Cmd or Ctrl.
     command: bool,
+    /// What plain trackpad scrolling does.
+    trackpad: TrackpadScroll,
     /// Physical pixels per logical pixel.
     scale: f64,
     drag: Option<(Button, Drag)>,
@@ -65,6 +81,7 @@ impl Default for Navigation {
             shift: false,
             alt: false,
             command: false,
+            trackpad: TrackpadScroll::default(),
             scale: 1.0,
             drag: None,
             gesture: None,
@@ -78,9 +95,14 @@ impl Navigation {
         self.alt = alt;
     }
 
-    /// Whether Cmd or Ctrl is held: trackpad scrolling then zooms.
+    /// Whether Cmd or Ctrl is held: trackpad scrolling then zooms (orbits in Zoom mode).
     pub fn set_command(&mut self, held: bool) {
         self.command = held;
+    }
+
+    /// Sets what plain trackpad scrolling does.
+    pub fn set_trackpad(&mut self, mode: TrackpadScroll) {
+        self.trackpad = mode;
     }
 
     pub fn set_scale_factor(&mut self, scale: f64) {
@@ -176,19 +198,23 @@ impl Navigation {
         }
     }
 
-    /// A scroll event. A mouse wheel, or Cmd/Ctrl with a trackpad, zooms toward the cursor;
-    /// otherwise trackpad scrolling orbits like a middle drag of the same delta, or pans with
-    /// Shift. `pick` finds the model point under the cursor as the camera given sees it.
-    /// Returns true if the camera moved.
+    /// A scroll event. A mouse wheel zooms toward the cursor. A trackpad zooms too with
+    /// Cmd/Ctrl in Orbit mode, or without it (and without Shift) in Zoom mode; otherwise it
+    /// orbits like a middle drag of the same delta, or pans with Shift. `pick` finds the model
+    /// point under the cursor as the camera given sees it. Returns true if the camera moved.
     pub fn scroll(
         &mut self,
         cam: &mut Camera,
         scroll: Scroll,
         mut pick: impl FnMut(&Camera) -> Option<DVec3>,
     ) -> bool {
+        let trackpad_zooms = match self.trackpad {
+            TrackpadScroll::Orbit => self.command,
+            TrackpadScroll::Zoom => !self.command && !self.shift,
+        };
         let delta = match scroll {
             Scroll::Lines(lines) => return self.zoom(cam, lines.y, pick),
-            Scroll::Pixels(px) if self.command => {
+            Scroll::Pixels(px) if trackpad_zooms => {
                 return self.zoom(cam, px.y / self.scale / LOGICAL_PX_PER_ZOOM_STEP, pick);
             }
             Scroll::Pixels(px) => px,
@@ -529,6 +555,59 @@ mod tests {
         assert!(nav.scroll(&mut cam, Scroll::Pixels(DVec2::new(0.0, px)), |_| None));
         assert!(cam.forward().abs_diff_eq(forward, 1e-12));
         assert!((cam.distance() - d * ZOOM_STEP).abs() < 1e-9);
+    }
+
+    /// The camera after one trackpad scroll of `px` with the trackpad in `mode`, Shift and
+    /// Cmd held or not, on a 2x display.
+    fn scrolled(mode: TrackpadScroll, shift: bool, command: bool, px: DVec2) -> Camera {
+        let (mut nav, mut cam) = setup();
+        nav.set_scale_factor(2.0);
+        nav.set_trackpad(mode);
+        nav.set_modifiers(shift, false);
+        nav.set_command(command);
+        assert!(nav.scroll(&mut cam, Scroll::Pixels(px), |_| None));
+        cam
+    }
+
+    #[test]
+    fn trackpad_zoom_mode_swaps_plain_and_cmd_scroll() {
+        use TrackpadScroll::{Orbit, Zoom};
+        let (_, start) = setup();
+        let px = DVec2::new(0.0, 100.0);
+        // Plain scroll zooms toward the cursor, as Cmd+scroll does in Orbit mode.
+        let zoomed = scrolled(Zoom, false, false, px);
+        assert!(zoomed.distance() < start.distance());
+        assert!(zoomed.forward().abs_diff_eq(start.forward(), 1e-12));
+        assert_eq!(zoomed, scrolled(Orbit, false, true, px));
+        // Cmd+scroll orbits about the pivot, as plain scroll does in Orbit mode.
+        let px = DVec2::new(30.0, -10.0);
+        let pivot = start.anchor_at(DVec2::new(400.0, 300.0));
+        let orbited = scrolled(Zoom, false, true, px);
+        assert!((orbited.eye.distance(pivot) - start.eye.distance(pivot)).abs() < 1e-9);
+        assert!(!orbited.forward().abs_diff_eq(start.forward(), 1e-9));
+        assert_eq!(orbited, scrolled(Orbit, false, false, px));
+        // Shift+scroll pans in both modes, with or without Cmd in Zoom mode.
+        let panned = scrolled(Zoom, true, false, px);
+        assert!(panned.forward().abs_diff_eq(start.forward(), 1e-12));
+        assert!(!panned.target.abs_diff_eq(start.target, 1e-6));
+        assert_eq!(panned, scrolled(Orbit, true, false, px));
+        assert_eq!(panned, scrolled(Zoom, true, true, px));
+    }
+
+    #[test]
+    fn wheel_and_pinch_ignore_the_trackpad_setting() {
+        let zoomed = |mode, command| {
+            let (mut nav, mut cam) = setup();
+            nav.set_trackpad(mode);
+            nav.set_command(command);
+            assert!(nav.scroll(&mut cam, Scroll::Lines(DVec2::new(0.0, 1.0)), |_| None));
+            let wheel = cam.clone();
+            assert!(nav.pinch(&mut cam, 0.2, |_| None));
+            (wheel, cam)
+        };
+        let orbit = zoomed(TrackpadScroll::Orbit, false);
+        assert_eq!(orbit, zoomed(TrackpadScroll::Zoom, false));
+        assert_eq!(orbit, zoomed(TrackpadScroll::Zoom, true));
     }
 
     #[test]
