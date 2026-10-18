@@ -312,10 +312,13 @@ pub enum Command {
         all: bool,
     },
     /// Undo the last `count` steps (default 1), each its own revision. With fewer steps to
-    /// undo than `count`, fails (`nothing_to_undo`) and undoes nothing.
+    /// undo than `count`, fails (`nothing_to_undo`) and undoes nothing. With `expect`, fails
+    /// (`unexpected_step`) unless the next step to undo matches it.
     Undo {
         #[serde(default)]
         count: Option<u32>,
+        #[serde(default)]
+        expect: Option<ExpectedStep>,
     },
     /// Redo the last `count` undone steps (default 1), like `undo`.
     Redo {
@@ -482,12 +485,42 @@ pub struct Outcome {
     pub purged: Option<usize>,
 }
 
+/// Who made an undo step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    /// Made in the window.
+    #[default]
+    User,
+    /// Made through the API.
+    Agent,
+}
+
+impl Origin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Origin::User => "user",
+            Origin::Agent => "agent",
+        }
+    }
+}
+
+/// The step an `undo` expects to take back: its label, and optionally who made it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExpectedStep {
+    pub label: String,
+    #[serde(default)]
+    pub origin: Option<Origin>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     InvalidInput,
     NothingToUndo,
     NothingToRedo,
+    /// `undo` with `expect`: the next step to undo is not the expected one.
+    UnexpectedStep,
     NotFound,
     /// A file could not be read or written; `message` says why.
     File,

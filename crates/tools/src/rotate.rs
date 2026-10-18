@@ -118,7 +118,10 @@ impl RotateTool {
         };
         let angle = if last.angle < 0.0 { -angle } else { angle };
         last.angle = angle;
-        out.commands.push(Command::Undo { count: None });
+        out.commands.push(Command::Undo {
+            count: None,
+            expect: None,
+        });
         out.commands.push(command(last, angle, Some(last.count)));
     }
 
@@ -136,7 +139,10 @@ impl RotateTool {
             out.message = Some(format!("At most {MAX_COPIES} copies"));
             return;
         }
-        out.commands.push(Command::Undo { count: None });
+        out.commands.push(Command::Undo {
+            count: None,
+            expect: None,
+        });
         out.commands.push(command(last, step, Some(count)));
         if let Some(last) = self.last.as_mut() {
             last.count = count;
@@ -619,7 +625,10 @@ mod tests {
         assert_eq!(
             again.commands,
             vec![
-                Command::Undo { count: None },
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
                 rotate(&["f8"], [1.0, 1.0, 0.0], -60.0, None)
             ]
         );
@@ -652,7 +661,10 @@ mod tests {
         assert_eq!(
             times.commands,
             vec![
-                Command::Undo { count: None },
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
                 rotate(&["f8"], [0.0; 3], 90.0, Some(3))
             ]
         );
@@ -660,7 +672,10 @@ mod tests {
         assert_eq!(
             divide.commands,
             vec![
-                Command::Undo { count: None },
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
                 rotate(&["f8"], [0.0; 3], 30.0, Some(3))
             ]
         );
@@ -677,7 +692,10 @@ mod tests {
         assert_eq!(
             again.commands,
             vec![
-                Command::Undo { count: None },
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
                 rotate(&["f8"], [0.0; 3], -45.0, None)
             ]
         );
@@ -696,7 +714,10 @@ mod tests {
         assert_eq!(
             out.commands,
             vec![
-                Command::Undo { count: None },
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
                 rotate(&["f8"], [0.0; 3], 45.0, Some(3))
             ]
         );

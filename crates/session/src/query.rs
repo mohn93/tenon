@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::{Lighting, Projection};
+use crate::command::Origin;
 
 /// Read-only questions about the document. Entities and coordinates are those of the open
 /// context (see `Command::OpenInstance`).
@@ -329,12 +330,15 @@ pub enum QueryResult {
     },
     /// Undo history: how many steps can be undone and redone, and their labels (the `type` of
     /// the command that made each, or `batch` for an atomic batch of differing commands), the
-    /// next to undo or redo first.
+    /// next to undo or redo first. `undo_origins` and `redo_origins` say who made each step, in
+    /// the same order.
     History {
         undo_depth: usize,
         redo_depth: usize,
         undo: Vec<String>,
         redo: Vec<String>,
+        undo_origins: Vec<Origin>,
+        redo_origins: Vec<Origin>,
         revision: u64,
     },
     Selection {

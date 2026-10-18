@@ -89,7 +89,10 @@ impl PushPullTool {
                 out.message = Some("Distance must not be zero".into());
             }
             Some(v) => {
-                out.commands.push(Command::Undo { count: None });
+                out.commands.push(Command::Undo {
+                    count: None,
+                    expect: None,
+                });
                 self.before_retype = Some(self.repeat);
                 self.pull(face, if last < 0.0 { -v } else { v }, out);
             }
@@ -703,13 +706,25 @@ mod tests {
         let out = r.send(ToolEvent::Value("2.5".into()));
         assert_eq!(
             out.commands,
-            vec![Command::Undo { count: None }, push_pull(r.face, 2.5)]
+            vec![
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
+                push_pull(r.face, 2.5)
+            ]
         );
         // Typed again, it redoes the redone pull; bad values change nothing.
         let out = r.send(ToolEvent::Value("3".into()));
         assert_eq!(
             out.commands,
-            vec![Command::Undo { count: None }, push_pull(r.face, 3.0)]
+            vec![
+                Command::Undo {
+                    count: None,
+                    expect: None
+                },
+                push_pull(r.face, 3.0)
+            ]
         );
         let out = r.send(ToolEvent::Value("abc".into()));
         assert!(out.commands.is_empty());

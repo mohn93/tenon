@@ -72,7 +72,11 @@ fn events_list_changes_after_a_revision() {
     for c in square() {
         d.execute(c).unwrap();
     }
-    d.execute(Command::Undo { count: None }).unwrap();
+    d.execute(Command::Undo {
+        count: None,
+        expect: None,
+    })
+    .unwrap();
     let r = ask(&d, json!({"type": "events", "since": 3}));
     assert_eq!(r["revision"], 5);
     assert_eq!(r["truncated"], false);
@@ -134,7 +138,11 @@ fn atomic_batch_is_one_undo_step() {
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 1);
     assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], 1);
     assert_eq!(d.revision(), 1);
-    d.execute(Command::Undo { count: None }).unwrap();
+    d.execute(Command::Undo {
+        count: None,
+        expect: None,
+    })
+    .unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["edges"], 0);
 }
 
@@ -162,7 +170,13 @@ fn failed_atomic_batch_changes_nothing() {
 fn atomic_batch_rejects_undo() {
     let mut d = doc();
     let err = d
-        .execute_batch(vec![Command::Undo { count: None }], true)
+        .execute_batch(
+            vec![Command::Undo {
+                count: None,
+                expect: None,
+            }],
+            true,
+        )
         .unwrap_err();
     assert_eq!(err.error.kind, ErrorKind::InvalidInput);
 }
@@ -224,7 +238,11 @@ fn history_labels_each_step_by_its_command() {
     d.execute(cmd(json!({"type": "orbit", "yaw": 10}))).unwrap();
     d.execute(cmd(json!({"type": "select", "ids": []})))
         .unwrap();
-    d.execute(Command::Undo { count: None }).unwrap();
+    d.execute(Command::Undo {
+        count: None,
+        expect: None,
+    })
+    .unwrap();
     let h = ask(&d, json!({"type": "history"}));
     assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));
     assert_eq!(h["redo"], json!(["add_guide_point"]));
@@ -244,8 +262,16 @@ fn history_labels_each_step_by_its_command() {
     assert_eq!(h["redo"], json!([]));
 
     // Undo and redo carry the label across.
-    d.execute(Command::Undo { count: None }).unwrap();
-    d.execute(Command::Undo { count: None }).unwrap();
+    d.execute(Command::Undo {
+        count: None,
+        expect: None,
+    })
+    .unwrap();
+    d.execute(Command::Undo {
+        count: None,
+        expect: None,
+    })
+    .unwrap();
     d.execute(Command::Redo { count: None }).unwrap();
     let h = ask(&d, json!({"type": "history"}));
     assert_eq!(h["undo"], json!(["add_edge", "add_edge"]));

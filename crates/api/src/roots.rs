@@ -359,9 +359,18 @@ mod tests {
             }
         ));
         // Other commands pass untouched.
-        let mut other = Command::Undo { count: None };
+        let mut other = Command::Undo {
+            count: None,
+            expect: None,
+        };
         roots.apply(&mut other, None, false).unwrap();
-        assert_eq!(other, Command::Undo { count: None });
+        assert_eq!(
+            other,
+            Command::Undo {
+                count: None,
+                expect: None
+            }
+        );
     }
 
     #[test]

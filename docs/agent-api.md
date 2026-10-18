@@ -52,7 +52,7 @@ Queries:
 | `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
-| `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `revision` |
+| `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
@@ -127,6 +127,12 @@ changes (see Notifications).
 `changes` are their net effect. With fewer steps than `count` it fails (`nothing_to_undo`,
 `nothing_to_redo`: "only 1 step to undo") and changes nothing. A new edit clears what could be
 redone. Undo and redo are not allowed in an atomic batch.
+
+`undo` takes an optional `expect` to guard against undoing someone else's step:
+`{"type": "undo", "expect": {"label": "push_pull", "origin": "agent"}}` undoes only if the next
+step to undo has that label (and, when given, that origin, see `history`); otherwise it fails
+(`unexpected_step`, naming the step found) and changes nothing. With nothing to undo it still
+fails `nothing_to_undo`.
 
 Find the face to push from the `created` ids of the command that made it, or with
 `{"type": "entities", "kinds": ["face"]}`. Faces created by push/pull point out of the solid.
@@ -1066,5 +1072,5 @@ Building a 2 x 3 x 1.5 m box on an empty model:
 
 Standard JSON-RPC codes (-32700 parse, -32600 invalid request, -32601 unknown method, -32602 bad
 params) plus `-32000` command failed (`data` is `{kind, message, ids?}`; `kind` is `invalid_input`,
-`not_found`, `nothing_to_undo`, `nothing_to_redo`, `file` or `unsaved_changes`), `-32001` batch failed
+`not_found`, `nothing_to_undo`, `nothing_to_redo`, `unexpected_step`, `file` or `unsaved_changes`), `-32001` batch failed
 (`data` is `{index, error, completed, rolled_back}`) and `-32002` rendering unavailable.

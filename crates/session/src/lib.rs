@@ -18,7 +18,8 @@ pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points, arc_through};
 pub use camera::{Camera, Lighting, Projection, Projector, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{
-    BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode, TextureSource,
+    BatchError, Command, CommandError, ErrorKind, ExpectedStep, Origin, Outcome, SelectMode,
+    TextureSource,
 };
 pub use document::{Document, MAX_COORDINATE, MAX_COPIES, check_coordinates, unit_vector};
 pub use export::ExportReport;

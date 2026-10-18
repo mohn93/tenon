@@ -239,6 +239,40 @@ pub struct ChangeSummary {
     pub materials: Vec<MaterialId>,
 }
 
+impl ChangeSummary {
+    /// The net change of `summaries` applied in order: made then changed is made, made then
+    /// erased is absent, changed then erased is erased. A material listed in any of them is
+    /// listed in the result.
+    pub fn join<'a>(summaries: impl IntoIterator<Item = &'a ChangeSummary>) -> ChangeSummary {
+        // entity -> (existed before, exists after)
+        let mut state: BTreeMap<EntityId, (bool, bool)> = BTreeMap::new();
+        let mut materials = BTreeSet::new();
+        for s in summaries {
+            let listed = s
+                .created
+                .iter()
+                .map(|id| (id, false, true))
+                .chain(s.deleted.iter().map(|id| (id, true, false)))
+                .chain(s.modified.iter().map(|id| (id, true, true)));
+            for (id, before, after) in listed {
+                state.entry(*id).or_insert((before, after)).1 = after;
+            }
+            materials.extend(s.materials.iter().copied());
+        }
+        let mut net = ChangeSummary::default();
+        for (id, (before, after)) in state {
+            match (before, after) {
+                (false, true) => net.created.push(id),
+                (true, false) => net.deleted.push(id),
+                (true, true) => net.modified.push(id),
+                (false, false) => {}
+            }
+        }
+        net.materials = materials.into_iter().collect();
+        net
+    }
+}
+
 impl ChangeSet {
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
@@ -1050,6 +1084,28 @@ mod tests {
         m.apply(&second);
         assert_eq!(m.edges().count(), 0);
         assert_eq!(m.vertices().count(), 2);
+    }
+
+    #[test]
+    fn summaries_join_to_the_net_change() {
+        let v = |n| EntityId::Vertex(VertexId(n));
+        let a = ChangeSummary {
+            created: vec![v(1), v(2)],
+            deleted: vec![v(9)],
+            modified: vec![v(5)],
+            materials: vec![],
+        };
+        let b = ChangeSummary {
+            created: vec![v(3)],
+            deleted: vec![v(2), v(5)],
+            modified: vec![v(1)],
+            materials: vec![],
+        };
+        let net = ChangeSummary::join([&a, &b]);
+        // made then changed is made; made then erased is gone
+        assert_eq!(net.created, vec![v(1), v(3)]);
+        assert_eq!(net.deleted, vec![v(5), v(9)]);
+        assert!(net.modified.is_empty());
     }
 
     #[test]

@@ -1535,7 +1535,10 @@ impl Editor {
 
     pub fn undo(&mut self) -> bool {
         self.reset_tool();
-        self.run(Command::Undo { count: None });
+        self.run(Command::Undo {
+            count: None,
+            expect: None,
+        });
         self.invalidate_hover();
         true
     }
@@ -4003,7 +4006,11 @@ mod tests {
         assert_eq!(box_max(&e, group), DVec3::new(10.0, 2.0, 1.0));
         type_text(&mut e, "-90");
         assert_eq!(box_min(&e, group), DVec3::new(10.0, -2.0, 0.0));
-        e.execute(Command::Undo { count: None }).unwrap();
+        e.execute(Command::Undo {
+            count: None,
+            expect: None,
+        })
+        .unwrap();
         assert_eq!(
             box_min(&e, group),
             DVec3::new(10.0, 0.0, 0.0),

@@ -73,7 +73,8 @@ fn undo_and_redo_walk_history() {
     assert_eq!(
         ask(&d, json!({"type": "history"})),
         json!({"type": "history", "undo_depth": 3, "redo_depth": 1,
-               "undo": ["add_edge", "add_edge", "add_edge"], "redo": ["add_edge"], "revision": 5})
+               "undo": ["add_edge", "add_edge", "add_edge"], "redo": ["add_edge"],
+               "undo_origins": ["user", "user", "user"], "redo_origins": ["user"], "revision": 5})
     );
     run(&mut d, json!({"type": "redo"})).unwrap();
     assert_eq!(ask(&d, json!({"type": "stats"}))["faces"], 1);
@@ -171,7 +172,12 @@ fn not_found_error_serializes_requested_ids_and_other_errors_omit_them() {
         json!({"kind": "not_found", "message": err.message, "ids": ["f99"]})
     );
     let mut d = doc();
-    let err = d.execute(Command::Undo { count: None }).unwrap_err();
+    let err = d
+        .execute(Command::Undo {
+            count: None,
+            expect: None,
+        })
+        .unwrap_err();
     let v = serde_json::to_value(&err).unwrap();
     assert!(v.get("ids").is_none());
     let back: session::CommandError = serde_json::from_value(v).unwrap();

@@ -54,7 +54,10 @@ fn subscribers_get_every_change_in_order() {
 
     // Edits made outside the API (e.g. in the window) are announced by notify().
     host.doc
-        .execute(session::Command::Undo { count: None })
+        .execute(session::Command::Undo {
+            count: None,
+            expect: None,
+        })
         .unwrap();
     hub.notify(&host);
     let undo = next(&w_rx);

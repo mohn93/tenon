@@ -10,7 +10,7 @@ use kernel::{
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
 use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
-use crate::command::{BatchError, Command, CommandError, ErrorKind, Outcome, SelectMode};
+use crate::command::{BatchError, Command, CommandError, ErrorKind, Origin, Outcome, SelectMode};
 use crate::import::ImportReport;
 use crate::query::{
     ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind,
@@ -41,6 +41,7 @@ const EVENT_LOG_LEN: usize = 1024;
 /// One undo step: the model change and the label of what made it (see `Command::name`).
 struct Step {
     label: String,
+    origin: Origin,
     changes: SceneChange,
 }
 
@@ -56,6 +57,8 @@ pub struct Document {
     selection: BTreeSet<EntityId>,
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// Stamped on the steps recorded from now on; `new` and `open` keep it.
+    origin: Origin,
     revision: u64,
     events: VecDeque<ChangeEvent>,
     /// Changes up to this revision are missing from `events` (the model was replaced).
@@ -84,6 +87,7 @@ impl Document {
             selection: BTreeSet::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            origin: Origin::User,
             revision: 0,
             events: VecDeque::new(),
             log_start: 0,
@@ -94,6 +98,15 @@ impl Document {
             positioned: None,
             purged: None,
         }
+    }
+
+    /// Who the steps recorded from now on are attributed to.
+    pub fn origin(&self) -> Origin {
+        self.origin
+    }
+
+    pub fn set_origin(&mut self, origin: Origin) {
+        self.origin = origin;
     }
 
     /// The file the model was last opened from or saved to.
@@ -186,12 +199,25 @@ impl Document {
             return Ok(outcome);
         }
         match command {
-            Command::Undo { count } => {
+            Command::Undo { count, expect } => {
                 let n = step_count(count)?;
                 if self.undo.len() < n {
                     return Err(CommandError::new(
                         ErrorKind::NothingToUndo,
                         too_few("undo", self.undo.len()),
+                    ));
+                }
+                if let (Some(expect), Some(top)) = (&expect, self.undo.last())
+                    && (expect.label != top.label || expect.origin.is_some_and(|o| o != top.origin))
+                {
+                    return Err(CommandError::new(
+                        ErrorKind::UnexpectedStep,
+                        format!(
+                            "the next step to undo is \"{}\" (by the {}), not \"{}\"",
+                            top.label,
+                            top.origin.as_str(),
+                            expect.label
+                        ),
                     ));
                 }
                 let mut done = Vec::new();
@@ -1066,7 +1092,11 @@ impl Document {
             return Outcome::default();
         }
         let outcome = self.changed(&changes);
-        self.undo.push(Step { label, changes });
+        self.undo.push(Step {
+            label,
+            origin: self.origin,
+            changes,
+        });
         self.redo.clear();
         outcome
     }
@@ -1199,6 +1229,8 @@ impl Document {
                 redo_depth: self.redo.len(),
                 undo: self.undo.iter().rev().map(|s| s.label.clone()).collect(),
                 redo: self.redo.iter().rev().map(|s| s.label.clone()).collect(),
+                undo_origins: self.undo.iter().rev().map(|s| s.origin).collect(),
+                redo_origins: self.redo.iter().rev().map(|s| s.origin).collect(),
                 revision: self.revision,
             },
             Query::Selection {} => QueryResult::Selection {
