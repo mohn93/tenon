@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use egui::ViewportId;
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
+use egui_winit::accesskit_winit;
 use render::Viewport;
 use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
 
+use crate::app::AppEvent;
 use crate::ui::theme::{self, ThemeChoice, UiScale};
 use crate::ui::{UiAction, View, draw};
 
@@ -15,6 +18,9 @@ pub struct Gui {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    /// A screen reader (or another accessibility client) asked for the AccessKit tree and has
+    /// not gone away: egui builds the tree in every frame drawn.
+    screen_reader: bool,
 }
 
 /// One laid-out frame of the panels, ready to paint.
@@ -56,6 +62,58 @@ impl Gui {
             ctx,
             state,
             renderer,
+            screen_reader: false,
+        }
+    }
+
+    /// A new Gui for a new device, keeping this one's AccessKit adapter and screen-reader
+    /// state (the adapter belongs to the window, which stays).
+    pub fn rebuilt(
+        &mut self,
+        window: &Window,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        theme: ThemeChoice,
+        ui_scale: UiScale,
+    ) -> Gui {
+        let mut gui = Gui::new(window, device, format, theme, ui_scale);
+        gui.state.accesskit = self.state.accesskit.take();
+        gui.screen_reader = self.screen_reader;
+        if gui.screen_reader {
+            gui.ctx.enable_accesskit();
+        }
+        gui
+    }
+
+    /// Makes the window's AccessKit adapter. The window must not have been shown yet. egui
+    /// builds no tree until an accessibility client asks for one (`on_accesskit`).
+    pub fn init_accesskit(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window: &Window,
+        proxy: EventLoopProxy<AppEvent>,
+    ) {
+        self.state.init_accesskit(event_loop, window, proxy);
+    }
+
+    /// Handles the adapter's event. True if a frame should be drawn.
+    pub fn on_accesskit(&mut self, event: accesskit_winit::WindowEvent) -> bool {
+        if let Some(on) = screen_reader_after(&event) {
+            self.screen_reader = on;
+            if on {
+                self.ctx.enable_accesskit();
+            } else {
+                self.ctx.disable_accesskit();
+            }
+        }
+        match event {
+            // The next frame sends the whole tree.
+            accesskit_winit::WindowEvent::InitialTreeRequested => true,
+            accesskit_winit::WindowEvent::ActionRequested(request) => {
+                self.state.on_accesskit_action_request(request);
+                true
+            }
+            accesskit_winit::WindowEvent::AccessibilityDeactivated => false,
         }
     }
 
@@ -186,6 +244,18 @@ fn start_zoom(ctx: &egui::Context, scale: UiScale) {
     ctx.options_mut(|o| o.zoom_factor = scale.factor());
 }
 
+/// Whether egui should build its AccessKit tree after `event`: Some(true) when a screen
+/// reader asks for it, Some(false) when it goes away, None otherwise. The tree is built only
+/// after an accessibility client asks, and may stay on afterwards; frames are still drawn
+/// only on input, so an idle window stays idle.
+fn screen_reader_after(event: &accesskit_winit::WindowEvent) -> Option<bool> {
+    match event {
+        accesskit_winit::WindowEvent::InitialTreeRequested => Some(true),
+        accesskit_winit::WindowEvent::AccessibilityDeactivated => Some(false),
+        accesskit_winit::WindowEvent::ActionRequested(_) => None,
+    }
+}
+
 /// The 3D view's rectangle in physical pixels, from its rectangle in points.
 fn physical_viewport(central: egui::Rect, pixels_per_point: f32) -> Viewport {
     let px = |v: f32| (v * pixels_per_point).round().max(0.0) as u32;
@@ -290,5 +360,23 @@ mod tests {
         assert_eq!(ppp(), 2.2);
         ctx.set_zoom_factor(1.25);
         assert_eq!(ppp(), 2.5);
+    }
+
+    #[test]
+    fn screen_reader_events_switch_the_tree() {
+        use accesskit_winit::WindowEvent as E;
+        use egui::accesskit::{Action, ActionRequest, NodeId, TreeId};
+        assert_eq!(screen_reader_after(&E::InitialTreeRequested), Some(true));
+        assert_eq!(
+            screen_reader_after(&E::AccessibilityDeactivated),
+            Some(false)
+        );
+        let click = ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: NodeId(1),
+            data: None,
+        };
+        assert_eq!(screen_reader_after(&E::ActionRequested(click)), None);
     }
 }

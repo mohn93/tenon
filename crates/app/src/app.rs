@@ -15,9 +15,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{
     DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
-#[cfg(target_os = "macos")]
-use winit::event_loop::EventLoopProxy;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
@@ -71,12 +69,14 @@ fn set_min_window(window: &Window, scale: UiScale) {
 }
 
 /// The window as it opens: title, default size and least size (at 100%; `State::new` sets the
-/// one for the UI scale).
+/// one for the UI scale). Hidden: the AccessKit adapter must be made before the window is first
+/// shown, so `resumed` shows it once the adapter exists.
 fn window_attributes() -> WindowAttributes {
     Window::default_attributes()
         .with_title("sketchup-alt")
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(MIN_WINDOW)
+        .with_visible(false)
 }
 
 /// The side of a texture's swatch image in the Materials list, in pixels.
@@ -90,6 +90,15 @@ pub enum AppEvent {
     /// A native menu item was chosen; `repeat` when a held key chose it.
     #[cfg(target_os = "macos")]
     Menu { id: String, repeat: bool },
+    /// The AccessKit adapter: a screen reader asked for the tree, asked for an action, or went
+    /// away.
+    AccessKit(egui_winit::accesskit_winit::Event),
+}
+
+impl From<egui_winit::accesskit_winit::Event> for AppEvent {
+    fn from(event: egui_winit::accesskit_winit::Event) -> Self {
+        AppEvent::AccessKit(event)
+    }
 }
 
 /// Longest delayed repaint worth scheduling; egui uses huge delays to mean "never".
@@ -1228,7 +1237,8 @@ impl State {
         eprintln!("GPU device made again");
         self.renderer = Renderer::new(&device, &queue, config.format);
         self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
-        self.gui = Gui::new(
+        // The window and its AccessKit adapter stay; only the panels' renderer is new.
+        self.gui = self.gui.rebuilt(
             &self.window,
             &device,
             config.format,
@@ -1857,9 +1867,8 @@ pub struct App {
     recovery: Option<PathBuf>,
     /// The window's preferences file (None: HOME is not set).
     prefs: Option<PathBuf>,
-    /// Carries native menu events to the loop.
-    #[cfg(target_os = "macos")]
-    menu_proxy: EventLoopProxy<AppEvent>,
+    /// Carries native menu and AccessKit events to the loop.
+    proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
@@ -1874,10 +1883,9 @@ impl App {
         prefs: Option<PathBuf>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
-        #[cfg(target_os = "macos")]
-        let menu_proxy = proxy.clone();
+        let api_proxy = proxy.clone();
         let hub = Hub::new(move || {
-            let _ = proxy.send_event(AppEvent::Api);
+            let _ = api_proxy.send_event(AppEvent::Api);
         });
         let socket = socket.and_then(|socket| match listen_unix(&socket, hub.inbox()) {
             Ok(()) => {
@@ -1901,8 +1909,7 @@ impl App {
             roots,
             recovery,
             prefs,
-            #[cfg(target_os = "macos")]
-            menu_proxy,
+            proxy,
         }
     }
 
@@ -1976,6 +1983,13 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Api => self.serve_api(event_loop),
             #[cfg(target_os = "macos")]
             AppEvent::Menu { id, repeat } => self.menu_event(event_loop, &id, repeat),
+            AppEvent::AccessKit(event) => {
+                if let Some(s) = self.state.as_mut()
+                    && s.gui.on_accesskit(event.window_event)
+                {
+                    s.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -1987,7 +2001,7 @@ impl ApplicationHandler<AppEvent> for App {
         // events, with whether a held key raised them.
         #[cfg(target_os = "macos")]
         {
-            let proxy = self.menu_proxy.clone();
+            let proxy = self.proxy.clone();
             muda::MenuEvent::set_event_handler(Some(move |e: muda::MenuEvent| {
                 let _ = proxy.send_event(AppEvent::Menu {
                     id: e.id.0,
@@ -2003,6 +2017,12 @@ impl ApplicationHandler<AppEvent> for App {
             self.recovery.clone(),
             self.prefs.clone(),
         );
+        // The adapter before the window is first shown (it panics otherwise), then the window,
+        // whatever happens next.
+        state
+            .gui
+            .init_accesskit(event_loop, &state.window, self.proxy.clone());
+        state.window.set_visible(true);
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),

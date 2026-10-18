@@ -3,6 +3,7 @@
 
 use std::ops::RangeInclusive;
 
+use egui::accesskit::Role;
 use egui::{
     Color32, CornerRadius, Margin, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
     WidgetInfo, WidgetType,
@@ -285,4 +286,77 @@ pub fn swatch(ui: &mut Ui, fill: Fill, label: &str, selected: bool) -> Response 
     }
     response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, label));
     response
+}
+
+/// Names a widget egui draws without an AccessKit name: a window's title bar, a panel's resize
+/// edge, a menu's area, a scroll bar. Does nothing unless the widget was laid out this pass or
+/// the last (`accesskit_node_builder` would otherwise add an empty node), and makes no name
+/// while AccessKit is off.
+pub fn name_egui_widget(
+    ctx: &egui::Context,
+    id: egui::Id,
+    role: Role,
+    name: impl FnOnce() -> String,
+) {
+    if ctx.read_response(id).is_none() {
+        return;
+    }
+    ctx.accesskit_node_builder(id, |node| {
+        node.set_role(role);
+        node.set_label(name());
+    });
+}
+
+/// Names the title bar of the window `shown` (what `Window::show` returned) "`title` title
+/// bar" (the window itself is named `title`). egui senses clicks and drags on it without naming
+/// it.
+pub fn name_title_bar<R>(ctx: &egui::Context, shown: &Option<egui::InnerResponse<R>>, title: &str) {
+    if let Some(shown) = shown {
+        // egui 0.36's id for it (`Window::show_dyn`): the window's area id with "__title_click".
+        let id = shown.response.layer_id.id.with("__title_click");
+        name_egui_widget(ctx, id, Role::TitleBar, || format!("{title} title bar"));
+    }
+}
+
+/// Names the scroll bars of the scroll area `id` (`ScrollAreaOutput::id`) "Scroll `what`".
+/// egui gives them a role but no name.
+pub fn name_scroll_bars(ctx: &egui::Context, id: egui::Id, what: &str) {
+    // egui 0.36's ids for them (`ScrollArea::show_viewport_dyn`): the area's id with the axis.
+    for axis in 0..2usize {
+        name_egui_widget(ctx, id.with(axis), Role::ScrollBar, || {
+            format!("Scroll {what}")
+        });
+    }
+}
+
+/// A slider for `value` in `range` with its value box after it, the slider labelled by the
+/// label widget `label` and the box named "`name` value". egui's slider draws its own box
+/// without a name, so the slider is drawn without one and the box here; `slider` and
+/// `value_box` set their formats. Returns the two joined, as egui's slider does.
+pub fn slider_row<T: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: egui::Id,
+    name: &str,
+    value: &mut T,
+    range: RangeInclusive<T>,
+    slider: impl for<'v> FnOnce(egui::Slider<'v>) -> egui::Slider<'v>,
+    value_box: impl for<'v> FnOnce(egui::DragValue<'v>) -> egui::DragValue<'v>,
+) -> Response {
+    let track = ui
+        .add(slider(
+            egui::Slider::new(value, range.clone()).show_value(false),
+        ))
+        .labelled_by(label);
+    // Dragging the box moves the value at the slider's rate: its range across its width.
+    let span = (range.end().to_f64() - range.start().to_f64()).abs();
+    let speed = span / f64::from(track.rect.width().max(1.0));
+    let shown = ui.add(value_box(
+        egui::DragValue::new(value)
+            .range(range)
+            .clamp_existing_to_range(true)
+            .speed(speed),
+    ));
+    ui.ctx()
+        .accesskit_node_builder(shown.id, |node| node.set_label(format!("{name} value")));
+    track.union(shown)
 }

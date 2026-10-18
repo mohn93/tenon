@@ -9,11 +9,23 @@ use crate::shortcuts::Bound;
 /// Draws `menus` as menu buttons, appending the action of each item clicked to `actions`.
 pub(super) fn show(ui: &mut Ui, menus: &[Menu], actions: &mut Vec<UiAction>) {
     for menu in menus {
-        ui.menu_button(menu.title, |ui| entries(ui, &menu.entries, actions));
+        ui.menu_button(menu.title, |ui| {
+            entries(ui, menu.title, &menu.entries, actions)
+        });
     }
 }
 
-fn entries(ui: &mut Ui, list: &[Entry], actions: &mut Vec<UiAction>) {
+/// Draws a menu's entries inside its open area, which is named "`title` menu" (its button is
+/// named `title`).
+fn entries(ui: &mut Ui, title: &str, list: &[Entry], actions: &mut Vec<UiAction>) {
+    // egui senses clicks on the menu's area (egui 0.36's id for it, `Area::begin`: the layer's
+    // id with "move") without naming it.
+    widgets::name_egui_widget(
+        ui.ctx(),
+        ui.layer_id().id.with("move"),
+        egui::accesskit::Role::Menu,
+        || format!("{title} menu"),
+    );
     for entry in list {
         match entry {
             Entry::Item(item) => {
@@ -52,7 +64,7 @@ fn entries(ui: &mut Ui, list: &[Entry], actions: &mut Vec<UiAction>) {
                 label,
                 entries: sub,
             } => {
-                ui.menu_button(*label, |ui| entries(ui, sub, actions));
+                ui.menu_button(*label, |ui| entries(ui, label, sub, actions));
             }
         }
     }

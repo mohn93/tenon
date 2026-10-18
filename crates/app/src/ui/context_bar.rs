@@ -233,11 +233,14 @@ fn breadcrumb(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     let last = crumbs.len() - 1;
     for (k, entry) in shown.iter().enumerate() {
         if k > 0 {
-            ui.label(
+            let separator = ui.label(
                 RichText::new(icons::CARET_RIGHT)
                     .font(caret.clone())
                     .color(t.text_secondary),
             );
+            // Read as text, not as the glyph's code point; as the hidden levels' tooltip
+            // separates them.
+            separator.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, ">"));
         }
         match *entry {
             Some(i) if i == last => {

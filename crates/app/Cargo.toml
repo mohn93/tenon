@@ -15,7 +15,7 @@ pollster.workspace = true
 env_logger.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
-egui-winit.workspace = true
+egui-winit = { workspace = true, features = ["accesskit"] }
 egui-phosphor.workspace = true
 serde.workspace = true
 serde_json.workspace = true

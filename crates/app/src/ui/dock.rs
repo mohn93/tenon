@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use egui::{Id, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 use serde::{Deserialize, Serialize};
 
-use super::{UiAction, View, materials, outliner, right, theme};
+use super::{UiAction, View, materials, outliner, right, theme, widgets};
 
 /// The tab shown in the dock's top area.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,7 +154,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             }
         }
     }
-    egui::ScrollArea::vertical()
+    let top = egui::ScrollArea::vertical()
         .id_salt("dock-top")
         .auto_shrink([false, false])
         .max_height(top_height(split, height))
@@ -162,6 +162,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             DockTab::EntityInfo => right::entity_info(ui, view, actions),
             DockTab::Materials => materials::materials(ui, view, actions),
         });
+    widgets::name_scroll_bars(ui.ctx(), top.id, view.dock.tab.name());
     divider(ui, divider_id, width);
     outliner::outliner(ui, view, actions);
     layout

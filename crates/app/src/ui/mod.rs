@@ -347,6 +347,12 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
                 .inner_margin(egui::Margin::same(dock::DOCK_MARGIN)),
         )
         .show(ui, |ui| dock::dock(ui, view, actions));
+    widgets::name_egui_widget(
+        ui.ctx(),
+        dock_resize_id(),
+        egui::accesskit::Role::Splitter,
+        || "Dock width".into(),
+    );
     let mut layout = panel.inner;
     // The width the panel's edge was dragged to, once the drag ends: not while dragging, not a
     // width that only rounding moved, and not a width the panel was held to without a drag

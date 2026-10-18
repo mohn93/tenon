@@ -18,7 +18,8 @@ pub(super) fn shortcuts_window(ui: &mut Ui, actions: &mut Vec<UiAction>) {
     let mut open = true;
     let columns = SHORTCUT_COLUMNS;
     let room = (ui.ctx().content_rect().height() - 80.0).max(120.0);
-    egui::Window::new("Keyboard Shortcuts")
+    let title = "Keyboard Shortcuts";
+    let shown = egui::Window::new(title)
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -27,7 +28,7 @@ pub(super) fn shortcuts_window(ui: &mut Ui, actions: &mut Vec<UiAction>) {
         .default_pos(ui.ctx().content_rect().center())
         .constrain(true)
         .show(ui.ctx(), |ui| {
-            egui::ScrollArea::vertical()
+            let list = egui::ScrollArea::vertical()
                 .max_height(room)
                 .show(ui, |ui| {
                     ui.horizontal_top(|ui| {
@@ -41,7 +42,9 @@ pub(super) fn shortcuts_window(ui: &mut Ui, actions: &mut Vec<UiAction>) {
                         }
                     });
                 });
+            widgets::name_scroll_bars(ui.ctx(), list.id, title);
         });
+    widgets::name_title_bar(ui.ctx(), &shown, title);
     if !open {
         actions.push(UiAction::ShowShortcuts(false));
     }
@@ -70,7 +73,8 @@ pub(super) fn agent_activity(
     actions: &mut Vec<UiAction>,
 ) {
     let mut open = true;
-    egui::Window::new("Agent Activity")
+    let title = "Agent Activity";
+    let shown = egui::Window::new(title)
         .open(&mut open)
         .collapsible(false)
         .default_width(420.0)
@@ -90,7 +94,7 @@ pub(super) fn agent_activity(
                 }
             }
             ui.separator();
-            egui::ScrollArea::vertical()
+            let list = egui::ScrollArea::vertical()
                 .max_height(300.0)
                 .show(ui, |ui| {
                     if log.is_empty() {
@@ -100,7 +104,9 @@ pub(super) fn agent_activity(
                         ui.monospace(line);
                     }
                 });
+            widgets::name_scroll_bars(ui.ctx(), list.id, "Agent requests");
         });
+    widgets::name_title_bar(ui.ctx(), &shown, title);
     if !open {
         actions.push(UiAction::ShowAgentActivity(false));
     }
@@ -110,7 +116,8 @@ pub(super) fn agent_activity(
 /// selection, or on the open context when nothing is selected.
 pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>) {
     let mut open = true;
-    egui::Window::new("Soften Edges")
+    let title = "Soften Edges";
+    let shown = egui::Window::new(title)
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -120,10 +127,16 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
             let mut value = angle;
             ui.horizontal(|ui| {
                 let label = ui.label("Angle");
-                if ui
-                    .add(egui::Slider::new(&mut value, 0..=180).suffix("°"))
-                    .labelled_by(label.id)
-                    .changed()
+                if widgets::slider_row(
+                    ui,
+                    label.id,
+                    "Angle",
+                    &mut value,
+                    0..=180,
+                    |s| s,
+                    |b| b.suffix("°"),
+                )
+                .changed()
                 {
                     actions.push(UiAction::SetSoftenAngle(value));
                 }
@@ -139,6 +152,7 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
             });
             ui.label(RichText::new("Selection, or everything open when nothing is").weak());
         });
+    widgets::name_title_bar(ui.ctx(), &shown, title);
     if !open {
         actions.push(UiAction::ShowSoften(false));
     }

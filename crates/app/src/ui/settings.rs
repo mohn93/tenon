@@ -5,7 +5,7 @@
 use egui::{Button, Id, Ui};
 
 use super::theme::{ThemeChoice, UiScale};
-use super::{SettingsView, UiAction, View};
+use super::{SettingsView, UiAction, View, widgets};
 use crate::navigation::TrackpadScroll;
 
 /// The window's width, in points.
@@ -36,7 +36,7 @@ pub(super) fn settings_window(
     let mut tab = ctx
         .data(|d| d.get_temp::<Tab>(tab_id()))
         .unwrap_or_default();
-    egui::Window::new("Settings")
+    let shown = egui::Window::new("Settings")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -59,6 +59,7 @@ pub(super) fn settings_window(
                 Tab::Input => input(ui, settings.trackpad, actions),
             }
         });
+    widgets::name_title_bar(&ctx, &shown, "Settings");
     ctx.data_mut(|d| d.insert_temp(tab_id(), tab));
     if !open {
         actions.push(UiAction::ShowSettings(false));

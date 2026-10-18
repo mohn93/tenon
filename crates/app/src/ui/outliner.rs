@@ -105,7 +105,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     }
     let mut filtering =
         Filter::new(view.outliner, &query).map(|filter| Filtering { filter, drawn: 0 });
-    egui::ScrollArea::vertical()
+    let tree = egui::ScrollArea::vertical()
         .id_salt("outliner")
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -133,6 +133,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
                 }
             }
         });
+    widgets::name_scroll_bars(ui.ctx(), tree.id, "Outliner");
 }
 
 /// The filter field, named "Filter outliner", and a Clear filter button while it holds text.
@@ -279,15 +280,19 @@ fn outliner_node(
         } else {
             CollapsingState::load_with_default_open(ui.ctx(), outliner_id(path), open)
         };
-        let (_toggle, header, _) = state
+        let expanded = state.is_open();
+        let (toggle, header, _) = state
             .show_header(ui, |ui| outliner_row(ui, row, path, selected, open))
             .body(|ui| {
                 for child in children {
                     outliner_node(ui, view, child, path, filtering, actions);
                 }
             });
+        let verb = if expanded { "Collapse" } else { "Expand" };
+        let name = format!("{verb} {}", display_name(row));
+        toggle.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
         #[cfg(test)]
-        super::tests::record(ui, path, _toggle.rect, true, false, false);
+        super::tests::record(ui, path, toggle.rect, true, false, false);
         actions.extend(header.inner);
     }
     path.pop();

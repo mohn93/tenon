@@ -131,8 +131,15 @@ fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             let label = ui.label("Opacity");
             // Fit the panel: the slider takes what the label and the number leave.
             ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(40.0);
-            ui.add(egui::Slider::new(&mut value, 0..=100).suffix("%"))
-                .labelled_by(label.id)
+            widgets::slider_row(
+                ui,
+                label.id,
+                "Opacity",
+                &mut value,
+                0..=100,
+                |s| s,
+                |b| b.suffix("%"),
+            )
         })
         .inner;
     if slider.dragged() {
@@ -162,12 +169,15 @@ fn glow_slider(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
                  surroundings (Camera > Night lighting shows them best)",
             );
             ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(40.0);
-            ui.add(
-                egui::Slider::new(&mut value, 0.0..=kernel::MAX_EMISSION)
-                    .step_by(0.1)
-                    .max_decimals(1),
+            widgets::slider_row(
+                ui,
+                label.id,
+                "Glow",
+                &mut value,
+                0.0..=kernel::MAX_EMISSION,
+                |s| s.step_by(0.1),
+                |b| b.max_decimals(1),
             )
-            .labelled_by(label.id)
         })
         .inner;
     if slider.dragged() {

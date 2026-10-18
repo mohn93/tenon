@@ -1,6 +1,7 @@
 //! The panels' tests, driven through egui_kittest: widgets are found by their names in the
 //! AccessKit tree, so the tests do not depend on where the layout puts them.
 
+mod access;
 mod context;
 mod dock;
 mod entity;
