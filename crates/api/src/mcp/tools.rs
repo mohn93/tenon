@@ -12,7 +12,7 @@ use crate::editor::EditorCommand;
 use crate::input::ToolInputParams;
 use crate::probe::{InferQuery, PickQuery, ScreenCommand, View};
 use crate::protocol::{RpcError, codes};
-use crate::schema::{any_of_root, hoist, object_root};
+use crate::schema::{hoist, object_root};
 
 /// `render_view`'s image size when the call leaves a side out.
 const DEFAULT_WIDTH: u32 = 960;
@@ -53,7 +53,7 @@ fn description(tool: &str) -> &'static str {
             "Changes the model with one or more commands (points in meters, Z up), run as one atomic undo step unless atomic is false; call describe for the command schemas."
         }
         "query" => {
-            "Reads the model with one query (entities, selection, camera, stats, history and more; lengths in meters, Z up); call describe for the query and result schemas."
+            "Reads the model with one query (entities, selection, camera, stats, history and more; lengths in meters, Z up), named by type; each type's other fields are in describe's query schema (describe with schema \"query\"), as is the result schema."
         }
         "pick" => {
             "Lists what lies under a view pixel or along a model ray (meters, Z up): faces front to back and the edges and guides near it; call describe for the schemas."
@@ -109,7 +109,22 @@ fn input_schema(tool: &str) -> Value {
                 "$defs": defs
             })
         }
-        "query" => any_of_root(vec![schema::<Query>(), schema::<EditorQuery>()]),
+        "query" => {
+            let mut types = query_types(&schema::<Query>());
+            types.extend(query_types(&schema::<EditorQuery>()));
+            json!({
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": types,
+                        "description": "The query; describe gives each type's other fields."
+                    }
+                },
+                "required": ["type"],
+                "additionalProperties": true
+            })
+        }
         "pick" => rooted(schema::<PickQuery>()),
         "infer" => rooted(schema::<InferQuery>()),
         "render_view" => {
@@ -139,6 +154,24 @@ fn input_schema(tool: &str) -> Value {
         "tool_input" => rooted(schema::<ToolInputParams>()),
         _ => unreachable!("no tool {tool}"),
     }
+}
+
+/// The `type` names of an internally tagged enum's schema, one per `oneOf` variant.
+///
+/// # Panics
+///
+/// When the schema has no `oneOf` or a variant has no constant `type`.
+fn query_types(schema: &Value) -> Vec<Value> {
+    schema["oneOf"]
+        .as_array()
+        .expect("a tagged enum's schema has oneOf")
+        .iter()
+        .map(|variant| {
+            let name = &variant["properties"]["type"]["const"];
+            assert!(name.is_string(), "a query variant has no constant type");
+            name.clone()
+        })
+        .collect()
 }
 
 /// `T`'s JSON Schema as JSON, self-contained.
@@ -267,12 +300,12 @@ fn run(backend: &mut dyn Backend, tool: &str, arguments: Value) -> Result<Reply,
         }
         "render_view" => {
             let mut arguments = object(arguments)?;
-            arguments
-                .entry("width")
-                .or_insert_with(|| json!(DEFAULT_WIDTH));
-            arguments
-                .entry("height")
-                .or_insert_with(|| json!(DEFAULT_HEIGHT));
+            for (side, default) in [("width", DEFAULT_WIDTH), ("height", DEFAULT_HEIGHT)] {
+                let value = arguments.entry(side).or_insert(Value::Null);
+                if value.is_null() {
+                    *value = json!(default);
+                }
+            }
             let mut value = backend.call("render_view", Value::Object(arguments))?;
             let image = match value.as_object_mut().and_then(|v| v.remove("png_base64")) {
                 Some(Value::String(png)) => Some(png),

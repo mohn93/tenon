@@ -360,6 +360,35 @@ fn forwarded_arguments() {
 }
 
 #[test]
+fn render_view_treats_null_sides_as_absent() {
+    let mut backend = Recording {
+        calls: Vec::new(),
+        reply: json!({}),
+    };
+    run_with(
+        &mut backend,
+        &[
+            init(1, "2025-06-18"),
+            tool(2, "render_view", json!({"width": null, "height": null})),
+            tool(3, "render_view", json!({"width": 10, "height": null})),
+        ],
+    );
+    assert_eq!(
+        backend.calls,
+        [
+            (
+                "render_view".to_string(),
+                json!({"width": 960, "height": 600})
+            ),
+            (
+                "render_view".to_string(),
+                json!({"width": 10, "height": 600})
+            ),
+        ]
+    );
+}
+
+#[test]
 fn pick_and_infer_forward_as_queries() {
     let out = session(&[
         tool(1, "transact", json!({"commands": square()})),
@@ -544,6 +573,49 @@ fn tool_schemas_hoist_defs_consistently() {
     let transact = &out[0]["result"]["tools"][1]["inputSchema"];
     assert_eq!(transact["properties"]["commands"]["minItems"], 1);
     assert_eq!(transact["required"], json!(["commands"]));
+}
+
+/// The Anthropic API refuses a tool whose input schema has `anyOf`, `oneOf` or `allOf` at its
+/// root, and Claude Code and Claude Desktop pass MCP tool schemas on to it.
+#[test]
+fn tool_schemas_have_plain_object_roots() {
+    let out = session(&[req(1, "tools/list", json!({}))]);
+    for t in out[0]["result"]["tools"].as_array().unwrap() {
+        let schema = &t["inputSchema"];
+        for key in ["anyOf", "oneOf", "allOf"] {
+            assert!(schema.get(key).is_none(), "{}: root {key}", t["name"]);
+        }
+        assert_eq!(schema["type"], "object", "{}", t["name"]);
+        assert!(schema["properties"].is_object(), "{}", t["name"]);
+    }
+}
+
+#[test]
+fn the_query_tool_names_every_query_type() {
+    let out = session(&[req(1, "tools/list", json!({}))]);
+    let query = &out[0]["result"]["tools"][2];
+    assert_eq!(query["name"], "query");
+    let schema = &query["inputSchema"];
+    assert_eq!(schema["required"], json!(["type"]));
+    let types: Vec<_> = schema["properties"]["type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    // The variants of session's Query and the API's EditorQuery, as describe's query schema has them.
+    let api_out = session(&[tool(1, "describe", json!({"schema": "query"}))]);
+    let params = &api_out[0]["result"]["structuredContent"]["params_schema"];
+    let mut expected = Vec::new();
+    for part in params["anyOf"].as_array().unwrap() {
+        for variant in part["oneOf"].as_array().unwrap() {
+            expected.push(variant["properties"]["type"]["const"].as_str().unwrap());
+        }
+    }
+    assert_eq!(types, expected);
+    for name in ["entities", "selection", "camera", "pick", "infer"] {
+        assert!(types.contains(&name), "{name}");
+    }
 }
 
 #[test]
