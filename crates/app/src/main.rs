@@ -8,6 +8,7 @@ mod gui;
 mod headless;
 mod host;
 mod info;
+mod mcp;
 mod menus;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -64,6 +65,14 @@ fn main() {
                 std::process::exit(1);
             }
             std::process::exit(headless::run(transport, file, roots))
+        }
+        Mode::Mcp {
+            live,
+            file,
+            api_roots,
+        } => {
+            let roots = roots(&api_roots);
+            std::process::exit(mcp::run(live, file, roots))
         }
         Mode::Window {
             socket,

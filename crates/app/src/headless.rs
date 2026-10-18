@@ -16,18 +16,13 @@ const VIEWPORT: DVec2 = DVec2::new(1280.0, 800.0);
 /// Opens `file` if given, then serves until stdin closes (stdio), forever (socket), or until
 /// an agent quits. Returns the process exit code.
 pub fn run(transport: Transport, file: Option<PathBuf>, roots: ApiRoots) -> i32 {
-    let mut editor = Editor::new(VIEWPORT, 1.0);
-    if let Some(path) = file {
-        let open = Command::Open {
-            path: path.display().to_string(),
-            // A fresh model: nothing to lose.
-            discard: false,
-        };
-        if let Err(e) = editor.execute(open) {
-            eprintln!("cannot open {}", e.message);
+    let mut editor = match editor_with(file) {
+        Ok(editor) => editor,
+        Err(message) => {
+            eprintln!("{message}");
             return 1;
         }
-    }
+    };
     let mut offscreen = Offscreen::headless();
     let mut hub = Hub::new(|| {});
     match transport {
@@ -53,6 +48,22 @@ pub fn run(transport: Transport, file: Option<PathBuf>, roots: ApiRoots) -> i32 
             0
         }
     }
+}
+
+/// A headless editor with `file` open if given, or the message saying why it cannot be opened.
+pub fn editor_with(file: Option<PathBuf>) -> Result<Editor, String> {
+    let mut editor = Editor::new(VIEWPORT, 1.0);
+    if let Some(path) = file {
+        let open = Command::Open {
+            path: path.display().to_string(),
+            // A fresh model: nothing to lose.
+            discard: false,
+        };
+        editor
+            .execute(open)
+            .map_err(|e| format!("cannot open {}", e.message))?;
+    }
+    Ok(editor)
 }
 
 /// Handles requests as they come, round by round, until `go_on` says to stop or an agent

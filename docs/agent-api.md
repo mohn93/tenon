@@ -25,6 +25,11 @@ socket file on a normal quit. The default name includes the process id, so a soc
 by a killed app is never reused; agents that start the app should pass `--socket PATH` (a fixed
 path is replaced on the next start).
 
+## MCP
+
+`app --mcp` serves this API as an MCP server on stdin/stdout, headless or forwarding to a running
+app with `--live SOCKET`. Setup for Claude Code and Claude Desktop is in [mcp.md](mcp.md).
+
 ## Methods
 
 Call `describe` first: it returns every method, notification, error code and the JSON Schemas of
@@ -1083,4 +1088,5 @@ Building a 2 x 3 x 1.5 m box on an empty model:
 Standard JSON-RPC codes (-32700 parse, -32600 invalid request, -32601 unknown method, -32602 bad
 params) plus `-32000` command failed (`data` is `{kind, message, ids?}`; `kind` is `invalid_input`,
 `not_found`, `nothing_to_undo`, `nothing_to_redo`, `unexpected_step`, `file` or `unsaved_changes`), `-32001` batch failed
-(`data` is `{index, error, completed, rolled_back}`) and `-32002` rendering unavailable.
+(`data` is `{index, error, completed, rolled_back}`), `-32002` rendering unavailable and `-32003`
+connection lost (MCP `--live` only: the app's socket closed).

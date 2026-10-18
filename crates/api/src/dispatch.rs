@@ -472,7 +472,8 @@ pub fn describe() -> Value {
         "errors": {
             "-32700": "parse error", "-32600": "invalid request", "-32601": "method not found",
             "-32602": "invalid params", "-32000": "command failed (data: CommandError; for tool_input stopped partway, ToolInputStopped)",
-            "-32001": "batch failed (data: BatchError)", "-32002": "rendering unavailable"
+            "-32001": "batch failed (data: BatchError)", "-32002": "rendering unavailable",
+            "-32003": "connection lost (MCP --live: the instance's socket closed)"
         },
         "schemas": {
             "Command": object_root(schema::<Command>()),

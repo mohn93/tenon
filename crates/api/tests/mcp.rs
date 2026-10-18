@@ -578,3 +578,57 @@ fn a_lost_connection_is_a_tool_error() {
     );
     assert_eq!(out[2]["result"], json!({}));
 }
+
+#[test]
+fn a_socket_backend_maps_replies_and_stays_lost() {
+    use api::mcp::{Backend, SocketBackend};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let dir = std::env::temp_dir().join(format!("skmcpb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("s.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    // A fake app: a notification and a stray reply before each real one, then it hangs up.
+    let app = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut lines = BufReader::new(stream).lines();
+        for reply in [
+            json!({"result": {"ok": true}}),
+            json!({"error": {"code": -32000, "message": "no", "data": {"kind": "not_found"}}}),
+        ] {
+            let request: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+            let mut reply = reply;
+            reply["jsonrpc"] = json!("2.0");
+            reply["id"] = request["id"].clone();
+            writeln!(writer, "{}", json!({"jsonrpc": "2.0", "method": "changed"})).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                json!({"jsonrpc": "2.0", "id": 999, "result": 0})
+            )
+            .unwrap();
+            writeln!(writer, "{reply}").unwrap();
+        }
+    });
+    let mut backend = SocketBackend::connect(&path).unwrap();
+    assert_eq!(
+        backend.call("query", json!({"type": "stats"})).unwrap(),
+        json!({"ok": true})
+    );
+    let e = backend.call("execute", json!({})).unwrap_err();
+    assert_eq!((e.code, e.message.as_str()), (-32000, "no"));
+    assert_eq!(e.data, Some(json!({"kind": "not_found"})));
+    app.join().unwrap();
+    for _ in 0..2 {
+        let e = backend.call("query", json!({"type": "stats"})).unwrap_err();
+        assert_eq!(e.code, codes::CONNECTION_LOST);
+        assert_eq!(
+            e.message,
+            format!("the connection to {} closed", path.display())
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

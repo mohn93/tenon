@@ -8,6 +8,8 @@ pub const USAGE: &str =
     "usage: app [--socket PATH] [--api-root DIR]... [FILE]            window, agent API on a Unix socket
        app --headless --stdio [--api-root DIR]... [FILE]          no window, agent API on stdin/stdout
        app --headless [--socket PATH] [--api-root DIR]... [FILE]  no window, agent API on a Unix socket
+       app --mcp [--api-root DIR]... [FILE]                MCP server on stdin/stdout with its own model
+       app --mcp --live SOCKET                             MCP server driving the app listening on SOCKET
 FILE is a .skr model to open at start.
 --api-root DIR (repeatable) keeps every file the API reads or writes inside DIR.";
 
@@ -27,6 +29,13 @@ pub enum Mode {
     },
     Headless {
         transport: Transport,
+        file: Option<PathBuf>,
+        api_roots: Vec<PathBuf>,
+    },
+    /// An MCP server on stdin/stdout, over its own model or, with `live`, the app listening
+    /// on that socket.
+    Mcp {
+        live: Option<PathBuf>,
         file: Option<PathBuf>,
         api_roots: Vec<PathBuf>,
     },
@@ -93,12 +102,21 @@ pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     let (mut headless, mut stdio, mut socket, mut file) = (false, false, None, None);
+    let (mut mcp, mut live) = (false, None);
     let mut api_roots = Vec::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => headless = true,
             "--stdio" => stdio = true,
+            "--mcp" => mcp = true,
+            "--live" => {
+                let path = args
+                    .next()
+                    .filter(|p| !p.starts_with("--"))
+                    .ok_or("--live needs a socket path")?;
+                live = Some(PathBuf::from(path));
+            }
             "-h" | "--help" => return Ok(Mode::Help),
             "--socket" => {
                 let path = args
@@ -119,6 +137,24 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
+    }
+    if live.is_some() && !mcp {
+        return Err("--live needs --mcp".into());
+    }
+    if mcp {
+        if headless || stdio || socket.is_some() {
+            return Err("--mcp runs on stdin/stdout: drop --headless, --stdio and --socket".into());
+        }
+        if live.is_some() && (file.is_some() || !api_roots.is_empty()) {
+            return Err(
+                "--mcp --live drives a running app: open files and set --api-root there".into(),
+            );
+        }
+        return Ok(Mode::Mcp {
+            live,
+            file,
+            api_roots,
+        });
     }
     if stdio && socket.is_some() {
         return Err("choose either --stdio or --socket".into());
@@ -233,6 +269,43 @@ mod tests {
                 .unwrap_err()
                 .contains("needs a folder")
         );
+    }
+
+    #[test]
+    fn mcp_modes_parse() {
+        assert_eq!(
+            parse(args("--mcp")).unwrap(),
+            Mode::Mcp {
+                live: None,
+                file: None,
+                api_roots: vec![]
+            }
+        );
+        assert_eq!(
+            parse(args("--mcp --api-root /a f.skr")).unwrap(),
+            Mode::Mcp {
+                live: None,
+                file: Some("f.skr".into()),
+                api_roots: vec!["/a".into()]
+            }
+        );
+        assert_eq!(
+            parse(args("--mcp --live /tmp/w.sock")).unwrap(),
+            Mode::Mcp {
+                live: Some("/tmp/w.sock".into()),
+                file: None,
+                api_roots: vec![]
+            }
+        );
+        assert!(
+            parse(args("--live /tmp/w.sock"))
+                .unwrap_err()
+                .contains("--mcp")
+        );
+        assert!(parse(args("--mcp --live /tmp/w.sock f.skr")).is_err());
+        assert!(parse(args("--mcp --live /tmp/w.sock --api-root /a")).is_err());
+        assert!(parse(args("--mcp --headless")).is_err());
+        assert!(parse(args("--mcp --socket /tmp/x.sock")).is_err());
     }
 
     #[test]
