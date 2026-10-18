@@ -626,11 +626,98 @@ fn quit_ends_the_file_menu_off_macos_and_leads_the_app_menu_on_it() {
         .filter(|i| i.action == UiAction::Quit)
         .count();
     assert_eq!(quits, 1);
-    assert!(matches!(native[0].entries.as_slice(), [Entry::Item(i)]
-        if i.action == UiAction::Quit && i.label == "Quit sketchup-alt"));
+    assert!(
+        matches!(native[0].entries.as_slice(), [Entry::Item(s), Entry::Item(q)]
+        if s.label == "Settings..." && q.action == UiAction::Quit && q.label == "Quit sketchup-alt")
+    );
     assert_eq!(
         click_menu(&mut harness(Fixture::default()), &["File", "Quit"]),
         [UiAction::Quit]
+    );
+}
+
+#[test]
+fn settings_is_in_the_app_menu_or_ends_edit() {
+    use crate::menus::{APP_MENU, Entry, menu_bar};
+    let f = Fixture::default();
+    let native = menu_bar(&f.view(), true);
+    let app = &native[0];
+    assert_eq!(app.title, APP_MENU);
+    let labels: Vec<&str> = app
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Item(i) => Some(i.label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["Settings...", "Quit sketchup-alt"]);
+    let settings_items = |bar: &[crate::menus::Menu]| {
+        crate::menus::items(bar)
+            .iter()
+            .filter(|i| i.action == UiAction::ShowSettings(true))
+            .count()
+    };
+    assert_eq!(settings_items(&native), 1, "once, in the app menu");
+    let egui = menu_bar(&f.view(), false);
+    let edit = &egui.iter().find(|m| m.title == "Edit").unwrap().entries;
+    let [.., Entry::Separator, Entry::Item(settings)] = edit.as_slice() else {
+        panic!("Edit ends with a separator and Settings...");
+    };
+    assert_eq!(settings.label, "Settings...");
+    assert_eq!(settings.action, UiAction::ShowSettings(true));
+    assert_eq!(settings.bound, Some(Bound::Settings));
+    assert_eq!(settings_items(&egui), 1);
+    let key = chord(Bound::Settings).unwrap();
+    assert_eq!(key.text_for(false), "Ctrl+,");
+    let mut h = harness(Fixture::default());
+    click(&mut h, "Edit");
+    assert!(drawn_texts(&h).contains(&key.text()), "the key beside it");
+    assert_eq!(
+        click_menu(&mut harness(Fixture::default()), &["Edit", "Settings..."]),
+        [UiAction::ShowSettings(true)]
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_app_menu_reads_about_settings_then_quit() {
+    use crate::menus::{APP_MENU, Entry, menu_bar};
+    use crate::native_menu::{AppSlot, app_menu_order};
+    let f = Fixture::default();
+    let bar = menu_bar(&f.view(), true);
+    let app = &bar[0];
+    assert_eq!(app.title, APP_MENU);
+    let read: Vec<String> = app_menu_order(&app.entries)
+        .into_iter()
+        .flat_map(|slot| match slot {
+            AppSlot::Entries(entries) => entries
+                .iter()
+                .map(|e| match e {
+                    Entry::Item(i) => i.label.clone(),
+                    _ => "?".into(),
+                })
+                .collect(),
+            AppSlot::Separator => vec!["-".into()],
+            AppSlot::About => vec!["About".into()],
+            AppSlot::Hide => vec!["Hide".into()],
+            AppSlot::HideOthers => vec!["HideOthers".into()],
+            AppSlot::ShowAll => vec!["ShowAll".into()],
+        })
+        .collect();
+    assert_eq!(
+        read,
+        [
+            "About",
+            "-",
+            "Settings...",
+            "-",
+            "Hide",
+            "HideOthers",
+            "ShowAll",
+            "-",
+            "Quit sketchup-alt"
+        ]
     );
 }
 

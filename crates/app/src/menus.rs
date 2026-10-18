@@ -10,7 +10,7 @@ use crate::shortcuts::Bound;
 use crate::ui::theme::ThemeChoice;
 use crate::ui::{FLY_HELP, UiAction, View, step_name};
 
-/// The title of the native app menu (macOS), which holds Quit.
+/// The title of the native app menu (macOS), which holds Settings... and Quit.
 pub const APP_MENU: &str = "sketchup-alt";
 
 /// The File submenu that lists the recent files: the one submenu whose items change.
@@ -88,7 +88,8 @@ fn tool_item(kind: ToolKind) -> Entry {
     bound_item(kind.label(), Bound::Tool(kind), UiAction::Tool(kind)).entry()
 }
 
-/// The menu bar. `native`: macOS's, with an app menu first holding Quit (File then has none).
+/// The menu bar. `native`: macOS's, with an app menu first holding Settings... and Quit (File
+/// and Edit then have neither); otherwise Settings... ends Edit and Quit ends File.
 /// The same items exist in every state of `view`; only labels, checks and enabled flags change.
 pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
     let mut file = vec![
@@ -113,7 +114,9 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Some(l) => format!("{verb} {}", step_name(l)),
         None => verb.to_string(),
     };
-    let edit = vec![
+    let settings =
+        || bound_item("Settings...", Bound::Settings, UiAction::ShowSettings(true)).entry();
+    let mut edit = vec![
         bound_item(&step("Undo", view.undo), Bound::Undo, UiAction::Undo)
             .enabled(view.undo.is_some())
             .entry(),
@@ -138,6 +141,10 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Entry::Separator,
         Item::new("Soften Edges...", UiAction::ShowSoften(true)).entry(),
     ];
+    if !native {
+        edit.push(Entry::Separator);
+        edit.push(settings());
+    }
 
     let draw = [
         ToolKind::Line,
@@ -257,8 +264,12 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
     if native {
         menus.push(Menu {
             title: APP_MENU,
-            // macOS names the app in its menu's Quit, as the predefined About does.
-            entries: vec![bound_item("Quit sketchup-alt", Bound::Quit, UiAction::Quit).entry()],
+            // Settings..., then Quit, which macOS names with the app, as the predefined About
+            // does. `native_menu` puts its standard items around them.
+            entries: vec![
+                settings(),
+                bound_item("Quit sketchup-alt", Bound::Quit, UiAction::Quit).entry(),
+            ],
         });
     }
     menus.extend([

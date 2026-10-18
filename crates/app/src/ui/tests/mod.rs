@@ -8,6 +8,7 @@ mod layout;
 mod materials;
 mod menus;
 mod outliner;
+mod settings;
 mod sheets;
 mod start;
 mod status;
@@ -26,8 +27,8 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, Sheet, StartCard, TexturePosition, TextureRow,
-    UiAction, View, draw,
+    Agents, DockLayout, DockTab, MaterialRow, SettingsView, Sheet, StartCard, TexturePosition,
+    TextureRow, UiAction, View, draw,
 };
 use crate::editor::{RenameTarget, Status};
 use crate::feedback::Hud;
@@ -85,6 +86,8 @@ pub(super) struct Fixture {
     pub sheet: Option<Sheet>,
     /// The one selected group or component, which Rename Component and the Name field rename.
     pub rename: Option<RenameTarget>,
+    /// The Settings window's values while it is open.
+    pub settings: Option<SettingsView>,
 }
 
 impl Default for Fixture {
@@ -137,6 +140,7 @@ impl Default for Fixture {
             recent: Vec::new(),
             sheet: None,
             rename: None,
+            settings: None,
         }
     }
 }
@@ -180,6 +184,7 @@ impl Fixture {
             recent: &self.recent,
             sheet: self.sheet.as_ref(),
             rename: self.rename.as_ref(),
+            settings: self.settings,
         }
     }
 

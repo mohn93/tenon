@@ -47,24 +47,33 @@ impl NativeMenu {
         for m in bar {
             let submenu = Submenu::new(m.title, true);
             if m.title == APP_MENU {
-                let about = AboutMetadata {
-                    name: Some("sketchup-alt".into()),
-                    version: Some(env!("CARGO_PKG_VERSION").into()),
-                    ..Default::default()
-                };
-                let standard = [
-                    PredefinedMenuItem::about(Some("About sketchup-alt"), Some(about)),
-                    PredefinedMenuItem::separator(),
-                    PredefinedMenuItem::hide(None),
-                    PredefinedMenuItem::hide_others(None),
-                    PredefinedMenuItem::show_all(None),
-                    PredefinedMenuItem::separator(),
-                ];
-                for item in &standard {
-                    append(&submenu, item);
+                for slot in app_menu_order(&m.entries) {
+                    match slot {
+                        AppSlot::About => {
+                            let about = AboutMetadata {
+                                name: Some("sketchup-alt".into()),
+                                version: Some(env!("CARGO_PKG_VERSION").into()),
+                                ..Default::default()
+                            };
+                            append(
+                                &submenu,
+                                &PredefinedMenuItem::about(Some("About sketchup-alt"), Some(about)),
+                            );
+                        }
+                        AppSlot::Separator => append(&submenu, &PredefinedMenuItem::separator()),
+                        AppSlot::Hide => append(&submenu, &PredefinedMenuItem::hide(None)),
+                        AppSlot::HideOthers => {
+                            append(&submenu, &PredefinedMenuItem::hide_others(None));
+                        }
+                        AppSlot::ShowAll => append(&submenu, &PredefinedMenuItem::show_all(None)),
+                        AppSlot::Entries(entries) => {
+                            add_entries(&submenu, entries, &mut items, &mut recent);
+                        }
+                    }
                 }
+            } else {
+                add_entries(&submenu, &m.entries, &mut items, &mut recent);
             }
-            add_entries(&submenu, &m.entries, &mut items, &mut recent);
             menu.append(&submenu).expect("add a menu to the menu bar");
         }
         menu.init_for_nsapp();
@@ -130,6 +139,34 @@ impl NativeMenu {
     pub fn action(&self, id: &str) -> Option<UiAction> {
         self.items.get(id).map(|n| n.action.clone())
     }
+}
+
+/// One place in the app menu: macOS's standard items, or some of the table's entries.
+pub(crate) enum AppSlot<'a> {
+    About,
+    Separator,
+    Hide,
+    HideOthers,
+    ShowAll,
+    Entries(&'a [Entry]),
+}
+
+/// The app menu in macOS's order: About, then the table's first entry (Settings...), then
+/// Hide, Hide Others and Show All, then the rest of the table's entries (Quit), each group
+/// after a separator.
+pub(crate) fn app_menu_order(entries: &[Entry]) -> Vec<AppSlot<'_>> {
+    let (first, rest) = entries.split_at(entries.len().min(1));
+    vec![
+        AppSlot::About,
+        AppSlot::Separator,
+        AppSlot::Entries(first),
+        AppSlot::Separator,
+        AppSlot::Hide,
+        AppSlot::HideOthers,
+        AppSlot::ShowAll,
+        AppSlot::Separator,
+        AppSlot::Entries(rest),
+    ]
 }
 
 fn append(submenu: &Submenu, item: &dyn IsMenuItem) {
@@ -228,10 +265,11 @@ pub fn accelerator(chord: Chord) -> Option<Accelerator> {
     if !chord.command {
         return None;
     }
-    let Key::Letter(c) = chord.key else {
-        return None;
+    let code = match chord.key {
+        Key::Letter(c) => *LETTERS.get((c as usize).checked_sub('a' as usize)?)?,
+        Key::Comma => Code::Comma,
+        _ => return None,
     };
-    let code = *LETTERS.get((c as usize).checked_sub('a' as usize)?)?;
     let mods = if chord.shift {
         Modifiers::META | Modifiers::SHIFT
     } else {
@@ -284,6 +322,10 @@ mod tests {
         assert_eq!(
             accelerator(chord(Bound::NewModel).unwrap()),
             Some(Accelerator::new(Modifiers::META, Code::KeyN))
+        );
+        assert_eq!(
+            accelerator(chord(Bound::Settings).unwrap()),
+            Some(Accelerator::new(Modifiers::META, Code::Comma))
         );
     }
 

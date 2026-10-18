@@ -29,6 +29,7 @@ pub enum Bound {
     ZoomExtents,
     ToggleFly,
     RenameComponent,
+    Settings,
 }
 
 /// The key of a shortcut.
@@ -41,6 +42,8 @@ pub enum Key {
     Escape,
     /// A function key: not a character, so never a plain key the editor types.
     F2,
+    /// ",", only with Cmd (Settings).
+    Comma,
 }
 
 /// A key and the modifiers held with it. `command` is Cmd on macOS and Ctrl elsewhere (the
@@ -82,7 +85,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 30] = [
+pub const TABLE: [Shortcut; 31] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -106,6 +109,7 @@ pub const TABLE: [Shortcut; 30] = [
     on(Bound::SelectAll, true, false, Key::Letter('a')),
     on(Bound::SelectNone, true, true, Key::Letter('a')),
     on(Bound::Duplicate, true, false, Key::Letter('d')),
+    on(Bound::Settings, true, false, Key::Comma),
     on(Bound::EraseSelection, false, false, Key::Delete),
     on(Bound::MakeGroup, false, false, Key::Letter('g')),
     on(Bound::MakeComponent, false, true, Key::Letter('g')),
@@ -125,13 +129,17 @@ pub fn lookup(chord: Chord) -> Option<&'static Shortcut> {
     TABLE.iter().find(|s| s.chord == chord)
 }
 
-/// What Cmd (or Ctrl) with `letter` (lowercase) does; `repeat` when the key is held down.
-/// The modifiers must match exactly: Shift+Cmd+N is not Cmd+N.
+/// What Cmd (or Ctrl) with `letter` (a lowercase letter, or ",") does; `repeat` when the key
+/// is held down. The modifiers must match exactly: Shift+Cmd+N is not Cmd+N.
 pub fn command(letter: char, shift: bool, repeat: bool) -> Option<Bound> {
+    let key = match letter {
+        ',' => Key::Comma,
+        c => Key::Letter(c),
+    };
     let chord = Chord {
         command: true,
         shift,
-        key: Key::Letter(letter),
+        key,
     };
     lookup(chord)
         .filter(|s| s.repeats || !repeat)
@@ -195,6 +203,7 @@ impl Chord {
             Key::Delete => "Delete".into(),
             Key::Escape => "Esc".into(),
             Key::F2 => "F2".into(),
+            Key::Comma => ",".into(),
         };
         let (shift, command) = if mac {
             ("⇧", "⌘")
@@ -242,6 +251,7 @@ impl Bound {
             Bound::ZoomExtents => "Zoom Extents",
             Bound::ToggleFly => "Fly Mode",
             Bound::RenameComponent => "Rename Component",
+            Bound::Settings => "Settings",
         }
     }
 
@@ -261,7 +271,8 @@ impl Bound {
             | Bound::SelectAll
             | Bound::SelectNone
             | Bound::Duplicate
-            | Bound::EraseSelection => "Edit",
+            | Bound::EraseSelection
+            | Bound::Settings => "Edit",
             Bound::MakeGroup
             | Bound::MakeComponent
             | Bound::CloseInstance
@@ -293,6 +304,7 @@ impl Bound {
             Bound::ZoomExtents => UiAction::ZoomExtents,
             Bound::ToggleFly => UiAction::ToggleFly,
             Bound::RenameComponent => UiAction::RenameComponent,
+            Bound::Settings => UiAction::ShowSettings(true),
         })
     }
 
@@ -397,8 +409,11 @@ mod tests {
     #[test]
     fn with_native_menus_the_key_path_leaves_cmd_chords_to_the_menu() {
         for s in TABLE.iter().filter(|s| s.chord.command) {
-            let Key::Letter(c) = s.chord.key else {
-                panic!("{:?}", s.bound)
+            // The character the key types: a letter, or "," for Settings.
+            let c = match s.chord.key {
+                Key::Letter(c) => c,
+                Key::Comma => ',',
+                _ => panic!("{:?}", s.bound),
             };
             let shift = s.chord.shift;
             let both = command(c, shift, false);
@@ -455,6 +470,29 @@ mod tests {
         assert_eq!(text(Bound::CloseInstance, true), "Esc");
         assert_eq!(text(Bound::SelectNone, true), "⇧⌘A");
         assert_eq!(text(Bound::Duplicate, false), "Ctrl+D");
+    }
+
+    #[test]
+    fn settings_is_cmd_comma() {
+        let settings = chord(Bound::Settings).unwrap();
+        assert_eq!(
+            settings,
+            Chord {
+                command: true,
+                shift: false,
+                key: Key::Comma
+            }
+        );
+        assert_eq!(settings.text_for(true), "⌘,");
+        assert_eq!(settings.text_for(false), "Ctrl+,");
+        assert_eq!(command(',', false, false), Some(Bound::Settings));
+        assert_eq!(command(',', true, false), None);
+        assert_eq!(command(',', false, true), None, "held, it opens once");
+        assert_eq!(Bound::Settings.label(), "Settings");
+        assert_eq!(Bound::Settings.group(), "Edit");
+        assert_eq!(Bound::Settings.action(), Some(UiAction::ShowSettings(true)));
+        // A comma typed without Cmd is no shortcut.
+        assert_eq!(plain(','), None);
     }
 
     #[test]

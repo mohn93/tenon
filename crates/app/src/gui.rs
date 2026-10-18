@@ -8,7 +8,7 @@ use render::Viewport;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::ui::theme::{self, ThemeChoice};
+use crate::ui::theme::{self, ThemeChoice, UiScale};
 use crate::ui::{UiAction, View, draw};
 
 pub struct Gui {
@@ -22,6 +22,9 @@ pub struct GuiFrame {
     pub actions: Vec<UiAction>,
     /// Where the 3D view goes, in physical pixels.
     pub viewport: Viewport,
+    /// Physical pixels per point this frame was laid out at: the window's scale factor times
+    /// the UI scale.
+    pub pixels_per_point: f32,
     /// Fly mode holds the pointer: egui keeps the cursor hidden rather than showing the icon
     /// of what it last saw under it.
     pub hide_cursor: bool,
@@ -34,9 +37,11 @@ impl Gui {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         theme: ThemeChoice,
+        ui_scale: UiScale,
     ) -> Self {
         let ctx = egui::Context::default();
         theme::install(&ctx, theme);
+        start_zoom(&ctx, ui_scale);
         let state = egui_winit::State::new(
             ctx.clone(),
             ViewportId::ROOT,
@@ -57,6 +62,11 @@ impl Gui {
     /// Draws the panels in `choice` from the next frame on.
     pub fn set_theme(&self, choice: ThemeChoice) {
         theme::set_choice(&self.ctx, choice);
+    }
+
+    /// Draws the panels at `scale` from the next frame on.
+    pub fn set_ui_scale(&self, scale: UiScale) {
+        self.ctx.set_zoom_factor(scale.factor());
     }
 
     /// The egui context, for loading images the panels show.
@@ -97,17 +107,10 @@ impl Gui {
         let output = self
             .ctx
             .run_ui(input, |ui| central = draw(ui, view, &mut actions));
-        let ppp = output.pixels_per_point;
-        let px = |v: f32| (v * ppp).round().max(0.0) as u32;
-        let viewport = Viewport {
-            x: px(central.min.x),
-            y: px(central.min.y),
-            width: px(central.width()),
-            height: px(central.height()),
-        };
         GuiFrame {
             actions,
-            viewport,
+            viewport: physical_viewport(central, output.pixels_per_point),
+            pixels_per_point: output.pixels_per_point,
             hide_cursor: false,
             output,
         }
@@ -176,6 +179,24 @@ impl Gui {
     }
 }
 
+/// Sets the UI scale before the first frame: egui's options directly, since
+/// `Context::set_zoom_factor` only takes effect a frame later and the first frame would be laid
+/// out at 100%.
+fn start_zoom(ctx: &egui::Context, scale: UiScale) {
+    ctx.options_mut(|o| o.zoom_factor = scale.factor());
+}
+
+/// The 3D view's rectangle in physical pixels, from its rectangle in points.
+fn physical_viewport(central: egui::Rect, pixels_per_point: f32) -> Viewport {
+    let px = |v: f32| (v * pixels_per_point).round().max(0.0) as u32;
+    Viewport {
+        x: px(central.min.x),
+        y: px(central.min.y),
+        width: px(central.width()),
+        height: px(central.height()),
+    }
+}
+
 /// See `Gui::wants_pointer_at`.
 fn wants_pointer_at(ctx: &egui::Context, pos: glam::DVec2) -> bool {
     if ctx.egui_is_using_pointer() {
@@ -229,5 +250,45 @@ mod tests {
             wants_pointer_at(&ctx, DVec2::new(1010.0, 610.0)),
             "over the menu"
         );
+    }
+
+    #[test]
+    fn physical_viewport_uses_the_zoomed_pixels_per_point() {
+        // A 2x display at 125%.
+        let central = Rect::from_min_size(Pos2::new(44.0, 36.0), Vec2::new(100.0, 50.0));
+        assert_eq!(
+            physical_viewport(central, 2.5),
+            Viewport {
+                x: 110,
+                y: 90,
+                width: 250,
+                height: 125
+            }
+        );
+    }
+
+    #[test]
+    fn the_zoom_factor_reaches_the_frame() {
+        let ctx = egui::Context::default();
+        let input = || {
+            let mut raw = egui::RawInput::default();
+            raw.viewports
+                .entry(ViewportId::ROOT)
+                .or_default()
+                .native_pixels_per_point = Some(2.0);
+            raw
+        };
+        let ppp = || {
+            let mut output = ctx.run_ui(input(), |_| {});
+            output.textures_delta.clear();
+            output.pixels_per_point
+        };
+        // The scale at start is in place before the first frame: egui-winit reads it to size
+        // that frame's screen in points (`set_zoom_factor` would only apply within the frame).
+        start_zoom(&ctx, UiScale::P110);
+        assert_eq!(ctx.zoom_factor(), 1.1);
+        assert_eq!(ppp(), 2.2);
+        ctx.set_zoom_factor(1.25);
+        assert_eq!(ppp(), 2.5);
     }
 }

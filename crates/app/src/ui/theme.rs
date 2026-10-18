@@ -31,6 +31,73 @@ impl ThemeChoice {
     }
 }
 
+/// How large the panels are drawn: egui's zoom factor, as a percent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(into = "u16")]
+pub enum UiScale {
+    P90,
+    #[default]
+    P100,
+    P110,
+    P125,
+}
+
+impl UiScale {
+    pub const ALL: [UiScale; 4] = [UiScale::P90, UiScale::P100, UiScale::P110, UiScale::P125];
+
+    pub fn percent(self) -> u16 {
+        match self {
+            UiScale::P90 => 90,
+            UiScale::P100 => 100,
+            UiScale::P110 => 110,
+            UiScale::P125 => 125,
+        }
+    }
+
+    /// egui's zoom factor: the percent over 100.
+    pub fn factor(self) -> f32 {
+        f32::from(self.percent()) / 100.0
+    }
+
+    /// "110%".
+    pub fn label(self) -> String {
+        format!("{}%", self.percent())
+    }
+}
+
+/// A percent that is not one of the four is 100.
+impl From<u16> for UiScale {
+    fn from(percent: u16) -> Self {
+        UiScale::ALL
+            .into_iter()
+            .find(|s| s.percent() == percent)
+            .unwrap_or_default()
+    }
+}
+
+impl From<UiScale> for u16 {
+    fn from(scale: UiScale) -> Self {
+        scale.percent()
+    }
+}
+
+/// Any value reads: a percent that is not one of the four, or a value that is not a whole
+/// number at all, is 100, so an odd scale never costs the rest of the prefs file.
+impl<'de> Deserialize<'de> for UiScale {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Read {
+            Percent(u16),
+            Other(serde::de::IgnoredAny),
+        }
+        Ok(match Read::deserialize(deserializer)? {
+            Read::Percent(p) => UiScale::from(p),
+            Read::Other(_) => UiScale::default(),
+        })
+    }
+}
+
 /// One theme's colors. The whole set the spec names is defined here; a few tokens (`success`)
 /// get their first user in a later milestone.
 #[allow(dead_code)]
@@ -334,8 +401,10 @@ pub fn style(t: &Tokens, dark: bool) -> egui::Style {
     style
 }
 
-/// Installs the fonts and both themes' styles on `ctx`, and picks `choice`.
+/// Installs the fonts and both themes' styles on `ctx`, and picks `choice`. egui's own
+/// keyboard zoom (Cmd+= and Cmd+-) is off: the UI scale is the Settings window's alone.
 pub fn install(ctx: &egui::Context, choice: ThemeChoice) {
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
     ctx.set_fonts(fonts::definitions());
     ctx.set_style_of(egui::Theme::Dark, style(&DARK, true));
     ctx.set_style_of(egui::Theme::Light, style(&LIGHT, false));
@@ -507,6 +576,25 @@ mod tests {
                 FontFamily::Monospace
             );
         }
+    }
+
+    #[test]
+    fn install_turns_egui_keyboard_zoom_off() {
+        let ctx = egui::Context::default();
+        assert!(ctx.options(|o| o.zoom_with_keyboard), "egui's default");
+        install(&ctx, ThemeChoice::System);
+        assert!(!ctx.options(|o| o.zoom_with_keyboard));
+    }
+
+    #[test]
+    fn ui_scales_read_as_percents() {
+        assert_eq!(UiScale::ALL.map(UiScale::percent), [90, 100, 110, 125]);
+        assert_eq!(UiScale::default(), UiScale::P100);
+        assert_eq!(UiScale::P125.factor(), 1.25);
+        assert_eq!(UiScale::P110.label(), "110%");
+        assert_eq!(UiScale::from(300), UiScale::P100);
+        assert_eq!(UiScale::from(90), UiScale::P90);
+        assert_eq!(u16::from(UiScale::P90), 90);
     }
 
     #[test]

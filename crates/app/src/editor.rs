@@ -3844,6 +3844,7 @@ mod tests {
             Key::Escape => EditorKey::Escape,
             // The window's key path acts on F2 (Rename Component); the editor has no key for it.
             Key::F2 => panic!("{bound:?} is the window's, not the editor's"),
+            Key::Comma => panic!("{bound:?} is a Cmd chord"),
         }
     }
 

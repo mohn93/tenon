@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::editor::ImportOptions;
 use crate::ui::DockLayout;
-use crate::ui::theme::ThemeChoice;
+use crate::ui::theme::{ThemeChoice, UiScale};
 
 /// What the prefs file keeps. Keys it does not know are ignored, and dropped at the next save;
 /// a key missing (a file from before it) is its default.
@@ -18,6 +18,9 @@ use crate::ui::theme::ThemeChoice;
 #[serde(default)]
 pub struct Prefs {
     pub theme: ThemeChoice,
+    /// How large the panels are drawn (Settings > Appearance). Any value that is not one of
+    /// the four percents loads as 100.
+    pub ui_scale: UiScale,
     /// The dock's width, split and tab.
     pub dock: DockLayout,
     /// Files opened or saved in the window, newest first, absolute, at most `RECENT_LEN`.
@@ -208,14 +211,16 @@ mod tests {
             &path,
             &Prefs {
                 theme: ThemeChoice::Light,
+                ui_scale: UiScale::P110,
                 ..Default::default()
             },
         )
         .unwrap();
         assert_eq!(load(&path).theme, ThemeChoice::Light);
+        assert_eq!(load(&path).ui_scale, UiScale::P110);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"theme\": \"light\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  }\n}"
+            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  }\n}"
         );
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&path), 0o600);
@@ -249,6 +254,7 @@ mod tests {
                 tab: DockTab::Materials,
             },
             recent: Vec::new(),
+            ui_scale: UiScale::P125,
             import: ImportOptions::default(),
         };
         assert_ne!(prefs.theme, ThemeChoice::default());
@@ -270,6 +276,7 @@ mod tests {
                 theme: ThemeChoice::Dark,
                 dock: DockLayout::default(),
                 recent: Vec::new(),
+                ui_scale: UiScale::P100,
                 import: ImportOptions::default(),
             }
         );
@@ -526,6 +533,36 @@ mod tests {
         );
         assert_eq!(prefs.recent, [PathBuf::from("/a/house.skr")]);
         assert_eq!(prefs.import, ImportOptions::default());
+        assert_eq!(prefs.ui_scale, UiScale::P100);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_ui_scale_loads_as_100() {
+        let home = home("ui-scale");
+        let path = path_in(&home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let load_json = |json: &str| {
+            std::fs::write(&path, json).unwrap();
+            load(&path)
+        };
+        assert_eq!(load_json("{\"ui_scale\": 125}").ui_scale, UiScale::P125);
+        assert_eq!(load_json("{}").ui_scale, UiScale::P100, "an older file");
+        // Any other value, of any type, is 100 and leaves the rest of the file alone.
+        for odd in [
+            "300",
+            "0",
+            "-90",
+            "110.0",
+            "\"big\"",
+            "null",
+            "[110]",
+            "{\"p\": 110}",
+        ] {
+            let prefs = load_json(&format!("{{\"theme\": \"dark\", \"ui_scale\": {odd}}}"));
+            assert_eq!(prefs.ui_scale, UiScale::P100, "{odd}");
+            assert_eq!(prefs.theme, ThemeChoice::Dark, "{odd}");
+        }
         std::fs::remove_dir_all(home).unwrap();
     }
 

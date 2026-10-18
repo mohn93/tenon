@@ -13,7 +13,7 @@ use tools::ToolKind;
 
 use crate::editor::{ImportOptions, RenameTarget, Status};
 use crate::feedback::Hud;
-use theme::ThemeChoice;
+use theme::{ThemeChoice, UiScale};
 
 pub(crate) mod context_bar;
 mod dialogs;
@@ -25,6 +25,7 @@ mod menu_bar;
 mod outliner;
 mod rail;
 mod right;
+mod settings;
 mod sheets;
 mod start;
 mod status;
@@ -120,6 +121,10 @@ pub enum UiAction {
     ShowAgentActivity(bool),
     /// Draw the window in this theme, and keep it in the preferences.
     SetTheme(ThemeChoice),
+    /// Open or close the Settings window.
+    ShowSettings(bool),
+    /// Draw the panels at this scale, and keep it in the preferences.
+    SetUiScale(UiScale),
     /// Lay the dock out so (a resize, a divider drag or a tab chosen), and keep it in the
     /// preferences.
     SetDock(DockLayout),
@@ -251,6 +256,14 @@ pub struct View<'a> {
     /// The one selected group or component (`Editor::rename_target`): Rename Component works
     /// on it and Entity Info shows its Name field.
     pub rename: Option<&'a RenameTarget>,
+    /// What the Settings window shows; Some while it is open.
+    pub settings: Option<SettingsView>,
+}
+
+/// The preferences the Settings window shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SettingsView {
+    pub ui_scale: UiScale,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.
@@ -364,6 +377,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
         viewport::gizmo(ui, central, view.camera, view.projection, actions);
     }
     viewport::set_cursor(ui.ctx(), central, view.cursor);
+    if let Some(settings) = &view.settings {
+        settings::settings_window(ui, view, settings, actions);
+    }
     // Last, over everything else.
     match view.sheet {
         Some(sheet) => sheets::sheet(ui, sheet, actions),

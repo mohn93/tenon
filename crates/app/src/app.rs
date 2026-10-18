@@ -35,15 +35,43 @@ use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
+use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, Sheet, StartCard, TexturePosition, TextureRow, UiAction, View,
+    Agents, MaterialRow, SettingsView, Sheet, StartCard, TexturePosition, TextureRow, UiAction,
+    View,
 };
 use crate::ui::{theme, viewport};
 
 /// The window's least size, in points: the panels and a usable 3D view.
 const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
 
-/// The window as it opens: title, default size and least size.
+/// The smallest window: 960 x 600 points at `scale`, in logical pixels, so the panels always
+/// get at least `MIN_WINDOW` points.
+fn min_window_size(scale: UiScale) -> LogicalSize<f64> {
+    let factor = f64::from(scale.percent()) / 100.0;
+    LogicalSize::new(MIN_WINDOW.width * factor, MIN_WINDOW.height * factor)
+}
+
+/// The size a window of `size` must grow to so it is at least `min` each way; None when it
+/// already is.
+fn grown_to_min(size: LogicalSize<f64>, min: LogicalSize<f64>) -> Option<LogicalSize<f64>> {
+    (size.width < min.width || size.height < min.height)
+        .then(|| LogicalSize::new(size.width.max(min.width), size.height.max(min.height)))
+}
+
+/// Holds `window` to the least size for `scale`, growing it now if it is smaller (a minimum
+/// alone may not resize a window that is already open).
+fn set_min_window(window: &Window, scale: UiScale) {
+    let min = min_window_size(scale);
+    window.set_min_inner_size(Some(min));
+    let size = window.inner_size().to_logical(window.scale_factor());
+    if let Some(grown) = grown_to_min(size, min) {
+        let _ = window.request_inner_size(grown);
+    }
+}
+
+/// The window as it opens: title, default size and least size (at 100%; `State::new` sets the
+/// one for the UI scale).
 fn window_attributes() -> WindowAttributes {
     Window::default_attributes()
         .with_title("sketchup-alt")
@@ -504,6 +532,8 @@ struct State {
     agent_activity: bool,
     /// Whether the Keyboard Shortcuts window is open.
     shortcuts_window: bool,
+    /// Whether the Settings window is open.
+    settings_open: bool,
     /// The sheet open over the window: keys and native menu items (but Quit) wait while it is.
     sheet: Option<Sheet>,
     /// What the open sheet was opened over, so its confirm acts only if it still applies.
@@ -575,7 +605,8 @@ impl State {
         } = gpu(&instance, &window).unwrap_or_else(|e| panic!("{e}"));
 
         let renderer = Renderer::new(&device, &queue, config.format);
-        let gui = Gui::new(&window, &device, config.format, prefs.theme);
+        let gui = Gui::new(&window, &device, config.format, prefs.theme, prefs.ui_scale);
+        set_min_window(&window, prefs.ui_scale);
         let view = Viewport::full((config.width, config.height));
         let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
         let mut editor = Editor::new(
@@ -604,6 +635,7 @@ impl State {
             start_dismissed: false,
             agent_activity: false,
             shortcuts_window: false,
+            settings_open: false,
             sheet: None,
             sheet_origin: SheetOrigin::default(),
             recovered_seen: 0,
@@ -1098,6 +1130,15 @@ impl State {
                 self.gui.set_theme(choice);
                 self.save_prefs();
             }
+            UiAction::ShowSettings(open) => self.settings_open = open,
+            UiAction::SetUiScale(scale) => {
+                if self.prefs.ui_scale != scale {
+                    self.prefs.ui_scale = scale;
+                    self.gui.set_ui_scale(scale);
+                    set_min_window(&self.window, scale);
+                    self.save_prefs();
+                }
+            }
             UiAction::SetDock(dock) => {
                 if self.prefs.dock != dock {
                     self.prefs.dock = dock;
@@ -1179,7 +1220,13 @@ impl State {
         eprintln!("GPU device made again");
         self.renderer = Renderer::new(&device, &queue, config.format);
         self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
-        self.gui = Gui::new(&self.window, &device, config.format, self.prefs.theme);
+        self.gui = Gui::new(
+            &self.window,
+            &device,
+            config.format,
+            self.prefs.theme,
+            self.prefs.ui_scale,
+        );
         // The swatches belonged to the old panels' context.
         self.swatches.clear();
         self.drawn = None;
@@ -1364,6 +1411,9 @@ impl State {
             recent: &self.prefs.recent,
             sheet: self.sheet.as_ref(),
             rename: rename.as_ref(),
+            settings: self.settings_open.then_some(SettingsView {
+                ui_scale: self.prefs.ui_scale,
+            }),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -1417,8 +1467,9 @@ impl State {
         self.renderer.set_preview(&self.editor.solid_preview());
         // The view follows the panels' theme; render_view keeps its own renderer's classic look.
         self.renderer.set_style(theme::view_style(self.gui.theme()));
+        // The view's widths in points follow the UI scale, as the panels' do.
         self.renderer
-            .set_pixels_per_point(self.window.scale_factor() as f32);
+            .set_pixels_per_point(gui_frame.pixels_per_point);
         self.renderer.set_lighting(doc.lighting);
         // The tools' marker and lines are egui's (the HUD); the renderer draws no overlay.
         self.renderer
@@ -1579,6 +1630,7 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
             PhysicalKey::Code(KeyCode::KeyQ) => Some('q'),
             PhysicalKey::Code(KeyCode::KeyA) => Some('a'),
             PhysicalKey::Code(KeyCode::KeyD) => Some('d'),
+            PhysicalKey::Code(KeyCode::Comma) => Some(','),
             _ => None,
         },
     }
@@ -2269,6 +2321,34 @@ mod tests {
     }
 
     #[test]
+    fn the_minimum_window_grows_with_the_ui_scale() {
+        assert_eq!(
+            min_window_size(UiScale::P100),
+            LogicalSize::new(960.0, 600.0)
+        );
+        assert_eq!(min_window_size(UiScale::P100), MIN_WINDOW);
+        assert_eq!(
+            min_window_size(UiScale::P125),
+            LogicalSize::new(1200.0, 750.0)
+        );
+        assert_eq!(
+            min_window_size(UiScale::P90),
+            LogicalSize::new(864.0, 540.0)
+        );
+    }
+
+    #[test]
+    fn a_window_smaller_than_the_new_minimum_grows_to_it() {
+        let min = min_window_size(UiScale::P125);
+        assert_eq!(
+            grown_to_min(LogicalSize::new(1000.0, 900.0), min),
+            Some(LogicalSize::new(1200.0, 900.0))
+        );
+        assert_eq!(grown_to_min(LogicalSize::new(960.0, 600.0), min), Some(min));
+        assert_eq!(grown_to_min(LogicalSize::new(1280.0, 800.0), min), None);
+    }
+
+    #[test]
     fn a_request_that_changes_only_the_editor_still_shows() {
         let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
         let before = shown(&e);
@@ -2688,12 +2768,15 @@ mod tests {
             'z' => KeyCode::KeyZ,
             'a' => KeyCode::KeyA,
             'd' => KeyCode::KeyD,
+            ',' => KeyCode::Comma,
             other => panic!("add {other} to shortcut_letter's fallbacks and here"),
         };
         let arabic = Key::Character(SmolStr::new("ب"));
         for s in TABLE.iter().filter(|s| s.chord.command) {
-            let ShortcutKey::Letter(c) = s.chord.key else {
-                continue;
+            let c = match s.chord.key {
+                ShortcutKey::Letter(c) => c,
+                ShortcutKey::Comma => ',',
+                _ => continue,
             };
             assert_eq!(
                 shortcut_letter(&arabic, PhysicalKey::Code(code(c))),
