@@ -529,6 +529,9 @@ struct State {
     timing: Timing,
     /// The window title last set.
     title: String,
+    /// The edited flag last given to the window (the macOS close button's dot).
+    #[cfg(target_os = "macos")]
+    edited: bool,
     /// When and where the left button last ended a click in the view, and how many clicks in
     /// a row that made, for double- and triple-clicks.
     clicks: Option<(Instant, DVec2, u8)>,
@@ -608,6 +611,8 @@ impl State {
             timing: Timing::default(),
             clicks: None,
             title: String::new(),
+            #[cfg(target_os = "macos")]
+            edited: false,
             left_press: None,
             focused: true,
             capture: Capture::Free,
@@ -696,16 +701,22 @@ impl State {
         if !doc.is_modified() {
             return true;
         }
-        let name = file_name(doc.path());
+        // With a parent, macOS shows an NSAlert sheet: Escape cancels, Cmd+D is Don't Save.
         let answer = rfd::MessageDialog::new()
-            .set_title("Unsaved changes")
-            .set_description(format!("Save the changes to {name} first?"))
-            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title(unsaved_question(doc.path()))
+            .set_description("Your changes will be lost if you don't save them.")
+            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+                "Save".into(),
+                "Don't Save".into(),
+                "Cancel".into(),
+            ))
+            .set_parent(&*self.window)
             .show();
-        match answer {
-            rfd::MessageDialogResult::Yes => self.save(false),
-            rfd::MessageDialogResult::No => true,
-            _ => false,
+        match unsaved_choice(&answer) {
+            UnsavedChoice::Save => self.save(false),
+            UnsavedChoice::DontSave => true,
+            UnsavedChoice::Cancel => false,
         }
     }
 
@@ -1127,10 +1138,16 @@ impl State {
         // The hover is worked out once per frame, not per event.
         self.editor.refresh_hover();
         let doc = self.editor.doc();
-        let title = window_title(doc.path(), doc.is_modified());
+        let modified = doc.is_modified();
+        let title = window_title(doc.path(), modified, cfg!(target_os = "macos"));
         if title != self.title {
             self.window.set_title(&title);
             self.title = title;
+        }
+        #[cfg(target_os = "macos")]
+        if modified != self.edited {
+            winit::platform::macos::WindowExtMacOS::set_document_edited(&*self.window, modified);
+            self.edited = modified;
         }
         let status = self.editor.status_parts();
         let info = entity_info(self.editor.doc());
@@ -1466,10 +1483,39 @@ fn file_name(path: Option<&Path>) -> String {
     )
 }
 
-/// "house.skr - sketchup-alt", with "*" after the name while there are unsaved changes.
-fn window_title(path: Option<&Path>, modified: bool) -> String {
+/// The window title: the file name alone on macOS, where the close button shows unsaved
+/// changes; elsewhere "house.skr* - sketchup-alt".
+fn window_title(path: Option<&Path>, modified: bool, mac: bool) -> String {
+    if mac {
+        return file_name(path);
+    }
     let star = if modified { "*" } else { "" };
     format!("{}{star} - sketchup-alt", file_name(path))
+}
+
+/// `Do you want to save changes to "house.skr"?`
+fn unsaved_question(path: Option<&Path>) -> String {
+    format!("Do you want to save changes to \"{}\"?", file_name(path))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnsavedChoice {
+    Save,
+    DontSave,
+    Cancel,
+}
+
+/// What the unsaved-changes alert's answer asks for. Yes and No come from a backend that
+/// ignores custom labels; anything else (Escape, a dismissed alert) cancels.
+fn unsaved_choice(answer: &rfd::MessageDialogResult) -> UnsavedChoice {
+    use rfd::MessageDialogResult as R;
+    match answer {
+        R::Yes => UnsavedChoice::Save,
+        R::No => UnsavedChoice::DontSave,
+        R::Custom(label) if label == "Save" => UnsavedChoice::Save,
+        R::Custom(label) if label == "Don't Save" => UnsavedChoice::DontSave,
+        _ => UnsavedChoice::Cancel,
+    }
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
@@ -2225,11 +2271,45 @@ mod tests {
 
     #[test]
     fn titles_name_the_file_and_mark_unsaved_changes() {
-        assert_eq!(window_title(None, false), "Untitled.skr - sketchup-alt");
+        let house = Some(Path::new("/m/house.skr"));
         assert_eq!(
-            window_title(Some(Path::new("/m/house.skr")), true),
+            window_title(None, false, false),
+            "Untitled.skr - sketchup-alt"
+        );
+        assert_eq!(
+            window_title(house, true, false),
             "house.skr* - sketchup-alt"
         );
+        // macOS: the close button's dot shows unsaved changes.
+        assert_eq!(window_title(house, true, true), "house.skr");
+        assert_eq!(window_title(None, true, true), "Untitled.skr");
+    }
+
+    #[test]
+    fn the_unsaved_question_names_the_file() {
+        assert_eq!(
+            unsaved_question(Some(Path::new("/m/house.skr"))),
+            "Do you want to save changes to \"house.skr\"?"
+        );
+        assert_eq!(
+            unsaved_question(None),
+            "Do you want to save changes to \"Untitled.skr\"?"
+        );
+    }
+
+    #[test]
+    fn unsaved_answers_map_to_save_dont_save_and_cancel() {
+        use rfd::MessageDialogResult as R;
+        let custom = |s: &str| R::Custom(s.into());
+        for answer in [custom("Save"), R::Yes] {
+            assert_eq!(unsaved_choice(&answer), UnsavedChoice::Save, "{answer}");
+        }
+        for answer in [custom("Don't Save"), R::No] {
+            assert_eq!(unsaved_choice(&answer), UnsavedChoice::DontSave, "{answer}");
+        }
+        for answer in [custom("Cancel"), R::Cancel, R::Ok, custom("other")] {
+            assert_eq!(unsaved_choice(&answer), UnsavedChoice::Cancel, "{answer}");
+        }
     }
 
     #[test]
