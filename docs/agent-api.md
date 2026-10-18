@@ -32,7 +32,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, and `positioned` for `position_texture`, and `purged` for `purge_definitions` |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, and `purged` for `purge_definitions` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -448,10 +448,11 @@ from the selection when it is in the open context (`select` with mode `toggle`);
 opens it (`open_path` with its whole path); the Model row at the top goes back to the root
 (`open_path` with `[]`; nothing when already there).
 
-`{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
-undo step; a component's name must not be empty; an unknown definition is `not_found`).
+`{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one undo
+step; a component's name must not be empty; an unknown definition is `not_found`).
 `{"type": "purge_definitions"}` removes every definition no instance places, such as a component
-whose last instance was erased, and what only it placed (one undo step). The outcome's `purged` counts the definitions removed, nested ones included (0 when nothing was unused).
+whose last instance was erased, and what only it placed (one undo step). The outcome's `purged`
+counts the definitions removed, nested ones included (0 when nothing was unused).
 
 ### Camera
 
@@ -993,11 +994,11 @@ under a pixel and where a click would snap.
 | Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |
 | Edit > Duplicate (Cmd+D) | `duplicate`, or `copy` with an explicit offset |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z; disabled when there is nothing to undo or redo, the tooltip naming the step) | `undo`, `redo`; `history` lists the steps |
-| Group menu and context bar: Make Group (G), Make Component... (Shift+G, asks for a name), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
+| Group menu and context bar: Make Group (G), Make Component... (Shift+G, a sheet that suggests `Component N`, the first free N), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (the agent passes `name` itself; an empty name is `invalid_input`), `explode`, `close_instance` |
 | Group > Rename Component... (F2), Entity Info's Name field | `rename_definition` (the instance's `definition` from `entity`) |
 | Group > Purge Unused | `purge_definitions` (`purged`) |
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night Lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
-| Camera > Field of View... | `set_camera` (`fov_y_deg`, with the current `eye` and `target`) |
+| Camera > Field of View... (a sheet; perspective only) | `set_camera` (`fov_y_deg`, with the current `eye`, `target` and `up` kept); `set_camera` takes `fov_y_deg` in either projection |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | Drawing by dragging (Line, Rectangle, Circle, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
@@ -1017,27 +1018,29 @@ under a pixel and where a click would snap.
 
 Window chrome, which changes nothing in the model, its view or the editor, has no command: the
 window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
-which menus are open, tooltips, which Outliner rows are expanded, the Outliner's filter text (an agent filters the
-`outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export dialog's suggested
-format, keyboard focus, and the window's preferences: the theme (Settings or View > Theme), the UI scale, the trackpad scroll setting, the dock's width, divider position and tab, and the recent files list, kept in
-`~/.sketchup-alt/prefs.json`, which the API never reads or writes (files an agent opens or saves are not added to the list). The card
-the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is chrome too, and so is dismissing it. Whether the menus are the native macOS menu bar
-or the window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text field
-has focus, except Undo, Redo, Select All and Select None, which go to the field. The window's 3D view follows
-the theme (its day background, the selection's color and width, and the axes, drawn red, green
-and blue in the theme's axis colors); `render_view` keeps one
-fixed look, so its images do not depend on the window. The view's feedback is chrome too: the
-pointer's shape per tool (a grabbing hand while orbiting or panning), the snap chip, which
-appears once the cursor has rested 150 ms, the 2.5 s flash by the cursor (the error a typed value leaves: the tool refusing it or its
-command failing. Clicks and informational messages do not flash. The text is `editor.message`),
-the Push/Pull solid preview (its triangles are not reported; `tool_input`'s `preview` has its
-outline: the face's loops, the pulled loops and the edges joining them), and the orientation gizmo in
-the view's corner. `render_view` never shows the hover highlight, markers, preview lines, solid
-or gizmo. The file dialogs are chrome too (commands
-take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.
-The sheets (import options, component name, rename, field of view) and the Settings window are
-chrome as well, and hold no requests. The window is exposed to screen readers such as VoiceOver
-through AccessKit; that is chrome too.
+which menus are open, tooltips, which Outliner rows are expanded, the Outliner's filter text (an
+agent filters the `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export
+dialog's suggested format, keyboard focus, and the window's preferences: the theme (Settings or
+View > Theme), the UI scale, the trackpad scroll setting, the import options, the dock's width,
+divider position and tab, and the recent files list, kept in `~/.sketchup-alt/prefs.json`, which
+the API never reads or writes (files an agent opens or saves are not added to the list). The card
+the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is
+chrome too, and so is dismissing it. Whether the menus are the native macOS menu bar or the
+window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text
+field has focus, except Undo, Redo, Select All and Select None, which go to the field. The window's
+3D view follows the theme (its day background, the selection's color and width, and the axes, drawn
+red, green and blue in the theme's axis colors); `render_view` keeps one fixed look, so its images
+do not depend on the window. The view's feedback is chrome too: the pointer's shape per tool (a
+grabbing hand while orbiting or panning), the snap chip, which appears once the cursor has rested
+150 ms, the 2.5 s flash by the cursor (the error a typed value leaves: the tool refusing it or its
+command failing. Clicks and informational messages do not flash. The text is `editor.message`), the
+Push/Pull solid preview (its triangles are not reported; `tool_input`'s `preview` has its outline:
+the face's loops, the pulled loops and the edges joining them), and the orientation gizmo in the
+view's corner. `render_view` never shows the hover highlight, markers, preview lines, solid or
+gizmo. The file dialogs are chrome too (commands take paths); while one, or the unsaved-changes
+prompt, is open, the window answers no requests. The sheets (import options, component name,
+rename, field of view) and the Settings window are chrome as well, and hold no requests. The window
+is exposed to screen readers such as VoiceOver through AccessKit; that is chrome too.
 
 ## Example
 
