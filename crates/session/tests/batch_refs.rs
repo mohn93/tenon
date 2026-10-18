@@ -2,7 +2,7 @@
 
 use glam::DVec2;
 use serde_json::{Value, json};
-use session::{BatchCommand, Command, Document, ErrorKind, Query};
+use session::{BatchCommand, Command, Document, ErrorKind, Query, check_references};
 
 fn doc() -> Document {
     Document::new(DVec2::new(800.0, 600.0))
@@ -247,4 +247,40 @@ fn reference_keys_cover_every_id_field() {
         }
     }
     assert!(checked > 10, "found only {checked} id fields");
+}
+
+#[test]
+fn a_reference_across_new_or_open_is_refused() {
+    for replace in [
+        json!({"type": "new", "discard": true}),
+        json!({"type": "open", "path": "/no/such.skr", "discard": true}),
+    ] {
+        let commands = batch(vec![
+            rectangle(),
+            replace,
+            json!({"type": "add_rectangle", "corner": [5, 5, 0], "opposite": [7, 7, 0]}),
+            json!({"type": "push_pull", "face": "$0:f0", "distance": 1}),
+        ]);
+        let (index, message) = check_references(&commands).unwrap_err();
+        assert_eq!(index, 3);
+        assert!(message.contains("replaced the document"), "{message}");
+    }
+    let commands = batch(vec![
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+        json!({"type": "new", "discard": true}),
+        rectangle(),
+        json!({"type": "push_pull", "face": "$2:f0", "distance": 1}),
+    ]);
+    assert_eq!(check_references(&commands), Ok(()));
+}
+
+#[test]
+fn a_command_without_references_comes_back_as_written() {
+    let value = json!({"type": "erase", "ids": ["f4611686018427387904"]});
+    let command = BatchCommand::parse(value.clone(), 0).unwrap();
+    assert!(!command.has_references());
+    let written: Command = serde_json::from_value(value).unwrap();
+    assert_eq!(command.command(), &written);
+    let e = doc().execute_batch(vec![command], false).unwrap_err();
+    assert_eq!(e.error.kind, ErrorKind::NotFound);
 }

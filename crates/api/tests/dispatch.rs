@@ -1006,6 +1006,42 @@ fn a_reference_past_what_was_made_is_a_batch_failure() {
 }
 
 #[test]
+fn a_reference_across_new_is_invalid_params_and_runs_nothing() {
+    let mut h = HeadlessHost::new();
+    let before = call(&mut h, "query", json!({"type": "history"}))["result"]["revision"].clone();
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [
+            rectangle(),
+            {"type": "new", "discard": true},
+            {"type": "add_rectangle", "corner": [5, 5, 0], "opposite": [7, 7, 0]},
+            {"type": "push_pull", "face": "$0:f0", "distance": 1}
+        ], "atomic": false}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    let message = r["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("invalid params: commands[3]: "), "{r}");
+    assert!(message.contains("replaced the document"), "{r}");
+    let after = call(&mut h, "query", json!({"type": "history"}))["result"]["revision"].clone();
+    assert_eq!(before, after);
+    let stats = call(&mut h, "query", json!({"type": "stats"}));
+    assert_eq!(stats["result"]["faces"], 0);
+}
+
+#[test]
+fn a_huge_written_id_without_references_fails_at_its_turn() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [{"type": "erase", "ids": ["f4611686018427387904"]}]}),
+    );
+    assert_eq!(r["error"]["code"], codes::BATCH_FAILED, "{r}");
+    assert_eq!(r["error"]["data"]["error"]["kind"], "not_found", "{r}");
+}
+
+#[test]
 fn an_invalid_command_names_its_index() {
     let mut h = HeadlessHost::new();
     let r = call(

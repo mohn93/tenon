@@ -200,6 +200,8 @@ Errors:
   reference to the command itself or a later one rejects the whole batch before anything runs:
   `-32602` with the message `invalid params: commands[<index>]: <reason>`. A command that is not a
   valid command at all is also `-32602`, its message prefixed `commands[<index>]: `.
+- A reference to a command at or before a `new` or `open` of the same batch is refused the same
+  way before anything runs (`-32602`), since ids start over in the new document.
 - A reference past what the command made (`"$0:f1"` when command 0 made one face) fails the
   referring command at its turn with `invalid_input`: `$0:f1: command 0 made 1 face`. The batch
   stops there as for any failed command (`-32001`): an atomic batch is rolled back, a non-atomic

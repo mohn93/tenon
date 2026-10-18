@@ -16,8 +16,10 @@ use serde_json::Value;
 
 use crate::command::{Command, CommandError, ErrorKind, Outcome};
 
-/// The first stand-in id number. Entity and material ids come from one counter that never gets
-/// near it.
+/// The first stand-in id number. The ids a document makes come from one counter that never gets
+/// near it, but ids a client names or a document holds (a crafted file) may in principle be that
+/// large: `resolve` only replaces the stand-ins `parse` put in, and `parse` refuses literal ids
+/// that large in a command that also has references.
 pub const STAND_IN_BASE: u64 = 1 << 62;
 
 /// The kind of id a reference picks from an outcome.
@@ -276,6 +278,11 @@ impl BatchCommand {
             ));
         }
         let mut command: Command = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        if refs.is_empty() {
+            // Taken as written: a literal id however large fails at its turn, as without
+            // references.
+            return Ok(BatchCommand::from(command));
+        }
         let mut stand_ins = 0;
         id_slots(&mut command, &mut |slot| {
             stand_ins += match slot {
@@ -482,4 +489,30 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SetProjection { .. }
         | Command::SetLighting { .. } => {}
     }
+}
+
+/// Refuses a reference across a `new` or `open` of the same batch: those restart the document,
+/// so ids made before them name other things after. The error is the referring command's index
+/// and the reason.
+pub fn check_references(commands: &[BatchCommand]) -> Result<(), (usize, String)> {
+    for (index, command) in commands.iter().enumerate() {
+        for r in &command.refs {
+            let replaced = (r.command..index).find(|&k| {
+                matches!(
+                    commands[k].command,
+                    Command::New { .. } | Command::Open { .. }
+                )
+            });
+            if let Some(k) = replaced {
+                return Err((
+                    index,
+                    format!(
+                        "\"{r}\" refers to command {}, before command {k} replaced the document",
+                        r.command
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }

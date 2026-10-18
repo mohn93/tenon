@@ -790,6 +790,26 @@ mod tests {
     }
 
     #[test]
+    fn a_batch_that_discards_resolves_references_made_after_the_new() {
+        let dir = recovery_dir("batch-refs-after");
+        let mut e = editor();
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "batch",
+            json!({"commands": [
+                add_edge(),
+                {"type": "new", "discard": true},
+                {"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]},
+                {"type": "push_pull", "face": "$2:f0", "distance": 1}
+            ]}),
+        );
+        assert_eq!(r["result"]["outcomes"].as_array().unwrap().len(), 4, "{r}");
+        assert_eq!(e.doc().model().faces().count(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn quitting_with_discard_keeps_the_work_and_a_folder_open_to_others_is_refused() {
         let dir = recovery_dir("quit");
         let mut e = editor();

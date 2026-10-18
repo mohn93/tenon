@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use session::{
     BatchCommand, BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind,
-    Lighting, Outcome, Query, QueryResult,
+    Lighting, Outcome, Query, QueryResult, check_references,
 };
 
 use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
@@ -251,6 +251,12 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            check_references(&commands).map_err(|(index, reason)| {
+                RpcError::new(
+                    codes::INVALID_PARAMS,
+                    format!("invalid params: commands[{index}]: {reason}"),
+                )
+            })?;
             for (index, command) in commands.iter_mut().enumerate() {
                 if let Err(error) = within_roots(host, command.command_mut(), true) {
                     let e = BatchError {
