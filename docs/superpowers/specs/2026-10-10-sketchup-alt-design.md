@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images, M8c clean-up); 2026-10-13 (M8d polish); 2026-10-14 (M9a soften and smooth, M9b textures, M9c lights); 2026-10-15 (M9d texture positioning, M9e light shadows; M10a-c full agent control); 2026-10-18 (M12a MCP adapter)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images, M8c clean-up); 2026-10-13 (M8d polish); 2026-10-14 (M9a soften and smooth, M9b textures, M9c lights); 2026-10-15 (M9d texture positioning, M9e light shadows; M10a-c full agent control); 2026-10-18 (M12a MCP adapter); 2026-10-18 (M12b batch references)
 
 ## Goal
 
@@ -335,6 +335,11 @@ Agent integration milestones:
     - `batch` results carry the net `changes` of the whole batch.
     - Undo steps carry an origin, `user` (the window) or `agent` (the API), listed by the `history` query; `undo` takes an `expect` (label and optional origin) and refuses with `unexpected_step` when the next step differs, so an agent does not undo a person's work in a shared window.
   - **Docs:** setup for Claude Code and Claude Desktop, headless and live.
+- **M12b**: references inside a batch.
+  - A command in a `batch` (and in the MCP `transact` tool) can name ids an earlier command of the same batch made, by reference instead of by id: `"$N:KI"` is the I-th id of kind K (`v`, `e`, `f`, `i`, `g`, or `m` for materials) in command N's outcome (`changes.created`, or `changes.materials` for `m`), counted from 0 in the order the outcome lists them; `"$N:K*"` is all of that kind and `"$N:*"` every entity command N created. N counts from 0 and must be lower than the referring command's own index.
+  - References are allowed only where a command takes an entity or material id (`ids`, `face`, `id`, `material`, and `open_path`'s `path`); anywhere else such a string is plain text. `*` references only in lists of ids.
+  - A malformed reference, or one to the referring command or a later one, rejects the whole batch before anything runs (invalid params). A reference to an id the earlier command did not make (`"$0:f1"` when it made one face) fails that command with `invalid_input`, like any failing command: an atomic batch is rolled back.
+  - `describe` and the MCP `transact` schema accept a reference wherever they accept an entity or material id in a batch.
 
 ## Risks
 
