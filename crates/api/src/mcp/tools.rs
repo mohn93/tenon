@@ -12,7 +12,7 @@ use crate::editor::EditorCommand;
 use crate::input::ToolInputParams;
 use crate::probe::{InferQuery, PickQuery, ScreenCommand, View};
 use crate::protocol::{RpcError, codes};
-use crate::schema::{hoist, object_root};
+use crate::schema::{hoist, object_root, with_batch_refs};
 
 /// `render_view`'s image size when the call leaves a side out.
 const DEFAULT_WIDTH: u32 = 960;
@@ -50,7 +50,7 @@ fn description(tool: &str) -> &'static str {
             "Describes the modeler's API (units are meters, Z is up); pass schema with one of schema_names or a method name (execute, batch, query, render_view, tool_input) to get its JSON Schema."
         }
         "transact" => {
-            "Changes the model with one or more commands (points in meters, Z up), run as one atomic undo step unless atomic is false; call describe for the command schemas."
+            "Changes the model with one or more commands (points in meters, Z up), run as one atomic undo step unless atomic is false; call describe for the command schemas. Two or more commands may refer to ids an earlier one of them made: \"$0:f0\" is the first face command 0 created, \"$0:e*\" all its edges, \"$0:*\" every edge, face, instance and guide it created, \"$1:m0\" the material command 1 added."
         }
         "query" => {
             "Reads the model with one query (entities, selection, camera, stats, history and more; lengths in meters, Z up), named by type; each type's other fields are in describe's query schema (describe with schema \"query\"), as is the result schema."
@@ -90,6 +90,7 @@ fn input_schema(tool: &str) -> Value {
                 hoist(&mut defs, schema::<ScreenCommand>()),
                 hoist(&mut defs, schema::<EditorCommand>()),
             ]});
+            with_batch_refs(&mut defs);
             json!({
                 "type": "object",
                 "properties": {

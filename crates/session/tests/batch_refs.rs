@@ -159,6 +159,16 @@ fn parse_rejects_bad_references() {
             1,
             vec!["material"],
         ),
+        (
+            json!({"type": "erase", "ids": ["$0:f0", "f4611686018427387904"]}),
+            1,
+            vec!["cannot be used with references"],
+        ),
+        (
+            json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0], "id": "$0:f0"}),
+            1,
+            vec!["unknown field `id`"],
+        ),
     ];
     for (value, index, texts) in cases {
         let e = BatchCommand::parse(value.clone(), index).unwrap_err();

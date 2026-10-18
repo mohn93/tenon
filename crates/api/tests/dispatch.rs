@@ -938,3 +938,110 @@ fn command_schemas_have_an_object_root_and_bounded_points() {
     let tool_input = d["schemas"]["ToolInput"].to_string();
     assert!(tool_input.contains("1000000.0"), "{tool_input}");
 }
+
+fn rectangle() -> Value {
+    json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 3, 0]})
+}
+
+#[test]
+fn batch_references_build_a_box_over_json_rpc() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [rectangle(), {"type": "push_pull", "face": "$0:f0", "distance": 1}]}),
+    );
+    let result = &r["result"];
+    assert_eq!(result["outcomes"].as_array().unwrap().len(), 2, "{r}");
+    let faces = result["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| id.as_str().unwrap().starts_with('f'))
+        .count();
+    assert_eq!(faces, 6, "{r}");
+    assert!(result["revision"].is_u64(), "{r}");
+}
+
+#[test]
+fn a_bad_reference_is_invalid_params_and_runs_nothing() {
+    let mut h = HeadlessHost::new();
+    let before = call(&mut h, "query", json!({"type": "history"}))["result"]["revision"].clone();
+    assert!(before.is_u64(), "{before}");
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [
+            {"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]},
+            {"type": "push_pull", "face": "$1:f0", "distance": 1}
+        ]}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid params: commands[1]: "),
+        "{r}"
+    );
+    let after = call(&mut h, "query", json!({"type": "history"}))["result"]["revision"].clone();
+    assert_eq!(before, after);
+    let stats = call(&mut h, "query", json!({"type": "stats"}));
+    assert_eq!(stats["result"]["edges"], 0);
+}
+
+#[test]
+fn a_reference_past_what_was_made_is_a_batch_failure() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [rectangle(), {"type": "push_pull", "face": "$0:f3", "distance": 1}], "atomic": true}),
+    );
+    assert_eq!(r["error"]["code"], codes::BATCH_FAILED, "{r}");
+    let data = &r["error"]["data"];
+    assert_eq!(data["index"], 1);
+    assert_eq!(data["error"]["kind"], "invalid_input");
+    assert_eq!(data["rolled_back"], true);
+}
+
+#[test]
+fn an_invalid_command_names_its_index() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [
+            {"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]},
+            {"type": "no_such"}
+        ]}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("commands[1]"),
+        "{r}"
+    );
+}
+
+#[test]
+fn describe_batch_schema_accepts_references() {
+    let d = api::describe();
+    let defs = &d["methods"]["batch"]["params_schema"]["$defs"];
+    let entity = defs["EntityId"]["anyOf"].as_array().unwrap();
+    assert_eq!(entity[1], json!({"$ref": "#/$defs/BatchRef"}));
+    let material = defs["MaterialId"]["anyOf"].as_array().unwrap();
+    assert_eq!(material[1], json!({"$ref": "#/$defs/BatchRef"}));
+    assert_eq!(
+        defs["BatchRef"]["pattern"],
+        r"^\$(0|[1-9][0-9]*):(([vefigm])(0|[1-9][0-9]*|\*)|\*)$"
+    );
+    assert!(
+        d["methods"]["execute"]["params_schema"]["$defs"]
+            .get("BatchRef")
+            .is_none()
+    );
+    assert!(d["schemas"]["BatchRef"].is_object());
+}

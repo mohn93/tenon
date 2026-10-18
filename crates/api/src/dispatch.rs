@@ -20,7 +20,7 @@ use crate::probe::{
 };
 use crate::protocol::{RpcError, codes, failure, parse, success};
 use crate::roots::ApiRoots;
-use crate::schema::{any_of_root, hoist, object_root};
+use crate::schema::{any_of_root, batch_ref_schema, hoist, object_root, with_batch_refs};
 
 /// Largest image side `render_view` accepts, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 4096;
@@ -53,7 +53,9 @@ struct EditorResult {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct BatchParams {
-    commands: Vec<Command>,
+    /// Commands, read one by one so that ids may be references (`BatchCommand::parse`).
+    #[schemars(with = "Vec<Command>")]
+    commands: Vec<Value>,
     #[serde(default)]
     atomic: bool,
 }
@@ -236,9 +238,21 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
         }
         "batch" => {
             let p: BatchParams = params_as(params)?;
-            let mut commands = p.commands;
+            let mut commands = p
+                .commands
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    BatchCommand::parse(value, index).map_err(|reason| {
+                        RpcError::new(
+                            codes::INVALID_PARAMS,
+                            format!("invalid params: commands[{index}]: {reason}"),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             for (index, command) in commands.iter_mut().enumerate() {
-                if let Err(error) = within_roots(host, command, true) {
+                if let Err(error) = within_roots(host, command.command_mut(), true) {
                     let e = BatchError {
                         index,
                         error,
@@ -252,7 +266,6 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
                     .with_data(json!(e)));
                 }
             }
-            let commands = commands.into_iter().map(BatchCommand::from).collect();
             let outcomes = host.execute_batch(commands, p.atomic).map_err(|e| {
                 RpcError::new(
                     codes::BATCH_FAILED,
@@ -405,8 +418,8 @@ pub fn describe() -> Value {
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
-                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed",
-                "params_schema": schema::<BatchParams>(),
+                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\"; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
+                "params_schema": batch_params_schema(),
                 "result_schema": schema::<BatchResult>(),
             },
             "query": {
@@ -495,8 +508,18 @@ pub fn describe() -> Value {
             "CommandError": schema_for!(CommandError),
             "BatchError": schema_for!(BatchError),
             "ChangeEvent": schema_for!(ChangeEvent),
+            "BatchRef": batch_ref_schema(),
         }
     })
+}
+
+/// `batch`'s params schema, its entity and material ids also taking batch references.
+fn batch_params_schema() -> Value {
+    let mut schema = schema::<BatchParams>();
+    if let Some(Value::Object(defs)) = schema.get_mut("$defs") {
+        with_batch_refs(defs);
+    }
+    schema
 }
 
 /// `T`'s JSON Schema as JSON, self-contained (its definitions under `$defs`).

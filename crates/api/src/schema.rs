@@ -48,6 +48,30 @@ pub fn any_of_root(schemas: Vec<Value>) -> Value {
     json!({"type": "object", "anyOf": any_of, "$defs": defs})
 }
 
+/// The grammar of a batch reference, whole string.
+const BATCH_REF_PATTERN: &str = r"^\$(0|[1-9][0-9]*):(([vefigm])(0|[1-9][0-9]*|\*)|\*)$";
+
+/// The schema of a batch reference: a string naming ids an earlier command of the batch made.
+pub fn batch_ref_schema() -> Value {
+    json!({
+        "type": "string",
+        "pattern": BATCH_REF_PATTERN,
+        "description": "In a batch, ids an earlier command of it made: \"$N:KI\" the I-th id of kind K (v vertex, e edge, f face, i instance, g guide, m material) command N made, \"$N:K*\" all of that kind (in id lists only), \"$N:*\" every edge, face, instance and guide it created."
+    })
+}
+
+/// Lets the `EntityId` and `MaterialId` definitions in `defs` also be batch references
+/// (`anyOf` the id or a `BatchRef`) and adds the `BatchRef` definition.
+pub fn with_batch_refs(defs: &mut Map<String, Value>) {
+    for name in ["EntityId", "MaterialId"] {
+        if let Some(def) = defs.get_mut(name) {
+            let id = def.take();
+            *def = json!({"anyOf": [id, {"$ref": "#/$defs/BatchRef"}]});
+        }
+    }
+    defs.insert("BatchRef".into(), batch_ref_schema());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +97,21 @@ mod tests {
                 "$defs": {"P": {"type": "number"}}
             })
         );
+    }
+
+    #[test]
+    fn with_batch_refs_wraps_the_id_definitions_present() {
+        let mut defs = Map::new();
+        defs.insert("EntityId".into(), json!({"type": "string"}));
+        defs.insert("Other".into(), json!({"type": "number"}));
+        with_batch_refs(&mut defs);
+        assert_eq!(
+            defs["EntityId"],
+            json!({"anyOf": [{"type": "string"}, {"$ref": "#/$defs/BatchRef"}]})
+        );
+        assert_eq!(defs["Other"], json!({"type": "number"}));
+        assert!(!defs.contains_key("MaterialId"));
+        assert_eq!(defs["BatchRef"], batch_ref_schema());
     }
 
     #[test]

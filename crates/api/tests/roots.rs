@@ -394,3 +394,28 @@ fn a_root_as_the_target_is_a_folder_and_a_nul_is_invalid() {
         assert!(message.contains("NUL"), "{c}: {message}");
     }
 }
+
+#[test]
+fn a_referenced_material_keeps_the_texture_path_rewritten_under_roots() {
+    let (root, _) = folders("ref-texture");
+    png_file(&root.join("tex.png"));
+    let mut h = host(&root);
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": [
+            {"type": "add_material", "color": [1, 2, 3]},
+            {"type": "change_material", "material": "$0:m0", "texture": {"path": "tex.png"}}
+        ]}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+    let material = r["result"]["outcomes"][0]["changes"]["materials"][0].clone();
+    let m = call(&mut h, "query", json!({"type": "materials"}));
+    let made = m["result"]["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == material)
+        .unwrap_or_else(|| panic!("{m}"));
+    assert!(made["texture"].is_object(), "{m}");
+}

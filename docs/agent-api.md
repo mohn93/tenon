@@ -40,6 +40,8 @@ all commands and results.
   each self-contained (its `$ref`s point into its own `$defs`). `execute` params are any of
   Command, ScreenCommand and EditorCommand; `query` params any of Query and EditorQuery.
   `subscribe` and `describe` take no params (`params_schema` null).
+  In `batch` params an `EntityId` or `MaterialId` may also be a `BatchRef` (see References inside
+  a batch).
 - The `schemas` entries for Command, Query, EditorQuery, EditorCommand and ScreenCommand have
   `"type": "object"` at the root beside their `oneOf`.
 - Model points (positions, not directions, normals or move offsets) are arrays of three numbers
@@ -160,6 +162,52 @@ pushed face, with nothing else on it inside that area: that cuts an opening (a w
 wall, a hole through a slab). The floor of a recess pushed on to the back opens the same way.
 When a face moves, its vertices are reported as `modified`; the edges and faces using them changed
 shape too.
+
+### References inside a batch
+
+In a `batch`, a command may refer to ids an earlier command of the same batch made, instead of
+predicting them:
+
+```json
+{"commands": [
+  {"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 3, 0]},
+  {"type": "push_pull", "face": "$0:f0", "distance": 2.5}
+], "atomic": true}
+```
+
+A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigm])(0|[1-9][0-9]*|\*)|\*)$`:
+
+- `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
+  face, `i` instance, `g` guide from its `changes.created` (lowest id first, which is the order
+  they were made), or `m` material from its `changes.materials`.
+- `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance and guide
+  it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
+  `*` references are allowed only in id lists (`ids`, and `path` of `open_path`), where they
+  expand in place, keeping order; one that expands to nothing leaves nothing in its place.
+- N counts commands of the batch from 0 and must be lower than the referring command's own
+  position.
+
+References are read only in a command's top-level `ids`, `face`, `id` and `material`, and in
+`path` of `open_path`. Any other string, such as a name or a file path, stays as written even
+when it looks like a reference. `material` takes only `m` references, the other fields only
+entity references; whether the entity suits the command (a face for `push_pull`) is checked by
+the command, as for a written id.
+
+Errors:
+
+- A malformed reference (a string in one of those fields that starts with `$` but does not match
+  the pattern), a kind that does not fit the field, a `*` in `face`, `id` or `material`, or a
+  reference to the command itself or a later one rejects the whole batch before anything runs:
+  `-32602` with the message `invalid params: commands[<index>]: <reason>`. A command that is not a
+  valid command at all is also `-32602`, its message prefixed `commands[<index>]: `.
+- A reference past what the command made (`"$0:f1"` when command 0 made one face) fails the
+  referring command at its turn with `invalid_input`: `$0:f1: command 0 made 1 face`. The batch
+  stops there as for any failed command (`-32001`): an atomic batch is rolled back, a non-atomic
+  one keeps the commands before it.
+- A reference to an id that an earlier command of the batch erased stands for that id all the
+  same; the command fails as it would with the id written out (`not_found`).
+
+`execute` does not take references: there one is not a valid id (`-32602`).
 
 ### Curves
 
@@ -991,6 +1039,7 @@ Behaviors worth knowing:
   takes the fields of `set_camera` (absent ones keep the document camera's values) and never
   moves the document camera; its `lighting` never changes the document's.
 - A failed atomic batch is rolled back but still consumes entity ids, so later ids may skip numbers.
+  Use references (`$0:f0`) rather than predicting ids.
 - An `id` that is not a string, number or null is an invalid request (`-32600`, reply id null).
 
 ## Window actions and the API

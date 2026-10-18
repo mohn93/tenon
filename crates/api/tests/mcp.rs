@@ -704,3 +704,34 @@ fn a_socket_backend_maps_replies_and_stays_lost() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn transact_accepts_references() {
+    let out = session(&[
+        tool(
+            1,
+            "transact",
+            json!({"commands": [
+                {"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 3, 0]},
+                {"type": "push_pull", "face": "$0:f0", "distance": 1}
+            ]}),
+        ),
+        req(2, "tools/list", json!({})),
+    ]);
+    let r = &out[0]["result"];
+    assert_eq!(r["isError"], false, "{r}");
+    let faces = r["structuredContent"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| id.as_str().unwrap().starts_with('f'))
+        .count();
+    assert_eq!(faces, 6, "{r}");
+    let transact = out[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "transact")
+        .unwrap();
+    assert!(transact["inputSchema"]["$defs"]["BatchRef"].is_object());
+}

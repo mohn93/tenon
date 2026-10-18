@@ -762,7 +762,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs M12b task 2"]
     fn a_batch_that_discards_resolves_references() {
         let dir = recovery_dir("batch-refs");
         let mut e = editor();

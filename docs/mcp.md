@@ -18,6 +18,14 @@ stdout; diagnostics go to stderr. The server exits when stdin closes.
 | `render_view` | A PNG of the view, without moving the document camera |
 | `tool_input` | Drives the active drawing tool with mouse and keyboard events |
 
+With two or more commands, `transact` runs them as a `batch`, so a command may refer to ids an
+earlier one made (see References inside a batch in [agent-api.md](agent-api.md)): `"$0:f0"` is
+the first face command 0 created, `"$0:e*"` all its edges, `"$0:*"` every edge, face, instance and
+guide it created and `"$1:m0"` the material command 1 added. A box in one call:
+`{"commands": [{"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 3, 0]},
+{"type": "push_pull", "face": "$0:f0", "distance": 2.5}]}`. A single command goes through
+`execute`, which takes no references.
+
 Units are meters, Z is up, angles are in degrees. A failed call is a tool result with `isError`
 and `{code, message, data?}` as its content, using the API's error codes.
 
