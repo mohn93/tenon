@@ -11,7 +11,7 @@ mod protocol;
 mod roots;
 mod transport;
 
-pub use dispatch::{EditorQuery, Host, describe, handle};
+pub use dispatch::{BatchResult, EditorQuery, ExecuteResult, Host, describe, handle};
 pub use editor::{Dialog, EditorCommand, EditorState, MessageKind, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{ACTIVITY_LEN, Activity, Hub, Inbox};

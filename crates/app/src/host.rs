@@ -10,7 +10,9 @@ use api::{
     ToolInputError, ToolInputResult, ToolInputStopped, ToolName, snap_name,
 };
 use render::Snapshotter;
-use session::{BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Outcome};
+use session::{
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin, Outcome,
+};
 use tools::Phase;
 
 use crate::cli;
@@ -101,6 +103,15 @@ pub fn recovery_path(dir: &Path, open_file: Option<&Path>, now: SystemTime) -> P
 }
 
 impl AppHost<'_> {
+    /// Runs `f` with the editor's steps tagged as the agent's, and back to the user's after,
+    /// whatever `f` returns.
+    fn as_agent<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.editor.set_origin(Origin::Agent);
+        let result = f(self);
+        self.editor.set_origin(Origin::User);
+        result
+    }
+
     /// Before a command that discards unsaved changes, writes the model to a recovery file
     /// (in the window). Fails, so the command does not run, when it cannot be written.
     fn keep_discarded(&mut self) -> Result<Option<PathBuf>, CommandError> {
@@ -161,7 +172,7 @@ impl Host for AppHost<'_> {
     }
 
     fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        self.execute_keeping(command)
+        self.as_agent(|host| host.execute_keeping(command))
     }
 
     fn execute_batch(
@@ -169,25 +180,27 @@ impl Host for AppHost<'_> {
         commands: Vec<Command>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
-        // Run one by one when a command would discard work, so it is kept at its turn.
-        if !atomic && self.recovery.is_some() && commands.iter().any(discards) {
-            let mut completed = Vec::new();
-            for (index, command) in commands.into_iter().enumerate() {
-                match self.execute_keeping(command) {
-                    Ok(outcome) => completed.push(outcome),
-                    Err(error) => {
-                        return Err(BatchError {
-                            index,
-                            error,
-                            completed,
-                            rolled_back: false,
-                        });
+        self.as_agent(|host| {
+            // Run one by one when a command would discard work, so it is kept at its turn.
+            if !atomic && host.recovery.is_some() && commands.iter().any(discards) {
+                let mut completed = Vec::new();
+                for (index, command) in commands.into_iter().enumerate() {
+                    match host.execute_keeping(command) {
+                        Ok(outcome) => completed.push(outcome),
+                        Err(error) => {
+                            return Err(BatchError {
+                                index,
+                                error,
+                                completed,
+                                rolled_back: false,
+                            });
+                        }
                     }
                 }
+                return Ok(completed);
             }
-            return Ok(completed);
-        }
-        self.editor.execute_batch(commands, atomic)
+            host.editor.execute_batch(commands, atomic)
+        })
     }
 
     fn render_view(
@@ -214,28 +227,31 @@ impl Host for AppHost<'_> {
     }
 
     fn editor_command(&mut self, command: EditorCommand) -> Result<(), CommandError> {
-        match command {
-            EditorCommand::SetTool { tool } => self.editor.select_tool(tool.into()),
-            EditorCommand::SetPaintMaterial { material } => {
-                self.editor.set_paint_material(material)?
+        self.as_agent(|host| {
+            let editor = &mut *host.editor;
+            match command {
+                EditorCommand::SetTool { tool } => editor.select_tool(tool.into()),
+                EditorCommand::SetPaintMaterial { material } => {
+                    editor.set_paint_material(material)?
+                }
+                EditorCommand::SetImportUnits { units } => editor.set_import_units(units),
+                EditorCommand::Cancel {} => editor.cancel(),
+                EditorCommand::SetFlyMode { on, speed } => editor.set_fly_mode(on, speed)?,
+                EditorCommand::SetDialog { dialog } => {
+                    editor.show_soften(dialog == Some(Dialog::SoftenEdges));
+                }
+                EditorCommand::SetSoftenAngle { angle } => {
+                    editor.set_soften_angle_checked(angle)?
+                }
+                EditorCommand::Duplicate {} => editor.duplicate()?,
             }
-            EditorCommand::SetImportUnits { units } => self.editor.set_import_units(units),
-            EditorCommand::Cancel {} => self.editor.cancel(),
-            EditorCommand::SetFlyMode { on, speed } => self.editor.set_fly_mode(on, speed)?,
-            EditorCommand::SetDialog { dialog } => {
-                self.editor.show_soften(dialog == Some(Dialog::SoftenEdges));
-            }
-            EditorCommand::SetSoftenAngle { angle } => {
-                self.editor.set_soften_angle_checked(angle)?
-            }
-            EditorCommand::Duplicate {} => self.editor.duplicate()?,
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn tool_input(&mut self, input: ToolInput) -> Result<ToolInputResult, ToolInputError> {
-        match self.editor.drive(input) {
-            Ok(driven) => Ok(tool_input_result(self.editor, driven)),
+        self.as_agent(|host| match host.editor.drive(input) {
+            Ok(driven) => Ok(tool_input_result(host.editor, driven)),
             Err(DriveError::Refused(e)) => Err(ToolInputError::Refused(e)),
             Err(DriveError::Stopped(stopped)) => {
                 let Stopped {
@@ -246,10 +262,10 @@ impl Host for AppHost<'_> {
                 Err(ToolInputError::Stopped(Box::new(ToolInputStopped {
                     error,
                     event,
-                    completed: tool_input_result(self.editor, driven),
+                    completed: tool_input_result(host.editor, driven),
                 })))
             }
-        }
+        })
     }
 
     fn quit(&mut self, discard: bool) -> Result<(), CommandError> {
@@ -378,6 +394,83 @@ mod tests {
         };
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
+    }
+
+    /// The origins of the undo steps, top first.
+    fn undo_origins(e: &mut Editor) -> Value {
+        let mut quit = false;
+        call(e, &mut quit, "query", json!({"type": "history"}))["result"]["undo_origins"].clone()
+    }
+
+    #[test]
+    fn api_edits_are_agent_steps_and_window_edits_are_user_steps() {
+        let mut e = editor();
+        let mut quit = false;
+        call(&mut e, &mut quit, "execute", add_edge());
+        assert_eq!(undo_origins(&mut e), json!(["agent"]));
+        // The window runs its edits through the editor directly.
+        e.execute(Command::AddEdge {
+            start: [0.0, 1.0, 0.0],
+            end: [1.0, 1.0, 0.0],
+        })
+        .unwrap();
+        assert_eq!(undo_origins(&mut e), json!(["user", "agent"]));
+        // An agent's guarded undo is refused while the user's step is on top.
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "undo", "expect": {"label": "add_edge", "origin": "agent"}}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "unexpected_step", "{r}");
+        assert_eq!(undo_origins(&mut e), json!(["user", "agent"]));
+    }
+
+    #[test]
+    fn a_failed_api_command_leaves_the_origin_user() {
+        let mut e = editor();
+        let mut quit = false;
+        let r = call(&mut e, &mut quit, "execute", json!({"type": "undo"}));
+        assert!(!r["error"].is_null());
+        e.execute(Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        assert_eq!(undo_origins(&mut e), json!(["user"]));
+    }
+
+    #[test]
+    fn tool_input_and_non_atomic_batches_make_agent_steps() {
+        let mut e = editor();
+        let mut quit = false;
+        call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_tool", "tool": "line"}),
+        );
+        let r = call(
+            &mut e,
+            &mut quit,
+            "tool_input",
+            json!({"events": [
+                {"type": "click", "point": [0, 0, 0]},
+                {"type": "click", "point": [1, 0, 0]}
+            ]}),
+        );
+        assert!(r["error"].is_null(), "{r}");
+        assert_eq!(undo_origins(&mut e), json!(["agent"]));
+
+        let mut e = editor();
+        let r = call(
+            &mut e,
+            &mut quit,
+            "batch",
+            json!({"commands": [{"type": "new", "discard": true}, add_edge()]}),
+        );
+        assert!(r["error"].is_null(), "{r}");
+        assert_eq!(undo_origins(&mut e), json!(["agent"]));
     }
 
     #[test]

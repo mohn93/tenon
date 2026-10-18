@@ -1,9 +1,10 @@
 //! Method dispatch: maps JSON-RPC methods onto session commands, queries and rendering.
 
 use base64::Engine;
+use kernel::ChangeSummary;
 use schemars::{JsonSchema, schema_for};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use session::{
     BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind, Lighting, Outcome,
@@ -22,6 +23,23 @@ use crate::roots::ApiRoots;
 
 /// Largest image side `render_view` accepts, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 4096;
+
+/// The reply to `execute`: the outcome and the document revision after it.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct ExecuteResult {
+    #[serde(flatten)]
+    pub outcome: Outcome,
+    pub revision: u64,
+}
+
+/// The reply to `batch`: each command's outcome, the net change of them all, and the revision.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct BatchResult {
+    pub outcomes: Vec<Outcome>,
+    /// The net effect of the whole batch (made then erased is absent).
+    pub changes: ChangeSummary,
+    pub revision: u64,
+}
 
 /// What the API needs from the program it runs in (the window app or headless mode).
 pub trait Host {
@@ -171,17 +189,19 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
                     all: false,
                 })
                 .map_err(command_failed)?;
-            let mut result = json!(outcome);
-            result["revision"] = json!(host.document().revision());
-            Ok(result)
+            Ok(json!(ExecuteResult {
+                outcome,
+                revision: host.document().revision(),
+            }))
         }
         "execute" => {
             let mut command: Command = params_as(params)?;
             within_roots(host, &mut command, false).map_err(command_failed)?;
             let outcome = host.execute(command).map_err(command_failed)?;
-            let mut result = json!(outcome);
-            result["revision"] = json!(host.document().revision());
-            Ok(result)
+            Ok(json!(ExecuteResult {
+                outcome,
+                revision: host.document().revision(),
+            }))
         }
         "batch" => {
             #[derive(Deserialize)]
@@ -215,7 +235,12 @@ fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, RpcEr
                 )
                 .with_data(json!(e))
             })?;
-            Ok(json!({"outcomes": outcomes, "revision": host.document().revision()}))
+            let changes = ChangeSummary::join(outcomes.iter().map(|o| &o.changes));
+            Ok(json!(BatchResult {
+                outcomes,
+                changes,
+                revision: host.document().revision(),
+            }))
         }
         "query" if matches!(type_of(&params), Some("pick" | "infer" | "editor")) => {
             let query: EditorQuery = params_as(params)?;
@@ -356,7 +381,7 @@ pub fn describe() -> Value {
             },
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
-                "result": "{outcomes: [Outcome], revision}",
+                "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
                 "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed"
             },
             "query": {

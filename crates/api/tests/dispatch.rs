@@ -768,3 +768,28 @@ fn select_all_runs_and_box_refuses_all() {
     );
     assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
 }
+
+#[test]
+fn batch_reports_the_net_changes() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "batch",
+        json!({"commands": square(), "atomic": true}),
+    );
+    let net = &r["result"]["changes"];
+    assert_eq!(net["created"].as_array().unwrap().len(), 4 + 4 + 1); // 4 vertices, 4 edges, the face
+    assert_eq!(r["result"]["outcomes"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn api_steps_are_agent_steps() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    );
+    let r = call(&mut h, "query", json!({"type": "history"}));
+    assert_eq!(r["result"]["undo_origins"], json!(["agent"]));
+}

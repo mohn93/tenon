@@ -2,7 +2,7 @@
 
 use glam::DVec2;
 use render::Snapshotter;
-use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Outcome};
+use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Origin, Outcome};
 
 use crate::dispatch::Host;
 use crate::roots::ApiRoots;
@@ -16,8 +16,11 @@ pub struct HeadlessHost {
 
 impl HeadlessHost {
     pub fn new() -> Self {
+        // Everything in a headless document comes through the API.
+        let mut doc = Document::new(DVec2::new(1280.0, 800.0));
+        doc.set_origin(Origin::Agent);
         Self {
-            doc: Document::new(DVec2::new(1280.0, 800.0)),
+            doc,
             snapshotter: None,
             gpu_checked: false,
             roots: ApiRoots::default(),

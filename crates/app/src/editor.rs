@@ -14,8 +14,8 @@ use render::PreviewVertex;
 use render::scene::DEFAULT_FRONT;
 use serde::{Deserialize, Serialize};
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Outcome, Projection,
-    SelectMode, StandardView, TextureSource,
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin, Outcome,
+    Projection, SelectMode, StandardView, TextureSource,
 };
 pub use session::{ImportAs, ImportUnits, UpAxis};
 use tools::overlay::{marker, preview_lines, snap_label};
@@ -329,6 +329,11 @@ impl Editor {
 
     pub fn doc(&self) -> &Document {
         &self.doc
+    }
+
+    /// Who the document's next undo steps are made by.
+    pub fn set_origin(&mut self, origin: Origin) {
+        self.doc.set_origin(origin);
     }
 
     /// Runs a command from outside the UI (the agent API). A command that can change the model
