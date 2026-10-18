@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::editor::ImportOptions;
 use crate::ui::DockLayout;
 use crate::ui::theme::ThemeChoice;
 
@@ -22,6 +23,8 @@ pub struct Prefs {
     /// Files opened or saved in the window, newest first, absolute, at most `RECENT_LEN`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent: Vec<PathBuf>,
+    /// The Import Options sheet's values when Import was last pressed.
+    pub import: ImportOptions,
 }
 
 /// How many recent files the prefs keep.
@@ -212,7 +215,7 @@ mod tests {
         assert_eq!(load(&path).theme, ThemeChoice::Light);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"theme\": \"light\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  }\n}"
+            "{\n  \"theme\": \"light\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  }\n}"
         );
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&path), 0o600);
@@ -246,6 +249,7 @@ mod tests {
                 tab: DockTab::Materials,
             },
             recent: Vec::new(),
+            import: ImportOptions::default(),
         };
         assert_ne!(prefs.theme, ThemeChoice::default());
         assert_ne!(prefs.dock, DockLayout::default());
@@ -266,6 +270,7 @@ mod tests {
                 theme: ThemeChoice::Dark,
                 dock: DockLayout::default(),
                 recent: Vec::new(),
+                import: ImportOptions::default(),
             }
         );
         std::fs::write(
@@ -459,6 +464,68 @@ mod tests {
         // A wrong type is an invalid file, as for any key.
         std::fs::write(&path, b"{\"theme\": \"dark\", \"recent\": \"/a.skr\"}").unwrap();
         assert_eq!(load(&path), Prefs::default());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn import_options_round_trip() {
+        use crate::editor::{ImportAs, ImportUnits, UpAxis};
+        let home = home("import");
+        let path = path_in(&home);
+        let options = ImportOptions {
+            units: ImportUnits::Inches,
+            up: None,
+            place: ImportAs::Component,
+            merge_coplanar: false,
+        };
+        let prefs = Prefs {
+            import: options,
+            ..Default::default()
+        };
+        save(&path, &prefs).unwrap();
+        assert_eq!(load(&path).import, options);
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["import"]["as"], "component");
+        assert!(json["import"].get("up").is_none(), "{json}");
+        let options = ImportOptions {
+            up: Some(UpAxis::Z),
+            ..options
+        };
+        save(
+            &path,
+            &Prefs {
+                import: options,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(load(&path).import, options);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn m11d_prefs_load_with_defaults_for_the_new_keys() {
+        let home = home("m11d");
+        let path = path_in(&home);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            b"{\"theme\": \"dark\", \"dock\": {\"width\": 300.0, \"split\": 0.5, \"tab\": \"materials\"}, \"recent\": [\"/a/house.skr\"]}",
+        )
+        .unwrap();
+        let prefs = load(&path);
+        assert_eq!(prefs.theme, ThemeChoice::Dark);
+        assert_eq!(
+            prefs.dock,
+            DockLayout {
+                width: 300.0,
+                split: 0.5,
+                tab: DockTab::Materials
+            }
+        );
+        assert_eq!(prefs.recent, [PathBuf::from("/a/house.skr")]);
+        assert_eq!(prefs.import, ImportOptions::default());
         std::fs::remove_dir_all(home).unwrap();
     }
 

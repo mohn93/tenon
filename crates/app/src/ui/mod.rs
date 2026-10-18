@@ -11,7 +11,7 @@ use kernel::{EntityId, TexturePlacement};
 use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
-use crate::editor::{ImportUnits, Status};
+use crate::editor::{ImportOptions, Status};
 use crate::feedback::Hud;
 use theme::ThemeChoice;
 
@@ -25,6 +25,7 @@ mod menu_bar;
 mod outliner;
 mod rail;
 mod right;
+mod sheets;
 mod start;
 mod status;
 #[cfg(test)]
@@ -33,6 +34,7 @@ pub mod theme;
 pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
+pub use sheets::Sheet;
 // Only the tests name a tab outside the dock.
 #[cfg(test)]
 pub use dock::DockTab;
@@ -60,8 +62,11 @@ pub enum UiAction {
     SaveFile,
     SaveFileAs,
     ImportFile,
-    /// What one unit in an imported OBJ or STL file is.
-    SetImportUnits(ImportUnits),
+    /// Import the file the Import Options sheet was opened for, with these options (kept in
+    /// the preferences).
+    ConfirmImport(ImportOptions),
+    /// Close the open sheet without doing anything.
+    CloseSheet,
     ExportFile,
     DeleteGuides,
     ZoomExtents,
@@ -195,8 +200,6 @@ pub struct View<'a> {
     pub lighting: Lighting,
     /// Whether fly mode is on, checked in the Camera menu.
     pub flying: bool,
-    /// The unit imported files are read in, checked in File > Import Units.
-    pub import_units: ImportUnits,
     /// Every material, in id order.
     pub materials: &'a [MaterialRow],
     /// The material the Paint tool paints with (None: the default material).
@@ -231,6 +234,8 @@ pub struct View<'a> {
     pub start: Option<StartCard<'a>>,
     /// The recent files as kept in the preferences, newest first (File > Open Recent).
     pub recent: &'a [PathBuf],
+    /// The sheet open over the window, if any.
+    pub sheet: Option<&'a Sheet>,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.
@@ -344,5 +349,10 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
         viewport::gizmo(ui, central, view.camera, view.projection, actions);
     }
     viewport::set_cursor(ui.ctx(), central, view.cursor);
+    // Last, over everything else.
+    match view.sheet {
+        Some(sheet) => sheets::sheet(ui, sheet, actions),
+        None => sheets::forget(ui),
+    }
     central
 }

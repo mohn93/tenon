@@ -35,7 +35,9 @@ use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
-use crate::ui::{Agents, MaterialRow, StartCard, TexturePosition, TextureRow, UiAction, View};
+use crate::ui::{
+    Agents, MaterialRow, Sheet, StartCard, TexturePosition, TextureRow, UiAction, View,
+};
 use crate::ui::{theme, viewport};
 
 /// The window's least size, in points: the panels and a usable 3D view.
@@ -502,6 +504,8 @@ struct State {
     agent_activity: bool,
     /// Whether the Keyboard Shortcuts window is open.
     shortcuts_window: bool,
+    /// The sheet open over the window: keys and native menu items (but Quit) wait while it is.
+    sheet: Option<Sheet>,
     /// How many of the editor's recovery files the window has already shown.
     recovered_seen: usize,
     gui: Gui,
@@ -572,10 +576,11 @@ impl State {
         let gui = Gui::new(&window, &device, config.format, prefs.theme);
         let view = Viewport::full((config.width, config.height));
         let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
-        let editor = Editor::new(
+        let mut editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
             window.scale_factor(),
         );
+        editor.set_import_options(prefs.import);
         Self {
             window,
             instance,
@@ -597,6 +602,7 @@ impl State {
             start_dismissed: false,
             agent_activity: false,
             shortcuts_window: false,
+            sheet: None,
             recovered_seen: 0,
             gui,
             drawn: None,
@@ -840,7 +846,8 @@ impl State {
         shown
     }
 
-    /// Imports an OBJ or STL file chosen in a dialog as a group in the open context.
+    /// Asks for an OBJ or STL file, then opens the Import Options sheet for it; the file is
+    /// read when the sheet's Import is pressed (`UiAction::ConfirmImport`).
     fn import(&mut self) {
         let chosen = rfd::FileDialog::new()
             .add_filter("OBJ or STL", &["obj", "stl"])
@@ -848,7 +855,10 @@ impl State {
             .add_filter("STL", &["stl"])
             .pick_file();
         if let Some(path) = chosen {
-            self.editor.import_file(&path);
+            self.sheet = Some(Sheet::Import {
+                path,
+                options: self.editor.import_options(),
+            });
         }
     }
 
@@ -894,7 +904,16 @@ impl State {
                 self.save(true);
             }
             UiAction::ImportFile => self.import(),
-            UiAction::SetImportUnits(units) => self.editor.set_import_units(units),
+            UiAction::ConfirmImport(options) => {
+                // Only the first report counts: the sheet is gone after it.
+                if let Some(Sheet::Import { path, .. }) = self.sheet.take() {
+                    self.editor.set_import_options(options);
+                    self.prefs.import = options;
+                    self.save_prefs();
+                    self.editor.import_file(&path);
+                }
+            }
+            UiAction::CloseSheet => self.sheet = None,
             UiAction::ExportFile => self.export(),
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
@@ -1227,7 +1246,6 @@ impl State {
             projection: self.editor.doc().camera.projection,
             lighting: self.editor.doc().lighting,
             flying: self.editor.flying(),
-            import_units: self.editor.import_units(),
             materials: &materials,
             material: self.editor.current_material(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
@@ -1258,6 +1276,7 @@ impl State {
                     recent: &self.recent_shown,
                 }),
             recent: &self.prefs.recent,
+            sheet: self.sheet.as_ref(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -1265,7 +1284,7 @@ impl State {
             let bar = menus::menu_bar(&panels, true);
             self.native
                 .get_or_insert_with(|| NativeMenu::new(&bar))
-                .sync(&bar, self.gui.wants_keyboard());
+                .sync(&bar, self.gui.wants_keyboard(), self.sheet.is_some());
         }
         gui_frame.hide_cursor = self.capture == Capture::Grabbed;
         // Applied once the frame is presented: some open modal dialogs, which must not run
@@ -1479,6 +1498,13 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
 }
 
 /// A file dialog for `.skr` models.
+/// Whether a key press goes on to the editor and the shortcut table: not while a text field
+/// has focus (the key is its), and not while a sheet is open (egui still gets every key, so the
+/// sheet's own fields and buttons work).
+fn keys_reach_editor(text_focused: bool, sheet_open: bool) -> bool {
+    !text_focused && !sheet_open
+}
+
 fn skr_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("SketchUp Alt model", &["skr"])
 }
@@ -1700,7 +1726,7 @@ impl App {
         let Some(action) = s.native.as_ref().and_then(|n| n.action(id)) else {
             return;
         };
-        if !menus::native_event_acts(&action, repeat, s.gui.wants_keyboard()) {
+        if !menus::native_event_acts(&action, repeat, s.gui.wants_keyboard(), s.sheet.is_some()) {
             return;
         }
         s.apply(action);
@@ -1914,7 +1940,11 @@ impl ApplicationHandler<AppEvent> for App {
             {
                 false
             }
-            WindowEvent::KeyboardInput { .. } if s.gui.wants_keyboard() => false,
+            WindowEvent::KeyboardInput { .. }
+                if !keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some()) =>
+            {
+                false
+            }
             WindowEvent::KeyboardInput { event, .. }
                 if let Some(key) = is_fly_move(
                     s.editor.flying(),
@@ -2275,6 +2305,14 @@ mod tests {
             ),
             1
         );
+    }
+
+    #[test]
+    fn keys_wait_while_a_sheet_is_open() {
+        assert!(keys_reach_editor(false, false));
+        assert!(!keys_reach_editor(true, false));
+        assert!(!keys_reach_editor(false, true));
+        assert!(!keys_reach_editor(true, true));
     }
 
     #[test]

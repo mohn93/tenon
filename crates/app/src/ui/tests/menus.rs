@@ -349,20 +349,11 @@ fn checked_menu_items_show_the_state() {
             ("Parallel Projection", false),
         ],
     );
-    // Import Units is a submenu of File.
-    let mut h = harness(Fixture {
-        import_units: ImportUnits::Millimeters,
-        ..Default::default()
-    });
+    // Units are chosen in the Import Options sheet: File has no Import Units submenu.
+    let mut h = harness(Fixture::default());
     click(&mut h, "File");
-    click(&mut h, "Import Units \u{23F5}");
-    for units in ImportUnits::ALL {
-        assert_eq!(
-            is_on(&h, units.label()),
-            Some(units == ImportUnits::Millimeters),
-            "{units:?}"
-        );
-    }
+    assert!(h.query_by_label("Import...").is_some());
+    assert!(h.query_by_label("Import Units \u{23F5}").is_none());
 }
 
 #[test]
@@ -717,8 +708,13 @@ fn text_actions_are_off_while_typing() {
             i.action,
             UiAction::Undo | UiAction::Redo | UiAction::SelectAll | UiAction::SelectNone
         );
-        assert_eq!(native_enabled(i, true), i.enabled && !text, "{}", i.label);
-        assert_eq!(native_enabled(i, false), i.enabled, "{}", i.label);
+        assert_eq!(
+            native_enabled(i, true, false),
+            i.enabled && !text,
+            "{}",
+            i.label
+        );
+        assert_eq!(native_enabled(i, false, false), i.enabled, "{}", i.label);
     }
 }
 
@@ -734,11 +730,17 @@ fn select_all_and_none_yield_to_a_focused_text_field() {
             .expect("an item")
     };
     for action in [UiAction::SelectAll, UiAction::SelectNone] {
-        assert!(native_enabled(item(action.clone()), false), "{action:?}");
-        assert!(!native_enabled(item(action.clone()), true), "{action:?}");
+        assert!(
+            native_enabled(item(action.clone()), false, false),
+            "{action:?}"
+        );
+        assert!(
+            !native_enabled(item(action.clone()), true, false),
+            "{action:?}"
+        );
     }
     // A text field has no Cmd+D: Duplicate stays on.
-    assert!(native_enabled(item(UiAction::Duplicate), true));
+    assert!(native_enabled(item(UiAction::Duplicate), true, false));
 }
 
 #[test]
@@ -791,21 +793,48 @@ fn held_keys_repeat_only_undo_and_redo_through_the_menu() {
 fn native_menu_events_act_once_and_leave_typing_alone() {
     use crate::menus::native_event_acts;
     // A click or a first key press acts.
-    assert!(native_event_acts(&UiAction::SaveFile, false, false));
-    assert!(native_event_acts(&UiAction::Undo, false, false));
+    assert!(native_event_acts(&UiAction::SaveFile, false, false, false));
+    assert!(native_event_acts(&UiAction::Undo, false, false, false));
     // Held Cmd+S saves once; held Cmd+Z keeps undoing.
-    assert!(!native_event_acts(&UiAction::SaveFile, true, false));
-    assert!(!native_event_acts(&UiAction::NewModel, true, false));
-    assert!(native_event_acts(&UiAction::Undo, true, false));
-    assert!(native_event_acts(&UiAction::Redo, true, false));
+    assert!(!native_event_acts(&UiAction::SaveFile, true, false, false));
+    assert!(!native_event_acts(&UiAction::NewModel, true, false, false));
+    assert!(native_event_acts(&UiAction::Undo, true, false, false));
+    assert!(native_event_acts(&UiAction::Redo, true, false, false));
     // While a text field has focus Cmd+Z is the field's, even if the menu raced it.
-    assert!(!native_event_acts(&UiAction::Undo, false, true));
-    assert!(!native_event_acts(&UiAction::Redo, true, true));
-    assert!(native_event_acts(&UiAction::SaveFile, false, true));
+    assert!(!native_event_acts(&UiAction::Undo, false, true, false));
+    assert!(!native_event_acts(&UiAction::Redo, true, true, false));
+    assert!(native_event_acts(&UiAction::SaveFile, false, true, false));
     // Cmd+A is the field's too; Cmd+D is not a field's, and a held one duplicates once.
-    assert!(!native_event_acts(&UiAction::SelectAll, false, true));
-    assert!(!native_event_acts(&UiAction::SelectNone, false, true));
-    assert!(native_event_acts(&UiAction::Duplicate, false, true));
-    assert!(!native_event_acts(&UiAction::Duplicate, true, false));
-    assert!(!native_event_acts(&UiAction::SelectAll, true, false));
+    assert!(!native_event_acts(&UiAction::SelectAll, false, true, false));
+    assert!(!native_event_acts(
+        &UiAction::SelectNone,
+        false,
+        true,
+        false
+    ));
+    assert!(native_event_acts(&UiAction::Duplicate, false, true, false));
+    assert!(!native_event_acts(&UiAction::Duplicate, true, false, false));
+    assert!(!native_event_acts(&UiAction::SelectAll, true, false, false));
+}
+
+#[test]
+fn only_quit_works_while_a_sheet_is_open() {
+    use crate::menus::{items, menu_bar, native_enabled, native_event_acts};
+    let f = Fixture {
+        undo: Some("paint".into()),
+        has_selection: true,
+        recent: vec!["/a/house.skr".into()],
+        ..Default::default()
+    };
+    let bar = menu_bar(&f.view(), true);
+    for i in items(&bar) {
+        assert_eq!(
+            native_enabled(i, false, true),
+            i.action == UiAction::Quit,
+            "{}",
+            i.label
+        );
+    }
+    assert!(!native_event_acts(&UiAction::OpenFile, false, false, true));
+    assert!(native_event_acts(&UiAction::Quit, false, false, true));
 }

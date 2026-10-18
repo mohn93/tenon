@@ -76,8 +76,9 @@ impl NativeMenu {
     }
 
     /// Brings the items up to date with `bar`, touching only what changed. Checks are compared
-    /// with the item's own state: a check item toggles itself when clicked.
-    pub fn sync(&mut self, bar: &[menus::Menu], text_focused: bool) {
+    /// with the item's own state: a check item toggles itself when clicked. While a sheet is
+    /// open (`sheet_open`) every item but Quit is disabled, the rebuilt recent rows too.
+    pub fn sync(&mut self, bar: &[menus::Menu], text_focused: bool, sheet_open: bool) {
         self.sync_recent(bar);
         for item in menus::items(bar) {
             let Some(native) = self.items.get_mut(&item_id(&item.action)) else {
@@ -91,7 +92,7 @@ impl NativeMenu {
                     Widget::Check(w) => w.set_text(&item.label),
                 }
             }
-            let enabled = native_enabled(item, text_focused);
+            let enabled = native_enabled(item, text_focused, sheet_open);
             if native.enabled != enabled {
                 native.enabled = enabled;
                 match &native.widget {

@@ -8,6 +8,7 @@ mod layout;
 mod materials;
 mod menus;
 mod outliner;
+mod sheets;
 mod start;
 mod status;
 mod viewport;
@@ -25,10 +26,10 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, StartCard, TexturePosition, TextureRow, UiAction,
-    View, draw,
+    Agents, DockLayout, DockTab, MaterialRow, Sheet, StartCard, TexturePosition, TextureRow,
+    UiAction, View, draw,
 };
-use crate::editor::{ImportUnits, Status};
+use crate::editor::Status;
 use crate::feedback::Hud;
 
 /// Everything a test's `View` borrows, owned, and what the panels reported.
@@ -45,7 +46,6 @@ pub(super) struct Fixture {
     pub projection: Projection,
     pub lighting: Lighting,
     pub flying: bool,
-    pub import_units: ImportUnits,
     pub materials: Vec<MaterialRow>,
     pub material: Option<MaterialId>,
     pub outliner: OutlinerTable,
@@ -81,6 +81,8 @@ pub(super) struct Fixture {
     pub start: Option<Vec<PathBuf>>,
     /// The recent files File > Open Recent lists, newest first.
     pub recent: Vec<PathBuf>,
+    /// The sheet open over the window.
+    pub sheet: Option<Sheet>,
 }
 
 impl Default for Fixture {
@@ -105,7 +107,6 @@ impl Default for Fixture {
             projection: Projection::Perspective,
             lighting: Lighting::Day,
             flying: false,
-            import_units: ImportUnits::Meters,
             materials: Vec::new(),
             material: None,
             outliner: OutlinerTable {
@@ -132,6 +133,7 @@ impl Default for Fixture {
             camera: Camera::new(glam::DVec2::new(1280.0, 800.0)),
             start: None,
             recent: Vec::new(),
+            sheet: None,
         }
     }
 }
@@ -156,7 +158,6 @@ impl Fixture {
             projection: self.projection,
             lighting: self.lighting,
             flying: self.flying,
-            import_units: self.import_units,
             materials: &self.materials,
             material: self.material,
             outliner: &self.outliner,
@@ -174,6 +175,7 @@ impl Fixture {
             camera: &self.camera,
             start: self.start.as_deref().map(|recent| StartCard { recent }),
             recent: &self.recent,
+            sheet: self.sheet.as_ref(),
         }
     }
 

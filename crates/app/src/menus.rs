@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use session::{Lighting, Projection, StandardView};
 use tools::ToolKind;
 
-use crate::editor::ImportUnits;
 use crate::shortcuts::Bound;
 use crate::ui::theme::ThemeChoice;
 use crate::ui::{FLY_HELP, UiAction, View, step_name};
@@ -103,17 +102,6 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         bound_item("Save As...", Bound::SaveFileAs, UiAction::SaveFileAs).entry(),
         Entry::Separator,
         bound_item("Import...", Bound::ImportFile, UiAction::ImportFile).entry(),
-        Entry::Submenu {
-            label: "Import Units",
-            entries: ImportUnits::ALL
-                .into_iter()
-                .map(|units| {
-                    Item::new(units.label(), UiAction::SetImportUnits(units))
-                        .checked(view.import_units == units)
-                        .entry()
-                })
-                .collect(),
-        },
         bound_item("Export...", Bound::ExportFile, UiAction::ExportFile).entry(),
     ];
     if !native {
@@ -393,9 +381,13 @@ pub fn item_id(action: &UiAction) -> String {
 }
 
 /// Whether a native item is enabled: as in the table, except those a text field takes while it
-/// has focus (`yields_to_text`), so Cmd+Z and Cmd+A reach the field.
+/// has focus (`yields_to_text`), so Cmd+Z and Cmd+A reach the field. While a sheet is open only
+/// Quit is.
 #[cfg(any(target_os = "macos", test))]
-pub fn native_enabled(item: &Item, text_focused: bool) -> bool {
+pub fn native_enabled(item: &Item, text_focused: bool, sheet_open: bool) -> bool {
+    if sheet_open {
+        return item.action == UiAction::Quit;
+    }
     item.enabled && !(text_focused && yields_to_text(&item.action))
 }
 
@@ -409,9 +401,18 @@ pub fn accepts_repeat(action: &UiAction) -> bool {
 
 /// Whether a native menu event for `action` acts. `repeat`: a held key raised it.
 /// `text_focused`: a text field has focus now, so Undo, Redo, Select All and Select None are
-/// the field's (the item may have been enabled when the key went down).
+/// the field's (the item may have been enabled when the key went down). `sheet_open`: a sheet
+/// is open, so only Quit acts (an event raced past the items being disabled).
 #[cfg(any(target_os = "macos", test))]
-pub fn native_event_acts(action: &UiAction, repeat: bool, text_focused: bool) -> bool {
+pub fn native_event_acts(
+    action: &UiAction,
+    repeat: bool,
+    text_focused: bool,
+    sheet_open: bool,
+) -> bool {
+    if sheet_open && *action != UiAction::Quit {
+        return false;
+    }
     !(repeat && !accepts_repeat(action)) && !(text_focused && yields_to_text(action))
 }
 

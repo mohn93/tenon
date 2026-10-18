@@ -12,11 +12,12 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::{DefinitionKind, EntityId, InstanceId, MaterialId};
 use render::PreviewVertex;
 use render::scene::DEFAULT_FRONT;
-pub use session::ImportUnits;
+use serde::{Deserialize, Serialize};
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportAs, Lighting, Outcome,
-    Projection, SelectMode, StandardView, TextureSource,
+    BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Outcome, Projection,
+    SelectMode, StandardView, TextureSource,
 };
+pub use session::{ImportAs, ImportUnits, UpAxis};
 use tools::overlay::{marker, preview_lines, snap_label};
 use tools::{
     Axis, Guides, Inference, Layout, Lock, Owner, Remembered, Scenery, Slab, SnapKind, Solid, Tool,
@@ -36,6 +37,34 @@ mod soften;
 mod texture_position;
 
 use soften::SoftenWindow;
+
+/// How the window imports OBJ and STL files: the `import` command's `scale`, `up`, `as` and
+/// `merge_coplanar`. Kept in the window's preferences, so missing keys are their defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportOptions {
+    /// The length one file unit stands for; anything but meters becomes `scale`.
+    pub units: ImportUnits,
+    /// The file axis that points up (None: the format's own, Y for OBJ and Z for STL).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub up: Option<UpAxis>,
+    /// What the import makes: a group, a component or loose geometry.
+    #[serde(rename = "as")]
+    pub place: ImportAs,
+    /// Whether coplanar neighbouring polygons merge into one face.
+    pub merge_coplanar: bool,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self {
+            units: ImportUnits::Meters,
+            up: None,
+            place: ImportAs::Group,
+            merge_coplanar: true,
+        }
+    }
+}
 
 /// A layout of the scene with the revision and open context it was made for.
 type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
@@ -175,8 +204,9 @@ pub struct Editor {
     material: Option<MaterialId>,
     /// Whether the sampling modifier (Cmd or Ctrl) is held.
     sample: bool,
-    /// What one unit in an imported file is (OBJ and STL files carry no units).
-    import_units: ImportUnits,
+    /// How files are imported: the unit one file unit is (OBJ and STL files carry no units),
+    /// the up axis, what the import makes and whether coplanar faces merge.
+    import: ImportOptions,
     /// The extension of the last file exported, which the export dialog suggests next.
     last_export: &'static str,
     /// Fly mode's keys, speed and motion; the speed lasts for the session.
@@ -257,7 +287,7 @@ impl Editor {
             scale_factor,
             material: None,
             sample: false,
-            import_units: ImportUnits::Meters,
+            import: ImportOptions::default(),
             last_export: "obj",
             fly: Fly::default(),
             flying: false,
@@ -1279,31 +1309,43 @@ impl Editor {
         [last, rest].concat()
     }
 
+    /// How files are imported, for the rest of the session.
+    pub fn import_options(&self) -> ImportOptions {
+        self.import
+    }
+
+    /// Sets how files are imported, for the rest of the session.
+    pub fn set_import_options(&mut self, options: ImportOptions) {
+        self.import = options;
+    }
+
     /// The unit imported files are read in.
     pub fn import_units(&self) -> ImportUnits {
-        self.import_units
+        self.import.units
     }
 
-    /// Sets the unit imported files are read in, for the rest of the session.
+    /// Sets the unit imported files are read in, for the rest of the session. The other
+    /// import options stay.
     pub fn set_import_units(&mut self, units: ImportUnits) {
-        self.import_units = units;
+        self.import.units = units;
     }
 
-    /// Imports an OBJ or STL file (the format its extension names) as a group in the open
-    /// context, which becomes the selection, as one undo step. One file unit is one
-    /// `import_units`. False if it cannot be imported; the status then says why.
+    /// Imports an OBJ or STL file (the format its extension names) into the open context as
+    /// `import_options` say (by default a group, which becomes the selection), as one undo
+    /// step. False if it cannot be imported; the status then says why.
     pub fn import_file(&mut self, path: &Path) -> bool {
         self.reset_tool();
         self.typed.clear();
         self.message = None;
+        let options = self.import;
         let outcome = self.run(Command::Import {
             library_roots: None,
             path: path.display().to_string(),
             format: None,
-            place: ImportAs::Group,
-            scale: (self.import_units != ImportUnits::Meters).then(|| self.import_units.meters()),
-            up: None,
-            merge_coplanar: None,
+            place: options.place,
+            scale: (options.units != ImportUnits::Meters).then(|| options.units.meters()),
+            up: options.up,
+            merge_coplanar: Some(options.merge_coplanar),
         });
         self.invalidate_hover();
         let Some(report) = outcome.and_then(|o| o.import) else {
@@ -1316,7 +1358,7 @@ impl Editor {
             1 => "1 face".to_string(),
             n => format!("{n} faces"),
         };
-        let units = match self.import_units {
+        let units = match options.units {
             ImportUnits::Meters => String::new(),
             u => format!(" in {}", u.label().to_lowercase()),
         };
@@ -4413,6 +4455,87 @@ mod tests {
         e.set_import_units(ImportUnits::Inches);
         assert!(e.import_file(&path));
         assert!((widest(&e) - 50.8).abs() < 1e-9, "{}", widest(&e));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A one-quad OBJ, 100 x 200 file units in the file's xy plane.
+    fn quad_obj(name: &str) -> std::path::PathBuf {
+        let path = temp_file(name);
+        std::fs::write(
+            &path,
+            "v 0 0 0\nv 100 0 0\nv 100 200 0\nv 0 200 0\nf 1 2 3 4\n",
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn import_uses_the_options() {
+        let mut e = editor();
+        let path = quad_obj("options.obj");
+        let options = ImportOptions {
+            units: ImportUnits::Centimeters,
+            up: Some(UpAxis::Z),
+            place: ImportAs::Component,
+            merge_coplanar: false,
+        };
+        e.set_import_options(options);
+        assert_eq!(e.import_options(), options);
+        assert!(e.import_file(&path), "{}", e.status());
+        let selected: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        let [EntityId::Instance(instance)] = selected[..] else {
+            panic!("one instance selected: {selected:?}")
+        };
+        let definition = e.doc().model().instance(instance).unwrap().definition;
+        let d = e.doc().scene().definition(definition).unwrap();
+        assert_eq!(d.kind, DefinitionKind::Component);
+        let (_, face) = d.mesh.faces().next().unwrap();
+        assert!(
+            face.normal.z.abs() > 1.0 - 1e-9,
+            "the file's z stays up: {}",
+            face.normal
+        );
+        let [lo, hi] = e
+            .doc()
+            .scene()
+            .bounds(kernel::MeshId::Definition(definition))
+            .unwrap();
+        assert!(
+            (hi - lo).abs_diff_eq(DVec3::new(1.0, 2.0, 0.0), 1e-9),
+            "{lo} {hi}"
+        );
+        assert_eq!(e.import_units(), ImportUnits::Centimeters);
+        e.set_import_units(ImportUnits::Feet);
+        assert_eq!(
+            e.import_options(),
+            ImportOptions {
+                units: ImportUnits::Feet,
+                ..options
+            },
+            "only the units change"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_loose_import_selects_its_geometry() {
+        let mut e = editor();
+        let path = quad_obj("loose.obj");
+        e.set_import_options(ImportOptions {
+            place: ImportAs::Context,
+            ..Default::default()
+        });
+        assert!(e.import_file(&path), "{}", e.status());
+        assert_eq!(e.doc().model().instances().count(), 0);
+        let faces: Vec<_> = e.doc().model().faces().map(|(id, _)| id).collect();
+        assert_eq!(faces.len(), 1);
+        assert!(e.doc().selection().contains(&EntityId::Face(faces[0])));
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            e.status_parts().message,
+            Some(format!("Imported {name}: 1 face"))
+        );
+        assert_eq!(e.message_kind(), Some(MessageKind::Info));
         let _ = std::fs::remove_file(&path);
     }
 
