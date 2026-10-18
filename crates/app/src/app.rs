@@ -57,10 +57,30 @@ fn grown_to_min(size: LogicalSize<f64>, min: LogicalSize<f64>) -> Option<Logical
         .then(|| LogicalSize::new(size.width.max(min.width), size.height.max(min.height)))
 }
 
-/// Holds `window` to the least size for `scale`, growing it now if it is smaller (a minimum
-/// alone may not resize a window that is already open).
+/// Room left on a monitor around the window, in points: the menu bar and the title bar above
+/// it, and a little each side. winit gives no work area, so this stands in for one.
+const MONITOR_MARGIN: LogicalSize<f64> = LogicalSize::new(16.0, 64.0);
+
+/// `min` held to what fits on a monitor of `monitor` points less `MONITOR_MARGIN`, so a large
+/// UI scale on a small display does not ask for a window bigger than the screen. With no
+/// monitor known, `min` as is.
+fn fit_to_monitor(min: LogicalSize<f64>, monitor: Option<LogicalSize<f64>>) -> LogicalSize<f64> {
+    match monitor {
+        Some(m) => LogicalSize::new(
+            min.width.min((m.width - MONITOR_MARGIN.width).max(0.0)),
+            min.height.min((m.height - MONITOR_MARGIN.height).max(0.0)),
+        ),
+        None => min,
+    }
+}
+
+/// Holds `window` to the least size for `scale` (fitted to its monitor), growing it now if it
+/// is smaller (a minimum alone may not resize a window that is already open).
 fn set_min_window(window: &Window, scale: UiScale) {
-    let min = min_window_size(scale);
+    let monitor = window
+        .current_monitor()
+        .map(|m| m.size().to_logical(m.scale_factor()));
+    let min = fit_to_monitor(min_window_size(scale), monitor);
     window.set_min_inner_size(Some(min));
     let size = window.inner_size().to_logical(window.scale_factor());
     if let Some(grown) = grown_to_min(size, min) {
@@ -1523,7 +1543,12 @@ impl State {
         }
         // The chip's rest and the flash's end, as of the HUD this frame showed.
         self.repaint_at = with_feedback(self.repaint_at, &self.timing, dressed_at, chip_at_rest);
+        // Actions from a pass with a sheet open (or after one opened) are only the sheet's own.
+        let sheet_was_open = self.sheet.is_some();
         for action in actions {
+            if (sheet_was_open || self.sheet.is_some()) && !action_allowed_with_sheet(&action) {
+                continue;
+            }
             self.apply(action);
         }
         if acted {
@@ -1655,7 +1680,6 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
     }
 }
 
-/// A file dialog for `.skr` models.
 /// What a sheet was opened over: the document (`Editor::documents`) and the selection.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct SheetOrigin {
@@ -1724,6 +1748,27 @@ fn keys_reach_editor(text_focused: bool, sheet_open: bool) -> bool {
     !text_focused && !sheet_open
 }
 
+/// Whether `action` is applied while a sheet is open: only closing or confirming the sheet,
+/// and Quit. egui presses a widget behind the sheet's modal layer on a screen reader's Click,
+/// so the panels' actions can still arrive and are dropped here.
+fn action_allowed_with_sheet(action: &UiAction) -> bool {
+    matches!(
+        action,
+        UiAction::CloseSheet
+            | UiAction::ConfirmImport(_)
+            | UiAction::ConfirmName(_)
+            | UiAction::ConfirmFieldOfView(_)
+            | UiAction::Quit
+    )
+}
+
+/// Whether a scroll or pinch goes to the editor: not while a sheet is open, and otherwise
+/// while flying (a held pointer may rest over a panel) or with the pointer in the view.
+fn view_input_reaches_editor(flying: bool, pointer_in_view: bool, sheet_open: bool) -> bool {
+    !sheet_open && (flying || pointer_in_view)
+}
+
+/// A file dialog for `.skr` models.
 fn skr_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("SketchUp Alt model", &["skr"])
 }
@@ -2163,9 +2208,14 @@ impl ApplicationHandler<AppEvent> for App {
                     handled
                 }
             }
-            // A held pointer may rest over a panel; while flying, scrolls still fly.
+            // A held pointer may rest over a panel; while flying, scrolls still fly. Not while
+            // a sheet is open, even if an agent turned fly on.
             WindowEvent::MouseWheel { .. } | WindowEvent::PinchGesture { .. }
-                if !s.editor.flying() && !s.pointer_in_view() =>
+                if !view_input_reaches_editor(
+                    s.editor.flying(),
+                    s.pointer_in_view(),
+                    s.sheet.is_some(),
+                ) =>
             {
                 false
             }
@@ -2375,6 +2425,27 @@ mod tests {
         );
         assert_eq!(grown_to_min(LogicalSize::new(960.0, 600.0), min), Some(min));
         assert_eq!(grown_to_min(LogicalSize::new(1280.0, 800.0), min), None);
+    }
+
+    #[test]
+    fn the_minimum_window_fits_a_small_monitor() {
+        let min = min_window_size(UiScale::P125);
+        let small = LogicalSize::new(1280.0, 800.0);
+        let fitted = fit_to_monitor(min, Some(small));
+        assert_eq!(
+            fitted,
+            LogicalSize::new(1200.0, 800.0 - MONITOR_MARGIN.height)
+        );
+        assert!(fitted.height < small.height && fitted.width <= small.width);
+        // The grow asked for follows the fitted minimum, so it fits too.
+        let grown = grown_to_min(LogicalSize::new(1000.0, 600.0), fitted).unwrap();
+        assert!(grown.width <= small.width && grown.height < small.height);
+        // A big monitor and no monitor leave the minimum alone.
+        assert_eq!(
+            fit_to_monitor(min, Some(LogicalSize::new(2560.0, 1440.0))),
+            min
+        );
+        assert_eq!(fit_to_monitor(min, None), min);
     }
 
     #[test]
@@ -2601,6 +2672,42 @@ mod tests {
         assert!(!keys_reach_editor(true, false));
         assert!(!keys_reach_editor(false, true));
         assert!(!keys_reach_editor(true, true));
+    }
+
+    #[test]
+    fn only_the_sheets_own_actions_and_quit_pass_a_sheet() {
+        for dropped in [
+            UiAction::OpenFile,
+            UiAction::OpenRecent(PathBuf::from("/tmp/a.skr")),
+            UiAction::Tool(tools::ToolKind::Line),
+            UiAction::MakeComponent,
+            UiAction::NewModel,
+            UiAction::RenameComponent,
+            UiAction::ShowFieldOfView,
+            UiAction::ShowSettings(true),
+        ] {
+            assert!(!action_allowed_with_sheet(&dropped), "{dropped:?}");
+        }
+        for passed in [
+            UiAction::CloseSheet,
+            UiAction::ConfirmImport(crate::editor::ImportOptions::default()),
+            UiAction::ConfirmName("Component 1".into()),
+            UiAction::ConfirmFieldOfView(35.0),
+            UiAction::Quit,
+        ] {
+            assert!(action_allowed_with_sheet(&passed), "{passed:?}");
+        }
+    }
+
+    #[test]
+    fn view_navigation_waits_while_a_sheet_is_open() {
+        assert!(view_input_reaches_editor(false, true, false));
+        assert!(view_input_reaches_editor(true, false, false));
+        assert!(!view_input_reaches_editor(false, false, false));
+        // An agent may turn fly on under a sheet: scroll and pinch still wait.
+        assert!(!view_input_reaches_editor(true, false, true));
+        assert!(!view_input_reaches_editor(true, true, true));
+        assert!(!view_input_reaches_editor(false, true, true));
     }
 
     /// An editor with a 2 x 2 rectangle, all of it selected.
