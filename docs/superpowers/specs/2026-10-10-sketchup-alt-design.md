@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images, M8c clean-up); 2026-10-13 (M8d polish); 2026-10-14 (M9a soften and smooth, M9b textures, M9c lights); 2026-10-15 (M9d texture positioning, M9e light shadows; M10a-c full agent control)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images, M8c clean-up); 2026-10-13 (M8d polish); 2026-10-14 (M9a soften and smooth, M9b textures, M9c lights); 2026-10-15 (M9d texture positioning, M9e light shadows; M10a-c full agent control); 2026-10-18 (M12a MCP adapter)
 
 ## Goal
 
@@ -173,7 +173,7 @@ Read-only, structured: list/get entities (vertices, edges, faces, groups, instan
 
 ### MCP
 
-A thin MCP adapter that forwards to the JSON-RPC API is optional and out of scope for v1 milestones.
+An MCP server (M12a) on stdio exposes the API to MCP clients (Claude Code, Claude Desktop) as a small tool set rather than one tool per command. It runs its own headless model by default, or forwards to a running window's socket with `--live`. It is a client of the same dispatch as the JSON-RPC API, so it adds no behaviour of its own beyond argument defaults and result shaping.
 
 ### Testing
 
@@ -323,6 +323,18 @@ Interface milestones (a four-part design audit on 2026-10-16 found the engine so
   - display units and precision
   - custom cursor images
   - number keys for standard views
+
+Agent integration milestones:
+
+- **M12a**: MCP adapter.
+  - **Server:** `app --mcp [--api-root DIR]... [FILE]` runs an MCP server on stdin/stdout with its own headless model, as `--headless --stdio` does. `app --mcp --live SOCKET` instead forwards every call to the window (or headless instance) listening on `SOCKET`; that program's file and `--api-root` folders apply, so `--live` takes neither. Nothing but MCP messages is written to stdout.
+  - **Protocol:** MCP over stdio (newline-delimited JSON-RPC 2.0): `initialize` (protocol versions 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05; the client's when supported, else the newest), `ping`, `tools/list` and `tools/call`; notifications get no reply.
+  - **Tools:** `describe` (the API description, or one named schema), `transact` (one command, or several as one atomic batch by default), `query`, `pick`, `infer`, `render_view` (the PNG as MCP image content) and `tool_input`. Each tool's input schema is the API's JSON Schema under an object root. A failed call is a tool result with `isError` and the API's error (code, message, data), so the model can correct itself.
+  - **API changes it needs**, in the JSON-RPC API too:
+    - `describe` gives each method's params and result as JSON Schemas; the `execute` result schema includes `revision`; model coordinates carry their +/-1e6 m bounds; Command, Query and the other command schemas have an object root.
+    - `batch` results carry the net `changes` of the whole batch.
+    - Undo steps carry an origin, `user` (the window) or `agent` (the API), listed by the `history` query; `undo` takes an `expect` (label and optional origin) and refuses with `unexpected_step` when the next step differs, so an agent does not undo a person's work in a shared window.
+  - **Docs:** setup for Claude Code and Claude Desktop, headless and live.
 
 ## Risks
 
