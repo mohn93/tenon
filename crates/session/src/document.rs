@@ -8,6 +8,7 @@ use kernel::{
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
+use crate::batch::BatchCommand;
 use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Origin, Outcome, SelectMode};
@@ -551,15 +552,22 @@ impl Document {
     /// Atomic: all modeling commands become one undo step, and on error everything (model,
     /// camera, selection and open context) is rolled back. Undo and redo are not allowed inside
     /// an atomic batch.
-    pub fn execute_batch(
+    ///
+    /// A command's references to ids earlier commands made are resolved at its turn; one that
+    /// cannot be resolved is that command's error.
+    pub fn execute_batch<C: Into<BatchCommand>>(
         &mut self,
-        commands: Vec<Command>,
+        commands: Vec<C>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
+        let commands: Vec<BatchCommand> = commands.into_iter().map(Into::into).collect();
         let mut outcomes = Vec::new();
         if !atomic {
-            for (index, command) in commands.into_iter().enumerate() {
-                match self.execute(command) {
+            for (index, command) in commands.iter().enumerate() {
+                match command
+                    .resolve(&outcomes)
+                    .and_then(|command| self.execute(command))
+                {
                     Ok(o) => outcomes.push(o),
                     Err(error) => {
                         return Err(BatchError {
@@ -581,37 +589,40 @@ impl Document {
         let mut applied: Vec<SceneChange> = Vec::new();
         // The edits' names: the step is labeled by theirs when they share one.
         let mut names: Vec<String> = Vec::new();
-        for (index, command) in commands.into_iter().enumerate() {
-            let result = match self.edit(&command) {
-                Some(changes) => changes.map(|c| {
-                    let summary = c.summary();
-                    applied.push(c);
-                    names.push(command.name());
-                    Outcome {
-                        changes: summary,
-                        import: self.import_report.take(),
-                        export: None,
-                        soften: self.soften_report.take(),
-                        positioned: self.positioned.take(),
-                        purged: self.purged.take(),
+        for (index, command) in commands.iter().enumerate() {
+            let result = match command.resolve(&outcomes) {
+                Err(error) => Err(error),
+                Ok(command) => match self.edit(&command) {
+                    Some(changes) => changes.map(|c| {
+                        let summary = c.summary();
+                        applied.push(c);
+                        names.push(command.name());
+                        Outcome {
+                            changes: summary,
+                            import: self.import_report.take(),
+                            export: None,
+                            soften: self.soften_report.take(),
+                            positioned: self.positioned.take(),
+                            purged: self.purged.take(),
+                        }
+                    }),
+                    None if matches!(
+                        command,
+                        Command::Undo { .. }
+                            | Command::Redo { .. }
+                            | Command::New { .. }
+                            | Command::Open { .. }
+                            | Command::Save { .. }
+                            | Command::Export { .. }
+                    ) =>
+                    {
+                        Err(CommandError::new(
+                            ErrorKind::InvalidInput,
+                            "undo, redo, new, open, save and export are not allowed in an atomic batch",
+                        ))
                     }
-                }),
-                None if matches!(
-                    command,
-                    Command::Undo { .. }
-                        | Command::Redo { .. }
-                        | Command::New { .. }
-                        | Command::Open { .. }
-                        | Command::Save { .. }
-                        | Command::Export { .. }
-                ) =>
-                {
-                    Err(CommandError::new(
-                        ErrorKind::InvalidInput,
-                        "undo, redo, new, open, save and export are not allowed in an atomic batch",
-                    ))
-                }
-                None => self.execute(command),
+                    None => self.execute(command),
+                },
             };
             match result {
                 Ok(o) => outcomes.push(o),

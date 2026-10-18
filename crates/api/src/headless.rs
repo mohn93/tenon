@@ -2,7 +2,9 @@
 
 use glam::DVec2;
 use render::Snapshotter;
-use session::{BatchError, Camera, Command, CommandError, Document, Lighting, Origin, Outcome};
+use session::{
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, Lighting, Origin, Outcome,
+};
 
 use crate::dispatch::Host;
 use crate::roots::ApiRoots;
@@ -57,7 +59,7 @@ impl Host for HeadlessHost {
 
     fn execute_batch(
         &mut self,
-        commands: Vec<Command>,
+        commands: Vec<BatchCommand>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
         self.doc.execute_batch(commands, atomic)

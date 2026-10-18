@@ -7,8 +7,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use session::{
-    BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind, Lighting, Outcome,
-    Query, QueryResult,
+    BatchCommand, BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind,
+    Lighting, Outcome, Query, QueryResult,
 };
 
 use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
@@ -75,7 +75,7 @@ pub trait Host {
     fn execute(&mut self, command: Command) -> Result<Outcome, CommandError>;
     fn execute_batch(
         &mut self,
-        commands: Vec<Command>,
+        commands: Vec<BatchCommand>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError>;
     /// Renders the current model from `camera`, lit by `lighting`, to tightly packed RGBA8
@@ -252,6 +252,7 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
                     .with_data(json!(e)));
                 }
             }
+            let commands = commands.into_iter().map(BatchCommand::from).collect();
             let outcomes = host.execute_batch(commands, p.atomic).map_err(|e| {
                 RpcError::new(
                     codes::BATCH_FAILED,

@@ -11,7 +11,8 @@ use api::{
 };
 use render::Snapshotter;
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin, Outcome,
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin,
+    Outcome,
 };
 use tools::Phase;
 
@@ -177,15 +178,19 @@ impl Host for AppHost<'_> {
 
     fn execute_batch(
         &mut self,
-        commands: Vec<Command>,
+        commands: Vec<BatchCommand>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
         self.as_agent(|host| {
             // Run one by one when a command would discard work, so it is kept at its turn.
-            if !atomic && host.recovery.is_some() && commands.iter().any(discards) {
+            if !atomic && host.recovery.is_some() && commands.iter().any(|c| discards(c.command()))
+            {
                 let mut completed = Vec::new();
-                for (index, command) in commands.into_iter().enumerate() {
-                    match host.execute_keeping(command) {
+                for (index, command) in commands.iter().enumerate() {
+                    match command
+                        .resolve(&completed)
+                        .and_then(|command| host.execute_keeping(command))
+                    {
                         Ok(outcome) => completed.push(outcome),
                         Err(error) => {
                             return Err(BatchError {
@@ -753,6 +758,35 @@ mod tests {
         );
         assert_eq!(r["error"]["data"]["index"], 1, "{r}");
         assert_eq!(r["error"]["data"]["completed"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "needs M12b task 2"]
+    fn a_batch_that_discards_resolves_references() {
+        let dir = recovery_dir("batch-refs");
+        let mut e = editor();
+        let r = call_kept(
+            &mut e,
+            &dir,
+            "batch",
+            json!({"commands": [
+                {"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]},
+                {"type": "push_pull", "face": "$0:f0", "distance": 1},
+                {"type": "new", "discard": true},
+                add_edge()
+            ]}),
+        );
+        assert_eq!(r["result"]["outcomes"].as_array().unwrap().len(), 4, "{r}");
+        let kept = files_in(&dir);
+        assert_eq!(kept.len(), 1);
+        let mut back = editor();
+        back.execute(Command::Open {
+            path: kept[0].display().to_string(),
+            discard: false,
+        })
+        .unwrap();
+        assert_eq!(back.doc().model().faces().count(), 6);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

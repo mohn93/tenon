@@ -14,8 +14,8 @@ use render::PreviewVertex;
 use render::scene::DEFAULT_FRONT;
 use serde::{Deserialize, Serialize};
 use session::{
-    BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin, Outcome,
-    Projection, SelectMode, StandardView, TextureSource,
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin,
+    Outcome, Projection, SelectMode, StandardView, TextureSource,
 };
 pub use session::{ImportAs, ImportUnits, UpAxis};
 use tools::overlay::{marker, preview_lines, snap_label};
@@ -354,14 +354,14 @@ impl Editor {
     /// Batch version of `execute`.
     pub fn execute_batch(
         &mut self,
-        commands: Vec<Command>,
+        commands: Vec<BatchCommand>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError> {
-        if commands.iter().any(Command::changes_model) {
+        if commands.iter().any(|c| c.command().changes_model()) {
             self.reset_tool();
         }
         // A batch that may have replaced the document counts as having done so.
-        if commands.iter().any(replaces_document) {
+        if commands.iter().any(|c| replaces_document(c.command())) {
             self.documents += 1;
         }
         let result = self.doc.execute_batch(commands, atomic);

@@ -1,6 +1,7 @@
 //! The editable document and the command/query layer every client (UI, API, tests) goes through.
 
 mod arc;
+mod batch;
 pub mod camera;
 mod circle;
 mod command;
@@ -16,6 +17,7 @@ mod sniff;
 pub mod texture;
 
 pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points, arc_through};
+pub use batch::{BatchCommand, BatchRef, RefKind, STAND_IN_BASE};
 pub use camera::{Camera, Lighting, Projection, Projector, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use command::{
