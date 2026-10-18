@@ -32,7 +32,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, and `positioned` for `position_texture` |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, and `positioned` for `position_texture`, and `purged` for `purge_definitions` |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, revision}`; atomic = one undo step, all or nothing |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -451,7 +451,7 @@ opens it (`open_path` with its whole path); the Model row at the top goes back t
 `{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one
 undo step; a component's name must not be empty; an unknown definition is `not_found`).
 `{"type": "purge_definitions"}` removes every definition no instance places, such as a component
-whose last instance was erased, and what only it placed (one undo step).
+whose last instance was erased, and what only it placed (one undo step). The outcome's `purged` counts the definitions removed, nested ones included (0 when nothing was unused).
 
 ### Camera
 
@@ -501,8 +501,10 @@ larger of the eye-to-target distance and the eye's height), else the point that 
 
 - Mouse: middle drag orbits, Shift+middle drag pans, Option/Alt+left drag (Shift+Option+left
   to pan) does the same without a middle button, and the wheel zooms toward the cursor.
-- Trackpad: two-finger scroll orbits as if dragging the scene, Shift+scroll pans, Cmd/Ctrl+
-  scroll and pinch zoom toward the cursor.
+- Trackpad: by default two-finger scroll orbits as if dragging the scene, Shift+scroll pans,
+  Cmd/Ctrl+scroll and pinch zoom toward the cursor. Settings > Input can swap scroll and
+  Cmd+scroll, so scroll zooms and Cmd+scroll orbits. That setting is window chrome, kept in the
+  preferences; `orbit`, `zoom` and `pan` are unaffected.
 - Orbit speed is per logical pixel, the same on any display. One scroll or pinch event zooms
   at most three wheel notches. Zooming in on a point stops 0.01 m short of it, then moves on
   through it toward what lies beyond; zooming where nothing is under the cursor moves the eye
@@ -622,8 +624,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   starts. The Select tool is `active` with no points while its button is held (a click or a box,
   both on screen); Erase and Paint are always `idle`.
 - `paint_material` is the material the Paint tool paints with (`null`: the default material);
-  `import_units` is what one unit of an imported OBJ or STL file is in the window's File > Import
-  (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
+  `import_units` is what one unit of an imported OBJ or STL file is in the window's import options
+  sheet (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
   `scale`).
 - `flying` and `fly_speed` (meters a second) are fly mode's (see Camera). Headless nothing moves
   the eye while flying; turning fly mode on still levels the view as in the window.
@@ -640,7 +642,9 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   `typing`, else the live measurement (`null` when there is none).
 - `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
   over the view: `soften_edges` or `null`. The window's file and unsaved-changes dialogs are
-  modal: while one is open the window handles no requests, which wait until it closes.
+  modal: while one is open the window handles no requests, which wait until it closes. Its
+  sheets (import options, component name, rename, field of view) and the Settings window are
+  chrome and do not hold requests.
 - `modifiers` are the modifier keys held (`cmd` is Cmd or Ctrl): the user's in the window and
   those a `tool_input` `modifiers` event holds (see Driving the tools).
 - `hovered` is what a click would act on now with Select, Push/Pull, Paint or Erase (an id of
@@ -658,7 +662,7 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 |---|---|
 | `{"type": "set_tool", "tool": "rectangle"}` | Switches to the tool (a fresh one, even if it is the active tool), dropping the operation in progress and anything typed, as the tool rail does. |
 | `{"type": "set_paint_material", "material": "m6"}` | The material the Paint tool paints with; `null` or absent for the default material. The tool does not change (a click on a swatch in the window's Materials tab does the same; a double-click then sets the Paint tool). An unknown material is `not_found`. |
-| `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is, for the window's File > Import, for the rest of the session. |
+| `{"type": "set_import_units", "units": "millimeters"}` | What one unit of an imported file is: sets the units of the window's import options sheet for the rest of the session. The sheet's other values (up axis, import as, merge coplanar faces) are the `import` command's own parameters. |
 | `{"type": "cancel"}` | Aborts the tool's operation, like pressing Escape until the tool is idle: leaves fly mode, drops typed text, the direction lock and the operation (and a copy array or a retyped angle the tool waits for), and lets go of the modifiers `tool_input` holds. It never closes the open group (`close_instance` does). |
 | `{"type": "set_fly_mode", "on": true, "speed": 6}` | Turns fly mode on or off, as F does (see Camera), and sets its speed in meters a second (0.25 to 60, else `invalid_input`; absent: unchanged). In the window the pointer is held while flying. |
 | `{"type": "duplicate"}` | Starts Move copying the selection, as Edit > Duplicate (Cmd+D) does: with the cursor in the view the base point is the point under it, so the copy follows the cursor; otherwise Move waits for a base point. With nothing selected it is `invalid_input`. The copy is made by the next click or typed distance (one `copy` step). |
@@ -891,9 +895,10 @@ beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error 
 A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 
-In the window, File > Import... (Cmd+I) picks an OBJ or STL file and imports it as a group
-with these defaults, except that `scale` follows File > Import Units (meters, centimeters,
-millimeters, inches or feet per file unit; meters until changed, kept for the session); the
+In the window, File > Import... (Cmd+I) picks an OBJ or STL file and opens an options sheet
+(units: meters, centimeters, millimeters, inches or feet per file unit, which becomes `scale`;
+up axis; import as; merge coplanar faces), whose values are the parameters above and are kept
+in the preferences. Importing from the sheet runs `import` with them; the
 status line reports the faces made (and the units when not meters) and polygons skipped, or the
 error.
 
@@ -975,20 +980,24 @@ under a pixel and where a click would snap.
 
 | In the window | Through the API |
 |---|---|
-| File > New, Open..., Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt is `unsaved_changes` |
+| File > New, Open..., Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt reads `Do you want to save changes to "<name>"?` (Save, Don't Save, Cancel); it is still `unsaved_changes` / `discard` |
+| File > Open Recent (the last 10 files) and Clear Menu | `open` (`path`); the list is chrome |
 | The empty-model card's New, Open... and recent files | `new`, `open` (`path`) |
-| File > Import... (Cmd+I), File > Import Units | `import` (`scale`, `as`, `up`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
+| File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
-| View > Theme (System, Dark, Light) | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
+| Settings (Cmd+,): Appearance (theme, UI scale) and Input (trackpad scroll); View > Theme | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |
 | Edit > Duplicate (Cmd+D) | `duplicate`, or `copy` with an explicit offset |
 | Undo, Redo (Cmd+Z, Shift+Cmd+Z; disabled when there is nothing to undo or redo, the tooltip naming the step) | `undo`, `redo`; `history` lists the steps |
-| Group menu and context bar: Make Group (G), Make Component (Shift+G), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
+| Group menu and context bar: Make Group (G), Make Component... (Shift+G, asks for a name), Explode; Close Group (Group menu, Escape, the breadcrumb) | `make_group`, `make_component` (`name`), `explode`, `close_instance` |
+| Group > Rename Component... (F2), Entity Info's Name field | `rename_definition` (the instance's `definition` from `entity`) |
+| Group > Purge Unused | `purge_definitions` (`purged`) |
 | Camera menu: Zoom Extents (Shift+Z), standard views, Perspective / Parallel, Night Lighting, the context bar's day/night toggle | `zoom_extents`, `standard_view`, `set_projection`, `set_lighting` |
+| Camera > Field of View... | `set_camera` (`fov_y_deg`, with the current `eye` and `target`) |
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | Drawing by dragging (Line, Rectangle, Circle, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
@@ -1003,14 +1012,14 @@ under a pixel and where a click would snap.
 | Entity Info: what is selected, texture Offset / Rotation / Scale, Rotate 90, Reset | `entity`, `entities`, `curve`; `position_texture` (`offset`, `rotation_deg`, `rotate_by: 90`, `scale`, `reset`) |
 | Outliner: the tree, click to select, Shift/Cmd-click to toggle, double-click to open, the Model row | `outliner`; `open_path` then `select` (`toggle`); `open_path` (`[]` for the root) |
 | Context bar breadcrumb (`Model > House > Kitchen`), Esc | `open_path` with the crumb's path; `close_instance` |
-| The window's title (file name, unsaved mark) | `file` |
+| The window's title (the file name; the edited dot on macOS, `*` elsewhere) | `file` |
 | The 3D view's size | `editor.viewport` (the default view of `pick` and `infer`); `render_view` takes any size |
 
 Window chrome, which changes nothing in the model, its view or the editor, has no command: the
 window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
 which menus are open, tooltips, which Outliner rows are expanded, the Outliner's filter text (an agent filters the
 `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export dialog's suggested
-format, keyboard focus, and the window's preferences: the theme (View > Theme), the dock's width, divider position and tab, and the recent files list, kept in
+format, keyboard focus, and the window's preferences: the theme (Settings or View > Theme), the UI scale, the trackpad scroll setting, the dock's width, divider position and tab, and the recent files list, kept in
 `~/.sketchup-alt/prefs.json`, which the API never reads or writes (files an agent opens or saves are not added to the list). The card
 the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is chrome too, and so is dismissing it. Whether the menus are the native macOS menu bar
 or the window's own is chrome too; on macOS, Cmd shortcuts act through the native menu even while a text field
@@ -1026,6 +1035,9 @@ outline: the face's loops, the pulled loops and the edges joining them), and the
 the view's corner. `render_view` never shows the hover highlight, markers, preview lines, solid
 or gizmo. The file dialogs are chrome too (commands
 take paths); while one, or the unsaved-changes prompt, is open, the window answers no requests.
+The sheets (import options, component name, rename, field of view) and the Settings window are
+chrome as well, and hold no requests. The window is exposed to screen readers such as VoiceOver
+through AccessKit; that is chrome too.
 
 ## Example
 
