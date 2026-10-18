@@ -1,7 +1,7 @@
 # SketchUp Alternative — Design
 
 Date: 2026-10-10
-Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images, M8c clean-up); 2026-10-13 (M8d polish); 2026-10-14 (M9a soften and smooth, M9b textures, M9c lights); 2026-10-15 (M9d texture positioning, M9e light shadows; M10a-c full agent control); 2026-10-18 (M12a MCP adapter); 2026-10-18 (M12b batch references)
+Status: Approved; amended 2026-10-10 (agent control, M2.5; M3/M4 scope); 2026-10-11 (M4 split into M4a-c; M4b scope; M4c scope; M5 split into M5a-c; M5b tools); 2026-10-12 (M5c files, M5d export, M6a circles, M6b rotate, M6c guides, M6d curves, M7a camera, M7b materials, M7c outliner, M8 split into M8a-d, M8a import, M8b golden images, M8c clean-up); 2026-10-13 (M8d polish); 2026-10-14 (M9a soften and smooth, M9b textures, M9c lights); 2026-10-15 (M9d texture positioning, M9e light shadows; M10a-c full agent control); 2026-10-18 (M12a MCP adapter); 2026-10-18 (M12b batch references); 2026-10-19 (M13a split; M13a1 Polygon and Scale)
 
 ## Goal
 
@@ -318,7 +318,7 @@ Interface milestones (a four-part design audit on 2026-10-16 found the engine so
   - **Accessibility:** AccessKit is switched on, so VoiceOver reads the window's controls. Every icon-only control has a label.
 
   Deferred:
-  - the Offset, Scale and Follow Me tools
+  - the Offset, Scale and Follow Me tools (now M13a1-M13a3)
   - cut, copy and paste between models
   - display units and precision
   - custom cursor images
@@ -340,6 +340,12 @@ Agent integration milestones:
   - References are allowed only where a command takes an entity or material id (`ids`, `face`, `id`, `material`, and `open_path`'s `path`); anywhere else such a string is plain text. `*` references only in lists of ids.
   - A malformed reference, or one to the referring command or a later one, rejects the whole batch before anything runs (invalid params). A reference to an id the earlier command did not make (`"$0:f1"` when it made one face) fails that command with `invalid_input`, like any failing command: an atomic batch is rolled back.
   - `describe` and the MCP `transact` schema accept a reference wherever they accept an entity or material id in a batch.
+
+Modeling parity milestones (M13a is split in three: M13a1 Polygon and Scale, M13a2 Offset, M13a3 Follow Me):
+
+- **M13a1**: Polygon and Scale.
+  - **Polygon:** `add_polygon {center, radius, sides?, normal?, circumscribed?, direction?}` draws a regular polygon of `sides` (default 6, 3 to 360) in one undo step: `radius` is the distance to its corners, or with `circumscribed` to the middles of its sides; `direction` (default the plane's u axis, as for circles) points from the center to the first corner, or to the middle of the first side when circumscribed. Its edges form one curve marked as a polygon: it selects as one, Entity Info reads "1 polygon" with radius and sides, the `curve` query's `kind` is `polygon`, and pulling it gives hard sides (a circle's are soft). The mark is kept through copies, splits, groups and files. The Polygon tool (key `n`) works like the Circle tool: click the center, then a corner (the cursor sets the radius and the rotation); typed `8s` sets the sides (remembered for the session), a typed length the radius; Ctrl switches inscribed and circumscribed.
+  - **Scale:** `scale {ids, origin, factors}` scales edges, faces (their vertices), vertices, instances and guides by `factors` [x, y, z] along the model axes about the fixed point `origin`, in one undo step. Factors are finite, not zero, at most 1e4 in size; a negative factor mirrors; all factors 1 is `invalid_input`. Faces that move whole keep their front side out (a mirrored box stays outward); faces that move partly must stay flat and not fold; an edge shrunk below the length tolerance is refused. Instances take the scale into their placement (stretched or mirrored instances already render and pick correctly); Entity Info shows an instance's scale. The Scale tool (key `s`) shows grips on the selection's box (8 corners, 12 edge middles, 6 face middles; grips along a flat side of the box are left out): drag or click a grip and move to scale, the opposite grip staying fixed; corner grips scale uniformly and edge and face grips along their own axes, Shift switching between the two, and Ctrl switching to scaling about the box's center. A typed number is a factor (`2`, `-1`, or `2,1.5` for the grip's axes), a typed length the new size along the grip (`3m`); typed after the scale, it redoes it.
 
 ## Risks
 
