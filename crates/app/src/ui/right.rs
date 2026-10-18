@@ -6,11 +6,30 @@ use kernel::EntityId;
 
 use super::widgets::{self, take_row};
 use super::{TexturePosition, UiAction, View};
+use crate::editor::RenameTarget;
 
 /// Entity Info, the dock's first tab (the tab is its title).
 pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
-    for line in view.info {
-        ui.label(line);
+    match view.rename {
+        // The first line ("1 component" or "1 group"), the Name field, then the rest.
+        Some(target) => {
+            let (first, rest) = view
+                .info
+                .split_first()
+                .map_or((None, &[][..]), |(f, r)| (Some(f), r));
+            if let Some(first) = first {
+                ui.label(first);
+            }
+            name_field(ui, target, actions);
+            for line in rest {
+                ui.label(line);
+            }
+        }
+        None => {
+            for line in view.info {
+                ui.label(line);
+            }
+        }
     }
     if let Some(soft) = view.edges_soft {
         let mut checked = soft;
@@ -25,6 +44,39 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
     match &view.texture_position {
         Some(t) => texture_position(ui, t, actions),
         None => end_texture_position_edit(ui, actions),
+    }
+}
+
+/// The selected group's or component's Name field. The text being typed lives in egui's memory
+/// until the field loses focus; then a changed name is reported, unless Escape discarded it or
+/// it is blank for a component (which needs a name), when the field goes back to the name.
+fn name_field(ui: &mut Ui, target: &RenameTarget, actions: &mut Vec<UiAction>) {
+    let key = egui::Id::new(("definition-name", target.definition.0));
+    let mut text = ui
+        .data(|d| d.get_temp::<String>(key))
+        .unwrap_or_else(|| target.name.clone());
+    let edit = ui
+        .horizontal(|ui| {
+            let label = ui.label("Name");
+            // Named by its label, which then is not a node of its own.
+            ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY))
+                .labelled_by(label.id)
+        })
+        .inner;
+    edit.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Name");
+        info.current_text_value = Some(text.clone());
+        info
+    });
+    if edit.lost_focus() {
+        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let blank = target.kind == kernel::DefinitionKind::Component && text.trim().is_empty();
+        if text != target.name && !escaped && !blank {
+            actions.push(UiAction::RenameDefinition(target.definition, text));
+        }
+        ui.data_mut(|d| d.remove::<String>(key));
+    } else if edit.has_focus() {
+        ui.data_mut(|d| d.insert_temp(key, text));
     }
 }
 

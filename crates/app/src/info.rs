@@ -75,7 +75,8 @@ fn selection_info(doc: &Document) -> Vec<String> {
         let d = instance.and_then(|i| doc.scene().definition(i.definition));
         let mut lines = match d {
             Some(d) if d.kind == DefinitionKind::Component => {
-                vec!["1 component".into(), format!("Name: {}", d.name)]
+                // The name is Entity Info's Name field.
+                vec!["1 component".into()]
             }
             _ => vec!["1 group".into()],
         };
@@ -380,7 +381,8 @@ mod tests {
             name: "Table".into(),
         })
         .unwrap();
-        assert_eq!(entity_info(&d), ["1 component", "Name: Table"]);
+        // The name is Entity Info's Name field, not a line.
+        assert_eq!(entity_info(&d), ["1 component"]);
         d.execute(Command::AddEdge {
             start: [5.0, 0.0, 0.0],
             end: [6.0, 0.0, 0.0],

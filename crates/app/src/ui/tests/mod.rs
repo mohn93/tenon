@@ -29,7 +29,7 @@ use super::{
     Agents, DockLayout, DockTab, MaterialRow, Sheet, StartCard, TexturePosition, TextureRow,
     UiAction, View, draw,
 };
-use crate::editor::Status;
+use crate::editor::{RenameTarget, Status};
 use crate::feedback::Hud;
 
 /// Everything a test's `View` borrows, owned, and what the panels reported.
@@ -83,6 +83,8 @@ pub(super) struct Fixture {
     pub recent: Vec<PathBuf>,
     /// The sheet open over the window.
     pub sheet: Option<Sheet>,
+    /// The one selected group or component, which Rename Component and the Name field rename.
+    pub rename: Option<RenameTarget>,
 }
 
 impl Default for Fixture {
@@ -134,6 +136,7 @@ impl Default for Fixture {
             start: None,
             recent: Vec::new(),
             sheet: None,
+            rename: None,
         }
     }
 }
@@ -176,6 +179,7 @@ impl Fixture {
             start: self.start.as_deref().map(|recent| StartCard { recent }),
             recent: &self.recent,
             sheet: self.sheet.as_ref(),
+            rename: self.rename.as_ref(),
         }
     }
 

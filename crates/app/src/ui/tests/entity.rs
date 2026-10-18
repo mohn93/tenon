@@ -205,3 +205,50 @@ fn an_edit_ended_in_a_discarded_pass_is_reported_once() {
     h.run_ok();
     assert_eq!(h.state_mut().take(), []);
 }
+
+#[test]
+fn entity_info_renames_a_selected_component() {
+    use crate::editor::RenameTarget;
+    let d: kernel::DefinitionId = "d2".parse().unwrap();
+    let fixture = || Fixture {
+        info: vec!["1 component".into()],
+        rename: Some(RenameTarget {
+            definition: d,
+            kind: kernel::DefinitionKind::Component,
+            name: "Chair".into(),
+        }),
+        ..Default::default()
+    };
+    let mut h = harness(fixture());
+    assert_eq!(
+        h.get_by_label("Name").accesskit_node().value().as_deref(),
+        Some("Chair")
+    );
+    // Clicking puts the cursor at the end; select it all first, as a user would.
+    h.get_by_label("Name").click();
+    h.run_ok();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_ok();
+    h.event(egui::Event::Text("Stool".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(
+        h.state_mut().take(),
+        [UiAction::RenameDefinition(d, "Stool".into())]
+    );
+
+    let mut h = harness(fixture());
+    assert_eq!(type_into(&mut h, "Name", 0, "s", egui::Key::Escape), []);
+
+    let mut h = harness(fixture());
+    h.get_by_label("Name").click();
+    h.run_ok();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_ok();
+    h.key_press(egui::Key::Backspace);
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), [], "a component needs a name");
+}

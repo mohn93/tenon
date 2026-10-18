@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use api::{MessageKind, Mods};
 use glam::{DAffine3, DVec2, DVec3};
-use kernel::{DefinitionKind, EntityId, InstanceId, MaterialId};
+use kernel::{DefinitionId, DefinitionKind, EntityId, InstanceId, MaterialId};
 use render::PreviewVertex;
 use render::scene::DEFAULT_FRONT;
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,24 @@ impl Default for ImportOptions {
             place: ImportAs::Group,
             merge_coplanar: true,
         }
+    }
+}
+
+/// The one selected group or component of the open context, which Rename Component and Entity
+/// Info's Name field rename.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenameTarget {
+    pub definition: DefinitionId,
+    pub kind: DefinitionKind,
+    pub name: String,
+}
+
+/// A definition's name as the window shows it: an unnamed group is "Group".
+fn shown_name(kind: DefinitionKind, name: &str) -> &str {
+    if kind == DefinitionKind::Group && name.is_empty() {
+        "Group"
+    } else {
+        name
     }
 }
 
@@ -952,9 +970,7 @@ impl Editor {
         self.flush_hover();
         match key {
             EditorKey::Char(c) if self.typed.is_empty() => {
-                let starts_value = c.is_ascii_digit() || matches!(c, '.' | '-' | '/' | '*');
-                let starts_array = matches!(c, 'x' | 'X') && copies(self.kind);
-                if starts_value || starts_array {
+                if self.starts_typing(c) {
                     self.typed.push(c);
                     true
                 } else if let Some(bound) = shortcuts::plain(c) {
@@ -1022,6 +1038,25 @@ impl Editor {
         }
     }
 
+    /// Whether `c`, typed with nothing typed yet, starts a value for the measurements box.
+    fn starts_typing(&self, c: char) -> bool {
+        let starts_value = c.is_ascii_digit() || matches!(c, '.' | '-' | '/' | '*');
+        let starts_array = matches!(c, 'x' | 'X') && copies(self.kind);
+        starts_value || starts_array
+    }
+
+    /// What `key` would run from the shortcut table now: not flying, nothing typed, a key with
+    /// a plain binding. None otherwise.
+    pub fn shortcut_for(&self, key: EditorKey) -> Option<Bound> {
+        if self.flying || !self.typed.is_empty() {
+            return None;
+        }
+        match key {
+            EditorKey::Char(c) if !self.starts_typing(c) => shortcuts::plain(c),
+            _ => None,
+        }
+    }
+
     /// Does what a key typed without Cmd is bound to. True if anything changed.
     fn run_shortcut(&mut self, bound: Bound) -> bool {
         match bound {
@@ -1066,22 +1101,80 @@ impl Editor {
     /// Makes a component of the selection, named "Component N" with the first free N. With
     /// nothing selected it says so in the status line (and returns true, so the window redraws).
     pub fn make_component(&mut self) -> bool {
-        let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
-        if ids.is_empty() {
-            self.message = Some(Message::error("Select geometry to make a component"));
-            return true;
-        }
+        let name = self.next_component_name();
+        self.make_component_named(&name)
+    }
+
+    /// "Component N" with the first free N.
+    pub fn next_component_name(&self) -> String {
         let names: Vec<&str> = self
             .doc
             .scene()
             .definitions()
             .map(|(_, d)| d.name.as_str())
             .collect();
-        let name = (1..)
+        (1..)
             .map(|n| format!("Component {n}"))
             .find(|n| !names.contains(&n.as_str()))
-            .expect("a free name");
-        self.run_selection_command(Command::MakeComponent { ids, name })
+            .expect("a free name")
+    }
+
+    /// Makes a component of the selection named `name`. With nothing selected it says so in
+    /// the status line (and returns true, so the window redraws); a refused name says why.
+    pub fn make_component_named(&mut self, name: &str) -> bool {
+        let ids: Vec<EntityId> = self.doc.selection().iter().copied().collect();
+        if ids.is_empty() {
+            self.message = Some(Message::error("Select geometry to make a component"));
+            return true;
+        }
+        self.run_selection_command(Command::MakeComponent {
+            ids,
+            name: name.to_string(),
+        })
+    }
+
+    /// The one selected group or component of the open context, if exactly one is selected.
+    pub fn rename_target(&self) -> Option<RenameTarget> {
+        let selection = self.doc.selection();
+        let (Some(EntityId::Instance(id)), 1) = (selection.first(), selection.len()) else {
+            return None;
+        };
+        let definition = self.doc.model().instance(*id)?.definition;
+        let d = self.doc.scene().definition(definition)?;
+        Some(RenameTarget {
+            definition,
+            kind: d.kind,
+            name: d.name.clone(),
+        })
+    }
+
+    /// Renames a definition as one undo step and says "Renamed <old> to <new>", or why the
+    /// session refused. The same name again does nothing. True if the status may have changed.
+    pub fn rename_definition(&mut self, definition: DefinitionId, name: &str) -> bool {
+        let old = self
+            .doc
+            .scene()
+            .definition(definition)
+            .map(|d| (d.kind, d.name.clone()));
+        if old.as_ref().is_some_and(|(_, n)| n == name) {
+            return false;
+        }
+        self.message = None;
+        if self
+            .run(Command::RenameDefinition {
+                definition,
+                name: name.to_string(),
+            })
+            .is_some()
+            && let Some((kind, old)) = old
+        {
+            self.message = Some(Message::info(format!(
+                "Renamed {} to {}",
+                shown_name(kind, &old),
+                shown_name(kind, name)
+            )));
+        }
+        true
     }
 
     /// Explodes the selected groups and components. With none selected it says so in the
@@ -3681,6 +3774,8 @@ mod tests {
             Key::Space => EditorKey::Char(' '),
             Key::Delete => EditorKey::Delete,
             Key::Escape => EditorKey::Escape,
+            // The window's key path acts on F2 (Rename Component); the editor has no key for it.
+            Key::F2 => panic!("{bound:?} is the window's, not the editor's"),
         }
     }
 
@@ -4456,6 +4551,171 @@ mod tests {
         assert!(e.import_file(&path));
         assert!((widest(&e) - 50.8).abs() < 1e-9, "{}", widest(&e));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Adds a 2 x 2 rectangle with its corner at (x, 0, 0) and selects it alone.
+    fn selected_rectangle(e: &mut Editor, x: f64) {
+        let outcome = e
+            .execute(Command::AddRectangle {
+                corner: [x, 0.0, 0.0],
+                opposite: [x + 2.0, 2.0, 0.0],
+                normal: None,
+            })
+            .unwrap();
+        let ids = outcome
+            .changes
+            .created
+            .iter()
+            .copied()
+            .filter(|id| matches!(id, EntityId::Edge(_) | EntityId::Face(_)))
+            .collect();
+        e.execute(Command::Select {
+            ids,
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+    }
+
+    /// The one selected instance's definition.
+    fn selected_definition(e: &Editor) -> kernel::DefinitionId {
+        let selected: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        let [EntityId::Instance(i)] = selected[..] else {
+            panic!("one instance selected: {selected:?}")
+        };
+        e.doc().model().instance(i).unwrap().definition
+    }
+
+    #[test]
+    fn make_component_named_uses_the_name() {
+        let mut e = editor();
+        selected_rectangle(&mut e, 0.0);
+        assert_eq!(e.next_component_name(), "Component 1");
+        assert!(e.make_component_named("Chair"));
+        let d = e.doc().scene().definition(selected_definition(&e)).unwrap();
+        assert_eq!(d.kind, DefinitionKind::Component);
+        assert_eq!(d.name, "Chair");
+        assert_eq!(e.next_component_name(), "Component 1");
+    }
+
+    #[test]
+    fn naming_a_component_with_nothing_selected_says_so() {
+        let mut e = editor();
+        let revision = e.doc().revision();
+        assert!(e.make_component_named("Chair"));
+        assert_eq!(e.doc().revision(), revision);
+        assert_eq!(definition_names(&e).len(), 0);
+        assert!(
+            e.status().contains("Select geometry to make a component"),
+            "{}",
+            e.status()
+        );
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+    }
+
+    #[test]
+    fn rename_target_is_the_one_selected_instance() {
+        let mut e = editor();
+        assert_eq!(e.rename_target(), None, "nothing selected");
+        selected_rectangle(&mut e, 0.0);
+        assert!(e.make_group());
+        let group = selected_definition(&e);
+        assert_eq!(
+            e.rename_target(),
+            Some(RenameTarget {
+                definition: group,
+                kind: DefinitionKind::Group,
+                name: String::new(),
+            })
+        );
+        let first = *e.doc().selection().first().unwrap();
+        selected_rectangle(&mut e, 5.0);
+        assert!(e.make_component_named("Chair"));
+        let chair = selected_definition(&e);
+        assert_eq!(
+            e.rename_target(),
+            Some(RenameTarget {
+                definition: chair,
+                kind: DefinitionKind::Component,
+                name: "Chair".into(),
+            })
+        );
+        let second = *e.doc().selection().first().unwrap();
+        e.execute(Command::Select {
+            ids: vec![first, second],
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        assert_eq!(e.rename_target(), None, "two instances");
+        selected_rectangle(&mut e, 10.0);
+        let edge = *e.doc().selection().first().unwrap();
+        assert!(matches!(edge, EntityId::Edge(_)));
+        e.execute(Command::Select {
+            ids: vec![second, edge],
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        assert_eq!(e.rename_target(), None, "an instance and an edge");
+    }
+
+    #[test]
+    fn rename_definition_renames_and_undoes() {
+        let mut e = editor();
+        selected_rectangle(&mut e, 0.0);
+        assert!(e.make_component());
+        let d = selected_definition(&e);
+        assert!(e.rename_definition(d, "Table"));
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Renamed Component 1 to Table")
+        );
+        assert_eq!(e.message_kind(), Some(MessageKind::Info));
+        assert_eq!(definition_names(&e), ["Table"]);
+        assert!(e.undo());
+        assert_eq!(definition_names(&e), ["Component 1"]);
+        e.rename_definition(d, "  ");
+        assert!(
+            e.status().contains("a component needs a name"),
+            "{}",
+            e.status()
+        );
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+        assert_eq!(definition_names(&e), ["Component 1"]);
+        // The same name again is skipped: no step and no new message.
+        let revision = e.doc().revision();
+        assert!(!e.rename_definition(d, "Component 1"));
+        assert_eq!(e.doc().revision(), revision);
+        assert!(e.status().contains("a component needs a name"));
+    }
+
+    #[test]
+    fn a_rename_whose_definition_is_gone_says_so() {
+        let mut e = editor();
+        selected_rectangle(&mut e, 0.0);
+        assert!(e.make_component());
+        let d = selected_definition(&e);
+        assert!(e.erase_selection());
+        e.execute(Command::PurgeDefinitions {}).unwrap();
+        assert!(e.doc().scene().definition(d).is_none());
+        e.rename_definition(d, "X");
+        assert!(e.status().contains("no definition"), "{}", e.status());
+    }
+
+    #[test]
+    fn shift_g_is_the_make_component_shortcut() {
+        let mut e = editor();
+        assert_eq!(
+            e.shortcut_for(EditorKey::Char('G')),
+            Some(Bound::MakeComponent)
+        );
+        assert_eq!(e.shortcut_for(EditorKey::Char('g')), Some(Bound::MakeGroup));
+        assert!(e.key(EditorKey::Char('2')));
+        assert_eq!(e.shortcut_for(EditorKey::Char('G')), None, "the G is text");
+        e.key(EditorKey::Escape);
+        assert!(e.set_flying(true));
+        assert_eq!(e.shortcut_for(EditorKey::Char('G')), None, "flying");
     }
 
     /// A one-quad OBJ, 100 x 200 file units in the file's xy plane.

@@ -6,8 +6,11 @@ use std::path::{Path, PathBuf};
 
 use egui::{Id, Modal, RichText, Ui};
 
+use egui::text::{CCursor, CCursorRange};
+use kernel::DefinitionKind;
+
 use super::{UiAction, theme, widgets};
-use crate::editor::{ImportAs, ImportOptions, ImportUnits, UpAxis};
+use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis};
 
 /// The sheet open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,6 +20,10 @@ pub enum Sheet {
         path: PathBuf,
         options: ImportOptions,
     },
+    /// Make Component, asking for the new component's name (`suggested` filled in).
+    NameComponent { suggested: String },
+    /// Rename Component (or Group), with the current name filled in.
+    Rename { target: RenameTarget },
 }
 
 /// A sheet's width, in points.
@@ -38,6 +45,7 @@ struct Editing {
 #[derive(Clone)]
 enum Values {
     Import(ImportOptions),
+    Name(String),
 }
 
 impl Values {
@@ -45,6 +53,8 @@ impl Values {
     fn of(sheet: &Sheet) -> Self {
         match sheet {
             Sheet::Import { options, .. } => Values::Import(*options),
+            Sheet::NameComponent { suggested } => Values::Name(suggested.clone()),
+            Sheet::Rename { target } => Values::Name(target.name.clone()),
         }
     }
 }
@@ -53,10 +63,12 @@ impl Values {
 /// `CloseSheet`; the confirm button reports the sheet's confirm action.
 pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
     let id = sheet_id();
-    let mut values = ui
+    let held = ui
         .data(|d| d.get_temp::<Editing>(id))
-        .filter(|e| e.origin == *sheet)
-        .map_or_else(|| Values::of(sheet), |e| e.values);
+        .filter(|e| e.origin == *sheet);
+    // The sheet's first frame: its name field takes focus.
+    let fresh = held.is_none();
+    let mut values = held.map_or_else(|| Values::of(sheet), |e| e.values);
     let modal = Modal::new(id)
         .area(Modal::default_area(id).fade_in(false))
         .show(ui.ctx(), |ui| {
@@ -65,6 +77,18 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                 (Sheet::Import { path, .. }, Values::Import(options)) => {
                     import_sheet(ui, path, options, actions);
                 }
+                (Sheet::NameComponent { .. }, Values::Name(name)) => {
+                    name_sheet(ui, "Make Component", "Create", name, false, fresh, actions);
+                }
+                (Sheet::Rename { target }, Values::Name(name)) => {
+                    let (title, allow_blank) = match target.kind {
+                        DefinitionKind::Group => ("Rename Group", true),
+                        DefinitionKind::Component => ("Rename Component", false),
+                    };
+                    name_sheet(ui, title, "Rename", name, allow_blank, fresh, actions);
+                }
+                // `Values::of` matches each sheet with its values.
+                _ => {}
             }
         });
     ui.data_mut(|d| {
@@ -144,6 +168,59 @@ fn import_sheet(
     ui.checkbox(&mut options.merge_coplanar, "Merge coplanar faces");
     if buttons(ui, "Import", true, actions) {
         actions.push(UiAction::ConfirmImport(*options));
+    }
+}
+
+/// A sheet asking for a name: `title`, a "Name" field holding `name`, then Cancel and
+/// `button`. On the sheet's first frame (`fresh`) the field takes focus with all of it
+/// selected, so typing replaces it. A blank name is refused unless `allow_blank`: `button` is
+/// then disabled and Enter does nothing. Enter in the field or `button` reports `ConfirmName`.
+fn name_sheet(
+    ui: &mut Ui,
+    title: &str,
+    button: &str,
+    name: &mut String,
+    allow_blank: bool,
+    fresh: bool,
+    actions: &mut Vec<UiAction>,
+) {
+    widgets::section_header(ui, title);
+    ui.add_space(theme::GRID);
+    let field_id = Id::new("sheet-name");
+    let output = ui
+        .horizontal(|ui| {
+            let label = ui.label("Name");
+            let output = egui::TextEdit::singleline(name)
+                .id(field_id)
+                .desired_width(f32::INFINITY)
+                .show(ui);
+            // Named by its label, which then is not a node of its own.
+            output.response.response.clone().labelled_by(label.id);
+            output
+        })
+        .inner;
+    let field = &output.response;
+    field.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Name");
+        info.current_text_value = Some(name.clone());
+        info
+    });
+    if fresh {
+        field.request_focus();
+        let mut state = output.state.clone();
+        let all = CCursorRange::two(CCursor::new(0), CCursor::new(name.chars().count()));
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), field_id);
+    }
+    let valid = allow_blank || !name.trim().is_empty();
+    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if entered && !valid {
+        // Enter ends the field's focus; it keeps it, so the name can still be typed.
+        field.request_focus();
+    }
+    let clicked = buttons(ui, button, valid, actions);
+    if valid && (entered || clicked) {
+        actions.push(UiAction::ConfirmName(name.clone()));
     }
 }
 

@@ -164,7 +164,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .enabled(view.has_selection)
             .entry(),
         bound_item(
-            "Make Component",
+            "Make Component...",
             Bound::MakeComponent,
             UiAction::MakeComponent,
         )
@@ -176,6 +176,14 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         bound_item("Close Group", Bound::CloseInstance, UiAction::CloseInstance)
             .enabled(view.inside_instance)
             .entry(),
+        Entry::Separator,
+        bound_item(
+            "Rename Component...",
+            Bound::RenameComponent,
+            UiAction::RenameComponent,
+        )
+        .enabled(view.rename.is_some())
+        .entry(),
     ];
 
     let mut camera = vec![

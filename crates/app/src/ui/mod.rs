@@ -7,11 +7,11 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use egui::{Panel, Ui};
-use kernel::{EntityId, TexturePlacement};
+use kernel::{DefinitionId, EntityId, TexturePlacement};
 use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
-use crate::editor::{ImportOptions, Status};
+use crate::editor::{ImportOptions, RenameTarget, Status};
 use crate::feedback::Hud;
 use theme::ThemeChoice;
 
@@ -67,6 +67,12 @@ pub enum UiAction {
     ConfirmImport(ImportOptions),
     /// Close the open sheet without doing anything.
     CloseSheet,
+    /// Open the Rename sheet for the one selected group or component.
+    RenameComponent,
+    /// Rename a definition (Entity Info's Name field).
+    RenameDefinition(DefinitionId, String),
+    /// The name typed in the Make Component or Rename sheet.
+    ConfirmName(String),
     ExportFile,
     DeleteGuides,
     ZoomExtents,
@@ -236,6 +242,9 @@ pub struct View<'a> {
     pub recent: &'a [PathBuf],
     /// The sheet open over the window, if any.
     pub sheet: Option<&'a Sheet>,
+    /// The one selected group or component (`Editor::rename_target`): Rename Component works
+    /// on it and Entity Info shows its Name field.
+    pub rename: Option<&'a RenameTarget>,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.

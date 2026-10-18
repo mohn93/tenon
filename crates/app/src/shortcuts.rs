@@ -28,6 +28,7 @@ pub enum Bound {
     CloseInstance,
     ZoomExtents,
     ToggleFly,
+    RenameComponent,
 }
 
 /// The key of a shortcut.
@@ -38,6 +39,8 @@ pub enum Key {
     Space,
     Delete,
     Escape,
+    /// A function key: not a character, so never a plain key the editor types.
+    F2,
 }
 
 /// A key and the modifiers held with it. `command` is Cmd on macOS and Ctrl elsewhere (the
@@ -79,7 +82,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 29] = [
+pub const TABLE: [Shortcut; 30] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -107,6 +110,7 @@ pub const TABLE: [Shortcut; 29] = [
     on(Bound::MakeGroup, false, false, Key::Letter('g')),
     on(Bound::MakeComponent, false, true, Key::Letter('g')),
     on(Bound::CloseInstance, false, false, Key::Escape),
+    on(Bound::RenameComponent, false, false, Key::F2),
     on(Bound::ZoomExtents, false, true, Key::Letter('z')),
     on(Bound::ToggleFly, false, false, Key::Letter('f')),
 ];
@@ -190,6 +194,7 @@ impl Chord {
             Key::Delete if mac => "⌫".into(),
             Key::Delete => "Delete".into(),
             Key::Escape => "Esc".into(),
+            Key::F2 => "F2".into(),
         };
         let (shift, command) = if mac {
             ("⇧", "⌘")
@@ -236,6 +241,7 @@ impl Bound {
             Bound::CloseInstance => "Close Group",
             Bound::ZoomExtents => "Zoom Extents",
             Bound::ToggleFly => "Fly Mode",
+            Bound::RenameComponent => "Rename Component",
         }
     }
 
@@ -256,7 +262,10 @@ impl Bound {
             | Bound::SelectNone
             | Bound::Duplicate
             | Bound::EraseSelection => "Edit",
-            Bound::MakeGroup | Bound::MakeComponent | Bound::CloseInstance => "Group",
+            Bound::MakeGroup
+            | Bound::MakeComponent
+            | Bound::CloseInstance
+            | Bound::RenameComponent => "Group",
             Bound::ZoomExtents | Bound::ToggleFly => "Camera",
         }
     }
@@ -283,6 +292,7 @@ impl Bound {
             Bound::CloseInstance => UiAction::CloseInstance,
             Bound::ZoomExtents => UiAction::ZoomExtents,
             Bound::ToggleFly => UiAction::ToggleFly,
+            Bound::RenameComponent => UiAction::RenameComponent,
         })
     }
 
@@ -445,6 +455,31 @@ mod tests {
         assert_eq!(text(Bound::CloseInstance, true), "Esc");
         assert_eq!(text(Bound::SelectNone, true), "⇧⌘A");
         assert_eq!(text(Bound::Duplicate, false), "Ctrl+D");
+    }
+
+    #[test]
+    fn f2_renames() {
+        let f2 = chord(Bound::RenameComponent).unwrap();
+        assert_eq!(
+            f2,
+            Chord {
+                command: false,
+                shift: false,
+                key: Key::F2
+            }
+        );
+        assert_eq!(f2.text_for(true), "F2");
+        assert_eq!(f2.text_for(false), "F2");
+        assert_eq!(lookup(f2).map(|s| s.bound), Some(Bound::RenameComponent));
+        assert_eq!(Bound::RenameComponent.group(), "Group");
+        assert_eq!(
+            Bound::RenameComponent.action(),
+            Some(UiAction::RenameComponent)
+        );
+        // F2 is not a character: no typed character finds it.
+        for c in (0u8..128).map(char::from) {
+            assert_ne!(plain(c), Some(Bound::RenameComponent), "{c:?}");
+        }
     }
 
     #[test]

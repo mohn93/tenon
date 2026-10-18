@@ -1,5 +1,6 @@
 use super::*;
-use crate::editor::{ImportAs, ImportOptions, ImportUnits, UpAxis};
+use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis};
+use kernel::DefinitionKind;
 
 /// The Import Options sheet for /m/chair.obj with the default options.
 fn import_fixture() -> Fixture {
@@ -57,5 +58,78 @@ fn a_sheet_keeps_presses_off_the_view() {
         layer.order,
         egui::Order::Background,
         "Gui::wants_pointer_at is true there"
+    );
+}
+
+/// The text the field named `label` holds.
+fn field_text(h: &H, label: &str) -> String {
+    h.get_by_label(label)
+        .accesskit_node()
+        .value()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn make_component_asks_for_a_name() {
+    let fixture = || Fixture {
+        sheet: Some(Sheet::NameComponent {
+            suggested: "Component 3".into(),
+        }),
+        ..Default::default()
+    };
+    let mut h = harness(fixture());
+    assert_eq!(field_text(&h, "Name"), "Component 3");
+    // The field has focus with all of it selected: typing replaces it.
+    h.event(egui::Event::Text("Chair".into()));
+    h.run_ok();
+    assert_eq!(field_text(&h, "Name"), "Chair");
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(
+        h.state_mut().take(),
+        [UiAction::ConfirmName("Chair".into())]
+    );
+
+    let mut h = harness(fixture());
+    h.event(egui::Event::Text("   ".into()));
+    h.run_ok();
+    assert!(h.get_by_label("Create").accesskit_node().is_disabled());
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), [], "a blank component name");
+    assert_eq!(click(&mut h, "Create"), []);
+    // Escape with the field focused closes the sheet.
+    let mut h = harness(fixture());
+    h.key_press(egui::Key::Escape);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), [UiAction::CloseSheet]);
+}
+
+#[test]
+fn the_rename_sheet_names_the_kind() {
+    let rename = |kind, name: &str| Fixture {
+        sheet: Some(Sheet::Rename {
+            target: RenameTarget {
+                definition: "d4".parse().unwrap(),
+                kind,
+                name: name.into(),
+            },
+        }),
+        ..Default::default()
+    };
+    let h = harness(rename(DefinitionKind::Component, "Chair"));
+    assert!(h.query_by_label("Rename Component").is_some());
+    assert_eq!(field_text(&h, "Name"), "Chair");
+    let mut h = harness(rename(DefinitionKind::Group, "Shed"));
+    assert!(h.query_by_label("Rename Group").is_some());
+    // A group may go without a name.
+    h.key_press(egui::Key::Backspace);
+    h.run_ok();
+    assert_eq!(field_text(&h, "Name"), "");
+    assert!(!h.get_by_label("Rename").accesskit_node().is_disabled());
+    assert_eq!(
+        click(&mut h, "Rename"),
+        [UiAction::ConfirmName(String::new())]
     );
 }

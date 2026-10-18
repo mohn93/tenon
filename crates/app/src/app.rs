@@ -938,9 +938,35 @@ impl State {
             UiAction::MakeGroup => {
                 self.editor.make_group();
             }
+            // With a selection the Make Component sheet asks for the name; without one the
+            // editor says what is missing.
             UiAction::MakeComponent => {
-                self.editor.make_component();
+                if self.editor.doc().selection().is_empty() {
+                    self.editor.make_component();
+                } else {
+                    self.sheet = Some(Sheet::NameComponent {
+                        suggested: self.editor.next_component_name(),
+                    });
+                }
             }
+            UiAction::RenameComponent => {
+                if let Some(target) = self.editor.rename_target() {
+                    self.sheet = Some(Sheet::Rename { target });
+                }
+            }
+            UiAction::RenameDefinition(definition, name) => {
+                self.editor.rename_definition(definition, &name);
+            }
+            // Only the first report counts: the sheet is gone after it.
+            UiAction::ConfirmName(name) => match self.sheet.take() {
+                Some(Sheet::NameComponent { .. }) => {
+                    self.editor.make_component_named(&name);
+                }
+                Some(Sheet::Rename { target }) => {
+                    self.editor.rename_definition(target.definition, &name);
+                }
+                other => self.sheet = other,
+            },
             UiAction::Explode => {
                 self.editor.explode_selection();
             }
@@ -1223,6 +1249,7 @@ impl State {
                 .map(|a| activity_line(a, now))
                 .collect()
         });
+        let rename = self.editor.rename_target();
         let panels = View {
             undo: self.editor.doc().undo_label(),
             redo: self.editor.doc().redo_label(),
@@ -1277,6 +1304,7 @@ impl State {
                 }),
             recent: &self.prefs.recent,
             sheet: self.sheet.as_ref(),
+            rename: rename.as_ref(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -2001,6 +2029,24 @@ impl ApplicationHandler<AppEvent> for App {
                     // Alt/Option is the orbit modifier; Option+letter must not type or switch
                     // tools through its physical-key fallback.
                     false
+                } else if event.logical_key == Key::Named(NamedKey::F2) {
+                    // The table's Rename Component; not a native accelerator, so it acts only
+                    // here. Not with Shift, not held, not while flying.
+                    let chord = shortcuts::Chord {
+                        command: false,
+                        shift: false,
+                        key: shortcuts::Key::F2,
+                    };
+                    let action = (!s.modifiers.shift_key() && !event.repeat && !s.editor.flying())
+                        .then(|| shortcuts::lookup(chord).and_then(|b| b.bound.action()))
+                        .flatten();
+                    match action {
+                        Some(action) => {
+                            s.apply(action);
+                            true
+                        }
+                        None => false,
+                    }
                 } else {
                     editor_key(
                         &event.logical_key,
@@ -2010,6 +2056,11 @@ impl ApplicationHandler<AppEvent> for App {
                     .is_some_and(|k| {
                         if event.repeat {
                             s.editor.key_repeat(k)
+                        } else if s.editor.shortcut_for(k) == Some(Bound::MakeComponent) {
+                            // Shift+G asks for the name in the window; tool_input and headless
+                            // keep the automatic "Component N" through `Editor::key`.
+                            s.apply(UiAction::MakeComponent);
+                            true
                         } else {
                             s.editor.key(k)
                         }

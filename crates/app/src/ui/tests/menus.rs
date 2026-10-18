@@ -476,7 +476,7 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
     }
     for (item, action) in [
         ("Make Group", UiAction::MakeGroup),
-        ("Make Component", UiAction::MakeComponent),
+        ("Make Component...", UiAction::MakeComponent),
         ("Explode", UiAction::Explode),
         ("Close Group", UiAction::CloseInstance),
     ] {
@@ -565,7 +565,8 @@ fn the_shortcuts_window_can_be_dragged_by_its_title() {
     let before = rect_of(&h, "Close window");
     // The node named for the window covers it all; its title bar is the top strip.
     let from = h.get_by_label("Keyboard Shortcuts").rect().center_top() + Vec2::new(0.0, 12.0);
-    let to = from + Vec2::new(-120.0, 60.0);
+    // Down by less than the room left under the window, which stays on screen.
+    let to = from + Vec2::new(-120.0, 40.0);
     h.event(egui::Event::PointerMoved(from));
     h.event(egui::Event::PointerButton {
         pos: from,
@@ -589,7 +590,7 @@ fn the_shortcuts_window_can_be_dragged_by_its_title() {
     h.run_ok();
     let moved = rect_of(&h, "Close window").min - before.min;
     assert!(
-        (moved - Vec2::new(-120.0, 60.0)).length() < 2.0,
+        (moved - Vec2::new(-120.0, 40.0)).length() < 2.0,
         "{moved:?}"
     );
 }
@@ -837,4 +838,59 @@ fn only_quit_works_while_a_sheet_is_open() {
     }
     assert!(!native_event_acts(&UiAction::OpenFile, false, false, true));
     assert!(native_event_acts(&UiAction::Quit, false, false, true));
+}
+
+#[test]
+fn the_group_menu_renames_and_purges() {
+    use crate::editor::RenameTarget;
+    use crate::menus::{Entry, menu_bar};
+    let target = RenameTarget {
+        definition: "d2".parse().unwrap(),
+        kind: kernel::DefinitionKind::Component,
+        name: "Chair".into(),
+    };
+    let with_target = || Fixture {
+        rename: Some(target.clone()),
+        ..Default::default()
+    };
+    let bar = menu_bar(&with_target().view(), false);
+    let group = &bar.iter().find(|m| m.title == "Group").unwrap().entries;
+    let labels: Vec<&str> = group
+        .iter()
+        .map(|entry| match entry {
+            Entry::Item(i) => i.label.as_str(),
+            Entry::Submenu { label, .. } => label,
+            Entry::Separator => "-",
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Make Group",
+            "Make Component...",
+            "Explode",
+            "Close Group",
+            "-",
+            "Rename Component...",
+        ]
+    );
+    let mut h = harness(with_target());
+    assert_eq!(
+        click_menu(&mut h, &["Group", "Rename Component..."]),
+        [UiAction::RenameComponent]
+    );
+    let mut h = harness(with_target());
+    click(&mut h, "Group");
+    assert!(
+        drawn_texts(&h).iter().any(|t| t == "F2"),
+        "the key it shows"
+    );
+    let mut h = harness(Fixture::default());
+    click(&mut h, "Group");
+    assert!(
+        h.get_by_label("Rename Component...")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert_eq!(click(&mut h, "Rename Component..."), []);
 }
