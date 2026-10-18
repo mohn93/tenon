@@ -73,6 +73,12 @@ pub enum UiAction {
     RenameDefinition(DefinitionId, String),
     /// The name typed in the Make Component or Rename sheet.
     ConfirmName(String),
+    /// Remove the definitions no instance places.
+    PurgeUnused,
+    /// Open the Field of View sheet.
+    ShowFieldOfView,
+    /// The Field of View sheet's value, in whole degrees.
+    ConfirmFieldOfView(f64),
     ExportFile,
     DeleteGuides,
     ZoomExtents,

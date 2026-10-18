@@ -133,3 +133,19 @@ fn the_rename_sheet_names_the_kind() {
         [UiAction::ConfirmName(String::new())]
     );
 }
+
+#[test]
+fn the_field_of_view_sheet_applies_whole_degrees() {
+    let mut h = harness(Fixture {
+        sheet: Some(Sheet::FieldOfView { degrees: 35.4 }),
+        ..Default::default()
+    });
+    assert!(h.query_by_label("Field of View").is_some(), "the title");
+    // The number and the suffix are painted apart; the field's value reads them together.
+    assert_eq!(field_text(&h, "Field of view"), "35°");
+    assert_eq!(
+        type_into(&mut h, "Field of view", 0, "50", egui::Key::Enter),
+        []
+    );
+    assert_eq!(click(&mut h, "Apply"), [UiAction::ConfirmFieldOfView(50.0)]);
+}

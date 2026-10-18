@@ -184,6 +184,9 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         )
         .enabled(view.rename.is_some())
         .entry(),
+        // Always enabled: knowing whether anything is unused would mean counting instances
+        // every frame.
+        Item::new("Purge Unused", UiAction::PurgeUnused).entry(),
     ];
 
     let mut camera = vec![
@@ -206,6 +209,12 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
                 .entry(),
         );
     }
+    // In a parallel view the field of view only sizes the view: changing it would zoom.
+    camera.push(
+        Item::new("Field of View...", UiAction::ShowFieldOfView)
+            .enabled(view.projection == Projection::Perspective)
+            .entry(),
+    );
     let night = view.lighting == Lighting::Night;
     let lighting = if night {
         Lighting::Day

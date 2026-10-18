@@ -872,6 +872,7 @@ fn the_group_menu_renames_and_purges() {
             "Close Group",
             "-",
             "Rename Component...",
+            "Purge Unused",
         ]
     );
     let mut h = harness(with_target());
@@ -893,4 +894,29 @@ fn the_group_menu_renames_and_purges() {
             .is_disabled()
     );
     assert_eq!(click(&mut h, "Rename Component..."), []);
+    // Purge Unused is always enabled: nothing has to be selected.
+    let mut h = harness(Fixture::default());
+    assert_eq!(
+        click_menu(&mut h, &["Group", "Purge Unused"]),
+        [UiAction::PurgeUnused]
+    );
+}
+
+#[test]
+fn field_of_view_needs_perspective() {
+    assert_eq!(
+        camera_menu(Fixture::default, "Field of View..."),
+        [UiAction::ShowFieldOfView]
+    );
+    let mut h = harness(Fixture {
+        projection: Projection::Parallel,
+        ..Default::default()
+    });
+    click(&mut h, "Camera");
+    assert!(
+        h.get_by_label("Field of View...")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert_eq!(click(&mut h, "Field of View..."), []);
 }

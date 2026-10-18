@@ -1133,6 +1133,21 @@ impl Editor {
         })
     }
 
+    /// Removes every definition no instance places (`purge_definitions`) as one undo step, and
+    /// says how many went: "Purged N unused definitions", or "Nothing to purge". True, so the
+    /// window redraws the message.
+    pub fn purge_unused(&mut self) -> bool {
+        self.message = None;
+        if let Some(outcome) = self.run(Command::PurgeDefinitions {}) {
+            self.message = Some(Message::info(match outcome.purged.unwrap_or(0) {
+                0 => "Nothing to purge".to_string(),
+                1 => "Purged 1 unused definition".to_string(),
+                n => format!("Purged {n} unused definitions"),
+            }));
+        }
+        true
+    }
+
     /// The one selected group or component of the open context, if exactly one is selected.
     pub fn rename_target(&self) -> Option<RenameTarget> {
         let selection = self.doc.selection();
@@ -1212,6 +1227,27 @@ impl Editor {
             return false;
         }
         self.run_camera_command(Command::SetProjection { projection })
+    }
+
+    /// The camera's vertical field of view in degrees.
+    pub fn field_of_view(&self) -> f64 {
+        self.doc.camera.fov_y.to_degrees()
+    }
+
+    /// Sets the camera's vertical field of view through `set_camera`, keeping eye, target and
+    /// up (so a top or bottom view keeps its screen direction). The tool's operation goes on.
+    /// A value out of range is refused with the session's message. True if anything visible
+    /// changed.
+    pub fn set_field_of_view(&mut self, degrees: f64) -> bool {
+        let camera = &self.doc.camera;
+        let command = Command::SetCamera {
+            eye: camera.eye.to_array(),
+            target: camera.target.to_array(),
+            fov_y_deg: Some(degrees),
+            up: Some(camera.up.to_array()),
+            projection: None,
+        };
+        self.run_camera_command(command)
     }
 
     /// Lights the view by day or by night; the tool's operation goes on. False if it already
@@ -4716,6 +4752,67 @@ mod tests {
         e.key(EditorKey::Escape);
         assert!(e.set_flying(true));
         assert_eq!(e.shortcut_for(EditorKey::Char('G')), None, "flying");
+    }
+
+    /// Makes a component of a new rectangle at (x, 0, 0) and erases its instance, leaving the
+    /// definition unused.
+    fn unused_component(e: &mut Editor, x: f64) {
+        selected_rectangle(e, x);
+        assert!(e.make_component());
+        assert!(e.erase_selection());
+    }
+
+    #[test]
+    fn purge_unused_reports_the_count() {
+        let mut e = editor();
+        unused_component(&mut e, 0.0);
+        unused_component(&mut e, 5.0);
+        assert_eq!(definition_names(&e).len(), 2);
+        assert!(e.purge_unused());
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Purged 2 unused definitions")
+        );
+        assert_eq!(e.message_kind(), Some(MessageKind::Info));
+        assert!(definition_names(&e).is_empty());
+        assert!(e.purge_unused());
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Nothing to purge")
+        );
+        assert!(
+            e.undo(),
+            "the empty purge was no step: this undoes the first"
+        );
+        assert_eq!(definition_names(&e).len(), 2, "one undo restores both");
+        assert!(e.purge_unused());
+        unused_component(&mut e, 10.0);
+        assert!(e.purge_unused());
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Purged 1 unused definition")
+        );
+    }
+
+    #[test]
+    fn field_of_view_keeps_the_view_and_its_up() {
+        let mut e = editor();
+        assert!(e.standard_view(StandardView::Top));
+        let before = e.doc().camera.clone();
+        let revision = e.doc().revision();
+        assert!(e.set_field_of_view(60.0));
+        let after = &e.doc().camera;
+        assert_eq!(after.eye, before.eye);
+        assert_eq!(after.target, before.target);
+        assert!(after.up.abs_diff_eq(before.up, 1e-12), "{}", after.up);
+        assert!((e.field_of_view() - 60.0).abs() < 1e-9);
+        assert_eq!(e.doc().revision(), revision);
+        assert!(!e.doc().is_modified());
+        let camera = e.doc().camera.clone();
+        e.set_field_of_view(200.0);
+        assert!(e.status().contains("fov_y_deg"), "{}", e.status());
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+        assert_eq!(e.doc().camera, camera);
     }
 
     /// A one-quad OBJ, 100 x 200 file units in the file's xy plane.

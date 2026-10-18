@@ -24,6 +24,8 @@ pub enum Sheet {
     NameComponent { suggested: String },
     /// Rename Component (or Group), with the current name filled in.
     Rename { target: RenameTarget },
+    /// Field of View, with the camera's value (rounded when shown).
+    FieldOfView { degrees: f64 },
 }
 
 /// A sheet's width, in points.
@@ -46,6 +48,7 @@ struct Editing {
 enum Values {
     Import(ImportOptions),
     Name(String),
+    Degrees(f64),
 }
 
 impl Values {
@@ -55,6 +58,7 @@ impl Values {
             Sheet::Import { options, .. } => Values::Import(*options),
             Sheet::NameComponent { suggested } => Values::Name(suggested.clone()),
             Sheet::Rename { target } => Values::Name(target.name.clone()),
+            Sheet::FieldOfView { degrees } => Values::Degrees(degrees.round()),
         }
     }
 }
@@ -86,6 +90,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                         DefinitionKind::Component => ("Rename Component", false),
                     };
                     name_sheet(ui, title, "Rename", name, allow_blank, fresh, actions);
+                }
+                (Sheet::FieldOfView { .. }, Values::Degrees(degrees)) => {
+                    field_of_view_sheet(ui, degrees, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -221,6 +228,27 @@ fn name_sheet(
     let clicked = buttons(ui, button, valid, actions);
     if valid && (entered || clicked) {
         actions.push(UiAction::ConfirmName(name.clone()));
+    }
+}
+
+/// The Field of View sheet: a whole-degree drag field, 1 to 170 as `set_camera` allows, and
+/// Apply, which reports the value rounded.
+fn field_of_view_sheet(ui: &mut Ui, degrees: &mut f64, actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "Field of View");
+    ui.add_space(theme::GRID);
+    ui.horizontal(|ui| {
+        let label = ui.label("Field of view");
+        ui.add(
+            egui::DragValue::new(degrees)
+                .range(1.0..=170.0)
+                .speed(0.5)
+                .fixed_decimals(0)
+                .suffix("°"),
+        )
+        .labelled_by(label.id);
+    });
+    if buttons(ui, "Apply", true, actions) {
+        actions.push(UiAction::ConfirmFieldOfView(degrees.round()));
     }
 }
 

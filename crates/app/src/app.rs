@@ -957,6 +957,22 @@ impl State {
             UiAction::RenameDefinition(definition, name) => {
                 self.editor.rename_definition(definition, &name);
             }
+            // A second report in one frame (egui laid it out twice) is harmless: input only
+            // reaches the first pass, and a repeat would only say "Nothing to purge".
+            UiAction::PurgeUnused => {
+                self.editor.purge_unused();
+            }
+            UiAction::ShowFieldOfView => {
+                self.sheet = Some(Sheet::FieldOfView {
+                    degrees: self.editor.field_of_view(),
+                });
+            }
+            UiAction::ConfirmFieldOfView(degrees) => match self.sheet.take() {
+                Some(Sheet::FieldOfView { .. }) => {
+                    self.editor.set_field_of_view(degrees);
+                }
+                other => self.sheet = other,
+            },
             // Only the first report counts: the sheet is gone after it.
             UiAction::ConfirmName(name) => match self.sheet.take() {
                 Some(Sheet::NameComponent { .. }) => {
