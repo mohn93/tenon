@@ -242,6 +242,14 @@ fn every_control_has_a_name() {
         recent: vec!["/m/house.skr".into(), "/m/shed.skr".into()],
         ..house_fixture(&["i1"])
     };
+    // A dock whose top area and Outliner both overflow, so both show their scroll bars.
+    let mut crowded = super::layout::crowded(40);
+    crowded.dock.split = *crate::ui::dock::SPLIT.end();
+    let h = harness_sized(crowded, Vec2::new(960.0, 600.0));
+    check("a crowded dock", &h);
+    for bar in ["Scroll Materials", "Scroll Outliner"] {
+        assert!(h.query_by_label(bar).is_some(), "{bar}");
+    }
     let h = harness(inside());
     check("inside a group", &h);
     // The open group's expand button says what it does and to which node.
@@ -296,5 +304,71 @@ fn icon_buttons_are_named_by_their_label() {
                 node.role(),
             );
         }
+    }
+}
+
+/// Sends AccessKit's `action` to the node named `label`, runs, and returns the actions.
+fn accesskit_action(h: &mut H, label: &str, action: Action) -> Vec<UiAction> {
+    let (target_node, target_tree) = h.get_by_label(label).accesskit_node().locate();
+    h.event(egui::Event::AccessKitActionRequest(
+        egui::accesskit::ActionRequest {
+            action,
+            target_tree,
+            target_node,
+            data: None,
+        },
+    ));
+    h.run_ok();
+    h.state_mut().take()
+}
+
+#[test]
+fn a_slider_value_box_steps_on_increment_and_decrement() {
+    // At the dock's widest the track is longest, where a rate of range / width falls below a
+    // step and would round back to the start.
+    let fixture = || {
+        let mut row = brick();
+        row.opacity = 0.4;
+        row.emission = 2.0;
+        Fixture {
+            materials: vec![row],
+            material: Some(MaterialId(31)),
+            dock: DockLayout {
+                width: *crate::ui::dock::DOCK_WIDTH.end(),
+                split: *crate::ui::dock::SPLIT.end(),
+                ..super::layout::materials_tab()
+            },
+            ..Default::default()
+        }
+    };
+    let id = MaterialId(31);
+    for (label, action, want) in [
+        (
+            "Opacity value",
+            Action::Increment,
+            UiAction::SetMaterialOpacity(id, 41),
+        ),
+        (
+            "Opacity value",
+            Action::Decrement,
+            UiAction::SetMaterialOpacity(id, 39),
+        ),
+        (
+            "Glow value",
+            Action::Increment,
+            UiAction::SetMaterialEmission(id, 21),
+        ),
+        (
+            "Glow value",
+            Action::Decrement,
+            UiAction::SetMaterialEmission(id, 19),
+        ),
+    ] {
+        let mut h = harness(fixture());
+        assert_eq!(
+            accesskit_action(&mut h, label, action),
+            [want],
+            "{label} {action:?}"
+        );
     }
 }

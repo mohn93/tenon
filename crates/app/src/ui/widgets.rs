@@ -289,16 +289,17 @@ pub fn swatch(ui: &mut Ui, fill: Fill, label: &str, selected: bool) -> Response 
 }
 
 /// Names a widget egui draws without an AccessKit name: a window's title bar, a panel's resize
-/// edge, a menu's area, a scroll bar. Does nothing unless the widget was laid out this pass or
-/// the last (`accesskit_node_builder` would otherwise add an empty node), and makes no name
-/// while AccessKit is off.
+/// edge, a menu's area, a scroll bar. Does nothing unless the widget was laid out in this pass
+/// (`accesskit_node_builder` would otherwise add an empty node), and makes no name while
+/// AccessKit is off.
 pub fn name_egui_widget(
     ctx: &egui::Context,
     id: egui::Id,
     role: Role,
     name: impl FnOnce() -> String,
 ) {
-    if ctx.read_response(id).is_none() {
+    let laid_out = ctx.viewport(|v| v.this_pass.widgets.get(id).is_some());
+    if !laid_out {
         return;
     }
     ctx.accesskit_node_builder(id, |node| {
@@ -329,32 +330,33 @@ pub fn name_scroll_bars(ctx: &egui::Context, id: egui::Id, what: &str) {
     }
 }
 
-/// A slider for `value` in `range` with its value box after it, the slider labelled by the
-/// label widget `label` and the box named "`name` value". egui's slider draws its own box
-/// without a name, so the slider is drawn without one and the box here; `slider` and
-/// `value_box` set their formats. Returns the two joined, as egui's slider does.
+/// A slider for `value` in `range`, moving in steps of `step`, with its value box after it; the
+/// slider is labelled by the label widget `label` and the box named "`name` value". egui's
+/// slider draws its own box without a name, so the slider is drawn without one and the box
+/// here; `value_box` sets its format. Returns the two joined, as egui's slider does.
 pub fn slider_row<T: egui::emath::Numeric>(
     ui: &mut Ui,
     label: egui::Id,
     name: &str,
     value: &mut T,
     range: RangeInclusive<T>,
-    slider: impl for<'v> FnOnce(egui::Slider<'v>) -> egui::Slider<'v>,
+    step: f64,
     value_box: impl for<'v> FnOnce(egui::DragValue<'v>) -> egui::DragValue<'v>,
 ) -> Response {
     let track = ui
-        .add(slider(
-            egui::Slider::new(value, range.clone()).show_value(false),
-        ))
+        .add(
+            egui::Slider::new(value, range.clone())
+                .step_by(step)
+                .show_value(false),
+        )
         .labelled_by(label);
-    // Dragging the box moves the value at the slider's rate: its range across its width.
-    let span = (range.end().to_f64() - range.start().to_f64()).abs();
-    let speed = span / f64::from(track.rect.width().max(1.0));
+    // The box moves by a step per arrow key, AccessKit Increment or Decrement, and point
+    // dragged: a rate below a step would round back to the value it started from.
     let shown = ui.add(value_box(
         egui::DragValue::new(value)
             .range(range)
             .clamp_existing_to_range(true)
-            .speed(speed),
+            .speed(step),
     ));
     ui.ctx()
         .accesskit_node_builder(shown.id, |node| node.set_label(format!("{name} value")));

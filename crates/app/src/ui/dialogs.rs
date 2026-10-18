@@ -127,15 +127,9 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
             let mut value = angle;
             ui.horizontal(|ui| {
                 let label = ui.label("Angle");
-                if widgets::slider_row(
-                    ui,
-                    label.id,
-                    "Angle",
-                    &mut value,
-                    0..=180,
-                    |s| s,
-                    |b| b.suffix("°"),
-                )
+                if widgets::slider_row(ui, label.id, "Angle", &mut value, 0..=180, 1.0, |b| {
+                    b.suffix("°")
+                })
                 .changed()
                 {
                     actions.push(UiAction::SetSoftenAngle(value));

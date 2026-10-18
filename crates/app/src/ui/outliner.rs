@@ -289,8 +289,10 @@ fn outliner_node(
                 }
             });
         let verb = if expanded { "Collapse" } else { "Expand" };
-        let name = format!("{verb} {}", display_name(row));
-        toggle.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        toggle.widget_info(|| {
+            let name = format!("{verb} {}", display_name(row));
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name)
+        });
         #[cfg(test)]
         super::tests::record(ui, path, toggle.rect, true, false, false);
         actions.extend(header.inner);
