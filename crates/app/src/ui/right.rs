@@ -2,7 +2,7 @@
 //! faces.
 
 use egui::Ui;
-use kernel::EntityId;
+use kernel::{DefinitionId, EntityId};
 
 use super::widgets::{self, take_row};
 use super::{TexturePosition, UiAction, View};
@@ -26,6 +26,8 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
             }
         }
         None => {
+            // The field went away (the selection changed): a name being typed is dropped.
+            ui.data_mut(|d| d.remove::<(DefinitionId, String)>(egui::Id::new(NAME_KEY)));
             for line in view.info {
                 ui.label(line);
             }
@@ -51,10 +53,12 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
 /// until the field loses focus; then a changed name is reported, unless Escape discarded it or
 /// it is blank for a component (which needs a name), when the field goes back to the name.
 fn name_field(ui: &mut Ui, target: &RenameTarget, actions: &mut Vec<UiAction>) {
-    let key = egui::Id::new(("definition-name", target.definition.0));
+    let key = egui::Id::new(NAME_KEY);
+    // A name typed for another definition (the selection changed meanwhile) is dropped.
     let mut text = ui
-        .data(|d| d.get_temp::<String>(key))
-        .unwrap_or_else(|| target.name.clone());
+        .data(|d| d.get_temp::<(DefinitionId, String)>(key))
+        .filter(|(d, _)| *d == target.definition)
+        .map_or_else(|| target.name.clone(), |(_, t)| t);
     let edit = ui
         .horizontal(|ui| {
             let label = ui.label("Name");
@@ -74,11 +78,16 @@ fn name_field(ui: &mut Ui, target: &RenameTarget, actions: &mut Vec<UiAction>) {
         if text != target.name && !escaped && !blank {
             actions.push(UiAction::RenameDefinition(target.definition, text));
         }
-        ui.data_mut(|d| d.remove::<String>(key));
+        ui.data_mut(|d| d.remove::<(DefinitionId, String)>(key));
     } else if edit.has_focus() {
-        ui.data_mut(|d| d.insert_temp(key, text));
+        ui.data_mut(|d| d.insert_temp(key, (target.definition, text)));
+    } else {
+        ui.data_mut(|d| d.remove::<(DefinitionId, String)>(key));
     }
 }
+
+/// The egui memory key of the name being typed in the Name field, with its definition.
+const NAME_KEY: &str = "definition-name";
 
 /// After the texture position fields go away (the selection is no longer only faces) with an
 /// edit in progress: a value already taken (dragged, or stepped with the arrow keys) applies to

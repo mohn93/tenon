@@ -506,6 +506,8 @@ struct State {
     shortcuts_window: bool,
     /// The sheet open over the window: keys and native menu items (but Quit) wait while it is.
     sheet: Option<Sheet>,
+    /// What the open sheet was opened over, so its confirm acts only if it still applies.
+    sheet_origin: SheetOrigin,
     /// How many of the editor's recovery files the window has already shown.
     recovered_seen: usize,
     gui: Gui,
@@ -603,6 +605,7 @@ impl State {
             agent_activity: false,
             shortcuts_window: false,
             sheet: None,
+            sheet_origin: SheetOrigin::default(),
             recovered_seen: 0,
             gui,
             drawn: None,
@@ -632,7 +635,7 @@ impl State {
     /// (hidden and locked, or confined, else visible with left-drag looking), free otherwise,
     /// so another app never gets a hidden or stuck pointer.
     fn sync_fly_cursor(&mut self) {
-        let want = self.editor.flying() && self.focused;
+        let want = holds_pointer(self.editor.flying(), self.focused, self.sheet.is_some());
         match (want, self.capture) {
             (true, Capture::Free) => {
                 self.capture = if grab_cursor(&self.window) {
@@ -846,6 +849,41 @@ impl State {
         shown
     }
 
+    /// Opens `sheet` over the window, replacing any other. Fly mode ends first: the held keys
+    /// are let go (the sheet keeps their releases from the editor) and the pointer is freed.
+    fn open_sheet(&mut self, sheet: Sheet) {
+        end_fly_for_sheet(&mut self.editor);
+        self.look_held = false;
+        self.sheet_origin = SheetOrigin::of(&self.editor);
+        self.sheet = Some(sheet);
+        self.sync_fly_cursor();
+    }
+
+    /// Takes the open sheet for its confirm action, when `kind` says it is the sheet the action
+    /// belongs to (otherwise it stays open and this is None). A sheet that no longer applies
+    /// (`sheet_applies`) is closed with a message instead.
+    fn confirm_sheet(&mut self, kind: impl Fn(&Sheet) -> bool) -> Option<Sheet> {
+        if !self.sheet.as_ref().is_some_and(kind) {
+            return None;
+        }
+        let sheet = self.sheet.take()?;
+        match sheet_applies(&sheet, &self.sheet_origin, &self.editor) {
+            Ok(()) => Some(sheet),
+            Err(why) => {
+                self.editor.show_error(why);
+                None
+            }
+        }
+    }
+
+    /// Closes the open sheet once the document it was opened over is replaced (new or open,
+    /// by the window or an agent): what it names may no longer exist.
+    fn drop_outlived_sheet(&mut self) {
+        if self.sheet.is_some() && self.editor.documents() != self.sheet_origin.document {
+            self.sheet = None;
+        }
+    }
+
     /// Asks for an OBJ or STL file, then opens the Import Options sheet for it; the file is
     /// read when the sheet's Import is pressed (`UiAction::ConfirmImport`).
     fn import(&mut self) {
@@ -855,10 +893,8 @@ impl State {
             .add_filter("STL", &["stl"])
             .pick_file();
         if let Some(path) = chosen {
-            self.sheet = Some(Sheet::Import {
-                path,
-                options: self.editor.import_options(),
-            });
+            let options = self.editor.import_options();
+            self.open_sheet(Sheet::Import { path, options });
         }
     }
 
@@ -906,7 +942,9 @@ impl State {
             UiAction::ImportFile => self.import(),
             UiAction::ConfirmImport(options) => {
                 // Only the first report counts: the sheet is gone after it.
-                if let Some(Sheet::Import { path, .. }) = self.sheet.take() {
+                if let Some(Sheet::Import { path, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::Import { .. }))
+                {
                     self.editor.set_import_options(options);
                     self.prefs.import = options;
                     self.save_prefs();
@@ -944,14 +982,13 @@ impl State {
                 if self.editor.doc().selection().is_empty() {
                     self.editor.make_component();
                 } else {
-                    self.sheet = Some(Sheet::NameComponent {
-                        suggested: self.editor.next_component_name(),
-                    });
+                    let suggested = self.editor.next_component_name();
+                    self.open_sheet(Sheet::NameComponent { suggested });
                 }
             }
             UiAction::RenameComponent => {
                 if let Some(target) = self.editor.rename_target() {
-                    self.sheet = Some(Sheet::Rename { target });
+                    self.open_sheet(Sheet::Rename { target });
                 }
             }
             UiAction::RenameDefinition(definition, name) => {
@@ -963,26 +1000,31 @@ impl State {
                 self.editor.purge_unused();
             }
             UiAction::ShowFieldOfView => {
-                self.sheet = Some(Sheet::FieldOfView {
-                    degrees: self.editor.field_of_view(),
-                });
+                let degrees = self.editor.field_of_view();
+                self.open_sheet(Sheet::FieldOfView { degrees });
             }
-            UiAction::ConfirmFieldOfView(degrees) => match self.sheet.take() {
-                Some(Sheet::FieldOfView { .. }) => {
+            UiAction::ConfirmFieldOfView(degrees) => {
+                if self
+                    .confirm_sheet(|s| matches!(s, Sheet::FieldOfView { .. }))
+                    .is_some()
+                {
                     self.editor.set_field_of_view(degrees);
                 }
-                other => self.sheet = other,
-            },
+            }
             // Only the first report counts: the sheet is gone after it.
-            UiAction::ConfirmName(name) => match self.sheet.take() {
-                Some(Sheet::NameComponent { .. }) => {
-                    self.editor.make_component_named(&name);
+            UiAction::ConfirmName(name) => {
+                match self.confirm_sheet(|s| {
+                    matches!(s, Sheet::NameComponent { .. } | Sheet::Rename { .. })
+                }) {
+                    Some(Sheet::NameComponent { .. }) => {
+                        self.editor.make_component_named(&name);
+                    }
+                    Some(Sheet::Rename { target }) => {
+                        self.editor.rename_definition(target.definition, &name);
+                    }
+                    _ => {}
                 }
-                Some(Sheet::Rename { target }) => {
-                    self.editor.rename_definition(target.definition, &name);
-                }
-                other => self.sheet = other,
-            },
+            }
             UiAction::Explode => {
                 self.editor.explode_selection();
             }
@@ -1265,6 +1307,7 @@ impl State {
                 .map(|a| activity_line(a, now))
                 .collect()
         });
+        self.drop_outlived_sheet();
         let rename = self.editor.rename_target();
         let panels = View {
             undo: self.editor.doc().undo_label(),
@@ -1542,6 +1585,67 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
 }
 
 /// A file dialog for `.skr` models.
+/// What a sheet was opened over: the document (`Editor::documents`) and the selection.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SheetOrigin {
+    document: u64,
+    selection: BTreeSet<EntityId>,
+}
+
+impl SheetOrigin {
+    fn of(editor: &Editor) -> Self {
+        Self {
+            document: editor.documents(),
+            selection: editor.doc().selection().clone(),
+        }
+    }
+}
+
+/// Whether `sheet`, opened over `origin`, still applies to what `editor` holds now (an agent
+/// may have changed it meanwhile). Err: what the status says when it does not.
+fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result<(), &'static str> {
+    if editor.documents() != origin.document {
+        return Err("The model was replaced; nothing was done");
+    }
+    match sheet {
+        Sheet::Import { .. } => Ok(()),
+        Sheet::NameComponent { .. } if *editor.doc().selection() != origin.selection => {
+            Err("The selection changed; no component was made")
+        }
+        Sheet::NameComponent { .. } => Ok(()),
+        Sheet::Rename { target }
+            if editor.rename_target().map(|t| t.definition) != Some(target.definition) =>
+        {
+            Err("The group or component is no longer selected; nothing was renamed")
+        }
+        Sheet::Rename { .. } => Ok(()),
+        Sheet::FieldOfView { .. } if editor.doc().camera.is_parallel() => {
+            Err("The field of view applies only to a perspective view")
+        }
+        Sheet::FieldOfView { .. } => Ok(()),
+    }
+}
+
+/// Ends fly mode before a sheet opens. Leaving stops the eye and lets every held key go, so a
+/// key held now does not move it once the sheet closes.
+fn end_fly_for_sheet(editor: &mut Editor) {
+    editor.set_flying(false);
+}
+
+/// Whether fly mode holds the pointer: flying in the focused window with no sheet open.
+fn holds_pointer(flying: bool, focused: bool, sheet_open: bool) -> bool {
+    flying && focused && !sheet_open
+}
+
+/// Whether a key press is the Quit chord on the window's key path (Ctrl+Q, and Cmd+Q without
+/// native menus): it quits, through the unsaved prompt, even while a sheet is open.
+fn is_quit_chord(letter: Option<char>, command_key: bool, shift: bool, cmd: bool) -> bool {
+    command_key
+        && letter
+            .and_then(|l| shortcuts::window_command(l, shift, false, cmd, shortcuts::NATIVE_MENUS))
+            == Some(Bound::Quit)
+}
+
 /// Whether a key press goes on to the editor and the shortcut table: not while a text field
 /// has focus (the key is its), and not while a sheet is open (egui still gets every key, so the
 /// sheet's own fields and buttons work).
@@ -1984,8 +2088,16 @@ impl ApplicationHandler<AppEvent> for App {
             {
                 false
             }
-            WindowEvent::KeyboardInput { .. }
-                if !keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some()) =>
+            WindowEvent::KeyboardInput { ref event, .. }
+                if !keys_reach_editor(s.gui.wants_keyboard(), s.sheet.is_some())
+                    && !(event.state == ElementState::Pressed
+                        && !event.repeat
+                        && is_quit_chord(
+                            shortcut_letter(&event.logical_key, event.physical_key),
+                            s.modifiers.super_key() || s.modifiers.control_key(),
+                            s.modifiers.shift_key(),
+                            s.modifiers.super_key(),
+                        )) =>
             {
                 false
             }
@@ -2380,6 +2492,127 @@ mod tests {
         assert!(!keys_reach_editor(true, false));
         assert!(!keys_reach_editor(false, true));
         assert!(!keys_reach_editor(true, true));
+    }
+
+    /// An editor with a 2 x 2 rectangle, all of it selected.
+    fn editor_with_selection() -> Editor {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        e.execute(session::Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        e.select_all();
+        e
+    }
+
+    #[test]
+    fn opening_a_sheet_ends_fly_mode_and_lets_held_keys_go() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        assert!(e.set_flying(true));
+        assert!(e.fly_key(FlyKey::W, true));
+        end_fly_for_sheet(&mut e);
+        assert!(!e.flying());
+        // The W release went to the sheet. Once it closes, flying again does not drift.
+        assert!(e.set_flying(true));
+        let eye = e.doc().camera.eye;
+        let t = Instant::now();
+        e.fly_tick(t);
+        e.fly_tick(t + Duration::from_millis(100));
+        assert_eq!(e.doc().camera.eye, eye, "no key is still held");
+    }
+
+    #[test]
+    fn the_pointer_is_not_held_while_a_sheet_is_open() {
+        assert!(holds_pointer(true, true, false));
+        assert!(!holds_pointer(true, true, true));
+        assert!(!holds_pointer(true, false, false));
+        assert!(!holds_pointer(false, true, false));
+    }
+
+    #[test]
+    fn a_sheet_does_not_outlive_its_model() {
+        let mut e = editor_with_selection();
+        e.make_group();
+        let target = e.rename_target().expect("one group selected");
+        let sheet = Sheet::Rename { target };
+        let origin = SheetOrigin::of(&e);
+        assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
+        // An agent starts a new model, then draws and groups again: d1 names a new group.
+        e.execute(session::Command::New { discard: true }).unwrap();
+        assert_ne!(
+            e.documents(),
+            origin.document,
+            "the window closes the sheet"
+        );
+        assert!(sheet_applies(&sheet, &origin, &e).is_err());
+        // An agent opens a file.
+        let path =
+            std::env::temp_dir().join(format!("sketchup-alt-app-{}-sheet.skr", std::process::id()));
+        e.execute(session::Command::Save {
+            path: Some(path.display().to_string()),
+            overwrite: true,
+        })
+        .unwrap();
+        let origin = SheetOrigin::of(&e);
+        e.execute(session::Command::Open {
+            path: path.display().to_string(),
+            discard: true,
+        })
+        .unwrap();
+        assert!(sheet_applies(&sheet, &origin, &e).is_err());
+        let _ = std::fs::remove_file(&path);
+        // The rename target must still be the one selected.
+        let mut e = editor_with_selection();
+        e.make_group();
+        let target = e.rename_target().unwrap();
+        let origin = SheetOrigin::of(&e);
+        e.select_none();
+        assert!(sheet_applies(&Sheet::Rename { target }, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn make_component_needs_the_selection_it_was_opened_with() {
+        let mut e = editor_with_selection();
+        let sheet = Sheet::NameComponent {
+            suggested: "Component 1".into(),
+        };
+        let origin = SheetOrigin::of(&e);
+        assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
+        // An agent selects one edge only.
+        let edge = *e.doc().selection().first().unwrap();
+        e.execute(session::Command::Select {
+            ids: vec![edge],
+            mode: session::SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn the_field_of_view_sheet_needs_perspective_at_confirm() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        let sheet = Sheet::FieldOfView { degrees: 35.0 };
+        let origin = SheetOrigin::of(&e);
+        assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
+        e.set_projection(session::Projection::Parallel);
+        assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn the_quit_chord_passes_a_sheet() {
+        // Ctrl+Q is the key path's on every system.
+        assert!(is_quit_chord(Some('q'), true, false, false));
+        assert!(!is_quit_chord(Some('q'), false, false, false), "plain q");
+        assert!(!is_quit_chord(Some('s'), true, false, false));
+        assert!(!is_quit_chord(Some('q'), true, true, false), "Shift+Ctrl+Q");
+        // Cmd+Q is the native menu's on macOS (Quit stays enabled while a sheet is open).
+        assert_eq!(
+            is_quit_chord(Some('q'), true, false, true),
+            !shortcuts::NATIVE_MENUS
+        );
     }
 
     #[test]

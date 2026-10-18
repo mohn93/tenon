@@ -252,3 +252,39 @@ fn entity_info_renames_a_selected_component() {
     h.run_ok();
     assert_eq!(h.state_mut().take(), [], "a component needs a name");
 }
+
+#[test]
+fn a_name_being_typed_goes_with_the_selection() {
+    use crate::editor::RenameTarget;
+    let target = RenameTarget {
+        definition: "d2".parse().unwrap(),
+        kind: kernel::DefinitionKind::Component,
+        name: "Chair".into(),
+    };
+    let mut h = harness(Fixture {
+        info: vec!["1 component".into()],
+        rename: Some(target.clone()),
+        ..Default::default()
+    });
+    h.get_by_label("Name").click();
+    h.run_ok();
+    h.event(egui::Event::Text("x".into()));
+    h.run_ok();
+    assert_eq!(
+        h.get_by_label("Name").accesskit_node().value().as_deref(),
+        Some("Chairx")
+    );
+    // The selection changes: the field goes, and with it the text typed.
+    h.state_mut().rename = None;
+    h.state_mut().info = vec!["Nothing selected".into()];
+    h.run_ok();
+    assert!(h.query_by_label("Name").is_none());
+    assert_eq!(h.state_mut().take(), []);
+    h.state_mut().rename = Some(target);
+    h.state_mut().info = vec!["1 component".into()];
+    h.run_ok();
+    assert_eq!(
+        h.get_by_label("Name").accesskit_node().value().as_deref(),
+        Some("Chair")
+    );
+}

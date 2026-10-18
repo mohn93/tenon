@@ -66,6 +66,11 @@ impl Default for ImportOptions {
     }
 }
 
+/// Whether `command` replaces the document (a new model, a file opened).
+fn replaces_document(command: &Command) -> bool {
+    matches!(command, Command::New { .. } | Command::Open { .. })
+}
+
 /// The one selected group or component of the open context, which Rename Component and Entity
 /// Info's Name field rename.
 #[derive(Clone, Debug, PartialEq)]
@@ -245,6 +250,9 @@ pub struct Editor {
     /// The model point (open context coordinates) a `tool_input` event put the cursor on:
     /// the tools look for it there, whatever hides it (see `Slab`).
     cursor_point: Option<DVec3>,
+    /// How many times the document was replaced (a new model or a file opened, by the window
+    /// or an agent): ids from before name other things afterwards.
+    documents: u64,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -315,6 +323,7 @@ impl Editor {
             agent_mods: Mods::default(),
             key_mods: Mods::default(),
             cursor_point: None,
+            documents: 0,
         }
     }
 
@@ -328,7 +337,11 @@ impl Editor {
         if command.changes_model() {
             self.reset_tool();
         }
+        let replaces = replaces_document(&command);
         let result = self.doc.execute(command);
+        if replaces && result.is_ok() {
+            self.documents += 1;
+        }
         self.invalidate_hover();
         result
     }
@@ -342,9 +355,24 @@ impl Editor {
         if commands.iter().any(Command::changes_model) {
             self.reset_tool();
         }
+        // A batch that may have replaced the document counts as having done so.
+        if commands.iter().any(replaces_document) {
+            self.documents += 1;
+        }
         let result = self.doc.execute_batch(commands, atomic);
         self.invalidate_hover();
         result
+    }
+
+    /// How many times the document was replaced (new or open, by the window or an agent).
+    /// What was noted by id before a change names other things after it.
+    pub fn documents(&self) -> u64 {
+        self.documents
+    }
+
+    /// Shows `text` as an error in the status line.
+    pub fn show_error(&mut self, text: &str) {
+        self.message = Some(Message::error(text));
     }
 
     /// Switches to the tool `kind` (a fresh one, even if it is the current tool), dropping the
@@ -1944,7 +1972,11 @@ impl Editor {
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
     fn execute_recorded(&mut self, command: Command) -> Result<Outcome, CommandError> {
         let noted = self.issued.is_some().then(|| command.clone());
+        let replaces = replaces_document(&command);
         let result = self.doc.execute(command);
+        if replaces && result.is_ok() {
+            self.documents += 1;
+        }
         if let (Some(command), Some(issued)) = (noted, self.issued.as_mut()) {
             issued.push((command, result.clone()));
         }
