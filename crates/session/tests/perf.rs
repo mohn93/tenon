@@ -1,4 +1,4 @@
-//! Timings for saving and opening a big model. Ignored by default (they assert only loose
+//! Timings for saving and opening a big model, and for purging many definitions. Ignored by default (they assert only loose
 //! bounds); run them in release to see the numbers:
 //! `cargo test --release -p session --test perf -- --ignored --nocapture`.
 
@@ -85,4 +85,45 @@ fn time_saving_and_opening_a_big_model() {
 
     assert!(saved < Duration::from_millis(500), "save took {saved:?}");
     assert!(opened < Duration::from_millis(1000), "open took {opened:?}");
+}
+
+#[test]
+#[ignore]
+fn time_purging_many_unused_definitions() {
+    let mut d = Document::new(DVec2::new(800.0, 600.0));
+    let mut instances = Vec::new();
+    for k in 0..2000 {
+        let x = k as f64 * 2.0;
+        let out = d
+            .execute(
+                serde_json::from_value(
+                    json!({"type": "add_rectangle", "corner": [x, 0, 0], "opposite": [x + 1.0, 1, 0]}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let ids: Vec<String> = out
+            .changes
+            .created
+            .iter()
+            .map(|id| id.to_string())
+            .filter(|id| id.starts_with(['e', 'f']))
+            .collect();
+        let out = d
+            .execute(
+                serde_json::from_value(json!({"type": "make_component", "ids": ids, "name": "R"}))
+                    .unwrap(),
+            )
+            .unwrap();
+        let instance = out.changes.created.iter().map(|id| id.to_string());
+        instances.extend(instance.filter(|id| id.starts_with('i')));
+    }
+    run(&mut d, json!({"type": "erase", "ids": instances}));
+
+    // The old purge walked every instance once per definition per removal.
+    let (out, took) = timed("purge 2000", || {
+        d.execute(Command::PurgeDefinitions {}).unwrap()
+    });
+    assert_eq!(out.purged, Some(2000));
+    assert!(took < Duration::from_secs(2), "purge took {took:?}");
 }

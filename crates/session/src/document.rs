@@ -70,6 +70,8 @@ pub struct Document {
     soften_report: Option<SoftenReport>,
     /// How many faces the last `position_texture` changed, until its outcome takes it.
     positioned: Option<usize>,
+    /// How many definitions the last `purge_definitions` removed, until its outcome takes it.
+    purged: Option<usize>,
 }
 
 impl Document {
@@ -90,6 +92,7 @@ impl Document {
             import_report: None,
             soften_report: None,
             positioned: None,
+            purged: None,
         }
     }
 
@@ -179,6 +182,7 @@ impl Document {
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
             outcome.positioned = self.positioned.take();
+            outcome.purged = self.purged.take();
             return Ok(outcome);
         }
         match command {
@@ -407,7 +411,12 @@ impl Document {
             Command::RenameDefinition { definition, name } => {
                 self.rename_changes(*definition, name)
             }
-            Command::PurgeDefinitions {} => Ok(self.scene.purge()),
+            Command::PurgeDefinitions {} => {
+                let change = self.scene.purge();
+                // Each step is one RemoveDefinition.
+                self.purged = Some(change.steps.len());
+                Ok(change)
+            }
             Command::AddMaterial {
                 name,
                 color,
@@ -558,6 +567,7 @@ impl Document {
                         export: None,
                         soften: self.soften_report.take(),
                         positioned: self.positioned.take(),
+                        purged: self.purged.take(),
                     }
                 }),
                 None if matches!(

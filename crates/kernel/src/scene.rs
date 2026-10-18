@@ -1,6 +1,6 @@
 //! Groups and components: definitions with a mesh of their own, placed as instances.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
@@ -378,16 +378,27 @@ impl Scene {
     }
 
     /// Removes every definition that no instance places, including ones only unused
-    /// definitions placed.
+    /// definitions placed. Each pass counts instances in one walk and removes, in id order,
+    /// every definition with none, so a nesting level takes one pass.
     pub fn purge(&mut self) -> SceneChange {
         let mut steps = Vec::new();
         loop {
-            let unused = self
-                .definitions()
-                .find(|(id, _)| self.instance_count(*id) == 0)
-                .map(|(id, _)| id);
-            let Some(id) = unused else { break };
-            steps.push(self.remove_definition(id));
+            let mut counts: HashMap<DefinitionId, usize> = HashMap::new();
+            for (_, i) in self.meshes().flat_map(|(_, m)| m.instances()) {
+                *counts.entry(i.definition).or_default() += 1;
+            }
+            let unused: Vec<DefinitionId> = self
+                .definitions
+                .keys()
+                .filter(|id| !counts.contains_key(id))
+                .copied()
+                .collect();
+            if unused.is_empty() {
+                break;
+            }
+            for id in unused {
+                steps.push(self.remove_definition(id));
+            }
         }
         SceneChange { steps }
     }

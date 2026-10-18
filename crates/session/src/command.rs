@@ -476,6 +476,10 @@ pub struct Outcome {
     /// How many faces a `position_texture` changed; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub positioned: Option<usize>,
+    /// How many definitions a `purge_definitions` removed (nested ones included); absent for
+    /// other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purged: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

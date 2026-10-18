@@ -384,3 +384,82 @@ fn an_empty_instance_is_within_no_box() {
     );
     assert_eq!(far["instances"], json!([]));
 }
+
+/// Makes a component named `name` of a 1 x 1 rectangle at `x` and returns its instance id.
+fn rectangle_component(d: &mut Document, x: f64, name: &str) -> String {
+    let out = run(
+        d,
+        json!({"type": "add_rectangle", "corner": [x, 0, 0], "opposite": [x + 1.0, 1, 0]}),
+    )
+    .unwrap();
+    assert!(out.get("purged").is_none(), "only a purge reports purged");
+    let ids: Vec<Value> = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| id.as_str().is_some_and(|s| s.starts_with(['e', 'f'])))
+        .cloned()
+        .collect();
+    let out = run(
+        d,
+        json!({"type": "make_component", "ids": ids, "name": name}),
+    )
+    .unwrap();
+    created_instance(&out)
+}
+
+fn definition_names(d: &Document) -> Vec<String> {
+    ask(d, json!({"type": "definitions"}))["definitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn purge_reports_what_it_removed() {
+    let mut d = doc();
+    // B is placed only inside A's definition; C's only instance is erased.
+    let b = rectangle_component(&mut d, 0.0, "B");
+    let a = created_instance(
+        &run(
+            &mut d,
+            json!({"type": "make_component", "ids": [b], "name": "A"}),
+        )
+        .unwrap(),
+    );
+    let c = rectangle_component(&mut d, 5.0, "C");
+    run(&mut d, json!({"type": "erase", "ids": [c]})).unwrap();
+    run(&mut d, json!({"type": "erase", "ids": [a]})).unwrap();
+    let mut before = definition_names(&d);
+    before.sort();
+    assert_eq!(before, ["A", "B", "C"]);
+
+    let out = run(&mut d, json!({"type": "purge_definitions"})).unwrap();
+    assert_eq!(out["purged"], 3, "A, the nested B and C");
+    assert_eq!(definition_names(&d), Vec::<String>::new());
+
+    let again = run(&mut d, json!({"type": "purge_definitions"})).unwrap();
+    assert_eq!(again["purged"], 0);
+
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    let mut after = definition_names(&d);
+    after.sort();
+    assert_eq!(after, before, "one undo brings all three back");
+}
+
+#[test]
+fn purging_many_unused_definitions_removes_them_all() {
+    // The old purge walked every instance once per definition per removal; perf.rs times
+    // this case.
+    let mut d = doc();
+    let instances: Vec<String> = (0..2000)
+        .map(|k| rectangle_component(&mut d, k as f64 * 2.0, &format!("R{k}")))
+        .collect();
+    run(&mut d, json!({"type": "erase", "ids": instances})).unwrap();
+    assert_eq!(counts(&d)[4], 2000);
+    let out = run(&mut d, json!({"type": "purge_definitions"})).unwrap();
+    assert_eq!(out["purged"], 2000);
+    assert_eq!(counts(&d), [0, 0, 0, 0, 0]);
+}
