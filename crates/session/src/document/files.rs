@@ -156,18 +156,27 @@ impl Document {
                 "a .skr path is a model file: use save, not export",
             ));
         }
-        let own = |p: &Path| {
-            self.path
-                .as_ref()
-                .is_some_and(|own| match (own.canonicalize(), p.canonicalize()) {
-                    (Ok(a), Ok(b)) => a == b,
-                    _ => own == p,
-                })
-        };
+        let own = |p: &Path| self.path.as_deref().is_some_and(|own| same_file(own, p));
         if own(target) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 "that is the open model's own file: export to another path",
+            ));
+        }
+        // A model opened from a SketchUp file has no file of its own; the original keeps
+        // what this app cannot (tags, scenes, curves, newer formats), so writing over it
+        // needs `overwrite`.
+        if !overwrite
+            && self
+                .imported_from
+                .as_deref()
+                .is_some_and(|original| same_file(original, target))
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "this is the SketchUp file the model was opened from; exporting would replace \
+                 it with a 2017 copy that drops what this app cannot keep; pass overwrite to \
+                 replace it",
             ));
         }
         if format == ExportFormat::Skp {
@@ -333,6 +342,15 @@ fn check_links<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Result<(), Comm
             ),
         )),
         None => Ok(()),
+    }
+}
+
+/// True when `a` and `b` name the same file: compared after resolving both, or as given
+/// when either cannot be resolved (a file not there yet).
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 

@@ -595,6 +595,48 @@ fn a_guide_line_can_end_a_definition() {
 }
 
 #[test]
+fn a_tiny_face_keeps_its_texture_pins() {
+    // A face 0.01 inch across with its texture pinned at 1000 times its projected size:
+    // the pins span 1e-5 inch of texture, and are judged by their shape, not their size.
+    let (s, k) = (0.01, 0.001);
+    let doc = Doc {
+        materials: vec![Material {
+            name: "tex".into(),
+            rgba: [1, 2, 3, 255],
+            opacity: 1.0,
+            texture: Some(Texture {
+                bytes: png_2x2(),
+                width: 100.0,
+                height: 100.0,
+            }),
+        }],
+        root: Geometry {
+            vertices: vec![[0.0, 0.0, 0.0], [s, 0.0, 0.0], [s, s, 0.0], [0.0, s, 0.0]],
+            edges: vec![edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 0)],
+            faces: vec![Face {
+                front: Some(0),
+                front_uv: Some([
+                    ([0.0, 0.0, 0.0], [0.0, 0.0]),
+                    ([s, 0.0, 0.0], [k * s / 100.0, 0.0]),
+                    ([s, s, 0.0], [k * s / 100.0, k * s / 100.0]),
+                ]),
+                ..face(vec![vec![0, 1, 2, 3]])
+            }],
+            ..Geometry::default()
+        },
+        ..Doc::default()
+    };
+    let (m, _, _) = read(&write(&doc).expect("writes"));
+    let map = m.root.uv_map(0);
+    assert!(!map.is_default());
+    let got = map.at([s, s, 0.0]);
+    assert!(
+        (got[0] - k * s).abs() < 1e-15 && (got[1] - k * s).abs() < 1e-15,
+        "{got:?}"
+    );
+}
+
+#[test]
 fn many_entities_cross_the_slot_escape() {
     const N: usize = 15_000;
     let mut root = Geometry::default();
@@ -830,6 +872,32 @@ fn invalid_documents_are_errors() {
     d.materials = (0..0x7fff).map(|i| solid(format!("m{i}"))).collect();
     cases.push(("too many materials", d, |e| {
         matches!(e, WriteError::TooManyMaterials)
+    }));
+
+    let mut d = base();
+    d.root = square();
+    d.materials.push(Material {
+        texture: Some(Texture {
+            bytes: png_2x2(),
+            width: 1.0,
+            height: 1.0,
+        }),
+        ..solid("tex".into())
+    });
+    d.root.faces[0].front = Some(0);
+    d.root.faces[0].front_uv = Some([
+        ([0.0, 0.0, 0.0], [0.0, 0.0]),
+        ([1.0, 0.0, 0.0], [1.0, 1.0]),
+        ([1.0, 1.0, 0.0], [2.0, 2.0]),
+    ]);
+    cases.push(("pins on one line", d, |e| {
+        matches!(
+            e,
+            WriteError::Degenerate {
+                what: "texture pins of face",
+                ..
+            }
+        )
     }));
 
     let mut d = base();

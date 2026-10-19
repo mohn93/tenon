@@ -104,6 +104,36 @@ fn definitions(scene: &Scene) -> BTreeMap<(String, String), (MeshCounts, usize)>
         .collect()
 }
 
+/// Per mesh (the root as "", definitions as in `definitions`): each face's front and back
+/// material names and each instance's material name, sorted.
+type Paints = (Vec<(Option<String>, Option<String>)>, Vec<Option<String>>);
+
+fn paints(scene: &Scene) -> BTreeMap<String, Paints> {
+    let name = |m: Option<kernel::MaterialId>| m.map(|m| scene.material(m).unwrap().name.clone());
+    let of = |m: &kernel::Model| {
+        let mut faces: Vec<_> = m
+            .faces()
+            .map(|(_, f)| (name(f.front), name(f.back)))
+            .collect();
+        let mut instances: Vec<_> = m.instances().map(|(_, i)| name(i.material)).collect();
+        faces.sort();
+        instances.sort();
+        (faces, instances)
+    };
+    let mut out = BTreeMap::new();
+    out.insert(String::new(), of(scene.root()));
+    for (_, def) in scene.definitions().filter(|(_, d)| !d.mesh.is_empty()) {
+        let kind = format!("{:?}", def.kind);
+        let name = match def.name.trim() {
+            "" => kind.as_str(),
+            n => n,
+        };
+        let key = format!("{name} ({kind})");
+        out.insert(key, of(&def.mesh));
+    }
+    out
+}
+
 /// Every material by name: color, opacity, and the texture's bytes and size.
 type MaterialSummary = ([u8; 3], f32, Option<(Vec<u8>, f64, f64)>);
 
@@ -195,6 +225,7 @@ fn cupboard_round_trips() {
     assert_eq!(definitions(got), definitions(want));
     assert_eq!(counts(got, MeshId::Root), counts(want, MeshId::Root));
     assert_materials_match(got, want);
+    assert_eq!(paints(got), paints(want));
     assert_bounds_match(got, want);
 
     // The knob and the hinge are each written once and placed twice.
@@ -314,6 +345,11 @@ fn drawn_model(d: &mut Document) -> Value {
         json!({"type": "scale", "ids": [copy], "origin": [25, 0, 0], "factors": [-1, 1, 1]}),
     )
     .unwrap();
+    run(
+        d,
+        json!({"type": "rotate", "ids": [copy], "center": [25, 0, 0], "angle": 90}),
+    )
+    .unwrap();
 
     run(
         d,
@@ -355,6 +391,11 @@ fn drawn_model(d: &mut Document) -> Value {
     run(
         d,
         json!({"type": "paint", "ids": [wall], "material": tiles}),
+    )
+    .unwrap();
+    run(
+        d,
+        json!({"type": "paint", "ids": [wall], "material": glass, "side": "back"}),
     )
     .unwrap();
     run(
@@ -415,6 +456,7 @@ fn a_drawn_model_round_trips() {
         .1;
     assert_eq!(crate_.1, 2, "the crate is placed twice");
     assert_materials_match(got, want);
+    assert_eq!(paints(got), paints(want));
     assert_bounds_match(got, want);
     assert_eq!(report_totals(&report), totals(got), "{report}");
     assert_eq!(report["materials"], 2, "{report}");
@@ -439,6 +481,35 @@ fn a_drawn_model_round_trips() {
         .map(|(_, i)| i.transform.matrix3.determinant())
         .collect();
     assert!(dets.iter().any(|d| (d + 1.0).abs() < 1e-9), "{dets:?}");
+    // ... and turned a quarter: its transforms come back term for term.
+    let transforms = |s: &Scene| {
+        let mut t: Vec<[f64; 12]> = s
+            .root()
+            .instances()
+            .map(|(_, i)| {
+                let m = i.transform.matrix3.to_cols_array();
+                let t = i.transform.translation.to_array();
+                [
+                    m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], t[0], t[1], t[2],
+                ]
+            })
+            .collect();
+        t.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        t
+    };
+    let (a, b) = (transforms(got), transforms(want));
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert!(
+            x.iter().zip(y).all(|(p, q)| (p - q).abs() < 1e-9),
+            "{x:?} against {y:?}"
+        );
+    }
+    assert!(
+        b.iter()
+            .any(|t| t[0].abs() < 1e-9 && (t[1].abs() - 1.0).abs() < 1e-9),
+        "a quarter turn: {b:?}"
+    );
 
     // The textured wall: its texture's placement is in the file, so each corner lies where
     // it did on the texture.
@@ -663,4 +734,122 @@ fn copied_groups_get_names_of_their_own() {
         .collect();
     names.sort();
     assert_eq!(names, ["Group", "Group 2", "Group 3"]);
+}
+
+#[test]
+fn the_opened_original_is_kept_unless_overwrite() {
+    // A model opened from a SketchUp file has no file of its own, but its original holds
+    // what the export drops.
+    let original = scratch("original.skp");
+    std::fs::copy(fixture("cupboard.skp"), &original).unwrap();
+    let before = std::fs::read(&original).unwrap();
+    let mut d = open(original.to_str().unwrap());
+    let dir = original.parent().unwrap();
+    let dotted = dir
+        .join("..")
+        .join(dir.file_name().unwrap())
+        .join("original.skp");
+    for path in [&original, &dotted] {
+        let (kind, message) = run(
+            &mut d,
+            json!({"type": "export", "path": path.to_str().unwrap()}),
+        )
+        .unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+        assert!(message.contains("opened from"), "{message}");
+        assert!(message.contains("overwrite"), "{message}");
+    }
+    // Other formats are refused the same way.
+    let (kind, _) = run(
+        &mut d,
+        json!({"type": "export", "path": original.to_str().unwrap(), "format": "obj"}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert_eq!(
+        std::fs::read(&original).unwrap(),
+        before,
+        "the original is intact"
+    );
+
+    // Another path is fine, and overwrite replaces the original.
+    export_to(&mut d, &scratch("beside-original.skp"));
+    run(
+        &mut d,
+        json!({"type": "export", "path": original.to_str().unwrap(), "overwrite": true}),
+    )
+    .unwrap();
+    assert_ne!(std::fs::read(&original).unwrap(), before);
+    assert_eq!(
+        std::fs::read(&original).unwrap(),
+        std::fs::read(scratch_kept("beside-original.skp")).unwrap()
+    );
+}
+
+/// A path in the scratch directory, left as it is.
+fn scratch_kept(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-skp-export-{}", std::process::id()))
+        .join(name)
+}
+
+#[cfg(unix)]
+#[test]
+fn under_api_root_a_link_is_refused() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    )
+    .unwrap();
+    let real = scratch("link-target.skp");
+    std::fs::copy(fixture("cupboard.skp"), &real).unwrap();
+    let before = std::fs::read(&real).unwrap();
+    let link = scratch("link.skp");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let export = |refuse_links| Command::Export {
+        path: link.to_str().unwrap().to_string(),
+        format: None,
+        overwrite: false,
+        refuse_links,
+    };
+    let e = d.execute(export(true)).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidInput, "{}", e.message);
+    assert!(e.message.contains("symbolic link"), "{}", e.message);
+    assert_eq!(std::fs::read(&real).unwrap(), before);
+    // Without the API root, a link to a SketchUp file is judged by that file.
+    d.execute(export(false)).unwrap();
+    assert!(std::fs::symlink_metadata(&link).is_ok());
+}
+
+#[test]
+fn only_empty_groups_is_nothing_to_export() {
+    let mut d = doc();
+    let rect = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [3, 0, 0], "opposite": [4, 1, 0]}),
+    )
+    .unwrap();
+    let created: Vec<&Value> = rect["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| !id.as_str().unwrap().starts_with('v'))
+        .collect();
+    run(&mut d, json!({"type": "make_group", "ids": created})).unwrap();
+    let group = selected(&d);
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    let inside = root_geometry(&d);
+    run(&mut d, json!({"type": "erase", "ids": inside})).unwrap();
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let (kind, message) = run(
+        &mut d,
+        json!({"type": "export", "path": scratch("hollow.skp").to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert_eq!(
+        message,
+        "nothing to export: only empty groups or components"
+    );
 }

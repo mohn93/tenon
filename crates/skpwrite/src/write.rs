@@ -765,11 +765,15 @@ fn uv_basis(n: [f64; 3]) -> ([f64; 3], [f64; 3]) {
 /// The matrix SketchUp stores for a positioned texture, from three pins: it takes
 /// `(u, v, 1)`, in inches of texture space, to the pin's position in the face's texture
 /// basis, row-vector convention. Pins are in tiles; `size` is the tile in inches.
-/// `None` when the pins' coordinates are on one line.
+/// `None` when the pins' coordinates are on one line, judged against their own spread so
+/// that a tiny face keeps its placement.
 fn uv_matrix(pins: &[UvPin; 3], size: Option<[f64; 2]>, normal: [f64; 3]) -> Option<[f64; 9]> {
     let (ux, wx) = uv_basis(normal);
     let [sw, sh] = size.unwrap_or([1.0, 1.0]);
     let a = pins.map(|(_, uv)| [uv[0] * sw, uv[1] * sh, 1.0]);
+    if !spread_in_2d(&a) {
+        return None;
+    }
     let bx = pins.map(|(p, _)| dot(p, ux));
     let by = pins.map(|(p, _)| dot(p, wx));
     let [a0, c0, e0] = solve3(&a, bx)?;
@@ -784,10 +788,28 @@ fn det3(m: &[[f64; 3]; 3]) -> f64 {
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
 }
 
+/// True when the points `(x, y)` of three rows `[x, y, 1]` are not on one line: twice
+/// their triangle's area is more than `PIN_SPREAD` times the square of its longest side.
+fn spread_in_2d(a: &[[f64; 3]; 3]) -> bool {
+    let side = |i: usize, j: usize| [a[j][0] - a[i][0], a[j][1] - a[i][1]];
+    let (p, q, r) = (side(0, 1), side(0, 2), side(1, 2));
+    let twice_area = (p[0] * q[1] - p[1] * q[0]).abs();
+    let longest = [p, q, r]
+        .iter()
+        .map(|s| s[0] * s[0] + s[1] * s[1])
+        .fold(0.0, f64::max);
+    twice_area.is_finite() && longest.is_finite() && twice_area > PIN_SPREAD * longest
+}
+
+/// Texture pins closer than this to one line (the sine of their smallest angle, about) are
+/// refused: independent of the face's size, unlike an absolute bound on the determinant,
+/// which refused the pins of a small face.
+const PIN_SPREAD: f64 = 1e-9;
+
 /// `a x = b` by Cramer's rule; `None` when `a` is singular.
 fn solve3(a: &[[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
     let d = det3(a);
-    if !d.is_finite() || d.abs() < 1e-9 {
+    if !d.is_finite() || d == 0.0 {
         return None;
     }
     let mut x = [0.0; 3];

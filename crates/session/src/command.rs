@@ -314,8 +314,8 @@ pub enum Command {
     /// places written once, faces with holes, soft edges, guides and materials with their
     /// textures; its `export` counts definitions, instances, faces, edges, guides and
     /// materials, with `warnings` for what the file cannot hold (glow, curves, empty groups).
-    /// An existing file that is not of the format written is refused unless `overwrite` is
-    /// true.
+    /// An existing file that is not of the format written, or the SketchUp file the model
+    /// was opened from, is refused unless `overwrite` is true.
     Export {
         path: String,
         #[serde(default)]

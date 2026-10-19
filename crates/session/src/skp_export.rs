@@ -32,6 +32,9 @@ pub(crate) struct SkpExportStats {
     pub materials: usize,
     /// What the file could not hold.
     pub warnings: Vec<String>,
+    /// Faces with a textured side whose placement could not be pinned, written with the
+    /// default projection.
+    unplaced_textures: usize,
 }
 
 /// The scene as a SketchUp 2017 file. `invalid_input` when there is nothing to write or the
@@ -107,10 +110,12 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         && root.instances.is_empty()
         && root.guides.is_empty()
     {
-        return Err(CommandError::new(
-            ErrorKind::InvalidInput,
-            "nothing to export: the model is empty",
-        ));
+        let message = if scene.root().instances().next().is_some() {
+            "nothing to export: only empty groups or components"
+        } else {
+            "nothing to export: the model is empty"
+        };
+        return Err(CommandError::new(ErrorKind::InvalidInput, message));
     }
     stats.definitions = definitions.len();
     stats.materials = materials.len();
@@ -142,6 +147,11 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         curves,
         "curve was written as separate edges",
         "curves were written as separate edges",
+    );
+    warn(
+        stats.unplaced_textures,
+        "textured face kept the default texture placement; its corners are too close to a line",
+        "textured faces kept the default texture placement; their corners are too close to a line",
     );
     warn(
         empty,
@@ -254,23 +264,26 @@ impl Ctx<'_> {
             })
             .collect();
 
-        let faces: Vec<skpwrite::Face> = m
-            .faces()
-            .map(|(_, f)| {
-                let loops = std::iter::once(&f.outer)
-                    .chain(&f.holes)
-                    .map(|l| l.iter().map(|v| at(*v)).collect())
-                    .collect();
-                let points: Vec<DVec3> = f.outer.iter().filter_map(|v| m.position(*v)).collect();
-                skpwrite::Face {
-                    loops,
-                    front: self.material(f.front),
-                    back: self.material(f.back),
-                    front_uv: self.pins(f, &points, f.front, false),
-                    back_uv: self.pins(f, &points, f.back, true),
-                }
-            })
-            .collect();
+        let mut faces = Vec::new();
+        for (_, f) in m.faces() {
+            let loops = std::iter::once(&f.outer)
+                .chain(&f.holes)
+                .map(|l| l.iter().map(|v| at(*v)).collect())
+                .collect();
+            let points: Vec<DVec3> = f.outer.iter().filter_map(|v| m.position(*v)).collect();
+            let front_uv = self.pins(f, &points, f.front, false);
+            let back_uv = self.pins(f, &points, f.back, true);
+            if matches!(front_uv, Pins::Unplaceable) || matches!(back_uv, Pins::Unplaceable) {
+                stats.unplaced_textures += 1;
+            }
+            faces.push(skpwrite::Face {
+                loops,
+                front: self.material(f.front),
+                back: self.material(f.back),
+                front_uv: front_uv.into_option(),
+                back_uv: back_uv.into_option(),
+            });
+        }
 
         let instances: Vec<Instance> = m
             .instances()
@@ -319,18 +332,27 @@ impl Ctx<'_> {
 
     /// Three pins fixing a side's texture where the face shows it: three corners of the
     /// outer loop that are not on one line, each with where it lies on the texture, in
-    /// tiles. None for a side whose material has no texture.
+    /// tiles. `Unplaceable` when no three corners are spread enough, on the face or on the
+    /// texture (judged by shape, not size, as the writer does), so that one face keeps the
+    /// default projection rather than failing the export.
     fn pins(
         &self,
         face: &Face,
         points: &[DVec3],
         material: Option<MaterialId>,
         back: bool,
-    ) -> Option<[UvPin; 3]> {
-        let texture = self.scene.material(material?)?.texture.as_ref()?;
+    ) -> Pins {
+        let Some(texture) = material
+            .and_then(|m| self.scene.material(m))
+            .and_then(|m| m.texture.as_ref())
+        else {
+            return Pins::Untextured;
+        };
         let size = DVec2::new(texture.width, texture.height);
-        let [a, b, c] = spread_corners(points)?;
-        Some([a, b, c].map(|p| {
+        let Some(corners) = spread_corners(points) else {
+            return Pins::Unplaceable;
+        };
+        let pins = corners.map(|p| {
             let front = face.texture_position(p);
             let uv = if back {
                 back_texture_position(front)
@@ -338,8 +360,41 @@ impl Ctx<'_> {
                 front
             } / size;
             (inches(p), uv.to_array())
-        }))
+        });
+        let on_texture = pins.map(|(_, uv)| DVec2::from_array(uv) * size);
+        if spread(on_texture) {
+            Pins::Placed(pins)
+        } else {
+            Pins::Unplaceable
+        }
     }
+}
+
+/// A face side's texture pins.
+enum Pins {
+    Untextured,
+    Placed([UvPin; 3]),
+    Unplaceable,
+}
+
+impl Pins {
+    fn into_option(self) -> Option<[UvPin; 3]> {
+        match self {
+            Pins::Placed(p) => Some(p),
+            _ => None,
+        }
+    }
+}
+
+/// True when three points are clearly not on one line: twice their triangle's area is more
+/// than 1e-6 times the square of its longest side (the writer refuses below 1e-9).
+fn spread([a, b, c]: [DVec2; 3]) -> bool {
+    let twice_area = (b - a).perp_dot(c - a).abs();
+    let longest = [b - a, c - a, c - b]
+        .iter()
+        .map(|s| s.length_squared())
+        .fold(0.0, f64::max);
+    twice_area.is_finite() && longest.is_finite() && twice_area > 1e-6 * longest
 }
 
 fn inches(p: DVec3) -> [f64; 3] {

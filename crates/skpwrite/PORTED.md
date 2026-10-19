@@ -81,6 +81,9 @@ sequence"); the C++ and TypeScript ports restart them per section.
     zero (`TextureSize`), two materials or two definitions with one name (`DuplicateName`;
     callers make names unique first), and a texture image, a face's loop list, or the
     material or definition list too long for its `u32` count (`TooLarge`).
+    Texture pins count as on one line when twice their triangle's area (in texture
+    inches) is at most 1e-9 times the square of its longest side, a bound independent of
+    the face's size; an absolute bound on the determinant refused small faces' pins.
 13. **Guides.** Guide lines are always infinite (start and end at -1e30 and 1e30) through
     the given point along the normalized direction; openskp also writes bounded segments.
 14. **Texture basis.** Pinned textures are solved in openskp's latest `face_uv_basis`
