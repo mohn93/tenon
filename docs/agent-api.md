@@ -868,7 +868,7 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 | Command | Effect |
 |---|---|
 | `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete: the bytes go to a new hidden `.sketchup-alt-<pid>-<n>.partial` beside it, renamed over it at the end; no other file is touched). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. |
-| `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
+| `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. A SketchUp file (a `.skp` path, or a file whose header is SketchUp's) opens as a new model not saved anywhere: what `import` reads from it (see Import) goes straight into the root, with no wrapping group (the file's top-level faces, edges and instances are the root's), lit by day, with the view zoomed to it; the outcome carries the `import` report (without `instance` and `definition`); `file` reports no `path` and `modified` false, so `save` needs a `path` (a `.skr`), and never writes over the `.skp`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
 Paths are relative to the app's working directory, or with `--api-root` to the first
@@ -1044,12 +1044,19 @@ through its transforms, times `scale`) reaches beyond +/-1e6 m is `invalid_input
 A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 
-In the window, File > Import... (Cmd+I) picks an OBJ or STL file and opens an options sheet
-(units: meters, centimeters, millimeters, inches or feet per file unit, which becomes `scale`;
-up axis; import as; merge coplanar faces), whose values are the parameters above and are kept
-in the preferences. Importing from the sheet runs `import` with them; the
-status line reports the faces made (and the units when not meters) and polygons skipped, or the
-error.
+In the window, File > Import... (Cmd+I) picks an OBJ, STL or SketchUp file and opens an
+options sheet (units: meters, centimeters, millimeters, inches or feet per file unit, which
+becomes `scale`; up axis; import as; merge coplanar faces), whose values are the parameters
+above and are kept in the preferences. For a `.skp` the sheet asks only "Import as": the file
+keeps its own units, axes and faces (`scale`, `up` and `merge_coplanar` are not sent).
+Importing from the sheet runs `import` with them; the status line reports the faces made (and
+the units when not meters) and polygons skipped, or the error. For a SketchUp file it reads
+`Imported desk.skp: 147 faces, 1 definition, 1 instance` (and faces skipped), followed by
+`with N warnings (see the import report)` when the report has warnings, which also go to
+stderr. File > Open... lists `.skr` and SketchUp (`.skp`) files; a `.skp` runs `open` as above,
+the status reads `Opened <name>.skp: ...` with the same counts, and the window title is
+`<name>.skp (imported)` until the model is saved (Save then asks for a `.skr` path, suggesting
+`<name>.skr`).
 
 Details: for `"as": "context"` the report's `faces` counts the faces built from the file, before
 they merge with what is already in the context. A `.mtl` over 16 MiB is ignored, as is a library
@@ -1130,10 +1137,10 @@ under a pixel and where a click would snap.
 
 | In the window | Through the API |
 |---|---|
-| File > New, Open..., Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt reads `Do you want to save changes to "<name>"?` (Save, Don't Save, Cancel); it is still `unsaved_changes` / `discard` |
+| File > New, Open... (`.skr` or `.skp`), Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt reads `Do you want to save changes to "<name>"?` (Save, Don't Save, Cancel); it is still `unsaved_changes` / `discard` |
 | File > Open Recent (the last 10 files) and Clear Menu | `open` (`path`); the list is chrome |
 | The empty-model card's New, Open... and recent files | `new`, `open` (`path`) |
-| File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
+| File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces; only import as for a `.skp`) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |

@@ -801,7 +801,7 @@ impl State {
         if !self.settle_changes() {
             return;
         }
-        if let Some(path) = skr_dialog().pick_file()
+        if let Some(path) = open_dialog().pick_file()
             && self.editor.open_file(&path)
         {
             self.remember_file();
@@ -821,7 +821,7 @@ impl State {
     /// is set. False if cancelled or the save failed.
     fn save(&mut self, choose: bool) -> bool {
         let path = if choose || self.editor.doc().path().is_none() {
-            let name = file_name(self.editor.doc().path());
+            let name = save_name(self.editor.doc().path(), self.editor.doc().imported_from());
             match skr_dialog().set_file_name(name).save_file() {
                 Some(path) => Some(path),
                 None => return false,
@@ -946,13 +946,14 @@ impl State {
         }
     }
 
-    /// Asks for an OBJ or STL file, then opens the Import Options sheet for it; the file is
-    /// read when the sheet's Import is pressed (`UiAction::ConfirmImport`).
+    /// Asks for an OBJ, STL or SketchUp file, then opens the Import Options sheet for it; the
+    /// file is read when the sheet's Import is pressed (`UiAction::ConfirmImport`).
     fn import(&mut self) {
         let chosen = rfd::FileDialog::new()
-            .add_filter("OBJ or STL", &["obj", "stl"])
+            .add_filter("OBJ, STL or SketchUp", &["obj", "stl", "skp"])
             .add_filter("OBJ", &["obj"])
             .add_filter("STL", &["stl"])
+            .add_filter("SketchUp", &["skp"])
             .pick_file();
         if let Some(path) = chosen {
             let options = self.editor.import_options();
@@ -1334,7 +1335,12 @@ impl State {
         self.editor.refresh_hover();
         let doc = self.editor.doc();
         let modified = doc.is_modified();
-        let title = window_title(doc.path(), modified, cfg!(target_os = "macos"));
+        let title = window_title(
+            doc.path(),
+            doc.imported_from(),
+            modified,
+            cfg!(target_os = "macos"),
+        );
         if title != self.title {
             self.window.set_title(&title);
             self.title = title;
@@ -1773,6 +1779,23 @@ fn skr_dialog() -> rfd::FileDialog {
     rfd::FileDialog::new().add_filter("SketchUp Alt model", &["skr"])
 }
 
+/// The File > Open dialog: `.skr` models, and SketchUp files (opened as new models).
+fn open_dialog() -> rfd::FileDialog {
+    rfd::FileDialog::new()
+        .add_filter("SketchUp Alt or SketchUp model", &["skr", "skp"])
+        .add_filter("SketchUp Alt model", &["skr"])
+        .add_filter("SketchUp model", &["skp"])
+}
+
+/// The name the save dialog suggests: the file's, else the SketchUp file's stem with `.skr`
+/// (never the SketchUp file itself), else "Untitled.skr".
+fn save_name(path: Option<&Path>, imported_from: Option<&Path>) -> String {
+    match (path, imported_from.and_then(|p| p.file_stem())) {
+        (None, Some(stem)) => format!("{}.skr", stem.to_string_lossy()),
+        _ => file_name(path),
+    }
+}
+
 /// The file's name, or "Untitled.skr" for a model never saved.
 fn file_name(path: Option<&Path>) -> String {
     path.and_then(|p| p.file_name()).map_or_else(
@@ -1782,13 +1805,23 @@ fn file_name(path: Option<&Path>) -> String {
 }
 
 /// The window title: the file name alone on macOS, where the close button shows unsaved
-/// changes; elsewhere "house.skr* - sketchup-alt".
-fn window_title(path: Option<&Path>, modified: bool, mac: bool) -> String {
+/// changes; elsewhere "house.skr* - sketchup-alt". A model opened from a SketchUp file and
+/// not saved yet is "desk.skp (imported)".
+fn window_title(
+    path: Option<&Path>,
+    imported_from: Option<&Path>,
+    modified: bool,
+    mac: bool,
+) -> String {
+    let name = match (path, imported_from.and_then(|p| p.file_name())) {
+        (None, Some(n)) => format!("{} (imported)", n.to_string_lossy()),
+        _ => file_name(path),
+    };
     if mac {
-        return file_name(path);
+        return name;
     }
     let star = if modified { "*" } else { "" };
-    format!("{}{star} - sketchup-alt", file_name(path))
+    format!("{name}{star} - sketchup-alt")
 }
 
 /// `Do you want to save changes to "house.skr"?`
@@ -2837,16 +2870,33 @@ mod tests {
     fn titles_name_the_file_and_mark_unsaved_changes() {
         let house = Some(Path::new("/m/house.skr"));
         assert_eq!(
-            window_title(None, false, false),
+            window_title(None, None, false, false),
             "Untitled.skr - sketchup-alt"
         );
         assert_eq!(
-            window_title(house, true, false),
+            window_title(house, None, true, false),
             "house.skr* - sketchup-alt"
         );
         // macOS: the close button's dot shows unsaved changes.
-        assert_eq!(window_title(house, true, true), "house.skr");
-        assert_eq!(window_title(None, true, true), "Untitled.skr");
+        assert_eq!(window_title(house, None, true, true), "house.skr");
+        assert_eq!(window_title(None, None, true, true), "Untitled.skr");
+    }
+
+    #[test]
+    fn a_model_opened_from_sketchup_is_titled_imported_until_saved() {
+        let desk = Some(Path::new("/m/desk.skp"));
+        assert_eq!(window_title(None, desk, false, true), "desk.skp (imported)");
+        assert_eq!(
+            window_title(None, desk, true, false),
+            "desk.skp (imported)* - sketchup-alt"
+        );
+        // Saving gives it a path of its own (and the document forgets the SketchUp file).
+        let saved = Some(Path::new("/m/desk.skr"));
+        assert_eq!(window_title(saved, None, false, true), "desk.skr");
+        // The save dialog suggests a .skr beside it, never the .skp.
+        assert_eq!(save_name(None, desk), "desk.skr");
+        assert_eq!(save_name(saved, None), "desk.skr");
+        assert_eq!(save_name(None, None), "Untitled.skr");
     }
 
     #[test]

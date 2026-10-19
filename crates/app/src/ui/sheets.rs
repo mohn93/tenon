@@ -10,7 +10,7 @@ use egui::text::{CCursor, CCursorRange};
 use kernel::DefinitionKind;
 
 use super::{UiAction, theme, widgets};
-use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis};
+use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis, is_sketchup_path};
 
 /// The sheet open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -118,7 +118,8 @@ pub(super) fn forget(ui: &Ui) {
 }
 
 /// The Import Options sheet: units, up axis, what the import makes and whether coplanar faces
-/// merge, for the file at `path`.
+/// merge, for the file at `path`. A SketchUp file has its own units, axes and faces: only
+/// what the import makes is asked.
 fn import_sheet(
     ui: &mut Ui,
     path: &Path,
@@ -133,37 +134,14 @@ fn import_sheet(
     );
     ui.label(RichText::new(name).color(t.text_secondary));
     ui.add_space(theme::GRID);
+    let sketchup = is_sketchup_path(path);
     egui::Grid::new("import-options")
         .num_columns(2)
         .spacing([theme::GRID * 2.0, theme::GRID])
         .show(ui, |ui| {
-            let label = ui.label("Units");
-            egui::ComboBox::from_id_salt("import-units")
-                .selected_text(options.units.label())
-                .show_ui(ui, |ui| {
-                    for units in ImportUnits::ALL {
-                        ui.selectable_value(&mut options.units, units, units.label());
-                    }
-                })
-                .response
-                .labelled_by(label.id);
-            ui.end_row();
-
-            ui.label("Up axis");
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut options.up, None, "Automatic");
-                    ui.radio_value(&mut options.up, Some(UpAxis::Y), "Y up");
-                    ui.radio_value(&mut options.up, Some(UpAxis::Z), "Z up");
-                });
-                ui.label(
-                    RichText::new("Automatic: Y for OBJ, Z for STL")
-                        .small()
-                        .color(t.text_secondary),
-                );
-            });
-            ui.end_row();
-
+            if !sketchup {
+                mesh_options(ui, options, t.text_secondary);
+            }
             ui.label("Import as");
             ui.vertical(|ui| {
                 ui.radio_value(&mut options.place, ImportAs::Group, "Group");
@@ -172,10 +150,42 @@ fn import_sheet(
             });
             ui.end_row();
         });
-    ui.checkbox(&mut options.merge_coplanar, "Merge coplanar faces");
+    if !sketchup {
+        ui.checkbox(&mut options.merge_coplanar, "Merge coplanar faces");
+    }
     if buttons(ui, "Import", true, actions) {
         actions.push(UiAction::ConfirmImport(*options));
     }
+}
+
+/// The import sheet's rows for OBJ and STL: units and up axis.
+fn mesh_options(ui: &mut Ui, options: &mut ImportOptions, secondary: egui::Color32) {
+    let label = ui.label("Units");
+    egui::ComboBox::from_id_salt("import-units")
+        .selected_text(options.units.label())
+        .show_ui(ui, |ui| {
+            for units in ImportUnits::ALL {
+                ui.selectable_value(&mut options.units, units, units.label());
+            }
+        })
+        .response
+        .labelled_by(label.id);
+    ui.end_row();
+
+    ui.label("Up axis");
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut options.up, None, "Automatic");
+            ui.radio_value(&mut options.up, Some(UpAxis::Y), "Y up");
+            ui.radio_value(&mut options.up, Some(UpAxis::Z), "Z up");
+        });
+        ui.label(
+            RichText::new("Automatic: Y for OBJ, Z for STL")
+                .small()
+                .color(secondary),
+        );
+    });
+    ui.end_row();
 }
 
 /// A sheet asking for a name: `title`, a "Name" field holding `name`, then Cancel and

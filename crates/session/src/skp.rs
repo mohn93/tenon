@@ -241,7 +241,8 @@ pub(crate) fn read_skp(
         }
     }
 
-    // The table's materials the reached geometry uses, in order of first use. A reference
+    // The table's materials the reached geometry uses, in order of first use: its faces' and
+    // its imported instances' (a skipped instance's material is not counted). A reference
     // to an id the table lacks (or too large for its 32-bit numbering) is unmatched.
     let table: HashSet<u32> = index
         .materials
@@ -253,11 +254,10 @@ pub(crate) fn read_skp(
     let mut used: Vec<u32> = Vec::new();
     for g in geometries() {
         let faces = g.face_material.iter().chain(&g.face_back_material).copied();
-        let instances = g
-            .instances
-            .iter()
-            .filter(|i| i.has_material)
-            .map(|i| instance_material(i).unwrap_or(NO_MATERIAL));
+        let instances = placements(g)
+            .into_iter()
+            .filter(|(i, _, _)| i.has_material)
+            .map(|(i, _, _)| instance_material(i).unwrap_or(NO_MATERIAL));
         for (id, from_instance) in faces
             .map(|f| (f, false))
             .chain(instances.map(|i| (i, true)))

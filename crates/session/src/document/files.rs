@@ -2,13 +2,14 @@
 
 use std::path::{Path, PathBuf};
 
-use kernel::{DefinitionId, DefinitionKind, Scene, SceneChange};
+use kernel::{DefinitionId, DefinitionKind, MeshId, Scene, SceneChange};
 
 use super::Document;
 use crate::camera::{Camera, Lighting};
 use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
 use crate::file::{self, Access};
+use crate::import::{ImportReport, MAX_IMPORT_BYTES};
 use crate::sniff::{self, Kind};
 
 impl Document {
@@ -47,9 +48,18 @@ impl Document {
     }
 
     /// Replaces the model, view and lighting with a file's. A file whose view cannot be used
-    /// (an eye on its target, say) opens with the default view.
-    pub(super) fn open_file(&mut self, path: &str) -> Result<(), CommandError> {
-        check_nul(Path::new(path))?;
+    /// (an eye on its target, say) opens with the default view. A SketchUp file (by its
+    /// extension or its header) opens as a new model never saved, with its import report.
+    pub(super) fn open_file(&mut self, path: &str) -> Result<Option<ImportReport>, CommandError> {
+        let file = Path::new(path);
+        check_nul(file)?;
+        if file
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("skp"))
+            || sniff::is_skp(file)
+        {
+            return self.open_skp(path).map(Some);
+        }
         let (scene, c) = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
         let camera = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
@@ -57,7 +67,32 @@ impl Document {
         self.replace(scene, camera);
         self.lighting = c.lighting;
         self.path = Some(PathBuf::from(path));
-        Ok(())
+        Ok(None)
+    }
+
+    /// Replaces the model with a SketchUp file's: its root geometry and instances go into the
+    /// root (no wrapper), the view zooms to them, lit by day, and the model has no file (so
+    /// saving asks for a `.skr` path). Nothing changes on failure.
+    fn open_skp(&mut self, path: &str) -> Result<ImportReport, CommandError> {
+        let bytes = super::import::read_limited(Path::new(path), MAX_IMPORT_BYTES)
+            .map_err(|e| file_error(path, e))?;
+        // Built aside, so a file that fails leaves the open model as it is.
+        let mut fresh = Document::new(self.camera.viewport);
+        let built = fresh.build_skp(path, bytes, 1.0, |scene, tree| {
+            scene
+                .import_tree_into_root(MeshId::Root, tree)
+                .map(|(r, c)| (None, r, c))
+        })?;
+        let report = fresh.skp_report(&built);
+        let mut camera = Camera::new(self.camera.viewport);
+        if let Some([lo, hi]) = fresh.scene.bounds(MeshId::Root) {
+            camera.fit(lo, hi);
+        }
+        self.replace(fresh.scene, camera);
+        self.lighting = Lighting::Day;
+        self.path = None;
+        self.imported_from = Some(PathBuf::from(path));
+        Ok(report)
     }
 
     /// Saves to `path`, or to the file last opened or saved.
@@ -88,6 +123,7 @@ impl Document {
         )
         .map_err(|e| file_error(&target.display().to_string(), e))?;
         self.path = Some(target);
+        self.imported_from = None;
         self.clean_revision = self.revision;
         Ok(())
     }
@@ -225,6 +261,7 @@ impl Document {
     fn replace(&mut self, scene: Scene, camera: Camera) {
         self.scene = scene;
         self.camera = camera;
+        self.imported_from = None;
         self.context.clear();
         self.selection.clear();
         self.undo.clear();

@@ -67,6 +67,8 @@ pub struct Document {
     log_start: u64,
     /// The file last opened or saved.
     path: Option<PathBuf>,
+    /// The SketchUp file the model was opened from, until it is saved.
+    imported_from: Option<PathBuf>,
     /// The revision the model had when it was last opened, saved or started.
     clean_revision: u64,
     /// What the last `import` edit made, until its outcome takes it.
@@ -94,6 +96,7 @@ impl Document {
             events: VecDeque::new(),
             log_start: 0,
             path: None,
+            imported_from: None,
             clean_revision: 0,
             import_report: None,
             soften_report: None,
@@ -114,6 +117,12 @@ impl Document {
     /// The file the model was last opened from or saved to.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    /// The SketchUp file the model was opened from, until the model is first saved (until
+    /// then it has no path of its own, so saving asks for one).
+    pub fn imported_from(&self) -> Option<&Path> {
+        self.imported_from.as_deref()
     }
 
     /// True when the model changed since it was opened, saved or started.
@@ -295,8 +304,11 @@ impl Document {
             }
             Command::Open { path, discard } => {
                 self.check_unsaved(discard)?;
-                self.open_file(&path)?;
-                Ok(Outcome::default())
+                let import = self.open_file(&path)?;
+                Ok(Outcome {
+                    import,
+                    ..Outcome::default()
+                })
             }
             Command::Save { path, overwrite } => {
                 self.save_file(path.as_deref(), overwrite)?;

@@ -287,7 +287,9 @@ pub enum Command {
     },
     /// Replace the model and view with those saved in a `.skr` file. Clears undo history;
     /// not an undo step. With changes not saved, fails (`unsaved_changes`) unless `discard`
-    /// is true.
+    /// is true. A SketchUp file (`.skp`, or a file whose header is SketchUp's) opens as a new
+    /// model never saved: its geometry and instances in the root, the view zoomed to them,
+    /// and the outcome's `import` report; `save` then needs a path.
     Open {
         path: String,
         #[serde(default)]

@@ -120,3 +120,21 @@ fn headless_opens_the_file_it_is_given() {
     );
     assert!(messages.is_empty());
 }
+
+#[test]
+fn headless_opens_a_sketchup_file_as_a_new_model() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../skp/tests/fixtures/cupboard.skp");
+    let ask = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "query", "params": {"type": "stats"}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "query", "params": {"type": "file"}}),
+    ];
+    let (status, messages) = session(&[path.to_str().unwrap()], &ask);
+    assert!(status.success(), "exit status {status}");
+    assert!(
+        messages[0]["result"]["instances"].as_u64().unwrap() > 1,
+        "{messages:?}"
+    );
+    assert_eq!(messages[1]["result"]["path"], Value::Null);
+    assert_eq!(messages[1]["result"]["modified"], false);
+}

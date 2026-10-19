@@ -5,7 +5,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use glam::DVec3;
-use kernel::{DefinitionKind, EntityId, MaterialId, MeshId, MeshPolygon, SceneChange};
+use kernel::{
+    DefinitionKind, EntityId, ImportTree, InstanceId, KernelError, MaterialId, MeshId, MeshPolygon,
+    Scene, SceneChange, TreeReport,
+};
 
 use super::{Document, MAX_COORDINATE};
 use crate::command::{CommandError, ErrorKind};
@@ -13,7 +16,7 @@ use crate::import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
 };
-use crate::skp::{read_skp, remove_materials};
+use crate::skp::{SkpNotes, read_skp, remove_materials};
 use crate::sniff;
 
 /// The name of an imported definition whose file name gives none.
@@ -21,6 +24,22 @@ const IMPORT_NAME: &str = "Import";
 
 /// The materials an import added, each with the change that added it.
 type AddedMaterials = Vec<(MaterialId, SceneChange)>;
+
+/// What building an import tree gives: the wrapper placed (if any), the counts and the change.
+pub(super) type Built = (Option<InstanceId>, TreeReport, SceneChange);
+
+/// A SketchUp file read and built into the scene.
+pub(super) struct BuiltSkp {
+    tree: ImportTree,
+    notes: SkpNotes,
+    /// The wrapper placed, when the tree was built into one.
+    instance: Option<InstanceId>,
+    built: TreeReport,
+    /// The change building made (without the materials).
+    change: SceneChange,
+    /// The materials added and kept, each with the change that added it.
+    kept: AddedMaterials,
+}
 
 /// Options of `Command::Import` besides the path.
 pub(crate) struct ImportOptions {
@@ -151,6 +170,37 @@ impl Document {
         scale: f64,
         place: ImportAs,
     ) -> Result<SceneChange, CommandError> {
+        let mesh = self.active();
+        let (kind, name) = (wrapper_kind(place), import_name(Path::new(path)));
+        let b = self.build_skp(path, bytes, scale, |scene, tree| {
+            scene
+                .import_tree(mesh, tree, kind, &name)
+                .map(|(i, r, c)| (Some(i), r, c))
+        })?;
+        let instance = b.instance.expect("import_tree places the wrapper");
+        let definition = self.model().instance(instance).map(|i| i.definition);
+        let root_faces = definition
+            .and_then(|d| self.scene.mesh(MeshId::Definition(d)))
+            .map_or(0, |m| m.faces().count());
+        let mut report = self.skp_report(&b);
+        report.instance = Some(EntityId::Instance(instance));
+        report.definition = definition;
+        let added = SceneChange::join(b.kept.into_iter().map(|(_, c)| c));
+        let change = SceneChange::join([added, b.change]);
+        self.place_import(mesh, instance, change, report, place, root_faces)
+    }
+
+    /// Reads a SketchUp file's `bytes` (from `path`, read again when the materials are
+    /// capped) and builds its tree into the scene with `build`, keeping only the materials
+    /// the built faces and instances use (at most `MAX_IMPORT_MATERIALS`; the file is read
+    /// twice when more are used). Nothing changes on failure.
+    pub(super) fn build_skp(
+        &mut self,
+        path: &str,
+        bytes: Vec<u8>,
+        scale: f64,
+        mut build: impl FnMut(&mut Scene, &ImportTree) -> Result<Built, KernelError>,
+    ) -> Result<BuiltSkp, CommandError> {
         let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
         let mut bytes = Some(bytes);
         let mut only: Option<HashSet<u32>> = None;
@@ -167,14 +217,7 @@ impl Document {
                     ErrorKind::File => file_error(e.message),
                     _ => e,
                 })?;
-            let mesh = self.active();
-            let built = self.scene.import_tree(
-                mesh,
-                &tree,
-                wrapper_kind(place),
-                &import_name(Path::new(path)),
-            );
-            let (instance, built, change) = match built {
+            let (instance, built, change) = match build(&mut self.scene, &tree) {
                 Ok(done) => done,
                 Err(e) => {
                     remove_materials(self, &notes.added);
@@ -213,8 +256,20 @@ impl Document {
         };
         notes.dropped_materials = dropped;
         notes.capped_materials += capped;
-        let mesh = self.active();
-        let textures = kept
+        Ok(BuiltSkp {
+            tree,
+            notes,
+            instance,
+            built,
+            change,
+            kept,
+        })
+    }
+
+    /// The import report of a built SketchUp file, without the instance or definition made.
+    pub(super) fn skp_report(&self, b: &BuiltSkp) -> ImportReport {
+        let textures = b
+            .kept
             .iter()
             .filter(|(id, _)| {
                 self.scene
@@ -222,34 +277,27 @@ impl Document {
                     .is_some_and(|m| m.texture.is_some())
             })
             .count();
-        let definition = self.model().instance(instance).map(|i| i.definition);
-        let root_faces = definition
-            .and_then(|d| self.scene.mesh(MeshId::Definition(d)))
-            .map_or(0, |m| m.faces().count());
-        let given_guides: usize = tree
+        let given_guides: usize = b
+            .tree
             .definitions
             .iter()
             .map(|d| &d.geometry)
-            .chain([&tree.root])
+            .chain([&b.tree.root])
             .map(|g| g.guides.len())
             .sum();
-        let report = ImportReport {
-            instance: Some(EntityId::Instance(instance)),
-            definition,
-            polygons: notes.polygons,
-            faces: built.faces,
-            vertices: built.vertices,
-            skipped: notes.unread_faces + built.skipped,
-            materials: kept.len(),
-            definitions: built.definitions,
-            instances: built.instances,
-            guides: given_guides.saturating_sub(built.skipped_guides),
+        ImportReport {
+            polygons: b.notes.polygons,
+            faces: b.built.faces,
+            vertices: b.built.vertices,
+            skipped: b.notes.unread_faces + b.built.skipped,
+            materials: b.kept.len(),
+            definitions: b.built.definitions,
+            instances: b.built.instances,
+            guides: given_guides.saturating_sub(b.built.skipped_guides),
             textures,
-            warnings: notes.warnings(&built),
-        };
-        let added = SceneChange::join(kept.into_iter().map(|(_, c)| c));
-        let change = SceneChange::join([added, change]);
-        self.place_import(mesh, instance, change, report, place, root_faces)
+            warnings: b.notes.warnings(&b.built),
+            ..ImportReport::default()
+        }
     }
 
     /// Finishes an import that placed `instance` in `mesh` with `change`: selects it, or for
@@ -259,7 +307,7 @@ impl Document {
     fn place_import(
         &mut self,
         mesh: MeshId,
-        instance: kernel::InstanceId,
+        instance: InstanceId,
         change: SceneChange,
         mut report: ImportReport,
         place: ImportAs,

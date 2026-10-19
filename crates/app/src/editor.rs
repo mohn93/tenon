@@ -14,8 +14,8 @@ use render::PreviewVertex;
 use render::scene::DEFAULT_FRONT;
 use serde::{Deserialize, Serialize};
 use session::{
-    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin,
-    Outcome, Projection, SelectMode, StandardView, TextureSource,
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, ImportReport,
+    Lighting, Origin, Outcome, Projection, SelectMode, StandardView, TextureSource,
 };
 pub use session::{ImportAs, ImportUnits, UpAxis};
 use tools::overlay::{marker, preview_lines, snap_label};
@@ -1415,17 +1415,29 @@ impl Editor {
         self.run_selection_command(Command::New { discard: true })
     }
 
-    /// Opens a `.skr` file, dropping unsaved changes (the window asks about them first). False
-    /// if it cannot be opened; the status then says why.
+    /// Opens a `.skr` file, or a SketchUp file as a new model never saved, dropping unsaved
+    /// changes (the window asks about them first). False if it cannot be opened; the status
+    /// then says why. A SketchUp file's status lists what it made.
     pub fn open_file(&mut self, path: &Path) -> bool {
         let revision = self.doc.revision();
-        self.run_selection_command(Command::Open {
+        self.reset_tool();
+        self.typed.clear();
+        self.message = None;
+        let outcome = self.run(Command::Open {
             path: path.display().to_string(),
             discard: true,
         });
+        self.invalidate_hover();
         let opened = self.doc.revision() != revision;
         if opened {
             self.material = None;
+        }
+        if let Some(report) = outcome.and_then(|o| o.import) {
+            self.message = Some(Message::info(format!(
+                "Opened {}{}",
+                display_name(path),
+                sketchup_summary(&report)
+            )));
         }
         opened
     }
@@ -1509,30 +1521,38 @@ impl Editor {
         self.import.units = units;
     }
 
-    /// Imports an OBJ or STL file (the format its extension names) into the open context as
-    /// `import_options` say (by default a group, which becomes the selection), as one undo
-    /// step. False if it cannot be imported; the status then says why.
+    /// Imports an OBJ, STL or SketchUp file (the format its extension names) into the open
+    /// context as `import_options` say (by default a group, which becomes the selection), as
+    /// one undo step. A SketchUp file keeps its own units, axes and faces: only `place`
+    /// applies. False if it cannot be imported; the status then says why.
     pub fn import_file(&mut self, path: &Path) -> bool {
         self.reset_tool();
         self.typed.clear();
         self.message = None;
+        let sketchup = is_sketchup_path(path);
         let options = self.import;
         let outcome = self.run(Command::Import {
             library_roots: None,
             path: path.display().to_string(),
             format: None,
             place: options.place,
-            scale: (options.units != ImportUnits::Meters).then(|| options.units.meters()),
-            up: options.up,
-            merge_coplanar: Some(options.merge_coplanar),
+            scale: (!sketchup && options.units != ImportUnits::Meters)
+                .then(|| options.units.meters()),
+            up: if sketchup { None } else { options.up },
+            merge_coplanar: (!sketchup).then_some(options.merge_coplanar),
         });
         self.invalidate_hover();
         let Some(report) = outcome.and_then(|o| o.import) else {
             return false;
         };
-        let name = path
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let name = display_name(path);
+        if sketchup {
+            self.message = Some(Message::info(format!(
+                "Imported {name}{}",
+                sketchup_summary(&report)
+            )));
+            return true;
+        }
         let faces = match report.faces {
             1 => "1 face".to_string(),
             n => format!("{n} faces"),
@@ -2210,6 +2230,46 @@ fn export_message(path: &Path, skipped: usize) -> String {
             path.display()
         ),
     }
+}
+
+/// True for a path the import and open treat as a SketchUp file: one ending in `.skp`.
+pub fn is_sketchup_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("skp"))
+}
+
+/// The file name of `path`, for the status.
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+}
+
+/// ": 616 faces, 7 definitions, 12 instances; 2 faces skipped; with 3 warnings (see the
+/// import report)": what a SketchUp file made, for the status. The warnings go to stderr.
+fn sketchup_summary(report: &ImportReport) -> String {
+    let count = |n: usize, one: &str| match n {
+        1 => format!("1 {one}"),
+        n => format!("{n} {one}s"),
+    };
+    let mut out = format!(
+        ": {}, {}, {}",
+        count(report.faces, "face"),
+        count(report.definitions, "definition"),
+        count(report.instances, "instance")
+    );
+    if report.skipped > 0 {
+        out += &format!("; {} skipped", count(report.skipped, "face"));
+    }
+    if !report.warnings.is_empty() {
+        for w in &report.warnings {
+            eprintln!("import: {w}");
+        }
+        out += &format!(
+            "; with {} (see the import report)",
+            count(report.warnings.len(), "warning")
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -4959,6 +5019,56 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    /// A SketchUp file among the `skp` crate's fixtures.
+    fn skp_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../skp/tests/fixtures")
+            .join(name)
+    }
+
+    #[test]
+    fn a_sketchup_import_says_what_it_made_and_warns() {
+        let mut e = editor();
+        // A SketchUp file has its own units and axes: the options' are not applied.
+        e.set_import_options(ImportOptions {
+            units: ImportUnits::Millimeters,
+            up: Some(UpAxis::Y),
+            ..Default::default()
+        });
+        assert!(e.import_file(&skp_fixture("desk.skp")), "{}", e.status());
+        let message = e.status_parts().message.unwrap();
+        assert!(message.starts_with("Imported desk"), "{message}");
+        assert!(
+            message.ends_with(
+                ": 147 faces, 1 definition, 1 instance; with 1 warning (see the import report)"
+            ),
+            "{message}"
+        );
+        assert!(!message.contains("millimeters"), "{message}");
+        let instance = e.doc().model().instances().next().unwrap().0;
+        let [lo, hi] = e
+            .doc()
+            .scene()
+            .bounds(kernel::MeshId::Definition(
+                e.doc().model().instance(instance).unwrap().definition,
+            ))
+            .unwrap();
+        assert!((hi - lo).max_element() > 0.5, "read in inches: {lo} {hi}");
+    }
+
+    #[test]
+    fn opening_a_sketchup_file_makes_an_untitled_model() {
+        let mut e = editor();
+        let path = skp_fixture("cupboard.skp");
+        assert!(e.open_file(&path), "{}", e.status());
+        let message = e.status_parts().message.unwrap();
+        assert!(message.starts_with("Opened cupboard.skp"), "{message}");
+        assert_eq!(e.doc().path(), None);
+        assert_eq!(e.doc().imported_from(), Some(path.as_path()));
+        assert!(!e.doc().is_modified());
+        assert!(e.doc().model().instances().count() > 1);
     }
 
     #[test]

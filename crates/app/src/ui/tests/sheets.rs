@@ -34,6 +34,25 @@ fn the_import_sheet_reports_its_options() {
 }
 
 #[test]
+fn the_import_sheet_for_a_sketchup_file_hides_units_up_and_merging() {
+    let shown = |path: &str| {
+        let h = harness(Fixture {
+            sheet: Some(Sheet::Import {
+                path: path.into(),
+                options: ImportOptions::default(),
+            }),
+            ..Default::default()
+        });
+        let texts = drawn_texts(&h);
+        ["Import as", "Units", "Up axis", "Merge coplanar faces"]
+            .map(|label| texts.iter().any(|t| t == label))
+    };
+    assert_eq!(shown("/m/desk.skp"), [true, false, false, false]);
+    assert_eq!(shown("/m/DESK.SKP"), [true, false, false, false]);
+    assert_eq!(shown("/m/chair.obj"), [true, true, true, true]);
+}
+
+#[test]
 fn the_import_sheet_cancels_on_escape_and_cancel() {
     let mut h = harness(import_fixture());
     h.key_press(egui::Key::Escape);

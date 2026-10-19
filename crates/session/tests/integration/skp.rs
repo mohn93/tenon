@@ -882,3 +882,118 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// Faces in the root.
+fn root_faces(d: &Document) -> usize {
+    ask(d, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+#[test]
+fn opening_a_skp_makes_a_new_untitled_model() {
+    let path = fixture("cupboard.skp");
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+
+    // Unsaved changes: refused, nothing changes.
+    let err = run(&mut d, json!({"type": "open", "path": path})).unwrap_err();
+    assert_eq!(err.0, ErrorKind::UnsavedChanges, "{}", err.1);
+    assert_eq!(ask(&d, json!({"type": "file"}))["modified"], true);
+    assert!(root_instances(&d).is_empty());
+
+    let r = run(
+        &mut d,
+        json!({"type": "open", "path": path, "discard": true}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["polygons"], 609, "{report}");
+    assert!(
+        report.get("instance").is_none_or(Value::is_null),
+        "{report}"
+    );
+    let file = ask(&d, json!({"type": "file"}));
+    assert_eq!(file["path"], Value::Null);
+    assert_eq!(file["modified"], false);
+    assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], 0);
+    assert_eq!(d.imported_from(), Some(Path::new(&path)));
+
+    // No wrapper: the root holds what importing into the context gives.
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "import", "path": path, "as": "context"}),
+    )
+    .unwrap();
+    let names = |d: &Document| {
+        let mut n: Vec<String> = root_instances(d)
+            .iter()
+            .map(|i| i["name"].as_str().unwrap_or("").to_string())
+            .collect();
+        n.sort();
+        n
+    };
+    assert!(root_instances(&d).len() > 1);
+    assert_eq!(names(&d), names(&e));
+    assert_eq!(root_faces(&d), root_faces(&e));
+    assert_eq!(definitions(&d).len(), definitions(&e).len());
+    assert!(definitions(&d).iter().all(|x| x["name"] != "cupboard"));
+    assert_eq!(materials_of(&d).len(), materials_of(&e).len());
+
+    // The camera shows the model.
+    let camera = ask(&d, json!({"type": "camera"}));
+    assert_ne!(camera, ask(&doc(), json!({"type": "camera"})));
+
+    // Saving asks for a path; it never writes over the .skp.
+    let err = run(&mut d, json!({"type": "save"})).unwrap_err();
+    assert_eq!(err.0, ErrorKind::InvalidInput, "{}", err.1);
+    assert!(err.1.contains("give a path"), "{}", err.1);
+    let saved = scratch("opened-cupboard.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": saved.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(d.path(), Some(saved.as_path()));
+    assert_eq!(d.imported_from(), None);
+    let mut f = doc();
+    run(
+        &mut f,
+        json!({"type": "open", "path": saved.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(names(&f), names(&d));
+    assert_eq!(root_faces(&f), root_faces(&d));
+    assert_eq!(definitions(&f).len(), definitions(&d).len());
+}
+
+#[test]
+fn a_skp_is_opened_by_its_header_and_a_bad_one_changes_nothing() {
+    let bytes = std::fs::read(fixture("cupboard.skp")).unwrap();
+    let renamed = write("cupboard-renamed.model", &bytes);
+    let mut d = doc();
+    run(&mut d, json!({"type": "open", "path": renamed})).unwrap();
+    assert!(!root_instances(&d).is_empty());
+    assert_eq!(ask(&d, json!({"type": "file"}))["path"], Value::Null);
+
+    // A truncated file: an error, and the model open before stays as it was.
+    let cut = write("cupboard-cut.skp", &bytes[..bytes.len() / 2]);
+    let before = (root_instances(&d).len(), root_faces(&d));
+    let revision = ask(&d, json!({"type": "file"}))["revision"].clone();
+    let err = run(
+        &mut d,
+        json!({"type": "open", "path": cut, "discard": true}),
+    )
+    .unwrap_err();
+    assert_eq!(err.0, ErrorKind::File, "{}", err.1);
+    assert_eq!((root_instances(&d).len(), root_faces(&d)), before);
+    assert_eq!(ask(&d, json!({"type": "file"}))["revision"], revision);
+    d.scene().validate().unwrap();
+}

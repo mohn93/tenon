@@ -10,7 +10,7 @@ pub const USAGE: &str =
        app --headless [--socket PATH] [--api-root DIR]... [FILE]  no window, agent API on a Unix socket
        app --mcp [--api-root DIR]... [FILE]                MCP server on stdin/stdout with its own model
        app --mcp --live SOCKET                             MCP server driving the app listening on SOCKET
-FILE is a .skr model to open at start.
+FILE is a .skr model to open at start, or a SketchUp .skp file to open as a new model.
 --api-root DIR (repeatable) keeps every file the API reads or writes inside DIR.";
 
 #[derive(Debug, PartialEq)]
