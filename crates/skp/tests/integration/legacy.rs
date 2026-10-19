@@ -95,6 +95,14 @@ fn legacy_cupboards_match_the_original() {
         assert_eq!(stats.lost_entities, 0, "{version}: {:?}", stats.notes);
         assert!(!m.is_vff);
         assert_eq!(shape(&m.root), shape(&original.root), "{version}: root");
+        // Hidden faces are kept and flagged. The cupboard has none, so this only checks that
+        // the two agree; the corpus run covers models that have some (couch, truck,
+        // barstools).
+        assert_eq!(
+            totals(&m)[3],
+            totals(&original)[3],
+            "{version}: hidden faces"
+        );
         assert_eq!(shapes(&m), shapes(&original), "{version}: definitions");
 
         let differences = geometry_differences(&m, &original, 1e-9);
@@ -321,6 +329,109 @@ fn element_caps_apply_to_legacy_files() {
         "a small cap is refused"
     );
     legacy::read_model(&src, &c, &options(100_000)).expect("a large cap reads");
+}
+
+/// `bytes` read, and checked to be the same model as `want` (from the unaltered file).
+fn assert_reads_as(bytes: Vec<u8>, want: &(Model, SceneIndex, ReadStats), what: &str) {
+    let got = read_legacy(bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(got.2.lost_entities, 0, "{what}: {:?}", got.2.notes);
+    assert_eq!(totals(&got.0), totals(&want.0), "{what}");
+    assert_eq!(shapes(&got.0), shapes(&want.0), "{what}");
+    let differences = geometry_differences(&got.0, &want.0, 0.0);
+    assert!(differences.is_empty(), "{what}: {differences:#?}");
+    assert_eq!(
+        material_use(&got.0, &got.1),
+        material_use(&want.0, &want.1),
+        "{what}"
+    );
+}
+
+/// The 2017 cupboard's two definition thumbnails the walk reads: an image header (`u32`
+/// subtype 4, PNG; `u32` length), then the image. The first is followed by the next
+/// definition, the second (the last definition's) by the root count, 2.
+const THUMBNAILS_2017: [usize; 2] = [0x22cad, 0x487a3];
+
+/// A JPEG thumbnail may or may not be followed by its quality word, and either way the
+/// file reads the same: the word is skipped only where what follows it says so. The second
+/// thumbnail is the case an ungated skip gets wrong: without the word, the root count (2)
+/// looks like a quality.
+#[test]
+fn the_jpeg_quality_word_is_optional() {
+    let bytes = legacy_fixture(2017);
+    let want = read_legacy(bytes.clone()).expect("read");
+    let le = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    for at in THUMBNAILS_2017 {
+        assert_eq!(le(at), 4, "a PNG at {at:#x}");
+        assert_eq!(&bytes[at + 8..at + 12], b"\x89PNG");
+    }
+    assert_eq!(
+        le(THUMBNAILS_2017[1] + 8 + le(THUMBNAILS_2017[1] + 4)),
+        2,
+        "root count"
+    );
+
+    // Marked JPEG, no quality word.
+    let mut jpeg = bytes.clone();
+    for at in THUMBNAILS_2017 {
+        jpeg[at..at + 4].copy_from_slice(&1u32.to_le_bytes());
+    }
+    assert_reads_as(
+        jpeg.clone(),
+        &want,
+        "JPEG thumbnails without a quality word",
+    );
+
+    // Marked JPEG, with the word after each image (inserted from the end so the offsets
+    // hold).
+    let mut quality = jpeg;
+    for at in THUMBNAILS_2017.into_iter().rev() {
+        let end = at + 8 + le(at + 4);
+        quality.splice(end..end, 70u32.to_le_bytes());
+    }
+    assert_reads_as(quality, &want, "JPEG thumbnails with a quality word");
+}
+
+/// The first 2020 filler at or after `from` that `count` follows: its offset.
+fn filler_before(bytes: &[u8], from: usize, count: &[u8]) -> usize {
+    const FILLER: [u8; 16] = [0, 0, 0, 0xff, 0xfe, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    from + bytes[from..]
+        .windows(16 + count.len())
+        .position(|w| w[..16] == FILLER && &w[16..] == count)
+        .expect("the 2020 filler")
+}
+
+/// A 2020 filler of another length than the 16 bytes measured is read by the fallback
+/// search, both before the definition count and before a definition's entity count.
+#[test]
+fn the_2020_fallback_reads_another_filler_length() {
+    let bytes = legacy_fixture(2020);
+    let want = read_legacy(bytes.clone()).expect("read");
+
+    // Four of the nine zeros after the empty string dropped before the definition count (6).
+    let mut short = bytes.clone();
+    let count_at = filler_before(&short, 0, &6u32.to_le_bytes());
+    short.drain(count_at + 7..count_at + 11);
+    assert_reads_as(short, &want, "a short filler before the definition count");
+
+    // And before the first definition's `u32 0, u32 count`.
+    let mut short = bytes.clone();
+    let at = filler_before(&short, count_at + 16, &[0, 0, 0, 0]);
+    short.drain(at + 7..at + 11);
+    assert_reads_as(short, &want, "a short filler before an entity count");
+}
+
+/// With a filler of another length, the fallback never finds a count of zero: a file whose
+/// definition count is 0 is refused rather than read from a later word.
+#[test]
+fn the_2020_fallback_refuses_a_zero_definition_count() {
+    let mut bytes = legacy_fixture(2020);
+    let at = filler_before(&bytes, 0, &6u32.to_le_bytes());
+    bytes[at + 16..at + 20].copy_from_slice(&0u32.to_le_bytes());
+    bytes.drain(at + 7..at + 11);
+    assert!(
+        read_legacy(bytes).is_err(),
+        "a zero count behind a short filler"
+    );
 }
 
 /// Where two readings of the same model differ beyond counts: each definition's (and the

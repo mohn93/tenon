@@ -242,6 +242,8 @@ pub struct ReadStats {
     /// Entity-list items abandoned after a malformed record. Non-zero means
     /// the model is incomplete but still usable.
     pub lost_entities: u64,
+    /// Hidden guide lines and points, which `read_model` leaves out.
+    pub hidden_guides: u64,
     /// Human-readable notes about anything that did not go cleanly.
     pub notes: Vec<String>,
 }
@@ -1104,7 +1106,7 @@ struct Archive<'a> {
     /// Definition slot -> info, in declaration order.
     defs: Vec<DefinitionInfo>,
     /// Definitions placed by a `CImage`.
-    image_defs: Vec<u32>,
+    image_defs: alloc::collections::BTreeSet<u32>,
     /// Emitted per definition as it completes, so the resident high-water
     /// mark is one definition and not the model.
     meshes: Vec<MeshBatch>,
@@ -1117,6 +1119,10 @@ struct Archive<'a> {
     def_stack: Vec<u32>,
     /// Guide lines and points, stack-like with the geometry arenas.
     guides: Vec<RawGuide>,
+    /// See `ReadStats::hidden_guides`.
+    hidden_guides: u64,
+    /// Where the last image read ended, when it was a JPEG.
+    jpeg_end: Option<u64>,
     /// What a completed definition is turned into.
     emit: Emit,
     /// `Emit::Topology` output: one per definition read, in file order.
@@ -1229,13 +1235,15 @@ impl<'a> Archive<'a> {
             dibs: Vec::new(),
             instances: Vec::new(),
             defs: Vec::new(),
-            image_defs: Vec::new(),
+            image_defs: alloc::collections::BTreeSet::new(),
             meshes: Vec::new(),
             edge_batches: Vec::new(),
             depth: 0,
             cur_loop: None,
             def_stack: Vec::new(),
             guides: Vec::new(),
+            hidden_guides: 0,
+            jpeg_end: None,
             emit: Emit::Batches,
             topo_defs: Vec::new(),
             topo_root: None,
@@ -1809,19 +1817,9 @@ impl<'a> Archive<'a> {
                 }
                 let at = self.c.at();
                 self.c.skip(len)?;
-                // A JPEG (subtype 1) is followed by a `u32` the length does
-                // not cover: its quality, 70 on every thumbnail SketchUp 2024
-                // writes into a 2017-2020 file. PNG images (subtype 4) have
-                // none. Left unread, it is taken for the next object - a
-                // back-reference and a null - so a definition list counted
-                // them as definitions and read the root count four bytes
-                // early, which lost root entities (truck, bikes) or failed
-                // the file (barstools). Read only when it is a plausible
-                // quality; the texture block's own 16-or-20-byte check
-                // (`texture_block`) still covers a JPEG written without one.
-                if subtype == 1 && self.c.left() >= 4 && self.c.u32_at(self.c.at())? <= 100 {
-                    self.c.skip(4)?;
-                }
+                // Where a JPEG (subtype 1) ends, for the thumbnail's
+                // quality word; see `skip_thumbnail_quality`.
+                self.jpeg_end = (subtype == 1).then(|| self.c.at());
                 let i = self.dibs.len() as u32;
                 self.dibs.push(DibRec { offset: at, len });
                 Ok(Slot::obj(Cls::Dib, i))
@@ -1836,7 +1834,11 @@ impl<'a> Archive<'a> {
             Cls::Thumbnail => {
                 self.preamble()?;
                 self.read_object(Some(Cls::Camera))?;
+                self.jpeg_end = None;
                 self.read_object(Some(Cls::Dib))?;
+                if self.jpeg_end.is_some_and(|e| e == self.c.at()) {
+                    self.skip_thumbnail_quality()?;
+                }
                 Ok(Slot::obj(Cls::Thumbnail, NONE_IDX))
             }
             Cls::Relationship => {
@@ -1908,7 +1910,9 @@ impl<'a> Archive<'a> {
                 // The start and end parameters of a bounded guide line. Our
                 // guides are infinite lines, so they are not kept.
                 let _params = self.c.f64s::<2>()?;
-                if !hidden {
+                if hidden {
+                    self.hidden_guides += 1;
+                } else {
                     self.guides.push(RawGuide::Line { point, direction });
                 }
                 // The trailing block varies by writing *build*, not cleanly
@@ -1953,7 +1957,9 @@ impl<'a> Archive<'a> {
                 self.preamble()?;
                 let (_, _, _, hidden) = self.drawbase()?;
                 let position = self.c.f64s::<3>()?;
-                if !hidden {
+                if hidden {
+                    self.hidden_guides += 1;
+                } else {
                     self.guides.push(RawGuide::Point { position });
                 }
                 let _reserved = self.c.f64s::<3>()?;
@@ -2025,8 +2031,8 @@ impl<'a> Archive<'a> {
                 let mut xf = [0.0f64; 13];
                 xf[..12].copy_from_slice(&xf12);
                 xf[12] = 1.0;
-                if def != NONE_IDX && !self.image_defs.contains(&def) {
-                    self.image_defs.push(def);
+                if def != NONE_IDX {
+                    self.image_defs.insert(def);
                 }
                 let parent = self.def_stack.last().copied().unwrap_or(ROOT_DEFINITION);
                 let i = self.instances.len() as u32;
@@ -2089,6 +2095,51 @@ impl<'a> Archive<'a> {
                 let _ = self.c.f64s::<3>()?;
             }
             _ => return Err(Error::Malformed("unknown attribute value type")),
+        }
+        Ok(())
+    }
+
+    /// A definition's JPEG thumbnail, as SketchUp 2024 writes it into a
+    /// 2017-2020 file, is followed by a `u32` its length does not cover: the
+    /// JPEG quality, 70 on every such file in the corpus. PNG thumbnails
+    /// (subtype 4) have none, and nothing shows that a 2017-2020 SketchUp
+    /// writes one. Left unread, the word is taken for the next object - a
+    /// back-reference and a null - so a definition list counted them as
+    /// definitions and read the root count four bytes early, which lost root
+    /// entities (truck, bikes) or failed the file (barstools).
+    ///
+    /// Skipped only when it is a plausible quality and what a thumbnail ends
+    /// (a definition) can be followed by reads well after it and not without
+    /// it: another definition, the root count and a first root entity, or an
+    /// instance's transform and name (a definition written inline by the
+    /// instance that first places it). Otherwise the cursor stays: a JPEG
+    /// without the word reads as before. A texture's image is not handled
+    /// here; `texture_block` has its own check.
+    fn skip_thumbnail_quality(&mut self) -> Result<()> {
+        let at = self.c.at();
+        let Ok(q) = self.c.u32_at(at) else {
+            return Ok(());
+        };
+        if q > 100 {
+            return Ok(());
+        }
+        let skip = if self.definition_at(at + 4) {
+            true
+        } else if self.definition_at(at) {
+            false
+        } else if self.bytes_eq_at(at + 4 + 104, &[0xff, 0xfe, 0xff]) {
+            // 13 doubles, then the instance name's string record.
+            true
+        } else if self.bytes_eq_at(at + 104, &[0xff, 0xfe, 0xff]) {
+            false
+        } else {
+            let with = self.c.u32_at(at + 4).is_ok_and(|n| n <= 5_000_000)
+                && self.strict_tag_at(at + 8, false)?;
+            let without = self.strict_tag_at(at + 4, false)?;
+            with && !without
+        };
+        if skip {
+            self.c.skip(4)?;
         }
         Ok(())
     }
@@ -2577,7 +2628,11 @@ impl<'a> Archive<'a> {
         // enough.
         let mut found = None;
         if self.v20 {
-            if self.bytes_eq_at(self.c.at(), &V20_FILLER) {
+            // The filler, then the `u32` (0 on every file measured). Checking
+            // the word too keeps a shorter filler, whose zeros run into that
+            // word, from passing for this one.
+            let here = self.c.at();
+            if self.bytes_eq_at(here, &V20_FILLER) && self.bytes_eq_at(here + 16, &[0; 4]) {
                 self.c.skip(V20_FILLER.len() as u64)?;
             } else {
                 found = self.count_after_v20_filler(self.c.at(), 5_000_000, Follows::ListItem)?;
@@ -3706,11 +3761,11 @@ impl<'a> Archive<'a> {
                     self.lost += 1;
                     done += 1;
                     if !self.resync_definition(p)? {
-                        self.note(String::from(
-                            "could not resynchronise after the failed definition; \
-                             the remaining definitions and the root list are lost",
+                        // The rest of the definitions and the whole root list
+                        // are unread: an error, not an empty model.
+                        return Err(Error::Malformed(
+                            "a definition failed and the next one could not be found",
                         ));
-                        return Ok(());
                     }
                 }
             }
@@ -5200,7 +5255,10 @@ pub fn read_model_and_index(
     let (mut ar, base, how) = walk_file(src, &p, Emit::Topology, budget)?;
     let (index, mut stats) = ar.index_and_stats(container, base, how);
     stats.bytes_read += p.bytes;
-    let root = ar.topo_root.take().unwrap_or_default();
+    let root = ar
+        .topo_root
+        .take()
+        .ok_or(Error::Malformed("the root entity list was not read"))?;
     let definitions = core::mem::take(&mut ar.topo_defs);
     let mut flags = [0u64; 4];
     for g in core::iter::once(&root).chain(definitions.iter().map(|d| &d.geom)) {
@@ -5350,7 +5408,16 @@ impl<'a> Archive<'a> {
             active_style: active,
             counts: Counts {
                 definitions: self.defs.len() as u32,
-                instances: self.instances.len() as u32,
+                // Placements inside a definition that failed are not part of
+                // the model.
+                instances: {
+                    let read: alloc::collections::BTreeSet<u32> =
+                        self.defs.iter().map(|d| d.id).collect();
+                    self.instances
+                        .iter()
+                        .filter(|i| i.parent == ROOT_DEFINITION || read.contains(&i.parent))
+                        .count() as u32
+                },
                 triangles: 0,
                 edges: 0,
                 textures,
@@ -5370,6 +5437,7 @@ impl<'a> Archive<'a> {
             inner_loops: self.inner_loops,
             faces_short_of_exact: self.faces_short,
             lost_entities: self.lost,
+            hidden_guides: self.hidden_guides,
             notes: core::mem::take(&mut self.notes),
         };
         (index, stats)

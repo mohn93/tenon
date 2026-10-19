@@ -95,19 +95,27 @@ Upstream's tests are not copied: they read a private corpus.
     path for now). Legacy `CConstructionLine` (point, direction; the start
     and end parameters are dropped, the line is infinite) and
     `CConstructionPoint` records, which were read and discarded, are kept
-    unless hidden.
-17. `CDib`: a JPEG image (subtype 1) is followed by a `u32` its length does
-    not cover, its quality (70 on every thumbnail SketchUp 2024 writes into a
-    2017-2020 file); it is read when it is at most 100. Upstream took it for
-    a back-reference and a null, so a definition list counted them as
+    unless hidden; hidden ones are counted in `ReadStats::hidden_guides`.
+    The field layout (point, direction, start and end parameters) was
+    cross-checked against openskp's reader (see item 18 for the source).
+17. A definition's JPEG thumbnail (`CDib` subtype 1) as SketchUp 2024 writes
+    it into a 2017-2020 file is followed by a `u32` its length does not
+    cover, the quality (70 on every such file). Upstream took it for a
+    back-reference and a null, so a definition list counted them as
     definitions and read the root count four bytes early: the truck and
     bikes lost root entities and barstools failed with "implausible root
-    entity count".
+    entity count". `skip_thumbnail_quality` skips it only after a thumbnail,
+    only when it is at most 100, and only when what follows reads with the
+    word skipped and not without it (a definition; a root count and a first
+    root entity; an instance's transform and name). A JPEG without the word
+    reads as before. Texture images keep `texture_block`'s own check.
 18. SketchUp 2020 container: the version map's `CLayerManager` schema is
     read (`layer_manager_schema`, 4 up to 2019, 7 in 2020). At 7 or more the
     walk skips the 16 bytes `00 00 00 ff fe ff 00` and nine zeros SketchUp
     2020 writes before the definition count and before each definition's
-    entity count. Where they are not exactly there it falls back to
+    entity count (the latter only when the undecoded `u32` after it is 0, so
+    that a shorter filler running into that word does not pass for it).
+    Where they are not exactly there it falls back to
     openskp's `findCountAfterV20Filler` (https://github.com/iamahsanmehmood/openskp,
     commit `13ae161fa0108647a04ad5730776120bb6fe8c83`, MIT, copyright (c)
     2024-2026 Ahsan Mehmood; ported, not copied), for the definition count,
@@ -126,3 +134,9 @@ Upstream's tests are not copied: they read a private corpus.
     (`RESYNC_BUDGET`; it was 64 MiB per call); the burn-band arithmetic
     (`translate_ref`, `register_burn`, the edge-use parent check) is checked
     and fails with `Malformed`; loop ranges saturate.
+22. A definition that fails and after which no next definition is found is
+    now an error (`Malformed`), for `read` too. Upstream returned the model
+    read so far, with the rest of the definitions and the whole root list
+    unread, which `read_model` would have given as an empty root.
+23. `SceneIndex::counts.instances` leaves out placements inside a definition
+    that failed. `image_defs` is a set.
