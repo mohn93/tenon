@@ -9,6 +9,7 @@ mod document;
 pub mod export;
 pub mod file;
 mod import;
+mod polygon;
 mod query;
 mod rectangle;
 mod rotate;
@@ -31,6 +32,7 @@ pub use import::{
     MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
 };
 pub use kernel::{CurveKind, ImageFormat, MaterialId, Side, TexturePlacement};
+pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
     Bounds, ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo,
     GuideKind, InstanceInfo, MaterialInfo, OutlinerNode, OutlinerRow, OutlinerTable, Query,

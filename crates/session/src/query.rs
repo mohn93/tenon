@@ -125,7 +125,7 @@ pub struct CurveInfo {
     pub length: f64,
     /// Center, unit normal (pointing up: +z, or on a vertical plane +y, else +x), radius (a
     /// polygon's corner radius) and swept angle in degrees (360 for a circle or polygon);
-    /// absent for kind `curve`.
+    /// absent when the corners are off a circle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub center: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

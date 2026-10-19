@@ -455,7 +455,7 @@ impl Model {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stencil {
     segments: Vec<(DVec3, DVec3)>,
-    /// Each segment's curve and soft flag.
+    /// Each segment's (curve, soft, polygon) marks.
     marks: Vec<(Option<CurveId>, bool, bool)>,
     faces: Vec<StencilFace>,
 }

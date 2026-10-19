@@ -443,3 +443,39 @@ fn pulled_curves_have_soft_sides_that_groups_and_files_keep() {
     run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
     assert_eq!((soft(&d), curves(&d)), (10, 2));
 }
+
+#[test]
+fn groups_and_explode_keep_the_polygon_mark() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_polygon", "center": [0, 0, 0], "radius": 1.0, "sides": 5}),
+    )
+    .unwrap();
+    let kind = |d: &Document| {
+        let first = edges(d)[0]["id"].clone();
+        curve(d, &first)["kind"].clone()
+    };
+    assert_eq!(kind(&d), "polygon");
+
+    let all = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]})).unwrap();
+    let ids: Vec<Value> = all["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(all["faces"].as_array().unwrap())
+        .map(|e| e["id"].clone())
+        .collect();
+    run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = ask(&d, json!({"type": "selection"})).unwrap()["ids"][0].clone();
+    run(&mut d, json!({"type": "explode", "ids": [group]})).unwrap();
+    assert_eq!(edges(&d).len(), 5);
+    assert_eq!(kind(&d), "polygon");
+
+    let path = scratch("polygon-group.skr");
+    let path_text = path.to_str().unwrap();
+    run(&mut d, json!({"type": "save", "path": path_text})).unwrap();
+    let mut e = doc();
+    run(&mut e, json!({"type": "open", "path": path_text})).unwrap();
+    assert_eq!(kind(&e), "polygon");
+}

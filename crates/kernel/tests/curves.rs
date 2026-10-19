@@ -529,8 +529,8 @@ fn a_pulled_polygon_has_hard_sides() {
     assert_eq!(top.len(), 1);
     assert_eq!(top[0].kind(), CurveKind::Polygon);
     assert_eq!(top[0].segments, 6);
-    let base: Vec<_> = all.iter().map(|c| m.curve(*c).unwrap().kind()).collect();
-    assert_eq!(base, [CurveKind::Polygon; 2]);
+    let kinds: Vec<_> = all.iter().map(|c| m.curve(*c).unwrap().kind()).collect();
+    assert_eq!(kinds, [CurveKind::Polygon; 2]);
 
     let mut circle = Model::new();
     let c = circle.add_curve(&hexagon(), true, false).unwrap();

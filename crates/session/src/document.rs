@@ -13,6 +13,7 @@ use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{BatchError, Command, CommandError, ErrorKind, Origin, Outcome, SelectMode};
 use crate::import::ImportReport;
+use crate::polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 use crate::query::{
     ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind,
     Query, QueryResult, VertexInfo,
@@ -341,6 +342,7 @@ impl Document {
             Command::AddEdge { .. }
             | Command::AddRectangle { .. }
             | Command::AddCircle { .. }
+            | Command::AddPolygon { .. }
             | Command::AddArc { .. }
             | Command::AddGuideLine { .. }
             | Command::AddGuidePoint { .. }
@@ -385,6 +387,21 @@ impl Document {
                 normal,
                 segments,
             } => self.add_circle_changes(*center, *radius, *normal, *segments),
+            Command::AddPolygon {
+                center,
+                radius,
+                sides,
+                normal,
+                circumscribed,
+                direction,
+            } => self.add_polygon_changes(
+                *center,
+                *radius,
+                *sides,
+                *normal,
+                *circumscribed,
+                *direction,
+            ),
             Command::AddArc {
                 center,
                 start,
@@ -701,6 +718,29 @@ impl Document {
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
         self.edit_mesh(|m| m.add_curve(&points, true, false))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    fn add_polygon_changes(
+        &mut self,
+        center: [f64; 3],
+        radius: f64,
+        sides: Option<u32>,
+        normal: Option<[f64; 3]>,
+        circumscribed: bool,
+        direction: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        check_coordinates(&[center])?;
+        let points = polygon_points(
+            DVec3::from(center),
+            radius,
+            sides.unwrap_or(DEFAULT_POLYGON_SIDES),
+            normal.map(DVec3::from),
+            circumscribed,
+            direction.map(DVec3::from),
+        )?;
+        check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
+        self.edit_mesh(|m| m.add_curve(&points, true, true))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 

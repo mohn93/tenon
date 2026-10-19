@@ -185,6 +185,7 @@ fn describe_lists_methods_and_schemas() {
         "add_edge",
         "add_rectangle",
         "add_circle",
+        "add_polygon",
         "add_arc",
         "push_pull",
         "erase",

@@ -465,6 +465,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         Command::AddEdge { .. }
         | Command::AddRectangle { .. }
         | Command::AddCircle { .. }
+        | Command::AddPolygon { .. }
         | Command::AddArc { .. }
         | Command::AddGuideLine { .. }
         | Command::AddGuidePoint { .. }

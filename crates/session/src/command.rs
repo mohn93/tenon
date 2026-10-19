@@ -48,6 +48,26 @@ pub enum Command {
         #[serde(default)]
         segments: Option<u32>,
     },
+    /// Draw a regular polygon of `sides` sides (default 6, 3 to 360) around `center`, in the
+    /// plane with `normal` (default Z), as one undo step. Inscribed, `radius` reaches the
+    /// corners and the first corner lies along `direction`; with `circumscribed`, `radius`
+    /// reaches the middles of the sides and the middle of the first side lies along
+    /// `direction`. `direction` (default the plane's u axis, see `add_rectangle`) is projected
+    /// into the plane. Its edges form one curve marked as a polygon, so pulling it keeps the
+    /// sides hard.
+    AddPolygon {
+        #[schemars(with = "ModelPoint")]
+        center: [f64; 3],
+        radius: f64,
+        #[serde(default)]
+        sides: Option<u32>,
+        #[serde(default)]
+        normal: Option<[f64; 3]>,
+        #[serde(default)]
+        circumscribed: bool,
+        #[serde(default)]
+        direction: Option<[f64; 3]>,
+    },
     /// Draw an arc, as `segments` straight edges (default 12, 2 to 360) tagged as one curve,
     /// in one undo step, given in one of three ways: around `center` from `start`, turning
     /// `angle` degrees counter-clockwise around `normal` (default Z; negative angles turn
