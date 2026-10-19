@@ -52,14 +52,14 @@ pub type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// The paths for `os`, or None when `HOME` is missing or not absolute (an empty or relative
 /// one would put the files under the working folder).
-pub fn resolve(os: Os, env: Env, pid: u32) -> Option<Paths> {
-    resolve_as(os, env, pid, current_uid())
+pub fn resolve(os: Os, env: Env, temp: &Path, pid: u32) -> Option<Paths> {
+    resolve_as(os, env, temp, pid, current_uid())
 }
 
-fn resolve_as(os: Os, env: Env, pid: u32, uid: Option<u32>) -> Option<Paths> {
+fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Option<Paths> {
     let home = home(env)?;
     let fallback = home.join(FALLBACK_DIR);
-    let socket_dir = socket_dir_as(os, env, Some(&home), pid, uid);
+    let socket_dir = socket_dir_as(os, env, temp, Some(&home), pid, uid);
     Some(match os {
         Os::Linux => {
             let config = xdg(env, "XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
@@ -82,9 +82,17 @@ fn resolve_as(os: Os, env: Env, pid: u32, uid: Option<u32>) -> Option<Paths> {
 
 /// The default socket path for this process. Works without `HOME` (the socket then stays in
 /// the temp folder, and listening reports any error).
-pub fn default_socket(env: Env, pid: u32) -> PathBuf {
-    socket_dir_as(Os::current(), env, home(env).as_deref(), pid, current_uid())
-        .join(socket_name(pid))
+pub fn default_socket(env: Env, temp: &Path, pid: u32) -> PathBuf {
+    let home = home(env);
+    socket_dir_as(
+        Os::current(),
+        env,
+        temp,
+        home.as_deref(),
+        pid,
+        current_uid(),
+    )
+    .join(socket_name(pid))
 }
 
 fn socket_name(pid: u32) -> String {
@@ -104,7 +112,14 @@ fn xdg(env: Env, name: &str) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
-fn socket_dir_as(os: Os, env: Env, home: Option<&Path>, pid: u32, uid: Option<u32>) -> PathBuf {
+fn socket_dir_as(
+    os: Os,
+    env: Env,
+    temp: &Path,
+    home: Option<&Path>,
+    pid: u32,
+    uid: Option<u32>,
+) -> PathBuf {
     let name = socket_name(pid);
     if os == Os::Linux
         && let Some(dir) = xdg(env, "XDG_RUNTIME_DIR")
@@ -113,13 +128,10 @@ fn socket_dir_as(os: Os, env: Env, home: Option<&Path>, pid: u32, uid: Option<u3
     {
         return dir;
     }
-    let temp = env("TMPDIR")
-        .filter(|t| !t.is_empty())
-        .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-    choose_temp_or_fallback(&temp, home, &name)
+    choose_temp_or_fallback(temp, home, &name)
 }
 
-/// The temp folder unless it is the shared `/tmp` (Linux without a usable runtime folder) or
+/// The temp folder (`std::env::temp_dir()`: `$TMPDIR`, else `/tmp`) unless it is the shared `/tmp` (Linux without a usable runtime folder) or
 /// too deep for a socket path; then `<home>/.sketchup-alt`. Without a home the temp folder is
 /// kept and listening reports the error.
 fn choose_temp_or_fallback(temp: &Path, home: Option<&Path>, name: &str) -> PathBuf {
@@ -158,11 +170,12 @@ mod tests {
         move |k| map.get(k).cloned()
     }
 
+    /// A fresh 0700 folder under a short base, so a socket path in it fits the limit.
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("sketchup-alt-paths-{}-{name}", std::process::id()));
+        let dir = PathBuf::from(format!("/tmp/sa-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         dir
     }
 
@@ -172,23 +185,21 @@ mod tests {
 
     #[test]
     fn macos_paths_are_unchanged() {
+        let tmp = Path::new("/var/folders/ab/T");
         let e = env(&[
             ("HOME", "/Users/me"),
-            ("TMPDIR", "/var/folders/ab/T"),
             ("XDG_CONFIG_HOME", "/ignored"),
             ("XDG_RUNTIME_DIR", "/ignored"),
         ]);
-        let p = resolve_as(Os::MacOs, &e, 7, Some(0)).unwrap();
+        let p = resolve_as(Os::MacOs, &e, tmp, 7, Some(0)).unwrap();
         assert_eq!(p.prefs, Path::new("/Users/me/.sketchup-alt/prefs.json"));
         assert_eq!(p.recovery, Path::new("/Users/me/.sketchup-alt/recovery"));
-        assert_eq!(p.socket_dir, Path::new("/var/folders/ab/T"));
+        assert_eq!(p.socket_dir, tmp, "the per-user temp folder");
         assert_eq!(p.legacy_prefs, None);
-        let long = format!("/{}", "x".repeat(100));
-        let e = env(&[("HOME", "/Users/me"), ("TMPDIR", &long)]);
-        let p = resolve_as(Os::MacOs, &e, 7, Some(0)).unwrap();
+        let long = PathBuf::from(format!("/{}", "x".repeat(100)));
+        let p = resolve_as(Os::MacOs, &e, &long, 7, Some(0)).unwrap();
         assert_eq!(p.socket_dir, Path::new("/Users/me/.sketchup-alt"));
-        let e = env(&[("HOME", "/Users/me")]);
-        let p = resolve_as(Os::Other, &e, 7, Some(0)).unwrap();
+        let p = resolve_as(Os::Other, &e, Path::new("/tmp"), 7, Some(0)).unwrap();
         assert_eq!(
             p.socket_dir,
             Path::new("/Users/me/.sketchup-alt"),
@@ -199,7 +210,7 @@ mod tests {
     #[test]
     fn linux_paths_follow_xdg() {
         let e = env(&[("HOME", "/home/me")]);
-        let p = resolve_as(Os::Linux, &e, 7, None).unwrap();
+        let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, None).unwrap();
         assert_eq!(
             p.prefs,
             Path::new("/home/me/.config/sketchup-alt/prefs.json")
@@ -217,7 +228,7 @@ mod tests {
             ("XDG_CONFIG_HOME", "/cfg"),
             ("XDG_STATE_HOME", "/st"),
         ]);
-        let p = resolve_as(Os::Linux, &e, 7, None).unwrap();
+        let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, None).unwrap();
         assert_eq!(p.prefs, Path::new("/cfg/sketchup-alt/prefs.json"));
         assert_eq!(p.recovery, Path::new("/st/sketchup-alt/recovery"));
     }
@@ -225,7 +236,6 @@ mod tests {
     #[test]
     fn relative_or_empty_xdg_values_are_ignored() {
         let run = scratch("relative-run");
-        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).unwrap();
         for bad in ["", "cfg", "./cfg"] {
             let e = env(&[
                 ("HOME", "/home/me"),
@@ -233,7 +243,7 @@ mod tests {
                 ("XDG_STATE_HOME", bad),
                 ("XDG_RUNTIME_DIR", bad),
             ]);
-            let p = resolve_as(Os::Linux, &e, 7, Some(my_uid(&run))).unwrap();
+            let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(my_uid(&run))).unwrap();
             assert_eq!(
                 p.prefs,
                 Path::new("/home/me/.config/sketchup-alt/prefs.json")
@@ -246,9 +256,12 @@ mod tests {
         }
         for bad_home in ["", "home/me"] {
             let e = env(&[("HOME", bad_home)]);
-            assert_eq!(resolve_as(Os::Linux, &e, 7, None), None);
+            assert_eq!(resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, None), None);
         }
-        assert_eq!(resolve_as(Os::Linux, &env(&[]), 7, None), None);
+        assert_eq!(
+            resolve_as(Os::Linux, &env(&[]), Path::new("/tmp"), 7, None),
+            None
+        );
         let _ = std::fs::remove_dir_all(run);
     }
 
@@ -258,9 +271,13 @@ mod tests {
         let uid = my_uid(&run);
         let run_str = run.to_str().unwrap().to_string();
         let e = env(&[("HOME", "/home/me"), ("XDG_RUNTIME_DIR", &run_str)]);
-        let dir = |uid| resolve_as(Os::Linux, &e, 7, uid).unwrap().socket_dir;
+        let dir = |uid| {
+            resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, uid)
+                .unwrap()
+                .socket_dir
+        };
         let fallback = PathBuf::from("/home/me/.sketchup-alt");
-        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(run.join("sketchup-alt-7.sock").as_os_str().len() <= MAX_SOCKET_PATH);
         assert_eq!(dir(Some(uid)), run, "private and ours");
         assert_eq!(dir(Some(uid.wrapping_add(1))), fallback, "someone else's");
         assert_eq!(dir(None), fallback, "owner unknown");
@@ -282,7 +299,9 @@ mod tests {
         let link_str = link.to_str().unwrap().to_string();
         let e = env(&[("HOME", "/home/me"), ("XDG_RUNTIME_DIR", &link_str)]);
         assert_eq!(
-            resolve_as(Os::Linux, &e, 7, Some(uid)).unwrap().socket_dir,
+            resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(uid))
+                .unwrap()
+                .socket_dir,
             fallback
         );
         let _ = std::fs::remove_dir_all(target);
@@ -292,7 +311,9 @@ mod tests {
         let file_str = file.to_str().unwrap().to_string();
         let e = env(&[("HOME", "/home/me"), ("XDG_RUNTIME_DIR", &file_str)]);
         assert_eq!(
-            resolve_as(Os::Linux, &e, 7, Some(uid)).unwrap().socket_dir,
+            resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(uid))
+                .unwrap()
+                .socket_dir,
             fallback
         );
         let e = env(&[
@@ -300,7 +321,9 @@ mod tests {
             ("XDG_RUNTIME_DIR", "/nonexistent/run"),
         ]);
         assert_eq!(
-            resolve_as(Os::Linux, &e, 7, Some(uid)).unwrap().socket_dir,
+            resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(uid))
+                .unwrap()
+                .socket_dir,
             fallback
         );
         let deep = run.join("d".repeat(100));
@@ -308,7 +331,9 @@ mod tests {
         let deep_str = deep.to_str().unwrap().to_string();
         let e = env(&[("HOME", "/home/me"), ("XDG_RUNTIME_DIR", &deep_str)]);
         assert_eq!(
-            resolve_as(Os::Linux, &e, 7, Some(uid)).unwrap().socket_dir,
+            resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, Some(uid))
+                .unwrap()
+                .socket_dir,
             fallback
         );
         let _ = std::fs::remove_dir_all(run);
@@ -317,25 +342,19 @@ mod tests {
     #[test]
     fn runtime_dir_is_ignored_off_linux() {
         let run = scratch("runtime-macos");
-        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).unwrap();
         let run_str = run.to_str().unwrap().to_string();
         let e = env(&[("HOME", "/Users/me"), ("XDG_RUNTIME_DIR", &run_str)]);
-        let p = resolve_as(Os::MacOs, &e, 7, Some(my_uid(&run))).unwrap();
+        let p = resolve_as(Os::MacOs, &e, Path::new("/var/t"), 7, Some(my_uid(&run))).unwrap();
         assert_ne!(p.socket_dir, run);
         let _ = std::fs::remove_dir_all(run);
     }
 
     #[test]
     fn default_socket_without_home_stays_in_temp() {
-        let e = env(&[("TMPDIR", "/var/t")]);
-        assert_eq!(
-            socket_dir_as(Os::MacOs, &e, None, 7, None),
-            Path::new("/var/t")
-        );
-        assert_eq!(
-            socket_dir_as(Os::Linux, &env(&[]), None, 7, None),
-            Path::new("/tmp")
-        );
+        let e = env(&[]);
+        let at = |os, temp: &str| socket_dir_as(os, &e, Path::new(temp), None, 7, None);
+        assert_eq!(at(Os::MacOs, "/var/t"), Path::new("/var/t"));
+        assert_eq!(at(Os::Linux, "/tmp"), Path::new("/tmp"));
     }
 
     #[cfg(target_os = "linux")]

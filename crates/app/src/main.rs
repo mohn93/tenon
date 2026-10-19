@@ -104,6 +104,7 @@ fn main() {
             let found = paths::resolve(
                 paths::Os::current(),
                 &|k| std::env::var_os(k),
+                &std::env::temp_dir(),
                 std::process::id(),
             );
             if found.is_none() {

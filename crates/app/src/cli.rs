@@ -50,7 +50,11 @@ pub const FALLBACK_DIR: &str = ".sketchup-alt";
 /// Default socket path: per-process, in the platform's private folder (see `paths`). Never in
 /// a shared directory such as /tmp.
 pub fn default_socket() -> PathBuf {
-    paths::default_socket(&|k| std::env::var_os(k), std::process::id())
+    paths::default_socket(
+        &|k| std::env::var_os(k),
+        &std::env::temp_dir(),
+        std::process::id(),
+    )
 }
 
 /// Returns the private directory when `socket` lives in the `~/.sketchup-alt` fallback.

@@ -21,9 +21,9 @@ stops the app with exit code 1 and a message on stderr.
 The default socket is `sketchup-alt-<pid>.sock`. On macOS it is in the temp directory, or in
 `~/.sketchup-alt/` (created with mode 0700) when the temp directory path is too long for a Unix
 socket or is the shared `/tmp`. On Linux it is in `$XDG_RUNTIME_DIR` when that is an absolute path
-to a folder you own that others cannot write to, else in `~/.sketchup-alt/` as on macOS. The
-socket is readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
-socket file on a normal quit. The default name includes the process id, so a socket left behind
+to a folder you own that others cannot write to, else in `$TMPDIR` when that is set to a short
+folder other than `/tmp`, else in `~/.sketchup-alt/`. The socket is readable only by the current user. Try it by hand
+with `nc -U PATH`. The window removes the socket file on a normal quit. The default name includes the process id, so a socket left behind
 by a killed app is never reused; agents that start the app should pass `--socket PATH` (a fixed
 path is replaced on the next start).
 

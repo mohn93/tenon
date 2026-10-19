@@ -64,10 +64,10 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked --no-fail-fast
 
       # Renders tests write (golden diffs, debug images) under target/tmp; kept when tests fail.
       - name: Upload test images

@@ -13,7 +13,7 @@ docker build -f "$root/scripts/linux.Dockerfile" \
     ${rust_version:+--build-arg "RUST_VERSION=$rust_version"} -t "$image" "$root/scripts"
 
 docker run --rm \
-    -v "$root:/work" \
+    -v "$root:/work:ro" \
     -v "$volume:/target" \
     -e CARGO_TARGET_DIR=/target \
     -e CARGO_TERM_COLOR=always \
