@@ -24,6 +24,8 @@ const GRIP_REACH: f64 = 10.0;
 const GRIP_SIZE: f64 = 0.012;
 /// Factors smaller than this in size count as zero.
 const MIN_FACTOR: f64 = 1e-4;
+/// The largest factor in size (as the `scale` command allows).
+const MAX_FACTOR: f64 = 1e4;
 
 /// A grip, as the side of the box it sits on along each model axis (-1, 0 or 1).
 type Sign = [i8; 3];
@@ -146,6 +148,11 @@ impl Stretch {
         self.bounds.at(self.grip)
     }
 
+    /// From the opposite grip to the grip: the size a typed length replaces.
+    fn span(&self) -> DVec3 {
+        self.grip_point() - self.bounds.at(opposite(self.grip))
+    }
+
     /// The point that stays put: the box center, or the grip opposite the one dragged.
     fn fixed(&self, about_center: bool) -> DVec3 {
         if about_center {
@@ -204,7 +211,8 @@ impl Stretch {
 }
 
 /// The point on the line through `origin` along `dir` nearest the cursor ray (the inferred
-/// point dropped onto the line when the ray runs along it).
+/// point dropped onto the line when the ray runs along it, or when the nearest point of the
+/// ray's line lies behind where the ray starts).
 fn nearest_on_line(origin: DVec3, dir: DVec3, hit: &Inference, ctx: &ToolContext) -> DVec3 {
     let u = dir.normalize();
     let ray = ctx.camera.ray(ctx.cursor);
@@ -215,8 +223,11 @@ fn nearest_on_line(origin: DVec3, dir: DVec3, hit: &Inference, ctx: &ToolContext
         return origin + u * (hit.point - origin).dot(u);
     }
     let w = origin - ray.origin;
-    let s = (b * r.dot(w) - u.dot(w)) / denom;
-    origin + u * s
+    let (d, e) = (u.dot(w), r.dot(w));
+    if (e - b * d) / denom <= 0.0 {
+        return origin + u * (hit.point - origin).dot(u);
+    }
+    origin + u * ((b * e - d) / denom)
 }
 
 /// The last scale made, which a typed value replaces.
@@ -225,8 +236,11 @@ struct Last {
     ids: Vec<EntityId>,
     origin: DVec3,
     moving: [bool; 3],
-    /// From the fixed point to the grip, for typed lengths.
-    reach: DVec3,
+    uniform: bool,
+    /// From the opposite grip to the grip, for typed lengths.
+    span: DVec3,
+    /// The box's size along each axis, for typed lengths.
+    size: DVec3,
     factors: [f64; 3],
 }
 
@@ -246,12 +260,16 @@ pub struct ScaleTool {
 }
 
 /// Factors from typed `values` for the `moving` axes: one value for all of them, or one each
-/// in x, y, z order. A length is divided by the distance from the fixed point to the grip
-/// (`reach`, along the axis for one value each) and takes the sign of the `current` factor.
+/// in x, y, z order. A length is a new size, whatever the fixed point: one value scaling
+/// `uniform`ly is the size along the grip (divided by the length of `span`, from the opposite
+/// grip to the grip: the diagonal for a corner grip); otherwise each is the size along its
+/// axis (divided by the box's `size` there). It takes the sign of the `current` factor.
 fn typed_factors(
     values: &[ScaleValue],
     moving: [bool; 3],
-    reach: DVec3,
+    uniform: bool,
+    span: DVec3,
+    size: DVec3,
     current: [f64; 3],
 ) -> Result<[f64; 3], String> {
     let axes: Vec<usize> = (0..3).filter(|&i| moving[i]).collect();
@@ -262,7 +280,8 @@ fn typed_factors(
             for &i in &axes {
                 factors[i] = match *one {
                     ScaleValue::Factor(f) => f,
-                    ScaleValue::Length(l) => signed(i, l / reach.length()),
+                    ScaleValue::Length(l) if uniform => signed(i, l / span.length()),
+                    ScaleValue::Length(l) => signed(i, l / size[i]),
                 };
             }
         }
@@ -270,7 +289,7 @@ fn typed_factors(
             for (&i, v) in axes.iter().zip(values) {
                 factors[i] = match *v {
                     ScaleValue::Factor(f) => f,
-                    ScaleValue::Length(l) => signed(i, l / reach[i].abs()),
+                    ScaleValue::Length(l) => signed(i, l / size[i]),
                 };
             }
         }
@@ -284,6 +303,11 @@ fn typed_factors(
 fn refusal(factors: [f64; 3], moving: [bool; 3]) -> Option<&'static str> {
     if (0..3).any(|i| moving[i] && (factors[i].is_nan() || factors[i].abs() < MIN_FACTOR)) {
         Some("Scale must not be zero")
+    } else if factors
+        .iter()
+        .any(|f| !f.is_finite() || f.abs() > MAX_FACTOR)
+    {
+        Some("Scale must be at most 10000 in size")
     } else if factors == [1.0; 3] {
         Some("A scale of 1 changes nothing")
     } else {
@@ -322,6 +346,7 @@ impl ScaleTool {
     fn finish(&mut self, factors: [f64; 3], out: &mut ToolOutput) {
         let Some(s) = &self.stretch else { return };
         let moving = s.moving(self.shift);
+        let uniform = s.uniform(self.shift);
         if let Some(why) = refusal(factors, moving) {
             out.message = Some(why.into());
             return;
@@ -334,7 +359,9 @@ impl ScaleTool {
             factors,
         });
         self.last = Some(Last {
-            reach: s.grip_point() - origin,
+            span: s.span(),
+            size: s.bounds.half * 2.0,
+            uniform,
             ids: s.ids,
             origin,
             moving,
@@ -348,7 +375,14 @@ impl ScaleTool {
             out.message = Some("Click a grip first".into());
             return;
         };
-        let factors = match typed_factors(values, last.moving, last.reach, last.factors) {
+        let factors = match typed_factors(
+            values,
+            last.moving,
+            last.uniform,
+            last.span,
+            last.size,
+            last.factors,
+        ) {
             Ok(f) => f,
             Err(why) => {
                 out.message = Some(why);
@@ -537,10 +571,17 @@ impl Tool for ScaleTool {
                 None => out.message = Some(format!("Not a scale factor or length: {text}")),
                 Some(values) => {
                     let typed = self.stretch.as_ref().map(|s| {
-                        let fixed = s.fixed(self.about_center);
                         let current = s.factors(self.about_center, self.shift);
                         let moving = s.moving(self.shift);
-                        typed_factors(&values, moving, s.grip_point() - fixed, current)
+                        let uniform = s.uniform(self.shift);
+                        typed_factors(
+                            &values,
+                            moving,
+                            uniform,
+                            s.span(),
+                            s.bounds.half * 2.0,
+                            current,
+                        )
                     });
                     match typed {
                         Some(Ok(factors)) => self.finish(factors, &mut out),
@@ -864,6 +905,73 @@ mod tests {
         let (_, factors) = scale_of(&r.type_("4m"));
         assert!(close(factors, v(-2.0, 1.0, 1.0)), "{factors}");
         assert!(r.type_("nope").message.is_some());
+    }
+
+    #[test]
+    fn a_typed_length_is_the_new_size_along_the_grip() {
+        // A face grip: 4 m wide, whether the opposite face or the center stays put.
+        for about_center in [false, true] {
+            let mut r = Rig::cube();
+            if about_center {
+                r.send(ToolEvent::ToggleCopy);
+            }
+            r.click(v(2.0, 1.0, 1.0));
+            let (origin, factors) = scale_of(&r.type_("4m"));
+            let fixed = if about_center { 1.0 } else { 0.0 };
+            assert!(close(origin, v(fixed, 1.0, 1.0)), "{origin}");
+            assert!(
+                close(factors, v(2.0, 1.0, 1.0)),
+                "{about_center}: {factors}"
+            );
+        }
+        // A corner grip: the new diagonal, here twice the old one.
+        let mut r = Rig::cube();
+        r.send(ToolEvent::ToggleCopy);
+        r.click(v(2.0, 2.0, 2.0));
+        let diagonal = 2.0 * 2.0 * 3f64.sqrt();
+        let (_, factors) = scale_of(&r.type_(&format!("{diagonal}m")));
+        assert!(close(factors, DVec3::splat(2.0)), "{factors}");
+        // A retyped length after a scale about the center is a size too.
+        let (_, factors) = {
+            let out = r.type_("4m");
+            match &out.commands[..] {
+                [Command::Undo { .. }, Command::Scale { factors, .. }] => {
+                    ((), DVec3::from(*factors))
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        let f = 4.0 / (2.0 * 3f64.sqrt());
+        assert!(close(factors, DVec3::splat(f)), "{factors}");
+    }
+
+    #[test]
+    fn shift_takes_one_length_per_axis_on_a_face_grip() {
+        let mut r = Rig::cube();
+        r.shift = true;
+        r.click(v(2.0, 1.0, 1.0));
+        let (_, factors) = scale_of(&r.type_("1m,1m,1m"));
+        assert!(close(factors, DVec3::splat(0.5)), "{factors}");
+    }
+
+    #[test]
+    fn factors_beyond_the_limits_are_refused() {
+        let mut r = Rig::cube();
+        r.click(v(2.0, 2.0, 2.0));
+        let out = r.type_("20000");
+        assert!(out.commands.is_empty());
+        assert_eq!(
+            out.message.as_deref(),
+            Some("Scale must be at most 10000 in size")
+        );
+        assert!(
+            matches!(r.tool.phase(), Phase::Active { .. }),
+            "still scaling"
+        );
+        let out = r.type_("0.00001");
+        assert_eq!(out.message.as_deref(), Some("Scale must not be zero"));
+        let (_, factors) = scale_of(&r.type_("10000"));
+        assert!(close(factors, DVec3::splat(1e4)), "{factors}");
     }
 
     #[test]

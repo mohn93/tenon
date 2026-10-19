@@ -2900,6 +2900,44 @@ mod tests {
     }
 
     #[test]
+    fn a_retyped_scale_redoes_only_its_own_step() {
+        let mut e = editor();
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        assert!(e.select_all());
+        e.select_tool(ToolKind::Scale);
+        // The square's corners at x = 4 (after a scale by 2).
+        let at_four = |e: &Editor| {
+            e.doc()
+                .model()
+                .vertices()
+                .filter(|(_, v)| (v.pos.x - 4.0).abs() < 1e-9)
+                .count()
+        };
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        type_text(&mut e, "2");
+        assert_eq!(at_four(&e), 2);
+        // Another command after the scale: a typed value no longer undoes anything.
+        e.execute(Command::AddEdge {
+            start: [6.0, 0.0, 0.0],
+            end: [6.0, 1.0, 0.0],
+        })
+        .unwrap();
+        let before = stats(&e);
+        type_text(&mut e, "3");
+        assert_eq!(stats(&e), before, "the edge stays");
+        assert_eq!(at_four(&e), 2, "the scale stays");
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("Click a grip first")
+        );
+    }
+
+    #[test]
     fn a_refused_retype_keeps_the_double_click_distance() {
         let mut e = editor();
         assert!(e.add_material());

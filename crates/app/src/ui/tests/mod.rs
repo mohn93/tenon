@@ -336,8 +336,6 @@ pub(super) fn click_at(h: &mut H, pos: Pos2, modifiers: egui::Modifiers) -> Vec<
     h.state_mut().take()
 }
 
-/// Clicks the `k`th field named `label`, types `text`, presses `end` and runs. Returns the
-/// actions.
 /// Whether `node` is the rail's button for a tool named `label`, which a field may share its
 /// name with (the Scale tool and the texture Scale fields).
 fn is_tool_button(node: &egui_kittest::Node<'_>, label: &str) -> bool {
@@ -359,6 +357,8 @@ pub(super) fn has_field(h: &H, label: &str) -> bool {
         .any(|n| !is_tool_button(&n, label))
 }
 
+/// Clicks the `k`th field named `label`, types `text`, presses `end` and runs. Returns the
+/// actions.
 pub(super) fn type_into(
     h: &mut H,
     label: &str,

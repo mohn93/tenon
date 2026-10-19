@@ -557,7 +557,7 @@ impl StencilFace {
         let ring = |r: &Vec<DVec3>| r.iter().map(|p| t.transform_point3(*p)).collect();
         StencilFace {
             outer: ring(&self.outer),
-            normal: t.transform_vector3(self.normal).normalize(),
+            normal: (t.matrix3.inverse().transpose() * self.normal).normalize(),
             paint: self.paint,
             texture: self.texture,
             openings: self.openings.iter().map(ring).collect(),

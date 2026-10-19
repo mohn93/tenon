@@ -247,3 +247,69 @@ fn an_instance_squeezed_too_flat_is_refused() {
     );
     assert_eq!(ask(&d, json!({"type": "entity", "id": group})), before);
 }
+
+/// Draws the closed loop through `corners` with edges.
+fn loop_of(d: &mut Document, corners: &[[f64; 3]]) {
+    for (i, a) in corners.iter().enumerate() {
+        let b = corners[(i + 1) % corners.len()];
+        run(d, json!({"type": "add_edge", "start": a, "end": b})).unwrap();
+    }
+}
+
+fn face_ids(d: &Document) -> Vec<Value> {
+    let all = ask(d, json!({"type": "entities", "kinds": ["face"]}));
+    all["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].clone())
+        .collect()
+}
+
+#[test]
+fn exploding_a_stretched_group_onto_its_own_sides_keeps_the_face() {
+    // A slanted rectangle in a group, stretched along x: its face tilts differently than a
+    // rotation would turn it. With its sides already drawn in the root, exploding must still
+    // close the face on the stretched plane.
+    let mut d = doc();
+    loop_of(
+        &mut d,
+        &[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+        ],
+    );
+    let all = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]}));
+    let ids: Vec<Value> = all["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(all["faces"].as_array().unwrap())
+        .map(|e| e["id"].clone())
+        .collect();
+    assert_eq!(face_ids(&d).len(), 1);
+    let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = created(&out, 'i')[0].clone();
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    )
+    .unwrap();
+    loop_of(
+        &mut d,
+        &[
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 1.0],
+            [2.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+        ],
+    );
+    let drawn = face_ids(&d);
+    assert_eq!(drawn.len(), 1, "the drawn loop makes a face");
+    run(&mut d, json!({"type": "erase", "ids": drawn})).unwrap();
+    assert!(face_ids(&d).is_empty());
+    run(&mut d, json!({"type": "explode", "ids": [group]})).unwrap();
+    assert_eq!(face_ids(&d).len(), 1);
+}
