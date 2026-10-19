@@ -996,16 +996,18 @@ and save it again"). What is carried:
   1000 m, times `scale`). A name the model already has gets a number (`Brick 2`); existing
   materials are never changed. A texture that cannot be used leaves the material its color and
   adds a warning. At most 1,024 materials are added (the first, in the file's order, of those
-  the faces and instances made use); faces and instances with the others are left unpainted,
-  with a warning.
+  the faces and instances made use; of a file using more than 4,096, only the first 4,096 in
+  order of use are considered); faces and instances with the others are left unpainted, with a
+  warning.
 
 Not carried, each counted in `warnings`: tags (everything is imported untagged), scenes,
 hidden states (hidden faces, groups and components are imported visible), images (skipped),
 instances of a definition the file lacks or with a flat or broken transform (skipped),
 faces that cannot be made (skipped: an outline that cannot be read, fewer than three distinct
 corners, a corner repeated, no area, or a duplicate), holes and edges that cannot be read,
-faces made from their outer loop, and material references whose ids are too large to match. Section planes,
-dimensions, text, guides, texture positions and the file's camera and styles are not read.
+faces made from their outer loop, and material references that match no material of the file
+(or one whose id is too large to match). Section planes, dimensions, text, guides, texture
+positions and the file's camera and styles are not read.
 
 The outcome's `import` reports what was made:
 

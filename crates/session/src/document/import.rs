@@ -154,7 +154,7 @@ impl Document {
         let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
         let mut bytes = Some(bytes);
         let mut only: Option<HashSet<u32>> = None;
-        let mut dropped = 0;
+        let (mut dropped, mut capped) = (0, 0);
         // At most twice: when the faces made keep more than `MAX_IMPORT_MATERIALS` materials,
         // everything is taken back and the file read again keeping only the first of them.
         let (tree, mut notes, instance, built, change, kept) = loop {
@@ -198,6 +198,7 @@ impl Document {
                     self.scene.apply(&change.inverse());
                     remove_materials(self, &notes.added);
                     dropped = kept.len() - MAX_IMPORT_MATERIALS;
+                    capped = notes.capped_materials;
                     only = Some(kept.into_iter().take(MAX_IMPORT_MATERIALS).collect());
                     continue;
                 }
@@ -211,6 +212,7 @@ impl Document {
             break (tree, notes, instance, built, change, kept);
         };
         notes.dropped_materials = dropped;
+        notes.capped_materials += capped;
         let mesh = self.active();
         let textures = kept
             .iter()

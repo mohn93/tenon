@@ -60,9 +60,12 @@ pub(crate) struct SkpNotes {
     /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
     /// caller, which counts the materials built faces keep).
     pub dropped_materials: usize,
-    /// Material references the file's numbering cannot match: a material whose id does not
-    /// fit in 32 bits, or an instance naming one.
+    /// Material references of the placed geometry that name no material of the file's table
+    /// (or one whose id is too large for its 32-bit numbering).
     pub unmatched_materials: usize,
+    /// Used materials past the first pass's bound (`4 * MAX_IMPORT_MATERIALS`, in order of
+    /// first use), imported as no material.
+    pub capped_materials: usize,
     /// The file's material id of each material added, in the file's order.
     pub material_ids: Vec<(u32, MaterialId)>,
     /// Textures made.
@@ -148,15 +151,14 @@ impl SkpNotes {
             "soft, smooth or hidden edges not between two faces were imported as ordinary edges",
         );
         say(
-            self.dropped_materials,
+            self.dropped_materials + self.capped_materials,
             &format!("material past the {MAX_IMPORT_MATERIALS} an import may add was left off"),
             &format!("materials past the {MAX_IMPORT_MATERIALS} an import may add were left off"),
         );
         say(
             self.unmatched_materials,
-            "material reference could not be matched (its id is too large) and was left off",
-            "material references could not be matched (their ids are too large) and were left \
-             off",
+            "material reference could not be matched to a material and was left off",
+            "material references could not be matched to a material and were left off",
         );
         out.extend(self.texture_warnings.iter().cloned());
         out
@@ -195,11 +197,6 @@ pub(crate) fn read_skp(
             .filter(|l| l.name != DEFAULT_TAG)
             .count(),
         scenes: index.scenes.len(),
-        unmatched_materials: index
-            .materials
-            .iter()
-            .filter(|m| m.id == NO_MATERIAL)
-            .count(),
         ..SkpNotes::default()
     };
 
@@ -244,20 +241,44 @@ pub(crate) fn read_skp(
         }
     }
 
-    let mut used: HashSet<u32> = HashSet::new();
+    // The table's materials the reached geometry uses, in order of first use. A reference
+    // to an id the table lacks (or too large for its 32-bit numbering) is unmatched.
+    let table: HashSet<u32> = index
+        .materials
+        .iter()
+        .map(|m| m.id)
+        .filter(|id| *id != NO_MATERIAL)
+        .collect();
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut used: Vec<u32> = Vec::new();
     for g in geometries() {
-        used.extend(g.face_material.iter().chain(&g.face_back_material));
-        used.extend(g.instances.iter().filter_map(instance_material));
-        notes.unmatched_materials += g
+        let faces = g.face_material.iter().chain(&g.face_back_material).copied();
+        let instances = g
             .instances
             .iter()
-            .filter(|i| i.has_material && i.material >= u64::from(NO_MATERIAL))
-            .count();
+            .filter(|i| i.has_material)
+            .map(|i| instance_material(i).unwrap_or(NO_MATERIAL));
+        for (id, from_instance) in faces
+            .map(|f| (f, false))
+            .chain(instances.map(|i| (i, true)))
+        {
+            if table.contains(&id) {
+                if seen.insert(id) {
+                    used.push(id);
+                }
+            } else if id != NO_MATERIAL || from_instance {
+                notes.unmatched_materials += 1;
+            }
+        }
     }
-    used.remove(&NO_MATERIAL);
     if let Some(only) = only {
         used.retain(|m| only.contains(m));
     }
+    // The first pass keeps to a bound, so a file naming very many materials costs little.
+    let first_pass = 4 * MAX_IMPORT_MATERIALS;
+    notes.capped_materials = used.len().saturating_sub(first_pass);
+    used.truncate(first_pass);
+    let used: HashSet<u32> = used.into_iter().collect();
     let materials = add_materials(document, &src, &container, &index.materials, scale, used)?;
     notes.textures = materials.textures;
     notes.texture_warnings = materials.warnings;
@@ -366,6 +387,15 @@ fn check_world_size(
         }
         out.expect("eight corners")
     };
+    let too_large = || {
+        CommandError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "the model reaches beyond +/-{MAX_COORDINATE} m at scale {}",
+                unit / METERS_PER_INCH
+            ),
+        )
+    };
     let mut state = vec![State::Unseen; definitions.len()];
     let mut boxes: Vec<Option<Box3>> = vec![None; definitions.len()];
     // The box of a geometry whose placed definitions are all done.
@@ -409,6 +439,10 @@ fn check_world_size(
                 }
             } else {
                 boxes[d] = box_of(&definitions[d].geom, &boxes);
+                // Past f64's range: no use going on.
+                if boxes[d].is_some_and(|(lo, hi)| !(lo.is_finite() && hi.is_finite())) {
+                    return Err(too_large());
+                }
                 state[d] = State::Done;
                 stack.pop();
             }
@@ -418,21 +452,17 @@ fn check_world_size(
         && (!(lo.is_finite() && hi.is_finite())
             || lo.abs().max(hi.abs()).max_element() > MAX_COORDINATE)
     {
-        return Err(CommandError::new(
-            ErrorKind::InvalidInput,
-            format!(
-                "the model reaches beyond +/-{MAX_COORDINATE} m at scale {}",
-                unit / METERS_PER_INCH
-            ),
-        ));
+        return Err(too_large());
     }
     Ok(())
 }
 
-/// `b` grown to hold `more`.
+/// `b` grown to hold `more`; not finite (NaN) when either is not.
 fn grow(b: Option<Box3>, more: Box3) -> Box3 {
+    let finite = |b: &Box3| b.0.is_finite() && b.1.is_finite();
     match b {
         None => more,
+        Some(b) if !(finite(&b) && finite(&more)) => (DVec3::NAN, DVec3::NAN),
         Some((lo, hi)) => (lo.min(more.0), hi.max(more.1)),
     }
 }
@@ -630,6 +660,13 @@ fn add_materials(
     };
     let mut seen: HashSet<u32> = HashSet::new();
     let mut pixels = document.texture_pixels_besides(None);
+    // Names are made unique against this set, built once: "Brick", then "Brick 2", ...
+    let mut taken: HashSet<String> = document
+        .scene()
+        .materials()
+        .map(|(_, m)| m.name.clone())
+        .collect();
+    let mut next: HashMap<String, usize> = HashMap::new();
     for m in table {
         if !used.contains(&m.id) || !seen.insert(m.id) {
             continue;
@@ -638,7 +675,16 @@ fn add_materials(
             "" => "Material".to_string(),
             n => n.chars().take(MAX_NAME).collect(),
         };
-        let name = document.scene().free_material_name(&base);
+        let name = if taken.contains(&base) {
+            let n = next.entry(base.clone()).or_insert(2);
+            while taken.contains(&format!("{base} {n}")) {
+                *n += 1;
+            }
+            format!("{base} {n}")
+        } else {
+            base
+        };
+        taken.insert(name.clone());
         let opacity = if m.opacity.is_finite() {
             m.opacity.clamp(0.0, 1.0)
         } else {

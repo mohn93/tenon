@@ -431,7 +431,9 @@ fn mutated_files_give_errors_not_panics() {
         )
         .unwrap();
         let before = d.scene().clone();
-        match run(&mut d, json!({"type": "import", "path": path})) {
+        let result = run(&mut d, json!({"type": "import", "path": path}));
+        let _ = std::fs::remove_file(&path);
+        match result {
             Ok(_) => ok += 1,
             Err((kind, message)) => {
                 failed += 1;
@@ -628,7 +630,9 @@ fn import_timed(
     let mut d = doc();
     let start = std::time::Instant::now();
     let r = run(&mut d, json!({"type": "import", "path": path}));
-    (d, r, start.elapsed())
+    let took = start.elapsed();
+    let _ = std::fs::remove_file(&path);
+    (d, r, took)
 }
 
 #[test]
@@ -683,6 +687,19 @@ fn a_model_larger_than_the_world_is_refused() {
     let (_, r, _) = import_timed("growing.skp", &bytes);
     assert_eq!(r.unwrap_err().0, ErrorKind::InvalidInput);
 
+    // Two levels each turned 45 degrees and scaled about 1e200: the inner one's box is
+    // finite, the outer one's runs out of f64 (inf - inf, NaN) on the way.
+    let turn = [
+        1e200, -1e200, 0.0, 1e200, 1e200, 0.0, 0.0, 0.0, 1e200, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let defs = vec![vec![(1, turn, None)], vec![(2, turn, None)], vec![]];
+    let bytes = file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[]);
+    let (d, r, _) = import_timed("overflow.skp", &bytes);
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+    assert!(message.contains("beyond"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+
     // Three such levels fit, and `scale` counts.
     let mut defs: Vec<Vec<craft::Place>> = (0..3)
         .map(|i| vec![(i + 1, scaled(100.0, 0.0), None)])
@@ -728,9 +745,36 @@ fn materials_past_the_limit_are_left_off_with_a_warning() {
         "{warnings:?}"
     );
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.starts_with("2 material references could not be matched")),
+        warnings.contains(
+            &"1 material reference could not be matched to a material and was left off".into()
+        ),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_file_naming_very_many_materials_is_read_quickly() {
+    use craft::{file, scaled};
+    let n = 5000;
+    // Every material the same name, the hardest case for unique naming.
+    let materials: Vec<(u64, String)> = (0..n).map(|k| (1000 + k as u64, "Same".into())).collect();
+    let root: Vec<craft::Place> = (0..n)
+        .map(|k| (0, scaled(1.0, k as f64), Some(1000 + k as u64)))
+        .collect();
+    let bytes = file(&[vec![]], &root, &materials, &[]);
+    let (d, r, took) = import_timed("5000-materials.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    assert!(took.as_secs_f64() < 5.0, "took {took:?}");
+    assert_eq!(r["import"]["materials"], session::MAX_IMPORT_MATERIALS);
+    let names: Vec<Value> = materials_of(&d).iter().map(|m| m["name"].clone()).collect();
+    assert!(names.contains(&json!("Same")) && names.contains(&json!("Same 1024")));
+    let dropped = n - session::MAX_IMPORT_MATERIALS;
+    let warnings = warnings(&r["import"]);
+    assert!(
+        warnings.contains(&format!(
+            "{dropped} materials past the 1024 an import may add were left off"
+        )),
         "{warnings:?}"
     );
 }
