@@ -364,3 +364,65 @@ fn record_sizes_are_not_allocated_up_front() {
         assert!(largest < ALLOCATION_LIMIT, "{name}: allocated {largest}");
     }
 }
+
+/// A model.dat of one definition holding `faces` empty face records (6 bytes each, which
+/// deflate about a thousand to one).
+fn empty_faces_model(faces: usize) -> Vec<u8> {
+    use skp::tags as t;
+    let rec = |tag: u16, payload: &[u8]| {
+        let mut out = tag.to_le_bytes().to_vec();
+        out.extend((payload.len() as u32).to_le_bytes());
+        out.extend(payload);
+        out
+    };
+    let face = rec(t::FACE, &[]);
+    let mut component = rec(t::ENTITY_PID, &7u64.to_le_bytes());
+    component.extend(rec(t::COMPONENT_FACES, &face.repeat(faces)));
+    let definition = rec(t::COMPONENT_DEFINITION, &rec(t::COMPONENT, &component));
+    let components = rec(
+        t::SKETCH_UP_MODEL_COMPONENTS,
+        &rec(
+            t::DEFINITION_LIST,
+            &rec(t::DEFINITION_LIST_DEFS, &definition),
+        ),
+    );
+    rec(t::SKETCH_UP_MODEL, &components)
+}
+
+#[test]
+fn element_caps_stop_a_bomb_of_empty_faces() {
+    use skp::scene::{read_model, ReadOptions};
+    let bytes = rebuilt(
+        &fixture("desk.skp"),
+        |model| *model = empty_faces_model(200_000),
+        &[],
+    );
+    let src = MemorySource::new(bytes);
+    let c = Container::open(&src).expect("open");
+    // Uncapped, every face is read, into per-face tables larger than the record itself.
+    let uncapped = largest_allocation(|| {
+        let m = read_model(&src, &c, &ReadOptions::default()).expect("read");
+        assert_eq!(m.definitions[0].geom.faces(), 200_000);
+    });
+    assert!(uncapped > 4 * 1024 * 1024, "allocated {uncapped}");
+    // Capped, the read stops early, with little memory and time.
+    let capped = ReadOptions {
+        max_elements: Some(10_000),
+        ..ReadOptions::default()
+    };
+    let start = std::time::Instant::now();
+    let largest = largest_allocation(|| match read_model(&src, &c, &capped) {
+        Err(skp::Error::Malformed(why)) => assert_eq!(why, "too many elements"),
+        Err(e) => panic!("{e}"),
+        Ok(_) => panic!("read past the cap"),
+    });
+    // Nothing larger than the 1.2 MB record's buffer.
+    assert!(largest <= 2 * 1024 * 1024, "allocated {largest}");
+    assert!(start.elapsed().as_secs_f64() < 2.0, "{:?}", start.elapsed());
+    // Exactly at the cap is fine.
+    let exact = ReadOptions {
+        max_elements: Some(200_000),
+        ..ReadOptions::default()
+    };
+    assert!(read_model(&src, &c, &exact).is_ok());
+}

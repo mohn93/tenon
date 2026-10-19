@@ -618,8 +618,9 @@ fn drawn_count(
     let (mut faces, mut edges) = (p.corners.len(), p.ends.len());
     for (_, instance) in model.instances() {
         let (f, e) = drawn_count(scene, parts, MeshId::Definition(instance.definition), memo);
-        faces += f;
-        edges += e;
+        // Saturating: a deeply nested model can place more than usize holds.
+        faces = faces.saturating_add(f);
+        edges = edges.saturating_add(e);
     }
     memo.insert(id, (faces, edges));
     (faces, edges)

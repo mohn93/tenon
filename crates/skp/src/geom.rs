@@ -99,7 +99,7 @@
 //! fixtures, and only the ones exported from other tools (Shapespark's baked
 //! atlases, 3ds Max via V-Ray) carry scales from 0.06 to 1577.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::model::NO_MATERIAL;
 use crate::tags as t;
 use crate::tlv::{Record, Tlv};
@@ -459,6 +459,22 @@ impl DefGeometry {
 
 /// Parse one `Component` record payload.
 pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
+    let mut unlimited = u64::MAX;
+    parse_component_within(payload, &mut unlimited)
+}
+
+/// One element more against `budget`: `Malformed("too many elements")` once it is spent.
+fn spend(budget: &mut u64) -> Result<()> {
+    *budget = budget
+        .checked_sub(1)
+        .ok_or(Error::Malformed("too many elements"))?;
+    Ok(())
+}
+
+/// [`parse_component`], counting every vertex, edge, face, loop, edge use and instance
+/// against `budget` and failing with `Malformed("too many elements")` once it is spent, so a
+/// small deflated record of millions of empty elements cannot take all memory.
+pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeometry> {
     let mut g = DefGeometry::default();
 
     // Vertices first: edges reference them, and within a component the
@@ -475,6 +491,7 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
                         pos = xyz;
                     }
                 }
+                spend(budget)?;
                 g.vertex_pid.push(c.pid);
                 g.vertex_pos.extend_from_slice(&pos);
             }
@@ -510,6 +527,7 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
                         _ => {}
                     }
                 }
+                spend(budget)?;
                 g.edge_pid.push(c.pid);
                 edge_start.push(a);
                 edge_end.push(b);
@@ -552,6 +570,7 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
             continue;
         }
         for f in sec.children_with(t::FACE) {
+            spend(budget)?;
             let c = common_of(&f);
             let mut n = [0.0f64; 3];
             let mut d = 0.0f64;
@@ -622,12 +641,14 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
                                     _ => {}
                                 }
                             }
+                            spend(budget)?;
                             g.coedge_edge.push(g.edge_index(eref));
                             g.coedge_reversed.push(rev);
                             coedges += 1;
                         }
                     }
                     if coedges > 0 {
+                        spend(budget)?;
                         g.loop_ofs.push(g.coedge_edge.len() as u32);
                         loops_here += 1;
                     }
@@ -661,6 +682,7 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
         match wrapper {
             None => {
                 for i in sec.children_with(t::COMPONENT_INSTANCE) {
+                    spend(budget)?;
                     g.instances.push(parse_instance(&i, false));
                 }
             }
@@ -669,6 +691,7 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
                     for i in env.children_with(t::COMPONENT_INSTANCE) {
                         let mut inst = parse_instance(&i, is_group);
                         inst.is_image = sec.tag == t::COMPONENT_IMAGES;
+                        spend(budget)?;
                         g.instances.push(inst);
                     }
                 }

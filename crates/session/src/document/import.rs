@@ -190,9 +190,8 @@ impl Document {
         self.place_import(mesh, instance, change, report, place, root_faces)
     }
 
-    /// Reads a SketchUp file's `bytes` (from `path`, read again when the materials are
-    /// capped) and builds its tree into the scene with `build`, keeping only the materials
-    /// the built faces and instances use (at most `MAX_IMPORT_MATERIALS`; the file is read
+    /// Reads a SketchUp file's `bytes` (from `path`, for messages) and builds its tree into the scene with `build`, keeping only the materials
+    /// the built faces and instances use (at most `MAX_IMPORT_MATERIALS`; the bytes are read
     /// twice when more are used). Nothing changes on failure.
     pub(super) fn build_skp(
         &mut self,
@@ -202,18 +201,13 @@ impl Document {
         mut build: impl FnMut(&mut Scene, &ImportTree) -> Result<Built, KernelError>,
     ) -> Result<BuiltSkp, CommandError> {
         let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
-        let mut bytes = Some(bytes);
         let mut only: Option<HashSet<u32>> = None;
         let (mut dropped, mut capped) = (0, 0);
         // At most twice: when the faces made keep more than `MAX_IMPORT_MATERIALS` materials,
         // everything is taken back and the file read again keeping only the first of them.
         let (tree, mut notes, instance, built, change, kept) = loop {
-            let bytes = match bytes.take() {
-                Some(b) => b,
-                None => read_limited(Path::new(path), MAX_IMPORT_BYTES).map_err(file_error)?,
-            };
             let (tree, notes) =
-                read_skp(bytes, scale, self, only.as_ref()).map_err(|e| match e.kind {
+                read_skp(&bytes, scale, self, only.as_ref()).map_err(|e| match e.kind {
                     ErrorKind::File => file_error(e.message),
                     _ => e,
                 })?;

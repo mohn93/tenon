@@ -58,3 +58,10 @@ Upstream's tests are not copied: they read a private corpus.
     each other many times, many levels deep, makes them take minutes and
     hundreds of megabytes. `index` now calls it and adds the two walks, so
     its result is unchanged. The importer calls only this one.
+12. `ReadOptions::max_elements` (`scene.rs`, default `None`) and
+    `geom::parse_component_within` (`geom.rs`): `read_model` counts every
+    vertex, edge, face, loop, edge use and instance over the root and all
+    definitions, and fails with `Malformed("too many elements")` past the
+    cap. A record of millions of empty faces is six bytes each and deflates
+    about a thousand to one, so a small file could otherwise make the per-face
+    tables take gigabytes. `parse_component` keeps its behaviour (no cap).

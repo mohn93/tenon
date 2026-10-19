@@ -4,7 +4,8 @@
 use glam::{DAffine3, DMat3, DQuat, DVec3};
 use kernel::{
     DefinitionId, DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
-    ImportInstance, ImportTree, KernelError, MAX_IMPORT_DEPTH, MeshId, Model, Scene,
+    ImportInstance, ImportTree, KernelError, MAX_IMPORT_DEPTH, MAX_IMPORT_PLACED_FACES,
+    MAX_IMPORT_PLACEMENTS, MeshId, Model, Scene,
 };
 
 fn face(loops: &[&[usize]]) -> ImportFace {
@@ -423,4 +424,59 @@ fn into_root_needs_an_empty_mesh() {
     let r = s.import_tree_into_root(MeshId::Root, &tree);
     assert!(matches!(r, Err(KernelError::InvalidImport(_))), "{r:?}");
     assert_eq!(s, before);
+}
+
+/// Definitions 0..levels-1 each placing the next `fan` times; the last holds `leaf`.
+fn fan_tree(levels: usize, fan: usize, leaf: ImportGeometry) -> ImportTree {
+    let mut definitions: Vec<ImportDefinition> = (0..levels - 1)
+        .map(|i| {
+            definition(
+                &format!("L{i}"),
+                ImportGeometry {
+                    instances: (0..fan)
+                        .map(|k| {
+                            place(
+                                i + 1,
+                                DAffine3::from_translation(DVec3::new(k as f64, 0.0, 0.0)),
+                            )
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    definitions.push(definition("Leaf", leaf));
+    ImportTree {
+        definitions,
+        root: root_placing_0(),
+    }
+}
+
+#[test]
+fn trees_resolving_to_too_many_placements_are_refused() {
+    let refused = |tree: &ImportTree, what: &str| {
+        let mut s = Scene::new();
+        match import(&mut s, tree) {
+            Err(KernelError::InvalidImport(m)) => assert!(m.contains(what), "{m}"),
+            r => panic!("{r:?}"),
+        }
+        assert_eq!(s, Scene::new());
+    };
+    // 1 + 10 + ... + 10^6 placements: past MAX_IMPORT_PLACEMENTS, with only 70 instances.
+    let tree = fan_tree(8, 10, unit_box());
+    refused(&tree, &MAX_IMPORT_PLACEMENTS.to_string());
+    // A thousand-face leaf placed 10^5 times: 10^8 faces shown, 111,111 placements.
+    let triangle = ImportGeometry {
+        points: vec![DVec3::ZERO, DVec3::X, DVec3::Y],
+        faces: vec![face(&[&[0, 1, 2]]); 1000],
+        ..Default::default()
+    };
+    let tree = fan_tree(6, 10, triangle);
+    refused(&tree, &MAX_IMPORT_PLACED_FACES.to_string());
+    // Just under both: 1 + 10 + ... + 10^5 placements of a box.
+    let mut s = Scene::new();
+    let report = import(&mut s, &fan_tree(6, 10, unit_box())).unwrap();
+    assert_eq!(report.instances, 51);
+    s.validate().unwrap();
 }

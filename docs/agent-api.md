@@ -982,7 +982,8 @@ and save it again"). What is carried:
 - Components and groups: every definition the file's model places, at any depth, becomes one
   definition (a group when every placement of it is a group, else a component; named as in the
   file, or `Group` / `Component`), shared by all its instances, with each instance's transform
-  (mirrors and scales included) and material. Definitions placed nowhere are not imported.
+  (mirrors and scales included) and material. Names longer than 240 characters are cut.
+  Definitions placed nowhere are not imported.
   The file's top level goes into the new group or component (`"as": "context"`: into the open
   context, its instances included).
 - Faces with their holes; a face that is not flat to within 5e-7 m or whose loops cross is made
@@ -994,8 +995,10 @@ and save it again"). What is carried:
   or JPEG, read from the file, under the limits of `add_material`: at most 16 MiB, 4096 pixels a
   side, the pixel budget and 256 textures) with the file's tile size (clamped to 0.001 to
   1000 m, times `scale`). A name the model already has gets a number (`Brick 2`); existing
-  materials are never changed. A texture that cannot be used leaves the material its color and
-  adds a warning. At most 1,024 materials are added (the first, in the file's order, of those
+  materials are never changed. Names longer than 240 characters are cut. A texture that cannot
+  be used leaves the material its color, with one warning per reason ("2 textures were not
+  imported (the image is over 16 MiB or 4096 pixels a side); their materials keep their
+  colours"). At most 1,024 materials are added (the first, in the file's order, of those
   the faces and instances made use; of a file using more than 4,096, only the first 4,096 in
   order of use are considered); faces and instances with the others are left unpainted, with a
   warning.
@@ -1006,8 +1009,9 @@ instances of a definition the file lacks or with a flat or broken transform (ski
 faces that cannot be made (skipped: an outline that cannot be read, fewer than three distinct
 corners, a corner repeated, no area, or a duplicate), holes and edges that cannot be read,
 faces made from their outer loop, and material references that match no material of the file
-(or one whose id is too large to match). Section planes, dimensions, text, guides, texture
-positions and the file's camera and styles are not read.
+(or one whose id is too large to match). Guides (construction lines and points) are not
+imported yet. Section planes, dimensions, text, texture positions and the file's camera and
+styles are not read.
 
 The outcome's `import` reports what was made:
 
@@ -1037,10 +1041,14 @@ OBJ and STL:
 a file that cannot be read, is over 128 MiB, has more than 200,000 polygons or 1,000,000 OBJ
 positions, has a broken line (the message names it), a number that is not finite, a position
 beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
-A SketchUp file that is damaged, places more than 200,000 faces, 1,000,000 vertices, 10,000
-definitions or 100,000 instances, nests instances more than 32 deep or places a definition
-inside itself, or makes nothing, is a `file` error too; one whose placed model (every instance
-through its transforms, times `scale`) reaches beyond +/-1e6 m is `invalid_input`.
+A SketchUp file that is damaged, places more than 200,000 faces or 1,000,000 vertices, has
+more than 10,000 definitions or 100,000 instances, nests instances more than 32 deep, places a
+definition inside itself, resolves to more than 1,000,000 placements through its nesting (a
+component of 10 placed in one placed 10 times is 110) or more than 20,000,000 faces with every
+placement counted, or makes nothing, is a `file` error too. One whose model unpacks to more
+than 512 MiB or holds more than 10,000,000 vertices, edges, faces, loops and instances (placed
+or not), or whose placed model (every instance through its transforms, times `scale`) reaches
+beyond +/-1e6 m, is `invalid_input`.
 A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 

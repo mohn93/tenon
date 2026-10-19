@@ -16,7 +16,7 @@ use skp::container::{Container, Generation};
 use skp::geom::{DefGeometry, RawInstance};
 use skp::model::{MaterialDef, NO_MATERIAL, TextureLocation, edge_flag};
 use skp::scene::{ReadOptions, read_model};
-use skp::source::MemorySource;
+use skp::source::ByteSource;
 use skp::zip::{ZipDirectory, read_entry_within};
 
 use crate::command::{CommandError, ErrorKind};
@@ -34,7 +34,15 @@ pub(crate) const LEGACY_MESSAGE: &str = "SketchUp 2020 and older files cannot be
 /// The name of the tag every SketchUp model has (shown as "Untagged").
 const DEFAULT_TAG: &str = "Layer0";
 
-/// The longest material name taken from a file, leaving room for a " 2" suffix.
+/// The most a file's model (`model.dat`) may unpack to.
+const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024;
+
+/// The most vertices, edges, faces, loops, edge uses and instances a file may hold, over all
+/// its definitions (placed or not): far past what the import limits let through, and a
+/// bound on what reading costs.
+const MAX_ELEMENTS: u64 = 10_000_000;
+
+/// The longest material or definition name taken from a file, leaving room for a " 2" suffix.
 const MAX_NAME: usize = 240;
 
 /// What reading a SketchUp file found besides the tree, for the import report.
@@ -72,8 +80,8 @@ pub(crate) struct SkpNotes {
     pub textures: usize,
     /// The materials added to the document, each with the change that added it.
     pub added: Vec<(MaterialId, SceneChange)>,
-    /// Sentences for textures that could not be read.
-    pub texture_warnings: Vec<String>,
+    /// Textures not imported, by reason, in the order the reasons came up.
+    pub texture_failures: Vec<(&'static str, usize)>,
 }
 
 impl SkpNotes {
@@ -160,7 +168,13 @@ impl SkpNotes {
             "material reference could not be matched to a material and was left off",
             "material references could not be matched to a material and were left off",
         );
-        out.extend(self.texture_warnings.iter().cloned());
+        for (why, n) in &self.texture_failures {
+            say(
+                *n,
+                &format!("texture was not imported ({why}); its material keeps its colour"),
+                &format!("textures were not imported ({why}); their materials keep their colours"),
+            );
+        }
         out
     }
 }
@@ -176,19 +190,43 @@ impl SkpNotes {
 /// Nothing here walks the placements through the nesting: every definition is visited once,
 /// so the work is linear in the file however often its definitions place each other.
 pub(crate) fn read_skp(
-    bytes: Vec<u8>,
+    bytes: &[u8],
     scale: f64,
     document: &mut Document,
     only: Option<&HashSet<u32>>,
 ) -> Result<(ImportTree, SkpNotes), CommandError> {
     let file_error = |m: String| CommandError::new(ErrorKind::File, m);
-    let src = MemorySource::new(bytes);
+    let src = Bytes(bytes);
     let container = Container::open(&src).map_err(|e| file_error(e.to_string()))?;
     if container.generation == Generation::Legacy {
         return Err(CommandError::new(ErrorKind::InvalidInput, LEGACY_MESSAGE));
     }
-    let model = read_model(&src, &container, &ReadOptions::default())
-        .map_err(|e| file_error(e.to_string()))?;
+    if container
+        .model_entry()
+        .is_some_and(|e| e.uncompressed_size > MAX_MODEL_BYTES)
+    {
+        return Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "the file's model unpacks to more than {} MiB: too large to import",
+                MAX_MODEL_BYTES >> 20
+            ),
+        ));
+    }
+    let options = ReadOptions {
+        max_elements: Some(MAX_ELEMENTS),
+        ..ReadOptions::default()
+    };
+    let model = read_model(&src, &container, &options).map_err(|e| match e {
+        skp::Error::Malformed("too many elements") => CommandError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "the file has more than {MAX_ELEMENTS} vertices, edges, faces, loops and \
+                 instances: too large to import"
+            ),
+        ),
+        e => file_error(e.to_string()),
+    })?;
     let index = model.index_without_placements(&src, &container);
     let mut notes = SkpNotes {
         tags: index
@@ -281,7 +319,7 @@ pub(crate) fn read_skp(
     let used: HashSet<u32> = used.into_iter().collect();
     let materials = add_materials(document, &src, &container, &index.materials, scale, used)?;
     notes.textures = materials.textures;
-    notes.texture_warnings = materials.warnings;
+    notes.texture_failures = materials.failures;
     notes.added = materials.added;
     notes.material_ids = materials.order;
 
@@ -297,7 +335,7 @@ pub(crate) fn read_skp(
             let name = match d.name.trim() {
                 "" if kind == DefinitionKind::Group => "Group".to_string(),
                 "" => "Component".to_string(),
-                n => n.to_string(),
+                n => n.chars().take(MAX_NAME).collect(),
             };
             // A definition the root does not reach is not built: it needs no geometry.
             let geometry = if reached[i] {
@@ -636,7 +674,8 @@ struct Added {
     /// The file's id of each material added, in order.
     order: Vec<(u32, MaterialId)>,
     textures: usize,
-    warnings: Vec<String>,
+    /// Textures not imported, by reason.
+    failures: Vec<(&'static str, usize)>,
 }
 
 /// Adds one material per entry of `table` whose id is in `used` (in the table's order, the
@@ -645,7 +684,7 @@ struct Added {
 /// leaves the material its colour and a warning.
 fn add_materials(
     document: &mut Document,
-    src: &MemorySource,
+    src: &dyn ByteSource,
     container: &Container,
     table: &[MaterialDef],
     scale: f64,
@@ -656,7 +695,14 @@ fn add_materials(
         added: Vec::new(),
         order: Vec::new(),
         textures: 0,
-        warnings: Vec::new(),
+        failures: Vec::new(),
+    };
+    let failed = |why: &'static str, failures: &mut Vec<(&'static str, usize)>| match failures
+        .iter_mut()
+        .find(|(w, _)| *w == why)
+    {
+        Some((_, n)) => *n += 1,
+        None => failures.push((why, 1)),
     };
     let mut seen: HashSet<u32> = HashSet::new();
     let mut pixels = document.texture_pixels_besides(None);
@@ -696,9 +742,7 @@ fn add_materials(
             Some(t) => match read_texture(src, container.zip.as_ref(), t, scale, pixels) {
                 Ok(texture) => Some(texture),
                 Err(why) => {
-                    out.warnings.push(format!(
-                        "the texture of material \"{name}\" was not imported: {why}"
-                    ));
+                    failed(why, &mut out.failures);
                     None
                 }
             },
@@ -713,10 +757,8 @@ fn add_materials(
         let had_texture = texture.is_some();
         let result = match document.scene_mut().add_material_from(material(texture)) {
             // Past the model's texture limit, say: keep the colour.
-            Err(e) if had_texture => {
-                out.warnings.push(format!(
-                    "the texture of material \"{name}\" was not imported: {e}"
-                ));
+            Err(_) if had_texture => {
+                failed(MODEL_LIMIT, &mut out.failures);
                 document.scene_mut().add_material_from(material(None))
             }
             r => r,
@@ -752,34 +794,61 @@ fn add_materials(
     Ok(out)
 }
 
+/// Why a texture was not imported, as the warnings say it.
+const MISSING: &str = "the image is missing from the file";
+const OVERSIZE: &str = "the image is over 16 MiB or 4096 pixels a side";
+const UNREADABLE: &str = "the image is not a PNG or JPEG that can be read";
+const TOO_MANY_PIXELS: &str = "all textures together would hold too many pixels";
+const MODEL_LIMIT: &str = "the model holds at most 256 textures";
+
 /// A material's texture from the file's zip, its tile size in meters times `scale` (each side
 /// clamped to the texture size limits). Fails, saying why, for an image that is missing,
 /// larger than `MAX_TEXTURE_BYTES`, not PNG or JPEG, too many pixels (`others` are held
 /// already) or broken.
 fn read_texture(
-    src: &MemorySource,
+    src: &dyn ByteSource,
     zip: Option<&ZipDirectory>,
     t: &skp::model::TextureRef,
     scale: f64,
     others: u64,
-) -> Result<Texture, String> {
+) -> Result<Texture, &'static str> {
     let TextureLocation::ZipEntry(at) = t.location else {
-        return Err("the image is not in the file's archive".into());
+        return Err(MISSING);
     };
     let entry = zip
         .and_then(|z| z.entries.get(at as usize))
-        .ok_or("the image is missing from the file")?;
+        .ok_or(MISSING)?;
     if entry.uncompressed_size > MAX_TEXTURE_BYTES {
-        return Err(format!(
-            "the image is over {MAX_TEXTURE_BYTES} bytes, the most a texture may have"
-        ));
+        return Err(OVERSIZE);
     }
-    let bytes = read_entry_within(src, entry, MAX_TEXTURE_BYTES)
-        .map_err(|e| format!("the image cannot be read ({e})"))?;
-    let (_, width, height) = dimensions(&bytes)?;
-    check_total_pixels(others, u64::from(width) * u64::from(height))?;
+    let bytes = read_entry_within(src, entry, MAX_TEXTURE_BYTES).map_err(|_| UNREADABLE)?;
+    let (_, width, height) = dimensions(&bytes).map_err(|e| {
+        if e.contains("pixels") || e.contains("too large") {
+            OVERSIZE
+        } else {
+            UNREADABLE
+        }
+    })?;
+    check_total_pixels(others, u64::from(width) * u64::from(height))
+        .map_err(|_| TOO_MANY_PIXELS)?;
     let [w, h] = t
         .tile_mm_drawable()
         .map(|mm| (mm / 1000.0 * scale).clamp(MIN_TEXTURE_SIZE, MAX_TEXTURE_SIZE));
-    texture_from_bytes(bytes, w, h)
+    texture_from_bytes(bytes, w, h).map_err(|_| UNREADABLE)
+}
+
+/// File bytes held in memory, read in place.
+struct Bytes<'a>(&'a [u8]);
+
+impl ByteSource for Bytes<'_> {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+
+    fn read_exact_at(&self, offset: u64, buf: &mut [u8]) -> skp::Result<()> {
+        self.bounds_check(offset, buf.len())?;
+        let start = offset as usize;
+        buf.copy_from_slice(&self.0[start..start + buf.len()]);
+        Ok(())
+    }
 }

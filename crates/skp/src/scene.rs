@@ -15,7 +15,7 @@
 use crate::container::{Container, Generation};
 use crate::edges::{build_adjacency, build_batch, EdgeAdjacency, EdgeFilter};
 use crate::error::{Error, Result};
-use crate::geom::{compose, parse_component, DefGeometry, IDENTITY13, NO_LAYER};
+use crate::geom::{compose, parse_component_within, DefGeometry, IDENTITY13, NO_LAYER};
 use crate::model::{
     Counts, EdgeBatch, InstanceTable, MeshBatch, SceneIndex, StyleDef, INCH_TO_MM, NO_MATERIAL,
 };
@@ -107,6 +107,10 @@ pub struct ReadOptions {
     /// a commercial pack's 4,147 definitions while bounding the duplication at
     /// twice their geometry.
     pub merge_below: usize,
+    /// Most vertices, edges, faces, loops, edge uses and instances `read_model` takes over
+    /// the root and every definition together; past it the read fails with
+    /// `Malformed("too many elements")`. `None` for no limit.
+    pub max_elements: Option<u64>,
 }
 
 impl Default for ReadOptions {
@@ -117,6 +121,7 @@ impl Default for ReadOptions {
             want_uvs: true,
             definition_limit: None,
             merge_below: 2,
+            max_elements: None,
         }
     }
 }
@@ -300,6 +305,7 @@ fn read_stream<R: SeqRead>(
         sections: Sections::default(),
         bytes_read: 0,
     };
+    let mut budget = opt.max_elements.unwrap_or(u64::MAX);
 
     let Some(root) = rs.header(total)? else {
         return Err(Error::Malformed("model stream is empty"));
@@ -316,7 +322,7 @@ fn read_stream<R: SeqRead>(
         match sec.tag {
             t::SKETCH_UP_MODEL_COMPONENTS => {
                 let sec_end = rs.enter(&sec)?;
-                read_definitions(rs, sec_end, &mut m, opt, &mut buf)?;
+                read_definitions(rs, sec_end, &mut m, opt, &mut buf, &mut budget)?;
             }
             t::SKETCH_UP_MODEL_ROOT => {
                 rs.payload(sec.size, &mut buf)?;
@@ -326,7 +332,7 @@ fn read_stream<R: SeqRead>(
                     // in place, plus the top-level placements.
                     for inner in Tlv::new(&buf) {
                         if inner.tag == t::COMPONENT {
-                            m.root = parse_component(inner.payload)?;
+                            m.root = parse_component_within(inner.payload, &mut budget)?;
                         }
                     }
                 }
@@ -368,6 +374,7 @@ fn read_definitions<R: SeqRead>(
     m: &mut Model,
     opt: &ReadOptions,
     buf: &mut Vec<u8>,
+    budget: &mut u64,
 ) -> Result<()> {
     // SketchUpModelComponents > DefinitionList > DefinitionListDefs, each of
     // which may carry an OverflowSizeTag that `enter` deals with.
@@ -395,12 +402,12 @@ fn read_definitions<R: SeqRead>(
             }
         }
         rs.payload(d.size, buf)?;
-        m.definitions.push(parse_definition(buf)?);
+        m.definitions.push(parse_definition(buf, budget)?);
     }
     Ok(())
 }
 
-fn parse_definition(payload: &[u8]) -> Result<Definition> {
+fn parse_definition(payload: &[u8], budget: &mut u64) -> Result<Definition> {
     let mut def = Definition {
         pid: 0,
         name: String::new(),
@@ -411,7 +418,7 @@ fn parse_definition(payload: &[u8]) -> Result<Definition> {
     for r in Tlv::new(payload) {
         match r.tag {
             t::COMPONENT => {
-                def.geom = parse_component(r.payload)?;
+                def.geom = parse_component_within(r.payload, budget)?;
                 let c = crate::geom::common_of(&r);
                 if c.pid != 0 {
                     def.pid = c.pid;

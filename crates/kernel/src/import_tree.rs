@@ -25,6 +25,13 @@ pub const MAX_IMPORT_DEFINITIONS: usize = 10_000;
 /// Most instances an import tree may have, over all its geometries.
 pub const MAX_IMPORT_INSTANCES: usize = 100_000;
 
+/// Most placements an import tree may resolve to, counting every instance once per placement
+/// of the definition holding it (a component of 10 placed in one placed 10 times is 110).
+pub const MAX_IMPORT_PLACEMENTS: u64 = 1_000_000;
+
+/// Most faces an import tree may show, counting a definition's faces once per placement.
+pub const MAX_IMPORT_PLACED_FACES: u64 = 20_000_000;
+
 /// Most pairs of loop sides one import checks for crossings (the check is quadratic in a face's
 /// corners). Faces past it are made from their outer loop alone, as a bent face is.
 const MAX_RING_CHECKS: usize = 20_000_000;
@@ -282,6 +289,18 @@ fn check_tree(tree: &ImportTree) -> Result<Vec<usize>, KernelError> {
     }
     let mut state = vec![State::Unseen; n];
     let mut height = vec![0; n];
+    // Once d is done: the placements resolved inside one placement of d, and the faces one
+    // placement of d shows (saturating).
+    let mut placed = vec![0u64; n];
+    let mut shown = vec![0u64; n];
+    let totals = |instances: &[ImportInstance], faces: usize, placed: &[u64], shown: &[u64]| {
+        instances.iter().fold((0u64, faces as u64), |(p, f), i| {
+            (
+                p.saturating_add(1).saturating_add(placed[i.definition]),
+                f.saturating_add(shown[i.definition]),
+            )
+        })
+    };
     let deep = || {
         invalid(format!(
             "instances are nested more than {MAX_IMPORT_DEPTH} deep"
@@ -296,8 +315,8 @@ fn check_tree(tree: &ImportTree) -> Result<Vec<usize>, KernelError> {
         let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
         while let Some(top) = stack.last_mut() {
             let d = top.0;
-            let placed = children(Some(d));
-            if let Some(child) = placed.get(top.1).map(|i| i.definition) {
+            let children_of_d = children(Some(d));
+            if let Some(child) = children_of_d.get(top.1).map(|i| i.definition) {
                 top.1 += 1;
                 match state[child] {
                     State::Searching => {
@@ -317,15 +336,34 @@ fn check_tree(tree: &ImportTree) -> Result<Vec<usize>, KernelError> {
                     }
                 }
             } else {
-                height[d] = 1 + placed
+                height[d] = 1 + children_of_d
                     .iter()
                     .map(|i| height[i.definition])
                     .max()
                     .unwrap_or(0);
+                (placed[d], shown[d]) = totals(
+                    children_of_d,
+                    tree.definitions[d].geometry.faces.len(),
+                    &placed,
+                    &shown,
+                );
                 state[d] = State::Done;
                 stack.pop();
             }
         }
+    }
+    let (placements, faces) = totals(&tree.root.instances, tree.root.faces.len(), &placed, &shown);
+    if placements > MAX_IMPORT_PLACEMENTS {
+        return invalid(format!(
+            "the file's instances resolve to more than {MAX_IMPORT_PLACEMENTS} placements \
+             through their nesting"
+        ));
+    }
+    if faces > MAX_IMPORT_PLACED_FACES {
+        return invalid(format!(
+            "the file shows more than {MAX_IMPORT_PLACED_FACES} faces with every placement \
+             counted"
+        ));
     }
     let reached: Vec<usize> = (0..n).filter(|&d| state[d] == State::Done).collect();
     for d in reached.iter().map(|&d| Some(d)).chain([None]) {

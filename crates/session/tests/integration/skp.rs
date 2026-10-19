@@ -295,11 +295,11 @@ fn materials_and_textures_are_imported() {
     assert_eq!(glass["color"], json!([100, 149, 237]));
     let warnings = warnings(&r["import"]);
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("[Translucent_Glass_Blue]")
-                && w.contains("texture")
-                && w.contains("4096")),
+        warnings.contains(
+            &"1 texture was not imported (the image is over 16 MiB or 4096 pixels a side); \
+              its material keeps its colour"
+                .into()
+        ),
         "{warnings:?}"
     );
 }
@@ -638,23 +638,39 @@ fn import_timed(
 #[test]
 fn many_placements_are_read_without_walking_them() {
     use craft::{file, scaled};
-    // 31 levels, each placing the next 10 times: 10^31 placements through the nesting, 310
-    // instances in the file.
-    let mut defs: Vec<Vec<craft::Place>> = (0..30)
-        .map(|i| {
-            (0..10)
-                .map(|k| (i + 1, scaled(1.0, k as f64), None))
-                .collect()
-        })
-        .collect();
-    defs.push(vec![]);
-    let bytes = file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[]);
-    let (d, r, took) = import_timed("deep.skp", &bytes);
+    // `levels` definitions, each placing the next 10 times, the last an edge.
+    let fan = |levels: usize| {
+        let mut defs: Vec<Vec<craft::Place>> = (0..levels - 1)
+            .map(|i| {
+                (0..10)
+                    .map(|k| (i + 1, scaled(1.0, k as f64), None))
+                    .collect()
+            })
+            .collect();
+        defs.push(vec![]);
+        file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[])
+    };
+    // 31 levels: 10^30 placements through the nesting from 301 instances, refused at once.
+    let (d, r, took) = import_timed("deep.skp", &fan(31));
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::File, "{message}");
+    assert!(message.contains("placements"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+    assert!(took.as_secs_f64() < 2.0, "took {took:?}");
+
+    // 6 levels: 111,111 placements, under the cap; it imports and opens quickly.
+    let (d, r, took) = import_timed("fan.skp", &fan(6));
     let r = r.unwrap();
     d.scene().validate().unwrap();
-    assert_eq!(r["import"]["definitions"], 31, "{}", r["import"]);
-    assert_eq!(r["import"]["instances"], 301);
+    assert_eq!(r["import"]["definitions"], 6, "{}", r["import"]);
+    assert_eq!(r["import"]["instances"], 51);
     assert!(took.as_secs_f64() < 2.0, "took {took:?}");
+    let path = write("fan-open.skp", &fan(6));
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    run(&mut d, json!({"type": "open", "path": path})).unwrap();
+    assert!(start.elapsed().as_secs_f64() < 2.0, "{:?}", start.elapsed());
+    d.scene().validate().unwrap();
 
     // A definition placing itself 50,000 times.
     let defs = vec![vec![(0, scaled(1.0, 0.0), None); 50_000]];
@@ -665,6 +681,24 @@ fn many_placements_are_read_without_walking_them() {
     assert!(message.contains("places itself"), "{message}");
     assert_eq!(d.scene(), doc().scene());
     assert!(took.as_secs_f64() < 2.0, "took {took:?}");
+}
+
+#[test]
+fn a_model_claiming_to_unpack_too_large_is_refused_unread() {
+    use craft::{file, scaled};
+    let mut bytes = file(&[vec![]], &[(0, scaled(1.0, 0.0), None)], &[], &[]);
+    // model.dat is the first entry: claim 600 MiB in its local and central headers.
+    let local = bytes.windows(4).position(|w| w == b"PK\x03\x04").unwrap();
+    let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    for at in [local + 22, central + 24] {
+        bytes[at..at + 4].copy_from_slice(&(600u32 << 20).to_le_bytes());
+    }
+    let (d, r, took) = import_timed("bomb.skp", &bytes);
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+    assert!(message.contains("512 MiB"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+    assert!(took.as_secs_f64() < 1.0, "took {took:?}");
 }
 
 #[test]
@@ -812,9 +846,11 @@ fn textures_past_the_model_limit_keep_their_colour() {
     assert_eq!(plain[0]["color"], json!([200, 10, 20]));
     let warnings = warnings(&r["import"]);
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains(plain[0]["name"].as_str().unwrap()) && w.contains("texture")),
+        warnings.contains(
+            &"1 texture was not imported (the model holds at most 256 textures); its material \
+              keeps its colour"
+                .into()
+        ),
         "{warnings:?}"
     );
 }
