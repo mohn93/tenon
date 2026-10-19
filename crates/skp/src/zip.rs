@@ -227,10 +227,29 @@ pub fn entry_data_offset(src: &dyn ByteSource, entry: &ZipEntry) -> Result<u64> 
         .ok_or(Error::Malformed("zip entry offset overflows"))
 }
 
+/// The most [`read_entry`] inflates. A deflated entry can claim, and hold,
+/// about a thousand times its compressed size; an entry read whole is an xml
+/// file, a thumbnail or a texture, none of which comes near this.
+pub const MAX_ENTRY_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Read one entry whole. For `model.dat` prefer the streaming path; this is
 /// for the small entries - xml, thumbnails, a single texture - where holding
-/// the bytes is the point.
+/// the bytes is the point. Entries over [`MAX_ENTRY_BYTES`] are refused.
 pub fn read_entry(src: &dyn ByteSource, entry: &ZipEntry) -> Result<Vec<u8>> {
+    read_entry_within(src, entry, MAX_ENTRY_BYTES)
+}
+
+/// [`read_entry`] with a tighter cap: an entry claiming more than `limit`
+/// bytes is refused before anything is read, and inflating one that claimed
+/// less stops at `limit`.
+pub fn read_entry_within(src: &dyn ByteSource, entry: &ZipEntry, limit: u64) -> Result<Vec<u8>> {
+    let limit = core::cmp::min(limit, MAX_ENTRY_BYTES);
+    let stored = entry.method == METHOD_STORE;
+    if entry.uncompressed_size > limit || (stored && entry.compressed_size > limit) {
+        return Err(Error::Malformed(
+            "zip entry is larger than the reader allows",
+        ));
+    }
     let at = entry_data_offset(src, entry)?;
     let len = usize::try_from(entry.compressed_size).map_err(|_| Error::OutOfRange {
         offset: at,
@@ -241,13 +260,11 @@ pub fn read_entry(src: &dyn ByteSource, entry: &ZipEntry) -> Result<Vec<u8>> {
         METHOD_STORE => src.read_vec(at, len),
         METHOD_DEFLATE => {
             let raw = src.read_vec(at, len)?;
-            miniz_oxide::inflate::decompress_to_vec_with_limit(
-                &raw,
-                usize::try_from(entry.uncompressed_size)
-                    .unwrap_or(usize::MAX)
-                    .saturating_add(64),
-            )
-            .map_err(|_| Error::Inflate("deflate stream rejected"))
+            // A little slack over the claimed size, as upstream allowed, but
+            // never over the cap.
+            let cap = core::cmp::min(entry.uncompressed_size + 64, limit);
+            miniz_oxide::inflate::decompress_to_vec_with_limit(&raw, cap as usize)
+                .map_err(|_| Error::Inflate("deflate stream rejected"))
         }
         _ => Err(Error::UnsupportedZip(
             "compression method other than store or deflate",

@@ -29,8 +29,9 @@ Upstream's tests are not copied: they read a private corpus.
    fixture's model.dat repeated four times at miniz level 1).
 6. Lengths read from the file are checked before anything is allocated:
    `ByteSource::read_vec` checks the range against the source first (this
-   covers the zip central directory read in `ZipDirectory::find` and both arms
-   of `read_entry`); a size that does not fit in `usize` is `OutOfRange`.
+   covers the zip central directory read in `ZipDirectory::find` and the
+   compressed bytes `read_entry` reads); a size that does not fit in `usize`
+   is `OutOfRange`. What `read_entry` inflates is capped separately (item 10).
    `InflateRead::new` now returns `Result` and refuses a compressed range that
    runs past the source (`OutOfRange`).
 7. `Vec::with_capacity` of the zip entry count is capped by how many records
@@ -43,3 +44,10 @@ Upstream's tests are not copied: they read a private corpus.
    header and data offsets, `InflateRead`'s input end, `RecordStream::enter`'s
    record end and `RangeRead`'s reads and skips. `Le::take` checks
    `at + len`; `RangeRead::total_hint` saturates.
+10. `read_entry` refuses an entry whose claimed inflated size (or, stored, its
+    size) is over `zip::MAX_ENTRY_BYTES` (128 MiB) with `Error::Malformed`
+    before reading it, and inflates at most `min(claimed + 64, cap)` bytes.
+    Upstream inflated up to whatever size the entry claimed, so a small
+    deflated entry could expand to gigabytes. `read_entry_within` takes a
+    tighter cap; `Model::index` reads each `materials/*/material.xml` with a
+    1 MiB cap and skips a larger one, as it already skipped an unreadable one.

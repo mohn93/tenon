@@ -174,6 +174,21 @@ fn nth_central_entry(cd: &[u8], n: usize) -> usize {
 /// The fixture with `model.dat` deflated again by miniz_oxide at level 9 and
 /// every other entry stored, behind the original SketchUp header.
 fn rezipped(bytes: &[u8]) -> Vec<u8> {
+    rebuilt(bytes, |_| {}, &[])
+}
+
+/// An entry added to a rebuilt fixture: its name, its deflated bytes and the
+/// inflated size its headers claim.
+struct Extra<'a> {
+    name: &'a str,
+    deflated: &'a [u8],
+    claimed: u32,
+}
+
+/// The fixture rebuilt: `edit` applied to the inflated `model.dat`, which is
+/// then deflated at level 9; every other entry stored; `extra` entries
+/// appended; the original SketchUp header in front.
+fn rebuilt(bytes: &[u8], edit: impl FnOnce(&mut Vec<u8>), extra: &[Extra]) -> Vec<u8> {
     let src = MemorySource::new(bytes.to_vec());
     let c = Container::open(&src).expect("open");
     let header = bytes
@@ -186,35 +201,45 @@ fn rezipped(bytes: &[u8]) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(cursor);
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    let mut model_len = 0;
+    // (name, inflated size) of each entry written deflated but marked stored.
+    let mut deflated: Vec<(String, u32)> = Vec::new();
+    let mut edit = Some(edit);
     for e in c.zip.as_ref().expect("zip").entries.iter() {
-        let data = c.read(&src, e).expect("entry");
+        let mut data = c.read(&src, e).expect("entry");
         zip.start_file(e.name.as_str(), stored)
             .expect("start entry");
         if e.name == "model.dat" {
-            model_len = data.len();
+            (edit.take().expect("one model.dat"))(&mut data);
+            deflated.push((e.name.clone(), data.len() as u32));
             zip.write_all(&miniz_oxide::deflate::compress_to_vec(&data, 9))
                 .expect("write");
         } else {
             zip.write_all(&data).expect("write");
         }
     }
+    for x in extra {
+        zip.start_file(x.name, stored).expect("start entry");
+        zip.write_all(x.deflated).expect("write");
+        deflated.push((x.name.to_string(), x.claimed));
+    }
     let mut out = zip.finish().expect("finish").into_inner();
 
-    // The entry was written stored; mark it deflated with its inflated size,
-    // in both the local header and the central directory.
+    // Those entries were written stored; mark them deflated with their
+    // inflated size, in both the local header and the central directory.
     let dir = ZipDirectory::find(&MemorySource::new(out.clone())).expect("new directory");
-    let index = dir
-        .entries
-        .iter()
-        .position(|e| e.name == "model.dat")
-        .expect("model.dat");
-    let local = dir.entries[index].header_offset as usize;
-    let cd = central_directory(&out);
-    let central = cd.start + nth_central_entry(&out[cd], index);
-    for (at, size_at) in [(local + 8, local + 22), (central + 10, central + 24)] {
-        out[at..at + 2].copy_from_slice(&8u16.to_le_bytes());
-        out[size_at..size_at + 4].copy_from_slice(&(model_len as u32).to_le_bytes());
+    for (name, size) in deflated {
+        let index = dir
+            .entries
+            .iter()
+            .position(|e| e.name == name)
+            .expect("entry");
+        let local = dir.entries[index].header_offset as usize;
+        let cd = central_directory(&out);
+        let central = cd.start + nth_central_entry(&out[cd], index);
+        for (at, size_at) in [(local + 8, local + 22), (central + 10, central + 24)] {
+            out[at..at + 2].copy_from_slice(&8u16.to_le_bytes());
+            out[size_at..size_at + 4].copy_from_slice(&size.to_le_bytes());
+        }
     }
     out
 }
@@ -262,5 +287,80 @@ fn inflate_reads_every_byte() {
                 );
             }
         }
+    }
+}
+
+/// A `material.xml` that inflates to far more than it is: 64 MiB of zeros in
+/// about 64 KiB. Claiming 4 GiB it is refused outright; claiming its true size
+/// it is still more than a material description can need, and the index
+/// skips it. Neither read allocates more than the limit.
+#[test]
+fn inflated_entries_are_capped() {
+    let zeros = miniz_oxide::deflate::compress_to_vec(&vec![0u8; 64 << 20], 1);
+    for name in FIXTURES {
+        for claimed in [u32::MAX, 64 << 20] {
+            let extra = Extra {
+                name: "materials/Bomb/material.xml",
+                deflated: &zeros,
+                claimed,
+            };
+            let bytes = rebuilt(&fixture(name), |_| {}, &[extra]);
+            let (c, m, src) = read(bytes).expect(name);
+            let entry = c
+                .zip
+                .as_ref()
+                .expect("zip")
+                .entries
+                .iter()
+                .find(|e| e.name == "materials/Bomb/material.xml");
+            let entry = entry.expect("added entry");
+            let largest = largest_allocation(|| {
+                let _ = m.index(&src, &c);
+            });
+            assert!(
+                largest < ALLOCATION_LIMIT,
+                "{name} claiming {claimed}: index allocated {largest}"
+            );
+            if claimed == u32::MAX {
+                let largest = largest_allocation(|| {
+                    assert!(c.read(&src, entry).is_err(), "{name}: a 4 GiB entry read");
+                });
+                assert!(
+                    largest < ALLOCATION_LIMIT,
+                    "{name}: entry read allocated {largest}"
+                );
+            }
+        }
+    }
+}
+
+/// A record in `model.dat` claiming 700 MiB, under the 768 MiB sanity cap, on
+/// a stream that holds well under 1 MiB: the read fails without allocating
+/// the claim.
+#[test]
+fn record_sizes_are_not_allocated_up_front() {
+    use skp::tags::{OVERFLOW_SIZE_TAG, SKETCH_UP_MODEL_ROOT};
+    for name in FIXTURES {
+        let bytes = rebuilt(
+            &fixture(name),
+            |model| {
+                let u16_at = |at: usize| u16::from_le_bytes([model[at], model[at + 1]]);
+                let u32_at = |at: usize| u32::from_le_bytes(model[at..at + 4].try_into().unwrap());
+                // The model record's header, then its children.
+                let mut at = 6;
+                if u16_at(at) == OVERFLOW_SIZE_TAG {
+                    at += 10;
+                }
+                while u16_at(at) != SKETCH_UP_MODEL_ROOT {
+                    at += 6 + u32_at(at + 2) as usize;
+                }
+                model[at + 2..at + 6].copy_from_slice(&(700u32 << 20).to_le_bytes());
+            },
+            &[],
+        );
+        let largest = largest_allocation(|| {
+            assert!(read(bytes).is_err(), "{name}: a 700 MiB record read");
+        });
+        assert!(largest < ALLOCATION_LIMIT, "{name}: allocated {largest}");
     }
 }

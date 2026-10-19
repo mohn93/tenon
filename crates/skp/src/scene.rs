@@ -76,6 +76,9 @@ pub const SKIPPED_MARKER: u32 = u32::MAX - 1;
 /// under 100 KB.
 const SMALL_SECTION_MAX: u64 = 64 * 1024 * 1024;
 
+/// The most a single `material.xml` may inflate to before `index` skips it.
+const MAX_MATERIAL_XML_BYTES: u64 = 1024 * 1024;
+
 pub struct Model {
     pub writer_version: String,
     pub is_vff: bool,
@@ -899,7 +902,10 @@ impl Model {
                     images.push((e.name.clone(), i as u32));
                 } else if e.name.ends_with("material.xml") {
                     if let Some(folder) = crate::materials::material_xml_folder(&e.name) {
-                        if let Ok(b) = crate::zip::read_entry(src, e) {
+                        // A material description is a few kilobytes; a
+                        // larger one is skipped like an unreadable one.
+                        if let Ok(b) = crate::zip::read_entry_within(src, e, MAX_MATERIAL_XML_BYTES)
+                        {
                             xml_bytes.push((folder.to_string(), b));
                         }
                     }
