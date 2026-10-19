@@ -1,0 +1,17 @@
+[package]
+name = "skp"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Reader for SketchUp .skp files, vendored from openskp-rs (skpcore); see VENDORED.md"
+
+[dependencies]
+miniz_oxide.workspace = true
+
+[dev-dependencies]
+zip.workspace = true
+
+[features]
+default = ["std"]
+std = []
