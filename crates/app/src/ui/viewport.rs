@@ -131,6 +131,7 @@ pub fn cursor_icon(tool: ToolKind, hovering: bool, navigating: bool) -> CursorIc
         ToolKind::Line
         | ToolKind::Rectangle
         | ToolKind::Circle
+        | ToolKind::Polygon
         | ToolKind::Arc
         | ToolKind::Rotate
         | ToolKind::TapeMeasure => CursorIcon::Crosshair,

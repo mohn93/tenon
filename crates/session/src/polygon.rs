@@ -17,8 +17,8 @@ pub const DEFAULT_POLYGON_SIDES: u32 = 6;
 /// plane through `center` with `normal` (Z when absent), counter-clockwise around the normal.
 /// Inscribed, `radius` is the distance to the corners and the first corner lies along
 /// `direction`; circumscribed, `radius` is the distance to the middles of the sides and the
-/// middle of the first side lies along `direction`. `direction` is projected into the plane
-/// (the plane's u axis from `rectangle_axes` when absent).
+/// middle of the side ending at the first corner lies along `direction`. `direction` is
+/// projected into the plane (the plane's u axis from `rectangle_axes` when absent).
 pub fn polygon_points(
     center: DVec3,
     radius: f64,

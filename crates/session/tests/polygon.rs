@@ -55,6 +55,39 @@ fn polygon_points_inscribed_and_circumscribed() {
 }
 
 #[test]
+fn polygon_points_on_a_tilted_plane_run_counter_clockwise_around_the_normal() {
+    let center = DVec3::new(1.0, 2.0, 3.0);
+    let p = polygon_points(center, 1.0, 5, Some(DVec3::new(2.0, 0.0, 0.0)), false, None).unwrap();
+    assert_eq!(p.len(), 5);
+    for (i, a) in p.iter().enumerate() {
+        let b = p[(i + 1) % p.len()];
+        assert!((a.x - center.x).abs() < 1e-12, "in the plane: {a:?}");
+        assert!(((*a - center).length() - 1.0).abs() < 1e-12, "{a:?}");
+        let turn = (*a - center).cross(b - center);
+        assert!(
+            turn.x > 0.0 && turn.y.abs() < 1e-12 && turn.z.abs() < 1e-12,
+            "{i}: {turn:?}"
+        );
+    }
+}
+
+#[test]
+fn circumscribed_polygon_points_put_the_closing_side_along_the_direction() {
+    let center = DVec3::new(0.5, -1.0, 0.0);
+    let direction = DVec3::new(1.0, 1.0, 4.0);
+    let p = polygon_points(center, 2.0, 6, None, true, Some(direction)).unwrap();
+    // The side from the last corner to the first is centred on the in-plane direction, at the
+    // radius.
+    let middle = (p[5] + p[0]) / 2.0;
+    let want = center + DVec3::new(1.0, 1.0, 0.0).normalize() * 2.0;
+    assert!((middle - want).length() < 1e-12, "{middle:?} vs {want:?}");
+    for corner in &p {
+        let r = (*corner - center).length();
+        assert!((r - 2.0 / (std::f64::consts::PI / 6.0).cos()).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn polygon_points_refuses_bad_input() {
     for sides in [2, 361] {
         let e = polygon_points(DVec3::ZERO, 1.0, sides, None, false, None).unwrap_err();
@@ -71,6 +104,18 @@ fn polygon_points_refuses_bad_input() {
     .unwrap_err();
     assert_eq!(e.kind, ErrorKind::InvalidInput);
     let e = polygon_points(DVec3::ZERO, 1e-7, 6, None, false, None).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidInput);
+    let e = polygon_points(
+        DVec3::ZERO,
+        1.0,
+        6,
+        None,
+        false,
+        Some(DVec3::new(f64::NAN, 1.0, 0.0)),
+    )
+    .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidInput);
+    let e = polygon_points(DVec3::ZERO, 1.0, 6, Some(DVec3::ZERO), false, None).unwrap_err();
     assert_eq!(e.kind, ErrorKind::InvalidInput);
 }
 

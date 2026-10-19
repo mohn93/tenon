@@ -51,10 +51,10 @@ pub enum Command {
     /// Draw a regular polygon of `sides` sides (default 6, 3 to 360) around `center`, in the
     /// plane with `normal` (default Z), as one undo step. Inscribed, `radius` reaches the
     /// corners and the first corner lies along `direction`; with `circumscribed`, `radius`
-    /// reaches the middles of the sides and the middle of the first side lies along
-    /// `direction`. `direction` (default the plane's u axis, see `add_rectangle`) is projected
-    /// into the plane. Its edges form one curve marked as a polygon, so pulling it keeps the
-    /// sides hard.
+    /// reaches the middles of the sides and the middle of the side ending at the first corner
+    /// lies along `direction`. `direction` (default the plane's u axis, see `add_rectangle`)
+    /// is projected into the plane. Its edges form one curve marked as a polygon, so pulling
+    /// it keeps the sides hard.
     AddPolygon {
         #[schemars(with = "ModelPoint")]
         center: [f64; 3],

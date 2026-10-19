@@ -150,6 +150,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::Line,
         ToolKind::Rectangle,
         ToolKind::Circle,
+        ToolKind::Polygon,
         ToolKind::Arc,
     ]
     .map(tool_item)

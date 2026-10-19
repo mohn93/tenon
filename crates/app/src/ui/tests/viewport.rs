@@ -208,6 +208,7 @@ fn each_tool_has_its_cursor() {
         (ToolKind::Line, C::Crosshair),
         (ToolKind::Rectangle, C::Crosshair),
         (ToolKind::Circle, C::Crosshair),
+        (ToolKind::Polygon, C::Crosshair),
         (ToolKind::Arc, C::Crosshair),
         (ToolKind::TapeMeasure, C::Crosshair),
         (ToolKind::Rotate, C::Crosshair),

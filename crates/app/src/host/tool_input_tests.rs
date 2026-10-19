@@ -179,6 +179,65 @@ fn rectangle_and_circle_take_typed_sizes_and_sides() {
 }
 
 #[test]
+fn polygon_draws_from_clicks_and_typed_sides() {
+    let mut e = editor();
+    tool(&mut e, "polygon");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "type", "text": "5s"},
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [1, 0, 0]},
+            {"type": "type", "text": "2"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_polygon"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert_eq!(
+        (c["sides"].clone(), c["radius"].clone()),
+        (json!(5), json!(2.0))
+    );
+    assert_eq!(c["circumscribed"], false);
+    assert_eq!(created(&r["commands"][0]["outcome"], 'e').len(), 5);
+
+    // The side count and a Ctrl tap's circumscribed mode outlast a switch to another tool.
+    let r = input(&mut e, json!([{"type": "key", "key": "ctrl"}]));
+    assert_eq!(
+        r["editor"]["message"], "Polygons are drawn circumscribed",
+        "{r}"
+    );
+    tool(&mut e, "select");
+    tool(&mut e, "polygon");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [6, 0, 0]},
+            {"type": "click", "point": [7, 0, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_polygon"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert_eq!(c["sides"], 5, "{c}");
+    assert!((c["radius"].as_f64().unwrap() - 1.0).abs() < 1e-9, "{c}");
+    assert_eq!(c["circumscribed"], true);
+    // A fresh session starts with six inscribed sides.
+    let mut fresh = editor();
+    tool(&mut fresh, "polygon");
+    let r = input(
+        &mut fresh,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [1, 0, 0]}
+        ]),
+    );
+    let c = &r["commands"][0]["command"];
+    assert_eq!(
+        (c["sides"].clone(), c["circumscribed"].clone()),
+        (json!(6), json!(false))
+    );
+}
+
+#[test]
 fn the_arc_tool_takes_two_clicks_and_a_typed_bulge() {
     let mut e = editor();
     tool(&mut e, "arc");

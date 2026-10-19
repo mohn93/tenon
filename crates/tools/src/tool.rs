@@ -4,7 +4,9 @@ use std::collections::BTreeSet;
 
 use glam::{DVec2, DVec3};
 use kernel::{EntityId, MaterialId, Model};
-use session::{Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS};
+use session::{
+    Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS, DEFAULT_POLYGON_SIDES,
+};
 
 use crate::arc::ArcTool;
 use crate::circle::CircleTool;
@@ -13,6 +15,7 @@ use crate::inference::{Axis, Inference};
 use crate::line::LineTool;
 use crate::move_tool::MoveTool;
 use crate::paint::PaintTool;
+use crate::polygon::PolygonTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
@@ -176,6 +179,11 @@ impl DragStart {
 pub struct Remembered {
     /// Sides of the circles the Circle tool draws.
     pub circle_sides: u32,
+    /// Sides of the polygons the Polygon tool draws.
+    pub polygon_sides: u32,
+    /// Whether the Polygon tool draws circumscribed polygons (radius to the middles of the
+    /// sides) rather than inscribed ones.
+    pub polygon_circumscribed: bool,
     /// Segments of the arcs the Arc tool draws.
     pub arc_segments: u32,
     /// The last Push/Pull distance, which a double-click on a face repeats.
@@ -186,6 +194,8 @@ impl Default for Remembered {
     fn default() -> Self {
         Remembered {
             circle_sides: DEFAULT_CIRCLE_SEGMENTS,
+            polygon_sides: DEFAULT_POLYGON_SIDES,
+            polygon_circumscribed: false,
             arc_segments: DEFAULT_ARC_SEGMENTS,
             pull_distance: None,
         }
@@ -198,6 +208,7 @@ pub enum ToolKind {
     Line,
     Rectangle,
     Circle,
+    Polygon,
     Arc,
     PushPull,
     Move,
@@ -209,11 +220,12 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 11] = [
+    pub const ALL: [ToolKind; 12] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
         ToolKind::Circle,
+        ToolKind::Polygon,
         ToolKind::Arc,
         ToolKind::PushPull,
         ToolKind::Move,
@@ -235,6 +247,10 @@ impl ToolKind {
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
             ToolKind::Circle => Box::new(CircleTool::with_sides(r.circle_sides)),
+            ToolKind::Polygon => Box::new(PolygonTool::with_settings(
+                r.polygon_sides,
+                r.polygon_circumscribed,
+            )),
             ToolKind::Arc => Box::new(ArcTool::with_segments(r.arc_segments)),
             ToolKind::PushPull => Box::new(PushPullTool::with_distance(r.pull_distance)),
             ToolKind::Move => Box::new(MoveTool::new()),
@@ -252,6 +268,7 @@ impl ToolKind {
             ToolKind::Line => "Line",
             ToolKind::Rectangle => "Rectangle",
             ToolKind::Circle => "Circle",
+            ToolKind::Polygon => "Polygon",
             ToolKind::Arc => "Arc",
             ToolKind::PushPull => "Push/Pull",
             ToolKind::Move => "Move",
@@ -269,6 +286,7 @@ impl ToolKind {
             ToolKind::Line => 'l',
             ToolKind::Rectangle => 'r',
             ToolKind::Circle => 'c',
+            ToolKind::Polygon => 'n',
             ToolKind::Arc => 'a',
             ToolKind::PushPull => 'p',
             ToolKind::Move => 'm',
@@ -426,6 +444,8 @@ mod tests {
         assert_eq!(phase, Phase::Idle);
         let (cmds, _) = dragged(ToolKind::Circle, a, b);
         assert!(matches!(cmds[..], [Command::AddCircle { .. }]), "{cmds:?}");
+        let (cmds, _) = dragged(ToolKind::Polygon, a, b);
+        assert!(matches!(cmds[..], [Command::AddPolygon { .. }]), "{cmds:?}");
         // Line: one edge, and the chain goes on from its end.
         let (cmds, phase) = dragged(ToolKind::Line, a, b);
         assert!(matches!(cmds[..], [Command::AddEdge { .. }]), "{cmds:?}");
@@ -454,6 +474,7 @@ mod tests {
             ToolKind::Line,
             ToolKind::Rectangle,
             ToolKind::Circle,
+            ToolKind::Polygon,
             ToolKind::Arc,
         ] {
             let (cmds, phase) = dragged(kind, a, a + DVec3::new(0.001, 0.0, 0.0));
@@ -511,7 +532,12 @@ mod tests {
         let scenery = Scenery::single(&model);
         let selection = BTreeSet::new();
         let a = DVec3::new(0.5, 0.5, 0.0);
-        for kind in [ToolKind::Line, ToolKind::Rectangle, ToolKind::Circle] {
+        for kind in [
+            ToolKind::Line,
+            ToolKind::Rectangle,
+            ToolKind::Circle,
+            ToolKind::Polygon,
+        ] {
             let mut tool = kind.make();
             let ctx = |cursor| ToolContext {
                 model: &model,
@@ -622,7 +648,7 @@ mod tests {
                 active(&[a, b])
             ]
         );
-        for kind in [ToolKind::Rectangle, ToolKind::Circle] {
+        for kind in [ToolKind::Rectangle, ToolKind::Circle, ToolKind::Polygon] {
             assert_eq!(
                 phases(kind, &[a]),
                 vec![idle.clone(), active(&[a]), active(&[a])],

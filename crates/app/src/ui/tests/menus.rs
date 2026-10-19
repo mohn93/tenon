@@ -453,6 +453,7 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
         ToolKind::Line,
         ToolKind::Rectangle,
         ToolKind::Circle,
+        ToolKind::Polygon,
         ToolKind::Arc,
     ] {
         assert_eq!(

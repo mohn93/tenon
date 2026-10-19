@@ -85,11 +85,12 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 31] = [
+pub const TABLE: [Shortcut; 32] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
     tool(ToolKind::Circle, 'c'),
+    tool(ToolKind::Polygon, 'n'),
     tool(ToolKind::Arc, 'a'),
     tool(ToolKind::PushPull, 'p'),
     tool(ToolKind::Move, 'm'),

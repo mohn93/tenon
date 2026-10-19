@@ -30,6 +30,7 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Line => ph::LINE_SEGMENT,
         ToolKind::Rectangle => ph::RECTANGLE,
         ToolKind::Circle => ph::CIRCLE,
+        ToolKind::Polygon => ph::HEXAGON,
         ToolKind::Arc => ph::BEZIER_CURVE,
         ToolKind::PushPull => ph::ARROW_FAT_LINES_UP,
         ToolKind::Move => ph::ARROWS_OUT_CARDINAL,
