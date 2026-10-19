@@ -32,10 +32,11 @@ impl Model {
         self.transform_vertices(vertices, DAffine3::from_translation(offset))
     }
 
-    /// Moves `vertices` by the rigid motion `t` (a rotation and a translation) as one
-    /// ChangeSet, under the rules of `move_vertices`. Faces that move whole turn with `t`.
-    /// Vertices `t` leaves in place (on a rotation's axis) are not reported, and a motion that
-    /// moves nothing changes nothing.
+    /// Moves `vertices` by the invertible affine map `t` (a rotation, scale, mirror or
+    /// translation) as one ChangeSet, under the rules of `move_vertices`. Faces that move
+    /// whole turn with `t`, and a mirror reverses their loops so they keep facing out. Every
+    /// edge must keep a length. Vertices `t` leaves in place (on a rotation's axis) are not
+    /// reported, and a motion that moves nothing changes nothing.
     pub fn transform_vertices(
         &mut self,
         vertices: &BTreeSet<VertexId>,
@@ -44,18 +45,21 @@ impl Model {
         if !t.is_finite() {
             return Err(KernelError::NotFinite);
         }
+        let det = t.matrix3.determinant();
+        if det.abs() < 1e-12 {
+            return Err(KernelError::Squash);
+        }
+        let mirror = det < 0.0;
         let moved: BTreeSet<VertexId> = vertices
             .iter()
             .copied()
             .filter(|v| self.vertex(*v).is_some())
             .collect();
-        debug_assert!(
-            {
-                let m = t.matrix3;
-                (m.transpose() * m).abs_diff_eq(glam::DMat3::IDENTITY, 1e-9)
-            },
-            "transform_vertices needs a rigid motion"
-        );
+        let m = t.matrix3;
+        let rigid = (m.transpose() * m).abs_diff_eq(glam::DMat3::IDENTITY, 1e-9);
+        // Normals turn with `t` itself for a rotation (exactly as before) and with the
+        // inverse transpose for any other map.
+        let normals = if rigid { m } else { m.inverse().transpose() };
         // A vertex a rotation leaves in place (on its axis) stays exactly where it is, not a
         // rounding error away. A pure translation moves every vertex by its full offset.
         let translation = t.matrix3 == glam::DMat3::IDENTITY;
@@ -75,7 +79,7 @@ impl Model {
 
         for (_, e) in self.edges() {
             let [a, b] = e.v;
-            if moved.contains(&a) != moved.contains(&b)
+            if (moved.contains(&a) || moved.contains(&b))
                 && at(self, a).distance(at(self, b)) < LENGTH_TOL
             {
                 return Err(KernelError::Squash);
@@ -100,8 +104,9 @@ impl Model {
             if touched == 0 {
                 continue;
             }
-            let normal = if touched == all.len() {
-                t.transform_vector3(f.normal).normalize()
+            let whole = touched == all.len();
+            let normal = if whole {
+                (normals * f.normal).normalize()
             } else {
                 let outer: Vec<DVec3> = f.outer.iter().map(|v| at(self, *v)).collect();
                 let area = vector_area(&outer);
@@ -129,9 +134,14 @@ impl Model {
                 }
                 normal
             };
-            if normal.distance(f.normal) > 1e-12 {
+            let reverse = whole && mirror;
+            if reverse || normal.distance(f.normal) > 1e-12 {
                 let mut g = f.clone();
                 g.normal = normal;
+                if reverse {
+                    reverse_loop(&mut g.outer);
+                    g.holes.iter_mut().for_each(|h| reverse_loop(h));
+                }
                 retilted.push((id, g));
             }
         }
@@ -583,6 +593,11 @@ impl FaceSample {
         let p = r.plane.project(self.inside);
         p.cmpge(r.lo).all() && p.cmple(r.hi).all() && point_in_polygon(p, &r.outline)
     }
+}
+
+/// Reverses a loop's direction, keeping its first vertex first.
+fn reverse_loop(ring: &mut [VertexId]) {
+    ring[1..].reverse();
 }
 
 fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {

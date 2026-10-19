@@ -445,6 +445,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::Move { ids, .. }
         | Command::Copy { ids, .. }
         | Command::Rotate { ids, .. }
+        | Command::Scale { ids, .. }
         | Command::MakeGroup { ids }
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }

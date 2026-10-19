@@ -352,6 +352,7 @@ impl Document {
             | Command::Move { .. }
             | Command::Copy { .. }
             | Command::Rotate { .. }
+            | Command::Scale { .. }
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
@@ -449,6 +450,11 @@ impl Document {
                 angle,
                 copies,
             } => self.rotate_changes(ids, *center, *axis, *angle, *copies),
+            Command::Scale {
+                ids,
+                origin,
+                factors,
+            } => self.scale_changes(ids, *origin, *factors),
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
@@ -912,6 +918,52 @@ impl Document {
             let mut c = m.transform_vertices(&vertices, turn)?;
             c.ops.extend(m.transform_instances(&instances, turn).ops);
             c.ops.extend(m.transform_guides(&guides, turn).ops);
+            Ok(c)
+        })
+        .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn scale_changes(
+        &mut self,
+        ids: &[EntityId],
+        origin: [f64; 3],
+        factors: [f64; 3],
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if ids.is_empty() {
+            return Err(invalid(
+                "ids must list at least one vertex, edge, face, instance or guide",
+            ));
+        }
+        check_coordinates(&[origin])?;
+        if !factors
+            .iter()
+            .all(|f| f.is_finite() && (1e-4..=1e4).contains(&f.abs()))
+        {
+            return Err(invalid(
+                "scale factors must be finite and between 1e-4 and 1e4 in size",
+            ));
+        }
+        if factors == [1.0; 3] {
+            return Err(invalid("nothing to scale: every factor is 1"));
+        }
+        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
+        if !missing.is_empty() {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
+            );
+        }
+        let origin = DVec3::from(origin);
+        let scale = DAffine3::from_translation(origin)
+            * DAffine3::from_scale(DVec3::from(factors))
+            * DAffine3::from_translation(-origin);
+        let vertices = self.vertex_ids(ids);
+        let (instances, guides) = (instance_ids(ids), guide_ids(ids));
+        self.check_placed(&vertices, &instances, &guides, &[scale])?;
+        self.edit_mesh(|m| {
+            let mut c = m.transform_vertices(&vertices, scale)?;
+            c.ops.extend(m.transform_instances(&instances, scale).ops);
+            c.ops.extend(m.transform_guides(&guides, scale).ops);
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))

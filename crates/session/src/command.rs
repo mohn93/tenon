@@ -152,6 +152,16 @@ pub enum Command {
         #[serde(default)]
         copies: Option<u32>,
     },
+    /// Scale vertices, edges, faces (their vertices), instances and guides by `factors` along
+    /// model x, y and z about `origin`, as one undo step. Each factor is finite, non-zero and
+    /// between 1e-4 and 1e4 in size; a negative factor mirrors (faces stay facing out). Faces
+    /// that share some of the scaled vertices stretch and may tilt, but must stay flat.
+    Scale {
+        ids: Vec<EntityId>,
+        #[schemars(with = "ModelPoint")]
+        origin: [f64; 3],
+        factors: [f64; 3],
+    },
     /// Turn edges, faces (with their edges), instances and guides into a group: they move into
     /// a new definition, placed by one new instance where they were. Guides alone cannot be
     /// grouped. The instance becomes the selection.

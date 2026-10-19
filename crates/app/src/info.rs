@@ -1,6 +1,6 @@
 //! Text for the Entity Info panel: what is selected and its measurements.
 
-use glam::{DAffine3, DQuat};
+use glam::{DAffine3, DMat3, DQuat};
 use kernel::{CurveKind, DefinitionKind, EdgeId, EntityId, Guide, Model};
 use session::Document;
 use tools::vcb::format_length;
@@ -80,7 +80,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
             }
             _ => vec!["1 group".into()],
         };
-        lines.extend(instance.and_then(|i| rotation(i.transform)));
+        lines.extend(instance.map_or_else(Vec::new, |i| placement(i.transform)));
         if let Some(material) = instance.and_then(|i| i.material) {
             lines.push(format!("Material: {}", material_name(doc, Some(material))));
         }
@@ -159,10 +159,32 @@ fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
     Some(lines)
 }
 
+/// The rotation line of a placement and, when it is not a pure rotation, a line with its
+/// scale along its own axes ("Scale: 2, 1, 1"; a mirror shows a negative x).
+fn placement(t: DAffine3) -> Vec<String> {
+    let m = t.matrix3;
+    let lengths = [m.x_axis.length(), m.y_axis.length(), m.z_axis.length()];
+    let mirror = m.determinant() < 0.0;
+    if !mirror && lengths.iter().all(|l| (l - 1.0).abs() < 1e-9) {
+        return rotation(m).into_iter().collect();
+    }
+    let sign = if mirror { -1.0 } else { 1.0 };
+    let scale = [sign * lengths[0], lengths[1], lengths[2]];
+    let turn = DMat3::from_cols(
+        m.x_axis / scale[0],
+        m.y_axis / scale[1],
+        m.z_axis / scale[2],
+    );
+    let mut lines: Vec<String> = rotation(turn).into_iter().collect();
+    let s = scale.map(number);
+    lines.push(format!("Scale: {}, {}, {}", s[0], s[1], s[2]));
+    lines
+}
+
 /// "Rotation: 30° about 0, 0, 1" for a turned placement (the turn of at most 180 degrees,
 /// counter-clockwise looking down the axis); None when it is not turned.
-fn rotation(t: DAffine3) -> Option<String> {
-    let (mut axis, angle) = DQuat::from_mat3(&t.matrix3).to_axis_angle();
+fn rotation(m: DMat3) -> Option<String> {
+    let (mut axis, angle) = DQuat::from_mat3(&m).to_axis_angle();
     let mut degrees = angle.to_degrees();
     if degrees > 180.0 {
         degrees = 360.0 - degrees;
@@ -454,6 +476,50 @@ mod tests {
         );
         turn(&mut d, 120.0);
         assert_eq!(entity_info(&d), ["1 group"]);
+    }
+
+    #[test]
+    fn entity_info_shows_scale_and_true_rotation() {
+        let group = |d: &mut Document| {
+            let ids = d
+                .model()
+                .faces()
+                .map(|(f, _)| EntityId::Face(f))
+                .chain(d.model().edges().map(|(e, _)| EntityId::Edge(e)))
+                .collect();
+            d.execute(Command::MakeGroup { ids }).unwrap();
+            *d.selection().first().unwrap()
+        };
+        let scale = |d: &mut Document, id: EntityId, factors: [f64; 3]| {
+            d.execute(Command::Scale {
+                ids: vec![id],
+                origin: [0.0; 3],
+                factors,
+            })
+            .unwrap();
+        };
+        // Stretched along its own x, then turned a quarter about Z.
+        let mut d = doc_with_square();
+        let g = group(&mut d);
+        scale(&mut d, g, [2.0, 1.0, 1.0]);
+        assert_eq!(entity_info(&d), ["1 group", "Scale: 2, 1, 1"]);
+        d.execute(Command::Rotate {
+            ids: vec![g],
+            center: [0.0; 3],
+            axis: None,
+            angle: 90.0,
+            copies: None,
+        })
+        .unwrap();
+        assert_eq!(
+            entity_info(&d),
+            ["1 group", "Rotation: 90° about 0, 0, 1", "Scale: 2, 1, 1"]
+        );
+        // Mirrored.
+        let mut d = doc_with_square();
+        let g = group(&mut d);
+        scale(&mut d, g, [-1.0, 1.0, 1.0]);
+        assert_eq!(entity_info(&d), ["1 group", "Scale: -1, 1, 1"]);
     }
 
     #[test]

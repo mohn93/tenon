@@ -323,3 +323,47 @@ fn describe_gives_the_view_queries_schemas() {
         "{text}"
     );
 }
+
+#[test]
+fn a_turned_group_scaled_along_model_axes_is_picked_at_its_new_extent() {
+    let mut h = boxed();
+    let all = query(
+        &mut h,
+        json!({"type": "entities", "kinds": ["edge", "face"]}),
+    );
+    let ids: Vec<Value> = ["edges", "faces"]
+        .iter()
+        .flat_map(|k| all[k].as_array().unwrap().clone())
+        .map(|e| e["id"].clone())
+        .collect();
+    let r = call(&mut h, "execute", json!({"type": "make_group", "ids": ids}));
+    let group = r["result"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('i'))
+        .unwrap()
+        .clone();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "rotate", "ids": [group], "center": [0, 0, 0], "angle": 30}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    // The box's top point (1.9, 0.1, 1) turned 30 degrees and then stretched twice along X.
+    let (s, c) = 30f64.to_radians().sin_cos();
+    let (x, y) = (2.0 * (1.9 * c - 0.1 * s), 1.9 * s + 0.1 * c);
+    let ray = json!({"origin": [x, y, 10], "direction": [0, 0, -1]});
+    let r = query(&mut h, json!({"type": "pick", "ray": ray}));
+    assert_eq!(r["hits"], json!([]), "outside the turned box");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    );
+    assert!(r["error"].is_null(), "{r}");
+    let r = query(&mut h, json!({"type": "pick", "ray": ray}));
+    assert_eq!(r["hits"][0]["path"], json!([group]));
+    let p = &r["hits"][0]["point"];
+    assert!((p[2].as_f64().unwrap() - 1.0).abs() < 1e-9, "{p}");
+}
