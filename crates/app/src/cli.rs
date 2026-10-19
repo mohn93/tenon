@@ -86,10 +86,13 @@ pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     }
 }
 
-/// `ensure_private_dir`, creating missing parent folders too (mode 0700). Only `dir` itself is
-/// checked, so an existing parent such as `~/.config` keeps its mode.
-pub fn ensure_private_tree(dir: &Path) -> io::Result<()> {
-    if let Some(parent) = dir.parent()
+/// `ensure_private_dir` for a folder under an XDG base: on Linux missing parent folders are
+/// created too (mode 0700; only `dir` itself is checked, so an existing parent such as
+/// `~/.config` keeps its mode). Elsewhere it is `ensure_private_dir`, so a missing parent (such
+/// as HOME) stays an error.
+pub fn ensure_private_xdg_dir(os: crate::paths::Os, dir: &Path) -> io::Result<()> {
+    if os == crate::paths::Os::Linux
+        && let Some(parent) = dir.parent()
         && !parent.as_os_str().is_empty()
         && std::fs::symlink_metadata(parent).is_err()
     {

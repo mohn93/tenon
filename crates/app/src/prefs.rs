@@ -161,17 +161,18 @@ fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-/// Writes `prefs` to `path` (mode 0600), in a folder made or checked private like the rest of
-/// the app's other private folders (0700, not a link; missing parents are created). The bytes go first to a new hidden file beside it
-/// (`.prefs-<pid>-<n>.partial`), created only where nothing is, so they never go through a
-/// link; it is renamed over `path` once written, or removed if the write fails.
+/// Writes `prefs` to `path` (mode 0600), in a folder made or checked private like the app's
+/// other private folders (0700, not a link; on Linux missing parents are created). The bytes go
+/// first to a new hidden file beside it (`.prefs-<pid>-<n>.partial`), created only where nothing
+/// is, so they never go through a link; it is renamed over `path` once written, or removed if
+/// the write fails.
 pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = path
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .ok_or_else(|| io::Error::other("the preferences path has no folder"))?;
-    crate::cli::ensure_private_tree(dir)?;
+    crate::cli::ensure_private_xdg_dir(crate::paths::Os::current(), dir)?;
     let json = serde_json::to_vec_pretty(prefs).map_err(io::Error::other)?;
     let (partial, mut file) = loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -233,6 +234,7 @@ mod tests {
         let home = home("legacy");
         let old = path_in(&home);
         let new = home.join(".config/sketchup-alt/prefs.json");
+        std::fs::create_dir_all(home.join(".config")).unwrap();
         let file = PrefsFile {
             path: new.clone(),
             legacy: Some(old.clone()),

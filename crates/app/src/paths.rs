@@ -136,7 +136,8 @@ fn is_private_dir_of(dir: &Path, uid: u32) -> bool {
 }
 
 /// The user this process runs as: the owner of `/proc/self` (Linux). None elsewhere, which
-/// leaves the runtime folder unused.
+/// leaves the runtime folder unused. A non-dumpable process (setuid, or `prctl` off) sees
+/// `/proc/self` owned by root, so the runtime folder is then not used: a safe fallback.
 fn current_uid() -> Option<u32> {
     std::fs::metadata("/proc/self").ok().map(|m| m.uid())
 }
@@ -271,6 +272,18 @@ mod tests {
             run,
             "readable by others is fine, writable is not"
         );
+        // A symlink to a good folder is not a real folder.
+        let link = run.join("link");
+        let target = scratch("runtime-target");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let link_str = link.to_str().unwrap().to_string();
+        let e = env(&[("HOME", "/home/me"), ("XDG_RUNTIME_DIR", &link_str)]);
+        assert_eq!(
+            resolve_as(Os::Linux, &e, 7, Some(uid)).unwrap().socket_dir,
+            fallback
+        );
+        let _ = std::fs::remove_dir_all(target);
         // A file, a missing folder, a path too long for a socket.
         let file = run.join("file");
         std::fs::write(&file, b"").unwrap();
@@ -321,5 +334,15 @@ mod tests {
             socket_dir_as(Os::Linux, &env(&[]), None, 7, None),
             Path::new("/tmp")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn current_uid_is_the_owner_of_a_new_file() {
+        let dir = scratch("uid");
+        let file = dir.join("f");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(current_uid(), Some(my_uid(&file)));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

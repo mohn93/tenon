@@ -28,6 +28,10 @@ folder, as before.
 
 Commands use Ctrl (Ctrl+S, Ctrl+Z, ...). The Super key never runs a command.
 
+In fly mode Ctrl flies straight down and W, A, S, D, E, Q and Space move. A movement key pressed
+with Ctrl held is a shortcut only when Ctrl plus that key is a bound command (Ctrl+S saves,
+Ctrl+Q quits); otherwise it still steers, so Ctrl+W flies forward while descending.
+
 ## File dialogs
 
 Open, Save and Export use the xdg-desktop-portal file chooser, falling back to `zenity`. If

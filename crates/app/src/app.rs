@@ -471,13 +471,33 @@ fn menu_bar_held(os: paths::Os, super_key: bool) -> bool {
     os == paths::Os::MacOs && super_key
 }
 
-/// Whether the key that turns a fly-mode movement key into a shortcut (Cmd+S saves) is down:
-/// Cmd on macOS (Ctrl+S still moves), Ctrl elsewhere.
-fn shortcut_held(os: paths::Os, super_key: bool, control_key: bool) -> bool {
-    match os {
-        paths::Os::MacOs => super_key,
-        _ => control_key,
+/// Whether a fly-mode movement key press is a shortcut instead. On macOS: with Cmd held
+/// (Cmd+S saves; Ctrl+S still moves). Elsewhere: with Ctrl held, when Ctrl plus that key is a
+/// bound window command (Ctrl+S saves), so Ctrl+W still steers and the Ctrl press itself, which
+/// flies straight down, always reaches fly mode.
+fn fly_shortcut(
+    os: paths::Os,
+    key: PhysicalKey,
+    shift: bool,
+    super_key: bool,
+    control_key: bool,
+) -> bool {
+    if os == paths::Os::MacOs {
+        return super_key;
     }
+    let letter = match key {
+        PhysicalKey::Code(code) => match code {
+            KeyCode::KeyW => 'w',
+            KeyCode::KeyA => 'a',
+            KeyCode::KeyS => 's',
+            KeyCode::KeyD => 'd',
+            KeyCode::KeyE => 'e',
+            KeyCode::KeyQ => 'q',
+            _ => return false,
+        },
+        _ => return false,
+    };
+    control_key && shortcuts::window_command(letter, shift, false, false, false).is_some()
 }
 
 /// True if a key event goes to fly mode's movement: a moving key while flying, except a press
@@ -649,9 +669,11 @@ impl State {
         menu_bar_held(paths::Os::current(), self.modifiers.super_key())
     }
 
-    fn shortcut_key(&self) -> bool {
-        shortcut_held(
+    fn fly_shortcut(&self, key: PhysicalKey) -> bool {
+        fly_shortcut(
             paths::Os::current(),
+            key,
+            self.modifiers.shift_key(),
             self.modifiers.super_key(),
             self.modifiers.control_key(),
         )
@@ -2319,7 +2341,7 @@ impl ApplicationHandler<AppEvent> for App {
                     s.editor.flying(),
                     event.physical_key,
                     event.state == ElementState::Pressed,
-                    s.shortcut_key(),
+                    s.fly_shortcut(event.physical_key),
                 ) =>
             {
                 s.editor.fly_key(key, event.state == ElementState::Pressed)
@@ -3127,19 +3149,47 @@ mod tests {
             assert!(command_held(os, true, true));
             assert!(!command_held(os, false, false));
             assert!(!menu_bar_held(os, true));
-            assert!(shortcut_held(os, false, true), "Ctrl+S saves while flying");
-            assert!(!shortcut_held(os, true, false), "Super+S flies");
         }
         assert!(command_held(Os::MacOs, true, false), "Cmd");
         assert!(command_held(Os::MacOs, false, true), "Ctrl still counts");
         assert!(!command_held(Os::MacOs, false, false));
         assert!(menu_bar_held(Os::MacOs, true));
         assert!(!menu_bar_held(Os::MacOs, false));
-        assert!(shortcut_held(Os::MacOs, true, false));
+    }
+
+    #[test]
+    fn fly_shortcuts_per_os() {
+        use paths::Os;
+        let code = PhysicalKey::Code;
+        let s = code(KeyCode::KeyS);
+        for os in [Os::Linux, Os::Other] {
+            assert!(fly_shortcut(os, s, false, false, true), "Ctrl+S saves");
+            assert!(fly_shortcut(os, code(KeyCode::KeyQ), false, false, true));
+            assert!(!fly_shortcut(os, code(KeyCode::KeyW), false, false, true));
+            assert!(!fly_shortcut(os, code(KeyCode::Space), false, false, true));
+            let ctrl = code(KeyCode::ControlLeft);
+            assert!(
+                !fly_shortcut(os, ctrl, false, false, true),
+                "Ctrl flies down"
+            );
+            assert!(!fly_shortcut(os, s, false, false, false), "plain S flies");
+            assert!(!fly_shortcut(os, s, false, true, false), "Super+S flies");
+        }
         assert!(
-            !shortcut_held(Os::MacOs, false, true),
-            "Ctrl+S flies on macOS"
+            fly_shortcut(Os::MacOs, s, false, true, false),
+            "Cmd+S saves"
         );
+        assert!(
+            !fly_shortcut(Os::MacOs, s, false, false, true),
+            "Ctrl+S flies"
+        );
+        assert!(!fly_shortcut(
+            Os::MacOs,
+            code(KeyCode::KeyW),
+            false,
+            false,
+            true
+        ));
     }
 
     #[test]

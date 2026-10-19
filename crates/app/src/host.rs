@@ -133,7 +133,8 @@ impl AppHost<'_> {
         if let Some(parent) = cli::private_dir_for(dir) {
             cli::ensure_private_dir(parent).map_err(|e| failed(e.to_string()))?;
         }
-        cli::ensure_private_tree(dir).map_err(|e| failed(e.to_string()))?;
+        cli::ensure_private_xdg_dir(crate::paths::Os::current(), dir)
+            .map_err(|e| failed(e.to_string()))?;
         let path = recovery_path(dir, self.editor.doc().path(), SystemTime::now());
         self.editor
             .doc()
