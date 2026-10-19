@@ -28,8 +28,8 @@ mod weld;
 
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
-    DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MaterialData, MeshData,
-    SceneData, TextureData, VertexData,
+    DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MIN_DETERMINANT,
+    MaterialData, MeshData, SceneData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{

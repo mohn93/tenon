@@ -959,6 +959,21 @@ impl Document {
             * DAffine3::from_translation(-origin);
         let vertices = self.vertex_ids(ids);
         let (instances, guides) = (instance_ids(ids), guide_ids(ids));
+        // An instance squeezed this flat could not be opened again once saved.
+        let flat: Vec<EntityId> = instances
+            .iter()
+            .filter(|i| {
+                self.model().instance(**i).is_some_and(|i| {
+                    (scale * i.transform).matrix3.determinant().abs() < kernel::MIN_DETERMINANT
+                })
+            })
+            .map(|i| EntityId::Instance(*i))
+            .collect();
+        if !flat.is_empty() {
+            return Err(
+                invalid("scaling would squeeze an instance too flat to keep").with_ids(flat),
+            );
+        }
         self.check_placed(&vertices, &instances, &guides, &[scale])?;
         self.edit_mesh(|m| {
             let mut c = m.transform_vertices(&vertices, scale)?;

@@ -38,8 +38,8 @@ impl Model {
         self.take_changes()
     }
 
-    /// Moves guides by the rigid motion `t` as one ChangeSet, keeping their ids (each is
-    /// reported as modified); unknown ids are skipped.
+    /// Moves guides by the affine map `t` as one ChangeSet (a line's direction is mapped and
+    /// normalised), keeping their ids (each is reported as modified); unknown ids are skipped.
     pub fn transform_guides(&mut self, ids: &[GuideId], t: DAffine3) -> ChangeSet {
         for id in ids.iter().collect::<BTreeSet<_>>() {
             if self.guide(*id).is_some() {

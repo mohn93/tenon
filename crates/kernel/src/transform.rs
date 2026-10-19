@@ -1,6 +1,6 @@
 //! Moving and copying geometry.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{DAffine3, DVec2, DVec3};
 
@@ -34,9 +34,11 @@ impl Model {
 
     /// Moves `vertices` by the invertible affine map `t` (a rotation, scale, mirror or
     /// translation) as one ChangeSet, under the rules of `move_vertices`. Faces that move
-    /// whole turn with `t`, and a mirror reverses their loops so they keep facing out. Every
-    /// edge must keep a length. Vertices `t` leaves in place (on a rotation's axis) are not
-    /// reported, and a motion that moves nothing changes nothing.
+    /// whole turn with `t`, and a mirror reverses their loops so they keep facing out (also
+    /// when `t` leaves every one of their vertices in place, like a face on a mirror plane).
+    /// Every edge must keep a length and no two vertices may meet. Vertices `t` leaves in
+    /// place (on a rotation's axis) are not reported, and a motion that moves no vertex and
+    /// is no mirror changes nothing.
     pub fn transform_vertices(
         &mut self,
         vertices: &BTreeSet<VertexId>,
@@ -95,6 +97,36 @@ impl Model {
                 return Err(KernelError::Squash);
             }
         }
+        // A map that is not rigid can also bring moved vertices together. Those closer than
+        // LENGTH_TOL fall in the same or neighbouring cells of a LENGTH_TOL grid.
+        if !rigid {
+            let cell = |p: DVec3| (p / LENGTH_TOL).floor().to_array().map(|c| c as i64);
+            let mut grid: HashMap<[i64; 3], Vec<DVec3>> = HashMap::new();
+            for &v in &moved {
+                let to = at(self, v);
+                let [x, y, z] = cell(to);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            let key = [
+                                x.saturating_add(dx),
+                                y.saturating_add(dy),
+                                z.saturating_add(dz),
+                            ];
+                            if grid
+                                .get(&key)
+                                .into_iter()
+                                .flatten()
+                                .any(|p| p.distance(to) < LENGTH_TOL)
+                            {
+                                return Err(KernelError::Squash);
+                            }
+                        }
+                    }
+                }
+                grid.entry([x, y, z]).or_default().push(to);
+            }
+        }
         // Faces that move partly get a new plane; check it and compute their new normals.
         // Faces that move whole keep their shape and turn with `t`.
         let mut retilted: Vec<(FaceId, Face)> = Vec::new();
@@ -106,7 +138,17 @@ impl Model {
             }
             let whole = touched == all.len();
             let normal = if whole {
-                (normals * f.normal).normalize()
+                let normal = (normals * f.normal).normalize();
+                // A squeeze can bring a face's sides or holes within tolerance of each other.
+                if !rigid {
+                    let rings: Vec<Vec<DVec3>> = loops(f)
+                        .map(|r| r.iter().map(|v| at(self, *v)).collect())
+                        .collect();
+                    if !rings_are_valid(&rings, normal) {
+                        return Err(KernelError::Squash);
+                    }
+                }
+                normal
             } else {
                 let outer: Vec<DVec3> = f.outer.iter().map(|v| at(self, *v)).collect();
                 let area = vector_area(&outer);

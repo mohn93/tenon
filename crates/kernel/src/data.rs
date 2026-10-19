@@ -20,7 +20,7 @@ pub const MAX_ID: u64 = 1 << 53;
 
 /// Instance transforms whose 3x3 part has a smaller determinant (in absolute value) cannot be
 /// inverted reliably and are rejected on load.
-const MIN_DETERMINANT: f64 = 1e-12;
+pub const MIN_DETERMINANT: f64 = 1e-12;
 
 /// A whole scene as plain data. Ids are the kernel's numbers (without the "v"/"e"/... prefix).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

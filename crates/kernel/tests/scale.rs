@@ -165,3 +165,89 @@ fn rotations_are_unchanged() {
         outers
     );
 }
+
+/// A 10 x 10 square on the ground with a hole from (x0, 4) to (x1, 6); returns the model
+/// and the face around the hole.
+fn square_with_hole(x0: f64, x1: f64) -> (Model, FaceId) {
+    let mut m = Model::new();
+    let ring =
+        |a: f64, b: f64, c: f64, d: f64| [p(a, c, 0.0), p(b, c, 0.0), p(b, d, 0.0), p(a, d, 0.0)];
+    m.add_polygon(&ring(0.0, 10.0, 0.0, 10.0)).unwrap();
+    m.add_polygon(&ring(x0, x1, 4.0, 6.0)).unwrap();
+    let outer = m
+        .faces()
+        .find(|(_, f)| !f.holes.is_empty())
+        .map(|(id, _)| id)
+        .unwrap();
+    (m, outer)
+}
+
+#[test]
+fn unconnected_vertices_squeezed_together_are_refused() {
+    let mut m = Model::new();
+    m.add_edge(p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)).unwrap();
+    m.add_edge(p(0.005, 0.0, 0.0), p(0.005, 1.0, 0.0)).unwrap();
+    let all = all_vertices(&m);
+    let before = m.clone();
+    assert!(matches!(
+        m.transform_vertices(&all, about(DVec3::ZERO, p(1e-4, 1.0, 1.0))),
+        Err(KernelError::Squash)
+    ));
+    assert_eq!(m, before);
+    m.validate().unwrap();
+}
+
+#[test]
+fn a_hole_squeezed_onto_its_outer_ring_is_refused() {
+    // The hole's left side is 5 mm from the outer ring's; scaled by 1e-4 along x it would be
+    // 0.0005 mm away, while every edge keeps a length and no vertices meet.
+    let (mut m, _) = square_with_hole(0.005, 5.0);
+    let all = all_vertices(&m);
+    let before = m.clone();
+    assert!(matches!(
+        m.transform_vertices(&all, about(DVec3::ZERO, p(1e-4, 1.0, 1.0))),
+        Err(KernelError::Squash)
+    ));
+    assert_eq!(m, before);
+}
+
+#[test]
+fn a_mirrored_face_with_a_hole_keeps_its_windings() {
+    let (mut m, face) = square_with_hole(4.0, 6.0);
+    let all = all_vertices(&m);
+    m.transform_vertices(&all, about(p(5.0, 5.0, 0.0), p(-1.0, 1.0, 1.0)))
+        .unwrap();
+    m.validate().unwrap();
+    let f = m.face(face).unwrap();
+    let pts =
+        |r: &Vec<VertexId>| -> Vec<DVec3> { r.iter().map(|v| m.vertex(*v).unwrap().pos).collect() };
+    assert!(
+        vector_area(&pts(&f.outer)).dot(f.normal) > 0.0,
+        "outer counter-clockwise"
+    );
+    assert_eq!(f.holes.len(), 1);
+    assert!(
+        vector_area(&pts(&f.holes[0])).dot(f.normal) < 0.0,
+        "hole clockwise"
+    );
+    // Every vertex was a mirror image of another on x = 5, so the outline is where it was.
+    assert_eq!(bounds(&m), (DVec3::ZERO, p(10.0, 10.0, 0.0)));
+}
+
+#[test]
+fn a_mirror_turns_over_a_face_on_the_mirror_plane() {
+    let mut m = Model::new();
+    m.add_polygon(&[
+        p(0.0, 0.0, 0.0),
+        p(1.0, 0.0, 0.0),
+        p(1.0, 1.0, 0.0),
+        p(0.0, 1.0, 0.0),
+    ])
+    .unwrap();
+    let (id, before) = m.faces().map(|(id, f)| (id, f.normal)).next().unwrap();
+    let all = all_vertices(&m);
+    m.transform_vertices(&all, about(DVec3::ZERO, p(1.0, 1.0, -1.0)))
+        .unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.face(id).unwrap().normal, -before);
+}

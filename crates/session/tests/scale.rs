@@ -224,3 +224,26 @@ fn scale_a_rotated_group_along_model_axes() {
     assert!((x(&after, "min") - 2.0 * x(&before, "min")).abs() < 1e-9);
     assert_eq!(after["max"][1], before["max"][1]);
 }
+
+#[test]
+fn an_instance_squeezed_too_flat_is_refused() {
+    let mut d = doc();
+    let group = group_box(&mut d, [0.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [1e-4, 1e-4, 1e-3]}),
+    )
+    .unwrap();
+    let before = ask(&d, json!({"type": "entity", "id": group}));
+    assert_eq!(
+        run(
+            &mut d,
+            json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [1e-4, 1, 1]}),
+        ),
+        Err((
+            ErrorKind::InvalidInput,
+            vec![group.as_str().unwrap().to_string()]
+        ))
+    );
+    assert_eq!(ask(&d, json!({"type": "entity", "id": group})), before);
+}
