@@ -111,7 +111,7 @@ pub struct ReadOptions {
     /// a commercial pack's 4,147 definitions while bounding the duplication at
     /// twice their geometry.
     pub merge_below: usize,
-    /// Most vertices, edges, faces, loops, edge uses and instances `read_model` takes over
+    /// Most vertices, edges, faces, loops, edge uses, guides and instances `read_model` takes over
     /// the root and every definition together; past it the read fails with
     /// `Malformed("too many elements")`. `None` for no limit.
     pub max_elements: Option<u64>,
@@ -457,6 +457,22 @@ fn parse_definition(payload: &[u8], budget: &mut u64) -> Result<Definition> {
 // ---------------------------------------------------------------------------
 
 impl Model {
+    /// Hidden guides skipped over the root and every definition (2021+ files; a legacy
+    /// read counts its own in `legacy::ReadStats::hidden_guides`).
+    pub fn hidden_guides(&self) -> u64 {
+        self.geometries().map(|g| u64::from(g.hidden_guides)).sum()
+    }
+
+    /// Guide-list records that were not read as a guide, over the root and every
+    /// definition (2021+ files; see `DefGeometry::unread_guides`).
+    pub fn unread_guides(&self) -> u64 {
+        self.geometries().map(|g| u64::from(g.unread_guides)).sum()
+    }
+
+    fn geometries(&self) -> impl Iterator<Item = &DefGeometry> {
+        core::iter::once(&self.root).chain(self.definitions.iter().map(|d| &d.geom))
+    }
+
     pub fn counts(&self) -> Counts {
         let mut c = Counts::default();
         c.definitions = self.definitions.len() as u32;

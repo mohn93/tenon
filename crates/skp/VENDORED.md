@@ -91,8 +91,8 @@ Upstream's tests are not copied: they read a private corpus.
     definitions weighing 50 as in item 13. `read`'s `finish` now builds its
     index with the same code (`index_and_stats`), which changes nothing in
     what `read` returns.
-16. Guides: `geom::RawGuide` and `DefGeometry::guides` (empty on the 2021+
-    path for now). Legacy `CConstructionLine` (point, direction; the start
+16. Guides: `geom::RawGuide` and `DefGeometry::guides` (the 2021+ path:
+    item 24). Legacy `CConstructionLine` (point, direction; the start
     and end parameters are dropped, the line is infinite) and
     `CConstructionPoint` records, which were read and discarded, are kept
     unless hidden; hidden ones are counted in `ReadStats::hidden_guides`.
@@ -140,3 +140,25 @@ Upstream's tests are not copied: they read a private corpus.
     unread, which `read_model` would have given as an empty root.
 23. `SceneIndex::counts.instances` leaves out placements inside a definition
     that failed. `image_defs` is a set.
+24. Guides from 2021+ files: `parse_component_within` reads
+    `ComponentConstructionLines > ConstructionLine` (point and direction from
+    the first six of `ConstructionLineGeomLine`'s eight doubles; the start and
+    end parameters are dropped, the line is infinite) and
+    `ComponentConstructionPoints > ConstructionPoint`
+    (`ConstructionPointPosition`) into `DefGeometry::guides`. Layout from
+    openskp's VFF reader (`_extract_geometry_from_nodes`, tags `9113`/`6942`/
+    `6A42` and `9213`/`6C42`/`6D42` in its spelling;
+    https://github.com/iamahsanmehmood/openskp, commit
+    `13ae161fa0108647a04ad5730776120bb6fe8c83`, MIT, copyright (c) 2024-2026
+    Ahsan Mehmood; ported, not copied), checked against the point records of
+    SketchUp 2024 files. Changed from openskp: the hidden bit of the
+    `ConstructionGeometry` wrapper's `DrawingElementFlags` is read, and hidden
+    guides are skipped and counted in `DefGeometry::hidden_guides`; a record
+    in either list that is not that list's guide, or lacks its body (a point
+    shorter than 3 doubles, a line shorter than 8), is skipped and counted in
+    `DefGeometry::unread_guides`. `scene::Model::hidden_guides` and
+    `unread_guides` sum both over the model (a legacy read counts hidden
+    guides in `ReadStats::hidden_guides` instead). Each kept guide counts
+    against the element budget.
+25. `skip_thumbnail_quality`: removed a branch that could not be taken (a
+    `u32` of at most 100 cannot start a definition) and reworded its comment.

@@ -2108,13 +2108,18 @@ impl<'a> Archive<'a> {
     /// definitions and read the root count four bytes early, which lost root
     /// entities (truck, bikes) or failed the file (barstools).
     ///
-    /// Skipped only when it is a plausible quality and what a thumbnail ends
-    /// (a definition) can be followed by reads well after it and not without
-    /// it: another definition, the root count and a first root entity, or an
-    /// instance's transform and name (a definition written inline by the
-    /// instance that first places it). Otherwise the cursor stays: a JPEG
-    /// without the word reads as before. A texture's image is not handled
-    /// here; `texture_block` has its own check.
+    /// Skipped only when it is a plausible quality and what can follow the
+    /// end of a definition (which the thumbnail ends) reads well after the
+    /// word and not without it: another definition, the root count and a
+    /// first root entity, or an instance's transform and name (a definition
+    /// written inline by the instance that first places it). Otherwise the
+    /// cursor stays: a JPEG without the word reads as before. A texture's
+    /// image is not handled here; `texture_block` has its own check.
+    ///
+    /// No check asks whether a definition starts at the word itself: a word
+    /// of at most 100 begins with a `u16` of at most 100, which is neither
+    /// a class-ref (bit 15 set, or the 0x7fff escape) nor a declaration
+    /// (0xffff), the only forms `definition_at` accepts.
     fn skip_thumbnail_quality(&mut self) -> Result<()> {
         let at = self.c.at();
         let Ok(q) = self.c.u32_at(at) else {
@@ -2125,8 +2130,6 @@ impl<'a> Archive<'a> {
         }
         let skip = if self.definition_at(at + 4) {
             true
-        } else if self.definition_at(at) {
-            false
         } else if self.bytes_eq_at(at + 4 + 104, &[0xff, 0xfe, 0xff]) {
             // 13 doubles, then the instance name's string record.
             true

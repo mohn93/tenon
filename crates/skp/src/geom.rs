@@ -349,6 +349,13 @@ pub struct DefGeometry {
     pub instances: Vec<RawInstance>,
     /// Guide lines and guide points, in the definition's own coordinates (inches).
     pub guides: Vec<RawGuide>,
+    /// 2021+ files: hidden guides in this definition, skipped (not in `guides`). Legacy
+    /// files count theirs in `legacy::ReadStats::hidden_guides` and leave this 0.
+    pub hidden_guides: u32,
+    /// 2021+ files: records in this definition's guide lists that were not read as a guide
+    /// (an unknown record, or a guide without its point or line), skipped. Always 0 for
+    /// legacy files.
+    pub unread_guides: u32,
 }
 
 /// A guide (construction line or point) as the file states it, in inches. A guide line is
@@ -488,7 +495,7 @@ pub(crate) fn spend(budget: &mut u64, n: u64) -> Result<()> {
     Ok(())
 }
 
-/// [`parse_component`], counting every vertex, edge, face, loop, edge use and instance
+/// [`parse_component`], counting every vertex, edge, face, loop, edge use, guide and instance
 /// against `budget` and failing with `Malformed("too many elements")` once it is spent, so a
 /// small deflated record of millions of empty elements cannot take all memory.
 pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeometry> {
@@ -678,6 +685,39 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
         }
     }
 
+    // Guides. Layout from openskp's VFF reader (see VENDORED.md), with
+    // SketchUp's own tag names:
+    //
+    //   ComponentConstructionLines  -> ConstructionLine  { ConstructionGeometry,
+    //       ConstructionLineGeomLine[8 x f64: point, direction, start, end], ... }
+    //   ComponentConstructionPoints -> ConstructionPoint { ConstructionGeometry,
+    //       ConstructionPointPosition[3 x f64], ... }
+    //
+    // `ConstructionGeometry` wraps the usual `DrawingElement`, whose flags
+    // carry the hidden bit. A line's start and end parameters are dropped: a
+    // guide line is infinite. Anything else in either list is skipped and
+    // counted, never read as a guide.
+    for sec in Tlv::new(payload) {
+        let points = match sec.tag {
+            t::COMPONENT_CONSTRUCTION_LINES => false,
+            t::COMPONENT_CONSTRUCTION_POINTS => true,
+            _ => continue,
+        };
+        for r in sec.children() {
+            let (guide, flags) = guide_of(&r, points);
+            let Some(guide) = guide else {
+                g.unread_guides = g.unread_guides.saturating_add(1);
+                continue;
+            };
+            if flags & 1 != 0 {
+                g.hidden_guides = g.hidden_guides.saturating_add(1);
+                continue;
+            }
+            spend(budget, 1)?;
+            g.guides.push(guide);
+        }
+    }
+
     // Placements. Three sections carry them and two of the three wrap each
     // one in a single-record envelope:
     //
@@ -760,6 +800,38 @@ fn parse_instance(rec: &Record, is_group: bool) -> RawInstance {
         }
     }
     i
+}
+
+/// One record of a guide list read as a guide, with its `DrawingElementFlags`. `None`
+/// when the record is not the guide its list holds (`points` says which), or lacks its
+/// point or line: a point needs three doubles, a line its eight (as openskp requires).
+fn guide_of(rec: &Record, points: bool) -> (Option<RawGuide>, u8) {
+    let (tag, body, need) = if points {
+        (t::CONSTRUCTION_POINT, t::CONSTRUCTION_POINT_POSITION, 24)
+    } else {
+        (t::CONSTRUCTION_LINE, t::CONSTRUCTION_LINE_GEOM_LINE, 64)
+    };
+    if rec.tag != tag {
+        return (None, 0);
+    }
+    let flags = rec
+        .child(t::CONSTRUCTION_GEOMETRY)
+        .map_or(0, |cg| common_of(&cg).flags);
+    let guide = rec
+        .child(body)
+        .filter(|b| b.payload.len() >= need)
+        .and_then(|b| {
+            let first = b.vec3_at(0).ok()?;
+            Some(if points {
+                RawGuide::Point { position: first }
+            } else {
+                RawGuide::Line {
+                    point: first,
+                    direction: b.vec3_at(24).ok()?,
+                }
+            })
+        });
+    (guide, flags)
 }
 
 fn is_sorted(v: &[u64]) -> bool {
