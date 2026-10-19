@@ -29,7 +29,7 @@ fn circles(count: usize, sides: usize) -> Model {
                 c + DVec3::new(a.cos(), a.sin(), 0.0) * 0.4
             })
             .collect();
-        m.add_curve(&pts, true).unwrap();
+        m.add_curve(&pts, true, false).unwrap();
     }
     m
 }

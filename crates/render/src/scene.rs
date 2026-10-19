@@ -879,7 +879,7 @@ mod tests {
         // swept edges between them are soft.
         let mut m = Model::new();
         let pts = [DVec3::ZERO, DVec3::X, DVec3::new(0.5, 0.8, 0.0)];
-        let c = m.add_curve(&pts, true).unwrap();
+        let c = m.add_curve(&pts, true, false).unwrap();
         let face = c
             .summary()
             .created
@@ -907,7 +907,7 @@ mod tests {
                 DVec3::new(a.cos(), a.sin(), 0.0)
             })
             .collect();
-        m.add_curve(&ring, true).unwrap();
+        m.add_curve(&ring, true, false).unwrap();
         let (base, _) = m.faces().next().unwrap();
         let up = m.face(base).unwrap().normal.z.signum();
         m.push_pull(base, up).unwrap();
@@ -1804,7 +1804,7 @@ mod tests {
         .unwrap();
         let curve = s
             .edit(MeshId::Root, |m| {
-                m.add_curve(&[at(5.0, 6.0), at(6.0, 6.0), at(5.5, 6.8)], true)
+                m.add_curve(&[at(5.0, 6.0), at(6.0, 6.0), at(5.5, 6.8)], true, false)
             })
             .unwrap();
         let cap = created(&curve, |e| match e {
@@ -2005,7 +2005,9 @@ mod tests {
             })
             .collect();
         let mut s = Scene::new();
-        let made = s.edit(MeshId::Root, |m| m.add_curve(&ring, true)).unwrap();
+        let made = s
+            .edit(MeshId::Root, |m| m.add_curve(&ring, true, false))
+            .unwrap();
         let cap = created(&made, |e| match e {
             EntityId::Face(f) => Some(f),
             _ => None,

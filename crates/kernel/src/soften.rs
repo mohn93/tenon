@@ -72,8 +72,8 @@ impl Model {
                 report.skipped += 1;
                 continue;
             }
-            let curve = edge.curve;
-            self.set_edge(e, curve, soft);
+            let (curve, polygon) = (edge.curve, edge.polygon);
+            self.set_edge(e, curve, soft, polygon);
             report.changed += 1;
         }
         (self.take_changes(), report)
@@ -95,8 +95,8 @@ impl Model {
             }
             // A small allowance, so 90 degrees takes the sides of a box.
             if self.fold_angle(e).is_some_and(|a| a <= max_angle + 1e-9) {
-                let curve = edge.curve;
-                self.set_edge(e, curve, true);
+                let (curve, polygon) = (edge.curve, edge.polygon);
+                self.set_edge(e, curve, true, polygon);
                 report.changed += 1;
             } else {
                 report.skipped += 1;

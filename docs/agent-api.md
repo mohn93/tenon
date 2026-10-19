@@ -223,9 +223,11 @@ edges. A curve is not an entity: `c` ids cannot be selected or erased. `{"type":
  "segments": 24, "length": 6.27, "center": [0,0,0], "normal": [0,0,1], "radius": 1.0, "angle": 360.0}
 ```
 
-- `kind` is `circle` (a closed chain), `arc` (an open one) or `curve` (its corners no longer lie on
-  one circle, after some of its vertices were moved; then `center`, `normal`, `radius` and `angle`
-  are absent).
+- `kind` is `circle` (a closed chain), `arc` (an open one), `polygon` (a closed chain of polygon
+  sides; `radius` is the corner radius and `segments` the number of sides) or `curve` (its corners
+  no longer lie on one circle, after some of its vertices were moved, or a polygon opened up by
+  erasing a side; `center`, `normal`, `radius` and `angle` are absent when the corners are off a
+  circle).
 - The shape is worked out from where the edges are now, so it follows moves, rotations and copies.
   `normal` points up (+z; on a vertical plane +y, else +x); `edges` and `vertices` run
   counter-clockwise around it, a circle starting at its oldest vertex (the first corner drawn).
@@ -235,11 +237,13 @@ edges. A curve is not an entity: `c` ids cannot be selected or erased. `{"type":
   splitting line is erased. Erasing edges of a curve leaves the rest a curve (a circle missing an
   edge is an arc); if what is left falls apart, the oldest piece keeps the id and the others become
   curves of their own; a single edge left over is a plain edge again.
-- Copies, groups and exploded geometry get new curve ids. A curve id is unique in the whole model.
+- Copies, groups and exploded geometry get new curve ids, and stay polygons when they were. A
+  curve id is unique in the whole model.
+- A pulled polygon keeps hard sides (no soft edges), and its moved copy on top is a polygon too.
 - A command's `changes.modified` lists edges whose curve or soft flag changed.
 - In the window, clicking an edge of a curve with the Select tool selects the whole curve, and
-  Entity Info then shows it as a circle, arc or curve with its radius, angle, segments and
-  length. A box selects only the edges it covers.
+  Entity Info then shows it as a circle, arc, polygon or curve with its radius, angle, segments
+  (sides for a polygon) and length. A box selects only the edges it covers.
 
 Soft edges (`"soft": true`, absent when false) are hidden edges between faces that form one
 smooth surface, such as the side of a pulled circle (see `push_pull`). The window does not

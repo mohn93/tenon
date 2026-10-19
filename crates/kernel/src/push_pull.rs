@@ -178,16 +178,16 @@ impl Model {
             outer: ring(&points[0]),
             holes: points[1..].iter().map(ring).collect(),
         };
-        // The curve of each loop side, to carry over to the moved sides (the cap) and to soften
-        // the swept edges between two sides of one curve.
-        let side_curves: Vec<Vec<Option<CurveId>>> = loops
+        // The curve of each loop side with its polygon flag, to carry over to the moved sides
+        // (the cap) and to soften the swept edges between two sides of one non-polygon curve.
+        let side_curves: Vec<Vec<Option<(CurveId, bool)>>> = loops
             .iter()
             .map(|l| {
                 (0..l.len())
                     .map(|i| {
                         self.edge_between(l[i], l[(i + 1) % l.len()])
                             .and_then(|e| self.edge(e))
-                            .and_then(|e| e.curve)
+                            .and_then(|e| Some((e.curve?, e.polygon)))
                     })
                     .collect()
             })
@@ -320,14 +320,15 @@ impl Model {
         self.mark_swept_curves(&points, &side_curves, offset);
     }
 
-    /// After an extrusion: the moved copy of each curve becomes a curve of its own, and the
-    /// swept edge from a point between two sides of one curve is soft, so the sides of a pulled
-    /// circle or arc read as one smooth surface. (Upkeep hardens a swept edge that ends up
-    /// bounding fewer than two faces.)
+    /// After an extrusion: the moved copy of each curve becomes a curve of its own (a polygon
+    /// when the curve is one), and the swept edge from a point between two sides of one curve
+    /// that is not a polygon is soft, so the sides of a pulled circle or arc read as one smooth
+    /// surface while a pulled polygon keeps hard sides. (Upkeep hardens a swept edge that ends
+    /// up bounding fewer than two faces.)
     fn mark_swept_curves(
         &mut self,
         points: &[Vec<DVec3>],
-        side_curves: &[Vec<Option<CurveId>>],
+        side_curves: &[Vec<Option<(CurveId, bool)>>],
         offset: DVec3,
     ) {
         let mut renamed: BTreeMap<CurveId, CurveId> = BTreeMap::new();
@@ -335,10 +336,10 @@ impl Model {
             let n = ps.len();
             for i in 0..n {
                 let (before, after) = (curves[(i + n - 1) % n], curves[i]);
-                if before.is_some() && before == after {
-                    self.tag_along(ps[i], ps[i] + offset, None, true);
+                if before.is_some_and(|(_, polygon)| !polygon) && before == after {
+                    self.tag_along(ps[i], ps[i] + offset, None, true, false);
                 }
-                if let Some(c) = after {
+                if let Some((c, polygon)) = after {
                     let moved = match renamed.get(&c) {
                         Some(m) => *m,
                         None => {
@@ -348,7 +349,7 @@ impl Model {
                         }
                     };
                     let (a, b) = (ps[i] + offset, ps[(i + 1) % n] + offset);
-                    self.tag_along(a, b, Some(moved), false);
+                    self.tag_along(a, b, Some(moved), false, polygon);
                 }
             }
         }

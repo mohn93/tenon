@@ -110,6 +110,9 @@ pub struct EdgeData {
     /// Absent (false) before soft edges existed, and for edges that are not soft.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub soft: bool,
+    /// Absent (false) before polygons existed, and for edges that are not polygon sides.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub polygon: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,6 +271,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 vertices: e.v.map(|v| v.0),
                 curve: e.curve.map(|c| c.0),
                 soft: e.soft,
+                polygon: e.polygon,
             })
             .collect(),
         faces: m
@@ -351,6 +355,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             v: e.vertices.map(VertexId),
             curve: e.curve.map(CurveId),
             soft: e.soft,
+            polygon: e.polygon,
         };
         if edges.insert(EdgeId(e.id), edge).is_some() {
             return Err(format!("edge e{} appears twice", e.id));

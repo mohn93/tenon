@@ -16,7 +16,7 @@ fn cylinder(n: usize) -> Model {
         })
         .collect();
     let mut m = Model::new();
-    m.add_curve(&ring, true).unwrap();
+    m.add_curve(&ring, true, false).unwrap();
     let (base, _) = m.faces().next().unwrap();
     let up = if m.face(base).unwrap().normal.z > 0.0 {
         2.0

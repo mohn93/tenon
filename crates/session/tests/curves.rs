@@ -227,6 +227,33 @@ fn curves_are_saved_and_older_files_still_open() {
     assert!(message.contains("soft edge"), "{message}");
 }
 
+#[test]
+fn polygon_sides_in_a_file_read_as_a_polygon() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "segments": 6}),
+    )
+    .unwrap();
+    let path = scratch("polygon.skr");
+    let path_text = path.to_str().unwrap();
+    run(&mut d, json!({"type": "save", "path": path_text})).unwrap();
+    edit_file(&path, |doc| {
+        for edge in doc["model"]["root"]["edges"].as_array_mut().unwrap() {
+            assert!(edge.get("polygon").is_none());
+            edge["polygon"] = json!(true);
+        }
+    });
+    let mut e = doc();
+    run(&mut e, json!({"type": "open", "path": path_text})).unwrap();
+    let first = edges(&e)[0]["id"].clone();
+    let c = curve(&e, &first);
+    assert_eq!(c["kind"], "polygon");
+    assert_eq!(c["segments"], 6);
+    assert!((c["radius"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+    assert_eq!(c["angle"], json!(360.0));
+}
+
 fn created(out: &Value, prefix: char) -> Vec<Value> {
     out["changes"]["created"]
         .as_array()

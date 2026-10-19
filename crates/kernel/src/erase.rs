@@ -85,9 +85,10 @@ impl Model {
             .map(|id| (id, self.face(id).unwrap().clone()))
             .collect();
         let (first, second) = (self.remove_edge(e1), self.remove_edge(e2));
-        // The joined edge keeps what the two had in common: their curve, and being soft.
+        // The joined edge keeps what the two had in common: their curve (with its polygon
+        // flag), and being soft.
         let curve = first.curve.filter(|c| second.curve == Some(*c));
-        self.insert_edge_like(p, q, curve, first.soft && second.soft);
+        self.insert_edge_like(p, q, curve, first.soft && second.soft, first.polygon);
         for (id, mut f) in users {
             f.outer.retain(|x| *x != v);
             f.holes.iter_mut().for_each(|h| h.retain(|x| *x != v));

@@ -163,9 +163,9 @@ impl Model {
         let old = self.remove_edge(e);
         let [a, b] = old.v;
         let m = self.insert_vertex(p);
-        // Both pieces stay on the edge's curve and keep it soft.
-        let first = self.insert_edge_like(a, m, old.curve, old.soft);
-        let second = self.insert_edge_like(m, b, old.curve, old.soft);
+        // Both pieces stay on the edge's curve and keep its soft and polygon flags.
+        let first = self.insert_edge_like(a, m, old.curve, old.soft, old.polygon);
+        let second = self.insert_edge_like(m, b, old.curve, old.soft, old.polygon);
         if fresh.remove(&e) {
             fresh.extend([first, second]);
         }
@@ -482,8 +482,10 @@ mod tests {
         for k in 0..6 {
             let c = p(k as f64 * 0.7, (k % 2) as f64 * 0.3, 0.0);
             out.push(
-                s.edit(MeshId::Root, |m| m.add_curve(&circle(c, 0.5, 24), true))
-                    .unwrap(),
+                s.edit(MeshId::Root, |m| {
+                    m.add_curve(&circle(c, 0.5, 24), true, false)
+                })
+                .unwrap(),
             );
         }
         let (edges, faces) = everything(s);
@@ -510,7 +512,7 @@ mod tests {
         // A tube through a slab: push a circle in the top down through.
         out.push(
             s.edit(MeshId::Root, |m| {
-                m.add_curve(&circle(p(2.0, 2.0, 2.0), 0.5, 16), true)
+                m.add_curve(&circle(p(2.0, 2.0, 2.0), 0.5, 16), true, false)
             })
             .unwrap(),
         );

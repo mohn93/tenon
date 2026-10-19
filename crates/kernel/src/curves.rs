@@ -33,6 +33,8 @@ pub struct Curve {
     pub length: f64,
     /// The circle through the curve's corners, when they all lie on one.
     pub circle: Option<CurveCircle>,
+    /// True when the curve's edges are the sides of a polygon (see `Edge::polygon`).
+    pub polygon: bool,
 }
 
 /// The circle a curve's corners lie on.
@@ -55,25 +57,36 @@ pub enum CurveKind {
     Circle,
     /// An open chain whose corners lie on a circle.
     Arc,
-    /// A chain whose corners no longer lie on one circle (some of its vertices were moved).
+    /// A chain whose corners no longer lie on one circle (some of its vertices were moved), or
+    /// a polygon that was opened up or bent off its circle.
     Curve,
+    /// A closed chain of polygon sides whose corners lie on a circle.
+    Polygon,
 }
 
 impl Curve {
     pub fn kind(&self) -> CurveKind {
-        match (self.closed, self.circle.is_some()) {
-            (true, true) => CurveKind::Circle,
-            (false, true) => CurveKind::Arc,
-            _ => CurveKind::Curve,
+        match (self.polygon, self.closed, self.circle.is_some()) {
+            (true, true, true) => CurveKind::Polygon,
+            (true, _, _) => CurveKind::Curve,
+            (false, true, true) => CurveKind::Circle,
+            (false, false, true) => CurveKind::Arc,
+            (false, _, false) => CurveKind::Curve,
         }
     }
 }
 
 impl Model {
     /// Draws the polyline through `points` (closed: the last point joins the first) with the
-    /// rules of `add_edge`, and puts the edges along it on one new curve, as one ChangeSet.
+    /// rules of `add_edge`, and puts the edges along it on one new curve, as one ChangeSet;
+    /// with `polygon` the curve's edges are polygon sides (see `Edge::polygon`).
     /// A polyline that is straight, or whose edges do not form one chain, gets no curve.
-    pub fn add_curve(&mut self, points: &[DVec3], closed: bool) -> Result<ChangeSet, KernelError> {
+    pub fn add_curve(
+        &mut self,
+        points: &[DVec3],
+        closed: bool,
+        polygon: bool,
+    ) -> Result<ChangeSet, KernelError> {
         let n = points.len();
         let sides = if closed { n } else { n.saturating_sub(1) };
         for i in 0..sides {
@@ -88,13 +101,21 @@ impl Model {
         }
         let curve = self.new_curve();
         for i in 0..sides {
-            self.tag_along(points[i], points[(i + 1) % n], Some(curve), false);
+            self.tag_along(points[i], points[(i + 1) % n], Some(curve), false, polygon);
         }
         Ok(self.take_changes())
     }
 
-    /// Puts every edge lying along the segment a-b on `curve` and sets its soft flag.
-    pub(crate) fn tag_along(&mut self, a: DVec3, b: DVec3, curve: Option<CurveId>, soft: bool) {
+    /// Puts every edge lying along the segment a-b on `curve` and sets its soft and polygon
+    /// flags.
+    pub(crate) fn tag_along(
+        &mut self,
+        a: DVec3,
+        b: DVec3,
+        curve: Option<CurveId>,
+        soft: bool,
+        polygon: bool,
+    ) {
         let len = a.distance(b);
         if len < LENGTH_TOL {
             return;
@@ -132,7 +153,7 @@ impl Model {
             }
         }
         for e in along {
-            self.set_edge(e, curve, soft);
+            self.set_edge(e, curve, soft, polygon);
         }
     }
 
@@ -149,6 +170,8 @@ impl Model {
             .map(|(e, edge)| (e, edge.v))
             .collect();
         let chain = chain(&members)?;
+        // Every edge of a curve has the same polygon flag.
+        let polygon = self.edge(members[0].0).unwrap().polygon;
         let points: Vec<DVec3> = chain.vertices.iter().map(|v| self.pos(*v)).collect();
         let corners = corners(&points, chain.closed);
         let segments = if chain.closed {
@@ -172,6 +195,7 @@ impl Model {
             segments,
             length,
             circle: None,
+            polygon,
         };
         // The corners, plus the ends of an open curve, are the points that lie on the circle.
         let mut key: Vec<usize> = corners.clone();
@@ -311,8 +335,9 @@ impl Model {
                 })
                 .collect();
             for e in hard {
-                let curve = self.edge(e).unwrap().curve;
-                self.set_edge(e, curve, false);
+                let edge = self.edge(e).unwrap();
+                let (curve, polygon) = (edge.curve, edge.polygon);
+                self.set_edge(e, curve, false, polygon);
             }
         }
     }
@@ -338,8 +363,9 @@ impl Model {
                 };
                 if tag != Some(c) {
                     for (e, _) in part {
-                        let soft = self.edge(e).unwrap().soft;
-                        self.set_edge(e, tag, soft);
+                        let edge = self.edge(e).unwrap();
+                        let (soft, polygon) = (edge.soft, edge.polygon);
+                        self.set_edge(e, tag, soft, polygon);
                     }
                 }
             }
@@ -379,9 +405,15 @@ impl Model {
     /// Checks the curve and soft-edge rules `upkeep` keeps.
     pub(crate) fn validate_curves(&self) -> Result<(), String> {
         let mut members: BTreeMap<CurveId, Vec<(EdgeId, [VertexId; 2])>> = BTreeMap::new();
+        let mut polygon: BTreeMap<CurveId, bool> = BTreeMap::new();
         for (id, e) in self.edges() {
             if let Some(c) = e.curve {
                 members.entry(c).or_default().push((id, e.v));
+                if *polygon.entry(c).or_insert(e.polygon) != e.polygon {
+                    return Err(format!("curve {c} has polygon and non-polygon edges"));
+                }
+            } else if e.polygon {
+                return Err(format!("polygon edge {id:?} is on no curve"));
             }
         }
         for (c, edges) in &members {

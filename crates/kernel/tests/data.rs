@@ -276,7 +276,8 @@ fn scene_with_every_kind() -> Scene {
             p(-5.0 + a.cos(), a.sin(), 0.0)
         })
         .collect();
-    s.edit(MeshId::Root, |m| m.add_curve(&ring, true)).unwrap();
+    s.edit(MeshId::Root, |m| m.add_curve(&ring, true, false))
+        .unwrap();
     s.edit(MeshId::Root, |m| {
         m.add_guide(kernel::Guide::Point {
             position: p(0.0, 0.0, 5.0),

@@ -184,6 +184,7 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         vertices: [id(a), id(b)],
         curve: None,
         soft: false,
+        polygon: false,
     };
     let face = |k, outer: &[u64], holes: Vec<Vec<u64>>| FaceData {
         id: id(k),

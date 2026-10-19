@@ -500,7 +500,7 @@ mod tests {
                     p(-1.5 + 0.5 * a.cos(), -2.5 + 0.5 * a.sin())
                 })
                 .collect();
-            r.model.add_curve(&ring, true).unwrap();
+            r.model.add_curve(&ring, true, false).unwrap();
             r
         }
 
@@ -732,7 +732,7 @@ mod tests {
                 DVec3::new(a.cos(), a.sin(), 0.0)
             })
             .collect();
-        let c = model.add_curve(&ring, true).unwrap();
+        let c = model.add_curve(&ring, true, false).unwrap();
         let face = c
             .summary()
             .created
@@ -962,7 +962,7 @@ mod tests {
             })
             .collect();
         let mut model = Model::new();
-        model.add_curve(&ring, true).unwrap();
+        model.add_curve(&ring, true, false).unwrap();
         r.model = model;
         let at = |deg: f64| {
             let a = deg.to_radians();

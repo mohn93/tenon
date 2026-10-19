@@ -28,6 +28,10 @@ pub struct Edge {
     /// pulled circle). It always bounds at least two faces.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub soft: bool,
+    /// A side of a polygon: its curve reads as a polygon rather than a circle, and its sides
+    /// stay hard when pulled. Every edge of a curve has the same flag; a plain edge never has it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub polygon: bool,
 }
 
 impl Edge {
@@ -37,6 +41,7 @@ impl Edge {
             v: [a, b],
             curve: None,
             soft: false,
+            polygon: false,
         }
     }
 }
@@ -155,7 +160,7 @@ pub enum Op {
     RemoveVertex(VertexId, Vertex),
     AddEdge(EdgeId, Edge),
     RemoveEdge(EdgeId, Edge),
-    /// An edge's curve or soft flag changed from the first to the second (same vertices).
+    /// An edge's curve, soft or polygon flag changed from the first to the second (same vertices).
     ChangeEdge(EdgeId, Edge, Edge),
     AddFace(FaceId, Face),
     RemoveFace(FaceId, Face),
@@ -774,38 +779,49 @@ impl Model {
     }
 
     pub(crate) fn insert_edge(&mut self, a: VertexId, b: VertexId) -> EdgeId {
-        self.insert_edge_like(a, b, None, false)
+        self.insert_edge_like(a, b, None, false, false)
     }
 
-    /// Adds the edge a-b on `curve` and with `soft` (the attributes of an edge it replaces).
+    /// Adds the edge a-b on `curve` and with `soft` and `polygon` (the attributes of an edge it
+    /// replaces). An edge on no curve is never a polygon side.
     pub(crate) fn insert_edge_like(
         &mut self,
         a: VertexId,
         b: VertexId,
         curve: Option<CurveId>,
         soft: bool,
+        polygon: bool,
     ) -> EdgeId {
         let id = EdgeId(self.alloc());
         let edge = Edge {
             v: [a, b],
             curve,
             soft,
+            polygon: polygon && curve.is_some(),
         };
         self.record(Op::AddEdge(id, edge));
         id
     }
 
-    /// Puts an edge on `curve` (or none) and sets its soft flag, recording a change only when
-    /// something differs.
-    pub(crate) fn set_edge(&mut self, id: EdgeId, curve: Option<CurveId>, soft: bool) {
+    /// Puts an edge on `curve` (or none) and sets its soft and polygon flags, recording a change
+    /// only when something differs. An edge on no curve is never a polygon side.
+    pub(crate) fn set_edge(
+        &mut self,
+        id: EdgeId,
+        curve: Option<CurveId>,
+        soft: bool,
+        polygon: bool,
+    ) {
         let from = self.edges[&id].clone();
-        if from.curve == curve && from.soft == soft {
+        let polygon = polygon && curve.is_some();
+        if from.curve == curve && from.soft == soft && from.polygon == polygon {
             return;
         }
         let to = Edge {
             v: from.v,
             curve,
             soft,
+            polygon,
         };
         self.record(Op::ChangeEdge(id, from, to));
     }
@@ -1273,7 +1289,13 @@ mod tests {
         let off = m.insert_vertex(DVec3::new(2.0, 1.0, 0.0));
         let e2 = m.insert_edge(v[1], off);
         let curve = m.new_curve();
-        m.tag_along(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0), Some(curve), false);
+        m.tag_along(
+            DVec3::ZERO,
+            DVec3::new(4.0, 0.0, 0.0),
+            Some(curve),
+            false,
+            false,
+        );
         assert_eq!(m.edge(e0).unwrap().curve, Some(curve));
         assert_eq!(m.edge(e1).unwrap().curve, Some(curve));
         assert_eq!(m.edge(e2).unwrap().curve, None);
@@ -1305,7 +1327,7 @@ mod tests {
         m.index();
         assert!(built(&m));
         m.set_paint(face, [Some(MaterialId(100)), None]);
-        m.set_edge(edge, Some(CurveId(101)), false);
+        m.set_edge(edge, Some(CurveId(101)), false, false);
         m.insert_guide(Guide::Point { position: DVec3::Z });
         let i = m.insert_instance(Instance::new(DefinitionId(102), DAffine3::IDENTITY));
         m.transform_instances(&[i], DAffine3::from_translation(DVec3::X));

@@ -196,7 +196,7 @@ impl Model {
         let mark = |(a, b): &(VertexId, VertexId)| {
             self.edge_between(*a, *b)
                 .and_then(|e| self.edge(e))
-                .map_or((None, false), |e| (e.curve, e.soft))
+                .map_or((None, false, false), |e| (e.curve, e.soft, e.polygon))
         };
         let ring = |l: &[VertexId]| l.iter().map(|v| self.pos(*v)).collect::<Vec<DVec3>>();
         let mut s = Stencil::default();
@@ -417,15 +417,16 @@ impl Model {
         for id in extra {
             self.remove_face(id);
         }
-        // Copied curve and soft edges stay so; each placement's curves get new ids.
+        // Copied curve, polygon and soft edges stay so; each placement's curves get new ids.
         for t in places {
             let mut renamed: BTreeMap<CurveId, CurveId> = BTreeMap::new();
-            for ((a, b), (curve, soft)) in stencil.segments.iter().zip(&stencil.marks) {
+            for ((a, b), (curve, soft, polygon)) in stencil.segments.iter().zip(&stencil.marks) {
                 if curve.is_none() && !soft {
                     continue;
                 }
                 let curve = curve.map(|c| *renamed.entry(c).or_insert_with(|| self.new_curve()));
-                self.tag_along(t.transform_point3(*a), t.transform_point3(*b), curve, *soft);
+                let (a, b) = (t.transform_point3(*a), t.transform_point3(*b));
+                self.tag_along(a, b, curve, *soft, *polygon);
             }
         }
     }
@@ -455,7 +456,7 @@ impl Model {
 pub(crate) struct Stencil {
     segments: Vec<(DVec3, DVec3)>,
     /// Each segment's curve and soft flag.
-    marks: Vec<(Option<CurveId>, bool)>,
+    marks: Vec<(Option<CurveId>, bool, bool)>,
     faces: Vec<StencilFace>,
 }
 

@@ -60,7 +60,7 @@ fn close(a: DVec3, b: DVec3) -> bool {
 fn a_drawn_circle_is_one_curve_whose_shape_comes_from_its_edges() {
     let mut m = Model::new();
     let points = ring(p(1.0, 2.0, 0.0), 2.0, 24);
-    let c = m.add_curve(&points, true).unwrap();
+    let c = m.add_curve(&points, true, false).unwrap();
     m.validate().unwrap();
     assert_eq!((m.edges().count(), m.faces().count()), (24, 1));
     let id = only_curve(&m);
@@ -99,7 +99,7 @@ fn a_circle_drawn_clockwise_reports_an_upward_normal() {
     let mut m = Model::new();
     let mut points = ring(DVec3::ZERO, 1.0, 12);
     points.reverse();
-    m.add_curve(&points, true).unwrap();
+    m.add_curve(&points, true, false).unwrap();
     let curve = m.curve(only_curve(&m)).unwrap();
     assert_eq!(curve.circle.unwrap().normal, DVec3::Z);
     let at = |i: usize| m.position(curve.vertices[i]).unwrap();
@@ -110,7 +110,7 @@ fn a_circle_drawn_clockwise_reports_an_upward_normal() {
 #[test]
 fn an_open_polyline_is_an_arc_and_a_straight_one_is_no_curve() {
     let mut m = Model::new();
-    m.add_curve(&arc(DVec3::ZERO, 3.0, TAU / 4.0, 6), false)
+    m.add_curve(&arc(DVec3::ZERO, 3.0, TAU / 4.0, 6), false, false)
         .unwrap();
     m.validate().unwrap();
     let curve = m.curve(only_curve(&m)).unwrap();
@@ -127,7 +127,11 @@ fn an_open_polyline_is_an_arc_and_a_straight_one_is_no_curve() {
 
     let mut straight = Model::new();
     straight
-        .add_curve(&[DVec3::ZERO, p(1.0, 0.0, 0.0), p(2.0, 0.0, 0.0)], false)
+        .add_curve(
+            &[DVec3::ZERO, p(1.0, 0.0, 0.0), p(2.0, 0.0, 0.0)],
+            false,
+            false,
+        )
         .unwrap();
     straight.validate().unwrap();
     assert!(curves(&straight).is_empty());
@@ -137,7 +141,7 @@ fn an_open_polyline_is_an_arc_and_a_straight_one_is_no_curve() {
 fn split_curve_edges_stay_on_the_curve_and_heal_back() {
     let mut m = Model::new();
     let points = ring(DVec3::ZERO, 1.0, 24);
-    m.add_curve(&points, true).unwrap();
+    m.add_curve(&points, true, false).unwrap();
     let id = only_curve(&m);
     // A line across the circle splits two of its edges in their middles.
     let a = (points[3] + points[4]) / 2.0;
@@ -169,7 +173,7 @@ fn split_curve_edges_stay_on_the_curve_and_heal_back() {
 fn erasing_curve_edges_leaves_arcs_and_a_lone_edge_is_no_curve() {
     let mut m = Model::new();
     let points = ring(DVec3::ZERO, 1.0, 12);
-    m.add_curve(&points, true).unwrap();
+    m.add_curve(&points, true, false).unwrap();
     let id = only_curve(&m);
 
     let first = m.erase(&[edge_at(&m, points[0], points[1])], &[]);
@@ -208,7 +212,8 @@ fn erasing_curve_edges_leaves_arcs_and_a_lone_edge_is_no_curve() {
 #[test]
 fn moved_turned_and_copied_curves_follow_their_edges() {
     let mut m = Model::new();
-    m.add_curve(&ring(DVec3::ZERO, 1.0, 8), true).unwrap();
+    m.add_curve(&ring(DVec3::ZERO, 1.0, 8), true, false)
+        .unwrap();
     let id = only_curve(&m);
     let all: BTreeSet<_> = m.vertices().map(|(v, _)| v).collect();
     m.move_vertices(&all, p(5.0, 0.0, 0.0)).unwrap();
@@ -242,7 +247,8 @@ fn moved_turned_and_copied_curves_follow_their_edges() {
 #[test]
 fn curves_go_into_groups_and_come_out_of_explode_with_new_ids() {
     let mut m = Model::new();
-    m.add_curve(&ring(DVec3::ZERO, 1.0, 12), true).unwrap();
+    m.add_curve(&ring(DVec3::ZERO, 1.0, 12), true, false)
+        .unwrap();
     let id = only_curve(&m);
     let mut s = Scene::from_root(m);
     let edges: Vec<EdgeId> = s.root().edges().map(|(e, _)| e).collect();
@@ -269,7 +275,8 @@ fn curves_go_into_groups_and_come_out_of_explode_with_new_ids() {
 #[test]
 fn curves_and_soft_flags_are_saved_and_checked_on_load() {
     let mut m = Model::new();
-    m.add_curve(&ring(DVec3::ZERO, 1.0, 6), true).unwrap();
+    m.add_curve(&ring(DVec3::ZERO, 1.0, 6), true, false)
+        .unwrap();
     let s = Scene::from_root(m);
     let data = s.to_data();
     let json = serde_json::to_value(&data).unwrap();
@@ -328,7 +335,9 @@ fn soft_edges(m: &Model) -> Vec<EdgeId> {
 #[test]
 fn a_pulled_circle_has_soft_sides_and_a_curve_on_top() {
     let mut m = Model::new();
-    let c = m.add_curve(&ring(DVec3::ZERO, 1.0, 12), true).unwrap();
+    let c = m
+        .add_curve(&ring(DVec3::ZERO, 1.0, 12), true, false)
+        .unwrap();
     let base = only_curve(&m);
     let pulled = m.push_pull(created_face(&c), 2.0).unwrap();
     m.validate().unwrap();
@@ -373,7 +382,9 @@ fn a_pulled_circle_has_soft_sides_and_a_curve_on_top() {
 #[test]
 fn a_soft_edge_left_with_one_face_hardens() {
     let mut m = Model::new();
-    let c = m.add_curve(&ring(DVec3::ZERO, 1.0, 8), true).unwrap();
+    let c = m
+        .add_curve(&ring(DVec3::ZERO, 1.0, 8), true, false)
+        .unwrap();
     m.push_pull(created_face(&c), 1.0).unwrap();
     let side = m
         .faces()
@@ -394,7 +405,7 @@ fn a_soft_edge_left_with_one_face_hardens() {
 fn an_arc_closed_by_a_line_pulls_up_with_hard_ends() {
     let mut m = Model::new();
     // A half circle from (1, 0) over the top to (-1, 0), closed by its diameter.
-    m.add_curve(&arc(DVec3::ZERO, 1.0, TAU / 2.0, 6), false)
+    m.add_curve(&arc(DVec3::ZERO, 1.0, TAU / 2.0, 6), false, false)
         .unwrap();
     let c = m.add_edge(p(-1.0, 0.0, 0.0), p(1.0, 0.0, 0.0)).unwrap();
     m.validate().unwrap();
@@ -433,7 +444,7 @@ fn a_circle_pushed_into_a_box_makes_a_soft_walled_hole() {
     for q in &mut top_ring {
         q.z = 2.0;
     }
-    let disk = m.add_curve(&top_ring, true).unwrap();
+    let disk = m.add_curve(&top_ring, true, false).unwrap();
     let disk_face = disk
         .summary()
         .created
@@ -456,6 +467,7 @@ fn a_straight_polyline_spends_no_curve_id() {
         .add_curve(
             &[p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0), p(2.0, 0.0, 0.0)],
             false,
+            false,
         )
         .unwrap();
     assert!(curves(&m).is_empty());
@@ -473,4 +485,148 @@ fn a_straight_polyline_spends_no_curve_id() {
         })
         .collect();
     assert_eq!(ids.iter().min(), Some(&5));
+}
+
+/// A hexagon's corners: radius 1 around the origin, the first along +X.
+fn hexagon() -> Vec<DVec3> {
+    ring(DVec3::ZERO, 1.0, 6)
+}
+
+#[test]
+fn a_polygon_curve_reads_as_a_polygon() {
+    let mut m = Model::new();
+    m.add_curve(&hexagon(), true, true).unwrap();
+    m.validate().unwrap();
+    let curve = m.curve_of(m.edges().next().unwrap().0).unwrap();
+    assert_eq!(curve.kind(), CurveKind::Polygon);
+    assert!(curve.polygon);
+    assert_eq!(curve.segments, 6);
+    assert!((curve.circle.unwrap().radius - 1.0).abs() < 1e-9);
+    assert!(m.edges().all(|(_, e)| e.polygon && !e.soft));
+
+    let mut c = Model::new();
+    c.add_curve(&hexagon(), true, false).unwrap();
+    let circle = c.curve_of(c.edges().next().unwrap().0).unwrap();
+    assert_eq!(circle.kind(), CurveKind::Circle);
+    assert!(!circle.polygon);
+    assert!(c.edges().all(|(_, e)| !e.polygon));
+}
+
+#[test]
+fn a_pulled_polygon_has_hard_sides() {
+    let mut m = Model::new();
+    let c = m.add_curve(&hexagon(), true, true).unwrap();
+    m.push_pull(created_face(&c), 1.0).unwrap();
+    m.validate().unwrap();
+    assert!(soft_edges(&m).is_empty());
+    let all = curves(&m);
+    assert_eq!(all.len(), 2);
+    let top: Vec<_> = all
+        .iter()
+        .map(|c| m.curve(*c).unwrap())
+        .filter(|c| c.circle.unwrap().center.z > 0.5)
+        .collect();
+    assert_eq!(top.len(), 1);
+    assert_eq!(top[0].kind(), CurveKind::Polygon);
+    assert_eq!(top[0].segments, 6);
+    let base: Vec<_> = all.iter().map(|c| m.curve(*c).unwrap().kind()).collect();
+    assert_eq!(base, [CurveKind::Polygon; 2]);
+
+    let mut circle = Model::new();
+    let c = circle.add_curve(&hexagon(), true, false).unwrap();
+    circle.push_pull(created_face(&c), 1.0).unwrap();
+    circle.validate().unwrap();
+    assert_eq!(soft_edges(&circle).len(), 6);
+}
+
+/// The kinds of a mesh's curves, in id order.
+fn kinds(m: &Model) -> Vec<CurveKind> {
+    curves(m)
+        .iter()
+        .map(|c| m.curve(*c).unwrap().kind())
+        .collect()
+}
+
+#[test]
+fn copies_splits_and_files_keep_the_polygon_mark() {
+    let pts = hexagon();
+    let mut m = Model::new();
+    m.add_curve(&pts, true, true).unwrap();
+    let id = only_curve(&m);
+    let edges: Vec<EdgeId> = m.edges().map(|(e, _)| e).collect();
+    let faces: Vec<_> = m.faces().map(|(f, _)| f).collect();
+    m.copy(&edges, &faces, p(3.0, 0.0, 0.0), 1).unwrap();
+    m.validate().unwrap();
+    let all = curves(&m);
+    assert_eq!(all.len(), 2);
+    let copy = *all.iter().find(|c| **c != id).unwrap();
+    assert_eq!(m.curve(copy).unwrap().kind(), CurveKind::Polygon);
+    assert!(close(
+        m.curve(copy).unwrap().circle.unwrap().center,
+        p(3.0, 0.0, 0.0)
+    ));
+
+    // A line from the middle of a side to the center splits that side.
+    m.add_edge((pts[0] + pts[1]) / 2.0, DVec3::ZERO).unwrap();
+    m.validate().unwrap();
+    let curve = m.curve(id).unwrap();
+    assert_eq!((curve.edges.len(), curve.segments), (7, 6));
+    assert_eq!(curve.kind(), CurveKind::Polygon);
+
+    // Saved and opened again.
+    let s = Scene::from_root(m.clone());
+    let back = Scene::from_data(&s.to_data()).unwrap();
+    assert_eq!(back, s);
+    assert_eq!(kinds(back.root()), [CurveKind::Polygon; 2]);
+
+    // Grouped and exploded.
+    let mut g = Scene::from_root(m.clone());
+    let edges: Vec<EdgeId> = g.root().edges().map(|(e, _)| e).collect();
+    let faces: Vec<_> = g.root().faces().map(|(f, _)| f).collect();
+    let (i, _) = g
+        .make_group(MeshId::Root, &edges, &faces, &[], DefinitionKind::Group, "")
+        .unwrap();
+    g.validate().unwrap();
+    let d = g.root().instance(i).unwrap().definition;
+    assert_eq!(
+        kinds(&g.definition(d).unwrap().mesh),
+        [CurveKind::Polygon; 2]
+    );
+    g.explode(MeshId::Root, i).unwrap();
+    g.validate().unwrap();
+    assert_eq!(kinds(g.root()), [CurveKind::Polygon; 2]);
+
+    // Opened up by erasing a side, it reads as a curve.
+    m.erase(&[edge_at(&m, pts[2], pts[3])], &[]);
+    m.validate().unwrap();
+    let opened = m.curve(id).unwrap();
+    assert!(opened.polygon);
+    assert_eq!(opened.kind(), CurveKind::Curve);
+}
+
+#[test]
+fn polygon_flags_agree_along_a_curve() {
+    let mut m = Model::new();
+    m.add_curve(&hexagon(), true, true).unwrap();
+    let json = serde_json::to_value(Scene::from_root(m).to_data()).unwrap();
+    let edges = json["root"]["edges"].as_array().unwrap();
+    assert!(edges.iter().all(|e| e["polygon"] == true));
+
+    let mut mixed = json.clone();
+    mixed["root"]["edges"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("polygon");
+    let mixed: SceneData = serde_json::from_value(mixed).unwrap();
+    let err = Scene::from_data(&mixed).unwrap_err();
+    assert!(err.contains("polygon"), "{err}");
+
+    // A plain edge is never a polygon side.
+    let mut lone = Model::new();
+    lone.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    let mut plain = serde_json::to_value(Scene::from_root(lone).to_data()).unwrap();
+    plain["root"]["edges"][0]["polygon"] = serde_json::json!(true);
+    let plain: SceneData = serde_json::from_value(plain).unwrap();
+    let err = Scene::from_data(&plain).unwrap_err();
+    assert!(err.contains("polygon"), "{err}");
 }

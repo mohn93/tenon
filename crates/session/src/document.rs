@@ -700,7 +700,7 @@ impl Document {
             segments.unwrap_or(DEFAULT_CIRCLE_SEGMENTS),
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
-        self.edit_mesh(|m| m.add_curve(&points, true))
+        self.edit_mesh(|m| m.add_curve(&points, true, false))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
@@ -720,7 +720,7 @@ impl Document {
             segments.unwrap_or(DEFAULT_ARC_SEGMENTS),
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
-        self.edit_mesh(|m| m.add_curve(&points, false))
+        self.edit_mesh(|m| m.add_curve(&points, false, false))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 

@@ -129,8 +129,8 @@ fn material_name(doc: &Document, material: Option<kernel::MaterialId>) -> String
         .map_or_else(|| "Default".to_string(), |m| m.name.clone())
 }
 
-/// "1 circle" (or arc, or curve) with its radius, angle, segments and length when `edges` are
-/// exactly the edges of one curve.
+/// "1 circle" (or arc, curve or polygon) with its radius, angle, segments (a polygon's sides)
+/// and length when `edges` are exactly the edges of one curve.
 fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
     let curve = m.curve_of(*edges.first()?)?;
     let mut mine = curve.edges.clone();
@@ -142,6 +142,7 @@ fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
         CurveKind::Circle => "1 circle".to_string(),
         CurveKind::Arc => "1 arc".to_string(),
         CurveKind::Curve => "1 curve".to_string(),
+        CurveKind::Polygon => "1 polygon".to_string(),
     }];
     if let Some(c) = curve.circle {
         lines.push(format!("Radius: {}", format_length(c.radius)));
@@ -149,7 +150,11 @@ fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
             lines.push(format!("Angle: {}°", number(c.angle.to_degrees())));
         }
     }
-    lines.push(format!("Segments: {}", curve.segments));
+    if curve.kind() == CurveKind::Polygon {
+        lines.push(format!("Sides: {}", curve.segments));
+    } else {
+        lines.push(format!("Segments: {}", curve.segments));
+    }
     lines.push(format!("Length: {}", format_length(curve.length)));
     Some(lines)
 }
@@ -335,6 +340,24 @@ mod tests {
             ["1 arc", "Radius: 1 m", "Angle: 90°", "Segments: 3"]
         );
         assert!(lines[4].starts_with("Length: 1.55"), "{lines:?}");
+    }
+
+    #[test]
+    fn describes_a_polygon_by_its_sides() {
+        let mut m = Model::new();
+        let corners: Vec<glam::DVec3> = (0..6)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / 6.0;
+                glam::DVec3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0)
+            })
+            .collect();
+        m.add_curve(&corners, true, true).unwrap();
+        let mut edges: Vec<EdgeId> = m.edges().map(|(e, _)| e).collect();
+        edges.sort();
+        assert_eq!(
+            curve_info(&m, &edges).unwrap(),
+            ["1 polygon", "Radius: 2 m", "Sides: 6", "Length: 12 m"]
+        );
     }
 
     #[test]

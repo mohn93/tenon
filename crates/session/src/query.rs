@@ -123,8 +123,9 @@ pub struct CurveInfo {
     pub segments: usize,
     /// Total length of the edges, in meters.
     pub length: f64,
-    /// Center, unit normal (pointing up: +z, or on a vertical plane +y, else +x), radius and
-    /// swept angle in degrees (360 for a circle); absent for kind `curve`.
+    /// Center, unit normal (pointing up: +z, or on a vertical plane +y, else +x), radius (a
+    /// polygon's corner radius) and swept angle in degrees (360 for a circle or polygon);
+    /// absent for kind `curve`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub center: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

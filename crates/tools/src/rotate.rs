@@ -770,7 +770,7 @@ mod tests {
             })
             .collect();
         let mut model = Model::new();
-        model.add_curve(&ring, true).unwrap();
+        model.add_curve(&ring, true, false).unwrap();
         r.model = model;
         let mut d = session::Document::new(DVec2::new(800.0, 600.0));
         d.execute(Command::AddCircle {
