@@ -105,7 +105,7 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
         for (a, b) in [
             (ToolKind::Paint, ToolKind::Line),
             (ToolKind::Arc, ToolKind::PushPull),
-            (ToolKind::Rotate, ToolKind::TapeMeasure),
+            (ToolKind::Scale, ToolKind::TapeMeasure),
         ] {
             let between = gap(a, b);
             assert!(

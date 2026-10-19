@@ -130,6 +130,42 @@ fn box_corners(scenery: &Scenery, id: EntityId) -> Option<[DVec3; 8]> {
     }))
 }
 
+/// The model-axis bounds (lowest and highest corner) of `ids`: the vertices of its edges, faces
+/// (outer and hole loops) and vertices, its instances' boxes and its guides' anchors. None
+/// when none of them exists.
+pub(crate) fn selection_bounds(
+    ctx: &ToolContext,
+    ids: &std::collections::BTreeSet<EntityId>,
+) -> Option<[DVec3; 2]> {
+    let m = ctx.model;
+    let mut points = Vec::new();
+    for id in ids {
+        match *id {
+            EntityId::Edge(e) => {
+                if let Some(e) = m.edge(e) {
+                    points.extend(e.v.iter().filter_map(|v| m.position(*v)));
+                }
+            }
+            EntityId::Face(f) => {
+                if let Some(f) = m.face(f) {
+                    points.extend(face_loops(f).flatten().filter_map(|v| m.position(*v)));
+                }
+            }
+            EntityId::Vertex(v) => points.extend(m.position(v)),
+            EntityId::Instance(i) => {
+                points.extend(ctx.scenery.instance_box(i).into_iter().flatten())
+            }
+            EntityId::Guide(g) => points.extend(m.guide(g).map(Guide::anchor)),
+        }
+    }
+    let first = *points.first()?;
+    Some(
+        points
+            .iter()
+            .fold([first, first], |[lo, hi], p| [lo.min(*p), hi.max(*p)]),
+    )
+}
+
 /// The twelve edges of an instance's bounding box, for outlines.
 pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
     let Some(c) = box_corners(ctx.scenery, id) else {

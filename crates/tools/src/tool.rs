@@ -19,6 +19,7 @@ use crate::polygon::PolygonTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
+use crate::scale::ScaleTool;
 use crate::scenery::Scenery;
 use crate::select::SelectTool;
 use crate::tape::TapeMeasureTool;
@@ -213,6 +214,7 @@ pub enum ToolKind {
     PushPull,
     Move,
     Rotate,
+    Scale,
     TapeMeasure,
     Erase,
     Paint,
@@ -220,7 +222,7 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 12] = [
+    pub const ALL: [ToolKind; 13] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -230,6 +232,7 @@ impl ToolKind {
         ToolKind::PushPull,
         ToolKind::Move,
         ToolKind::Rotate,
+        ToolKind::Scale,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
         ToolKind::Paint,
@@ -255,6 +258,7 @@ impl ToolKind {
             ToolKind::PushPull => Box::new(PushPullTool::with_distance(r.pull_distance)),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),
+            ToolKind::Scale => Box::new(ScaleTool::new()),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
             ToolKind::Paint => Box::new(PaintTool::new()),
@@ -273,6 +277,7 @@ impl ToolKind {
             ToolKind::PushPull => "Push/Pull",
             ToolKind::Move => "Move",
             ToolKind::Rotate => "Rotate",
+            ToolKind::Scale => "Scale",
             ToolKind::TapeMeasure => "Tape Measure",
             ToolKind::Erase => "Erase",
             ToolKind::Paint => "Paint",
@@ -291,6 +296,7 @@ impl ToolKind {
             ToolKind::PushPull => 'p',
             ToolKind::Move => 'm',
             ToolKind::Rotate => 'q',
+            ToolKind::Scale => 's',
             ToolKind::TapeMeasure => 't',
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',

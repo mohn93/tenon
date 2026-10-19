@@ -466,6 +466,7 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
         ToolKind::PushPull,
         ToolKind::Move,
         ToolKind::Rotate,
+        ToolKind::Scale,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
         ToolKind::Paint,

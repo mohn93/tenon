@@ -167,7 +167,7 @@ fn flat(v: DVec3, axis: DVec3) -> DVec3 {
 }
 
 /// True for snaps to a point of the model, which the angle follows exactly.
-fn is_point(kind: SnapKind) -> bool {
+pub(crate) fn is_point(kind: SnapKind) -> bool {
     matches!(
         kind,
         SnapKind::Endpoint

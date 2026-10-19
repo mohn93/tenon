@@ -338,6 +338,27 @@ pub(super) fn click_at(h: &mut H, pos: Pos2, modifiers: egui::Modifiers) -> Vec<
 
 /// Clicks the `k`th field named `label`, types `text`, presses `end` and runs. Returns the
 /// actions.
+/// Whether `node` is the rail's button for a tool named `label`, which a field may share its
+/// name with (the Scale tool and the texture Scale fields).
+fn is_tool_button(node: &egui_kittest::Node<'_>, label: &str) -> bool {
+    node.accesskit_node().role() == egui::accesskit::Role::Button
+        && ToolKind::ALL.iter().any(|k| k.label() == label)
+}
+
+/// The `k`th node named `label`, passing over a tool's rail button of that name.
+pub(super) fn field<'h>(h: &'h H, label: &'h str, k: usize) -> egui_kittest::Node<'h> {
+    h.get_all_by_label(label)
+        .filter(|n| !is_tool_button(n, label))
+        .nth(k)
+        .unwrap_or_else(|| panic!("field {k} named {label}"))
+}
+
+/// Whether a node other than a tool's rail button is named `label`.
+pub(super) fn has_field(h: &H, label: &str) -> bool {
+    h.query_all_by_label(label)
+        .any(|n| !is_tool_button(&n, label))
+}
+
 pub(super) fn type_into(
     h: &mut H,
     label: &str,
@@ -345,10 +366,7 @@ pub(super) fn type_into(
     text: &str,
     end: egui::Key,
 ) -> Vec<UiAction> {
-    h.get_all_by_label(label)
-        .nth(k)
-        .unwrap_or_else(|| panic!("field {k} named {label}"))
-        .click();
+    field(h, label, k).click();
     h.run_ok();
     h.event(egui::Event::Text(text.into()));
     h.run_ok();

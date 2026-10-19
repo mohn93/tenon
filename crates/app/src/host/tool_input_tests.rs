@@ -376,6 +376,71 @@ fn rotate_turns_the_selection_by_a_typed_angle_and_copies() {
 }
 
 #[test]
+fn scale_a_box_by_its_corner_and_retype() {
+    let mut e = editor();
+    cube(&mut e);
+    select_all(&mut e);
+    tool(&mut e, "scale");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [2, 2, 1]},
+            {"type": "move", "point": [3, 3, 1.5]},
+            {"type": "type", "text": "2"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["scale"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["origin"], [0.0, 0.0, 0.0]), "{c}");
+    assert!(near(&c["factors"], [2.0, 2.0, 2.0]), "{c}");
+    // Typed again right after: the scale is redone with the new factor.
+    let r = input(&mut e, json!([{"type": "type", "text": "3"}]));
+    assert_eq!(ran(&r), ["undo", "scale"], "{r}");
+    let c = &r["commands"][1]["command"];
+    assert!(near(&c["origin"], [0.0, 0.0, 0.0]), "{c}");
+    assert!(near(&c["factors"], [3.0, 3.0, 3.0]), "{c}");
+    let top = ask(&mut e, json!({"type": "infer", "point": [6, 6, 3]}));
+    assert_eq!(top["kind"], "endpoint", "{top}");
+    assert!(near(&top["point"], [6.0, 6.0, 3.0]), "{top}");
+
+    // After another tool's command, a fresh Scale tool has nothing to change.
+    tool(&mut e, "line");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [4, -1, 0]},
+            {"type": "click", "point": [5, -1, 0]},
+            {"type": "key", "key": "escape"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_edge"], "{r}");
+    tool(&mut e, "scale");
+    let r = input(&mut e, json!([{"type": "type", "text": "2"}]));
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(r["editor"]["message"], "Click a grip first", "{r}");
+}
+
+#[test]
+fn scale_about_center_with_ctrl() {
+    let mut e = editor();
+    cube(&mut e);
+    select_all(&mut e);
+    tool(&mut e, "scale");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "key", "key": "ctrl"},
+            {"type": "click", "point": [2, 2, 1]},
+            {"type": "type", "text": "2"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["scale"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["origin"], [1.0, 1.0, 0.5]), "{c}");
+    assert!(near(&c["factors"], [2.0, 2.0, 2.0]), "{c}");
+}
+
+#[test]
 fn the_tape_measure_adds_guides_and_ctrl_only_measures() {
     let mut e = editor();
     exec(

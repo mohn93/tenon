@@ -454,6 +454,11 @@ impl Editor {
         let released = !shift && self.shift;
         self.shift = shift;
         self.nav.set_modifiers(shift, alt);
+        if (pressed || released) && self.kind == ToolKind::Scale {
+            // Shift switches uniform scaling: the preview follows at once.
+            self.invalidate_hover();
+            return true;
+        }
         if pressed && self.lock.is_none() {
             let (Some(anchor), Some(hit)) = (self.tool.anchor(), self.hit) else {
                 return false;
@@ -749,10 +754,14 @@ impl Editor {
     }
 
     /// The copy modifier (Ctrl) was tapped. The Move and Rotate tools switch copying, the Tape
-    /// Measure switches guide creation, the Polygon tool switches inscribed and circumscribed;
-    /// elsewhere it does nothing and returns false.
+    /// Measure switches guide creation, the Polygon tool switches inscribed and circumscribed,
+    /// the Scale tool switches scaling about the center; elsewhere it does nothing and returns
+    /// false.
     pub fn toggle_copy(&mut self) -> bool {
-        let takes_ctrl = matches!(self.kind, ToolKind::TapeMeasure | ToolKind::Polygon);
+        let takes_ctrl = matches!(
+            self.kind,
+            ToolKind::TapeMeasure | ToolKind::Polygon | ToolKind::Scale
+        );
         if self.flying || !copies(self.kind) && !takes_ctrl {
             return false;
         }
@@ -3497,6 +3506,20 @@ mod tests {
         e.key(EditorKey::Char('m'));
         assert!(e.key(EditorKey::Char('x')));
         assert!(e.status().contains("x_"), "{}", e.status());
+    }
+
+    #[test]
+    fn ctrl_switches_the_polygon_and_scale_tools() {
+        let mut e = editor();
+        for kind in [ToolKind::Polygon, ToolKind::Scale] {
+            e.select_tool(kind);
+            assert!(e.toggle_copy(), "{kind:?}");
+        }
+        assert!(
+            e.status().contains("Scaling about the center"),
+            "{}",
+            e.status()
+        );
     }
 
     #[test]

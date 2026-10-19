@@ -35,6 +35,7 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::PushPull => ph::ARROW_FAT_LINES_UP,
         ToolKind::Move => ph::ARROWS_OUT_CARDINAL,
         ToolKind::Rotate => ph::ARROW_CLOCKWISE,
+        ToolKind::Scale => ph::ARROWS_OUT,
         ToolKind::TapeMeasure => ph::RULER,
     }
 }

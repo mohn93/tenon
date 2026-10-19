@@ -2143,7 +2143,9 @@ impl ApplicationHandler<AppEvent> for App {
                     .editor
                     .set_sample_modifier(m.state().super_key() || m.state().control_key());
                 // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and
-                // copying, and the Tape Measure between adding guides and measuring only.
+                // copying, the Tape Measure between adding guides and measuring only, the
+                // Polygon tool between inscribed and circumscribed, and the Scale tool scaling
+                // about the center.
                 let toggled = tapped && s.editor.toggle_copy();
                 locked || toggled || resampled
             }

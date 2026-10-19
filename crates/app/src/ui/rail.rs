@@ -18,7 +18,12 @@ pub const GROUPS: [&[ToolKind]; 4] = [
         ToolKind::Polygon,
         ToolKind::Arc,
     ],
-    &[ToolKind::PushPull, ToolKind::Move, ToolKind::Rotate],
+    &[
+        ToolKind::PushPull,
+        ToolKind::Move,
+        ToolKind::Rotate,
+        ToolKind::Scale,
+    ],
     &[ToolKind::TapeMeasure],
 ];
 

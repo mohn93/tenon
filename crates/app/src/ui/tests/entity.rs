@@ -63,7 +63,7 @@ fn entity_info_shows_texture_position_fields_for_selected_faces() {
     // Without faces selected there are no texture fields.
     let h = harness(Fixture::default());
     for label in ["Offset", "Rotation", "Scale", "Rotate 90", "Reset"] {
-        assert!(h.query_by_label(label).is_none(), "{label}");
+        assert!(!has_field(&h, label), "{label}");
     }
 }
 
@@ -82,7 +82,7 @@ fn a_texture_field_applies_to_the_faces_it_was_edited_for() {
             three.clone(),
             TexturePlacement::default(),
         ));
-        h.get_all_by_label(label).nth(k).unwrap().click();
+        field(&h, label, k).click();
         h.run_ok();
         h.event(egui::Event::Text("2".into()));
         h.run_ok();
@@ -121,7 +121,7 @@ fn a_stepped_texture_value_applies_when_its_fields_go_away() {
             three.clone(),
             TexturePlacement::default(),
         ));
-        h.get_all_by_label(label).nth(k).unwrap().click();
+        field(&h, label, k).click();
         h.run_ok();
         for _ in 0..2 {
             h.key_press(egui::Key::ArrowUp);

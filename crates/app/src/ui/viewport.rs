@@ -134,6 +134,7 @@ pub fn cursor_icon(tool: ToolKind, hovering: bool, navigating: bool) -> CursorIc
         | ToolKind::Polygon
         | ToolKind::Arc
         | ToolKind::Rotate
+        | ToolKind::Scale
         | ToolKind::TapeMeasure => CursorIcon::Crosshair,
         ToolKind::Move => CursorIcon::Move,
         ToolKind::PushPull => CursorIcon::ResizeVertical,

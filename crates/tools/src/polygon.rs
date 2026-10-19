@@ -105,7 +105,7 @@ impl Tool for PolygonTool {
 
     fn prompt(&self) -> &'static str {
         match (self.center, self.circumscribed) {
-            (None, _) => "Click the center; type 8s for 8 sides; Ctrl switches inscribed",
+            (None, _) => "Click the center; 8s sets the sides; Ctrl: inscribed or circumscribed",
             (Some(_), false) => "Click a corner, or type the radius",
             (Some(_), true) => "Click the middle of a side, or type the radius",
         }

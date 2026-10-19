@@ -39,6 +39,37 @@ pub fn parse_lengths(s: &str) -> Option<Vec<f64>> {
     s.split(',').map(parse_length).collect()
 }
 
+/// One typed scale value: a plain number is a factor, a number with a unit a length (meters).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScaleValue {
+    Factor(f64),
+    Length(f64),
+}
+
+/// Comma-separated scale values, all factors ("2", "-1", "1.5, 2") or all lengths ("3m",
+/// "250mm, 1m"). None if one is neither or the kinds are mixed.
+pub fn parse_scale(s: &str) -> Option<Vec<ScaleValue>> {
+    let values: Vec<ScaleValue> = s
+        .split(',')
+        .map(|v| {
+            let v = v.trim();
+            let (sign, digits) = match v.strip_prefix('-') {
+                Some(rest) => (-1.0, rest.trim_start()),
+                None => (1.0, v),
+            };
+            match number(digits) {
+                Some(f) => Some(ScaleValue::Factor(sign * f)),
+                None => parse_length(v).map(ScaleValue::Length),
+            }
+        })
+        .collect::<Option<_>>()?;
+    let factors = values
+        .iter()
+        .filter(|v| matches!(v, ScaleValue::Factor(_)))
+        .count();
+    (factors == 0 || factors == values.len()).then_some(values)
+}
+
 /// A typed array of copies: "5x", "x5" or "*5" make 5 copies at the last copy's spacing;
 /// "/5" makes 5 copies evenly between the original and the last copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,6 +232,22 @@ mod tests {
             2.0,
             "rounding noise is not a direction"
         );
+    }
+
+    #[test]
+    fn parse_scale_reads_factors_and_lengths() {
+        use ScaleValue::{Factor, Length};
+        assert_eq!(parse_scale("2"), Some(vec![Factor(2.0)]));
+        assert_eq!(parse_scale("-1"), Some(vec![Factor(-1.0)]));
+        assert_eq!(parse_scale("1.5, 2"), Some(vec![Factor(1.5), Factor(2.0)]));
+        assert_eq!(parse_scale("3m"), Some(vec![Length(3.0)]));
+        assert_eq!(
+            parse_scale("250mm,1m"),
+            Some(vec![Length(0.25), Length(1.0)])
+        );
+        for bad in ["2,3m", "", "x", "2,", "1e3"] {
+            assert_eq!(parse_scale(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
