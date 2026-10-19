@@ -45,6 +45,10 @@ pub enum KernelError {
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
     TooManyFaces,
+    /// An import tree is malformed (a missing or cyclic definition, nesting too deep, too
+    /// many definitions or instances, or a singular transform), or the mesh it should go
+    /// straight into is not empty; the text says which.
+    InvalidImport(String),
 }
 
 impl fmt::Display for KernelError {
@@ -77,7 +81,8 @@ impl fmt::Display for KernelError {
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
             | KernelError::MaterialEmission(why)
-            | KernelError::TexturePlacement(why) => {
+            | KernelError::TexturePlacement(why)
+            | KernelError::InvalidImport(why) => {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {

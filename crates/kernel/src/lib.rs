@@ -12,6 +12,7 @@ mod group;
 mod guides;
 mod ids;
 mod import;
+mod import_tree;
 mod index;
 mod material;
 mod mesh;
@@ -36,6 +37,10 @@ pub use ids::{
     CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
+pub use import_tree::{
+    ImportDefinition, ImportEdge, ImportFace, ImportGeometry, ImportInstance, ImportTree,
+    MAX_IMPORT_DEFINITIONS, MAX_IMPORT_DEPTH, MAX_IMPORT_INSTANCES, TreeReport,
+};
 pub use index::{Index, Shape};
 pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};

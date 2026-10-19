@@ -648,7 +648,7 @@ fn loops(f: &Face) -> impl Iterator<Item = &Vec<VertexId>> {
 
 /// True when no two non-adjacent edges of the rings touch or cross (in the plane with this
 /// normal) and every hole (ring 1..) lies inside the outer ring (ring 0).
-fn rings_are_valid(rings: &[Vec<DVec3>], normal: DVec3) -> bool {
+pub(crate) fn rings_are_valid(rings: &[Vec<DVec3>], normal: DVec3) -> bool {
     let plane = Plane::through(rings[0][0], normal);
     let flat: Vec<Vec<glam::DVec2>> = rings
         .iter()

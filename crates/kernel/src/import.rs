@@ -40,7 +40,7 @@ pub const MAX_IMPORT_FACES: usize = 200_000;
 
 /// Corners within this distance of a polygon's plane count as on it. Half the kernel's
 /// tolerance, so the faces made pass `Model::validate` with room for rounding.
-const FLAT_TOL: f64 = 0.5 * LENGTH_TOL;
+pub(crate) const FLAT_TOL: f64 = 0.5 * LENGTH_TOL;
 
 /// Most corners of a flat polygon that are checked for crossing sides.
 const MAX_SIMPLE_CHECK: usize = 256;
@@ -202,7 +202,7 @@ pub(crate) fn build_mesh(
 /// Positions with points closer than `LENGTH_TOL` to an earlier kept one dropped, and for
 /// each point the index of the position it became. Kept positions are at least `LENGTH_TOL`
 /// apart: a grid of `LENGTH_TOL` cells finds the near ones.
-fn weld(points: &[DVec3]) -> (Vec<DVec3>, Vec<usize>) {
+pub(crate) fn weld(points: &[DVec3]) -> (Vec<DVec3>, Vec<usize>) {
     let cell = |p: DVec3| (p / LENGTH_TOL).floor().to_array().map(|c| c as i64);
     let mut grid: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
     let mut kept: Vec<DVec3> = Vec::new();
@@ -242,7 +242,7 @@ fn weld(points: &[DVec3]) -> (Vec<DVec3>, Vec<usize>) {
 
 /// The faces one polygon makes, as (loop, unit normal): itself when it is flat and simple,
 /// else the triangles of its projection; none when it has no area.
-fn pieces(points: &[DVec3], mut corners: Vec<usize>) -> Vec<(Vec<usize>, DVec3)> {
+pub(crate) fn pieces(points: &[DVec3], mut corners: Vec<usize>) -> Vec<(Vec<usize>, DVec3)> {
     corners.dedup();
     while corners.len() > 1 && corners.first() == corners.last() {
         corners.pop();
@@ -290,7 +290,7 @@ fn pieces(points: &[DVec3], mut corners: Vec<usize>) -> Vec<(Vec<usize>, DVec3)>
 
 /// The unit normal of a polygon by its vector area, or None when it is narrower than
 /// `LENGTH_TOL` (twice its area over its longest side).
-fn normal_of(pts: &[DVec3]) -> Option<DVec3> {
+pub(crate) fn normal_of(pts: &[DVec3]) -> Option<DVec3> {
     let area = vector_area(pts);
     let longest = (0..pts.len())
         .map(|i| pts[i].distance(pts[(i + 1) % pts.len()]))

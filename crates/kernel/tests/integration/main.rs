@@ -10,6 +10,7 @@ mod erase;
 mod faces;
 mod groups;
 mod guides;
+mod import_tree;
 mod index;
 mod materials;
 mod mesh;
