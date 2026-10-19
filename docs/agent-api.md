@@ -18,8 +18,10 @@ Any of these can end with a `.skr` file to open at start, e.g.
 `cargo run -p app -- --headless --stdio house.skr`. In headless mode a file that cannot be opened
 stops the app with exit code 1 and a message on stderr.
 
-The default socket is `sketchup-alt-<pid>.sock` in the temp directory, or in `~/.sketchup-alt/`
-(created with mode 0700) when the temp directory path is too long for a Unix socket. The socket is
+The default socket is `sketchup-alt-<pid>.sock`. On macOS it is in the temp directory, or in
+`~/.sketchup-alt/` (created with mode 0700) when the temp directory path is too long for a Unix
+socket or is the shared `/tmp`. On Linux it is in `$XDG_RUNTIME_DIR` when that is an absolute path
+to a folder you own that others cannot write to, else in `~/.sketchup-alt/` as on macOS. The socket is
 readable only by the current user. Try it by hand with `nc -U PATH`. The window removes the
 socket file on a normal quit. The default name includes the process id, so a socket left behind
 by a killed app is never reused; agents that start the app should pass `--socket PATH` (a fixed
@@ -889,7 +891,7 @@ when the model has given out ids past 2^53, which no file can hold. `open` and `
 not saved (`modified` in the `file` query) unless told to: they fail with `unsaved_changes`, and
 a client that means it, or has asked the user, passes `"discard": true`. In the window, `new`,
 `open` and `quit` with `discard: true` first write the unsaved model to a recovery file,
-`~/.sketchup-alt/recovery/<name>-<seconds>.skr`; the window's status bar and its Agent Activity
+`<name>-<seconds>.skr` in the recovery folder (macOS `~/.sketchup-alt/recovery`; Linux `$XDG_STATE_HOME/sketchup-alt/recovery`, by default `~/.local/state/sketchup-alt/recovery`; files an earlier version left in `~/.sketchup-alt/recovery` stay there); the window's status bar and its Agent Activity
 window name it; only the user may read it (0600). If the file cannot be written the command fails with `file` and nothing is
 discarded. Headless, nothing is written. The window asks the user
 itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an
@@ -1174,7 +1176,7 @@ under a pixel and where a click would snap.
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
-| Settings (Cmd+,): Appearance (theme, UI scale) and Input (trackpad scroll); View > Theme | none: window chrome, kept in `~/.sketchup-alt/prefs.json` |
+| Settings (Cmd+,): Appearance (theme, UI scale) and Input (trackpad scroll); View > Theme | none: window chrome, kept in the prefs file (see below) |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |
@@ -1208,7 +1210,8 @@ which menus are open, tooltips, which Outliner rows are expanded, the Outliner's
 agent filters the `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export
 dialog's suggested format, keyboard focus, and the window's preferences: the theme (Settings or
 View > Theme), the UI scale, the trackpad scroll setting, the import options, the dock's width,
-divider position and tab, and the recent files list, kept in `~/.sketchup-alt/prefs.json`, which
+divider position and tab, and the recent files list, kept in `~/.sketchup-alt/prefs.json` on macOS and in
+`$XDG_CONFIG_HOME/sketchup-alt/prefs.json` (by default `~/.config/sketchup-alt/prefs.json`) on Linux, which
 the API never reads or writes (files an agent opens or saves are not added to the list). The card
 the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is
 chrome too, and so is dismissing it. Whether the menus are the native macOS menu bar or the

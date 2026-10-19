@@ -13,11 +13,12 @@ mod menus;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod navigation;
+mod paths;
 mod prefs;
 mod shortcuts;
 mod ui;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -99,17 +100,22 @@ fn main() {
             let event_loop = builder.build().expect("create event loop");
             // Redraw on demand only; the loop sleeps until input or an API request arrives.
             event_loop.set_control_flow(ControlFlow::Wait);
-            // An empty or relative HOME would put the files under the working folder.
-            let home = std::env::var_os("HOME").filter(|home| Path::new(home).is_absolute());
-            let recovery = home
-                .as_ref()
-                .map(|home| PathBuf::from(home).join(cli::FALLBACK_DIR).join("recovery"));
-            let prefs = home.as_ref().map(|home| prefs::path_in(Path::new(home)));
-            if home.is_none() {
+            // Without an absolute HOME the files would land under the working folder.
+            let found = paths::resolve(
+                paths::Os::current(),
+                &|k| std::env::var_os(k),
+                std::process::id(),
+            );
+            if found.is_none() {
                 eprintln!(
                     "warning: HOME is not set: work an agent discards in the window is not kept, and preferences last only for the session"
                 );
             }
+            let recovery = found.as_ref().map(|p| p.recovery.clone());
+            let prefs = found.map(|p| prefs::PrefsFile {
+                path: p.prefs,
+                legacy: p.legacy_prefs,
+            });
             let mut app = app::App::new(&event_loop, socket, file, roots, recovery, prefs);
             event_loop.run_app(&mut app).expect("run app");
         }

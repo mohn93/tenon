@@ -75,9 +75,32 @@ fn cleaned(recent: Vec<PathBuf>) -> Vec<PathBuf> {
 /// The largest prefs file read; anything larger is not one this app wrote.
 const MAX_BYTES: u64 = 64 * 1024;
 
-/// The prefs file for the home folder `home`.
+/// The prefs file for the home folder `home` (the macOS layout).
+#[cfg(test)]
 pub fn path_in(home: &Path) -> PathBuf {
     home.join(crate::cli::FALLBACK_DIR).join("prefs.json")
+}
+
+/// Where the window's preferences live: `path`, and an earlier location read once when `path`
+/// does not exist yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrefsFile {
+    pub path: PathBuf,
+    pub legacy: Option<PathBuf>,
+}
+
+/// The prefs of `file`: those at `file.path`, or, when nothing is there yet, those at the
+/// legacy path. The legacy file is only read; the next save writes `file.path`, after which
+/// it is no longer looked at.
+pub fn load_file(file: &PrefsFile) -> Prefs {
+    let missing = matches!(
+        std::fs::symlink_metadata(&file.path),
+        Err(e) if e.kind() == io::ErrorKind::NotFound
+    );
+    match &file.legacy {
+        Some(legacy) if missing => load(legacy),
+        _ => load(&file.path),
+    }
 }
 
 /// The prefs at `path`: the defaults when there is no file, and the defaults with a warning
@@ -139,7 +162,7 @@ fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
 }
 
 /// Writes `prefs` to `path` (mode 0600), in a folder made or checked private like the rest of
-/// `~/.sketchup-alt` (0700, not a link). The bytes go first to a new hidden file beside it
+/// the app's other private folders (0700, not a link; missing parents are created). The bytes go first to a new hidden file beside it
 /// (`.prefs-<pid>-<n>.partial`), created only where nothing is, so they never go through a
 /// link; it is renamed over `path` once written, or removed if the write fails.
 pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
@@ -148,7 +171,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .ok_or_else(|| io::Error::other("the preferences path has no folder"))?;
-    crate::cli::ensure_private_dir(dir)?;
+    crate::cli::ensure_private_tree(dir)?;
     let json = serde_json::to_vec_pretty(prefs).map_err(io::Error::other)?;
     let (partial, mut file) = loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -203,6 +226,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn old_prefs_are_read_once() {
+        let home = home("legacy");
+        let old = path_in(&home);
+        let new = home.join(".config/sketchup-alt/prefs.json");
+        let file = PrefsFile {
+            path: new.clone(),
+            legacy: Some(old.clone()),
+        };
+        let kept = Prefs {
+            recent: vec![PathBuf::from("/a/b.skr")],
+            ..Prefs::default()
+        };
+        save(&old, &kept).unwrap();
+        let old_bytes = std::fs::read(&old).unwrap();
+        // The new file is missing: the old one is read.
+        let mut loaded = load_file(&file);
+        assert_eq!(loaded, kept);
+        assert!(!new.exists(), "reading does not write");
+        // The next save goes to the new place (made, with its missing parents, private).
+        loaded.recent.push(PathBuf::from("/c.skr"));
+        save(&new, &loaded).unwrap();
+        assert_eq!(
+            std::fs::read(&old).unwrap(),
+            old_bytes,
+            "old file untouched"
+        );
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&new), 0o600);
+        assert_eq!(mode(new.parent().unwrap()), 0o700);
+        // Now the new file wins, even though the old one is still there.
+        assert_eq!(load_file(&file), loaded);
+        // An unreadable new file is not replaced by the old one.
+        std::fs::write(&new, b"not json").unwrap();
+        assert_eq!(load_file(&file), Prefs::default());
+        // No legacy path: just the new file.
+        std::fs::remove_file(&new).unwrap();
+        let only_new = PrefsFile {
+            path: new,
+            legacy: None,
+        };
+        assert_eq!(load_file(&only_new), Prefs::default());
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

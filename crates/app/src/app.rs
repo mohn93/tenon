@@ -31,6 +31,7 @@ use crate::menus;
 #[cfg(target_os = "macos")]
 use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
+use crate::paths;
 use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
@@ -459,6 +460,26 @@ fn fly_move_key(key: PhysicalKey) -> Option<FlyKey> {
     })
 }
 
+/// Whether a command key is down: Cmd or Ctrl on macOS, Ctrl alone elsewhere, where Super is
+/// the desktop's own key and never runs a command.
+fn command_held(os: paths::Os, super_key: bool, control_key: bool) -> bool {
+    control_key || (os == paths::Os::MacOs && super_key)
+}
+
+/// Whether the key that has the menu bar's chords is down: Cmd on macOS, none elsewhere.
+fn menu_bar_held(os: paths::Os, super_key: bool) -> bool {
+    os == paths::Os::MacOs && super_key
+}
+
+/// Whether the key that turns a fly-mode movement key into a shortcut (Cmd+S saves) is down:
+/// Cmd on macOS (Ctrl+S still moves), Ctrl elsewhere.
+fn shortcut_held(os: paths::Os, super_key: bool, control_key: bool) -> bool {
+    match os {
+        paths::Os::MacOs => super_key,
+        _ => control_key,
+    }
+}
+
 /// True if a key event goes to fly mode's movement: a moving key while flying, except a press
 /// with Cmd held, which stays a shortcut (Cmd+S saves). Releases always go, so a key let go
 /// after Cmd went down still stops.
@@ -616,13 +637,37 @@ struct State {
 }
 
 impl State {
+    fn command_held(&self) -> bool {
+        command_held(
+            paths::Os::current(),
+            self.modifiers.super_key(),
+            self.modifiers.control_key(),
+        )
+    }
+
+    fn menu_bar_key(&self) -> bool {
+        menu_bar_held(paths::Os::current(), self.modifiers.super_key())
+    }
+
+    fn shortcut_key(&self) -> bool {
+        shortcut_held(
+            paths::Os::current(),
+            self.modifiers.super_key(),
+            self.modifiers.control_key(),
+        )
+    }
+
     fn new(
         window: Arc<Window>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
-        prefs_path: Option<PathBuf>,
+        prefs_file: Option<prefs::PrefsFile>,
     ) -> Self {
-        let prefs = prefs_path.as_deref().map(prefs::load).unwrap_or_default();
+        let prefs = prefs_file
+            .as_ref()
+            .map(prefs::load_file)
+            .unwrap_or_default();
+        let prefs_path = prefs_file.map(|f| f.path);
         let recent_shown = prefs::existing(&prefs.recent, prefs::CARD_RECENT);
         let instance = wgpu::Instance::default();
         let Gpu {
@@ -1944,7 +1989,7 @@ pub struct App {
     /// Where work an agent discards is kept.
     recovery: Option<PathBuf>,
     /// The window's preferences file (None: HOME is not set).
-    prefs: Option<PathBuf>,
+    prefs: Option<prefs::PrefsFile>,
     /// Carries native menu and AccessKit events to the loop.
     proxy: EventLoopProxy<AppEvent>,
 }
@@ -1958,7 +2003,7 @@ impl App {
         file: Option<PathBuf>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
-        prefs: Option<PathBuf>,
+        prefs: Option<prefs::PrefsFile>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
         let api_proxy = proxy.clone();
@@ -2172,9 +2217,11 @@ impl ApplicationHandler<AppEvent> for App {
                     .set_modifiers(m.state().shift_key(), m.state().alt_key());
                 // Cmd or Ctrl held makes a Paint click pick up a material (and changes how
                 // its target is highlighted).
-                let resampled = s
-                    .editor
-                    .set_sample_modifier(m.state().super_key() || m.state().control_key());
+                let resampled = s.editor.set_sample_modifier(command_held(
+                    paths::Os::current(),
+                    m.state().super_key(),
+                    m.state().control_key(),
+                ));
                 // Tapping Ctrl switches tools that can copy (Move, Rotate) between moving and
                 // copying, the Tape Measure between adding guides and measuring only, the
                 // Polygon tool between inscribed and circumscribed, and the Scale tool scaling
@@ -2260,9 +2307,9 @@ impl ApplicationHandler<AppEvent> for App {
                         && !event.repeat
                         && is_quit_chord(
                             shortcut_letter(&event.logical_key, event.physical_key),
-                            s.modifiers.super_key() || s.modifiers.control_key(),
+                            s.command_held(),
                             s.modifiers.shift_key(),
-                            s.modifiers.super_key(),
+                            s.menu_bar_key(),
                         )) =>
             {
                 false
@@ -2272,7 +2319,7 @@ impl ApplicationHandler<AppEvent> for App {
                     s.editor.flying(),
                     event.physical_key,
                     event.state == ElementState::Pressed,
-                    s.modifiers.super_key(),
+                    s.shortcut_key(),
                 ) =>
             {
                 s.editor.fly_key(key, event.state == ElementState::Pressed)
@@ -2286,12 +2333,12 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::PinchGesture { delta, .. } => s.editor.pinch(delta),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                let command_key = s.modifiers.super_key() || s.modifiers.control_key();
+                let command_key = s.command_held();
                 let letter = shortcut_letter(&event.logical_key, event.physical_key);
                 if command_key {
                     let shift = s.modifiers.shift_key();
                     // With native menus, Cmd chords are the menu bar's; Ctrl ones still act here.
-                    let cmd = s.modifiers.super_key();
+                    let cmd = s.menu_bar_key();
                     let bound = letter.and_then(|l| {
                         shortcuts::window_command(
                             l,
@@ -3069,6 +3116,30 @@ mod tests {
         let digit = Key::Character(SmolStr::new("5"));
         let five = PhysicalKey::Code(KeyCode::Digit5);
         assert_eq!(ch(editor_key(&digit, five, true)), Some('5'));
+    }
+
+    #[test]
+    fn super_is_not_command_off_macos() {
+        use paths::Os;
+        for os in [Os::Linux, Os::Other] {
+            assert!(command_held(os, false, true), "Ctrl");
+            assert!(!command_held(os, true, false), "Super alone");
+            assert!(command_held(os, true, true));
+            assert!(!command_held(os, false, false));
+            assert!(!menu_bar_held(os, true));
+            assert!(shortcut_held(os, false, true), "Ctrl+S saves while flying");
+            assert!(!shortcut_held(os, true, false), "Super+S flies");
+        }
+        assert!(command_held(Os::MacOs, true, false), "Cmd");
+        assert!(command_held(Os::MacOs, false, true), "Ctrl still counts");
+        assert!(!command_held(Os::MacOs, false, false));
+        assert!(menu_bar_held(Os::MacOs, true));
+        assert!(!menu_bar_held(Os::MacOs, false));
+        assert!(shortcut_held(Os::MacOs, true, false));
+        assert!(
+            !shortcut_held(Os::MacOs, false, true),
+            "Ctrl+S flies on macOS"
+        );
     }
 
     #[test]

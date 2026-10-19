@@ -49,7 +49,7 @@ Claude Code:
 claude mcp add sketchup-alt -- /path/to/app --mcp --api-root ~/Models
 ```
 
-Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Claude Desktop on macOS (`~/Library/Application Support/Claude/claude_desktop_config.json`; Claude Desktop has no Linux build, use Claude Code there):
 
 ```json
 {"mcpServers": {"sketchup-alt": {"command": "/path/to/app", "args": ["--mcp", "--api-root", "/Users/you/Models"]}}}
@@ -66,7 +66,7 @@ Start the window on a fixed socket, then point the MCP server at it:
 claude mcp add sketchup-alt-live -- /path/to/app --mcp --live ~/.sketchup-alt/main.sock
 ```
 
-`~/.sketchup-alt` is created with mode 0700 if missing. The window must be running when the client
+`~/.sketchup-alt` is created with mode 0700 if missing. On Linux, `$XDG_RUNTIME_DIR` (usually `/run/user/<uid>`) is a good place for a fixed socket: `--socket "$XDG_RUNTIME_DIR/sketchup-alt.sock"`. The window must be running when the client
 starts the server: a socket that cannot be reached stops it with exit code 1. If the window quits
 later, every call fails with code `-32003` (connection lost) until the client restarts the server.
 `--live` takes no FILE or `--api-root`; open files and set `--api-root` on the window.

@@ -4,6 +4,8 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use crate::paths;
+
 pub const USAGE: &str =
     "usage: app [--socket PATH] [--api-root DIR]... [FILE]            window, agent API on a Unix socket
        app --headless --stdio [--api-root DIR]... [FILE]          no window, agent API on stdin/stdout
@@ -41,30 +43,14 @@ pub enum Mode {
     },
 }
 
-/// Unix socket paths are limited to about 104 bytes on macOS.
-const MAX_SOCKET_PATH: usize = 100;
-
-/// Directory under HOME used when the temp directory is too deep for a socket path.
+/// Base folder under HOME for the files that live there on macOS, and for the socket when the
+/// preferred folder is unusable.
 pub const FALLBACK_DIR: &str = ".sketchup-alt";
 
-/// Default socket path: per-process, in the user's temp directory, or in `~/.sketchup-alt/` when
-/// the temp directory is too deep for a socket path. Never in a shared directory such as /tmp.
+/// Default socket path: per-process, in the platform's private folder (see `paths`). Never in
+/// a shared directory such as /tmp.
 pub fn default_socket() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    choose_socket(&std::env::temp_dir(), home.as_deref(), std::process::id())
-}
-
-/// The temp directory is used unless it is the shared `/tmp` (Linux without TMPDIR) or too deep
-/// for a socket path; then `<home>/.sketchup-alt` is used. Without a home, the temp path is
-/// kept and listening reports the error.
-fn choose_socket(temp_dir: &Path, home: Option<&Path>, pid: u32) -> PathBuf {
-    let name = format!("sketchup-alt-{pid}.sock");
-    let preferred = temp_dir.join(&name);
-    let usable = temp_dir != Path::new("/tmp") && preferred.as_os_str().len() <= MAX_SOCKET_PATH;
-    match home {
-        Some(home) if !usable => home.join(FALLBACK_DIR).join(name),
-        _ => preferred,
-    }
+    paths::default_socket(&|k| std::env::var_os(k), std::process::id())
 }
 
 /// Returns the private directory when `socket` lives in the `~/.sketchup-alt` fallback.
@@ -98,6 +84,21 @@ pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
             Ok(())
         }
     }
+}
+
+/// `ensure_private_dir`, creating missing parent folders too (mode 0700). Only `dir` itself is
+/// checked, so an existing parent such as `~/.config` keeps its mode.
+pub fn ensure_private_tree(dir: &Path) -> io::Result<()> {
+    if let Some(parent) = dir.parent()
+        && !parent.as_os_str().is_empty()
+        && std::fs::symlink_metadata(parent).is_err()
+    {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
+    }
+    ensure_private_dir(dir)
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
@@ -315,30 +316,8 @@ mod tests {
     }
 
     #[test]
-    fn socket_choice() {
-        let home = Path::new("/Users/me");
-        let fallback = home.join(FALLBACK_DIR).join("sketchup-alt-7.sock");
-        let short = Path::new("/var/folders/ab/T");
-        assert_eq!(
-            choose_socket(short, Some(home), 7),
-            short.join("sketchup-alt-7.sock")
-        );
-        assert_eq!(choose_socket(Path::new("/tmp"), Some(home), 7), fallback);
-        let long = PathBuf::from(format!("/{}", "x".repeat(100)));
-        assert_eq!(choose_socket(&long, Some(home), 7), fallback);
-        assert_eq!(
-            choose_socket(&long, None, 7),
-            long.join("sketchup-alt-7.sock")
-        );
-        assert_eq!(
-            choose_socket(Path::new("/tmp"), None, 7),
-            Path::new("/tmp/sketchup-alt-7.sock")
-        );
-    }
-
-    #[test]
     fn default_socket_path_fits_the_os_limit() {
-        assert!(default_socket().as_os_str().len() <= MAX_SOCKET_PATH);
+        assert!(default_socket().as_os_str().len() <= paths::MAX_SOCKET_PATH);
     }
 
     #[test]
