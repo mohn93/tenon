@@ -1,4 +1,4 @@
-//! Importing SketchUp files (2021 and newer) through JSON commands, over the CC BY 4.0
+//! Importing SketchUp files (2017 and newer) through JSON commands, over the CC BY 4.0
 //! fixtures of the `skp` crate.
 
 use std::io::{Cursor, Write};
@@ -459,20 +459,33 @@ fn utf16_tag(text: &str) -> Vec<u8> {
 }
 
 #[test]
-fn legacy_files_are_refused_with_a_message() {
+fn older_than_2017_is_refused() {
+    let mut d = doc();
+    for version in ["{16.1.1451}", "{13.0.3689}", ""] {
+        let mut bytes = utf16_tag("SketchUp Model");
+        if !version.is_empty() {
+            bytes.extend(utf16_tag(version));
+        }
+        bytes.extend([0x01, 0x00, 0x00, 0x00, b'C', b'V', b'e', b'r']);
+        bytes.extend([0u8; 300]);
+        for name in ["old.skp", "old.model"] {
+            // Without an extension it knows, the header says SketchUp.
+            let path = write(name, &bytes);
+            let (kind, message) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
+            assert_eq!(kind, ErrorKind::InvalidInput, "{version}: {message}");
+            assert!(message.contains("older than 2017"), "{message}");
+        }
+    }
+    assert_eq!(d.scene(), doc().scene());
+
+    // A 2020 header over bytes that are no model: a file error, nothing changes.
     let mut bytes = utf16_tag("SketchUp Model");
     bytes.extend(utf16_tag("{20.0.373}"));
     bytes.extend([0x01, 0x00, 0x00, 0x00, b'C', b'V', b'e', b'r']);
     bytes.extend([0u8; 300]);
-    let mut d = doc();
-    for name in ["old.skp", "old.model"] {
-        // Without an extension it knows, the header says SketchUp.
-        let path = write(name, &bytes);
-        let (kind, message) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
-        assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
-        assert!(message.contains("2020"), "{message}");
-        assert!(message.contains("2021 or newer"), "{message}");
-    }
+    let path = write("broken-2020.skp", &bytes);
+    let (kind, message) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
+    assert_eq!(kind, ErrorKind::File, "{message}");
     assert_eq!(d.scene(), doc().scene());
 
     // A 2021+ file under another name imports by its header too; other files do not.
@@ -485,6 +498,253 @@ fn legacy_files_are_refused_with_a_message() {
     let path = write("not-sketchup.skp", b"hello");
     let (kind, _) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
     assert_eq!(kind, ErrorKind::File);
+}
+
+/// The cupboard as SketchUp 2024 saved it in the 2017 to 2020 formats.
+const LEGACY_CUPBOARDS: [&str; 4] = [
+    "legacy/cupboard_v2017.skp",
+    "legacy/cupboard_v2018.skp",
+    "legacy/cupboard_v2019.skp",
+    "legacy/cupboard_v2020.skp",
+];
+
+/// The report's counts the legacy copies must share with the original.
+const COUNTS: [&str; 9] = [
+    "definitions",
+    "instances",
+    "polygons",
+    "faces",
+    "vertices",
+    "materials",
+    "skipped",
+    "guides",
+    "textures",
+];
+
+/// Imports `path` into a new document: the document and the report.
+fn import(path: &str) -> (Document, Value) {
+    let mut d = doc();
+    let r = run(&mut d, json!({"type": "import", "path": path}))
+        .unwrap_or_else(|e| panic!("{path}: {e:?}"));
+    d.scene().validate().unwrap();
+    (d, r["import"].clone())
+}
+
+/// The bounds of the one instance an import placed in the root.
+fn import_bounds(d: &Document) -> [[f64; 3]; 2] {
+    let roots = root_instances(d);
+    assert_eq!(roots.len(), 1);
+    let b = &roots[0]["bounds"];
+    ["min", "max"].map(|k| [0, 1, 2].map(|i| b[k][i].as_f64().unwrap()))
+}
+
+fn close(a: [[f64; 3]; 2], b: [[f64; 3]; 2], tolerance: f64) -> bool {
+    (0..2).all(|k| (0..3).all(|i| (a[k][i] - b[k][i]).abs() <= tolerance))
+}
+
+#[test]
+fn legacy_cupboards_import_like_the_original() {
+    let (original, want) = import(&fixture("cupboard.skp"));
+    let want_bounds = import_bounds(&original);
+    for name in LEGACY_CUPBOARDS {
+        let (d, report) = import(&fixture(name));
+        for k in COUNTS {
+            assert_eq!(report[k], want[k], "{name}: {k}: {report} against {want}");
+        }
+        assert!(
+            close(import_bounds(&d), want_bounds, 1e-3),
+            "{name}: {:?} against {want_bounds:?}",
+            import_bounds(&d)
+        );
+        // The knob and the hinge are each still one component placed twice.
+        let defs = definitions(&d);
+        for part in ["knob", "Hinge"] {
+            let found: Vec<&Value> = defs.iter().filter(|x| x["name"] == part).collect();
+            assert_eq!(found.len(), 1, "{name}: {part}");
+            assert_eq!(found[0]["kind"], "component", "{name}: {}", found[0]);
+            assert_eq!(found[0]["instances"], 2, "{name}: {}", found[0]);
+        }
+        let mut names: Vec<Value> = materials_of(&d).iter().map(|m| m["name"].clone()).collect();
+        let mut want_names: Vec<Value> = materials_of(&original)
+            .iter()
+            .map(|m| m["name"].clone())
+            .collect();
+        names.sort_by_key(Value::to_string);
+        want_names.sort_by_key(Value::to_string);
+        assert_eq!(names, want_names, "{name}");
+    }
+}
+
+#[test]
+fn opening_a_legacy_file_works() {
+    let open = |path: &str| {
+        let mut d = doc();
+        let r = run(&mut d, json!({"type": "open", "path": path})).unwrap();
+        d.scene().validate().unwrap();
+        (d, r["import"].clone())
+    };
+    let (want, want_report) = open(&fixture("cupboard.skp"));
+    let path = fixture("legacy/cupboard_v2017.skp");
+    let (d, report) = open(&path);
+    for k in COUNTS {
+        assert_eq!(report[k], want_report[k], "{k}: {report}");
+    }
+    assert!(
+        report.get("instance").is_none_or(Value::is_null),
+        "{report}"
+    );
+    let file = ask(&d, json!({"type": "file"}));
+    assert_eq!(file["path"], Value::Null);
+    assert_eq!(file["modified"], false);
+    assert_eq!(d.imported_from(), Some(Path::new(&path)));
+    assert_eq!(root_instances(&d).len(), root_instances(&want).len());
+    assert_eq!(root_faces(&d), root_faces(&want));
+    assert_eq!(definitions(&d).len(), definitions(&want).len());
+}
+
+#[test]
+fn guides_are_imported() {
+    // The cupboards have none, in either container.
+    for name in ["cupboard.skp"].into_iter().chain(LEGACY_CUPBOARDS) {
+        let (d, report) = import(&fixture(name));
+        assert!(
+            report.get("guides").is_none_or(|g| g == 0),
+            "{name}: {report}"
+        );
+        assert!(
+            !warnings(&report).iter().any(|w| w.contains("guide")),
+            "{name}: {report}"
+        );
+        d.scene().validate().unwrap();
+    }
+
+    // Guides of a crafted 2023 file: in the root and in a definition placed 10 inches along x.
+    use craft::{Guide, file_with_guides, scaled};
+    let root_guides = [
+        Guide::Line([1.0, 2.0, 3.0], [0.0, 0.0, 5.0]),
+        Guide::Point([10.0, 20.0, 30.0]),
+        // Not imported: no direction, not finite, beyond the coordinate limit.
+        Guide::Line([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+        Guide::Point([f64::NAN, 0.0, 0.0]),
+        Guide::Line([0.0, 0.0, 0.0], [f64::INFINITY, 0.0, 0.0]),
+        Guide::Point([1e9, 0.0, 0.0]),
+    ];
+    let bytes = file_with_guides(
+        &[(vec![], vec![Guide::Point([1.0, 0.0, 0.0])])],
+        &[(0, scaled(1.0, 10.0), None)],
+        &root_guides,
+    );
+    let path = write("guides.skp", &bytes);
+    let mut d = doc();
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path, "as": "context"}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["guides"], 3, "{report}");
+    assert!(
+        warnings(report).contains(&"4 guides could not be read and were skipped".to_string()),
+        "{report}"
+    );
+    let guides = ask(&d, json!({"type": "entities", "kinds": ["guide"]}))["guides"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let near =
+        |v: &Value, want: [f64; 3]| (0..3).all(|i| (v[i].as_f64().unwrap() - want[i]).abs() < 1e-9);
+    assert_eq!(guides.len(), 2, "{guides:?}");
+    let line = guides.iter().find(|g| g["kind"] == "line").unwrap();
+    assert!(near(&line["point"], [0.0254, 0.0508, 0.0762]), "{line}");
+    assert!(near(&line["direction"], [0.0, 0.0, 1.0]), "{line}");
+    let point = guides.iter().find(|g| g["kind"] == "point").unwrap();
+    assert!(near(&point["point"], [0.254, 0.508, 0.762]), "{point}");
+
+    // The definition's guide point, in the definition's own coordinates.
+    let instance = root_instances(&d)[0]["id"].clone();
+    run(&mut d, json!({"type": "open_instance", "id": instance})).unwrap();
+    let inner = ask(&d, json!({"type": "entities", "kinds": ["guide"]}))["guides"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(inner.len(), 1, "{inner:?}");
+    assert!(near(&inner[0]["point"], [0.0254, 0.0, 0.0]), "{inner:?}");
+
+    // A guide point is part of the model's size: one far out in a scaled-up definition makes
+    // the model too large.
+    let bytes = file_with_guides(
+        &[(vec![], vec![Guide::Point([1e7, 0.0, 0.0])])],
+        &[(0, scaled(1000.0, 0.0), None)],
+        &[],
+    );
+    let (d, r, _) = import_timed("far-guide.skp", &bytes);
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+    assert!(message.contains("beyond"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+}
+
+#[test]
+fn mutated_legacy_files_give_errors_not_panics() {
+    for (n, name) in LEGACY_CUPBOARDS.iter().enumerate() {
+        let original = std::fs::read(fixture(name)).unwrap();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64 ^ n as u64;
+        let mut next = move |below: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % below as u64) as usize
+        };
+        let (mut ok, mut failed) = (0, 0);
+        // 52 mutants over the four versions, past the header (which would only refuse).
+        for k in 0..13 {
+            let mut bytes = original.clone();
+            let body = 64 + next(bytes.len() - 64);
+            match k % 4 {
+                0 => bytes.truncate(body),
+                1 => {
+                    for _ in 0..1 + next(8) {
+                        let at = 64 + next(bytes.len() - 64);
+                        bytes[at] ^= 1 << next(8);
+                    }
+                }
+                2 => {
+                    let end = (body + 1 + next(64)).min(bytes.len());
+                    for b in &mut bytes[body..end] {
+                        *b = next(256) as u8;
+                    }
+                }
+                _ => {
+                    let end = (body + 8).min(bytes.len());
+                    bytes[body..end].fill(0xff);
+                }
+            }
+            let path = write(&format!("legacy-mutant-{n}-{k}.skp"), &bytes);
+            let mut d = doc();
+            run(
+                &mut d,
+                json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+            )
+            .unwrap();
+            let before = d.scene().clone();
+            let result = run(&mut d, json!({"type": "import", "path": path}));
+            let _ = std::fs::remove_file(&path);
+            match result {
+                Ok(_) => ok += 1,
+                Err((kind, message)) => {
+                    failed += 1;
+                    assert!(
+                        matches!(kind, ErrorKind::File | ErrorKind::InvalidInput),
+                        "{kind:?}: {message}"
+                    );
+                    assert_eq!(d.scene(), &before, "{name} mutant {k}: {message}");
+                }
+            }
+            d.scene().validate().unwrap();
+        }
+        println!("{name} mutants: {ok} imported, {failed} refused");
+    }
 }
 
 /// Building small SketchUp files record by record (`[u16 tag][u32 size][payload]`), so tests
@@ -554,6 +814,45 @@ mod craft {
         out
     }
 
+    /// A guide as a file states it, in inches: a line (point, direction) or a point.
+    pub enum Guide {
+        Line([f64; 3], [f64; 3]),
+        Point([f64; 3]),
+    }
+
+    fn doubles(v: &[f64]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    /// A component's guide lists (only those it has).
+    fn guide_lists(guides: &[Guide]) -> Vec<u8> {
+        let (mut lines, mut points) = (Vec::new(), Vec::new());
+        for g in guides {
+            match g {
+                Guide::Line(p, d) => {
+                    // Point, direction, then the start and end parameters.
+                    let body = doubles(&[p[0], p[1], p[2], d[0], d[1], d[2], 0.0, 0.0]);
+                    lines.extend(rec(
+                        t::CONSTRUCTION_LINE,
+                        &rec(t::CONSTRUCTION_LINE_GEOM_LINE, &body),
+                    ));
+                }
+                Guide::Point(p) => points.extend(rec(
+                    t::CONSTRUCTION_POINT,
+                    &rec(t::CONSTRUCTION_POINT_POSITION, &doubles(p)),
+                )),
+            }
+        }
+        let mut out = Vec::new();
+        if !lines.is_empty() {
+            out.extend(rec(t::COMPONENT_CONSTRUCTION_LINES, &lines));
+        }
+        if !points.is_empty() {
+            out.extend(rec(t::COMPONENT_CONSTRUCTION_POINTS, &points));
+        }
+        out
+    }
+
     /// A SketchUp 2023 file: definitions (each a one-inch edge plus its placements), the
     /// root's placements, materials (pid, name) and extra zip entries (stored).
     pub fn file(
@@ -562,11 +861,33 @@ mod craft {
         materials: &[(u64, String)],
         entries: &[(String, Vec<u8>)],
     ) -> Vec<u8> {
+        let definitions: Vec<(Vec<Place>, Vec<Guide>)> =
+            definitions.iter().map(|p| (p.clone(), vec![])).collect();
+        build(&definitions, root, &[], materials, entries)
+    }
+
+    /// A SketchUp 2023 file whose definitions (placements, guides) and root have guides.
+    pub fn file_with_guides(
+        definitions: &[(Vec<Place>, Vec<Guide>)],
+        root: &[Place],
+        root_guides: &[Guide],
+    ) -> Vec<u8> {
+        build(definitions, root, root_guides, &[], &[])
+    }
+
+    fn build(
+        definitions: &[(Vec<Place>, Vec<Guide>)],
+        root: &[Place],
+        root_guides: &[Guide],
+        materials: &[(u64, String)],
+        entries: &[(String, Vec<u8>)],
+    ) -> Vec<u8> {
         let mut defs = Vec::new();
-        for (i, places) in definitions.iter().enumerate() {
+        for (i, (places, guides)) in definitions.iter().enumerate() {
             let mut component = id(t::ENTITY_PID, def_pid(i));
             component.extend(edge());
             component.extend(instances(places));
+            component.extend(guide_lists(guides));
             let mut d = rec(t::COMPONENT, &component);
             d.extend(rec(
                 t::COMPONENT_DEFINITION_NAME,
@@ -578,10 +899,9 @@ mod craft {
             t::SKETCH_UP_MODEL_COMPONENTS,
             &rec(t::DEFINITION_LIST, &rec(t::DEFINITION_LIST_DEFS, &defs)),
         );
-        let root = rec(
-            t::SKETCH_UP_MODEL_ROOT,
-            &rec(t::COMPONENT, &instances(root)),
-        );
+        let mut root = instances(root);
+        root.extend(guide_lists(root_guides));
+        let root = rec(t::SKETCH_UP_MODEL_ROOT, &rec(t::COMPONENT, &root));
         let mut list = Vec::new();
         for (pid, name) in materials {
             let mut m = rec(t::ENTITY, &id(t::ENTITY_PID, *pid));
@@ -856,8 +1176,9 @@ fn textures_past_the_model_limit_keep_their_colour() {
 }
 
 /// Imports every `*.skp` under `$SKP_CORPUS`: files from SketchUp 2021 and newer import
-/// without error, or (empty templates) say there is nothing to import; older ones are refused
-/// with the 2020 message. Prints each report and the warnings over all files.
+/// without error, or (empty templates) say there is nothing to import; files from 2017 to
+/// 2020 import too or fail with a `file` error (listed); older ones are refused with the 2017
+/// message. Prints each report and the warnings over all files.
 #[test]
 #[ignore = "needs a local corpus in SKP_CORPUS"]
 fn corpus_imports() {
@@ -868,7 +1189,13 @@ fn corpus_imports() {
     let mut files = Vec::new();
     collect(Path::new(&dir), &mut files);
     files.sort();
-    let (mut imported, mut empty, mut legacy, mut failed) = (0, 0, 0, Vec::new());
+    let (mut imported, mut empty, mut old, mut failed) = (0, 0, 0, Vec::new());
+    let mut legacy_failed = Vec::new();
+    let is_legacy = |path: &Path| {
+        let src = skp::source::MemorySource::new(std::fs::read(path).unwrap());
+        skp::container::Container::open(&src)
+            .is_ok_and(|c| c.generation == skp::container::Generation::Legacy)
+    };
     // Per warning (its number taken out): files and total count.
     let mut warned: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     for path in &files {
@@ -890,19 +1217,164 @@ fn corpus_imports() {
                 println!("ok {p}: {report}");
             }
             Err((ErrorKind::File, m)) if m.contains("nothing to import") => empty += 1,
-            Err((ErrorKind::InvalidInput, m)) if m.contains("2020") => legacy += 1,
+            Err((ErrorKind::InvalidInput, m)) if m.contains("older than 2017") => old += 1,
+            Err((ErrorKind::File, m)) if is_legacy(path) => {
+                assert_eq!(d.scene(), doc().scene(), "{p}");
+                legacy_failed.push(format!("{p}: {m}"));
+            }
             Err((kind, m)) => failed.push(format!("{p}: {kind:?}: {m}")),
         }
     }
     println!(
-        "{} files: {imported} imported, {empty} empty, {legacy} legacy refused, {} failed",
+        "{} files: {imported} imported, {empty} empty, {old} older than 2017 refused, {} from \
+         2017-2020 could not be read, {} failed",
         files.len(),
+        legacy_failed.len(),
         failed.len()
     );
+    for f in &legacy_failed {
+        println!("2017-2020 file not read: {f}");
+    }
     for (w, (files, total)) in &warned {
         println!("warning in {files} files, {total} in all: {w}");
     }
     assert!(failed.is_empty(), "failed:\n{}", failed.join("\n"));
+}
+
+/// Imports each model of `$SKP_CORPUS/../legacy_src` and its copies saved by SketchUp 2024 in
+/// the 2017 to 2020 formats (`$SKP_CORPUS/../legacy_out/<model>_v20xx.skp`). Every copy
+/// imports or fails with a `file` or `invalid_input` message, leaving the model as it was.
+/// Prints, per version, how many copies import like their original: the same definitions,
+/// instances, materials and guides (the top level's at the same places, within 1 micrometer),
+/// faces made within 1% and bounds within 1 mm; and how many give the very same report.
+#[test]
+#[ignore = "needs a local corpus in SKP_CORPUS"]
+fn corpus_legacy_imports() {
+    let Some(dir) = std::env::var_os("SKP_CORPUS") else {
+        println!("SKP_CORPUS is not set; skipping");
+        return;
+    };
+    let base = Path::new(&dir).join("..");
+    let mut originals = Vec::new();
+    collect(&base.join("legacy_src"), &mut originals);
+    originals.sort();
+    let versions = ["2017", "2018", "2019", "2020"];
+    let mut matched = [0usize; 4];
+    let mut imported = [0usize; 4];
+    let mut identical = [0usize; 4];
+    let mut problems = Vec::new();
+    let try_import = |path: &str| {
+        let mut d = doc();
+        let r = run(&mut d, json!({"type": "import", "path": path}));
+        if r.is_err() {
+            assert_eq!(d.scene(), doc().scene(), "{path}");
+        }
+        d.scene().validate().unwrap();
+        r.map(|r| {
+            let bounds = import_bounds(&d);
+            // The top level's guides, in the wrapper's coordinates, in a stable order.
+            let wrapper = root_instances(&d)[0]["id"].clone();
+            run(&mut d, json!({"type": "open_instance", "id": wrapper})).unwrap();
+            let mut guides: Vec<Vec<f64>> =
+                ask(&d, json!({"type": "entities", "kinds": ["guide"]}))["guides"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|g| {
+                        let mut v: Vec<f64> = g["point"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|x| x.as_f64().unwrap())
+                            .collect();
+                        if let Some(dir) = g["direction"].as_array() {
+                            v.extend(dir.iter().map(|x| x.as_f64().unwrap()));
+                        }
+                        v
+                    })
+                    .collect();
+            guides.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            (r["import"].clone(), bounds, guides)
+        })
+    };
+    let count = |r: &Value, k: &str| r[k].as_u64().unwrap_or(0);
+    for original in &originals {
+        let stem = original.file_stem().unwrap().to_str().unwrap();
+        let want = try_import(original.to_str().unwrap());
+        let Ok((want, want_bounds, want_guides)) = want else {
+            println!("{stem}: the original does not import: {want:?}");
+            continue;
+        };
+        println!("{stem} original: {want}");
+        if !want_guides.is_empty() {
+            println!("{stem} top-level guides: {want_guides:?}");
+        }
+        for (k, v) in versions.iter().enumerate() {
+            let path = base.join("legacy_out").join(format!("{stem}_v{v}.skp"));
+            if !path.exists() {
+                problems.push(format!("{stem} {v}: missing"));
+                continue;
+            }
+            match try_import(path.to_str().unwrap()) {
+                Ok((got, bounds, guides)) => {
+                    imported[k] += 1;
+                    let mut differ = Vec::new();
+                    for key in ["definitions", "instances", "materials", "guides"] {
+                        if count(&got, key) != count(&want, key) {
+                            differ.push(format!(
+                                "{key} {} (original {})",
+                                count(&got, key),
+                                count(&want, key)
+                            ));
+                        }
+                    }
+                    let (f, wf) = (count(&got, "faces") as f64, count(&want, "faces") as f64);
+                    if (f - wf).abs() > 0.01 * wf {
+                        differ.push(format!("faces {f} (original {wf})"));
+                    }
+                    let same_guides = guides.len() == want_guides.len()
+                        && guides.iter().zip(&want_guides).all(|(a, b)| {
+                            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6)
+                        });
+                    if !same_guides {
+                        differ.push(format!("guides {guides:?} (original {want_guides:?})"));
+                    }
+                    if got == want {
+                        identical[k] += 1;
+                    }
+                    if !close(bounds, want_bounds, 1e-3) {
+                        differ.push(format!("bounds {bounds:?} (original {want_bounds:?})"));
+                    }
+                    if differ.is_empty() {
+                        matched[k] += 1;
+                    } else {
+                        problems.push(format!("{stem} {v}: {}", differ.join(", ")));
+                    }
+                    println!("{stem} {v}: {got}");
+                }
+                Err((kind, message)) => {
+                    assert!(
+                        matches!(kind, ErrorKind::File | ErrorKind::InvalidInput),
+                        "{stem} {v}: {kind:?}: {message}"
+                    );
+                    problems.push(format!("{stem} {v}: refused: {kind:?}: {message}"));
+                }
+            }
+        }
+    }
+    println!("version | imported | match their original | identical report | of");
+    for (k, v) in versions.iter().enumerate() {
+        println!(
+            "{v} | {} | {} | {} | {}",
+            imported[k],
+            matched[k],
+            identical[k],
+            originals.len()
+        );
+    }
+    for p in &problems {
+        println!("differs: {p}");
+    }
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {

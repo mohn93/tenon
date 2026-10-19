@@ -1,21 +1,23 @@
-//! Reading SketchUp files (2021 and newer) into an import tree: every definition once, with
-//! its faces (holes included), edges (soft, smooth and hidden ones soft), placements and
-//! materials. Tags, scenes, images and hidden states are not carried; the notes say what was
-//! left out.
+//! Reading SketchUp files (2017 and newer) into an import tree: every definition once, with
+//! its faces (holes included), edges (soft, smooth and hidden ones soft), placements, guides
+//! and materials. Tags, scenes, images and hidden states are not carried; the notes say what
+//! was left out. Files from SketchUp 2017 to 2020 (the legacy container) are read by
+//! `skp::legacy` into the same shape as newer ones.
 
 use std::collections::{HashMap, HashSet};
 
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::vector_area;
 use kernel::{
-    DefinitionKind, ImportDefinition, ImportEdge, ImportFace, ImportGeometry, ImportInstance,
-    ImportTree, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material, MaterialId,
-    SceneChange, Texture, TreeReport,
+    DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
+    ImportInstance, ImportTree, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material,
+    MaterialId, SceneChange, Texture, TreeReport,
 };
 use skp::container::{Container, Generation};
-use skp::geom::{DefGeometry, RawInstance};
-use skp::model::{MaterialDef, NO_MATERIAL, TextureLocation, edge_flag};
-use skp::scene::{ReadOptions, read_model};
+use skp::geom::{DefGeometry, RawGuide, RawInstance};
+use skp::legacy;
+use skp::model::{MaterialDef, NO_MATERIAL, SceneIndex, TextureLocation, edge_flag};
+use skp::scene::{Model, ReadOptions, read_model};
 use skp::source::ByteSource;
 use skp::zip::{ZipDirectory, read_entry_within};
 
@@ -27,14 +29,16 @@ use crate::{Document, MAX_COORDINATE};
 /// Meters per inch, SketchUp's internal unit.
 const METERS_PER_INCH: f64 = 0.0254;
 
-/// The refusal for files older than SketchUp 2021.
-pub(crate) const LEGACY_MESSAGE: &str = "SketchUp 2020 and older files cannot be imported yet; \
-     open the file in SketchUp 2021 or newer and save it again";
+/// The refusal for files older than SketchUp 2017.
+const OLD_MESSAGE: &str = "SketchUp files older than 2017 are not supported";
+
+/// The oldest SketchUp version whose files are read (the major version in the file's header).
+const OLDEST_VERSION: u32 = 17;
 
 /// The name of the tag every SketchUp model has (shown as "Untagged").
 const DEFAULT_TAG: &str = "Layer0";
 
-/// The most a file's model (`model.dat`) may unpack to.
+/// The most a file's model (`model.dat`, or a 2017-2020 file's model stream) may unpack to.
 const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The most vertices, edges, faces, loops, edge uses and instances a file may hold, over all
@@ -58,6 +62,15 @@ pub(crate) struct SkpNotes {
     pub unread_edges: usize,
     pub hidden_faces: usize,
     pub hidden_instances: usize,
+    /// Hidden guides, which the reader leaves out.
+    pub hidden_guides: usize,
+    /// Guides that could not be read, or are not finite, have no direction or lie beyond
+    /// `MAX_COORDINATE`: skipped.
+    pub skipped_guides: usize,
+    /// Entities of a 2017-2020 file that could not be read (after a damaged record).
+    pub lost_entities: usize,
+    /// Faces of a 2017-2020 file read short of their holes.
+    pub faces_short: usize,
     pub images: usize,
     /// Instances of definitions the file does not have.
     pub missing: usize,
@@ -114,6 +127,26 @@ impl SkpNotes {
             self.hidden_instances,
             "hidden group or component was imported visible",
             "hidden groups or components were imported visible",
+        );
+        say(
+            self.lost_entities,
+            "entity could not be read and was skipped",
+            "entities could not be read and were skipped",
+        );
+        say(
+            self.faces_short,
+            "face may be missing a hole",
+            "faces may be missing holes",
+        );
+        say(
+            self.hidden_guides,
+            "hidden guide was not imported",
+            "hidden guides were not imported",
+        );
+        say(
+            self.skipped_guides + built.skipped_guides,
+            "guide could not be read and was skipped",
+            "guides could not be read and were skipped",
         );
         say(self.images, "image was skipped", "images were skipped");
         say(
@@ -183,7 +216,7 @@ impl SkpNotes {
 /// `scale`, adding the materials its faces and instances use to `document`'s scene (listed
 /// in the notes, so a caller can take them out again). With `only`, just the materials of
 /// those ids (the file's numbering) are added; the others import as no material. A file from
-/// SketchUp 2020 or older, or one whose placed model reaches beyond `MAX_COORDINATE`, is
+/// before SketchUp 2017, or one whose placed model reaches beyond `MAX_COORDINATE`, is
 /// `invalid_input`; a file that cannot be read is a `file` error (the message does not name
 /// the file). Nothing is added on an error.
 ///
@@ -198,37 +231,12 @@ pub(crate) fn read_skp(
     let file_error = |m: String| CommandError::new(ErrorKind::File, m);
     let src = Bytes(bytes);
     let container = Container::open(&src).map_err(|e| file_error(e.to_string()))?;
-    if container.generation == Generation::Legacy {
-        return Err(CommandError::new(ErrorKind::InvalidInput, LEGACY_MESSAGE));
-    }
-    if container
-        .model_entry()
-        .is_some_and(|e| e.uncompressed_size > MAX_MODEL_BYTES)
-    {
-        return Err(CommandError::new(
-            ErrorKind::InvalidInput,
-            format!(
-                "the file's model unpacks to more than {} MiB: too large to import",
-                MAX_MODEL_BYTES >> 20
-            ),
-        ));
-    }
-    let options = ReadOptions {
-        max_elements: Some(MAX_ELEMENTS),
-        ..ReadOptions::default()
-    };
-    let model = read_model(&src, &container, &options).map_err(|e| match e {
-        skp::Error::Malformed("too many elements") => CommandError::new(
-            ErrorKind::InvalidInput,
-            format!(
-                "the file has more than {MAX_ELEMENTS} vertices, edges, faces, loops and \
-                 instances: too large to import"
-            ),
-        ),
-        e => file_error(e.to_string()),
-    })?;
-    let index = model.index_without_placements(&src, &container);
+    let (model, index, stats) = read_file(&src, &container)?;
     let mut notes = SkpNotes {
+        lost_entities: stats.as_ref().map_or(0, |s| saturate(s.lost_entities)),
+        faces_short: stats
+            .as_ref()
+            .map_or(0, |s| saturate(s.faces_short_of_exact)),
         tags: index
             .layers
             .iter()
@@ -270,6 +278,15 @@ pub(crate) fn read_skp(
         )));
     }
     check_world_size(&model.root, &model.definitions, unit, &by_pid)?;
+    // Hidden guides and guide records not read, in the reached geometry (a 2017-2020 file
+    // counts its hidden guides over the whole file).
+    let legacy_hidden = stats.as_ref().map_or(0, |s| saturate(s.hidden_guides));
+    notes.hidden_guides = geometries()
+        .map(|g| g.hidden_guides as usize)
+        .fold(legacy_hidden, usize::saturating_add);
+    notes.skipped_guides = geometries()
+        .map(|g| g.unread_guides as usize)
+        .fold(0, usize::saturating_add);
 
     // Groups: definitions every imported placement of which is a group.
     let mut component = vec![false; model.definitions.len()];
@@ -360,6 +377,81 @@ pub(crate) fn read_skp(
     }
 }
 
+/// Reads a file's model and its placement-free index (with a 2017-2020 file's reading
+/// statistics), under the size limits: a model over `MAX_MODEL_BYTES` or `MAX_ELEMENTS` and a
+/// file from before SketchUp 2017 are `invalid_input`; one that cannot be read is a `file`
+/// error.
+fn read_file(
+    src: &Bytes,
+    container: &Container,
+) -> Result<(Model, SceneIndex, Option<legacy::ReadStats>), CommandError> {
+    let invalid = |m: String| CommandError::new(ErrorKind::InvalidInput, m);
+    let read_error = |e: skp::Error| match e {
+        skp::Error::Malformed("too many elements") => invalid(format!(
+            "the file has more than {MAX_ELEMENTS} vertices, edges, faces, loops and \
+             instances: too large to import"
+        )),
+        e => CommandError::new(ErrorKind::File, e.to_string()),
+    };
+    let too_large = || {
+        invalid(format!(
+            "the file's model unpacks to more than {} MiB: too large to import",
+            MAX_MODEL_BYTES >> 20
+        ))
+    };
+    let options = ReadOptions {
+        max_elements: Some(MAX_ELEMENTS),
+        ..ReadOptions::default()
+    };
+    match container.generation {
+        Generation::Legacy => {
+            if major_version(&container.header.version) < OLDEST_VERSION {
+                return Err(invalid(OLD_MESSAGE.to_string()));
+            }
+            // The model is the file's own (uncompressed) stream.
+            if container
+                .legacy_stream
+                .is_some_and(|(start, end)| end.saturating_sub(start) > MAX_MODEL_BYTES)
+            {
+                return Err(too_large());
+            }
+            let (model, index, stats) =
+                legacy::read_model_and_index(src, container, &options).map_err(read_error)?;
+            Ok((model, index, Some(stats)))
+        }
+        Generation::Vff => {
+            if container
+                .model_entry()
+                .is_some_and(|e| e.uncompressed_size > MAX_MODEL_BYTES)
+            {
+                return Err(too_large());
+            }
+            let model = read_model(src, container, &options).map_err(read_error)?;
+            let index = model.index_without_placements(src, container);
+            Ok((model, index, None))
+        }
+    }
+}
+
+/// The major version of a header's version text (`{20.0.1}` is 20); 0 when it has none.
+fn major_version(version: &str) -> u32 {
+    let digits: String = version
+        .trim_start_matches('{')
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if digits.is_empty() {
+        0
+    } else {
+        digits.parse().unwrap_or(u32::MAX)
+    }
+}
+
+/// A count as a `usize`, saturating.
+fn saturate(n: u64) -> usize {
+    usize::try_from(n).unwrap_or(usize::MAX)
+}
+
 /// An instance that is imported: the index of the definition it places and its transform
 /// (see `transform`). None for an image, a definition the file lacks or a broken transform.
 fn placement(
@@ -388,10 +480,11 @@ fn placements<'g>(
 /// An axis-aligned box: its lowest and highest corners.
 type Box3 = (DVec3, DVec3);
 
-/// Fails when the placed model (`root` and the definitions it places, each instance through
-/// its transform, `unit` meters per inch) reaches beyond `MAX_COORDINATE` (`invalid_input`),
-/// or when a definition places itself (`file`). Each definition's box is computed once, from
-/// its points and its instances' boxes, so this is linear in the file.
+/// Fails when the placed model (`root` and the definitions it places, their points and guide
+/// points, each instance through its transform, `unit` meters per inch) reaches beyond
+/// `MAX_COORDINATE` (`invalid_input`), or when a definition places itself (`file`). Each
+/// definition's box is computed once, from its points and its instances' boxes, so this is
+/// linear in the file.
 fn check_world_size(
     root: &DefGeometry,
     definitions: &[skp::scene::Definition],
@@ -404,12 +497,18 @@ fn check_world_size(
         Searching,
         Done,
     }
+    // A geometry's points and the points of its guides that are imported.
     let own = |g: &DefGeometry| -> Option<Box3> {
+        let anchors = g.guides.iter().filter_map(|r| match guide(r, unit)? {
+            Guide::Line { point, .. } => Some(point),
+            Guide::Point { position } => Some(position),
+        });
         g.vertex_pos
             .as_chunks::<3>()
             .0
             .iter()
             .map(|p| DVec3::from_array(*p) * unit)
+            .chain(anchors)
             .fold(None, |b, p| Some(grow(b, (p, p))))
     };
     let placed_box = |b: Box3, t: &DAffine3| -> Box3 {
@@ -618,13 +717,38 @@ fn geometry(
             material: instance_material(i).and_then(|m| materials.get(&m).copied()),
         });
     }
+    let mut guides = Vec::with_capacity(g.guides.len());
+    for r in &g.guides {
+        match guide(r, unit) {
+            Some(guide) => guides.push(guide),
+            None => notes.skipped_guides += 1,
+        }
+    }
     Ok(ImportGeometry {
         points,
         faces,
         edges,
-        guides: Vec::new(),
+        guides,
         instances,
     })
+}
+
+/// A guide of the file in meters (`unit` per inch), or None when its point is not finite or
+/// lies beyond `MAX_COORDINATE`, or a line's direction is not finite or has no length.
+fn guide(r: &RawGuide, unit: f64) -> Option<Guide> {
+    let at = |p: [f64; 3]| {
+        let p = DVec3::from_array(p) * unit;
+        (p.is_finite() && p.abs().max_element() <= MAX_COORDINATE).then_some(p)
+    };
+    match *r {
+        RawGuide::Line { point, direction } => Some(Guide::Line {
+            point: at(point)?,
+            direction: DVec3::from_array(direction).try_normalize()?,
+        }),
+        RawGuide::Point { position } => Some(Guide::Point {
+            position: at(position)?,
+        }),
+    }
 }
 
 /// A `file` error when a position is not finite or lies beyond `MAX_COORDINATE`.
@@ -801,10 +925,11 @@ const UNREADABLE: &str = "the image is not a PNG or JPEG that can be read";
 const TOO_MANY_PIXELS: &str = "all textures together would hold too many pixels";
 const MODEL_LIMIT: &str = "the model holds at most 256 textures";
 
-/// A material's texture from the file's zip, its tile size in meters times `scale` (each side
-/// clamped to the texture size limits). Fails, saying why, for an image that is missing,
-/// larger than `MAX_TEXTURE_BYTES`, not PNG or JPEG, too many pixels (`others` are held
-/// already) or broken.
+/// A material's texture from the file's zip (or, in a 2017-2020 file, from its place in the
+/// file's stream), its tile size in meters times `scale` (each side clamped to the texture
+/// size limits). Fails, saying why, for an image that is missing, larger than
+/// `MAX_TEXTURE_BYTES`, not PNG or JPEG, too many pixels (`others` are held already) or
+/// broken.
 fn read_texture(
     src: &dyn ByteSource,
     zip: Option<&ZipDirectory>,
@@ -812,16 +937,26 @@ fn read_texture(
     scale: f64,
     others: u64,
 ) -> Result<Texture, &'static str> {
-    let TextureLocation::ZipEntry(at) = t.location else {
-        return Err(MISSING);
+    let bytes = match t.location {
+        TextureLocation::ZipEntry(at) => {
+            let entry = zip
+                .and_then(|z| z.entries.get(at as usize))
+                .ok_or(MISSING)?;
+            if entry.uncompressed_size > MAX_TEXTURE_BYTES {
+                return Err(OVERSIZE);
+            }
+            read_entry_within(src, entry, MAX_TEXTURE_BYTES).map_err(|_| UNREADABLE)?
+        }
+        TextureLocation::Inline { offset, len } => {
+            if len > MAX_TEXTURE_BYTES {
+                return Err(OVERSIZE);
+            }
+            if offset.checked_add(len).is_none_or(|end| end > src.len()) {
+                return Err(MISSING);
+            }
+            src.read_vec(offset, len as usize).map_err(|_| MISSING)?
+        }
     };
-    let entry = zip
-        .and_then(|z| z.entries.get(at as usize))
-        .ok_or(MISSING)?;
-    if entry.uncompressed_size > MAX_TEXTURE_BYTES {
-        return Err(OVERSIZE);
-    }
-    let bytes = read_entry_within(src, entry, MAX_TEXTURE_BYTES).map_err(|_| UNREADABLE)?;
     let (_, width, height) = dimensions(&bytes).map_err(|e| {
         if e.contains("pixels") || e.contains("too large") {
             OVERSIZE

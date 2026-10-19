@@ -37,7 +37,7 @@ pub enum ImportFormat {
     Obj,
     /// STL, binary or ASCII.
     Stl,
-    /// SketchUp, from SketchUp 2021 or newer.
+    /// SketchUp, from SketchUp 2017 or newer.
     Skp,
 }
 

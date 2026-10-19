@@ -975,9 +975,10 @@ is a `file` error. A `mtllib` name with spaces is read as the whole rest of the 
 separate words as fallbacks (several libraries on one line). Materials go on the faces' front
 sides.
 
-SketchUp files (`skp`) from SketchUp 2021 and newer are read; an older file is `invalid_input`
-("SketchUp 2020 and older files cannot be imported yet; open the file in SketchUp 2021 or newer
-and save it again"). What is carried:
+SketchUp files (`skp`) from SketchUp 2017 and newer are read (2017 to 2020 files, which keep
+their model in an older format, import as the same model saved by a newer SketchUp would); a
+file from before SketchUp 2017 is `invalid_input` ("SketchUp files older than 2017 are not
+supported"). What is carried:
 
 - Components and groups: every definition the file's model places, at any depth, becomes one
   definition (a group when every placement of it is a group, else a component; named as in the
@@ -1002,15 +1003,21 @@ and save it again"). What is carried:
   the faces and instances made use; of a file using more than 4,096, only the first 4,096 in
   order of use are considered); faces and instances with the others are left unpainted, with a
   warning.
+- Guides (construction lines and points) of the top level and of every imported definition,
+  at the file's positions (a guide line through its point, infinite). A guide that is not
+  finite, has no direction or lies beyond +/-1e6 m is skipped, with a warning; guide points
+  count toward the model's size below.
 
 Not carried, each counted in `warnings`: tags (everything is imported untagged), scenes,
 hidden states (hidden faces, groups and components are imported visible), images (skipped),
 instances of a definition the file lacks or with a flat or broken transform (skipped),
 faces that cannot be made (skipped: an outline that cannot be read, fewer than three distinct
 corners, a corner repeated, no area, or a duplicate), holes and edges that cannot be read,
-faces made from their outer loop, and material references that match no material of the file
-(or one whose id is too large to match). Guides (construction lines and points) are not
-imported yet. Section planes, dimensions, text, texture positions and the file's camera and
+faces made from their outer loop, material references that match no material of the file
+(or one whose id is too large to match), hidden guides (not imported), guides that cannot be
+read, and, in a 2017-2020 file, entities that could not be read after a damaged record
+("12 entities could not be read and were skipped": the rest of the model is imported).
+Section planes, dimensions, text, texture positions and the file's camera and
 styles are not read.
 
 The outcome's `import` reports what was made:
@@ -1025,10 +1032,12 @@ it places (each definition once), `faces` the faces made (a face made from its o
 may make several), `vertices` the vertices made, `skipped` faces that made none (an outline
 that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
 `materials` the materials added. It also has `definitions` and `instances` (made from the
-file's, without the wrapper), `textures` (materials added with a texture) and `warnings`
+file's, without the wrapper), `guides` (guides made), `textures` (materials added with a
+texture) and `warnings`
 (sentences, such as "4 tags were not imported (tags are not supported yet)", "2 scenes were
 not imported", "3 hidden faces were imported visible", "1 image was skipped", "5 face holes
-could not be read and were dropped"); each is absent when 0 or empty, and always absent for
+could not be read and were dropped", "2 hidden guides were not imported", "1 guide could not be
+read and was skipped"); each is absent when 0 or empty, and always absent for
 OBJ and STL:
 
 ```
@@ -1046,7 +1055,8 @@ more than 10,000 definitions or 100,000 instances, nests instances more than 32 
 definition inside itself, resolves to more than 1,000,000 placements through its nesting (a
 component of 10 placed in one placed 10 times is 110) or more than 20,000,000 faces with every
 placement counted, or makes nothing, is a `file` error too. One whose model unpacks to more
-than 512 MiB or holds more than 10,000,000 vertices, edges, faces, loops and instances (placed
+than 512 MiB (for a 2017-2020 file: whose model is larger than that) or holds more than
+10,000,000 vertices, edges, faces, loops and instances (placed
 or not), or whose placed model (every instance through its transforms, times `scale`) reaches
 beyond +/-1e6 m, is `invalid_input`.
 A number or index that cannot be read is reported by its line or facet, without quoting it.

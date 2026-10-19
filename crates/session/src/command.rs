@@ -333,8 +333,8 @@ pub enum Command {
     /// `y` for OBJ, `z` for STL, as `export` writes them). Corners closer than 1e-6 m are
     /// welded, and with `merge_coplanar` (default true) neighbouring faces in one plane with
     /// one material become one face. OBJ materials come from its `mtllib` libraries. A
-    /// SketchUp file (2021 or newer) keeps its components and groups (each definition once),
-    /// face holes, soft edges and materials; its lengths keep their real size, times `scale`,
+    /// SketchUp file (2017 or newer) keeps its components and groups (each definition once),
+    /// face holes, soft edges, guides and materials; its lengths keep their real size, times `scale`,
     /// and `up` and `merge_coplanar` are ignored. The outcome's `import` says what was made.
     Import {
         path: String,
