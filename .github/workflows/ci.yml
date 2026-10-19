@@ -68,3 +68,13 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      # Renders tests write (golden diffs, debug images) under target/tmp; kept when tests fail.
+      - name: Upload test images
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-images-${{ matrix.arch }}
+          path: target/tmp/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7

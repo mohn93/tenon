@@ -192,6 +192,9 @@ fn sky_is_cleared_to_background() {
 #[test]
 fn all_three_axes_are_visible() {
     let Some(px) = render(&camera()) else { return };
+    // Kept for inspection (CI uploads target/tmp images when a test fails).
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("headless/axes.png");
+    crate::golden::write_png(&out, &px, W, H);
     let any = |f: &dyn Fn([u8; 4]) -> bool| px.chunks(4).any(|c| f([c[0], c[1], c[2], c[3]]));
     let dominant = |p: [u8; 4], i: usize| {
         let (a, b) = match i {

@@ -65,7 +65,7 @@ fn diff_image(actual: &[u8], mask: &[bool]) -> Vec<u8> {
         .collect()
 }
 
-fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) {
+pub(crate) fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).expect("create image folder");
     }
