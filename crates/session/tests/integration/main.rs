@@ -22,6 +22,7 @@ mod polygon;
 mod rotate;
 mod scale;
 mod selection;
+mod skp;
 mod soften;
 mod texture_position;
 mod textures;

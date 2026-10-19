@@ -41,7 +41,8 @@ pub enum KernelError {
     MaterialEmission(String),
     /// A texture placement's offset, rotation or scale is out of range; the text says which.
     TexturePlacement(String),
-    /// An import has no polygon that makes a face.
+    /// An import makes nothing: no polygon makes a face, or a tree's root makes no face, edge,
+    /// guide or instance.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
     TooManyFaces,
@@ -86,7 +87,10 @@ impl fmt::Display for KernelError {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {
-                write!(f, "nothing to import: no polygon makes a face")
+                write!(
+                    f,
+                    "nothing to import: nothing in the file makes a face, edge or instance"
+                )
             }
             KernelError::TooManyFaces => write!(
                 f,

@@ -14,6 +14,7 @@ mod query;
 mod rectangle;
 mod rotate;
 mod schema;
+mod skp;
 mod sniff;
 pub mod texture;
 

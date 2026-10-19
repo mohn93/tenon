@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 kernel = { path = "../kernel" }
+skp = { path = "../skp" }
 glam.workspace = true
 serde.workspace = true
 schemars.workspace = true

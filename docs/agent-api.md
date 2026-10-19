@@ -941,17 +941,18 @@ triangulated (counted once per placement). A binary STL holds at most 2^32 - 1 t
 
 ### Import
 
-`{"type": "import", "path": "/abs/chair.obj"}` reads an OBJ or STL file and adds its faces to
-the open context as one undo step. `format` (`obj`, `stl`) defaults to the one the path's
-extension names, in any case; any other extension without `format` is `invalid_input`, and so
-is a `.skr` path (use `open`).
+`{"type": "import", "path": "/abs/chair.obj"}` reads an OBJ, STL or SketchUp file and adds its
+faces to the open context as one undo step. `format` (`obj`, `stl`, `skp`) defaults to the one
+the path's extension names, in any case; a file with another extension whose header is
+SketchUp's is read as `skp`; any other file without `format` is `invalid_input`, and so is a
+`.skr` path (use `open`).
 
 | Field | Meaning |
 |---|---|
 | `as` | `group` (default): a new group named after the file (`chair`), placed at the open context's origin and selected. `component`: the same as a component. `context`: loose geometry in the open context that merges with what it touches (splitting edges and faces as drawing does), as if the group were made and exploded; what comes out is selected. Drawing with sticky geometry takes seconds for big files, so a file making more than 10,000 faces is `invalid_input` here (import it as a group). |
-| `scale` | Meters per file unit, default 1 (a millimeter file: `0.001`). Positive and finite, else `invalid_input`. |
-| `up` | The file's up axis: `y` or `z`. Defaults to `y` for OBJ and `z` for STL, as `export` writes them, so exporting and importing again gives back the same geometry (a Y-up file's (x, y, z) becomes (x, -z, y)). |
-| `merge_coplanar` | Default true: neighbouring faces that share an edge no third face uses, lie in one plane, face the same way and have the same material become one face (an STL's triangles come back as the model's faces, holes included). False keeps one face per polygon. |
+| `scale` | Meters per file unit, default 1 (a millimeter file: `0.001`). Positive and finite, else `invalid_input`. A SketchUp file has real units: `scale` multiplies them (2 doubles the model). |
+| `up` | The file's up axis: `y` or `z`. Defaults to `y` for OBJ and `z` for STL, as `export` writes them, so exporting and importing again gives back the same geometry (a Y-up file's (x, y, z) becomes (x, -z, y)). Ignored for SketchUp (Z-up, as the model). |
+| `merge_coplanar` | Default true: neighbouring faces that share an edge no third face uses, lie in one plane, face the same way and have the same material become one face (an STL's triangles come back as the model's faces, holes included). False keeps one face per polygon. Ignored for SketchUp: faces are kept as the file has them. |
 
 Reading: OBJ `v` positions, `f` polygons (`v`, `v/vt`, `v/vt/vn`, `v//vn` corners; negative
 indices count back from the last position), `usemtl` and `mtllib`, comments and lines continued
@@ -974,6 +975,35 @@ is a `file` error. A `mtllib` name with spaces is read as the whole rest of the 
 separate words as fallbacks (several libraries on one line). Materials go on the faces' front
 sides.
 
+SketchUp files (`skp`) from SketchUp 2021 and newer are read; an older file is `invalid_input`
+("SketchUp 2020 and older files cannot be imported yet; open the file in SketchUp 2021 or newer
+and save it again"). What is carried:
+
+- Components and groups: every definition the file's model places, at any depth, becomes one
+  definition (a group when every placement of it is a group, else a component; named as in the
+  file, or `Group` / `Component`), shared by all its instances, with each instance's transform
+  (mirrors and scales included) and material. Definitions placed nowhere are not imported.
+  The file's top level goes into the new group or component (`"as": "context"`: into the open
+  context, its instances included).
+- Faces with their holes; a face that is not flat to within 5e-7 m or whose loops cross is made
+  from its outer loop alone (cut into triangles where needed), losing its holes. Front and back
+  materials. A face's front is the side its plane in the file faces.
+- Edges: every edge, loose ones included; soft, smooth and hidden edges become soft edges
+  (an edge not between exactly two faces stays an ordinary edge).
+- Materials used by an imported face or instance: color, opacity, and the texture image (PNG
+  or JPEG, read from the file, under the limits of `add_material`: at most 16 MiB, 4096 pixels a
+  side, the pixel budget and 256 textures) with the file's tile size (clamped to 0.001 to
+  1000 m, times `scale`). A name the model already has gets a number (`Brick 2`); existing
+  materials are never changed. A texture that cannot be used leaves the material its color and
+  adds a warning. At most 1,024 materials are added; faces with more are left unpainted, with a
+  warning.
+
+Not carried, each counted in `warnings`: tags (everything is imported untagged), scenes,
+hidden states (hidden faces, groups and components are imported visible), images (skipped),
+instances of a definition the file lacks or with a flat or broken transform (skipped),
+holes and edges that cannot be read, and faces made from their outer loop. Section planes,
+dimensions, text, guides, texture positions and the file's camera and styles are not read.
+
 The outcome's `import` reports what was made:
 
 ```
@@ -981,10 +1011,30 @@ The outcome's `import` reports what was made:
  "faces": 12, "vertices": 16, "skipped": 0, "materials": 1}, "revision": 3}
 ```
 
+For a SketchUp file `polygons` counts the faces of the file's top level and of the definitions
+it places (each definition once), `faces` the faces made (a face made from its outer loop
+may make several), `vertices` the vertices made, `skipped` faces that made none (an outline
+that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
+`materials` the materials added. It also has `definitions` and `instances` (made from the
+file's, without the wrapper), `textures` (materials added with a texture) and `warnings`
+(sentences, such as "4 tags were not imported (tags are not supported yet)", "2 scenes were
+not imported", "3 hidden faces were imported visible", "1 image was skipped", "5 face holes
+could not be read and were dropped"); each is absent when 0 or empty, and always absent for
+OBJ and STL:
+
+```
+{"import": {"instance": "i6341", "definition": "d15", "polygons": 609, "faces": 616,
+ "vertices": 2580, "skipped": 0, "materials": 9, "definitions": 6, "instances": 8,
+ "warnings": ["1 hidden group or component was imported visible"]}}
+```
+
 `instance` and `definition` are absent for `"as": "context"`. Errors leave the model as it was:
 a file that cannot be read, is over 128 MiB, has more than 200,000 polygons or 1,000,000 OBJ
 positions, has a broken line (the message names it), a number that is not finite, a position
 beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
+A SketchUp file that is damaged, places more than 200,000 faces, 1,000,000 vertices, 10,000
+definitions or 100,000 instances, nests instances more than 32 deep or places a definition
+inside itself, or makes nothing, is a `file` error too.
 A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 

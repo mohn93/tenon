@@ -13,6 +13,8 @@ use crate::import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
 };
+use crate::skp::{read_skp, remove_materials};
+use crate::sniff;
 
 /// The name of an imported definition whose file name gives none.
 const IMPORT_NAME: &str = "Import";
@@ -47,8 +49,14 @@ impl Document {
         {
             return Err(invalid("a .skr file is a model: use open, not import"));
         }
-        let Some(format) = o.format.or_else(|| ImportFormat::from_path(file)) else {
-            return Err(invalid("give a format, or a path ending in .obj or .stl"));
+        let format = match o.format.or_else(|| ImportFormat::from_path(file)) {
+            Some(format) => format,
+            None if sniff::is_skp(file) => ImportFormat::Skp,
+            None => {
+                return Err(invalid(
+                    "give a format, or a path ending in .obj, .stl or .skp",
+                ));
+            }
         };
         let scale = o.scale.unwrap_or(1.0);
         if !(scale.is_finite() && scale > 0.0) {
@@ -59,6 +67,7 @@ impl Document {
         let mut read = match format {
             ImportFormat::Obj => read_obj(&bytes),
             ImportFormat::Stl => read_stl(&bytes),
+            ImportFormat::Skp => return self.import_skp(path, bytes, scale, o.place),
         }
         .map_err(file_error)?;
         let up = o.up.unwrap_or(format.default_up());
@@ -87,15 +96,8 @@ impl Document {
                 material: p.material.as_ref().and_then(|m| materials.get(m).copied()),
             })
             .collect();
-        let name = file
-            .file_stem()
-            .map(|s| s.to_string_lossy().trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| IMPORT_NAME.to_string());
-        let kind = match o.place {
-            ImportAs::Component => DefinitionKind::Component,
-            ImportAs::Group | ImportAs::Context => DefinitionKind::Group,
-        };
+        let name = import_name(file);
+        let kind = wrapper_kind(o.place);
         let mesh = self.active();
         let imported = self.scene.import_mesh(
             mesh,
@@ -125,7 +127,7 @@ impl Document {
             self.scene.apply(&change.inverse());
         }
         let added = SceneChange::join(kept.into_iter().map(|(_, c)| c));
-        let mut report = ImportReport {
+        let report = ImportReport {
             instance: Some(EntityId::Instance(instance)),
             definition,
             polygons: polygon_count,
@@ -133,19 +135,115 @@ impl Document {
             vertices: built.vertices,
             skipped: built.skipped,
             materials: added.summary().materials.len(),
+            ..ImportReport::default()
         };
         let change = SceneChange::join([added, change]);
-        if o.place != ImportAs::Context {
+        self.place_import(mesh, instance, change, report, o.place, built.faces)
+    }
+
+    /// Reads a SketchUp file's `bytes` and adds it to the open context as `import_changes`
+    /// does: each definition once, the root geometry in a new group or component named after
+    /// the file (exploded for `"as": "context"`). Nothing changes on failure.
+    fn import_skp(
+        &mut self,
+        path: &str,
+        bytes: Vec<u8>,
+        scale: f64,
+        place: ImportAs,
+    ) -> Result<SceneChange, CommandError> {
+        let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
+        let (tree, notes) = read_skp(bytes, scale, self).map_err(|e| match e.kind {
+            ErrorKind::File => file_error(e.message),
+            _ => e,
+        })?;
+        let mesh = self.active();
+        let built = self.scene.import_tree(
+            mesh,
+            &tree,
+            wrapper_kind(place),
+            &import_name(Path::new(path)),
+        );
+        let (instance, built, change) = match built {
+            Ok(done) => done,
+            Err(e) => {
+                remove_materials(self, &notes.added);
+                return Err(file_error(e.to_string()));
+            }
+        };
+        // Materials only skipped faces used are not kept.
+        let mut in_use: HashSet<MaterialId> = HashSet::new();
+        for (_, m) in self.scene.meshes() {
+            in_use.extend(m.faces().flat_map(|(_, f)| f.paint()).flatten());
+            in_use.extend(m.instances().filter_map(|(_, i)| i.material));
+        }
+        let (kept, unused): (Vec<_>, Vec<_>) = notes
+            .added
+            .iter()
+            .cloned()
+            .partition(|(id, _)| in_use.contains(id));
+        remove_materials(self, &unused);
+        let textures = kept
+            .iter()
+            .filter(|(id, _)| {
+                self.scene
+                    .material(*id)
+                    .is_some_and(|m| m.texture.is_some())
+            })
+            .count();
+        let definition = self.model().instance(instance).map(|i| i.definition);
+        let root_faces = definition
+            .and_then(|d| self.scene.mesh(MeshId::Definition(d)))
+            .map_or(0, |m| m.faces().count());
+        let given_guides: usize = tree
+            .definitions
+            .iter()
+            .map(|d| &d.geometry)
+            .chain([&tree.root])
+            .map(|g| g.guides.len())
+            .sum();
+        let report = ImportReport {
+            instance: Some(EntityId::Instance(instance)),
+            definition,
+            polygons: notes.polygons,
+            faces: built.faces,
+            vertices: built.vertices,
+            skipped: notes.unread_faces + built.skipped,
+            materials: kept.len(),
+            definitions: built.definitions,
+            instances: built.instances,
+            guides: given_guides.saturating_sub(built.skipped_guides),
+            textures,
+            warnings: notes.warnings(&built),
+        };
+        let added = SceneChange::join(kept.into_iter().map(|(_, c)| c));
+        let change = SceneChange::join([added, change]);
+        self.place_import(mesh, instance, change, report, place, root_faces)
+    }
+
+    /// Finishes an import that placed `instance` in `mesh` with `change`: selects it, or for
+    /// `"as": "context"` explodes it (at most `MAX_CONTEXT_IMPORT_FACES` faces, its own
+    /// `faces`) and selects what came out. Keeps the report for the outcome; on failure takes
+    /// `change` back.
+    fn place_import(
+        &mut self,
+        mesh: MeshId,
+        instance: kernel::InstanceId,
+        change: SceneChange,
+        mut report: ImportReport,
+        place: ImportAs,
+        faces: usize,
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if place != ImportAs::Context {
             self.selection = BTreeSet::from([EntityId::Instance(instance)]);
             self.import_report = Some(report);
             return Ok(change);
         }
-        if built.faces > MAX_CONTEXT_IMPORT_FACES {
+        if faces > MAX_CONTEXT_IMPORT_FACES {
             self.scene.apply(&change.inverse());
             return Err(invalid(&format!(
-                "the file makes {} faces: at most {MAX_CONTEXT_IMPORT_FACES} can be imported \
-                 into the context; import it as a group or component",
-                built.faces
+                "the file makes {faces} faces: at most {MAX_CONTEXT_IMPORT_FACES} can be \
+                 imported into the context; import it as a group or component"
             )));
         }
         match self.scene.explode(mesh, instance) {
@@ -238,6 +336,22 @@ impl Document {
             }
         }
         Ok((out, added))
+    }
+}
+
+/// The name of a definition imported from `file`: its stem, or `IMPORT_NAME`.
+fn import_name(file: &Path) -> String {
+    file.file_stem()
+        .map(|s| s.to_string_lossy().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| IMPORT_NAME.to_string())
+}
+
+/// The kind of the definition wrapping an import placed `place`.
+fn wrapper_kind(place: ImportAs) -> DefinitionKind {
+    match place {
+        ImportAs::Component => DefinitionKind::Component,
+        ImportAs::Group | ImportAs::Context => DefinitionKind::Group,
     }
 }
 

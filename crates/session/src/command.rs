@@ -322,15 +322,18 @@ pub enum Command {
         #[serde(skip)]
         refuse_links: bool,
     },
-    /// Read an OBJ or STL file and add its faces to the open context, as one undo step: as a
-    /// new group (default) or component named after the file, placed at the context's origin
-    /// and selected, or (`"as": "context"`) as loose geometry merging with what it touches,
-    /// which becomes the selection. `format` defaults to the one the extension names (`.obj`,
-    /// `.stl`). File units are meters times `scale` (default 1); `up` is the file's up axis
-    /// (default `y` for OBJ, `z` for STL, as `export` writes them). Corners closer than
-    /// 1e-6 m are welded, and with `merge_coplanar` (default true) neighbouring faces in one
-    /// plane with one material become one face. OBJ materials come from its `mtllib`
-    /// libraries. The outcome's `import` says what was made.
+    /// Read an OBJ, STL or SketchUp file and add its faces to the open context, as one undo
+    /// step: as a new group (default) or component named after the file, placed at the
+    /// context's origin and selected, or (`"as": "context"`) as loose geometry merging with
+    /// what it touches, which becomes the selection. `format` defaults to the one the extension
+    /// names (`.obj`, `.stl`, `.skp`), else to SketchUp for a file with SketchUp's header. OBJ
+    /// and STL units are meters times `scale` (default 1); `up` is the file's up axis (default
+    /// `y` for OBJ, `z` for STL, as `export` writes them). Corners closer than 1e-6 m are
+    /// welded, and with `merge_coplanar` (default true) neighbouring faces in one plane with
+    /// one material become one face. OBJ materials come from its `mtllib` libraries. A
+    /// SketchUp file (2021 or newer) keeps its components and groups (each definition once),
+    /// face holes, soft edges and materials; its lengths keep their real size, times `scale`,
+    /// and `up` and `merge_coplanar` are ignored. The outcome's `import` says what was made.
     Import {
         path: String,
         #[serde(default)]

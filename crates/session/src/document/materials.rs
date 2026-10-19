@@ -12,7 +12,9 @@ use super::Document;
 use super::import::read_limited;
 use crate::command::{CommandError, ErrorKind, TextureSource};
 use crate::query::{MaterialInfo, TextureInfo};
-use crate::texture::{MAX_TEXTURE_BYTES, average_color, check_total_pixels, decode, dimensions};
+use crate::texture::{
+    MAX_TEXTURE_BYTES, average_color, check_total_pixels, dimensions, texture_from_bytes,
+};
 
 /// The name `add_material` gives when none is passed (made unique with a number).
 const DEFAULT_MATERIAL_NAME: &str = "Material";
@@ -135,7 +137,7 @@ impl Document {
 
     /// The pixels the texture images of materials other than `except` hold, each image counted
     /// once however many materials share it.
-    fn texture_pixels_besides(&self, except: Option<MaterialId>) -> u64 {
+    pub(crate) fn texture_pixels_besides(&self, except: Option<MaterialId>) -> u64 {
         let mut seen = std::collections::HashSet::new();
         self.scene
             .materials()
@@ -189,38 +191,36 @@ fn texture_of(
     current: Option<&Texture>,
     others: u64,
 ) -> Result<Texture, CommandError> {
-    let image = match &source.path {
+    // A new image without a width is as wide as `current` (or 1 m), and without a height
+    // keeps its proportions (kept within the limits a given one must meet).
+    let width = source.width.or(current.map(|t| t.width)).unwrap_or(1.0);
+    let height_of = |pixels_wide: u32, pixels_high: u32| {
+        source.height.unwrap_or_else(|| {
+            (width * f64::from(pixels_high) / f64::from(pixels_wide))
+                .clamp(MIN_TEXTURE_SIZE, MAX_TEXTURE_SIZE)
+        })
+    };
+    match &source.path {
         Some(path) => {
             super::files::check_nul(Path::new(path))?;
             let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
             let bytes = read_limited(Path::new(path), MAX_TEXTURE_BYTES).map_err(file_error)?;
-            let (_, width, height) = dimensions(&bytes).map_err(file_error)?;
-            check_total_pixels(others, u64::from(width) * u64::from(height)).map_err(file_error)?;
-            Arc::new(decode(bytes).map_err(file_error)?)
+            let (_, w, h) = dimensions(&bytes).map_err(file_error)?;
+            check_total_pixels(others, u64::from(w) * u64::from(h)).map_err(file_error)?;
+            texture_from_bytes(bytes, width, height_of(w, h)).map_err(file_error)
         }
         None => match current {
-            Some(t) => t.image.clone(),
-            None => {
-                return Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    "the material has no texture: give a texture path",
-                ));
-            }
+            Some(t) => Ok(Texture {
+                image: t.image.clone(),
+                width,
+                height: source.height.unwrap_or(t.height),
+            }),
+            None => Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "the material has no texture: give a texture path",
+            )),
         },
-    };
-    let width = source.width.or(current.map(|t| t.width)).unwrap_or(1.0);
-    let height = match (source.height, current) {
-        (Some(h), _) => h,
-        (None, Some(t)) if source.path.is_none() => t.height,
-        // A derived height is kept within the limits a given one must meet.
-        _ => (width * f64::from(image.height) / f64::from(image.width))
-            .clamp(MIN_TEXTURE_SIZE, MAX_TEXTURE_SIZE),
-    };
-    Ok(Texture {
-        image,
-        width,
-        height,
-    })
+    }
 }
 
 /// A kernel refusal as a command error; a missing material is `not_found`, naming `id`.

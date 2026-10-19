@@ -129,10 +129,17 @@ fn a_face_with_a_hole_and_soft_edges() {
         root,
     };
     let mut s = Scene::new();
-    let (instance, report, _) = s
+    let (instance, report, change) = s
         .import_tree(MeshId::Root, &tree, DefinitionKind::Group, "Tree")
         .unwrap();
     s.validate().unwrap();
+    // Undo and redo give back the same scene.
+    let built = s.clone();
+    s.apply(&change.inverse());
+    assert_eq!(s, Scene::new());
+    s.apply(&change);
+    s.validate().unwrap();
+    assert_eq!(s, built);
     assert!(s.root().instance(instance).is_some());
     assert_eq!(report.faces, 2);
     assert_eq!(report.vertices, 12);

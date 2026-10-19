@@ -126,6 +126,11 @@ impl Document {
         &self.scene
     }
 
+    /// The scene, for changes made outside `document` (an import's materials).
+    pub(crate) fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+
     /// The mesh being edited: the root, or the definition of the open instance.
     pub fn model(&self) -> &Model {
         self.scene

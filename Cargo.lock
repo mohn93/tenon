@@ -3105,6 +3105,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "skp",
  "zip",
 ]
 

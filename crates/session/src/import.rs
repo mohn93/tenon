@@ -37,25 +37,28 @@ pub enum ImportFormat {
     Obj,
     /// STL, binary or ASCII.
     Stl,
+    /// SketchUp, from SketchUp 2021 or newer.
+    Skp,
 }
 
 impl ImportFormat {
-    /// The format a file name's extension asks for (`.obj`, `.stl`, any case).
+    /// The format a file name's extension asks for (`.obj`, `.stl`, `.skp`, any case).
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
             "obj" => ImportFormat::Obj,
             "stl" => ImportFormat::Stl,
+            "skp" => ImportFormat::Skp,
             _ => return None,
         })
     }
 
     /// The axis that points up in files of this format unless told otherwise: Y for OBJ, Z
-    /// for STL (as `export` writes them).
+    /// for STL (as `export` writes them) and SketchUp (which is Z-up; `up` is ignored).
     pub fn default_up(self) -> UpAxis {
         match self {
             ImportFormat::Obj => UpAxis::Y,
-            ImportFormat::Stl => UpAxis::Z,
+            ImportFormat::Stl | ImportFormat::Skp => UpAxis::Z,
         }
     }
 }
@@ -146,17 +149,38 @@ pub struct ImportReport {
     /// Its definition (absent for `"as": "context"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<DefinitionId>,
-    /// Polygons in the file (STL: triangles).
+    /// Polygons in the file (STL: triangles; SketchUp: faces of the root and of the
+    /// definitions it places, each definition once).
     pub polygons: usize,
-    /// Faces made from them, after coplanar neighbours merged.
+    /// Faces made from them, after coplanar neighbours merged (not for SketchUp).
     pub faces: usize,
     /// Vertices made: coincident corners are welded into one.
     pub vertices: usize,
-    /// Polygons that made no face: fewer than three distinct corners, no area, or the same
-    /// corners as an earlier polygon.
+    /// Polygons that made no face: fewer than three distinct corners, no area, the same
+    /// corners as an earlier polygon, or (SketchUp) an outer loop that could not be read.
     pub skipped: usize,
-    /// Materials added from the OBJ's material library.
+    /// Materials added: from the OBJ's material library, or the SketchUp file's materials
+    /// its faces and instances use.
     pub materials: usize,
+    /// SketchUp: definitions made from the file's (each once, however often it is placed).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub definitions: usize,
+    /// SketchUp: instances made from the file's.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub instances: usize,
+    /// Guides made.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub guides: usize,
+    /// SketchUp: materials added with a texture.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub textures: usize,
+    /// SketchUp: what the file has that the import left out or changed, as sentences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// A polygon as read: corner indices into the points, and its OBJ material name.

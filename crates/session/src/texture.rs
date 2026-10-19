@@ -1,9 +1,10 @@
 //! Reading texture images: PNG and JPEG files decoded to sRGB pixels.
 
 use std::io::Cursor;
+use std::sync::Arc;
 
 use image::{ImageReader, Limits};
-use kernel::{ImageFormat, TextureImage};
+use kernel::{ImageFormat, Texture, TextureImage};
 
 /// The largest texture file read, in bytes.
 pub const MAX_TEXTURE_BYTES: u64 = 16 * 1024 * 1024;
@@ -76,6 +77,17 @@ pub fn decode(encoded: Vec<u8>) -> Result<TextureImage, String> {
         height: pixels.height(),
         pixels: pixels.into_raw(),
         encoded,
+    })
+}
+
+/// A texture `width` by `height` meters of a PNG or JPEG file's bytes, decoded as [`decode`]
+/// does. Fails, saying why, as [`decode`] does; the size is checked when the texture is given
+/// to a material.
+pub fn texture_from_bytes(bytes: Vec<u8>, width: f64, height: f64) -> Result<Texture, String> {
+    Ok(Texture {
+        image: Arc::new(decode(bytes)?),
+        width,
+        height,
     })
 }
 

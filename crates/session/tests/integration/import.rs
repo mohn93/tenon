@@ -322,7 +322,7 @@ fn bad_requests_and_bad_files_change_nothing() {
         &mut d,
         json!({"type": "import", "path": write("m.dwg", "")}),
         ErrorKind::InvalidInput,
-        ".obj or .stl",
+        ".obj, .stl or .skp",
     );
     for scale in [0.0, -1.0] {
         check(

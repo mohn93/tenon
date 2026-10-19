@@ -27,7 +27,7 @@ pub const MAX_IMPORT_INSTANCES: usize = 100_000;
 
 /// Most pairs of loop sides one import checks for crossings (the check is quadratic in a face's
 /// corners). Faces past it are made from their outer loop alone, as a bent face is.
-const MAX_RING_CHECKS: usize = 200_000_000;
+const MAX_RING_CHECKS: usize = 20_000_000;
 
 /// Definitions read from a file and the root geometry that places them.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -95,6 +95,8 @@ pub struct TreeReport {
     /// Faces that could not be made as given (bent, sides crossing, or holes that do not fit)
     /// and were made from their outer loop alone, cut into triangles where needed.
     pub split: usize,
+    /// Holes dropped from faces made from their outer loop alone (counted in `split`).
+    pub holes_dropped: usize,
     /// Edges marked soft that stay hard because they are not between exactly two faces.
     pub hard: usize,
     /// Edges with an end out of range or both ends welded into one point.
@@ -405,6 +407,7 @@ fn shape<'a>(
             report.skipped += 1;
         } else if split {
             report.split += 1;
+            report.holes_dropped += f.loops.len() - 1;
         }
     }
     let mut edges: Vec<(usize, usize, bool)> = Vec::new();
@@ -561,5 +564,52 @@ impl Model {
         }
         ops.extend(self.take_changes().ops);
         ChangeSet { ops }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A square with a square hole, flat and valid.
+    fn holed() -> ImportGeometry {
+        let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
+        ImportGeometry {
+            points: vec![
+                p(0.0, 0.0),
+                p(2.0, 0.0),
+                p(2.0, 2.0),
+                p(0.0, 2.0),
+                p(0.5, 0.5),
+                p(1.5, 0.5),
+                p(1.5, 1.5),
+                p(0.5, 1.5),
+            ],
+            faces: vec![ImportFace {
+                loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]],
+                front: None,
+                back: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_face_past_the_ring_check_budget_is_made_from_its_outer_loop() {
+        let g = holed();
+        let mut report = TreeReport::default();
+        let mut budget = MAX_RING_CHECKS;
+        let shaped = shape(&g, &mut budget, &mut 0, &mut report).unwrap();
+        assert_eq!(shaped.faces.len(), 1);
+        assert_eq!(shaped.faces[0].loops.len(), 2);
+        assert_eq!((report.split, report.holes_dropped), (0, 0));
+
+        // 8 corners cost 32 checks: a budget of 31 is not enough.
+        let mut report = TreeReport::default();
+        let shaped = shape(&g, &mut 31, &mut 0, &mut report).unwrap();
+        assert_eq!(shaped.faces.len(), 1);
+        assert_eq!(shaped.faces[0].loops.len(), 1);
+        assert_eq!((report.split, report.holes_dropped), (1, 1));
+        assert_eq!(report.skipped, 0);
     }
 }

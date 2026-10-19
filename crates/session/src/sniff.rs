@@ -21,6 +21,8 @@ pub(crate) enum Kind {
     Gltf,
     /// A PNG or JPEG image.
     Image,
+    /// A SketchUp model.
+    Skp,
 }
 
 impl Kind {
@@ -33,6 +35,7 @@ impl Kind {
             Kind::Glb => "binary glTF",
             Kind::Gltf => "glTF",
             Kind::Image => "PNG or JPEG",
+            Kind::Skp => "SketchUp model",
         }
     }
 }
@@ -131,6 +134,7 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
     match kind {
         Kind::Skr => false,
         Kind::Glb => head.starts_with(b"glTF"),
+        Kind::Skp => head.starts_with(&skp_magic()),
         Kind::Image => {
             head.starts_with(b"\x89PNG\r\n\x1a\n") || head.starts_with(&[0xFF, 0xD8, 0xFF])
         }
@@ -148,6 +152,29 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
         Kind::Obj => keyword_text(head, len, OBJ_KEYWORDS, None),
         Kind::Mtl => keyword_text(head, len, MTL_KEYWORDS, Some("newmtl")),
     }
+}
+
+/// The start of every SketchUp file: `ff fe ff`, a length of 14 and "SketchUp Model" in
+/// UTF-16LE.
+fn skp_magic() -> Vec<u8> {
+    let mut magic = vec![0xff, 0xfe, 0xff, 14];
+    magic.extend("SketchUp Model".encode_utf16().flat_map(u16::to_le_bytes));
+    magic
+}
+
+/// True when the regular file at `path` starts as a SketchUp file does.
+pub(crate) fn is_skp(path: &Path) -> bool {
+    let magic = skp_magic();
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = Vec::new();
+    meta.is_file()
+        && file.take(magic.len() as u64).read_to_end(&mut head).is_ok()
+        && is_kind(&head, meta.len(), Kind::Skp)
 }
 
 /// ASCII STL: a first line `solid` (alone or followed by a name), then a line starting with
@@ -307,6 +334,18 @@ mod tests {
         assert!(!kind_of(r#"{"user": "\"asset\""}"#, Kind::Gltf));
         assert!(!kind_of("[1, 2]", Kind::Gltf));
         assert!(!kind_of("not json", Kind::Gltf));
+    }
+
+    #[test]
+    fn the_sketchup_header_is_skp() {
+        let mut head = vec![0xff, 0xfe, 0xff, 14];
+        for c in "SketchUp Model{23.1.340}".encode_utf16() {
+            head.extend(c.to_le_bytes());
+        }
+        assert!(is_kind(&head, 100, Kind::Skp));
+        head[4] = b's';
+        assert!(!is_kind(&head, 100, Kind::Skp));
+        assert!(!is_kind(&[0xff, 0xfe], 2, Kind::Skp));
     }
 
     #[test]
