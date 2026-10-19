@@ -419,10 +419,94 @@ fn element_caps_stop_a_bomb_of_empty_faces() {
     // Nothing larger than the 1.2 MB record's buffer.
     assert!(largest <= 2 * 1024 * 1024, "allocated {largest}");
     assert!(start.elapsed().as_secs_f64() < 2.0, "{:?}", start.elapsed());
-    // Exactly at the cap is fine.
+    // Exactly at the cap is fine: the faces, the definition (50) and its geometry (1).
     let exact = ReadOptions {
-        max_elements: Some(200_000),
+        max_elements: Some(200_051),
         ..ReadOptions::default()
     };
     assert!(read_model(&src, &c, &exact).is_ok());
+}
+
+/// A model.dat of `count` empty definitions (6 bytes each).
+fn empty_definitions_model(count: usize) -> Vec<u8> {
+    use skp::tags as t;
+    let rec = |tag: u16, payload: &[u8]| {
+        let mut out = tag.to_le_bytes().to_vec();
+        out.extend((payload.len() as u32).to_le_bytes());
+        out.extend(payload);
+        out
+    };
+    let definitions = rec(t::COMPONENT_DEFINITION, &[]).repeat(count);
+    let components = rec(
+        t::SKETCH_UP_MODEL_COMPONENTS,
+        &rec(
+            t::DEFINITION_LIST,
+            &rec(t::DEFINITION_LIST_DEFS, &definitions),
+        ),
+    );
+    rec(t::SKETCH_UP_MODEL, &components)
+}
+
+#[test]
+fn element_caps_count_definitions() {
+    use skp::scene::{read_model, ReadOptions};
+    let bytes = rebuilt(
+        &fixture("desk.skp"),
+        |model| *model = empty_definitions_model(100_000),
+        &[],
+    );
+    let src = MemorySource::new(bytes);
+    let c = Container::open(&src).expect("open");
+    let uncapped = largest_allocation(|| {
+        let m = read_model(&src, &c, &ReadOptions::default()).expect("read");
+        assert_eq!(m.definitions.len(), 100_000);
+    });
+    assert!(uncapped > 16 * 1024 * 1024, "allocated {uncapped}");
+    let capped = ReadOptions {
+        max_elements: Some(10_000),
+        ..ReadOptions::default()
+    };
+    let start = std::time::Instant::now();
+    let largest = largest_allocation(|| match read_model(&src, &c, &capped) {
+        Err(skp::Error::Malformed(why)) => assert_eq!(why, "too many elements"),
+        Err(e) => panic!("{e}"),
+        Ok(_) => panic!("read past the cap"),
+    });
+    assert!(largest < 1024 * 1024, "allocated {largest}");
+    assert!(start.elapsed().as_secs_f64() < 2.0, "{:?}", start.elapsed());
+}
+
+#[test]
+fn a_stream_longer_than_its_entry_claims_is_refused() {
+    use skp::scene::{read_model, ReadOptions};
+    let bytes = rebuilt(
+        &fixture("desk.skp"),
+        |model| *model = empty_faces_model(500_000),
+        &[],
+    );
+    // Claim 1 MiB for the 3 MB model.dat, in its local header and the central directory.
+    let mut bytes = bytes;
+    let dir = ZipDirectory::find(&MemorySource::new(bytes.clone())).expect("directory");
+    let index = dir
+        .entries
+        .iter()
+        .position(|e| e.name == "model.dat")
+        .expect("model.dat");
+    let local = dir.entries[index].header_offset as usize;
+    let cd = central_directory(&bytes);
+    let central = cd.start + nth_central_entry(&bytes[cd], index);
+    for at in [local + 22, central + 24] {
+        bytes[at..at + 4].copy_from_slice(&(1u32 << 20).to_le_bytes());
+    }
+    let src = MemorySource::new(bytes);
+    let c = Container::open(&src).expect("open");
+    let start = std::time::Instant::now();
+    match read_model(&src, &c, &ReadOptions::default()) {
+        Err(skp::Error::Malformed(why)) => {
+            assert_eq!(why, "deflate stream is longer than its entry claims")
+        }
+        Err(e) => panic!("{e}"),
+        Ok(m) => panic!("read {} faces", m.definitions[0].geom.faces()),
+    }
+    assert!(start.elapsed().as_secs_f64() < 2.0, "{:?}", start.elapsed());
 }

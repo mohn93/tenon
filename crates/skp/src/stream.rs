@@ -112,6 +112,8 @@ pub struct InflateRead<'s> {
     out_pos: usize,
     consumed: u64,
     expect: u64,
+    /// Bytes inflated so far; more than `expect` is refused.
+    produced: u64,
     finished: bool,
 }
 
@@ -149,6 +151,7 @@ impl<'s> InflateRead<'s> {
             out_pos: 0,
             consumed: 0,
             expect: uncompressed,
+            produced: 0,
             finished: false,
         })
     }
@@ -201,6 +204,14 @@ impl<'s> InflateRead<'s> {
             );
             self.out.truncate(before + r.bytes_written);
             self.in_pos += r.bytes_consumed;
+            // The entry's claimed size is what callers bound their work by: a stream that
+            // runs past it is not what its header says.
+            self.produced = self.produced.saturating_add(r.bytes_written as u64);
+            if self.produced > self.expect {
+                return Err(Error::Malformed(
+                    "deflate stream is longer than its entry claims",
+                ));
+            }
             let progressed = r.bytes_written != 0 || r.bytes_consumed != 0;
 
             match r.status {

@@ -463,10 +463,10 @@ pub fn parse_component(payload: &[u8]) -> Result<DefGeometry> {
     parse_component_within(payload, &mut unlimited)
 }
 
-/// One element more against `budget`: `Malformed("too many elements")` once it is spent.
-fn spend(budget: &mut u64) -> Result<()> {
+/// `n` elements more against `budget`: `Malformed("too many elements")` once it is spent.
+pub(crate) fn spend(budget: &mut u64, n: u64) -> Result<()> {
     *budget = budget
-        .checked_sub(1)
+        .checked_sub(n)
         .ok_or(Error::Malformed("too many elements"))?;
     Ok(())
 }
@@ -475,6 +475,8 @@ fn spend(budget: &mut u64) -> Result<()> {
 /// against `budget` and failing with `Malformed("too many elements")` once it is spent, so a
 /// small deflated record of millions of empty elements cannot take all memory.
 pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeometry> {
+    // The geometry's own tables, before any element.
+    spend(budget, 1)?;
     let mut g = DefGeometry::default();
 
     // Vertices first: edges reference them, and within a component the
@@ -491,7 +493,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
                         pos = xyz;
                     }
                 }
-                spend(budget)?;
+                spend(budget, 1)?;
                 g.vertex_pid.push(c.pid);
                 g.vertex_pos.extend_from_slice(&pos);
             }
@@ -527,7 +529,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
                         _ => {}
                     }
                 }
-                spend(budget)?;
+                spend(budget, 1)?;
                 g.edge_pid.push(c.pid);
                 edge_start.push(a);
                 edge_end.push(b);
@@ -570,7 +572,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             continue;
         }
         for f in sec.children_with(t::FACE) {
-            spend(budget)?;
+            spend(budget, 1)?;
             let c = common_of(&f);
             let mut n = [0.0f64; 3];
             let mut d = 0.0f64;
@@ -641,14 +643,14 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
                                     _ => {}
                                 }
                             }
-                            spend(budget)?;
+                            spend(budget, 1)?;
                             g.coedge_edge.push(g.edge_index(eref));
                             g.coedge_reversed.push(rev);
                             coedges += 1;
                         }
                     }
                     if coedges > 0 {
-                        spend(budget)?;
+                        spend(budget, 1)?;
                         g.loop_ofs.push(g.coedge_edge.len() as u32);
                         loops_here += 1;
                     }
@@ -682,7 +684,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
         match wrapper {
             None => {
                 for i in sec.children_with(t::COMPONENT_INSTANCE) {
-                    spend(budget)?;
+                    spend(budget, 1)?;
                     g.instances.push(parse_instance(&i, false));
                 }
             }
@@ -691,7 +693,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
                     for i in env.children_with(t::COMPONENT_INSTANCE) {
                         let mut inst = parse_instance(&i, is_group);
                         inst.is_image = sec.tag == t::COMPONENT_IMAGES;
-                        spend(budget)?;
+                        spend(budget, 1)?;
                         g.instances.push(inst);
                     }
                 }

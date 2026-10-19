@@ -190,9 +190,10 @@ impl Document {
         self.place_import(mesh, instance, change, report, place, root_faces)
     }
 
-    /// Reads a SketchUp file's `bytes` (from `path`, for messages) and builds its tree into the scene with `build`, keeping only the materials
-    /// the built faces and instances use (at most `MAX_IMPORT_MATERIALS`; the bytes are read
-    /// twice when more are used). Nothing changes on failure.
+    /// Reads a SketchUp file's `bytes` (from `path`, named in messages) and builds its tree
+    /// into the scene with `build`, keeping only the materials the built faces and instances
+    /// use (at most `MAX_IMPORT_MATERIALS`; the bytes are read twice when more are used).
+    /// Nothing changes on failure.
     pub(super) fn build_skp(
         &mut self,
         path: &str,

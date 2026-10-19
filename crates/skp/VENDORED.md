@@ -65,3 +65,14 @@ Upstream's tests are not copied: they read a private corpus.
     cap. A record of millions of empty faces is six bytes each and deflates
     about a thousand to one, so a small file could otherwise make the per-face
     tables take gigabytes. `parse_component` keeps its behaviour (no cap).
+13. Definitions count against `max_elements` too (`scene.rs`
+    `read_definitions`): each costs `DEFINITION_WEIGHT` (50) before it is
+    made, and each parsed geometry 1 (`parse_component_within`). An empty
+    `ComponentDefinition` record is six bytes but a few hundred bytes once
+    read, so without this a stream of empty definitions grew without bound.
+14. The claimed stream size is enforced: `InflateRead::pump` (`stream.rs`)
+    fails with `Malformed("deflate stream is longer than its entry claims")`
+    once it has inflated more than the entry's `uncompressed_size`, and
+    `read_stream` clamps the model record's end to that size. Upstream
+    inflated until the deflate stream ended, so a caller bounding its work by
+    the claimed size could be given far more.

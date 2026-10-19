@@ -76,6 +76,10 @@ pub const SKIPPED_MARKER: u32 = u32::MAX - 1;
 /// under 100 KB.
 const SMALL_SECTION_MAX: u64 = 64 * 1024 * 1024;
 
+/// What one definition counts against `ReadOptions::max_elements`: a `Definition` is a few
+/// hundred bytes before any geometry, about fifty elements' worth.
+const DEFINITION_WEIGHT: u64 = 50;
+
 /// The most a single `material.xml` may inflate to before `index` skips it.
 const MAX_MATERIAL_XML_BYTES: u64 = 1024 * 1024;
 
@@ -315,7 +319,8 @@ fn read_stream<R: SeqRead>(
             "model stream does not begin with SketchUpModel",
         ));
     }
-    let root_end = rs.enter(&root)?;
+    // The model record cannot run past the stream's claimed size.
+    let root_end = core::cmp::min(rs.enter(&root)?, total);
     let mut buf: Vec<u8> = Vec::new();
 
     while let Some(sec) = rs.header(root_end)? {
@@ -402,6 +407,8 @@ fn read_definitions<R: SeqRead>(
             }
         }
         rs.payload(d.size, buf)?;
+        // A definition costs far more than one element; count it so, before it is made.
+        crate::geom::spend(budget, DEFINITION_WEIGHT)?;
         m.definitions.push(parse_definition(buf, budget)?);
     }
     Ok(())
