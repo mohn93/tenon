@@ -3,9 +3,16 @@
 `cargo test --workspace` runs everything. Rendering tests need a GPU adapter; without one they
 print "no GPU adapter, skipping" and pass.
 
+Each crate's integration tests are modules of one test binary, `tests/integration/main.rs`, so a
+full run starts one test program per crate (on macOS every new program is scanned before it runs,
+which made one binary per file slow). Run one file's tests by module path:
+`cargo test -p session --test integration scale::`. A new test file goes in
+`tests/integration/` with a `mod` line in `main.rs`; tests in different files now run in parallel
+in one process, so they must not share fixed temp paths or global state.
+
 ## Golden images
 
-`crates/render/tests/golden.rs` renders a few canonical scenes headless at 160 x 120 and compares
+`crates/render/tests/integration/golden.rs` renders a few canonical scenes headless at 160 x 120 and compares
 each with its PNG in `crates/render/tests/golden/`. A pixel differs when one of its color channels
 differs by more than 24 (out of 255); a test fails when more than 0.5% of its pixels differ, which
 leaves room for GPU and driver differences in antialiasing. Changes under that tolerance, such as
@@ -20,7 +27,7 @@ or probe edits): `UPDATE_GOLDEN` accepts whatever renders. With a test filter, o
 images are rewritten.
 
 ```
-UPDATE_GOLDEN=1 cargo test -p render --test golden
+UPDATE_GOLDEN=1 cargo test -p render --test integration golden::
 git diff --stat crates/render/tests/golden/
 ```
 
@@ -29,11 +36,11 @@ A new scene needs a test calling `check("<name>", &doc)` and its name in
 
 ## Timings
 
-`crates/kernel/tests/perf.rs` times big edits (copying 30 circles three and a hundred times,
+`crates/kernel/tests/integration/perf.rs` times big edits (copying 30 circles three and a hundred times,
 copying an exploded 1,800-face terrain, edits inside a 20,000-face imported group, exploding
 imported groups of 1,800 and 20,000 faces, softening and shading a 20,000-face terrain). Its tests are ignored by default;
 run them in release, where they also check loose upper bounds:
 
 ```
-cargo test --release -p kernel --test perf -- --ignored --nocapture
+cargo test --release -p kernel --test integration perf:: -- --ignored --nocapture
 ```
