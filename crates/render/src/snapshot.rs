@@ -12,6 +12,7 @@ pub struct Snapshotter {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: Renderer,
+    software: bool,
 }
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -28,7 +29,15 @@ impl Snapshotter {
             ..Default::default()
         }))
         .ok()?;
-        Some(Self::with_device(&device, &queue))
+        let mut snap = Self::with_device(&device, &queue);
+        snap.software = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        Some(snap)
+    }
+
+    /// True when `new_headless` found a software adapter (e.g. Mesa lavapipe), whose rasterizer
+    /// differs from real GPUs. False for a shared device, whose adapter is not known here.
+    pub fn is_software_adapter(&self) -> bool {
+        self.software
     }
 
     /// Shares an existing device, e.g. the window's.
@@ -37,6 +46,7 @@ impl Snapshotter {
             device: device.clone(),
             queue: queue.clone(),
             renderer: Renderer::new(device, queue, FORMAT),
+            software: false,
         }
     }
 

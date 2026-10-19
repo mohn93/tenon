@@ -109,12 +109,18 @@ fn updating() -> bool {
 
 /// Renders `doc` with its camera, lighting, selection and open context, and checks the image
 /// against `tests/golden/<name>.png` (or rewrites that file with `UPDATE_GOLDEN=1`). Skips
-/// without a GPU adapter.
+/// without a GPU adapter, and on a software adapter (Mesa lavapipe, WARP) with a printed note:
+/// the goldens come from a real GPU and stay strict there; a software rasterizer differs in
+/// edges, antialiasing and shadow filtering by more than any tolerance worth having.
 fn check(name: &str, doc: &Document) {
     let Some(mut snap) = Snapshotter::new_headless() else {
         eprintln!("no GPU adapter, skipping");
         return;
     };
+    if snap.is_software_adapter() && !updating() {
+        eprintln!("{name}: software GPU adapter, skipping golden comparison");
+        return;
+    }
     let actual = snap
         .capture(
             doc.scene(),

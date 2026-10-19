@@ -1,5 +1,32 @@
 # Linux
 
+## Build
+
+A Rust toolchain (the version in `.github/workflows/ci.yml`) and a C linker (`build-essential` on
+Debian and Ubuntu). There are no `-dev` packages: the dependency tree links no GTK, X11 or
+Wayland library at build time.
+
+```bash
+cargo build --release -p app
+```
+
+## Run
+
+The window needs a Vulkan or OpenGL driver and these libraries at run time. On Debian and Ubuntu:
+
+```bash
+sudo apt-get install mesa-vulkan-drivers libvulkan1 libxkbcommon0 libwayland-client0 \
+    libx11-6 libxcursor1 libxrandr2 libxi6
+```
+
+Use your GPU vendor's driver instead of `mesa-vulkan-drivers` where it has one. Wayland or X11
+both work. Open, Save and Export need `xdg-desktop-portal` (with a backend) or `zenity` (see File
+dialogs below).
+
+Headless mode and the MCP server (`--mcp`) open no window and need no display. Rendering to an
+image (`render_view`) still needs a Vulkan or GL adapter; Mesa's software adapter (lavapipe, in
+`mesa-vulkan-drivers`) is enough.
+
 ## File locations
 
 The window follows the XDG Base Directory layout. An `XDG_*` variable counts only when it is set
@@ -38,3 +65,19 @@ Open, Save and Export use the xdg-desktop-portal file chooser, falling back to `
 neither is installed, the dialog cannot open. The dialog library (rfd 0.17) logs that to stderr
 and returns the same answer as Cancel, so the window cannot tell the two apart and shows no
 message; install `xdg-desktop-portal` with a backend, or `zenity`.
+
+## Tests
+
+Linux is verified in GitHub Actions (`.github/workflows/ci.yml`): fmt, clippy with `-D warnings`
+and `cargo test --workspace` on `ubuntu-24.04` (x86_64) and `ubuntu-24.04-arm` (aarch64), with
+Mesa lavapipe as the GPU. Golden-image tests compare against images made on a real GPU, so on a
+software adapter they skip with a printed note instead of comparing.
+
+`scripts/linux-test.sh` runs the same three commands in an Ubuntu 24.04 Docker container, using
+the Rust version of your local `rustc`. It keeps build output in the Docker volume
+`sketchup-alt-linux-target` (not the repo's `target/`) and can be run repeatedly. It has not been
+run on every machine; CI is the reference and the script mirrors it.
+
+```bash
+scripts/linux-test.sh
+```
