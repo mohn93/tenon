@@ -132,7 +132,9 @@ fn choose_temp_or_fallback(temp: &Path, home: Option<&Path>, name: &str) -> Path
 
 /// A real folder owned by `uid` that group and others cannot write to.
 fn is_private_dir_of(dir: &Path, uid: u32) -> bool {
-    std::fs::metadata(dir).is_ok_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o022 == 0)
+    // `symlink_metadata`: a symlink is not a real folder, even when it points at one.
+    std::fs::symlink_metadata(dir)
+        .is_ok_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o022 == 0)
 }
 
 /// The user this process runs as: the owner of `/proc/self` (Linux). None elsewhere, which

@@ -117,7 +117,8 @@ fn check(name: &str, doc: &Document) {
         eprintln!("no GPU adapter, skipping");
         return;
     };
-    if snap.is_software_adapter() && !updating() {
+    if snap.is_software_adapter() {
+        // Neither compared nor rewritten: a software render must not become the reference.
         eprintln!("{name}: software GPU adapter, skipping golden comparison");
         return;
     }

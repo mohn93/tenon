@@ -8,15 +8,22 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
   RUST_VERSION: 1.99.0
 
 jobs:
   linux:
     name: ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +42,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers libvulkan1 libxkbcommon0 libwayland-client0 \
-            libx11-6 libxcursor1 libxrandr2 libxi6
+            libx11-6 libxcursor1 libxrandr2 libxi6 libxkbcommon-x11-0 libwayland-cursor0 libwayland-egl1
 
       - name: Install Rust
         run: |

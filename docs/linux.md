@@ -16,7 +16,7 @@ The window needs a Vulkan or OpenGL driver and these libraries at run time. On D
 
 ```bash
 sudo apt-get install mesa-vulkan-drivers libvulkan1 libxkbcommon0 libwayland-client0 \
-    libx11-6 libxcursor1 libxrandr2 libxi6
+    libx11-6 libxcursor1 libxrandr2 libxi6 libxkbcommon-x11-0 libwayland-cursor0 libwayland-egl1
 ```
 
 Use your GPU vendor's driver instead of `mesa-vulkan-drivers` where it has one. Wayland or X11
@@ -75,8 +75,8 @@ software adapter they skip with a printed note instead of comparing.
 
 `scripts/linux-test.sh` runs the same three commands in an Ubuntu 24.04 Docker container, using
 the Rust version of your local `rustc`. It keeps build output in the Docker volume
-`sketchup-alt-linux-target` (not the repo's `target/`) and can be run repeatedly. It has not been
-run on every machine; CI is the reference and the script mirrors it.
+`sketchup-alt-linux-target` (not the repo's `target/`) and can be run repeatedly. It is not
+verified yet (CI is the reference and the script mirrors it).
 
 ```bash
 scripts/linux-test.sh

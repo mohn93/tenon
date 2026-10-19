@@ -10,7 +10,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl \
         mesa-vulkan-drivers libvulkan1 libxkbcommon0 libwayland-client0 \
-        libx11-6 libxcursor1 libxrandr2 libxi6 \
+        libx11-6 libxcursor1 libxrandr2 libxi6 libxkbcommon-x11-0 libwayland-cursor0 libwayland-egl1 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
