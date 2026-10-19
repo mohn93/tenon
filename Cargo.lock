@@ -3162,6 +3162,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "skpwrite"
+version = "0.1.0"
+dependencies = [
+ "skp",
+]
+
+[[package]]
 name = "skrifa"
 version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

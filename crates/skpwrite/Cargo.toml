@@ -1,0 +1,10 @@
+[package]
+name = "skpwrite"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+publish = false
+description = "A SketchUp 2017 (.skp) writer ported from openskp's Python writer; see PORTED.md"
+
+[dev-dependencies]
+skp = { path = "../skp" }

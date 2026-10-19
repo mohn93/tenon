@@ -31,12 +31,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## openskp (record layouts and a fallback search ported into `crates/skp`)
+## openskp (record layouts and a fallback search ported into `crates/skp`; the writer in `crates/skpwrite`)
 
 Some record layouts and the SketchUp 2020 count search in `crates/skp/src/legacy.rs` are
 ported from openskp (https://github.com/iamahsanmehmood/openskp, commit
-`13ae161fa0108647a04ad5730776120bb6fe8c83`); see `crates/skp/VENDORED.md`. openskp is
-distributed under the MIT licence:
+`13ae161fa0108647a04ad5730776120bb6fe8c83`); see `crates/skp/VENDORED.md`. The SketchUp
+2017 writer in `crates/skpwrite` is ported from openskp's Python writer at the same commit;
+see `crates/skpwrite/PORTED.md`. `crates/skpwrite/src/blank_v17.skp`, embedded in the
+writer, is openskp's `_scaffold/blank_v17.skp` unchanged: a blank document saved by the
+SketchUp SDK, as openskp describes it. openskp is distributed under the MIT licence:
 
 ```
 MIT License
