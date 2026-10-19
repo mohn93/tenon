@@ -27,10 +27,14 @@ pub enum ExportFormat {
     Glb,
     /// glTF 2.0 JSON with the buffer embedded as base64.
     Gltf,
+    /// SketchUp 2017 (`.skp`): the whole scene, with its groups, components, materials and
+    /// guides, rather than triangles (see `skp_export`).
+    Skp,
 }
 
 impl ExportFormat {
-    /// The format a file name's extension asks for (`.obj`, `.stl`, `.glb`, `.gltf`, any case).
+    /// The format a file name's extension asks for (`.obj`, `.stl`, `.glb`, `.gltf`, `.skp`,
+    /// any case).
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
@@ -38,6 +42,7 @@ impl ExportFormat {
             "stl" => ExportFormat::Stl,
             "glb" => ExportFormat::Glb,
             "gltf" => ExportFormat::Gltf,
+            "skp" => ExportFormat::Skp,
             _ => return None,
         })
     }
@@ -47,12 +52,39 @@ impl ExportFormat {
 const DEFAULT_COLOR: [f64; 3] = [0.93, 0.93, 0.90];
 
 /// What an `export` wrote.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExportReport {
-    /// Triangles written.
+    /// Triangles written (0 for a SketchUp file).
     pub triangles: usize,
     /// Faces left out because they could not be triangulated (counted once per placement).
     pub skipped_faces: usize,
+    /// SketchUp files: definitions written, each once however often it is placed. Absent
+    /// when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub definitions: usize,
+    /// SketchUp files: instances written, over the root and every definition. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub instances: usize,
+    /// SketchUp files: faces written, each definition's once. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub faces: usize,
+    /// SketchUp files: edges written, each definition's once. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub edges: usize,
+    /// SketchUp files: guide lines and points written. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub guides: usize,
+    /// SketchUp files: materials written. Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub materials: usize,
+    /// What the file could not hold (glowing materials, curves, empty groups). Absent when
+    /// there is nothing to say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// What an export writes: the file's bytes and, for an OBJ whose faces are painted, the bytes
@@ -85,6 +117,9 @@ pub(crate) fn encode(
         ExportFormat::Stl => only(stl(triangles)?),
         ExportFormat::Glb => only(glb(&groups)?),
         ExportFormat::Gltf => only(gltf(&groups).into_bytes()),
+        ExportFormat::Skp => {
+            return Err("a SketchUp file is written from the scene, not triangles".to_string());
+        }
     })
 }
 

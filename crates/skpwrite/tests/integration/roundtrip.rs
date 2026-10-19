@@ -832,6 +832,94 @@ fn invalid_documents_are_errors() {
         matches!(e, WriteError::TooManyMaterials)
     }));
 
+    let mut d = base();
+    d.root = square();
+    d.root.edges.push(edge(1, 0));
+    cases.push(("duplicate edge", d, |e| {
+        matches!(
+            e,
+            WriteError::Degenerate {
+                what: "duplicate edge",
+                index: 4,
+                ..
+            }
+        )
+    }));
+
+    let mut d = base();
+    d.root = square();
+    d.root.vertices.push([2.0, 0.0, 0.0]);
+    d.root.edges = vec![
+        edge(0, 1),
+        edge(1, 4),
+        edge(4, 2),
+        edge(2, 1),
+        edge(2, 3),
+        edge(3, 0),
+    ];
+    d.root.faces = vec![face(vec![vec![0, 1, 4, 2, 1, 2, 3]])];
+    cases.push(("loop repeating a vertex", d, |e| {
+        matches!(
+            e,
+            WriteError::Degenerate {
+                what: "face loop",
+                ..
+            }
+        )
+    }));
+
+    for size in [0.0, -1.0] {
+        let mut d = base();
+        d.materials.push(Material {
+            texture: Some(Texture {
+                bytes: png_2x2(),
+                width: size,
+                height: 1.0,
+            }),
+            ..solid("tex".into())
+        });
+        cases.push(("texture size", d, |e| {
+            matches!(e, WriteError::TextureSize { material: 0 })
+        }));
+    }
+
+    let mut d = base();
+    d.materials = vec![solid("same".into()), solid("same".into())];
+    cases.push((
+        "duplicate material name",
+        d,
+        |e| matches!(e, WriteError::DuplicateName { what: "material", name } if name == "same"),
+    ));
+
+    let mut d = base();
+    let named = |name: &str| Definition {
+        name: name.into(),
+        is_group: true,
+        geometry: one_edge_root(),
+    };
+    d.definitions = vec![named("Group"), named("Group")];
+    cases.push((
+        "duplicate definition name",
+        d,
+        |e| matches!(e, WriteError::DuplicateName { what: "definition", name } if name == "Group"),
+    ));
+
+    let mut d = base();
+    d.definitions = vec![named("Flat")];
+    let mut flat = place(0);
+    flat.rotation[2] = [0.0; 3];
+    d.root.instances.push(flat);
+    cases.push(("singular instance", d, |e| {
+        matches!(
+            e,
+            WriteError::Degenerate {
+                what: "instance",
+                index: 0,
+                ..
+            }
+        )
+    }));
+
     for (name, doc, check) in cases {
         match write(&doc) {
             Ok(_) => panic!("{name}: wrote"),

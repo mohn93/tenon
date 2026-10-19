@@ -256,11 +256,12 @@ pub struct Editor {
 }
 
 /// The formats File > Export offers, as (filter name, extension).
-pub const EXPORT_FORMATS: [(&str, &str); 4] = [
+pub const EXPORT_FORMATS: [(&str, &str); 5] = [
     ("OBJ", "obj"),
     ("STL", "stl"),
     ("glTF binary", "glb"),
     ("glTF", "gltf"),
+    ("SketchUp 2017 (.skp)", "skp"),
 ];
 
 /// The colors the Materials panel offers; new materials get them in turn.
@@ -1478,8 +1479,13 @@ impl Editor {
         let Some(outcome) = outcome else {
             return false;
         };
-        let skipped = outcome.export.map_or(0, |r| r.skipped_faces);
-        self.message = Some(Message::info(export_message(path, skipped)));
+        let report = outcome.export.unwrap_or_default();
+        let mut message = export_message(path, report.skipped_faces);
+        // What a SketchUp file could not hold.
+        if !report.warnings.is_empty() {
+            message = format!("{message} ({})", report.warnings.join("; "));
+        }
+        self.message = Some(Message::info(message));
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
         if let Some((_, ext)) = EXPORT_FORMATS
             .iter()
@@ -4703,6 +4709,23 @@ mod tests {
         assert_eq!(export_message(path, 0), "Exported model.stl");
         assert!(export_message(path, 1).ends_with("without 1 face that could not be triangulated"));
         assert!(export_message(path, 3).contains("without 3 faces"));
+    }
+
+    #[test]
+    fn the_export_dialog_offers_sketchup() {
+        assert!(EXPORT_FORMATS.contains(&("SketchUp 2017 (.skp)", "skp")));
+        let mut e = editor();
+        e.select_tool(ToolKind::Line);
+        square(&mut e);
+        assert!(
+            e.export_formats()
+                .contains(&("SketchUp 2017 (.skp)", "skp"))
+        );
+        let path = temp_file("dialog.skp");
+        assert!(e.export_file(&path));
+        assert_eq!(e.export_formats()[0], ("SketchUp 2017 (.skp)", "skp"));
+        assert!(std::fs::read(&path).unwrap().len() > 5000);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

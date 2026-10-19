@@ -3106,6 +3106,7 @@ dependencies = [
  "serde",
  "serde_json",
  "skp",
+ "skpwrite",
  "zip",
 ]
 

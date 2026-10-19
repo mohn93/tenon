@@ -280,8 +280,8 @@ shows a Soft checkbox that softens or hardens them.
 ### Guides
 
 Guides are construction geometry, as drawn by the Tape Measure tool: guide lines (infinite) and
-guide points. Tools snap to them; they never merge with edges, bound no faces and are not
-exported. They belong to the open context they are added in (the root, or a group or component
+guide points. Tools snap to them; they never merge with edges, bound no faces and are only
+exported to SketchUp files. They belong to the open context they are added in (the root, or a group or component
 definition) and are saved with the model.
 
 | Command | Effect |
@@ -900,8 +900,10 @@ atomic batch.
 `{"type": "export", "path": "/abs/house.glb"}` writes every face of the whole model as
 triangles: the root's faces and every instance's, placed in root coordinates (a component placed
 twice is written twice), whatever instance is open. Edges without faces are not written.
-`format` (`obj`, `stl`, `glb`, `gltf`) defaults to the one the path's extension names, in any
-case; any other extension without `format` is `invalid_input`, and so is a model with no faces.
+`format` (`obj`, `stl`, `glb`, `gltf`, `skp`) defaults to the one the path's extension names, in
+any case; any other extension without `format` is `invalid_input`, and so is a model with no
+faces (for `skp`: with nothing at all, "nothing to export"). A SketchUp file holds the whole
+scene rather than triangles (see the `skp` row below).
 A `.skr` path (any case) and the open model's own file are refused with `invalid_input`: export
 never overwrites a model; use `save`.
 An existing file at `path` (and, for an OBJ with materials, at its `.mtl` and image paths) that is
@@ -914,7 +916,7 @@ line; MTL is the same with MTL keywords and at least one `newmtl`; STL is text w
 is `solid` (alone or followed by a name, any case) and whose next line starts with `facet` or
 `endsolid`, or a binary STL whose size is 84 + 50 x its triangle count; `glb` starts with
 `glTF`; `gltf` is a JSON object whose `asset` has a `version` string (read up to the `asset`,
-within 16 MiB); a texture image is a PNG or JPEG. Something that is not a regular file (a folder, a device) is refused.
+within 16 MiB); `skp` starts with SketchUp's file header; a texture image is a PNG or JPEG. Something that is not a regular file (a folder, a device) is refused.
 
 | Format | Content |
 |---|---|
@@ -922,6 +924,7 @@ within 16 MiB); a texture image is a PNG or JPEG. Something that is not a regula
 | `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors or opacity |
 | `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear, with the opacity as alpha), and a see-through one `alphaMode` `BLEND`; the default one is named `default`; a material with a texture has a `TEXCOORD_0` attribute and a `baseColorTexture` (its image file, as it was read, in the buffer; a sampler with linear mipmapped filtering that repeats both ways) with a white `baseColorFactor` (and the opacity as alpha); a glowing material has `emissiveFactor`, its color (linear) times its emission up to 1 (white, and an `emissiveTexture` naming its texture, when it has one), and an emission above 1 goes in `KHR_materials_emissive_strength` (`emissiveStrength`, listed in `extensionsUsed`); Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
+| `skp` | A SketchUp 2017 file (SketchUp 2017 and newer open it), written from the scene rather than triangles: the root and every group and component definition the root places (at any depth), each written once in its own coordinates and placed by its instances (transform and material kept, a mirrored one stays mirrored); faces with their holes and front and back materials; every edge, soft edges soft and smooth; guide lines and points; every material (color, opacity, texture image as it was read and its size); each textured face side carries its texture's placement. Lengths are inches, as SketchUp stores them; Z up. Only Layer0 is written. Names SketchUp needs unique are made so with a number (" 2"), and blank ones become `Material`, `Group` or `Component`; names are cut to 240 UTF-16 units. Groups and components with nothing in them are left out. Curves (circles, arcs, polygons) are written as their separate edges. The same model gives the same bytes. |
 
 Colors and textures come from each face's front side (its own material, else that of the nearest
 painted instance placing it); back-side materials are not exported. Texture coordinates follow
@@ -935,7 +938,11 @@ which the window ignores.
 Units are meters. Export writes the file the same safe way as `save`, is not an undo step, and
 does not change the revision or the `file` query. Its result has `"export": {"triangles": n,
 "skipped_faces": k}`: the triangles written and the faces left out because they could not be
-triangulated (counted once per placement). A binary STL holds at most 2^32 - 1 triangles and a
+triangulated (counted once per placement). For `skp` both are 0 and the result adds what was
+written, each definition counted once: `definitions`, `instances`, `faces`, `edges`, `guides`
+and `materials` (each absent when 0), and `warnings` (absent when empty) for what the file
+cannot hold: "N materials glow; SketchUp files cannot store that", "N curves were written as
+separate edges", "N empty groups or components were left out". A binary STL holds at most 2^32 - 1 triangles and a
 `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused with
 `invalid_input` and nothing is written.
 

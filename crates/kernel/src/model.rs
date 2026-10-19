@@ -121,7 +121,8 @@ impl Instance {
     }
 }
 
-/// Construction geometry drawn by the Tape Measure: not part of any face, never exported.
+/// Construction geometry drawn by the Tape Measure: not part of any face, exported only to
+/// SketchUp files.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Guide {
     /// The infinite line through `point` along the unit vector `direction`.

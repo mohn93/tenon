@@ -330,7 +330,8 @@ impl Archive {
         }
         self.drawbase(material, DrawFlags::default());
         self.f64s(&plane);
-        self.u32(loops.len() as u32);
+        // Validation refuses a count past u32 (`Plan::new`).
+        self.u32(u32::try_from(loops.len()).unwrap_or(u32::MAX));
         for (i, uses) in loops.iter().enumerate() {
             let loop_slot = self.new_of_class("CLoop", LOOP_SCHEMA);
             self.preamble_no_pid();
@@ -387,7 +388,8 @@ impl Archive {
                 self.bytes(&[0, 0]);
                 self.new_of_class("CDib", DIB_SCHEMA);
                 self.u32(t.kind.subtype());
-                self.u32(t.bytes.len() as u32);
+                // Validation refuses a length past u32 (`Plan::new`).
+                self.u32(u32::try_from(t.bytes.len()).unwrap_or(u32::MAX));
                 self.bytes(t.bytes);
                 if t.kind == ImageKind::Jpeg {
                     self.u32(90);

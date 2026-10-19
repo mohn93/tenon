@@ -15,6 +15,7 @@ mod rectangle;
 mod rotate;
 mod schema;
 mod skp;
+mod skp_export;
 mod sniff;
 pub mod texture;
 

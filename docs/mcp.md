@@ -77,3 +77,6 @@ later, every call fails with code `-32003` (connection lost) until the client re
   `undo_origins`). In a window someone else also edits, undo with `expect` so only the agent's own
   step is undone: `{"type": "undo", "expect": {"label": "add_edge", "origin": "agent"}}`.
 - Headless, `--api-root` is the only limit on the files the agent can read and write.
+- `export` to a `.skp` path writes a SketchUp 2017 file of the whole model (groups,
+  components, materials, guides); the result's `export` counts what it wrote and warns about
+  what SketchUp files cannot hold (see Export in [agent-api.md](agent-api.md)).

@@ -10,6 +10,7 @@ use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
 use crate::file::{self, Access};
 use crate::import::{ImportReport, MAX_IMPORT_BYTES};
+use crate::skp_export;
 use crate::sniff::{self, Kind};
 
 impl Document {
@@ -129,7 +130,8 @@ impl Document {
     }
 
     /// Writes every face of the whole model as triangles in `format`, or the format the
-    /// path's extension names.
+    /// path's extension names; a SketchUp file holds the whole scene instead (see
+    /// `skp_export`).
     pub(super) fn export_file(
         &self,
         path: &str,
@@ -140,7 +142,7 @@ impl Document {
         let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "give a format, or a path ending in .obj, .stl, .glb or .gltf",
+                "give a format, or a path ending in .obj, .stl, .glb, .gltf or .skp",
             ));
         };
         let target = Path::new(path);
@@ -167,6 +169,9 @@ impl Document {
                 ErrorKind::InvalidInput,
                 "that is the open model's own file: export to another path",
             ));
+        }
+        if format == ExportFormat::Skp {
+            return export_skp(&self.scene, target, overwrite, refuse_links);
         }
         let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
         if triangles.is_empty() {
@@ -213,18 +218,7 @@ impl Document {
             None => Vec::new(),
         };
         if refuse_links {
-            let link = std::iter::once(target)
-                .chain(side.iter().map(|(p, _)| p.as_path()))
-                .find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()));
-            if let Some(link) = link {
-                return Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    format!(
-                        "{} is a symbolic link: under --api-root the API does not write to links",
-                        link.display()
-                    ),
-                ));
-            }
+            check_links(std::iter::once(target).chain(side.iter().map(|(p, _)| p.as_path())))?;
         }
         if !overwrite {
             let kind = match format {
@@ -232,6 +226,7 @@ impl Document {
                 ExportFormat::Stl => Kind::Stl,
                 ExportFormat::Glb => Kind::Glb,
                 ExportFormat::Gltf => Kind::Gltf,
+                ExportFormat::Skp => Kind::Skp,
             };
             let checks = std::iter::once((target.to_path_buf(), kind)).chain(side);
             if let Some((p, k)) = checks.into_iter().find(|(p, k)| !sniff::replaceable(p, *k)) {
@@ -253,6 +248,7 @@ impl Document {
         Ok(ExportReport {
             triangles: triangles.len(),
             skipped_faces,
+            ..ExportReport::default()
         })
     }
 
@@ -292,6 +288,51 @@ impl Document {
         self.scene
             .rename_definition(id, name)
             .map_err(|e| CommandError::new(ErrorKind::NotFound, e.to_string()))
+    }
+}
+
+/// Writes the whole scene as a SketchUp file at `target`, after the checks every export
+/// makes: something to write, no symbolic link under `--api-root`, and no existing file
+/// that is not a SketchUp file unless `overwrite`.
+fn export_skp(
+    scene: &Scene,
+    target: &Path,
+    overwrite: bool,
+    refuse_links: bool,
+) -> Result<ExportReport, CommandError> {
+    let (bytes, stats) = skp_export::encode_skp(scene)?;
+    if refuse_links {
+        check_links(std::iter::once(target))?;
+    }
+    if !overwrite && !sniff::replaceable(target, Kind::Skp) {
+        return Err(sniff::refusal(target, Kind::Skp));
+    }
+    file::replace_file(target, &bytes, Access::Default)
+        .map_err(|e| file_error(&target.display().to_string(), e))?;
+    Ok(ExportReport {
+        definitions: stats.definitions,
+        instances: stats.instances,
+        faces: stats.faces,
+        edges: stats.edges,
+        guides: stats.guides,
+        materials: stats.materials,
+        warnings: stats.warnings,
+        ..ExportReport::default()
+    })
+}
+
+/// Refuses the first of `paths` that is a symbolic link: under `--api-root` the API does not
+/// write through links.
+fn check_links<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Result<(), CommandError> {
+    match paths.find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())) {
+        Some(link) => Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "{} is a symbolic link: under --api-root the API does not write to links",
+                link.display()
+            ),
+        )),
+        None => Ok(()),
     }
 }
 

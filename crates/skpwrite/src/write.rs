@@ -20,7 +20,7 @@ use crate::archive::{
     Archive, DrawFlags, ImageKind, MAX_STRING_UNITS, TextureRecord, Use, UvSides,
 };
 use crate::doc::{Doc, Edge, Face, Geometry, Guide, Instance, UvPin};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Where the material count sits, right before the material list.
@@ -73,6 +73,10 @@ const TIMESTAMP: u32 = 1_767_225_600;
 /// Faces whose normal is within this of vertical take the world axes for their texture
 /// basis, as SketchUp does (openskp's `VERTICAL_TOLERANCE`, measured).
 const VERTICAL_TOLERANCE: f64 = 1e-3;
+
+/// An instance whose 3x3 has a determinant smaller than this is flat: refused. The
+/// project's kernel and reader use the same bound.
+const MIN_DETERMINANT: f64 = 1e-12;
 
 /// Which entity list an error is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +142,12 @@ pub enum WriteError {
     EmptyDocument,
     /// More materials than an entity's material reference can name.
     TooManyMaterials,
+    /// A texture whose width or height is not more than zero.
+    TextureSize { material: usize },
+    /// Two materials, or two definitions, with the same name.
+    DuplicateName { what: &'static str, name: String },
+    /// A count or a length past what its `u32` field holds.
+    TooLarge { what: &'static str },
 }
 
 impl fmt::Display for WriteError {
@@ -189,6 +199,13 @@ impl fmt::Display for WriteError {
             }
             Self::EmptyDocument => write!(f, "the document has nothing in its root"),
             Self::TooManyMaterials => write!(f, "too many materials for one file"),
+            Self::TextureSize { material } => {
+                write!(f, "material {material}'s texture has no width or height")
+            }
+            Self::DuplicateName { what, name } => {
+                write!(f, "two {what}s are named \"{name}\"")
+            }
+            Self::TooLarge { what } => write!(f, "a {what} is too large for the file"),
         }
     }
 }
@@ -256,7 +273,7 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     out.extend_from_slice(&SCAFFOLD[..MATERIAL_COUNT_POS]);
     put_u32(&mut out, PID_COUNTER_POS, last_pid);
     put(&mut out, ISO_CAMERA_PREFIX_POS, &ISO_CAMERA_PREFIX);
-    out.extend_from_slice(&(doc.materials.len() as u32).to_le_bytes());
+    out.extend_from_slice(&plan.material_count.to_le_bytes());
     out.extend_from_slice(&materials_buf);
 
     let layers_at = out.len();
@@ -271,7 +288,7 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     shift_ref(&mut anchor, 0, material_shift);
     out.extend_from_slice(&anchor);
 
-    out.extend_from_slice(&(plan.order.len() as u32).to_le_bytes());
+    out.extend_from_slice(&plan.def_count.to_le_bytes());
     out.extend_from_slice(&defs_buf);
     out.extend_from_slice(&SCAFFOLD[DEF_COUNT_POS + 4..ROOT_COUNT_POS]);
     out.extend_from_slice(&root_count.to_le_bytes());
@@ -351,6 +368,10 @@ fn shift_ref(buf: &mut Vec<u8>, at: usize, shift: u32) -> usize {
 struct Plan {
     /// Definitions to write, each after every definition it places.
     order: Vec<usize>,
+    /// How many there are, as the file's count.
+    def_count: u32,
+    /// How many materials there are, as the file's count.
+    material_count: u32,
     def_guids: Vec<[u8; 16]>,
     root: GeomPlan,
     defs: Vec<GeomPlan>,
@@ -375,8 +396,10 @@ struct FacePlan {
 impl Plan {
     fn new(doc: &Doc) -> Result<Self, WriteError> {
         let mut texture_paths = Vec::with_capacity(doc.materials.len());
+        let mut names = HashSet::with_capacity(doc.materials.len());
         for (i, m) in doc.materials.iter().enumerate() {
             check_string("material name", &m.name)?;
+            unique(&mut names, "material", &m.name)?;
             finite("material opacity", &[m.opacity])?;
             match &m.texture {
                 None => texture_paths.push(None),
@@ -384,18 +407,25 @@ impl Plan {
                     let kind = ImageKind::of(&t.bytes)
                         .ok_or(WriteError::UnknownTextureFormat { material: i })?;
                     finite("texture size", &[t.width, t.height])?;
+                    if t.width <= 0.0 || t.height <= 0.0 {
+                        return Err(WriteError::TextureSize { material: i });
+                    }
+                    fits_u32("texture image", t.bytes.len())?;
                     texture_paths.push(Some(texture_path(&m.name, kind)));
                 }
             }
         }
+        let material_count = fits_u32("material list", doc.materials.len())?;
         let empty: Vec<bool> = doc
             .definitions
             .iter()
             .map(|d| entity_count(&d.geometry) == 0)
             .collect();
         let mut defs = Vec::with_capacity(doc.definitions.len());
+        let mut names = HashSet::with_capacity(doc.definitions.len());
         for (i, d) in doc.definitions.iter().enumerate() {
             check_string("definition name", &d.name)?;
+            unique(&mut names, "definition", &d.name)?;
             defs.push(plan_geometry(
                 doc,
                 Owner::Definition(i),
@@ -408,6 +438,7 @@ impl Plan {
             return Err(WriteError::EmptyDocument);
         }
         let order = order_definitions(doc, &empty)?;
+        let def_count = fits_u32("definition list", order.len())?;
         let def_guids = doc
             .definitions
             .iter()
@@ -416,6 +447,8 @@ impl Plan {
             .collect();
         Ok(Self {
             order,
+            def_count,
+            material_count,
             def_guids,
             root,
             defs,
@@ -441,6 +474,27 @@ fn check_string(what: &'static str, s: &str) -> Result<(), WriteError> {
         return Err(WriteError::StringTooLong { what, units });
     }
     Ok(())
+}
+
+/// Refuses a second use of a name.
+fn unique<'a>(
+    names: &mut HashSet<&'a str>,
+    what: &'static str,
+    name: &'a str,
+) -> Result<(), WriteError> {
+    if names.insert(name) {
+        Ok(())
+    } else {
+        Err(WriteError::DuplicateName {
+            what,
+            name: name.to_string(),
+        })
+    }
+}
+
+/// `n` as the `u32` a count or length is stored in.
+fn fits_u32(what: &'static str, n: usize) -> Result<u32, WriteError> {
+    u32::try_from(n).map_err(|_| WriteError::TooLarge { what })
 }
 
 fn finite(what: &'static str, vs: &[f64]) -> Result<(), WriteError> {
@@ -502,7 +556,13 @@ fn plan_geometry(
                 index: i,
             });
         }
-        by_pair.entry((e.a.min(e.b), e.a.max(e.b))).or_insert(i);
+        if by_pair.insert((e.a.min(e.b), e.a.max(e.b)), i).is_some() {
+            return Err(WriteError::Degenerate {
+                owner,
+                what: "duplicate edge",
+                index: i,
+            });
+        }
     }
 
     let mut faces = Vec::with_capacity(g.faces.len());
@@ -565,6 +625,14 @@ fn check_instance(
         finite("instance rotation", row)?;
     }
     finite("instance translation", &inst.translation)?;
+    let det = det3(&inst.rotation);
+    if !det.is_finite() || det.abs() < MIN_DETERMINANT {
+        return Err(WriteError::Degenerate {
+            owner,
+            what: "instance",
+            index: i,
+        });
+    }
     material_in_range(doc, inst.material)
 }
 
@@ -581,10 +649,20 @@ fn plan_face(
     if f.loops.is_empty() {
         return Err(WriteError::ShortLoop { owner, face: fi });
     }
+    fits_u32("face's loop list", f.loops.len())?;
     let mut loops = Vec::with_capacity(f.loops.len());
+    let mut seen = HashSet::new();
     for ring in &f.loops {
         if ring.len() < 3 {
             return Err(WriteError::ShortLoop { owner, face: fi });
+        }
+        seen.clear();
+        if !ring.iter().all(|v| seen.insert(*v)) {
+            return Err(WriteError::Degenerate {
+                owner,
+                what: "face loop",
+                index: fi,
+            });
         }
         let mut uses = Vec::with_capacity(ring.len());
         for k in 0..ring.len() {

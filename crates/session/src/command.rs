@@ -102,7 +102,7 @@ pub enum Command {
     PushPull { face: EntityId, distance: f64 },
     /// Add a guide line: the infinite line through `point` along `direction` (any non-zero
     /// length), as one undo step. Guides are construction geometry: tools snap to them, they
-    /// bound no faces and are not exported.
+    /// bound no faces and are only exported to SketchUp files.
     AddGuideLine {
         #[schemars(with = "ModelPoint")]
         point: [f64; 3],
@@ -308,9 +308,14 @@ pub enum Command {
     },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
-    /// `.stl`, `.glb`, `.gltf`). Not an undo step. The outcome's `export` counts the triangles
-    /// written and the faces left out because they could not be triangulated. An existing
-    /// file that is not of the format written is refused unless `overwrite` is true.
+    /// `.stl`, `.glb`, `.gltf`, `.skp`). Not an undo step. The outcome's `export` counts the
+    /// triangles written and the faces left out because they could not be triangulated. A
+    /// SketchUp 2017 file (`skp`) holds the whole scene instead: every definition the root
+    /// places written once, faces with holes, soft edges, guides and materials with their
+    /// textures; its `export` counts definitions, instances, faces, edges, guides and
+    /// materials, with `warnings` for what the file cannot hold (glow, curves, empty groups).
+    /// An existing file that is not of the format written is refused unless `overwrite` is
+    /// true.
     Export {
         path: String,
         #[serde(default)]

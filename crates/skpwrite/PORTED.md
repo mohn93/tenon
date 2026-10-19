@@ -72,7 +72,15 @@ sequence"); the C++ and TypeScript ports restart them per section.
     `edges`, a recursive or empty definition, a texture neither PNG nor JPEG, a string over
     254 UTF-16 units, a NaN or infinity, a degenerate face, edge, guide line or set of
     texture pins, an empty root, and more materials than a drawbase's `u16` material
-    reference can name (`TooManyMaterials`, a check openskp does not make).
+    reference can name (`TooManyMaterials`, a check openskp does not make). Also refused,
+    none of which openskp checks: two edges between the same two vertices (either order;
+    `Degenerate` "duplicate edge", not skipped, so the caller's edge list is written as
+    given), a face loop that visits a vertex twice (`Degenerate` "face loop"), an instance
+    whose 3x3 has a determinant under 1e-12 in size (`Degenerate` "instance"; the project's
+    kernel and reader use the same bound), a texture whose width or height is not above
+    zero (`TextureSize`), two materials or two definitions with one name (`DuplicateName`;
+    callers make names unique first), and a texture image, a face's loop list, or the
+    material or definition list too long for its `u32` count (`TooLarge`).
 13. **Guides.** Guide lines are always infinite (start and end at -1e30 and 1e30) through
     the given point along the normalized direction; openskp also writes bounded segments.
 14. **Texture basis.** Pinned textures are solved in openskp's latest `face_uv_basis`
