@@ -76,3 +76,53 @@ Upstream's tests are not copied: they read a private corpus.
     `read_stream` clamps the model record's end to that size. Upstream
     inflated until the deflate stream ended, so a caller bounding its work by
     the claimed size could be given far more.
+15. Legacy topology (`legacy.rs`): `legacy::read_model`, `read_index` and
+    `read_model_and_index` give a pre-2021 file in the 2021+ path's shape, a
+    `scene::Model` with one `geom::DefGeometry` per definition (`pid` is the
+    definition's archive slot, which instances name in `def_pid`) and one for
+    the root, plus a `SceneIndex` (textures as `TextureLocation::Inline`) and
+    `ReadStats`. Built from the arenas before a definition releases them
+    (`emit_topology`), so no placement is walked: no bounds, reachability or
+    instance tables, and `finish` (whose placement grouping is quadratic) is
+    not called. Hidden faces are kept with bit 0 of `face_flags` set (the
+    batches still skip them); the face's back material, plane constant and
+    front texture flags, which were read and dropped, are kept; instances
+    carry group, image and hidden. `ReadOptions::max_elements` applies, with
+    definitions weighing 50 as in item 13. `read`'s `finish` now builds its
+    index with the same code (`index_and_stats`), which changes nothing in
+    what `read` returns.
+16. Guides: `geom::RawGuide` and `DefGeometry::guides` (empty on the 2021+
+    path for now). Legacy `CConstructionLine` (point, direction; the start
+    and end parameters are dropped, the line is infinite) and
+    `CConstructionPoint` records, which were read and discarded, are kept
+    unless hidden.
+17. `CDib`: a JPEG image (subtype 1) is followed by a `u32` its length does
+    not cover, its quality (70 on every thumbnail SketchUp 2024 writes into a
+    2017-2020 file); it is read when it is at most 100. Upstream took it for
+    a back-reference and a null, so a definition list counted them as
+    definitions and read the root count four bytes early: the truck and
+    bikes lost root entities and barstools failed with "implausible root
+    entity count".
+18. SketchUp 2020 container: the version map's `CLayerManager` schema is
+    read (`layer_manager_schema`, 4 up to 2019, 7 in 2020). At 7 or more the
+    walk skips the 16 bytes `00 00 00 ff fe ff 00` and nine zeros SketchUp
+    2020 writes before the definition count and before each definition's
+    entity count. Where they are not exactly there it falls back to
+    openskp's `findCountAfterV20Filler` (https://github.com/iamahsanmehmood/openskp,
+    commit `13ae161fa0108647a04ad5730776120bb6fe8c83`, MIT, copyright (c)
+    2024-2026 Ahsan Mehmood; ported, not copied), for the definition count,
+    each definition's entity count (searched before reading, as openskp
+    does for version 20), the relationship count and the root count. Changed
+    from openskp: the definition count's candidate must be followed by a
+    definition rather than any plausible tag, so that a file with no
+    definitions is refused rather than read from a later word.
+19. Material names `*N` read as `MaterialN` (`materials::display_name`, as
+    on the 2021+ path).
+20. A textured material's colour is opaque: the fourth byte of the texture
+    block's average colour is a colorize flag (0 or 0xff), not an alpha.
+21. Hardening: `read` and `read_model` walk from at most 4 candidate slot
+    bases (`MAX_BASES`; the probe offers one per model layer);
+    `resync_definition` scans at most 64 MiB per file over all walks
+    (`RESYNC_BUDGET`; it was 64 MiB per call); the burn-band arithmetic
+    (`translate_ref`, `register_burn`, the edge-use parent check) is checked
+    and fails with `Malformed`; loop ranges saturate.

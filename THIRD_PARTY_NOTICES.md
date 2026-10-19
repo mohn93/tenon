@@ -36,5 +36,6 @@ SOFTWARE.
 `crates/skp/tests/fixtures/cupboard.skp` and `desk.skp` are SketchUp models by Corynth,
 licensed under Creative Commons Attribution 4.0 International (CC BY 4.0,
 https://creativecommons.org/licenses/by/4.0/), from
-https://corynth.itch.io/free-assets-sketchup-3d-assets, unchanged. They are used only by tests;
-see `crates/skp/tests/fixtures/ATTRIBUTION.md`.
+https://corynth.itch.io/free-assets-sketchup-3d-assets, unchanged. `crates/skp/tests/fixtures/legacy/`
+holds the cupboard saved in an older SketchUp file format (2017 to 2020) by SketchUp 2024. They are
+used only by tests; see `crates/skp/tests/fixtures/ATTRIBUTION.md`.

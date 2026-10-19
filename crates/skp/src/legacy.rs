@@ -135,10 +135,12 @@
 
 use crate::container::Container;
 use crate::error::{Error, Result};
+use crate::geom::{spend, DefGeometry, RawGuide, RawInstance, NO_UV};
 use crate::model::{
     Counts, EdgeBatch, InstanceTable, LayerDef, LengthUnit, MaterialDef, MeshBatch, SceneDef,
     SceneIndex, StyleDef, TextureLocation, TextureRef, INCH_TO_MM, NO_MATERIAL,
 };
+use crate::scene::{Definition, Model, ReadOptions};
 use crate::source::ByteSource;
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -856,6 +858,10 @@ struct VersionMap {
     /// the file that says which *layout* that block has. See
     /// `read_rendering_options`.
     rendering_options: u16,
+    /// `CLayerManager`: 4 up to SketchUp 2019, 7 from SketchUp 2020, whose
+    /// container adds a filler before the definition count (see
+    /// `Archive::v20`).
+    layer_manager: u16,
     found: bool,
 }
 
@@ -879,6 +885,7 @@ fn read_version_map(c: &mut Cur) -> VersionMap {
             "CLayer" => vm.layer = schema,
             "CComponentInstance" => vm.instance = schema,
             "CRenderingOptions" => vm.rendering_options = schema,
+            "CLayerManager" => vm.layer_manager = schema,
             "End-Of-Version-Map" => {
                 vm.found = true;
                 break;
@@ -910,6 +917,12 @@ struct EdgeRec {
 #[derive(Clone, Copy)]
 struct FaceRec {
     normal: [f64; 3],
+    /// The plane's fourth term, for the topology output.
+    plane_d: f64,
+    /// Archive slot of the back material, 0 for none.
+    back_mat_slot: u32,
+    /// `CDrawingElement` flags; bit 0 is hidden.
+    flags: u8,
     /// Range into `loops`.
     loop_start: u32,
     loop_len: u32,
@@ -935,6 +948,8 @@ struct FaceRec {
 #[derive(Clone, Copy)]
 struct FtcRec {
     front: [f64; 9],
+    /// The front side's flag word, for the topology output's `uv_flags`.
+    front_flags: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -981,6 +996,11 @@ struct InstRec {
     mat_slot: u32,
     layer_slot: u32,
     name: String,
+    /// Placed by a `CGroup` rather than a `CComponentInstance`.
+    is_group: bool,
+    /// Placed by a `CImage`.
+    is_image: bool,
+    hidden: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -992,6 +1012,48 @@ struct InstRec {
 const MAX_DEPTH: u32 = 64;
 
 const N_CLS: usize = 28;
+
+/// What must follow a count `count_after_v20_filler` finds.
+#[derive(Clone, Copy)]
+enum Follows {
+    /// An entity, a relationship: anything `plausible_list_tag` accepts.
+    ListItem,
+    /// The first definition of the definition list.
+    Definition,
+}
+
+/// What `read_definition` turns a completed definition into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Emit {
+    /// Mesh and edge batches, for `read`.
+    Batches,
+    /// A `DefGeometry`, for `read_model`.
+    Topology,
+    /// Nothing: `read_index` wants only the materials, layers and scenes.
+    Nothing,
+}
+
+/// The most bytes `resync_definition` scans over a whole file, all walks
+/// together. A two-byte needle has many false positives, and every failed
+/// definition starts another scan.
+const RESYNC_BUDGET: u64 = 64 << 20;
+
+/// The most slot bases `read` and `read_model` walk the file from. The probe
+/// offers one candidate per model layer when no class repeats before the
+/// definition list; a file of many layers could otherwise ask for as many
+/// whole walks.
+const MAX_BASES: usize = 4;
+
+/// What one definition counts against `ReadOptions::max_elements`, as on the
+/// modern path (`scene.rs`).
+const DEFINITION_WEIGHT: u64 = 50;
+
+/// The block SketchUp 2020 writes between the active-layer reference and the
+/// definition count: an empty string record and nine zero bytes, after three
+/// zero bytes. Measured on every 2020 file of the corpus.
+const V20_FILLER: [u8; 16] = [
+    0x00, 0x00, 0x00, 0xff, 0xfe, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Owner {
@@ -1053,6 +1115,24 @@ struct Archive<'a> {
     cur_loop: Option<u32>,
     /// Which definition's geometry is currently being accumulated.
     def_stack: Vec<u32>,
+    /// Guide lines and points, stack-like with the geometry arenas.
+    guides: Vec<RawGuide>,
+    /// What a completed definition is turned into.
+    emit: Emit,
+    /// `Emit::Topology` output: one per definition read, in file order.
+    topo_defs: Vec<Definition>,
+    topo_root: Option<DefGeometry>,
+    /// What `ReadOptions::max_elements` has left for the topology output.
+    budget: u64,
+    /// Set once `budget` ran out. Sticky: the walk catches a definition's
+    /// error and moves on, so the failure has to outlive that.
+    over_budget: bool,
+    /// SketchUp 2020's container: `CLayerManager` schema 7 or more. Its
+    /// writer adds a filler before the definition count; see `walk`.
+    v20: bool,
+    /// Bytes `resync_definition` may still scan, shared by every walk of the
+    /// file so that the retries of a damaged file stay bounded.
+    resync_left: u64,
     cline_tail: Option<u64>,
     /// Whether any material in the file carries an image. A model painted
     /// only in flat colour gets no UVs at all - there is nothing for them to
@@ -1101,6 +1181,11 @@ const PROBE_BASE: u32 = 1 << 24;
 
 impl<'a> Archive<'a> {
     fn new(c: Cur<'a>, ver: u32, vm: &VersionMap) -> Self {
+        let v20 = if vm.found {
+            vm.layer_manager >= 7
+        } else {
+            ver >= 20
+        };
         // The version map is the better source because it is the number the
         // writer branched on, but a file that has lost it is still worth
         // trying: the writer version tracks both gates across this corpus
@@ -1150,6 +1235,14 @@ impl<'a> Archive<'a> {
             depth: 0,
             cur_loop: None,
             def_stack: Vec::new(),
+            guides: Vec::new(),
+            emit: Emit::Batches,
+            topo_defs: Vec::new(),
+            topo_root: None,
+            budget: u64::MAX,
+            over_budget: false,
+            v20,
+            resync_left: RESYNC_BUDGET,
             cline_tail: None,
             any_textured: false,
             burns: Vec::new(),
@@ -1337,7 +1430,7 @@ impl<'a> Archive<'a> {
 
     fn back_ref(&mut self, mut slot: u32) -> Result<(u32, Slot)> {
         if !self.burns.is_empty() && slot >= self.burns[0].0 {
-            match self.translate_ref(slot) {
+            match self.translate_ref(slot)? {
                 Some(w) => slot = w,
                 // A phantom index: the writer mapped an annotation's
                 // connection point into the store map without serializing
@@ -1372,34 +1465,40 @@ impl<'a> Archive<'a> {
         Ok((slot, e))
     }
 
-    /// Map a file store-map index through the burn bands to our numbering.
-    fn translate_ref(&self, slot: u32) -> Option<u32> {
+    /// Map a file store-map index through the burn bands to our numbering:
+    /// `None` for an index inside a band. The bands come from the file, so
+    /// their sums are checked.
+    fn translate_ref(&self, slot: u32) -> Result<Option<u32>> {
+        const OVERFLOW: Error = Error::Malformed("burned slot band out of range");
         let mut offset = 0u32;
         for (start, width) in &self.burns {
             if slot < *start {
                 break;
             }
-            if slot < start + width {
-                return None;
+            if slot < start.checked_add(*width).ok_or(OVERFLOW)? {
+                return Ok(None);
             }
-            offset += width;
+            offset = offset.checked_add(*width).ok_or(OVERFLOW)?;
         }
-        slot.checked_sub(offset)
+        Ok(slot.checked_sub(offset))
     }
 
     /// The writer maps an annotation's connection points into the MFC store
     /// map without writing any bytes for them, so the file's later
     /// back-references run ahead of a byte-exact walk. Registrations stay at
     /// walker indices; `back_ref` translates file references instead.
-    fn register_burn(&mut self, delta: u32) {
+    fn register_burn(&mut self, delta: u32) -> Result<()> {
+        const OVERFLOW: Error = Error::Malformed("burned slot band out of range");
         if let Some(w) = self.annot_watermark {
-            self.burns.push((w + self.cum_delta, delta));
-            self.cum_delta += delta;
+            let start = w.checked_add(self.cum_delta).ok_or(OVERFLOW)?;
+            self.cum_delta = self.cum_delta.checked_add(delta).ok_or(OVERFLOW)?;
+            self.burns.push((start, delta));
             self.annot_watermark = None;
             if let Some(last) = self.burn_credit.last_mut() {
-                *last += 1;
+                *last = last.saturating_add(1);
             }
         }
+        Ok(())
     }
 
     // -- shared record blocks --------------------------------------------
@@ -1558,14 +1657,20 @@ impl<'a> Archive<'a> {
                 } else {
                     Some(tag as u32)
                 };
-                let expect = self.cur_loop.map(|l| l + self.cum_delta);
+                let expect = match self.cur_loop {
+                    Some(l) => Some(
+                        l.checked_add(self.cum_delta)
+                            .ok_or(Error::Malformed("burned slot band out of range"))?,
+                    ),
+                    None => None,
+                };
                 if ps != expect {
                     let delta = match (ps, expect) {
                         (Some(p), Some(e)) if p > e => p - e,
                         _ => 0,
                     };
                     if delta > 0 && delta <= 4096 && self.annot_watermark.is_some() {
-                        self.register_burn(delta);
+                        self.register_burn(delta)?;
                     } else {
                         self.c.seek(p0)?;
                         return Err(Error::Malformed("edge-use parent is not the current loop"));
@@ -1623,11 +1728,13 @@ impl<'a> Archive<'a> {
                 }
                 let llen = self.face_loops.len() as u32 - lstart;
                 self.inner_loops += llen.saturating_sub(1) as u64;
-                let _back_mat = self.c.u16()?;
-                let _ = flags;
+                let back_mat = self.c.u16()? as u32;
                 let i = self.faces.len() as u32;
                 self.faces.push(FaceRec {
                     normal: [plane[0], plane[1], plane[2]],
+                    plane_d: plane[3],
+                    back_mat_slot: back_mat,
+                    flags,
                     loop_start: lstart,
                     loop_len: llen,
                     mat_slot: mat,
@@ -1695,13 +1802,26 @@ impl<'a> Archive<'a> {
                 // restaurant pack these blobs are 383 MB; line art needs none
                 // of them, and the container is uncompressed, so skipping is
                 // free. We keep where they are.
-                let _subtype = self.c.u32()?;
+                let subtype = self.c.u32()?;
                 let len = self.c.u32()? as u64;
                 if len > self.c.left() {
                     return Err(Error::Malformed("implausible image length"));
                 }
                 let at = self.c.at();
                 self.c.skip(len)?;
+                // A JPEG (subtype 1) is followed by a `u32` the length does
+                // not cover: its quality, 70 on every thumbnail SketchUp 2024
+                // writes into a 2017-2020 file. PNG images (subtype 4) have
+                // none. Left unread, it is taken for the next object - a
+                // back-reference and a null - so a definition list counted
+                // them as definitions and read the root count four bytes
+                // early, which lost root entities (truck, bikes) or failed
+                // the file (barstools). Read only when it is a plausible
+                // quality; the texture block's own 16-or-20-byte check
+                // (`texture_block`) still covers a JPEG written without one.
+                if subtype == 1 && self.c.left() >= 4 && self.c.u32_at(self.c.at())? <= 100 {
+                    self.c.skip(4)?;
+                }
                 let i = self.dibs.len() as u32;
                 self.dibs.push(DibRec { offset: at, len });
                 Ok(Slot::obj(Cls::Dib, i))
@@ -1770,7 +1890,10 @@ impl<'a> Archive<'a> {
                 // case, not an edge case.
                 let idx = if front.iter().all(|v| v.is_finite()) && front != IDENTITY_3X3 {
                     let i = self.ftcs.len() as u32;
-                    self.ftcs.push(FtcRec { front });
+                    self.ftcs.push(FtcRec {
+                        front,
+                        front_flags: ff,
+                    });
                     i
                 } else {
                     NONE_IDX
@@ -1779,10 +1902,15 @@ impl<'a> Archive<'a> {
             }
             Cls::ConstructionLine => {
                 self.preamble()?;
-                self.drawbase()?;
-                let _point = self.c.f64s::<3>()?;
-                let _dir = self.c.f64s::<3>()?;
+                let (_, _, _, hidden) = self.drawbase()?;
+                let point = self.c.f64s::<3>()?;
+                let direction = self.c.f64s::<3>()?;
+                // The start and end parameters of a bounded guide line. Our
+                // guides are infinite lines, so they are not kept.
                 let _params = self.c.f64s::<2>()?;
+                if !hidden {
+                    self.guides.push(RawGuide::Line { point, direction });
+                }
                 // The trailing block varies by writing *build*, not cleanly
                 // by version: 7 bytes on the 2017 calibration corpus, 4 on
                 // 2016 and on a real 2018, 0 on another real 2017. Calibrate
@@ -1823,8 +1951,11 @@ impl<'a> Archive<'a> {
             }
             Cls::ConstructionPoint => {
                 self.preamble()?;
-                self.drawbase()?;
-                let _p = self.c.f64s::<3>()?;
+                let (_, _, _, hidden) = self.drawbase()?;
+                let position = self.c.f64s::<3>()?;
+                if !hidden {
+                    self.guides.push(RawGuide::Point { position });
+                }
                 let _reserved = self.c.f64s::<3>()?;
                 self.c.skip(1)?;
                 Ok(Slot::obj(Cls::ConstructionPoint, NONE_IDX))
@@ -1885,7 +2016,7 @@ impl<'a> Archive<'a> {
             Cls::Instance | Cls::Group => self.read_instance(cls),
             Cls::Image => {
                 self.preamble()?;
-                let (_m, _f, layer, _h) = self.drawbase()?;
+                let (_m, _f, layer, hidden) = self.drawbase()?;
                 let def = self.read_object(None)?.map(|(s, _)| s).unwrap_or(NONE_IDX);
                 let xf12 = self.c.f64s::<12>()?;
                 let _one = self.c.f64()?;
@@ -1906,6 +2037,9 @@ impl<'a> Archive<'a> {
                     mat_slot: 0,
                     layer_slot: layer,
                     name: String::new(),
+                    is_group: false,
+                    is_image: true,
+                    hidden,
                 });
                 Ok(Slot::obj(Cls::Image, i))
             }
@@ -2295,7 +2429,11 @@ impl<'a> Archive<'a> {
         let opacity = self.c.f64()?;
         let use_opacity = self.c.u8()?;
         Ok(TexBlock {
-            rgba: [avg[0], avg[1], avg[2], avg[3]],
+            // The fourth byte is not an alpha: it is 0 on a plain textured
+            // material and 0xff on a colorized one (see `colorized`). The
+            // modern path gives every material an opaque colour, with the
+            // opacity separate.
+            rgba: [avg[0], avg[1], avg[2], 0xff],
             opacity,
             use_opacity,
             dib,
@@ -2368,7 +2506,7 @@ impl<'a> Archive<'a> {
 
     fn read_instance(&mut self, cls: Cls) -> Result<Slot> {
         self.preamble()?;
-        let (mat, _flags, layer, _hidden) = self.drawbase()?;
+        let (mat, _flags, layer, hidden) = self.drawbase()?;
         let (def_slot, def_entry) = self
             .read_object(Some(Cls::Definition))?
             .ok_or(Error::Malformed("instance with no definition"))?;
@@ -2398,6 +2536,9 @@ impl<'a> Archive<'a> {
             mat_slot: mat,
             layer_slot: layer,
             name,
+            is_group: cls == Cls::Group,
+            is_image: false,
+            hidden,
         });
         Ok(Slot::obj(cls, i))
     }
@@ -2428,8 +2569,36 @@ impl<'a> Archive<'a> {
         if decl == 0x7fff {
             let _ = self.c.u32()?;
         }
-        let _ = self.c.u32()?;
-        let count = self.c.u32()?;
+        // SketchUp 2020's filler again (see `walk`), here before the
+        // undecoded `u32` that precedes the count. When it is not exactly
+        // there, openskp's search runs before the two words are read: a
+        // filler of another length makes them read as a plausible count
+        // (0xfffe on this corpus), so waiting for an implausible one is not
+        // enough.
+        let mut found = None;
+        if self.v20 {
+            if self.bytes_eq_at(self.c.at(), &V20_FILLER) {
+                self.c.skip(V20_FILLER.len() as u64)?;
+            } else {
+                found = self.count_after_v20_filler(self.c.at(), 5_000_000, Follows::ListItem)?;
+            }
+        }
+        let count = match found {
+            Some(n) => n,
+            None => {
+                let _ = self.c.u32()?;
+                let count_pos = self.c.at();
+                let mut count = self.c.u32()?;
+                if self.v20 && (count > 5_000_000 || count == 0) {
+                    if let Some(n) =
+                        self.count_after_v20_filler(count_pos, 5_000_000, Follows::ListItem)?
+                    {
+                        count = n;
+                    }
+                }
+                count
+            }
+        };
         if count > 5_000_000 {
             return Err(Error::Malformed("implausible definition entity count"));
         }
@@ -2440,7 +2609,22 @@ impl<'a> Archive<'a> {
         self.def_stack.pop();
         match res {
             Ok(()) => {
-                self.emit_definition(slot, &mark);
+                match self.emit {
+                    Emit::Batches => self.emit_definition(slot, &mark),
+                    Emit::Topology => {
+                        let geom = self.emit_topology(slot, &mark);
+                        if let (Some(geom), Some(info)) = (geom, self.defs.last()) {
+                            self.topo_defs.push(Definition {
+                                pid: slot as u64,
+                                name: info.name.clone(),
+                                guid: unhex16(&info.guid),
+                                always_face_camera: info.always_faces_camera,
+                                geom,
+                            });
+                        }
+                    }
+                    Emit::Nothing => {}
+                }
                 self.release(&mark);
                 Ok(Slot::obj(Cls::Definition, (self.defs.len() - 1) as u32))
             }
@@ -2453,7 +2637,13 @@ impl<'a> Archive<'a> {
 
     fn definition_body(&mut self, slot: u32, count: u32) -> Result<()> {
         self.read_entity_list(count, Owner::Def)?;
-        let nrel = self.c.u32()?;
+        let nrel_pos = self.c.at();
+        let mut nrel = self.c.u32()?;
+        if self.v20 && nrel > 100_000 {
+            if let Some(n) = self.count_after_v20_filler(nrel_pos, 100_000, Follows::ListItem)? {
+                nrel = n;
+            }
+        }
         if nrel > 100_000 {
             return Err(Error::Malformed("definition list misaligned"));
         }
@@ -2594,6 +2784,8 @@ impl<'a> Archive<'a> {
             loop_uses: self.loop_uses.len() as u32,
             face_loops: self.face_loops.len() as u32,
             ftcs: self.ftcs.len() as u32,
+            guides: self.guides.len() as u32,
+            instances: self.instances.len() as u32,
             slot: self.next_slot(),
         }
     }
@@ -2614,6 +2806,7 @@ impl<'a> Archive<'a> {
         self.loop_uses.truncate(m.loop_uses as usize);
         self.face_loops.truncate(m.face_loops as usize);
         self.ftcs.truncate(m.ftcs as usize);
+        self.guides.truncate(m.guides as usize);
         {
             let from = core::cmp::min(m.slot.saturating_sub(self.base) as usize, self.slots.len());
             for i in from..self.slots.len() {
@@ -2669,6 +2862,150 @@ impl<'a> Archive<'a> {
         self.emit_meshes(id, m);
     }
 
+    /// One definition's (or the root's) topology, in the shape the modern
+    /// path's `geom::parse_component` produces: vertices, edges, faces with
+    /// their loops in CSR form, placements and guides. Hidden faces are kept
+    /// (bit 0 of `face_flags`), unlike the batches, which skip them.
+    ///
+    /// Indices are rebased onto this definition's own arrays; a reference
+    /// that leaves them (into an enclosing definition's arenas, or past the
+    /// end) becomes `u32::MAX`, which `DefGeometry` already means as a
+    /// dangling reference. Counts every element against `budget`; `None`
+    /// once it is spent, with `over_budget` set.
+    fn emit_topology(&mut self, id: u32, m: &Mark) -> Option<DefGeometry> {
+        if self.over_budget {
+            return None;
+        }
+        let g = self.build_topology(id, m);
+        if g.is_none() {
+            self.over_budget = true;
+        }
+        g
+    }
+
+    fn build_topology(&mut self, id: u32, m: &Mark) -> Option<DefGeometry> {
+        let weight = if id == ROOT_DEFINITION {
+            1
+        } else {
+            DEFINITION_WEIGHT + 1
+        };
+        spend(&mut self.budget, weight).ok()?;
+        let mut g = DefGeometry::default();
+
+        let vbase = m.verts as usize;
+        let verts = self.verts.get(vbase..).unwrap_or(&[]);
+        spend(&mut self.budget, verts.len() as u64).ok()?;
+        for (i, p) in verts.iter().enumerate() {
+            g.vertex_pid.push(i as u64);
+            g.vertex_pos.extend_from_slice(p);
+        }
+        let local_vertex = |v: u32| -> u32 {
+            match (v as usize).checked_sub(vbase) {
+                Some(k) if k < verts.len() => k as u32,
+                _ => u32::MAX,
+            }
+        };
+
+        let ebase = m.edges as usize;
+        let edges = self.edges.get(ebase..).unwrap_or(&[]);
+        spend(&mut self.budget, edges.len() as u64).ok()?;
+        for (i, e) in edges.iter().enumerate() {
+            g.edge_pid.push(i as u64);
+            g.edge_v.push(local_vertex(e.v1));
+            g.edge_v.push(local_vertex(e.v2));
+            g.edge_flags.push(e.flags);
+            g.edge_layer.push(self.layer_index(e.layer_slot));
+        }
+
+        let faces = self.faces.get(m.faces as usize..).unwrap_or(&[]);
+        spend(&mut self.budget, faces.len() as u64).ok()?;
+        g.face_loop_ofs.push(0);
+        g.loop_ofs.push(0);
+        for f in faces {
+            g.face_normal.extend_from_slice(&f.normal);
+            g.face_plane_d.push(f.plane_d);
+            g.face_material.push(self.material_index(f.mat_slot));
+            g.face_back_material
+                .push(self.material_index(f.back_mat_slot));
+            g.face_layer.push(self.layer_index(f.layer_slot));
+            g.face_flags.push(f.flags);
+            match self.front_matrix(f.ftc) {
+                Some(xf) => {
+                    g.face_uv.push((g.uv_xf.len() / 9) as u32);
+                    g.uv_xf.extend_from_slice(&xf);
+                    g.uv_flags.push(
+                        self.ftcs
+                            .get(f.ftc as usize)
+                            .map(|r| r.front_flags)
+                            .unwrap_or(0),
+                    );
+                }
+                None => g.face_uv.push(NO_UV),
+            }
+            let lend = f.loop_start.saturating_add(f.loop_len);
+            for li in f.loop_start..lend {
+                // A loop belongs to this definition only if it was read
+                // after the mark; anything else is a stale reference.
+                let Some(&lidx) = self.face_loops.get(li as usize) else {
+                    continue;
+                };
+                if lidx < m.loops {
+                    continue;
+                }
+                let Some(lr) = self.loops.get(lidx as usize).copied() else {
+                    continue;
+                };
+                let from = lr.start as usize;
+                let Some(to) = from.checked_add(lr.len as usize) else {
+                    continue;
+                };
+                if from < m.loop_uses as usize || to > self.loop_uses.len() || lr.len == 0 {
+                    continue;
+                }
+                spend(&mut self.budget, lr.len as u64 + 1).ok()?;
+                for u in &self.loop_uses[from..to] {
+                    let e = match (u.edge as usize).checked_sub(ebase) {
+                        Some(k) if k < edges.len() => k as u32,
+                        _ => u32::MAX,
+                    };
+                    g.coedge_edge.push(e);
+                    g.coedge_reversed.push(u.reversed as u8);
+                }
+                g.loop_ofs.push(g.coedge_edge.len() as u32);
+            }
+            g.face_loop_ofs.push(g.loop_ofs.len() as u32 - 1);
+        }
+
+        let instances = self.instances.get(m.instances as usize..).unwrap_or(&[]);
+        for inst in instances.iter().filter(|i| i.parent == id) {
+            spend(&mut self.budget, 1).ok()?;
+            let material = self.material_index(inst.mat_slot);
+            g.instances.push(RawInstance {
+                pid: 0,
+                name: inst.name.clone(),
+                def_pid: inst.def_slot as u64,
+                guid: [0; 16],
+                m: inst.xf,
+                material: material as u64,
+                has_material: material != NO_MATERIAL,
+                layer: self.layer_index(inst.layer_slot) as u64,
+                has_layer: true,
+                flags: if inst.hidden {
+                    crate::model::edge_flag::HIDDEN
+                } else {
+                    0
+                },
+                is_group: inst.is_group,
+                is_image: inst.is_image,
+            });
+        }
+
+        let guides = self.guides.get(m.guides as usize..).unwrap_or(&[]);
+        spend(&mut self.budget, guides.len() as u64).ok()?;
+        g.guides.extend_from_slice(guides);
+        Some(g)
+    }
+
     /// Edges, with their flags and both adjacent face normals.
     ///
     /// `face_counts` under two means a boundary edge, which is always a
@@ -2689,7 +3026,7 @@ impl<'a> Archive<'a> {
         let mut fcount = vec![0u8; ne];
         let mut fnorm = vec![0f32; ne * 6];
         for f in &self.faces[m.faces as usize..] {
-            for li in f.loop_start..f.loop_start + f.loop_len {
+            for li in f.loop_start..f.loop_start.saturating_add(f.loop_len) {
                 let Some(&lidx) = self.face_loops.get(li as usize) else {
                     continue;
                 };
@@ -2697,7 +3034,7 @@ impl<'a> Archive<'a> {
                     continue;
                 };
                 let from = lr.start as usize;
-                let to = from + lr.len as usize;
+                let to = from.saturating_add(lr.len as usize);
                 if to > self.loop_uses.len() {
                     continue;
                 }
@@ -2980,7 +3317,7 @@ impl<'a> Archive<'a> {
 
     /// A face's loops as point rings, outer first, in inches.
     fn face_rings(&self, f: &FaceRec, out: &mut Vec<Vec<[f64; 3]>>) {
-        for li in f.loop_start..f.loop_start + f.loop_len {
+        for li in f.loop_start..f.loop_start.saturating_add(f.loop_len) {
             let Some(&lidx) = self.face_loops.get(li as usize) else {
                 continue;
             };
@@ -2988,7 +3325,7 @@ impl<'a> Archive<'a> {
                 continue;
             };
             let from = lr.start as usize;
-            let to = from + lr.len as usize;
+            let to = from.saturating_add(lr.len as usize);
             if to > self.loop_uses.len() || lr.len < 3 {
                 continue;
             }
@@ -3023,6 +3360,9 @@ struct Mark {
     loop_uses: u32,
     face_loops: u32,
     ftcs: u32,
+    guides: u32,
+    /// Not released: `finish` groups every placement at the end.
+    instances: u32,
     slot: u32,
 }
 
@@ -3049,6 +3389,24 @@ fn solid_opacity(stored: f64, use_flag: u8) -> f32 {
     } else {
         v.clamp(0.0, 1.0) as f32
     }
+}
+
+/// `hex16` in reverse; anything that is not 32 hex digits reads as zero.
+fn unhex16(s: &str) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    let b = s.as_bytes();
+    if b.len() != 32 {
+        return out;
+    }
+    for (i, o) in out.iter_mut().enumerate() {
+        let hi = (b[2 * i] as char).to_digit(16);
+        let lo = (b[2 * i + 1] as char).to_digit(16);
+        match (hi, lo) {
+            (Some(h), Some(l)) => *o = (h * 16 + l) as u8,
+            _ => return [0; 16],
+        }
+    }
+    out
 }
 
 fn hex16(b: &[u8; 16]) -> String {
@@ -3314,14 +3672,32 @@ impl<'a> Archive<'a> {
             Some((_, e)) if e.is(Cls::Layer) || e.kind == K_PREMODEL => {}
             _ => return Err(Error::Malformed("definition-list anchor is not a layer")),
         }
-        let def_count = self.c.u32()?;
+        // SketchUp 2020 writes a filler here (`V20_FILLER`). Skipped when it
+        // is exactly there; otherwise a count that cannot be right is looked
+        // for again past a filler of another length, as openskp does.
+        if self.v20 && self.bytes_eq_at(self.c.at(), &V20_FILLER) {
+            self.c.skip(V20_FILLER.len() as u64)?;
+        }
+        let count_pos = self.c.at();
+        let mut def_count = self.c.u32()?;
+        if self.v20 && (def_count > 1_000_000 || def_count == 0) {
+            if let Some(n) =
+                self.count_after_v20_filler(count_pos, 1_000_000, Follows::Definition)?
+            {
+                def_count = n;
+            }
+        }
         if def_count > 1_000_000 {
             return Err(Error::Malformed("implausible definition count"));
         }
         let mut done = 0u32;
         while done < def_count {
             let p = self.c.at();
-            match self.read_object(Some(Cls::Definition)) {
+            let r = self.read_object(Some(Cls::Definition));
+            if self.over_budget {
+                return Err(Error::Malformed("too many elements"));
+            }
+            match r {
                 Ok(_) => done += 1,
                 Err(e) => {
                     self.note(format!(
@@ -3361,17 +3737,108 @@ impl<'a> Archive<'a> {
             }
         }
 
+        if self.over_budget {
+            return Err(Error::Malformed("too many elements"));
+        }
+
         // Root entity list.
-        let root_count = self.c.u32()?;
+        let count_pos = self.c.at();
+        let mut root_count = self.c.u32()?;
+        if self.v20 && root_count > 5_000_000 {
+            if let Some(n) = self.count_after_v20_filler(count_pos, 5_000_000, Follows::ListItem)? {
+                root_count = n;
+            }
+        }
         if root_count > 5_000_000 {
             return Err(Error::Malformed("implausible root entity count"));
         }
         let mark = self.mark();
         self.read_entity_list(root_count, Owner::Root)?;
-        self.emit_definition(ROOT_DEFINITION, &mark);
+        match self.emit {
+            Emit::Batches => self.emit_definition(ROOT_DEFINITION, &mark),
+            Emit::Topology => self.topo_root = self.emit_topology(ROOT_DEFINITION, &mark),
+            Emit::Nothing => {}
+        }
         self.release(&mark);
+        if self.over_budget {
+            return Err(Error::Malformed("too many elements"));
+        }
         self.walk_end = self.c.at();
         Ok(())
+    }
+
+    /// openskp's `findCountAfterV20Filler` (MIT; see `VENDORED.md`): when a
+    /// SketchUp 2020 count read at `count_pos` cannot be right, look for an
+    /// empty string record within the next 12 bytes, then for the first
+    /// count `0 < n <= limit` past its zero padding - at the offsets that
+    /// keep the count 4-byte aligned with the padding lengths seen, 9 and 13
+    /// - that what `follows` says comes next. On a match the cursor is left
+    /// after the count; otherwise it is not moved.
+    ///
+    /// A count of zero is never found this way, so a list that is really
+    /// empty stays unread (an error or a counted loss) rather than taking a
+    /// later word for its count.
+    fn count_after_v20_filler(
+        &mut self,
+        count_pos: u64,
+        limit: u32,
+        follows: Follows,
+    ) -> Result<Option<u32>> {
+        const MAX_PAD: u64 = 29;
+        let Some(marker) =
+            (count_pos..count_pos + 12).find(|&i| self.bytes_eq_at(i, &[0xff, 0xfe, 0xff]))
+        else {
+            return Ok(None);
+        };
+        if self.byte_at(marker + 3) != Some(0) {
+            // A string that is not empty is data, not the filler.
+            return Ok(None);
+        }
+        let mut pad = 1;
+        while pad <= MAX_PAD {
+            let at = marker + 4 + pad;
+            let Ok(n) = self.c.u32_at(at) else {
+                break;
+            };
+            let next = match follows {
+                Follows::ListItem => self.plausible_list_tag(at + 4),
+                Follows::Definition => self.definition_at(at + 4),
+            };
+            if n > 0 && n <= limit && next {
+                self.c.seek(at + 4)?;
+                return Ok(Some(n));
+            }
+            pad += 4;
+        }
+        Ok(None)
+    }
+
+    /// A `CComponentDefinition` starts at `at`: its class declaration, or a
+    /// class-ref to the class once it is known.
+    fn definition_at(&mut self, at: u64) -> bool {
+        let def_cls = self.class_slot[Cls::Definition as usize];
+        if def_cls != NONE_IDX && self.is_class_ref_at(at, def_cls) {
+            return true;
+        }
+        self.bytes_eq_at(at, &[0xff, 0xff])
+            && self.bytes_eq_at(at + 4, &[20, 0])
+            && self.bytes_eq_at(at + 6, b"CComponentDefinition")
+    }
+
+    /// The word at `at` can start an object read: a null, an escape, a class
+    /// declaration, a class-ref to a class already known, or a back-ref
+    /// below the next slot.
+    fn plausible_list_tag(&mut self, at: u64) -> bool {
+        let Ok(t) = self.c.u16_at(at) else {
+            return false;
+        };
+        if t == 0 || t == 0x7fff || t == 0xffff {
+            return true;
+        }
+        if t & 0x8000 != 0 {
+            return self.entry((t & 0x7fff) as u32).kind == K_CLASS;
+        }
+        (t as u32) < self.next_slot()
     }
 
     /// After a definition fails, find the next one.
@@ -3389,16 +3856,26 @@ impl<'a> Archive<'a> {
         let mut at = from + 1;
         // Bound the work, not just the attempts: a two-byte needle has many
         // false positives, so without a byte budget a corrupt file could ask
-        // for terabytes of scanning.
-        let budget_end = core::cmp::min(self.c.end, from.saturating_add(64 << 20));
+        // for terabytes of scanning. The budget is the file's, not the
+        // call's (`RESYNC_BUDGET`): every failed definition starts a scan.
+        let budget_end = core::cmp::min(self.c.end, at.saturating_add(self.resync_left));
+        let r = self.resync_scan(&needle, &mut at, budget_end);
+        self.resync_left = self
+            .resync_left
+            .saturating_sub(core::cmp::min(at, budget_end).saturating_sub(from));
+        r
+    }
+
+    fn resync_scan(&mut self, needle: &[u8; 2], at: &mut u64, budget_end: u64) -> Result<bool> {
         let mut tries = 0;
-        while tries < 1 << 16 && at < budget_end {
+        while tries < 1 << 16 && *at < budget_end {
             tries += 1;
-            self.c.seek(at)?;
-            let Some(hit) = self.c.find(&needle, budget_end - at)? else {
+            self.c.seek(*at)?;
+            let Some(hit) = self.c.find(needle, budget_end - *at)? else {
+                *at = budget_end;
                 return Ok(false);
             };
-            at = hit + 1;
+            *at = hit + 1;
             // Validate: preamble, base block, plausible layer count, layer.
             let mut p = hit + 2;
             let attr = self.c.u16_at(p)?;
@@ -4578,8 +5055,29 @@ pub fn read_scenes(src: &dyn ByteSource, container: &Container) -> Result<Vec<Sc
     Ok(ar.scan_pages(None))
 }
 
-/// Read the whole model.
-pub fn read(src: &dyn ByteSource, container: &Container) -> Result<LegacyModel> {
+/// The `CLayerManager` schema the file's version map states, or `None` when
+/// the map is not found. 7 or more is SketchUp 2020's container, whose filler
+/// before the definition count the walk skips; 2017 to 2019 write 4.
+pub fn layer_manager_schema(src: &dyn ByteSource, container: &Container) -> Result<Option<u16>> {
+    let (start, end) = stream_of(container)?;
+    let vm = read_version_map(&mut Cur::new(src, start, end));
+    Ok(vm.found.then_some(vm.layer_manager))
+}
+
+/// What every walk of a file shares: the stream, the version map, the anchor
+/// and the slot bases to try, in order.
+struct Prepared {
+    start: u64,
+    end: u64,
+    ver: u32,
+    vm: VersionMap,
+    anchor: Anchor,
+    bases: Vec<(u32, &'static str)>,
+    /// Bytes the version map, anchor and probe read.
+    bytes: u64,
+}
+
+fn prepare(src: &dyn ByteSource, container: &Container) -> Result<Prepared> {
     let (start, end) = stream_of(container)?;
     let ver = major_version(&container.header.version);
 
@@ -4612,25 +5110,144 @@ pub fn read(src: &dyn ByteSource, container: &Container) -> Result<LegacyModel> 
             "could not recover the archive's slot base",
         ));
     }
+    // Each base is a whole walk; see `MAX_BASES`.
+    bases.truncate(MAX_BASES);
+    Ok(Prepared {
+        start,
+        end,
+        ver,
+        vm,
+        anchor,
+        bases,
+        bytes: head_bytes + probe_bytes,
+    })
+}
 
+/// Walk the file from each candidate slot base in turn until one walks,
+/// emitting definitions as `emit` says. A budget failure ("too many
+/// elements") ends the search: another base would read the same elements.
+fn walk_file<'a>(
+    src: &'a dyn ByteSource,
+    p: &Prepared,
+    emit: Emit,
+    budget: u64,
+) -> Result<(Archive<'a>, u32, &'static str)> {
     let mut last: Option<Error> = None;
-    for (base, how) in bases {
-        let mut ar = Archive::new(Cur::new(src, start, end), ver, &vm);
+    let mut resync_left = RESYNC_BUDGET;
+    for &(base, how) in &p.bases {
+        let mut ar = Archive::new(Cur::new(src, p.start, p.end), p.ver, &p.vm);
         ar.base = base;
-        match ar.walk(&anchor) {
-            Ok(()) => {
-                let mut model = ar.finish(container, base, how);
-                model.stats.bytes_read += probe_bytes + head_bytes;
-                return Ok(model);
-            }
+        ar.emit = emit;
+        ar.budget = budget;
+        ar.resync_left = resync_left;
+        let r = ar.walk(&p.anchor);
+        resync_left = ar.resync_left;
+        match r {
+            Ok(()) => return Ok((ar, base, how)),
+            Err(e @ Error::Malformed("too many elements")) => return Err(e),
             Err(e) => last = Some(e),
         }
     }
     Err(last.unwrap_or(Error::Malformed("the archive did not walk")))
 }
 
+/// Read the whole model.
+pub fn read(src: &dyn ByteSource, container: &Container) -> Result<LegacyModel> {
+    let p = prepare(src, container)?;
+    let (ar, base, how) = walk_file(src, &p, Emit::Batches, u64::MAX)?;
+    let mut model = ar.finish(container, base, how);
+    model.stats.bytes_read += p.bytes;
+    Ok(model)
+}
+
+/// The model as topology, in the shape the modern path's `scene::read_model`
+/// gives: one `DefGeometry` per definition (`Definition::pid` is its archive
+/// slot, which is what an instance's `def_pid` names) and one for the root.
+///
+/// Unlike `read`, nothing is computed from the placements - no bounds, no
+/// reachability, no instance tables - so the work is linear in the file
+/// however its definitions place each other. Hidden faces are kept, flagged.
+/// Material and layer references are indices into `read_index`'s lists.
+/// `ReadOptions::max_elements` applies as on the modern path; the other
+/// options do not.
+pub fn read_model(
+    src: &dyn ByteSource,
+    container: &Container,
+    options: &ReadOptions,
+) -> Result<(Model, ReadStats)> {
+    let (m, _, stats) = read_model_and_index(src, container, options)?;
+    Ok((m, stats))
+}
+
+/// The materials (textures as inline byte ranges), layers, styles and scenes,
+/// without the placements: `bbox` is `None` and scenes keep the near and far
+/// planes the file stores. Walks the file once, building no geometry.
+pub fn read_index(src: &dyn ByteSource, container: &Container) -> Result<SceneIndex> {
+    let p = prepare(src, container)?;
+    let (mut ar, base, how) = walk_file(src, &p, Emit::Nothing, u64::MAX)?;
+    let (index, _) = ar.index_and_stats(container, base, how);
+    Ok(index)
+}
+
+/// `read_model` and `read_index` from one walk.
+pub fn read_model_and_index(
+    src: &dyn ByteSource,
+    container: &Container,
+    options: &ReadOptions,
+) -> Result<(Model, SceneIndex, ReadStats)> {
+    let p = prepare(src, container)?;
+    let budget = options.max_elements.unwrap_or(u64::MAX);
+    let (mut ar, base, how) = walk_file(src, &p, Emit::Topology, budget)?;
+    let (index, mut stats) = ar.index_and_stats(container, base, how);
+    stats.bytes_read += p.bytes;
+    let root = ar.topo_root.take().unwrap_or_default();
+    let definitions = core::mem::take(&mut ar.topo_defs);
+    let mut flags = [0u64; 4];
+    for g in core::iter::once(&root).chain(definitions.iter().map(|d| &d.geom)) {
+        for f in &g.edge_flags {
+            count_edge_flags(&mut flags, *f);
+        }
+    }
+    stats.edge_flags = flags;
+    let model = Model {
+        writer_version: container.header.version.clone(),
+        is_vff: false,
+        root,
+        definitions,
+        sections: Default::default(),
+        bytes_read: stats.bytes_read,
+    };
+    Ok((model, index, stats))
+}
+
+/// One edge's flags into `ReadStats::edge_flags`: drawable, hidden, soft,
+/// smooth.
+fn count_edge_flags(hist: &mut [u64; 4], f: u8) {
+    if crate::model::edge_flag::is_drawable(f) {
+        hist[0] += 1;
+    }
+    if f & crate::model::edge_flag::HIDDEN != 0 {
+        hist[1] += 1;
+    }
+    if f & crate::model::edge_flag::SOFT != 0 {
+        hist[2] += 1;
+    }
+    if f & crate::model::edge_flag::SMOOTH != 0 {
+        hist[3] += 1;
+    }
+}
+
 impl<'a> Archive<'a> {
-    fn finish(mut self, container: &Container, base: u32, how: &'static str) -> LegacyModel {
+    /// Everything the index says that the placements do not decide: the unit,
+    /// styles, scenes, layers and materials, and the reading's statistics.
+    /// `bbox` is `None`, `counts.edges` and `counts.triangles` 0, and
+    /// `ReadStats::edge_flags` zero; `finish` fills those in.
+    fn index_and_stats(
+        &mut self,
+        container: &Container,
+        base: u32,
+        how: &'static str,
+    ) -> (SceneIndex, ReadStats) {
         let unit = read_length_unit(&mut self.c);
         let (ro_schema, wide_entity) = (self.ro_schema, self.wide_entity);
         let block = read_rendering_options(&mut self.c, ro_schema, wide_entity);
@@ -4711,7 +5328,9 @@ impl<'a> Archive<'a> {
             }
             materials.push(MaterialDef {
                 id: i as u32,
-                name: m.name.clone(),
+                // `*18` is what SketchUp shows as `Material18`, as on the
+                // modern path.
+                name: crate::materials::display_name(&m.name),
                 rgba: m.rgba,
                 opacity: m.opacity,
                 texture: m.texture.clone(),
@@ -4719,12 +5338,50 @@ impl<'a> Archive<'a> {
             });
         }
 
+        let index = SceneIndex {
+            writer_version: container.header.version.clone(),
+            generation_is_vff: false,
+            unit,
+            bbox: None,
+            scenes,
+            layers,
+            materials,
+            styles,
+            active_style: active,
+            counts: Counts {
+                definitions: self.defs.len() as u32,
+                instances: self.instances.len() as u32,
+                triangles: 0,
+                edges: 0,
+                textures,
+            },
+            thumbnail_png: None,
+        };
+        let stats = ReadStats {
+            bytes_read: self.c.read_bytes,
+            stream_len: self.c.end - self.c.start,
+            texture_bytes_skipped: texture_bytes,
+            objects: self.objects,
+            slot_base: base,
+            slot_base_method: how,
+            edge_flags: [0; 4],
+            uv_sides: self.uv_sides,
+            uv_matrices: self.uv_matrices,
+            inner_loops: self.inner_loops,
+            faces_short_of_exact: self.faces_short,
+            lost_entities: self.lost,
+            notes: core::mem::take(&mut self.notes),
+        };
+        (index, stats)
+    }
+
+    fn finish(mut self, container: &Container, base: u32, how: &'static str) -> LegacyModel {
+        let (mut index, mut stats) = self.index_and_stats(container, base, how);
+
         // Placements, grouped by (parent, definition) so that nothing is
         // flattened and the hierarchy survives.
         let mut placements: Vec<Placements> = Vec::new();
-        let mut instance_count = 0u64;
         for inst in &self.instances {
-            instance_count += 1;
             let key = (inst.parent, inst.def_slot);
             let pos = placements
                 .iter()
@@ -4755,15 +5412,17 @@ impl<'a> Archive<'a> {
             }
         }
 
-        let edge_total: u64 = self.edge_batches.iter().map(|e| e.len() as u64).sum();
+        // Every edge the file carries, placed or not: this is the number the
+        // C++ oracle reports as `edge_flags.total`, and matching it exactly is
+        // how the geometry layer is checked.
+        index.counts.edges = self.edge_batches.iter().map(|e| e.len() as u64).sum();
 
         // The bounding box is taken before the unreachable definitions are
         // dropped, because it is computed by walking the placement tree and
         // so only ever sees what is placed anyway.
         let bbox = self.model_bbox(&placements);
-        let mut scenes = scenes;
         if let Some(bb) = bbox {
-            for s in scenes.iter_mut() {
+            for s in index.scenes.iter_mut() {
                 let (Some(eye), Some(target)) = (s.eye, s.target) else {
                     continue;
                 };
@@ -4779,48 +5438,13 @@ impl<'a> Archive<'a> {
                 }
             }
         }
-
-        let index = SceneIndex {
-            writer_version: container.header.version.clone(),
-            generation_is_vff: false,
-            unit,
-            bbox,
-            scenes,
-            layers,
-            materials,
-            styles: styles.clone(),
-            active_style: active,
-            counts: Counts {
-                definitions: definitions.len() as u32,
-                instances: instance_count as u32,
-                // Filled in below, once the unplaced definitions are gone.
-                triangles: 0,
-                // Every edge the file carries, placed or not: this is the
-                // number the C++ oracle reports as `edge_flags.total`, and
-                // matching it exactly is how the geometry layer is checked.
-                edges: edge_total,
-                textures,
-            },
-            thumbnail_png: None,
-        };
+        index.bbox = bbox;
 
         // Counted before the filter below, because the oracle's own
         // histogram covers every edge the file carries.
-        let mut flag_hist = [0u64; 4];
         for b in &self.edge_batches {
             for f in &b.flags {
-                if crate::model::edge_flag::is_drawable(*f) {
-                    flag_hist[0] += 1;
-                }
-                if f & crate::model::edge_flag::HIDDEN != 0 {
-                    flag_hist[1] += 1;
-                }
-                if f & crate::model::edge_flag::SOFT != 0 {
-                    flag_hist[2] += 1;
-                }
-                if f & crate::model::edge_flag::SMOOTH != 0 {
-                    flag_hist[3] += 1;
-                }
+                count_edge_flags(&mut stats.edge_flags, *f);
             }
         }
 
@@ -4830,21 +5454,7 @@ impl<'a> Archive<'a> {
             meshes: core::mem::take(&mut self.meshes),
             edges: core::mem::take(&mut self.edge_batches),
             placements,
-            stats: ReadStats {
-                bytes_read: self.c.read_bytes,
-                stream_len: self.c.end - self.c.start,
-                texture_bytes_skipped: texture_bytes,
-                objects: self.objects,
-                slot_base: base,
-                slot_base_method: how,
-                edge_flags: flag_hist,
-                uv_sides: self.uv_sides,
-                uv_matrices: self.uv_matrices,
-                inner_loops: self.inner_loops,
-                faces_short_of_exact: self.faces_short,
-                lost_entities: self.lost,
-                notes: core::mem::take(&mut self.notes),
-            },
+            stats,
         };
 
         // Batches for definitions nothing places are work nobody asked for

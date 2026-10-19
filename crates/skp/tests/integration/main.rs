@@ -2,6 +2,7 @@
 //! program per crate instead of one per file.
 
 mod fixtures;
+mod legacy;
 mod robustness;
 
 use skp::container::{Container, Generation};

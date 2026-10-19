@@ -347,6 +347,23 @@ pub struct DefGeometry {
     pub coedge_reversed: Vec<u8>,
 
     pub instances: Vec<RawInstance>,
+    /// Guide lines and guide points, in the definition's own coordinates (inches).
+    pub guides: Vec<RawGuide>,
+}
+
+/// A guide (construction line or point) as the file states it, in inches. A guide line is
+/// infinite: a line the file bounds by start and end parameters is still a line through
+/// `point` along `direction`. Values are as read; a consumer checks them (finite, a
+/// direction that is not zero) before use.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RawGuide {
+    Line {
+        point: [f64; 3],
+        direction: [f64; 3],
+    },
+    Point {
+        position: [f64; 3],
+    },
 }
 
 impl DefGeometry {
