@@ -70,7 +70,7 @@ fn definitions(d: &Document) -> Vec<Value> {
         .clone()
 }
 
-fn materials(d: &Document) -> Vec<Value> {
+fn materials_of(d: &Document) -> Vec<Value> {
     ask(d, json!({"type": "materials"}))["materials"]
         .as_array()
         .unwrap()
@@ -150,7 +150,7 @@ fn cupboard_imports_as_a_group_with_shared_components() {
     run(&mut d, json!({"type": "undo"})).unwrap();
     assert!(root_instances(&d).is_empty());
     assert!(definitions(&d).is_empty());
-    assert!(materials(&d).is_empty());
+    assert!(materials_of(&d).is_empty());
     d.scene().validate().unwrap();
 }
 
@@ -170,7 +170,7 @@ fn desk_imports_its_placed_definitions_and_says_what_it_left_out() {
     assert!(definitions(&d).iter().all(|x| x["name"] != "Derrick"));
     // Its materials are only on the figure: none is added.
     assert_eq!(report["materials"], 0);
-    assert!(materials(&d).is_empty());
+    assert!(materials_of(&d).is_empty());
     let tags = tags_in(&path);
     assert_eq!(
         warnings.iter().any(|w| w.contains("tag")),
@@ -241,7 +241,7 @@ fn materials_and_textures_are_imported() {
     )
     .unwrap();
     let report = &r["import"];
-    let all = materials(&d);
+    let all = materials_of(&d);
     assert_eq!(report["materials"], all.len());
     assert!(!all.is_empty());
     for m in &all {
@@ -262,7 +262,7 @@ fn materials_and_textures_are_imported() {
     let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
     d.scene().validate().unwrap();
     assert_eq!(r["import"]["textures"], 1, "{}", r["import"]);
-    let textured: Vec<Value> = materials(&d)
+    let textured: Vec<Value> = materials_of(&d)
         .into_iter()
         .filter(|m| m["texture"].is_object())
         .collect();
@@ -287,7 +287,7 @@ fn materials_and_textures_are_imported() {
     let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
     d.scene().validate().unwrap();
     assert!(r["import"].get("textures").is_none());
-    let glass = materials(&d)
+    let glass = materials_of(&d)
         .into_iter()
         .find(|m| m["name"] == "[Translucent_Glass_Blue]")
         .unwrap();
@@ -372,7 +372,7 @@ fn existing_material_names_are_kept() {
         json!({"type": "import", "path": fixture("cupboard.skp")}),
     )
     .unwrap();
-    let all = materials(&d);
+    let all = materials_of(&d);
     let mine = all
         .iter()
         .find(|m| m["name"] == "[Translucent_Glass_Blue]")
@@ -483,6 +483,296 @@ fn legacy_files_are_refused_with_a_message() {
     let path = write("not-sketchup.skp", b"hello");
     let (kind, _) = run(&mut d, json!({"type": "import", "path": path})).unwrap_err();
     assert_eq!(kind, ErrorKind::File);
+}
+
+/// Building small SketchUp files record by record (`[u16 tag][u32 size][payload]`), so tests
+/// can make what no fixture has: many placements, deep nesting, many materials.
+mod craft {
+    use std::io::{Cursor, Write};
+
+    use skp::tags as t;
+
+    fn rec(tag: u16, payload: &[u8]) -> Vec<u8> {
+        let mut out = tag.to_le_bytes().to_vec();
+        out.extend((payload.len() as u32).to_le_bytes());
+        out.extend(payload);
+        out
+    }
+
+    /// An id record: the id in 8 bytes (an id's width is its record's size).
+    fn id(tag: u16, v: u64) -> Vec<u8> {
+        rec(tag, &v.to_le_bytes())
+    }
+
+    /// A row-major transform: `scale` on the diagonal and translation `x` inches along x.
+    pub fn scaled(scale: f64, x: f64) -> [f64; 13] {
+        [
+            scale, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, scale, x, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    /// A placement: the definition's index, its transform and its material's pid.
+    pub type Place = (usize, [f64; 13], Option<u64>);
+
+    fn instances(places: &[Place]) -> Vec<u8> {
+        let mut list = Vec::new();
+        for (k, (def, m, material)) in places.iter().enumerate() {
+            let mut body = id(t::ENTITY_PID, 100_000 + k as u64);
+            body.extend(id(t::COMPONENT_INSTANCE_DEF_PID_REF, def_pid(*def)));
+            let m: Vec<u8> = m.iter().flat_map(|x| x.to_le_bytes()).collect();
+            body.extend(rec(t::COMPONENT_INSTANCE_TRANSFORM, &m));
+            if let Some(material) = material {
+                body.extend(id(t::DRAWING_ELEMENT_MATERIAL_PID_REF, *material));
+            }
+            list.extend(rec(t::COMPONENT_INSTANCE, &body));
+        }
+        rec(t::COMPONENT_INSTANCES, &list)
+    }
+
+    fn def_pid(i: usize) -> u64 {
+        10 + i as u64
+    }
+
+    /// A one-inch edge along x.
+    fn edge() -> Vec<u8> {
+        let vertex = |pid: u64, x: f64| {
+            let mut body = id(t::ENTITY_PID, pid);
+            let p: Vec<u8> = [x, 0.0, 0.0].iter().flat_map(|c| c.to_le_bytes()).collect();
+            body.extend(rec(t::VERTEX_POSITION, &p));
+            rec(t::VERTEX, &body)
+        };
+        let mut out = rec(
+            t::COMPONENT_VERTICES,
+            &[vertex(1, 0.0), vertex(2, 1.0)].concat(),
+        );
+        let mut e = id(t::ENTITY_PID, 3);
+        e.extend(id(t::EDGE_START_VERTEX_PID_REF, 1));
+        e.extend(id(t::EDGE_END_VERTEX_PID_REF, 2));
+        out.extend(rec(t::COMPONENT_EDGES, &rec(t::EDGE, &e)));
+        out
+    }
+
+    /// A SketchUp 2023 file: definitions (each a one-inch edge plus its placements), the
+    /// root's placements, materials (pid, name) and extra zip entries (stored).
+    pub fn file(
+        definitions: &[Vec<Place>],
+        root: &[Place],
+        materials: &[(u64, String)],
+        entries: &[(String, Vec<u8>)],
+    ) -> Vec<u8> {
+        let mut defs = Vec::new();
+        for (i, places) in definitions.iter().enumerate() {
+            let mut component = id(t::ENTITY_PID, def_pid(i));
+            component.extend(edge());
+            component.extend(instances(places));
+            let mut d = rec(t::COMPONENT, &component);
+            d.extend(rec(
+                t::COMPONENT_DEFINITION_NAME,
+                format!("D{i}").as_bytes(),
+            ));
+            defs.extend(rec(t::COMPONENT_DEFINITION, &d));
+        }
+        let components = rec(
+            t::SKETCH_UP_MODEL_COMPONENTS,
+            &rec(t::DEFINITION_LIST, &rec(t::DEFINITION_LIST_DEFS, &defs)),
+        );
+        let root = rec(
+            t::SKETCH_UP_MODEL_ROOT,
+            &rec(t::COMPONENT, &instances(root)),
+        );
+        let mut list = Vec::new();
+        for (pid, name) in materials {
+            let mut m = rec(t::ENTITY, &id(t::ENTITY_PID, *pid));
+            m.extend(rec(t::MATERIAL_XML_PATH, name.as_bytes()));
+            list.extend(rec(t::MATERIAL, &m));
+        }
+        let materials = rec(
+            t::SKETCH_UP_MODEL_MATERIALS,
+            &rec(
+                t::MATERIAL_MANAGER,
+                &rec(t::MATERIAL_MANAGER_MATERIALS, &list),
+            ),
+        );
+        let model = rec(t::SKETCH_UP_MODEL, &[materials, components, root].concat());
+
+        let mut header = super::utf16_tag("SketchUp Model");
+        header.extend(super::utf16_tag("{23.0.0}"));
+        let start = header.len() as u64;
+        let mut out = Cursor::new(header);
+        out.set_position(start);
+        let mut zip = zip::ZipWriter::new(out);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("model.dat", deflated).unwrap();
+        zip.write_all(&model).unwrap();
+        for (name, bytes) in entries {
+            zip.start_file(name.as_str(), stored).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+}
+
+/// Imports `bytes` (written as `name`) into a new document, timing it.
+fn import_timed(
+    name: &str,
+    bytes: &[u8],
+) -> (
+    Document,
+    Result<Value, (ErrorKind, String)>,
+    std::time::Duration,
+) {
+    let path = write(name, bytes);
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    let r = run(&mut d, json!({"type": "import", "path": path}));
+    (d, r, start.elapsed())
+}
+
+#[test]
+fn many_placements_are_read_without_walking_them() {
+    use craft::{file, scaled};
+    // 31 levels, each placing the next 10 times: 10^31 placements through the nesting, 310
+    // instances in the file.
+    let mut defs: Vec<Vec<craft::Place>> = (0..30)
+        .map(|i| {
+            (0..10)
+                .map(|k| (i + 1, scaled(1.0, k as f64), None))
+                .collect()
+        })
+        .collect();
+    defs.push(vec![]);
+    let bytes = file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[]);
+    let (d, r, took) = import_timed("deep.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    assert_eq!(r["import"]["definitions"], 31, "{}", r["import"]);
+    assert_eq!(r["import"]["instances"], 301);
+    assert!(took.as_secs_f64() < 2.0, "took {took:?}");
+
+    // A definition placing itself 50,000 times.
+    let defs = vec![vec![(0, scaled(1.0, 0.0), None); 50_000]];
+    let bytes = file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[]);
+    let (d, r, took) = import_timed("self.skp", &bytes);
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::File, "{message}");
+    assert!(message.contains("places itself"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+    assert!(took.as_secs_f64() < 2.0, "took {took:?}");
+}
+
+#[test]
+fn a_model_larger_than_the_world_is_refused() {
+    use craft::{file, scaled};
+    // One instance scaled a billion times.
+    let bytes = file(&[vec![]], &[(0, scaled(1e9, 0.0), None)], &[], &[]);
+    let (d, r, _) = import_timed("huge.skp", &bytes);
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput, "{message}");
+    assert!(message.contains("beyond"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+
+    // Ten levels each scaled 100 times: no one transform is large, the model is.
+    let mut defs: Vec<Vec<craft::Place>> = (0..10)
+        .map(|i| vec![(i + 1, scaled(100.0, 0.0), None)])
+        .collect();
+    defs.push(vec![]);
+    let bytes = file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[]);
+    let (_, r, _) = import_timed("growing.skp", &bytes);
+    assert_eq!(r.unwrap_err().0, ErrorKind::InvalidInput);
+
+    // Three such levels fit, and `scale` counts.
+    let mut defs: Vec<Vec<craft::Place>> = (0..3)
+        .map(|i| vec![(i + 1, scaled(100.0, 0.0), None)])
+        .collect();
+    defs.push(vec![]);
+    let bytes = file(&defs, &[(0, scaled(1.0, 0.0), None)], &[], &[]);
+    let (_, r, _) = import_timed("big.skp", &bytes);
+    r.unwrap();
+    let path = write("big.skp", &bytes);
+    let (kind, _) = run(
+        &mut doc(),
+        json!({"type": "import", "path": path, "scale": 1e3}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn materials_past_the_limit_are_left_off_with_a_warning() {
+    use craft::{file, scaled};
+    let n = session::MAX_IMPORT_MATERIALS + 6;
+    let mut materials: Vec<(u64, String)> =
+        (0..n).map(|k| (1000 + k as u64, format!("M{k}"))).collect();
+    let mut root: Vec<craft::Place> = (0..n)
+        .map(|k| (0, scaled(1.0, k as f64), Some(1000 + k as u64)))
+        .collect();
+    // An id too large for the reader's 32-bit material numbering, and an instance naming it.
+    materials.push((1 << 33, "Far".into()));
+    root.push((0, scaled(1.0, 0.0), Some(1 << 33)));
+    let bytes = file(&[vec![]], &root, &materials, &[]);
+    let (d, r, _) = import_timed("many-materials.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["materials"], session::MAX_IMPORT_MATERIALS);
+    let names: Vec<Value> = materials_of(&d).iter().map(|m| m["name"].clone()).collect();
+    assert!(names.contains(&json!("M0")) && names.contains(&json!("M1023")));
+    assert!(!names.contains(&json!("M1024")));
+    assert!(materials_of(&d).iter().all(|m| m["instances"] == 1));
+    let warnings = warnings(report);
+    assert!(
+        warnings.contains(&"6 materials past the 1024 an import may add were left off".into()),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.starts_with("2 material references could not be matched")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn textures_past_the_model_limit_keep_their_colour() {
+    use craft::{file, scaled};
+    let n = kernel::MAX_TEXTURES + 1;
+    let materials: Vec<(u64, String)> =
+        (0..n).map(|k| (1000 + k as u64, format!("T{k}"))).collect();
+    let root: Vec<craft::Place> = (0..n)
+        .map(|k| (0, scaled(1.0, k as f64), Some(1000 + k as u64)))
+        .collect();
+    let mut entries = Vec::new();
+    for k in 0..n {
+        let xml = format!(
+            "<materialDocument><mat:material name=\"T{k}\" colorRed=\"200\" colorGreen=\"10\" \
+             colorBlue=\"20\" hasTexture=\"1\"><mat:texture textureFilename=\"t.png\" \
+             xScale=\"10\" yScale=\"10\" /></mat:material></materialDocument>"
+        );
+        entries.push((format!("materials/T{k}/material.xml"), xml.into_bytes()));
+        entries.push((format!("materials/T{k}/t.png"), png(1, 1)));
+    }
+    let bytes = file(&[vec![]], &root, &materials, &entries);
+    let (d, r, _) = import_timed("many-textures.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    assert_eq!(r["import"]["textures"], kernel::MAX_TEXTURES);
+    assert_eq!(r["import"]["materials"], n);
+    let plain: Vec<Value> = materials_of(&d)
+        .into_iter()
+        .filter(|m| m.get("texture").is_none_or(Value::is_null))
+        .collect();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0]["color"], json!([200, 10, 20]));
+    let warnings = warnings(&r["import"]);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains(plain[0]["name"].as_str().unwrap()) && w.contains("texture")),
+        "{warnings:?}"
+    );
 }
 
 /// Imports every `*.skp` under `$SKP_CORPUS`: files from SketchUp 2021 and newer import

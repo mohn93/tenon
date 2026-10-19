@@ -51,3 +51,10 @@ Upstream's tests are not copied: they read a private corpus.
     deflated entry could expand to gigabytes. `read_entry_within` takes a
     tighter cap; `Model::index` reads each `materials/*/material.xml` with a
     1 MiB cap and skips a larger one, as it already skipped an unreadable one.
+11. `Model::index_without_placements` (`scene.rs`): `index` without the
+    two placement walks, `bounds` and `instance_tables` (`bbox` is `None`,
+    `counts.instances` 0). Those walks grow with the number of resolved
+    placements, not the file's size: a small file whose definitions place
+    each other many times, many levels deep, makes them take minutes and
+    hundreds of megabytes. `index` now calls it and adds the two walks, so
+    its result is unchanged. The importer calls only this one.

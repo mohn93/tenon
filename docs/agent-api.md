@@ -995,13 +995,16 @@ and save it again"). What is carried:
   side, the pixel budget and 256 textures) with the file's tile size (clamped to 0.001 to
   1000 m, times `scale`). A name the model already has gets a number (`Brick 2`); existing
   materials are never changed. A texture that cannot be used leaves the material its color and
-  adds a warning. At most 1,024 materials are added; faces with more are left unpainted, with a
-  warning.
+  adds a warning. At most 1,024 materials are added (the first, in the file's order, of those
+  the faces and instances made use); faces and instances with the others are left unpainted,
+  with a warning.
 
 Not carried, each counted in `warnings`: tags (everything is imported untagged), scenes,
 hidden states (hidden faces, groups and components are imported visible), images (skipped),
 instances of a definition the file lacks or with a flat or broken transform (skipped),
-holes and edges that cannot be read, and faces made from their outer loop. Section planes,
+faces that cannot be made (skipped: an outline that cannot be read, fewer than three distinct
+corners, a corner repeated, no area, or a duplicate), holes and edges that cannot be read,
+faces made from their outer loop, and material references whose ids are too large to match. Section planes,
 dimensions, text, guides, texture positions and the file's camera and styles are not read.
 
 The outcome's `import` reports what was made:
@@ -1034,7 +1037,8 @@ positions, has a broken line (the message names it), a number that is not finite
 beyond +/-1e6 m after scaling, or no polygon that makes a face, gives the error kind `file`.
 A SketchUp file that is damaged, places more than 200,000 faces, 1,000,000 vertices, 10,000
 definitions or 100,000 instances, nests instances more than 32 deep or places a definition
-inside itself, or makes nothing, is a `file` error too.
+inside itself, or makes nothing, is a `file` error too; one whose placed model (every instance
+through its transforms, times `scale`) reaches beyond +/-1e6 m is `invalid_input`.
 A number or index that cannot be read is reported by its line or facet, without quoting it.
 `import` is allowed in an atomic batch.
 

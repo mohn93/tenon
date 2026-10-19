@@ -152,7 +152,7 @@ pub struct ImportReport {
     /// Polygons in the file (STL: triangles; SketchUp: faces of the root and of the
     /// definitions it places, each definition once).
     pub polygons: usize,
-    /// Faces made from them, after coplanar neighbours merged (not for SketchUp).
+    /// Faces made from them, after coplanar neighbours merged (SketchUp: no merging).
     pub faces: usize,
     /// Vertices made: coincident corners are welded into one.
     pub vertices: usize,

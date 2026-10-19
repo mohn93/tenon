@@ -57,8 +57,14 @@ pub(crate) struct SkpNotes {
     pub flat: usize,
     pub tags: usize,
     pub scenes: usize,
-    /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material.
+    /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
+    /// caller, which counts the materials built faces keep).
     pub dropped_materials: usize,
+    /// Material references the file's numbering cannot match: a material whose id does not
+    /// fit in 32 bits, or an instance naming one.
+    pub unmatched_materials: usize,
+    /// The file's material id of each material added, in the file's order.
+    pub material_ids: Vec<(u32, MaterialId)>,
     /// Textures made.
     pub textures: usize,
     /// The materials added to the document, each with the change that added it.
@@ -115,6 +121,11 @@ impl SkpNotes {
             "definitions placed nowhere were not imported",
         );
         say(
+            self.unread_faces + built.skipped,
+            "face could not be made and was skipped",
+            "faces could not be made and were skipped",
+        );
+        say(
             self.unread_holes + built.holes_dropped,
             "face hole could not be read and was dropped",
             "face holes could not be read and were dropped",
@@ -141,6 +152,12 @@ impl SkpNotes {
             &format!("material past the {MAX_IMPORT_MATERIALS} an import may add was left off"),
             &format!("materials past the {MAX_IMPORT_MATERIALS} an import may add were left off"),
         );
+        say(
+            self.unmatched_materials,
+            "material reference could not be matched (its id is too large) and was left off",
+            "material references could not be matched (their ids are too large) and were left \
+             off",
+        );
         out.extend(self.texture_warnings.iter().cloned());
         out
     }
@@ -148,13 +165,19 @@ impl SkpNotes {
 
 /// Reads a SketchUp file's bytes into an import tree whose positions are meters times
 /// `scale`, adding the materials its faces and instances use to `document`'s scene (listed
-/// in the notes, so a caller can take them out again). A file from SketchUp 2020 or older is
+/// in the notes, so a caller can take them out again). With `only`, just the materials of
+/// those ids (the file's numbering) are added; the others import as no material. A file from
+/// SketchUp 2020 or older, or one whose placed model reaches beyond `MAX_COORDINATE`, is
 /// `invalid_input`; a file that cannot be read is a `file` error (the message does not name
 /// the file). Nothing is added on an error.
+///
+/// Nothing here walks the placements through the nesting: every definition is visited once,
+/// so the work is linear in the file however often its definitions place each other.
 pub(crate) fn read_skp(
     bytes: Vec<u8>,
     scale: f64,
     document: &mut Document,
+    only: Option<&HashSet<u32>>,
 ) -> Result<(ImportTree, SkpNotes), CommandError> {
     let file_error = |m: String| CommandError::new(ErrorKind::File, m);
     let src = MemorySource::new(bytes);
@@ -164,7 +187,7 @@ pub(crate) fn read_skp(
     }
     let model = read_model(&src, &container, &ReadOptions::default())
         .map_err(|e| file_error(e.to_string()))?;
-    let index = model.index(&src, &container);
+    let index = model.index_without_placements(&src, &container);
     let mut notes = SkpNotes {
         tags: index
             .layers
@@ -172,28 +195,27 @@ pub(crate) fn read_skp(
             .filter(|l| l.name != DEFAULT_TAG)
             .count(),
         scenes: index.scenes.len(),
+        unmatched_materials: index
+            .materials
+            .iter()
+            .filter(|m| m.id == NO_MATERIAL)
+            .count(),
         ..SkpNotes::default()
     };
 
     // Definitions by pid (the first of a repeated pid wins), and those the root reaches
-    // through instances that are imported.
+    // through the instances that are imported.
     let unit = METERS_PER_INCH * scale;
     let mut by_pid: HashMap<u64, usize> = HashMap::new();
     for (i, d) in model.definitions.iter().enumerate() {
         by_pid.entry(d.pid).or_insert(i);
     }
-    let placed = |g: &DefGeometry| -> Vec<usize> {
-        g.instances
-            .iter()
-            .filter(|i| !i.is_image && transform(i, unit).is_some())
-            .filter_map(|i| by_pid.get(&i.def_pid).copied())
-            .collect()
-    };
+    let placements = |g| placements(g, unit, &by_pid);
     let mut reached = vec![false; model.definitions.len()];
-    let mut stack = placed(&model.root);
+    let mut stack: Vec<usize> = placements(&model.root).iter().map(|p| p.1).collect();
     while let Some(d) = stack.pop() {
         if !std::mem::replace(&mut reached[d], true) {
-            stack.extend(placed(&model.definitions[d].geom));
+            stack.extend(placements(&model.definitions[d].geom).iter().map(|p| p.1));
         }
     }
     let geometries = || {
@@ -212,30 +234,35 @@ pub(crate) fn read_skp(
             "more than {MAX_IMPORT_POINTS} vertices in the placed definitions"
         )));
     }
+    check_world_size(&model.root, &model.definitions, unit, &by_pid)?;
 
-    // Groups: definitions every placement of which is a group.
+    // Groups: definitions every imported placement of which is a group.
     let mut component = vec![false; model.definitions.len()];
-    for i in geometries().flat_map(|g| &g.instances) {
-        if let Some(&d) = by_pid.get(&i.def_pid)
-            && !i.is_group
-        {
+    for (i, d, _) in geometries().flat_map(placements) {
+        if !i.is_group {
             component[d] = true;
         }
     }
 
-    let materials = add_materials(document, &src, &container, &index.materials, scale, {
-        let mut used: HashSet<u32> = HashSet::new();
-        for g in geometries() {
-            used.extend(g.face_material.iter().chain(&g.face_back_material));
-            used.extend(g.instances.iter().filter_map(instance_material));
-        }
-        used.remove(&NO_MATERIAL);
-        used
-    })?;
+    let mut used: HashSet<u32> = HashSet::new();
+    for g in geometries() {
+        used.extend(g.face_material.iter().chain(&g.face_back_material));
+        used.extend(g.instances.iter().filter_map(instance_material));
+        notes.unmatched_materials += g
+            .instances
+            .iter()
+            .filter(|i| i.has_material && i.material >= u64::from(NO_MATERIAL))
+            .count();
+    }
+    used.remove(&NO_MATERIAL);
+    if let Some(only) = only {
+        used.retain(|m| only.contains(m));
+    }
+    let materials = add_materials(document, &src, &container, &index.materials, scale, used)?;
     notes.textures = materials.textures;
-    notes.dropped_materials = materials.dropped;
     notes.texture_warnings = materials.warnings;
     notes.added = materials.added;
+    notes.material_ids = materials.order;
 
     let result = (|| {
         let root = geometry(&model.root, unit, &by_pid, &materials.ids, &mut notes)?;
@@ -271,6 +298,142 @@ pub(crate) fn read_skp(
             remove_materials(document, &notes.added);
             Err(e)
         }
+    }
+}
+
+/// An instance that is imported: the index of the definition it places and its transform
+/// (see `transform`). None for an image, a definition the file lacks or a broken transform.
+fn placement(
+    i: &RawInstance,
+    unit: f64,
+    by_pid: &HashMap<u64, usize>,
+) -> Option<(usize, DAffine3)> {
+    if i.is_image {
+        return None;
+    }
+    Some((*by_pid.get(&i.def_pid)?, transform(i, unit)?))
+}
+
+/// A geometry's imported instances, each with its definition's index and its transform.
+fn placements<'g>(
+    g: &'g DefGeometry,
+    unit: f64,
+    by_pid: &HashMap<u64, usize>,
+) -> Vec<(&'g RawInstance, usize, DAffine3)> {
+    g.instances
+        .iter()
+        .filter_map(|i| placement(i, unit, by_pid).map(|(d, t)| (i, d, t)))
+        .collect()
+}
+
+/// An axis-aligned box: its lowest and highest corners.
+type Box3 = (DVec3, DVec3);
+
+/// Fails when the placed model (`root` and the definitions it places, each instance through
+/// its transform, `unit` meters per inch) reaches beyond `MAX_COORDINATE` (`invalid_input`),
+/// or when a definition places itself (`file`). Each definition's box is computed once, from
+/// its points and its instances' boxes, so this is linear in the file.
+fn check_world_size(
+    root: &DefGeometry,
+    definitions: &[skp::scene::Definition],
+    unit: f64,
+    by_pid: &HashMap<u64, usize>,
+) -> Result<(), CommandError> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Unseen,
+        Searching,
+        Done,
+    }
+    let own = |g: &DefGeometry| -> Option<Box3> {
+        g.vertex_pos
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| DVec3::from_array(*p) * unit)
+            .fold(None, |b, p| Some(grow(b, (p, p))))
+    };
+    let placed_box = |b: Box3, t: &DAffine3| -> Box3 {
+        let mut out = None;
+        for k in 0..8 {
+            let corner = DVec3::new(
+                if k & 1 == 0 { b.0.x } else { b.1.x },
+                if k & 2 == 0 { b.0.y } else { b.1.y },
+                if k & 4 == 0 { b.0.z } else { b.1.z },
+            );
+            let p = t.transform_point3(corner);
+            out = Some(grow(out, (p, p)));
+        }
+        out.expect("eight corners")
+    };
+    let mut state = vec![State::Unseen; definitions.len()];
+    let mut boxes: Vec<Option<Box3>> = vec![None; definitions.len()];
+    // The box of a geometry whose placed definitions are all done.
+    let box_of = |g: &DefGeometry, boxes: &[Option<Box3>]| -> Option<Box3> {
+        placements(g, unit, by_pid)
+            .iter()
+            .filter_map(|(_, d, t)| boxes[*d].map(|b| placed_box(b, t)))
+            .fold(own(g), |acc, b| Some(grow(acc, b)))
+    };
+    for (_, start, _) in placements(root, unit, by_pid) {
+        if state[start] == State::Done {
+            continue;
+        }
+        state[start] = State::Searching;
+        let mut stack: Vec<(usize, Vec<usize>)> = vec![(
+            start,
+            placements(&definitions[start].geom, unit, by_pid)
+                .iter()
+                .map(|p| p.1)
+                .collect(),
+        )];
+        while let Some((d, children)) = stack.last_mut() {
+            let d = *d;
+            if let Some(child) = children.pop() {
+                match state[child] {
+                    State::Searching => {
+                        return Err(CommandError::new(
+                            ErrorKind::File,
+                            "a definition places itself",
+                        ));
+                    }
+                    State::Done => {}
+                    State::Unseen => {
+                        state[child] = State::Searching;
+                        let next = placements(&definitions[child].geom, unit, by_pid)
+                            .iter()
+                            .map(|p| p.1)
+                            .collect();
+                        stack.push((child, next));
+                    }
+                }
+            } else {
+                boxes[d] = box_of(&definitions[d].geom, &boxes);
+                state[d] = State::Done;
+                stack.pop();
+            }
+        }
+    }
+    if let Some((lo, hi)) = box_of(root, &boxes)
+        && (!(lo.is_finite() && hi.is_finite())
+            || lo.abs().max(hi.abs()).max_element() > MAX_COORDINATE)
+    {
+        return Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "the model reaches beyond +/-{MAX_COORDINATE} m at scale {}",
+                unit / METERS_PER_INCH
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `b` grown to hold `more`.
+fn grow(b: Option<Box3>, more: Box3) -> Box3 {
+    match b {
+        None => more,
+        Some((lo, hi)) => (lo.min(more.0), hi.max(more.1)),
     }
 }
 
@@ -370,12 +533,12 @@ fn geometry(
             notes.images += 1;
             continue;
         }
-        let Some(&definition) = by_pid.get(&i.def_pid) else {
-            notes.missing += 1;
-            continue;
-        };
-        let Some(transform) = transform(i, unit) else {
-            notes.flat += 1;
+        let Some((definition, transform)) = placement(i, unit, by_pid) else {
+            if by_pid.contains_key(&i.def_pid) {
+                notes.flat += 1;
+            } else {
+                notes.missing += 1;
+            }
             continue;
         };
         if i.flags & 1 != 0 {
@@ -440,14 +603,15 @@ fn transform(i: &RawInstance, unit: f64) -> Option<DAffine3> {
 struct Added {
     ids: HashMap<u32, MaterialId>,
     added: Vec<(MaterialId, SceneChange)>,
+    /// The file's id of each material added, in order.
+    order: Vec<(u32, MaterialId)>,
     textures: usize,
-    dropped: usize,
     warnings: Vec<String>,
 }
 
 /// Adds one material per entry of `table` whose id is in `used` (in the table's order, the
-/// first of a repeated id winning), named uniquely against the model's names; at most
-/// `MAX_IMPORT_MATERIALS`, the rest counted in `dropped`. A texture that cannot be read
+/// first of a repeated id winning), named uniquely against the model's names. The caller
+/// keeps to `MAX_IMPORT_MATERIALS` (see `read_skp`'s `only`). A texture that cannot be read
 /// leaves the material its colour and a warning.
 fn add_materials(
     document: &mut Document,
@@ -460,18 +624,14 @@ fn add_materials(
     let mut out = Added {
         ids: HashMap::new(),
         added: Vec::new(),
+        order: Vec::new(),
         textures: 0,
-        dropped: 0,
         warnings: Vec::new(),
     };
     let mut seen: HashSet<u32> = HashSet::new();
     let mut pixels = document.texture_pixels_besides(None);
     for m in table {
         if !used.contains(&m.id) || !seen.insert(m.id) {
-            continue;
-        }
-        if out.added.len() == MAX_IMPORT_MATERIALS {
-            out.dropped += 1;
             continue;
         }
         let base: String = match m.name.trim() {
@@ -531,6 +691,7 @@ fn add_materials(
                     pixels += t.map_or(0, |t| u64::from(t.image.width) * u64::from(t.image.height));
                 }
                 out.ids.insert(m.id, id);
+                out.order.push((m.id, id));
                 out.added.push((id, change));
             }
             Err(e) => {

@@ -867,10 +867,26 @@ impl Model {
     /// `model.dat`. Those entries are a few hundred bytes each; the images
     /// they name are not read.
     pub fn index(&self, src: &dyn ByteSource, c: &Container) -> SceneIndex {
+        let mut idx = self.index_without_placements(src, c);
+        idx.bbox = self.bounds();
+        idx.counts.instances = self
+            .instance_tables()
+            .iter()
+            .map(|t| t.len())
+            .sum::<usize>() as u32;
+        idx
+    }
+
+    /// [`Model::index`] without what needs every placement resolved through
+    /// the nesting: `bbox` is `None` and `counts.instances` is 0. Those walks
+    /// grow with the number of resolved placements, which a small file can
+    /// make enormous (a definition placing another many times, many levels
+    /// deep); this costs time linear in the file.
+    pub fn index_without_placements(&self, src: &dyn ByteSource, c: &Container) -> SceneIndex {
         let mut idx = SceneIndex {
             writer_version: self.writer_version.clone(),
             generation_is_vff: self.is_vff,
-            bbox: self.bounds(),
+            bbox: None,
             counts: self.counts(),
             ..Default::default()
         };
@@ -953,11 +969,6 @@ impl Model {
         idx.materials
             .retain(|m| !crate::materials::is_layer_material(&m.name));
         idx.counts.textures = idx.materials.iter().filter(|m| m.texture.is_some()).count() as u32;
-        idx.counts.instances = self
-            .instance_tables()
-            .iter()
-            .map(|t| t.len())
-            .sum::<usize>() as u32;
         idx
     }
 

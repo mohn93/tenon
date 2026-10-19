@@ -152,36 +152,66 @@ impl Document {
         place: ImportAs,
     ) -> Result<SceneChange, CommandError> {
         let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
-        let (tree, notes) = read_skp(bytes, scale, self).map_err(|e| match e.kind {
-            ErrorKind::File => file_error(e.message),
-            _ => e,
-        })?;
-        let mesh = self.active();
-        let built = self.scene.import_tree(
-            mesh,
-            &tree,
-            wrapper_kind(place),
-            &import_name(Path::new(path)),
-        );
-        let (instance, built, change) = match built {
-            Ok(done) => done,
-            Err(e) => {
-                remove_materials(self, &notes.added);
-                return Err(file_error(e.to_string()));
+        let mut bytes = Some(bytes);
+        let mut only: Option<HashSet<u32>> = None;
+        let mut dropped = 0;
+        // At most twice: when the faces made keep more than `MAX_IMPORT_MATERIALS` materials,
+        // everything is taken back and the file read again keeping only the first of them.
+        let (tree, mut notes, instance, built, change, kept) = loop {
+            let bytes = match bytes.take() {
+                Some(b) => b,
+                None => read_limited(Path::new(path), MAX_IMPORT_BYTES).map_err(file_error)?,
+            };
+            let (tree, notes) =
+                read_skp(bytes, scale, self, only.as_ref()).map_err(|e| match e.kind {
+                    ErrorKind::File => file_error(e.message),
+                    _ => e,
+                })?;
+            let mesh = self.active();
+            let built = self.scene.import_tree(
+                mesh,
+                &tree,
+                wrapper_kind(place),
+                &import_name(Path::new(path)),
+            );
+            let (instance, built, change) = match built {
+                Ok(done) => done,
+                Err(e) => {
+                    remove_materials(self, &notes.added);
+                    return Err(file_error(e.to_string()));
+                }
+            };
+            // Materials only skipped faces used are not kept.
+            let mut in_use: HashSet<MaterialId> = HashSet::new();
+            for (_, m) in self.scene.meshes() {
+                in_use.extend(m.faces().flat_map(|(_, f)| f.paint()).flatten());
+                in_use.extend(m.instances().filter_map(|(_, i)| i.material));
             }
+            if only.is_none() {
+                let kept: Vec<u32> = notes
+                    .material_ids
+                    .iter()
+                    .filter(|(_, id)| in_use.contains(id))
+                    .map(|(file, _)| *file)
+                    .collect();
+                if kept.len() > MAX_IMPORT_MATERIALS {
+                    self.scene.apply(&change.inverse());
+                    remove_materials(self, &notes.added);
+                    dropped = kept.len() - MAX_IMPORT_MATERIALS;
+                    only = Some(kept.into_iter().take(MAX_IMPORT_MATERIALS).collect());
+                    continue;
+                }
+            }
+            let (kept, unused): (Vec<_>, Vec<_>) = notes
+                .added
+                .iter()
+                .cloned()
+                .partition(|(id, _)| in_use.contains(id));
+            remove_materials(self, &unused);
+            break (tree, notes, instance, built, change, kept);
         };
-        // Materials only skipped faces used are not kept.
-        let mut in_use: HashSet<MaterialId> = HashSet::new();
-        for (_, m) in self.scene.meshes() {
-            in_use.extend(m.faces().flat_map(|(_, f)| f.paint()).flatten());
-            in_use.extend(m.instances().filter_map(|(_, i)| i.material));
-        }
-        let (kept, unused): (Vec<_>, Vec<_>) = notes
-            .added
-            .iter()
-            .cloned()
-            .partition(|(id, _)| in_use.contains(id));
-        remove_materials(self, &unused);
+        notes.dropped_materials = dropped;
+        let mesh = self.active();
         let textures = kept
             .iter()
             .filter(|(id, _)| {
