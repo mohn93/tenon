@@ -282,7 +282,8 @@ mod tests {
             p.socket_dir,
             Path::new(abs("/Users/me/.sketchup-alt").as_str())
         );
-        let p = resolve_as(Os::Other, &e, Path::new(abs("/tmp").as_str()), 7, Some(0)).unwrap();
+        // The shared-/tmp rule compares the literal path, so pass it as is on every host.
+        let p = resolve_as(Os::Other, &e, Path::new("/tmp"), 7, Some(0)).unwrap();
         assert_eq!(
             p.socket_dir,
             Path::new(abs("/Users/me/.sketchup-alt").as_str()),
