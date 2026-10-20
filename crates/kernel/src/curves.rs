@@ -347,7 +347,7 @@ impl Model {
                 self.set_edge(e, curve, false, polygon);
             }
         }
-        self.freeze_annotations();
+        self.freeze_annotations(&curves);
     }
 
     fn mend_curves(&mut self, curves: &BTreeSet<CurveId>) {

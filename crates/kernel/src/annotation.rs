@@ -228,19 +228,24 @@ impl Anchor {
 }
 
 impl Circle {
-    /// The circle under the affine map `t`; under a map that is not a similarity, the radius
-    /// is how `t` stretches one direction in the plane.
+    /// The circle under the affine map `t`. Under a map that is not a similarity the image is
+    /// an ellipse; the circle kept has the same area: its radius is the old one times the
+    /// square root of how `t` scales area in the circle's plane (the absolute determinant of
+    /// `t`'s 2x2 block on that plane, |t(u) x t(v)| for an orthonormal pair u, v in it).
     fn transformed(self, t: DAffine3) -> Circle {
         let normal = (t.matrix3.inverse().transpose() * self.normal)
             .try_normalize()
             .unwrap_or(self.normal);
-        let along = t
-            .transform_vector3(self.normal.any_orthonormal_vector())
+        let u = self.normal.any_orthonormal_vector();
+        let v = self.normal.cross(u);
+        let area = t
+            .transform_vector3(u)
+            .cross(t.transform_vector3(v))
             .length();
         Circle {
             center: t.transform_point3(self.center),
             normal,
-            radius: self.radius * along,
+            radius: self.radius * area.sqrt(),
         }
     }
 }
@@ -515,7 +520,8 @@ impl Model {
     /// Moves dimensions and notes by the affine map `t` as one ChangeSet, keeping their ids
     /// (each is reported as modified): point anchors, fixed circles, offsets, leaders and
     /// note positions move; vertex anchors and curves stay with their geometry, and screen
-    /// notes stay where they are on the view. Unknown ids are skipped.
+    /// notes stay where they are on the view. A linear dimension whose ends the move brings
+    /// together (a point end moved onto a vertex end) is removed. Unknown ids are skipped.
     pub fn transform_annotations(
         &mut self,
         dimensions: &[DimensionId],
@@ -527,7 +533,9 @@ impl Model {
                 let moved = d.transformed(t);
                 if moved != d {
                     self.remove_dimension(*id);
-                    self.insert_dimension_as(*id, moved);
+                    if !self.ends_together(&moved) {
+                        self.insert_dimension_as(*id, moved);
+                    }
                 }
             }
         }
@@ -750,6 +758,10 @@ impl Model {
                             }
                         }
                     };
+                    // A map that squeezes space can bring point ends together.
+                    if self.ends_together(&d) {
+                        continue;
+                    }
                     let id = if keep_ids {
                         self.insert_dimension_as(id, d);
                         id
@@ -787,72 +799,76 @@ impl Model {
     }
 
     /// Freezes the anchors the pending edit cut loose, recording the change with the edit: a
-    /// vertex anchor whose vertex is gone becomes a point where the vertex last was, and a
-    /// radial dimension whose curve is gone or no longer a circle or an arc keeps the circle
-    /// it had before the edit (one whose curve had none then either goes). Runs from
-    /// `upkeep`, after the curves are mended.
-    pub(crate) fn freeze_annotations(&mut self) {
+    /// vertex anchor whose vertex is gone becomes a point where the vertex last was; a linear
+    /// dimension whose ends the edit brought together (a weld) goes; and a radial dimension
+    /// on one of `curves` (the curves the edit touched) that is gone or no longer a circle
+    /// or an arc keeps the circle it had before the edit (one whose curve had none then
+    /// either goes). Runs from `upkeep`, after the curves are mended.
+    pub(crate) fn freeze_annotations(&mut self, curves: &BTreeSet<CurveId>) {
         if self.dimensions.is_empty() && self.notes.is_empty() {
             return;
         }
-        // Where each vertex the edit removed last was (one added back again is not gone).
+        // Where each vertex the edit removed last was (one added back again is not gone),
+        // and every vertex the edit moved, removed or added.
         let mut gone: BTreeMap<VertexId, DVec3> = BTreeMap::new();
-        let mut geometry = false;
+        let mut touched: BTreeSet<VertexId> = BTreeSet::new();
         for op in self.pending() {
             match op {
                 Op::RemoveVertex(id, v) => {
                     gone.insert(*id, v.pos);
-                    geometry = true;
+                    touched.insert(*id);
                 }
                 Op::AddVertex(id, _) => {
                     gone.remove(id);
-                    geometry = true;
+                    touched.insert(*id);
                 }
-                Op::AddEdge(..) | Op::RemoveEdge(..) | Op::ChangeEdge(..) | Op::MoveVertex(..) => {
-                    geometry = true;
+                Op::MoveVertex(id, _, _) => {
+                    touched.insert(*id);
                 }
                 _ => {}
             }
         }
-        if !geometry {
+        if touched.is_empty() && curves.is_empty() {
             return;
         }
         let freeze = |m: &Model, a: Anchor| match a {
             Anchor::Vertex(v) if m.position(v).is_none() => gone.get(&v).map(|p| Anchor::Point(*p)),
             _ => None,
         };
+        let on_touched = |a: &Anchor| a.vertex().is_some_and(|v| touched.contains(&v));
         let mut dimensions: Vec<(DimensionId, Option<Dimension>)> = Vec::new();
         let mut lost_curves: Vec<(DimensionId, CurveId)> = Vec::new();
         for (id, d) in &self.dimensions {
             match *d {
-                Dimension::Linear { a, b, offset, tag } => {
+                Dimension::Linear { a, b, offset, tag } if on_touched(&a) || on_touched(&b) => {
                     let (fa, fb) = (freeze(self, a), freeze(self, b));
-                    if fa.is_some() || fb.is_some() {
-                        dimensions.push((
-                            *id,
-                            Some(Dimension::Linear {
-                                a: fa.unwrap_or(a),
-                                b: fb.unwrap_or(b),
-                                offset,
-                                tag,
-                            }),
-                        ));
+                    let (a2, b2) = (fa.unwrap_or(a), fb.unwrap_or(b));
+                    let frozen = Dimension::Linear {
+                        a: a2,
+                        b: b2,
+                        offset,
+                        tag,
+                    };
+                    if self.ends_together(&frozen) {
+                        dimensions.push((*id, None));
+                    } else if fa.is_some() || fb.is_some() {
+                        dimensions.push((*id, Some(frozen)));
                     }
                 }
                 Dimension::Radial {
                     curve: curve @ RadialAnchor::Curve(c),
                     ..
-                } => {
+                } if curves.contains(&c) => {
                     if self.circle_of(&curve).is_none() {
                         lost_curves.push((*id, c));
                     }
                 }
-                Dimension::Radial { .. } => {}
+                Dimension::Linear { .. } | Dimension::Radial { .. } => {}
             }
         }
         if !lost_curves.is_empty() {
-            let curves: BTreeSet<CurveId> = lost_curves.iter().map(|(_, c)| *c).collect();
-            let before = self.circles_before(&curves);
+            let lost: BTreeSet<CurveId> = lost_curves.iter().map(|(_, c)| *c).collect();
+            let before = self.circles_before(&lost);
             for (id, c) in lost_curves {
                 let Dimension::Radial {
                     diameter,
@@ -877,24 +893,26 @@ impl Model {
             }
         }
         let mut notes: Vec<(NoteId, Note)> = Vec::new();
-        for (id, n) in &self.notes {
-            if let Note::Leader {
-                anchor,
-                position,
-                text,
-                tag,
-            } = n
-                && let Some(anchor) = freeze(self, *anchor)
-            {
-                notes.push((
-                    *id,
-                    Note::Leader {
-                        anchor,
-                        position: *position,
-                        text: text.clone(),
-                        tag: *tag,
-                    },
-                ));
+        if !gone.is_empty() {
+            for (id, n) in &self.notes {
+                if let Note::Leader {
+                    anchor,
+                    position,
+                    text,
+                    tag,
+                } = n
+                    && let Some(anchor) = freeze(self, *anchor)
+                {
+                    notes.push((
+                        *id,
+                        Note::Leader {
+                            anchor,
+                            position: *position,
+                            text: text.clone(),
+                            tag: *tag,
+                        },
+                    ));
+                }
             }
         }
         for (id, d) in dimensions {
@@ -920,14 +938,19 @@ impl Model {
             .iter()
             .filter_map(|c| Some((*c, self.circle_of(&RadialAnchor::Curve(*c))?)))
             .collect();
-        for op in ops {
+        for op in ops.iter().cloned() {
             self.apply_op(op);
         }
+        debug_assert_eq!(
+            self.pending().len(),
+            ops.len(),
+            "replaying the edit records nothing"
+        );
         circles
     }
 
     /// Checks the annotations: vertex anchors on existing vertices, a linear dimension's ends
-    /// not on one vertex, finite numbers, curves that are circles or arcs, fixed circles with
+    /// apart, finite numbers, curves that are circles or arcs, fixed circles with
     /// a unit normal and a positive radius, screen notes within the view, and valid text.
     pub(crate) fn validate_annotations(&self) -> Result<(), String> {
         let missing = |a: &Anchor| a.vertex().filter(|v| self.position(*v).is_none());
@@ -943,8 +966,10 @@ impl Model {
             }
             let ok = match d {
                 Dimension::Linear { a, b, offset, .. } => {
-                    if a.vertex().is_some() && a == b {
-                        return Err(format!("{name} measures from a vertex to itself"));
+                    if let (Some(p), Some(q)) = (self.anchor_point(a), self.anchor_point(b))
+                        && p.distance(q) < LENGTH_TOL
+                    {
+                        return Err(format!("{name} measures between two points that coincide"));
                     }
                     self.anchor_is_valid(a) && self.anchor_is_valid(b) && offset.is_finite()
                 }
@@ -992,6 +1017,17 @@ impl Model {
             check_note(self, n).map_err(|e| format!("{name}: {e}"))?;
         }
         Ok(())
+    }
+
+    /// True for a linear dimension whose ends are less than `LENGTH_TOL` apart.
+    fn ends_together(&self, d: &Dimension) -> bool {
+        match d {
+            Dimension::Linear { a, b, .. } => match (self.anchor_point(a), self.anchor_point(b)) {
+                (Some(p), Some(q)) => p.distance(q) < LENGTH_TOL,
+                _ => false,
+            },
+            Dimension::Radial { .. } => false,
+        }
     }
 
     fn anchor_is_valid(&self, anchor: &Anchor) -> bool {
@@ -1113,5 +1149,83 @@ impl Scene {
             ));
         }
         self.edit(mesh, |m| m.add_note(note))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::TAU;
+
+    use super::*;
+
+    fn p(x: f64, y: f64, z: f64) -> DVec3 {
+        DVec3::new(x, y, z)
+    }
+
+    #[test]
+    fn a_radial_dimension_whose_curve_had_no_circle_before_the_edit_goes() {
+        // The circle, the dimension on it and the erase that takes the circle away are one
+        // edit, so before the edit there was no circle to keep.
+        let mut m = Model::new();
+        let points: Vec<DVec3> = (0..12)
+            .map(|k| {
+                let a = TAU * k as f64 / 12.0;
+                p(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        for i in 0..12 {
+            m.draw_segment(points[i], points[(i + 1) % 12]);
+        }
+        let curve = m.new_curve();
+        for i in 0..12 {
+            m.tag_along(points[i], points[(i + 1) % 12], Some(curve), false, false);
+        }
+        let d = m.insert_dimension(Dimension::Radial {
+            curve: RadialAnchor::Curve(curve),
+            diameter: false,
+            leader: DVec3::X,
+            tag: None,
+        });
+        let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        m.erase_pending(&edges, &[]);
+        let c = m.take_changes();
+        assert!(m.dimension(d).is_none(), "nothing to keep: it goes");
+        assert!(c.summary().created.is_empty() && c.summary().deleted.is_empty());
+        m.validate().unwrap();
+        m.apply(&c.inverse());
+        assert_eq!(m, Model::new());
+    }
+
+    #[test]
+    fn a_weld_that_brings_the_ends_together_removes_the_dimension() {
+        let mut m = Model::new();
+        let a = m.insert_vertex(DVec3::ZERO);
+        let b = m.insert_vertex(p(1.0, 0.0, 0.0));
+        let c = m.insert_vertex(p(2.0, 0.0, 0.0));
+        let up = m.insert_vertex(p(2.0, 1.0, 0.0));
+        m.insert_edge(a, b);
+        m.insert_edge(c, up);
+        let d = m.insert_dimension(Dimension::Linear {
+            a: Anchor::Vertex(a),
+            b: Anchor::Vertex(c),
+            offset: -DVec3::Y,
+            tag: None,
+        });
+        m.take_changes();
+        m.validate().unwrap();
+        let before = m.clone();
+        // c moves onto a and welds into it.
+        m.move_vertex(c, DVec3::ZERO);
+        m.weld(&BTreeSet::from([c]));
+        let welded = m.take_changes();
+        assert!(m.position(c).is_none(), "c welded into a");
+        assert!(m.dimension(d).is_none(), "a zero-length dimension goes");
+        assert!(welded.summary().deleted.contains(&EntityId::Dimension(d)));
+        m.validate().unwrap();
+        let after = m.clone();
+        m.apply(&welded.inverse());
+        assert_eq!(m, before);
+        m.apply(&welded);
+        assert_eq!(m, after, "redo is exact");
     }
 }

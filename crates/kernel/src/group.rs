@@ -82,7 +82,8 @@ impl Scene {
             for (id, _) in &guides {
                 m.remove_guide(*id);
             }
-            // The annotations go before the geometry, so they are not frozen on the way out.
+            // The moved annotations go before the geometry is detached: they are put back in
+            // the definition below, so the parent's upkeep must not freeze them on the way out.
             m.erase_annotations_pending(&parts.dimensions, &notes);
             m.detach(edges, faces);
             placed = Some(m.insert_instance(Instance::new(definition, DAffine3::IDENTITY)));

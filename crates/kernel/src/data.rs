@@ -217,17 +217,18 @@ pub struct GuideData {
     pub tag: Option<u64>,
 }
 
-/// A dimension end or a note's anchor: a vertex id, or a point.
+/// A dimension end or a note's anchor: `{"vertex": 12}` or `{"point": [x, y, z]}`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(rename_all = "snake_case")]
 pub enum AnchorData {
     Vertex(u64),
     Point([f64; 3]),
 }
 
-/// The circle a radial dimension measures: a curve id, or a fixed circle.
+/// The circle a radial dimension measures: `{"curve": 5}` or
+/// `{"fixed": {"center": ..., "normal": ..., "radius": ...}}`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(rename_all = "snake_case")]
 pub enum RadialAnchorData {
     Curve(u64),
     Fixed(CircleData),
@@ -723,8 +724,8 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
                 offset,
                 tag,
             } => {
-                let what = format!("dimension d{id}");
-                check_id("dimension d", *id)?;
+                let what = format!("dimension r{id}");
+                check_id("dimension r", *id)?;
                 finite(offset, what.clone())?;
                 let dimension = Dimension::Linear {
                     a: anchor(a, &what)?,
@@ -741,8 +742,8 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
                 leader,
                 tag,
             } => {
-                let what = format!("dimension d{id}");
-                check_id("dimension d", *id)?;
+                let what = format!("dimension r{id}");
+                check_id("dimension r", *id)?;
                 finite(leader, what.clone())?;
                 let curve = match curve {
                     RadialAnchorData::Curve(c) => {

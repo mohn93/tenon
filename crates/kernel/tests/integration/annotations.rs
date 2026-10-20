@@ -395,10 +395,12 @@ fn an_erased_end_vertex_freezes_its_anchor_and_undo_attaches_it_again() {
     );
     assert_eq!(m.dimension_points(d), Some((a, b)));
     assert!(erased.summary().modified.contains(&EntityId::Dimension(d)));
+    let frozen = m.clone();
 
     m.apply(&erased.inverse());
     assert_eq!(m, attached, "undo attaches it again");
     m.apply(&erased);
+    assert_eq!(m, frozen, "redo freezes it exactly as before");
 
     // Only the attached end follows the remaining vertex.
     m.move_vertices(&BTreeSet::from([vb]), p(0.0, 0.0, 1.0))
@@ -503,8 +505,12 @@ fn a_radial_dimension_follows_its_circle_and_keeps_the_last_circle_when_it_break
         other => panic!("not frozen: {other:?}"),
     }
     assert!(bent.summary().modified.contains(&EntityId::Dimension(r)));
+    let frozen = m.clone();
     m.apply(&bent.inverse());
     assert_eq!(m, attached, "undo attaches it again");
+    m.apply(&bent);
+    assert_eq!(m, frozen, "redo is exact");
+    m.apply(&bent.inverse());
 
     // Erasing the circle's edges freezes it too.
     let edges = all_edges(&m);
@@ -1149,4 +1155,197 @@ fn annotation_data_that_breaks_the_model_is_refused_clearly() {
     let json = serde_json::to_string(&data).unwrap();
     let odd = json.replacen("\"offset\"", "\"bogus\":1,\"offset\"", 1);
     assert!(serde_json::from_str::<SceneData>(&odd).is_err());
+}
+
+#[test]
+fn edits_that_leave_a_circle_alone_leave_its_radial_dimension_attached() {
+    let mut m = Model::new();
+    m.add_curve(&circle_points(DVec3::ZERO, 1.0, 16), true, false)
+        .unwrap();
+    let curve = m.edges().next().unwrap().1.curve.unwrap();
+    let r = created_dimension(
+        &m.add_dimension(Dimension::Radial {
+            curve: RadialAnchor::Curve(curve),
+            diameter: false,
+            leader: p(2.0, 0.0, 0.0),
+            tag: None,
+        })
+        .unwrap()
+        .summary()
+        .created,
+    );
+    let on_curve = |m: &Model| {
+        matches!(
+            m.dimension(r),
+            Some(Dimension::Radial {
+                curve: RadialAnchor::Curve(c),
+                ..
+            }) if *c == curve
+        )
+    };
+    // Unrelated edits: a separate line drawn, then moved, then erased.
+    let drawn = m.add_edge(p(5.0, 0.0, 0.0), p(6.0, 0.0, 0.0)).unwrap();
+    assert!(on_curve(&m));
+    assert!(!drawn.summary().modified.contains(&EntityId::Dimension(r)));
+    let far = vid(&m, p(6.0, 0.0, 0.0));
+    let moved = m
+        .move_vertices(&BTreeSet::from([far]), p(0.0, 1.0, 0.0))
+        .unwrap();
+    assert!(on_curve(&m));
+    assert!(!moved.summary().modified.contains(&EntityId::Dimension(r)));
+    let line: Vec<_> = m.edges_at(far);
+    m.erase(&line, &[]);
+    assert!(on_curve(&m));
+    m.validate().unwrap();
+    // An edit that touches the circle and breaks it still freezes the dimension.
+    let first = vid(&m, p(1.0, 0.0, 0.0));
+    m.move_vertices(&BTreeSet::from([first]), p(0.3, 0.0, 0.0))
+        .unwrap();
+    assert!(matches!(
+        m.dimension(r),
+        Some(Dimension::Radial {
+            curve: RadialAnchor::Fixed { .. },
+            ..
+        })
+    ));
+    m.validate().unwrap();
+}
+
+#[test]
+fn a_non_uniform_scale_keeps_a_fixed_circles_area_and_scales_point_ends() {
+    let mut m = Model::new();
+    let d = created_dimension(
+        &m.add_dimension(linear(
+            Anchor::Point(DVec3::ZERO),
+            Anchor::Point(p(0.0, 2.0, 0.0)),
+            p(1.0, 0.0, 0.0),
+        ))
+        .unwrap()
+        .summary()
+        .created,
+    );
+    let r = created_dimension(
+        &m.add_dimension(Dimension::Radial {
+            curve: RadialAnchor::Fixed {
+                center: p(1.0, 1.0, 0.0),
+                normal: DVec3::Z,
+                radius: 1.0,
+            },
+            diameter: false,
+            leader: p(1.0, 1.0, 0.0),
+            tag: None,
+        })
+        .unwrap()
+        .summary()
+        .created,
+    );
+    let stretch = DAffine3::from_scale(p(2.0, 3.0, 5.0));
+    m.transform_annotations(&[d, r], &[], stretch);
+    m.validate().unwrap();
+    assert_eq!(
+        m.dimension(d),
+        Some(&linear(
+            Anchor::Point(DVec3::ZERO),
+            Anchor::Point(p(0.0, 6.0, 0.0)),
+            p(2.0, 0.0, 0.0)
+        ))
+    );
+    let c = m.radial_circle(r).unwrap();
+    assert!(c.center.distance(p(2.0, 3.0, 0.0)) < 1e-12);
+    assert!(c.normal.distance(DVec3::Z) < 1e-12);
+    assert!(
+        (c.radius - 6.0_f64.sqrt()).abs() < 1e-12,
+        "the radius keeps the ellipse's area: sqrt(2 * 3)"
+    );
+    match m.dimension(r) {
+        Some(Dimension::Radial { leader, .. }) => assert_eq!(*leader, p(2.0, 3.0, 0.0)),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn exploding_a_stretched_group_places_its_annotations_by_the_stretch() {
+    let (m, d) = dimensioned_rectangle();
+    let mut s = Scene::from_root(m);
+    let (edges, faces) = (all_edges(s.root()), all_faces(s.root()));
+    let parts = Parts {
+        edges,
+        faces,
+        dimensions: vec![d],
+        ..Parts::default()
+    };
+    let (i, _) = s
+        .make_group_with(MeshId::Root, &parts, DefinitionKind::Group, "")
+        .unwrap();
+    let stretch = DAffine3::from_scale(p(2.0, 3.0, 1.0));
+    s.edit(MeshId::Root, |m| Ok(m.transform_instances(&[i], stretch)))
+        .unwrap();
+    let exploded = s.explode(MeshId::Root, i).unwrap();
+    s.validate().unwrap();
+    let out = created_dimension(&exploded.summary().created);
+    let root = s.root();
+    assert_eq!(
+        root.dimension(out),
+        Some(&linear(
+            Anchor::Vertex(vid(root, DVec3::ZERO)),
+            Anchor::Vertex(vid(root, p(8.0, 0.0, 0.0))),
+            p(0.0, -3.0, 0.0)
+        ))
+    );
+}
+
+#[test]
+fn moving_a_point_end_onto_the_other_end_removes_the_dimension() {
+    let (mut m, _) = dimensioned_rectangle();
+    let a = vid(&m, DVec3::ZERO);
+    let d = created_dimension(
+        &m.add_dimension(linear(
+            Anchor::Vertex(a),
+            Anchor::Point(p(0.0, -3.0, 0.0)),
+            DVec3::X,
+        ))
+        .unwrap()
+        .summary()
+        .created,
+    );
+    let c = m.transform_annotations(&[d], &[], DAffine3::from_translation(p(0.0, 3.0, 0.0)));
+    assert!(m.dimension(d).is_none());
+    assert_eq!(c.summary().deleted, vec![EntityId::Dimension(d)]);
+    m.validate().unwrap();
+    m.apply(&c.inverse());
+    assert!(m.dimension(d).is_some());
+
+    // Moving the vertex end onto the point end removes it too, with the move.
+    let moved = m
+        .move_vertices(&BTreeSet::from([a]), p(0.0, -3.0, 0.0))
+        .unwrap();
+    assert!(moved.summary().deleted.contains(&EntityId::Dimension(d)));
+    assert!(m.dimension(d).is_none());
+    m.validate().unwrap();
+}
+
+#[test]
+fn anchors_are_written_tagged_and_coincident_ends_are_refused_on_load() {
+    let s = annotated_scene();
+    let json = serde_json::to_string(&s.to_data()).unwrap();
+    assert!(json.contains("{\"vertex\":"), "{json}");
+    assert!(json.contains("{\"point\":["), "{json}");
+    assert!(json.contains("{\"curve\":"), "{json}");
+    assert!(json.contains("{\"fixed\":{"), "{json}");
+    let bad = json.replacen("{\"vertex\":", "{\"vertexx\":", 1);
+    let e = serde_json::from_str::<SceneData>(&bad)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("vertexx"), "{e}");
+
+    let mut data = s.to_data();
+    data.root.dimensions.push(kernel::DimensionData::Linear {
+        id: 9100,
+        a: kernel::AnchorData::Point([1.0, 1.0, 1.0]),
+        b: kernel::AnchorData::Point([1.0, 1.0, 1.0]),
+        offset: [0.0, 0.0, 1.0],
+        tag: None,
+    });
+    let e = Scene::from_data(&data).unwrap_err();
+    assert!(e.contains("r9100") && e.contains("coincide"), "{e}");
 }

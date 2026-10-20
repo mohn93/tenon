@@ -658,25 +658,25 @@ impl Scene {
         }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
-        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "d", "n", "c",
-        // "d", "m", "t", "p") and the kind (dimensions and definitions share "d").
-        let mut owner: BTreeMap<u64, (char, Kind)> = BTreeMap::new();
-        let mut claim = |id: u64, prefix: char, kind: Kind| match owner.insert(id, (prefix, kind)) {
+        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "r", "n", "c",
+        // "d", "m", "t", "p").
+        let mut owner: BTreeMap<u64, char> = BTreeMap::new();
+        let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
             None => Ok(()),
-            Some((_, k)) if k == kind => Err(format!("{prefix}{id} is used in two meshes")),
-            Some((p, _)) => Err(format!("{p}{id} and {prefix}{id} share an id")),
+            Some(p) if p == prefix => Err(format!("{prefix}{id} is used in two meshes")),
+            Some(p) => Err(format!("{p}{id} and {prefix}{id} share an id")),
         };
         for id in self.definitions.keys() {
-            claim(id.0, 'd', Kind::Definition)?;
+            claim(id.0, 'd')?;
         }
         for id in self.materials.keys() {
-            claim(id.0, 'm', Kind::Material)?;
+            claim(id.0, 'm')?;
         }
         for id in self.tags.keys() {
-            claim(id.0, 't', Kind::Tag)?;
+            claim(id.0, 't')?;
         }
         for (id, _) in &self.pages {
-            claim(id.0, 'p', Kind::Page)?;
+            claim(id.0, 'p')?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;
@@ -710,20 +710,20 @@ impl Scene {
                 return Err(format!("{id} is on a missing tag"));
             }
             for id in entity_ids(m) {
-                let (prefix, n, kind) = match id {
-                    EntityId::Vertex(v) => ('v', v.0, Kind::Vertex),
-                    EntityId::Edge(e) => ('e', e.0, Kind::Edge),
-                    EntityId::Face(f) => ('f', f.0, Kind::Face),
-                    EntityId::Instance(i) => ('i', i.0, Kind::Instance),
-                    EntityId::Guide(g) => ('g', g.0, Kind::Guide),
-                    EntityId::Dimension(d) => ('d', d.0, Kind::Dimension),
-                    EntityId::Note(n) => ('n', n.0, Kind::Note),
+                let (prefix, n) = match id {
+                    EntityId::Vertex(v) => ('v', v.0),
+                    EntityId::Edge(e) => ('e', e.0),
+                    EntityId::Face(f) => ('f', f.0),
+                    EntityId::Instance(i) => ('i', i.0),
+                    EntityId::Guide(g) => ('g', g.0),
+                    EntityId::Dimension(d) => ('r', d.0),
+                    EntityId::Note(n) => ('n', n.0),
                 };
-                claim(n, prefix, kind)?;
+                claim(n, prefix)?;
             }
             let curves: BTreeSet<CurveId> = m.edges().filter_map(|(_, e)| e.curve).collect();
             for c in curves {
-                claim(c.0, 'c', Kind::Curve)?;
+                claim(c.0, 'c')?;
             }
         }
         if let Some(id) = self.cycle() {
@@ -776,23 +776,6 @@ impl Scene {
         }
         None
     }
-}
-
-/// What an id names, for `Scene::validate`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Vertex,
-    Edge,
-    Face,
-    Instance,
-    Guide,
-    Dimension,
-    Note,
-    Curve,
-    Definition,
-    Material,
-    Tag,
-    Page,
 }
 
 /// The eight corners of the box `lo..hi` placed by `transform`.

@@ -29,7 +29,7 @@ impl fmt::Display for CurveId {
     }
 }
 
-/// Any kernel entity. Serialized as a short string: "v12", "e3", "f7", "i4", "g9", "d5",
+/// Any kernel entity. Serialized as a short string: "v12", "e3", "f7", "i4", "g9", "r5",
 /// "n6".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -55,7 +55,7 @@ impl fmt::Display for EntityId {
             EntityId::Face(id) => write!(f, "f{}", id.0),
             EntityId::Instance(id) => write!(f, "i{}", id.0),
             EntityId::Guide(id) => write!(f, "g{}", id.0),
-            EntityId::Dimension(id) => write!(f, "d{}", id.0),
+            EntityId::Dimension(id) => write!(f, "r{}", id.0),
             EntityId::Note(id) => write!(f, "n{}", id.0),
         }
     }
@@ -72,7 +72,7 @@ impl FromStr for EntityId {
             'f' => Ok(EntityId::Face(FaceId(n))),
             'i' => Ok(EntityId::Instance(InstanceId(n))),
             'g' => Ok(EntityId::Guide(GuideId(n))),
-            'd' => Ok(EntityId::Dimension(DimensionId(n))),
+            'r' => Ok(EntityId::Dimension(DimensionId(n))),
             'n' => Ok(EntityId::Note(NoteId(n))),
             _ => Err(format!("invalid entity id {s:?}")),
         }
@@ -95,7 +95,7 @@ fn parse_prefixed(s: &str) -> Option<(char, u64)> {
 }
 
 /// Ids appear in JSON as strings: "v12" (vertex), "e3" (edge), "f7" (face), "i4" (instance),
-/// "g9" (guide), "d5" (dimension), "n6" (note).
+/// "g9" (guide), "r5" (dimension), "n6" (note).
 impl schemars::JsonSchema for EntityId {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "EntityId".into()
@@ -104,8 +104,8 @@ impl schemars::JsonSchema for EntityId {
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "pattern": "^[vefigdn](0|[1-9][0-9]*)$",
-            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face, i<n> instance, g<n> guide, d<n> dimension, n<n> note"
+            "pattern": "^[vefigrn](0|[1-9][0-9]*)$",
+            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face, i<n> instance, g<n> guide, r<n> dimension, n<n> note"
         })
     }
 }
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(EntityId::Face(FaceId(7)).to_string(), "f7");
         assert_eq!(EntityId::Instance(InstanceId(4)).to_string(), "i4");
         assert_eq!(EntityId::Guide(GuideId(9)).to_string(), "g9");
-        assert_eq!(EntityId::Dimension(DimensionId(5)).to_string(), "d5");
+        assert_eq!(EntityId::Dimension(DimensionId(5)).to_string(), "r5");
         assert_eq!(EntityId::Note(NoteId(6)).to_string(), "n6");
         assert_eq!("d3".parse::<DefinitionId>(), Ok(DefinitionId(3)));
         assert_eq!(DefinitionId(3).to_string(), "d3");

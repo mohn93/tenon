@@ -2081,8 +2081,9 @@ impl Editor {
         pasted
     }
 
-    /// Selects the edges, faces, instances and guides a command created in the open context (a
-    /// copied group's new contents live in its new definition and are left out).
+    /// Selects the edges, faces, instances, guides and annotations a command created in the
+    /// open context (a copied group's new contents live in its new definition and are left
+    /// out).
     fn select_created(&mut self, outcome: Outcome) {
         let m = self.doc.model();
         let ids = outcome
