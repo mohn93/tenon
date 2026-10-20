@@ -491,10 +491,12 @@ The `entity` result of an edge, face, instance or guide (and its entry in `entit
 
 Tags follow the geometry: the pieces of a split edge or face keep its tag, two edges joined or
 two faces merged by an erase keep one's, copies (of geometry, guides and instances) keep their
-tags, `make_group` and `make_component` keep the tags of what goes inside (the new instance is
-Untagged), and push/pull and follow_me put the faces they make from a face (cap and sides, end
-caps) on that face's tag. Exploding an instance keeps each piece's own tag; what came out
-Untagged (edges, faces, instances, guides) takes the instance's tag.
+tags, and `make_group` and `make_component` keep the tags of what goes inside (the new instance is
+Untagged). Exploding an instance keeps each piece's own tag; what came out Untagged (edges,
+faces, instances, guides) takes the instance's tag. New geometry is Untagged: the faces and
+edges push/pull and follow_me make (cap, sides, end caps) are Untagged whatever the source face
+is on, which keeps its own tag. A copy or explode drawn over coincident existing edges puts
+them on the incoming edges' tag (when those have one), as drawn geometry takes the copy's paint.
 
 ### Groups and components
 

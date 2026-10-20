@@ -512,3 +512,56 @@ fn set_tag_ids_take_batch_references_and_tag_fields_do_not() {
     );
     assert!(BatchCommand::parse(json!({"type": "delete_tag", "tag": "$0:m0"}), 1).is_err());
 }
+
+#[test]
+fn follow_me_makes_untagged_geometry_from_a_tagged_profile() {
+    let mut d = doc();
+    let path = run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [2, 0, 0]}),
+    )
+    .unwrap()["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('e'))
+        .unwrap()
+        .clone();
+    let out = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [0, 1, 1], "normal": [1, 0, 0]}),
+    )
+    .unwrap();
+    let old: Vec<Value> = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|id| !id.as_str().unwrap().starts_with('v'))
+        .cloned()
+        .collect();
+    let face = old
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone();
+    let walls = add(&mut d, json!({"name": "Walls"}));
+    run(&mut d, json!({"type": "set_tag", "ids": old, "tag": walls})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": [path]}),
+    )
+    .unwrap();
+    let all = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]}));
+    let faces = all["faces"].as_array().unwrap();
+    assert_eq!(faces.len(), 6);
+    assert!(faces.iter().all(|f| f["tag"].is_null()), "{faces:?}");
+    // Edges the sweep made are Untagged; the profile's edges that stay keep their tag.
+    let edges = all["edges"].as_array().unwrap();
+    assert!(edges.iter().any(|e| old.contains(&e["id"])), "{edges:?}");
+    assert!(edges.iter().any(|e| !old.contains(&e["id"])), "{edges:?}");
+    for e in edges {
+        let kept = old.contains(&e["id"]);
+        let expected = if kept { json!(walls) } else { Value::Null };
+        assert_eq!(e["tag"], expected, "{e}");
+    }
+}

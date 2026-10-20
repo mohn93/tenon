@@ -263,8 +263,9 @@ impl Model {
         } else {
             (face.paint(), face.texture)
         };
-        // The cap and sides go on the pushed face's tag.
-        let new_tag = face.tag;
+        // The cap and sides are new geometry: Untagged, whatever the pushed face (or a
+        // coplanar face they were cut from) is on.
+        let new_tag = None;
         let created: Vec<FaceId> = self
             .faces()
             .map(|(f, _)| f)

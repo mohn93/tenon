@@ -119,7 +119,8 @@ impl Scene {
     /// tree's order), then the root geometry into one new definition named `name` of `kind`,
     /// placed once with the identity in mesh `parent`. Fails with `InvalidImport` for a
     /// malformed tree (see `check_tree`), `NotFinite` for a point that is not finite,
-    /// `MaterialNotFound` for a material the scene lacks, `TooManyFaces` past
+    /// `MaterialNotFound` for a material the scene lacks, `TagNotFound` for a guide on a tag
+    /// the scene lacks, `TooManyFaces` past
     /// `MAX_IMPORT_FACES` and `NothingToImport` when the root makes nothing; nothing changes
     /// then.
     pub fn import_tree(
@@ -181,6 +182,15 @@ impl Scene {
                 || g.instances.iter().any(|i| missing(&i.material))
         }) {
             return Err(KernelError::MaterialNotFound);
+        }
+        // Guides are the only imported entities that carry a tag; one the scene lacks would
+        // leave the guide on a dangling tag.
+        if geometries
+            .iter()
+            .flat_map(|g| &g.guides)
+            .any(|g| g.tag().is_some_and(|t| self.tag(t).is_none()))
+        {
+            return Err(KernelError::TagNotFound);
         }
         let given: usize = geometries.iter().map(|g| g.faces.len()).sum();
         if given > MAX_IMPORT_FACES {

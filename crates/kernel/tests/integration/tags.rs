@@ -231,6 +231,9 @@ fn deleting_a_tag_moves_its_entities_everywhere_and_undo_puts_them_back() {
     for move_to in [None, Some(roof)] {
         let before = s.clone();
         let deleted = s.delete_tag(walls, move_to).unwrap();
+        // One edit per mesh with something on the tag (root and the group's), then the
+        // removal.
+        assert_eq!(deleted.steps.len(), 3);
         s.validate().unwrap();
         assert!(s.tag(walls).is_none());
         assert_eq!(s.root().instance(group).unwrap().tag, move_to);
@@ -264,6 +267,71 @@ fn deleting_a_tag_moves_its_entities_everywhere_and_undo_puts_them_back() {
         s.delete_tag(TagId(999), None),
         Err(KernelError::TagNotFound)
     );
+}
+
+#[test]
+fn deleting_a_tag_edits_only_the_meshes_with_something_on_it() {
+    let (mut s, group) = grouped_square();
+    let walls = tag(&mut s, "Walls");
+    s.set_tags(MeshId::Root, &[EntityId::Instance(group)], Some(walls))
+        .unwrap();
+    let deleted = s.delete_tag(walls, None).unwrap();
+    // The group's definition has nothing on the tag: no step for it.
+    assert!(matches!(
+        &deleted.steps[..],
+        [
+            kernel::Step::Edit(MeshId::Root, _),
+            kernel::Step::RemoveTag(..)
+        ]
+    ));
+    let unused = tag(&mut s, "Unused");
+    let deleted = s.delete_tag(unused, None).unwrap();
+    assert!(matches!(&deleted.steps[..], [kernel::Step::RemoveTag(..)]));
+}
+
+#[test]
+fn a_tagged_copy_drawn_over_an_existing_edge_puts_it_on_its_tag() {
+    let mut m = Model::new();
+    for x in [0.0, 4.0] {
+        m.add_polygon(&[
+            p(x, 0.0, 0.0),
+            p(x + 2.0, 0.0, 0.0),
+            p(x + 2.0, 2.0, 0.0),
+            p(x, 2.0, 0.0),
+        ])
+        .unwrap();
+    }
+    let mut s = Scene::from_root(m);
+    let walls = tag(&mut s, "Walls");
+    let right: Vec<EntityId> = {
+        let m = s.root();
+        m.edges()
+            .filter(|(_, e)| e.v.iter().all(|v| m.position(*v).unwrap().x >= 4.0))
+            .map(|(e, _)| EntityId::Edge(e))
+            .collect()
+    };
+    s.set_tags(MeshId::Root, &right, Some(walls)).unwrap();
+    let edges: Vec<EdgeId> = right
+        .iter()
+        .map(|id| match id {
+            EntityId::Edge(e) => *e,
+            _ => unreachable!(),
+        })
+        .collect();
+    // The copy lands between the squares: its left side lies on the left square's right edge.
+    s.edit(MeshId::Root, |m| m.copy(&edges, &[], p(-2.0, 0.0, 0.0), 1))
+        .unwrap();
+    s.validate().unwrap();
+    let m = s.root();
+    let at_x = |x: f64| {
+        m.edges()
+            .find(|(_, e)| e.v.iter().all(|v| m.position(*v).unwrap().x == x))
+            .unwrap()
+            .1
+            .tag
+    };
+    assert_eq!(at_x(2.0), Some(walls));
+    assert_eq!(at_x(0.0), None);
 }
 
 #[test]
@@ -397,15 +465,57 @@ fn make_group_keeps_tags_and_explode_passes_the_instance_tag_to_untagged_content
 }
 
 #[test]
-fn pulled_faces_give_their_tag_to_the_cap_and_sides() {
-    let (mut s, face) = square_scene();
+fn pulling_a_tagged_face_makes_untagged_geometry() {
+    for distance in [1.0, -1.0] {
+        let (mut s, face) = square_scene();
+        let walls = tag(&mut s, "Walls");
+        let ids = all_ids(s.root());
+        s.set_tags(MeshId::Root, &ids, Some(walls)).unwrap();
+        s.edit(MeshId::Root, |m| m.push_pull(face, distance))
+            .unwrap();
+        s.validate().unwrap();
+        let m = s.root();
+        assert_eq!(m.faces().count(), 6);
+        assert_eq!(m.edges().count(), 12);
+        // The source face and its edges keep their tag; the cap, the sides and the new edges
+        // are new geometry, Untagged.
+        assert_eq!(m.face(face).unwrap().tag, Some(walls));
+        for (id, f) in m.faces() {
+            assert_eq!(f.tag.is_some(), id == face, "{id:?}");
+        }
+        for (id, e) in m.edges() {
+            let old = ids.contains(&EntityId::Edge(id));
+            assert_eq!(e.tag, old.then_some(walls), "{id:?}");
+        }
+    }
+}
+
+#[test]
+fn an_import_tree_with_a_guide_on_a_missing_tag_is_refused() {
+    let (mut s, _) = square_scene();
     let walls = tag(&mut s, "Walls");
-    s.set_tags(MeshId::Root, &[EntityId::Face(face)], Some(walls))
+    let tree = |t: TagId| kernel::ImportTree {
+        root: kernel::ImportGeometry {
+            guides: vec![Guide::point(p(1.0, 1.0, 1.0)).with_tag(Some(t))],
+            ..kernel::ImportGeometry::default()
+        },
+        definitions: Vec::new(),
+    };
+    let before = s.clone();
+    let refused = s.import_tree(MeshId::Root, &tree(TagId(999)), DefinitionKind::Group, "x");
+    assert_eq!(refused.unwrap_err(), KernelError::TagNotFound);
+    assert_eq!(s, before);
+    let (placed, _, _) = s
+        .import_tree(MeshId::Root, &tree(walls), DefinitionKind::Group, "x")
         .unwrap();
-    s.edit(MeshId::Root, |m| m.push_pull(face, 1.0)).unwrap();
     s.validate().unwrap();
-    assert_eq!(s.root().faces().count(), 6);
-    assert!(s.root().faces().all(|(_, f)| f.tag == Some(walls)));
+    let d = MeshId::Definition(s.root().instance(placed).unwrap().definition);
+    assert!(
+        s.mesh(d)
+            .unwrap()
+            .guides()
+            .all(|(_, g)| g.tag() == Some(walls))
+    );
 }
 
 #[test]

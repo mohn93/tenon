@@ -69,7 +69,7 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
 impl Model {
     /// Puts edges, faces, instances and guides on `tag` (None: Untagged) as one ChangeSet.
     /// Vertices, unknown ids and entities already on it are skipped.
-    pub fn set_tags(&mut self, ids: &[EntityId], tag: Option<TagId>) -> ChangeSet {
+    pub(crate) fn set_tags(&mut self, ids: &[EntityId], tag: Option<TagId>) -> ChangeSet {
         for &id in ids.iter().collect::<BTreeSet<_>>() {
             self.set_tag(id, tag);
         }
@@ -155,7 +155,12 @@ impl Scene {
         if move_to.is_some_and(|t| self.tag(t).is_none()) {
             return Err(KernelError::TagNotFound);
         }
-        let meshes: Vec<MeshId> = self.meshes().map(|(m, _)| m).collect();
+        // Only meshes with something on the tag get an edit step.
+        let meshes: Vec<MeshId> = self
+            .meshes()
+            .filter(|(_, m)| m.tagged(id).next().is_some())
+            .map(|(m, _)| m)
+            .collect();
         let mut changes = Vec::new();
         for mesh in meshes {
             changes.push(self.edit(mesh, |m| Ok(m.retag(id, move_to)))?);
