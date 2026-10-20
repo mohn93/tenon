@@ -239,7 +239,7 @@ fn reference_keys_cover_every_id_field() {
             }
             checked += 1;
             let reference_key = matches!(key.as_str(), "ids" | "face" | "id" | "material")
-                || (key == "path" && name == "open_path");
+                || (key == "path" && matches!(name, "open_path" | "follow_me"));
             assert!(
                 reference_key,
                 "{name}.{key} holds ids but is not a reference key"

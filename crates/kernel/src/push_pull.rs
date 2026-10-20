@@ -437,7 +437,7 @@ impl Model {
     }
 
     /// A point strictly inside face `id`: the centroid of its first triangle.
-    fn interior_point(&self, id: FaceId) -> Option<DVec3> {
+    pub(crate) fn interior_point(&self, id: FaceId) -> Option<DVec3> {
         let [a, b, c] = *self.triangulate(id)?.first()?;
         Some((a + b + c) / 3.0)
     }

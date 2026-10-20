@@ -116,9 +116,17 @@ impl Model {
         soft: bool,
         polygon: bool,
     ) {
+        for e in self.edges_along(a, b) {
+            self.set_edge(e, curve, soft, polygon);
+        }
+    }
+
+    /// The edges lying along the segment a-b (none when it is shorter than `LENGTH_TOL`).
+    pub(crate) fn edges_along(&self, a: DVec3, b: DVec3) -> BTreeSet<EdgeId> {
+        let mut along: BTreeSet<EdgeId> = BTreeSet::new();
         let len = a.distance(b);
         if len < LENGTH_TOL {
-            return;
+            return along;
         }
         let on = |p: DVec3| {
             let (t, d) = project_on_segment(p, a, b);
@@ -128,7 +136,6 @@ impl Model {
         // The edges along a-b form chains reaching its ends (drawing a-b joined every vertex
         // on it), so walk out from the vertices at the ends.
         let ends: Vec<VertexId> = [a, b].iter().filter_map(|p| self.find_vertex(*p)).collect();
-        let mut along: BTreeSet<EdgeId> = BTreeSet::new();
         if ends.len() < 2 {
             // An end is gone (push/pull removed strays): pieces may be cut off from it, so
             // look at every edge.
@@ -152,9 +159,7 @@ impl Model {
                 }
             }
         }
-        for e in along {
-            self.set_edge(e, curve, soft, polygon);
-        }
+        along
     }
 
     /// The curve edge `edge` is part of, if any.

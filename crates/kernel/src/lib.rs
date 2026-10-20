@@ -23,6 +23,7 @@ mod regions;
 mod scene;
 mod smooth;
 mod soften;
+pub mod sweep;
 mod texture;
 mod transform;
 mod triangles;

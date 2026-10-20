@@ -178,6 +178,14 @@ pub enum Command {
         #[schemars(with = "Option<ModelPoint>")]
         toward: Option<[f64; 3]>,
     },
+    /// Sweep face `face` (the profile) along `path`, edges forming one connected chain (open or
+    /// closed, without branches), as one undo step. The sweep starts at the path end nearest the
+    /// face's plane (closed: the nearest path vertex) and carries the face as it is, so a face
+    /// beside a circle sweeps around it. Corners are mitred; an open path is capped at both
+    /// ends. The face itself is removed. Edges between the faces of two profile sides, or of two
+    /// path segments, on one curve that is not a polygon are soft. `path` may not include the
+    /// face's own edges unless it is exactly the outer loop of another face.
+    FollowMe { face: EntityId, path: Vec<EntityId> },
     /// Turn edges, faces (with their edges), instances and guides into a group: they move into
     /// a new definition, placed by one new instance where they were. Guides alone cannot be
     /// grouped. The instance becomes the selection.

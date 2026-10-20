@@ -221,10 +221,11 @@ impl From<Command> for BatchCommand {
     }
 }
 
-/// The top-level fields where references are recognised; `path` only in `open_path`.
+/// The top-level fields where references are recognised; `path` only in `open_path` and
+/// `follow_me`.
 fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
-        || (key == "path" && command_type == Some("open_path"))
+        || (key == "path" && matches!(command_type, Some("open_path" | "follow_me")))
 }
 
 impl BatchCommand {
@@ -455,6 +456,10 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::PositionTexture { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
         Command::OpenPath { path } => f(Slot::List(path)),
+        Command::FollowMe { face, path } => {
+            f(Slot::One(face));
+            f(Slot::List(path));
+        }
         Command::ChangeMaterial { material, .. } | Command::DeleteMaterial { material } => {
             f(Slot::Material(material))
         }

@@ -9,6 +9,7 @@ mod contract;
 mod curves;
 mod export;
 mod files;
+mod follow_me;
 mod groups;
 mod guides;
 mod history_origin;

@@ -24,6 +24,7 @@ use crate::rotate::rotation;
 
 mod camera;
 mod files;
+mod follow_me;
 mod groups;
 mod import;
 mod materials;
@@ -372,6 +373,7 @@ impl Document {
             | Command::Rotate { .. }
             | Command::Scale { .. }
             | Command::Offset { .. }
+            | Command::FollowMe { .. }
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
@@ -479,6 +481,7 @@ impl Document {
                 distance,
                 toward,
             } => self.offset_changes(ids, *distance, *toward),
+            Command::FollowMe { face, path } => self.follow_me_changes(*face, path),
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
