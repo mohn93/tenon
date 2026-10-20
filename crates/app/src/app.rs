@@ -21,6 +21,7 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 use crate::awake::Awake;
+use crate::clipboard::SystemClipboard;
 use crate::editor::{DRAG_LOGICAL_PX, Editor, EditorKey};
 use crate::feedback::Timing;
 use crate::fly::FlyKey;
@@ -708,6 +709,7 @@ impl State {
         );
         editor.set_import_options(prefs.import);
         editor.set_trackpad(prefs.trackpad);
+        editor.set_clipboard(Box::new(SystemClipboard::default()));
         Self {
             window,
             instance,
@@ -1097,6 +1099,19 @@ impl State {
             // A refusal is in the status: nothing was selected.
             UiAction::Duplicate => {
                 let _ = self.editor.duplicate();
+            }
+            // Refusals are in the status (nothing selected, no clip on the clipboard).
+            UiAction::Cut => {
+                let _ = self.editor.cut();
+            }
+            UiAction::Copy => {
+                let _ = self.editor.copy();
+            }
+            UiAction::Paste => {
+                let _ = self.editor.paste(None);
+            }
+            UiAction::PasteInPlace => {
+                let _ = self.editor.paste_in_place();
             }
             UiAction::EraseSelection => {
                 self.editor.erase_selection();
@@ -1543,6 +1558,7 @@ impl State {
             status: &status,
             info: &info,
             has_selection: !self.editor.doc().selection().is_empty(),
+            has_clip: self.editor.clip_ready(),
             has_instance_selected: self
                 .editor
                 .doc()
@@ -1818,6 +1834,9 @@ fn shortcut_letter(logical: &Key, physical: PhysicalKey) -> Option<char> {
             PhysicalKey::Code(KeyCode::KeyQ) => Some('q'),
             PhysicalKey::Code(KeyCode::KeyA) => Some('a'),
             PhysicalKey::Code(KeyCode::KeyD) => Some('d'),
+            PhysicalKey::Code(KeyCode::KeyX) => Some('x'),
+            PhysicalKey::Code(KeyCode::KeyC) => Some('c'),
+            PhysicalKey::Code(KeyCode::KeyV) => Some('v'),
             PhysicalKey::Code(KeyCode::Comma) => Some(','),
             _ => None,
         },
@@ -2399,7 +2418,11 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Focused(true) => {
                 s.focused = true;
-                false
+                // Another app may have changed the clipboard: Paste is enabled by what it
+                // holds now.
+                let had = s.editor.clip_ready();
+                s.editor.refresh_clipboard();
+                had != s.editor.clip_ready()
             }
             // The frames skipped while the window was hidden (see `retries_at_once`).
             WindowEvent::Occluded(false) => true,
@@ -3258,6 +3281,9 @@ mod tests {
             'z' => KeyCode::KeyZ,
             'a' => KeyCode::KeyA,
             'd' => KeyCode::KeyD,
+            'x' => KeyCode::KeyX,
+            'c' => KeyCode::KeyC,
+            'v' => KeyCode::KeyV,
             ',' => KeyCode::Comma,
             other => panic!("add {other} to shortcut_letter's fallbacks and here"),
         };

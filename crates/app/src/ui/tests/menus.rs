@@ -792,13 +792,21 @@ fn text_actions_are_off_while_typing() {
         undo: Some("paint".into()),
         redo: Some("erase".into()),
         has_selection: true,
+        has_clip: true,
         ..Default::default()
     };
     let bar = menu_bar(&f.view(), true);
     for i in items(&bar) {
         let text = matches!(
             i.action,
-            UiAction::Undo | UiAction::Redo | UiAction::SelectAll | UiAction::SelectNone
+            UiAction::Undo
+                | UiAction::Redo
+                | UiAction::SelectAll
+                | UiAction::SelectNone
+                | UiAction::Cut
+                | UiAction::Copy
+                | UiAction::Paste
+                | UiAction::PasteInPlace
         );
         assert_eq!(
             native_enabled(i, true, false),
@@ -864,6 +872,117 @@ fn the_edit_menu_selects_all_none_and_duplicates() {
     for bound in [Bound::SelectAll, Bound::SelectNone, Bound::Duplicate] {
         let key = chord(bound).unwrap().text();
         assert!(texts.contains(&key), "{key} in {texts:?}");
+    }
+}
+
+#[test]
+fn the_edit_menu_cuts_copies_and_pastes() {
+    let fixture = |has_selection, has_clip| Fixture {
+        has_selection,
+        has_clip,
+        ..Default::default()
+    };
+    for (item, action) in [
+        ("Cut", UiAction::Cut),
+        ("Copy", UiAction::Copy),
+        ("Paste", UiAction::Paste),
+        ("Paste In Place", UiAction::PasteInPlace),
+    ] {
+        let mut h = harness(fixture(true, true));
+        assert_eq!(click_menu(&mut h, &["Edit", item]), [action], "{item}");
+    }
+    // Cut and Copy need a selection, Paste and Paste In Place a clip on the clipboard.
+    for (has_selection, has_clip) in [(false, false), (true, false), (false, true)] {
+        for (item, needs_selection) in [
+            ("Cut", true),
+            ("Copy", true),
+            ("Paste", false),
+            ("Paste In Place", false),
+        ] {
+            let mut h = harness(fixture(has_selection, has_clip));
+            let there = rects_named(&h, item);
+            click(&mut h, "Edit");
+            let on = if needs_selection {
+                has_selection
+            } else {
+                has_clip
+            };
+            let node = new_node(&h, item, &there);
+            assert_eq!(
+                node.accesskit_node().is_disabled(),
+                !on,
+                "{item} {has_selection} {has_clip}"
+            );
+        }
+    }
+    // After Redo, before Select All; their keys are the table's and Paste In Place has none.
+    let f = fixture(true, true);
+    let bar = crate::menus::menu_bar(&f.view(), false);
+    let edit = &bar.iter().find(|m| m.title == "Edit").unwrap().entries;
+    let labels: Vec<Option<&str>> = edit
+        .iter()
+        .map(|e| match e {
+            crate::menus::Entry::Item(i) => Some(i.label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        labels[..8],
+        [
+            Some("Undo"),
+            Some("Redo"),
+            None,
+            Some("Cut"),
+            Some("Copy"),
+            Some("Paste"),
+            Some("Paste In Place"),
+            None
+        ]
+    );
+    let mut h = harness(fixture(true, true));
+    click(&mut h, "Edit");
+    let texts = drawn_texts(&h);
+    for bound in [Bound::Cut, Bound::Copy, Bound::Paste] {
+        let key = chord(bound).unwrap().text();
+        assert!(texts.contains(&key), "{key} in {texts:?}");
+    }
+}
+
+#[test]
+fn cut_copy_and_paste_yield_to_a_focused_text_field() {
+    use crate::menus::{items, menu_bar, native_enabled, native_event_acts};
+    let f = Fixture {
+        has_selection: true,
+        has_clip: true,
+        ..Default::default()
+    };
+    let bar = menu_bar(&f.view(), true);
+    for action in [
+        UiAction::Cut,
+        UiAction::Copy,
+        UiAction::Paste,
+        UiAction::PasteInPlace,
+    ] {
+        let item = *items(&bar)
+            .iter()
+            .find(|i| i.action == action)
+            .expect("an item");
+        assert!(native_enabled(item, false, false), "{action:?}");
+        // Disabled, so the key goes on to the field, and an event that raced it does nothing.
+        assert!(!native_enabled(item, true, false), "{action:?}");
+        assert!(
+            native_event_acts(&action, false, false, false),
+            "{action:?}"
+        );
+        assert!(
+            !native_event_acts(&action, false, true, false),
+            "{action:?}"
+        );
+        // A held key acts once.
+        assert!(
+            !native_event_acts(&action, true, false, false),
+            "{action:?}"
+        );
     }
 }
 

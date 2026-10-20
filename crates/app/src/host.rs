@@ -252,6 +252,10 @@ impl Host for AppHost<'_> {
                     editor.set_soften_angle_checked(angle)?
                 }
                 EditorCommand::Duplicate {} => editor.duplicate()?,
+                EditorCommand::CopySelection {} => editor.copy()?,
+                EditorCommand::CutSelection {} => editor.cut()?,
+                EditorCommand::PasteClipboard { at } => editor.paste(at)?,
+                EditorCommand::PasteInPlace {} => editor.paste_in_place()?,
             }
             Ok(())
         })

@@ -1037,7 +1037,7 @@ fn modifiers_stay_held_across_calls_until_let_go() {
     assert_eq!(
         r["error"]["data"]["message"],
         "event 1: with cmd or ctrl held only z (undo, with shift redo), a (select all, with \
-         shift none) and d (duplicate) are taken",
+         shift none), d (duplicate), x (cut), c (copy) and v (paste) are taken",
         "{r}"
     );
     assert_eq!(
@@ -1621,4 +1621,202 @@ fn a_turn_shows_only_its_direction_lock() {
     assert_eq!(ran(&r), ["rotate"], "{r}");
     assert_eq!(r["editor"]["phase"], "idle", "{r}");
     assert_eq!(r["editor"]["lock"], "Locked: blue axis", "{r}");
+}
+
+/// The labels of the steps `undo` would undo, newest first.
+fn undo_labels(e: &mut Editor) -> Vec<String> {
+    ask(e, json!({"type": "history"}))["undo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn copy_and_paste_through_editor_commands() {
+    let mut e = editor();
+    square(&mut e);
+    // Nothing selected: nothing to copy, and no clip yet to paste.
+    let r = call(&mut e, "execute", json!({"type": "copy_selection"}));
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    let r = call(&mut e, "execute", json!({"type": "paste_in_place"}));
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    select_all(&mut e);
+    let revision = e.doc().revision();
+    exec(&mut e, json!({"type": "copy_selection"}));
+    assert_eq!(e.doc().revision(), revision, "copying changes nothing");
+    assert!(e.clip_ready());
+    // Pasted with its base point (the square's corner at the origin) at (5, 0, 0).
+    let r = exec(&mut e, json!({"type": "paste_clipboard", "at": [5, 0, 0]}));
+    assert_eq!(r["editor"]["tool"], "select", "{r}");
+    assert_eq!(count(&mut e, "faces"), 2);
+    assert_eq!(undo_labels(&mut e)[0], "paste");
+    assert_eq!(
+        ask(&mut e, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    for corner in [[5.0, 0.0, 0.0], [7.0, 2.0, 0.0]] {
+        assert!(has_vertex(&e, corner), "{corner:?}");
+    }
+    // In place: back where it was copied from, merging with the square there.
+    exec(&mut e, json!({"type": "paste_in_place"}));
+    assert_eq!(count(&mut e, "faces"), 2, "merged onto the original");
+    // The model's own `copy` (by an offset) is still the model's.
+    let r = exec(
+        &mut e,
+        json!({"type": "add_rectangle", "corner": [0, 20, 0], "opposite": [1, 21, 0]}),
+    );
+    let face = created(&r, 'f')[0].clone();
+    let r = exec(
+        &mut e,
+        json!({"type": "copy", "ids": [face], "offset": [0, 9, 0]}),
+    );
+    assert!(r["changes"]["created"].as_array().is_some(), "{r}");
+}
+
+/// Whether the open context has a vertex at `p`.
+fn has_vertex(e: &Editor, p: [f64; 3]) -> bool {
+    let m = e.doc().model();
+    m.vertices().any(|(v, _)| {
+        m.position(v)
+            .is_some_and(|q| q.distance(DVec3::from(p)) < 1e-9)
+    })
+}
+
+#[test]
+fn cut_is_one_undo_step_and_undo_restores() {
+    let mut e = editor();
+    square(&mut e);
+    select_all(&mut e);
+    exec(&mut e, json!({"type": "cut_selection"}));
+    assert_eq!(count(&mut e, "faces"), 0);
+    assert_eq!(count(&mut e, "edges"), 0);
+    assert_eq!(undo_labels(&mut e), ["cut", "add_rectangle"]);
+    exec(&mut e, json!({"type": "undo"}));
+    assert_eq!(count(&mut e, "faces"), 1);
+    assert_eq!(count(&mut e, "edges"), 4);
+    // The clip is still there to paste.
+    exec(&mut e, json!({"type": "redo"}));
+    exec(&mut e, json!({"type": "paste_in_place"}));
+    assert_eq!(count(&mut e, "faces"), 1);
+    assert_eq!(undo_labels(&mut e), ["paste", "cut", "add_rectangle"]);
+}
+
+#[test]
+fn text_that_is_not_a_clip_is_refused_and_changes_nothing() {
+    use crate::clipboard::{Clipboard, MemoryClipboard};
+    let mut e = editor();
+    square(&mut e);
+    let mut board = MemoryClipboard::default();
+    board.set_text("hello".into()).unwrap();
+    e.set_clipboard(Box::new(board));
+    assert!(!e.clip_ready());
+    let revision = e.doc().revision();
+    for command in [
+        json!({"type": "paste_clipboard"}),
+        json!({"type": "paste_clipboard", "at": [1, 1, 0]}),
+        json!({"type": "paste_in_place"}),
+    ] {
+        let r = call(&mut e, "execute", command.clone());
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+        let state = ask(&mut e, json!({"type": "editor"}));
+        assert_eq!(
+            state["message"], "The clipboard does not hold sketchup-alt geometry",
+            "{command}"
+        );
+        assert_eq!(state["tool"], "select");
+        assert_eq!(state["phase"], "idle");
+    }
+    // Damaged clip text: why, in the status.
+    let mut board = MemoryClipboard::default();
+    board.set_text("sketchup-alt clip 1\n!!!".into()).unwrap();
+    e.set_clipboard(Box::new(board));
+    assert!(e.clip_ready(), "by its header");
+    let r = call(&mut e, "execute", json!({"type": "paste_clipboard"}));
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+    assert_eq!(e.doc().revision(), revision);
+}
+
+#[test]
+fn cmd_x_c_and_v_cut_copy_and_paste_with_the_paste_tool() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "line");
+    let cmd = |e: &mut Editor, key: &str| {
+        call(
+            e,
+            "tool_input",
+            json!({"events": [{"type": "key", "key": key, "cmd": true}]}),
+        )
+    };
+    // Nothing selected: Cmd+C says so.
+    let r = cmd(&mut e, "c");
+    assert_eq!(
+        r["result"]["editor"]["message"], "Select something to copy",
+        "{r}"
+    );
+    select_all(&mut e);
+    assert!(cmd(&mut e, "c")["error"].is_null());
+    // Cmd+V: the Paste tool, the clip following the cursor by its base point.
+    let r = input(
+        &mut e,
+        json!([{"type": "key", "key": "v", "cmd": true}, {"type": "move", "point": [4, 0, 0]}]),
+    );
+    assert_eq!(r["editor"]["phase"], "active", "{r}");
+    assert_eq!(r["editor"]["prompt"], "Click where to paste (Esc cancels)");
+    assert!(
+        r["editor"]["status"].as_str().unwrap().starts_with("Paste"),
+        "{r}"
+    );
+    let preview = r["preview"].as_array().unwrap();
+    assert_eq!(preview.len(), 4, "{r}");
+    assert!(
+        preview
+            .iter()
+            .any(|s| near(&s[0], [4.0, 0.0, 0.0]) || near(&s[1], [4.0, 0.0, 0.0])),
+        "{r}"
+    );
+    // Escape: back to Line, nothing pasted.
+    let r = input(&mut e, json!([{"type": "key", "key": "escape"}]));
+    assert_eq!(r["editor"]["tool"], "line", "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert_eq!(count(&mut e, "faces"), 1);
+    // Cmd+V, then a click pastes there and Line comes back.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "key", "key": "v", "cmd": true},
+            {"type": "click", "point": [4, 0, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["paste"], "{r}");
+    assert_eq!(r["editor"]["tool"], "line", "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert_eq!(count(&mut e, "faces"), 2);
+    // The pasted square is selected; Cmd+X cuts it as one step.
+    let r = cmd(&mut e, "x");
+    assert!(r["error"].is_null(), "{r}");
+    assert_eq!(count(&mut e, "faces"), 1);
+    assert_eq!(undo_labels(&mut e)[0], "cut");
+    // `cancel` puts the Paste tool away too.
+    cmd(&mut e, "v");
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "active");
+    exec(&mut e, json!({"type": "cancel"}));
+    let state = ask(&mut e, json!({"type": "editor"}));
+    assert_eq!(
+        (state["tool"].clone(), state["phase"].clone()),
+        (json!("line"), json!("idle"))
+    );
+    // Shifted, they are no chords.
+    let r = call(
+        &mut e,
+        "tool_input",
+        json!({"events": [{"type": "key", "key": "v", "cmd": true, "shift": true}]}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
 }

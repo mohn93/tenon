@@ -222,8 +222,19 @@ impl Document {
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        let label = command.name();
+        self.execute_as(command, label)
+    }
+
+    /// Runs one command as `execute` does, its undo step (if it makes one) labelled `label`
+    /// instead of by the command's name: the window's Cut is an `erase` labelled `cut`.
+    pub fn execute_as(
+        &mut self,
+        command: Command,
+        label: impl Into<String>,
+    ) -> Result<Outcome, CommandError> {
         if let Some(changes) = self.edit(&command) {
-            let mut outcome = self.record(command.name(), changes?);
+            let mut outcome = self.record(label.into(), changes?);
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
             outcome.positioned = self.positioned.take();

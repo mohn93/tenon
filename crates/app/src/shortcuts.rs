@@ -22,6 +22,9 @@ pub enum Bound {
     SelectAll,
     SelectNone,
     Duplicate,
+    Cut,
+    Copy,
+    Paste,
     EraseSelection,
     MakeGroup,
     MakeComponent,
@@ -90,7 +93,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 37] = [
+pub const TABLE: [Shortcut; 40] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -118,6 +121,9 @@ pub const TABLE: [Shortcut; 37] = [
     on(Bound::SelectAll, true, false, Key::Letter('a')),
     on(Bound::SelectNone, true, true, Key::Letter('a')),
     on(Bound::Duplicate, true, false, Key::Letter('d')),
+    on(Bound::Cut, true, false, Key::Letter('x')),
+    on(Bound::Copy, true, false, Key::Letter('c')),
+    on(Bound::Paste, true, false, Key::Letter('v')),
     on(Bound::Settings, true, false, Key::Comma),
     on(Bound::EraseSelection, false, false, Key::Delete),
     on(Bound::MakeGroup, false, false, Key::Letter('g')),
@@ -257,6 +263,9 @@ impl Bound {
             Bound::SelectAll => "Select All",
             Bound::SelectNone => "Select None",
             Bound::Duplicate => "Duplicate",
+            Bound::Cut => "Cut",
+            Bound::Copy => "Copy",
+            Bound::Paste => "Paste",
             Bound::EraseSelection => "Erase selection",
             Bound::MakeGroup => "Make Group",
             Bound::MakeComponent => "Make Component",
@@ -286,6 +295,9 @@ impl Bound {
             | Bound::SelectAll
             | Bound::SelectNone
             | Bound::Duplicate
+            | Bound::Cut
+            | Bound::Copy
+            | Bound::Paste
             | Bound::EraseSelection
             | Bound::Settings => "Edit",
             Bound::MakeGroup
@@ -314,6 +326,9 @@ impl Bound {
             Bound::SelectAll => UiAction::SelectAll,
             Bound::SelectNone => UiAction::SelectNone,
             Bound::Duplicate => UiAction::Duplicate,
+            Bound::Cut => UiAction::Cut,
+            Bound::Copy => UiAction::Copy,
+            Bound::Paste => UiAction::Paste,
             Bound::EraseSelection => UiAction::EraseSelection,
             Bound::MakeGroup => UiAction::MakeGroup,
             Bound::MakeComponent => UiAction::MakeComponent,
@@ -420,6 +435,16 @@ mod tests {
         assert_eq!(command('a', false, false), Some(Bound::SelectAll));
         assert_eq!(command('a', true, false), Some(Bound::SelectNone));
         assert_eq!(command('d', false, false), Some(Bound::Duplicate));
+        assert_eq!(command('x', false, false), Some(Bound::Cut));
+        assert_eq!(command('c', false, false), Some(Bound::Copy));
+        assert_eq!(command('v', false, false), Some(Bound::Paste));
+        assert_eq!(command('v', true, false), None);
+        assert_eq!(command('c', false, true), None, "held Cmd+C copies once");
+        assert_eq!(
+            plain('c'),
+            Some(Bound::Tool(ToolKind::Circle)),
+            "plain c is still Circle"
+        );
         assert_eq!(command('a', false, true), None, "held Cmd+A selects once");
         assert_eq!(
             plain('a'),
@@ -492,6 +517,8 @@ mod tests {
         assert_eq!(text(Bound::CloseInstance, true), "Esc");
         assert_eq!(text(Bound::SelectNone, true), "⇧⌘A");
         assert_eq!(text(Bound::Duplicate, false), "Ctrl+D");
+        assert_eq!(text(Bound::Paste, true), "⌘V");
+        assert_eq!(text(Bound::Cut, false), "Ctrl+X");
     }
 
     #[test]

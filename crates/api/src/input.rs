@@ -336,11 +336,17 @@ fn event(e: InputEvent) -> Result<Input, CommandError> {
                 cmd: cmd || ctrl,
             };
             let (key, mods) = key_named(&key, mods)?;
-            // Cmd+Shift+D is no chord of the window's.
-            if mods.cmd && !matches!(key, Key::Char('z' | 'Z' | 'a' | 'A' | 'd')) {
+            // Cmd+Shift+D, X, C and V are no chords of the window's.
+            if mods.cmd
+                && !matches!(
+                    key,
+                    Key::Char('z' | 'Z' | 'a' | 'A' | 'd' | 'x' | 'c' | 'v')
+                )
+            {
                 return Err(invalid(
                     "with cmd or ctrl only z (undo, with shift redo), a (select all, with \
-                     shift none) and d (duplicate) are taken; file actions are commands",
+                     shift none), d (duplicate), x (cut), c (copy) and v (paste) are taken; \
+                     file actions are commands",
                 ));
             }
             if mods.alt && !mods.cmd {
@@ -505,12 +511,20 @@ mod tests {
             (
                 json!({"type": "key", "key": "s", "cmd": true}),
                 "event 0: with cmd or ctrl only z (undo, with shift redo), a (select all, with \
-                 shift none) and d (duplicate) are taken; file actions are commands",
+                 shift none), d (duplicate), x (cut), c (copy) and v (paste) are taken; file \
+                 actions are commands",
             ),
             (
                 json!({"type": "key", "key": "d", "cmd": true, "shift": true}),
                 "event 0: with cmd or ctrl only z (undo, with shift redo), a (select all, with \
-                 shift none) and d (duplicate) are taken; file actions are commands",
+                 shift none), d (duplicate), x (cut), c (copy) and v (paste) are taken; file \
+                 actions are commands",
+            ),
+            (
+                json!({"type": "key", "key": "v", "cmd": true, "shift": true}),
+                "event 0: with cmd or ctrl only z (undo, with shift redo), a (select all, with \
+                 shift none), d (duplicate), x (cut), c (copy) and v (paste) are taken; file \
+                 actions are commands",
             ),
             (
                 json!({"type": "key", "key": "r", "alt": true}),

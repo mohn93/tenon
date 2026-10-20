@@ -124,6 +124,19 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .enabled(view.redo.is_some())
             .entry(),
         Entry::Separator,
+        bound_item("Cut", Bound::Cut, UiAction::Cut)
+            .enabled(view.has_selection)
+            .entry(),
+        bound_item("Copy", Bound::Copy, UiAction::Copy)
+            .enabled(view.has_selection)
+            .entry(),
+        bound_item("Paste", Bound::Paste, UiAction::Paste)
+            .enabled(view.has_clip)
+            .entry(),
+        Item::new("Paste In Place", UiAction::PasteInPlace)
+            .enabled(view.has_clip)
+            .entry(),
+        Entry::Separator,
         bound_item("Select All", Bound::SelectAll, UiAction::SelectAll).entry(),
         bound_item("Select None", Bound::SelectNone, UiAction::SelectNone)
             .enabled(view.has_selection)
@@ -461,11 +474,20 @@ pub fn native_event_acts(
 }
 
 /// Whether a focused text field takes the action's chord for itself: undo and redo its
-/// typing, select all or none of its text. Duplicate is not a field's (it has no Cmd+D).
+/// typing, select all or none of its text, cut, copy and paste text. Duplicate is not a
+/// field's (it has no Cmd+D); Paste In Place has no key but is the field's too, so no item
+/// pastes geometry while a field is being typed in.
 #[cfg(any(target_os = "macos", test))]
 fn yields_to_text(action: &UiAction) -> bool {
     matches!(
         action,
-        UiAction::Undo | UiAction::Redo | UiAction::SelectAll | UiAction::SelectNone
+        UiAction::Undo
+            | UiAction::Redo
+            | UiAction::SelectAll
+            | UiAction::SelectNone
+            | UiAction::Cut
+            | UiAction::Copy
+            | UiAction::Paste
+            | UiAction::PasteInPlace
     )
 }

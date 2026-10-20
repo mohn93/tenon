@@ -189,10 +189,29 @@ pub enum EditorCommand {
     /// a typed distance places it (one undo step); otherwise Move waits for a base point.
     /// `invalid_input` with nothing selected.
     Duplicate {},
+    /// Edit > Copy (Cmd+C): puts the selection on the app's clipboard as clip text (see
+    /// Clipboard), in world coordinates. `invalid_input` with nothing selected. (Named apart
+    /// from the `copy` command, which copies by an offset.)
+    CopySelection {},
+    /// Edit > Cut (Cmd+X): `copy_selection`, then erases the selection as one undo step labelled `cut`.
+    /// Nothing is erased when the copy fails. `invalid_input` with nothing selected.
+    CutSelection {},
+    /// Edit > Paste (Cmd+V): with `at` (a point of the open context), pastes the clip on the
+    /// clipboard with its base point there (one `paste` step); without it the Paste tool comes
+    /// out, the clip following the cursor until a click places it (Escape or `cancel` goes
+    /// back to the tool used before). `invalid_input` when the clipboard holds no clip.
+    /// (Named apart from the `paste` command, which takes the clip text.)
+    PasteClipboard {
+        #[serde(default)]
+        at: Option<[f64; 3]>,
+    },
+    /// Edit > Paste In Place: pastes the clip on the clipboard where it was copied from, in
+    /// world coordinates (one `paste` step). `invalid_input` when the clipboard holds no clip.
+    PasteInPlace {},
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 8] = [
+pub const EDITOR_COMMANDS: [&str; 12] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
@@ -201,6 +220,10 @@ pub const EDITOR_COMMANDS: [&str; 8] = [
     "set_dialog",
     "set_soften_angle",
     "duplicate",
+    "copy_selection",
+    "cut_selection",
+    "paste_clipboard",
+    "paste_in_place",
 ];
 
 #[cfg(test)]
@@ -222,5 +245,19 @@ mod tests {
             listed += 1;
         }
         assert_eq!(listed, EDITOR_COMMANDS.len(), "{text}");
+    }
+
+    /// `execute` sends a `type` listed here to the editor, so none may be a model command's.
+    #[test]
+    fn no_editor_command_shares_a_model_commands_type() {
+        let schema = serde_json::to_value(schemars::schema_for!(session::Command)).unwrap();
+        let text = schema.to_string();
+        assert!(
+            text.contains("\"copy\""),
+            "the model's copy is in the schema"
+        );
+        for name in EDITOR_COMMANDS {
+            assert!(!text.contains(&format!("\"{name}\"")), "{name}");
+        }
     }
 }

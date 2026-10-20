@@ -1,6 +1,7 @@
 mod app;
 mod awake;
 mod cli;
+mod clipboard;
 mod editor;
 mod feedback;
 mod fly;

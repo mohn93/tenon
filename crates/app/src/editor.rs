@@ -25,12 +25,14 @@ use tools::{
     infer_detail,
 };
 
+use crate::clipboard::{Clipboard, MemoryClipboard};
 use crate::feedback::{Chip, Hud};
 use crate::fly::{self, Fly, FlyKey};
 use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll, TrackpadScroll};
 use crate::shortcuts::{self, Bound};
 
 mod agent;
+mod clip;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
 mod scenes;
@@ -256,6 +258,14 @@ pub struct Editor {
     /// How many times the document was replaced (a new model or a file opened, by the window
     /// or an agent): ids from before name other things afterwards.
     documents: u64,
+    /// Where Cut and Copy put clips and Paste reads them: the system clipboard in the window,
+    /// one in memory otherwise.
+    clipboard: Box<dyn Clipboard>,
+    /// Whether the clipboard held a clip when last looked at (`refresh_clipboard`), or since
+    /// this editor put one there: Paste is enabled then.
+    clip_ready: bool,
+    /// While the Paste tool is out: the tool to go back to when it pastes or is cancelled.
+    paste_return: Option<ToolKind>,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -328,6 +338,9 @@ impl Editor {
             key_mods: Mods::default(),
             cursor_point: None,
             documents: 0,
+            clipboard: Box::new(MemoryClipboard::default()),
+            clip_ready: false,
+            paste_return: None,
         }
     }
 
@@ -388,6 +401,7 @@ impl Editor {
     /// current tool's operation and any typed text, and keeping the settings tools remember for
     /// the session, such as circle sides.
     pub fn select_tool(&mut self, kind: ToolKind) {
+        self.paste_return = None;
         self.tool.remember(&mut self.remembered);
         self.tool = kind.make_with(&self.remembered);
         self.kind = kind;
@@ -766,7 +780,7 @@ impl Editor {
             self.kind,
             ToolKind::TapeMeasure | ToolKind::Polygon | ToolKind::Scale
         );
-        if self.flying || !copies(self.kind) && !takes_ctrl {
+        if self.flying || self.pasting() || !copies(self.kind) && !takes_ctrl {
             return false;
         }
         self.send(ToolEvent::ToggleCopy);
@@ -1095,7 +1109,7 @@ impl Editor {
     /// Whether `c`, typed with nothing typed yet, starts a value for the measurements box.
     fn starts_typing(&self, c: char) -> bool {
         let starts_value = c.is_ascii_digit() || matches!(c, '.' | '-' | '/' | '*');
-        let starts_array = matches!(c, 'x' | 'X') && copies(self.kind);
+        let starts_array = matches!(c, 'x' | 'X') && copies(self.kind) && !self.pasting();
         starts_value || starts_array
     }
 
@@ -1847,6 +1861,9 @@ impl Editor {
         self.flush_hover();
         let is_release = matches!(event, ToolEvent::Release(_));
         let is_value = matches!(event, ToolEvent::Value(_));
+        let is_click = matches!(event, ToolEvent::Click(_));
+        let is_cancel = matches!(event, ToolEvent::Cancel);
+        let revision = self.doc.revision();
         let mut out = self.handle(event.clone());
         if matches!(out.commands.first(), Some(Command::Undo { .. }))
             && self.tool_step != Some(self.doc.revision())
@@ -1877,6 +1894,10 @@ impl Editor {
             self.message = Some(Message::info(format!("Painting with {name}")));
         }
         self.apply(out);
+        // The Paste tool goes once it pasted, or on Escape.
+        if is_cancel || is_click && self.doc.revision() != revision {
+            self.end_paste();
+        }
         if is_value {
             self.flash = self
                 .message
@@ -2025,9 +2046,19 @@ impl Editor {
 
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
     fn execute_recorded(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        let label = command.name();
+        self.execute_recorded_as(command, label)
+    }
+
+    /// `execute_recorded`, its undo step labelled `label` (see `Document::execute_as`).
+    fn execute_recorded_as(
+        &mut self,
+        command: Command,
+        label: impl Into<String>,
+    ) -> Result<Outcome, CommandError> {
         let noted = self.issued.is_some().then(|| command.clone());
         let replaces = replaces_document(&command);
-        let result = self.doc.execute(command);
+        let result = self.doc.execute_as(command, label);
         if replaces && result.is_ok() {
             self.documents += 1;
         }

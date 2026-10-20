@@ -91,7 +91,11 @@ impl Host for Editing {
             EditorCommand::SetDialog { dialog } => self.state.dialog = dialog,
             EditorCommand::SetSoftenAngle { angle } => self.state.soften_angle = angle,
             // The window's Move tool copies; this host has none.
-            EditorCommand::Duplicate {} => {}
+            EditorCommand::Duplicate {}
+            | EditorCommand::CopySelection {}
+            | EditorCommand::CutSelection {}
+            | EditorCommand::PasteClipboard { .. }
+            | EditorCommand::PasteInPlace {} => {}
         }
         Ok(())
     }

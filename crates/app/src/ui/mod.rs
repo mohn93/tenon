@@ -57,6 +57,14 @@ pub enum UiAction {
     SelectNone,
     /// Copy the selection with Move, the base point under the cursor.
     Duplicate,
+    /// Put the selection on the clipboard and erase it.
+    Cut,
+    /// Put the selection on the clipboard.
+    Copy,
+    /// Paste the clipboard's clip with the Paste tool, under the cursor.
+    Paste,
+    /// Paste the clipboard's clip where it was copied from.
+    PasteInPlace,
     EraseSelection,
     MakeGroup,
     MakeComponent,
@@ -269,6 +277,8 @@ pub struct View<'a> {
     pub status: &'a Status,
     pub info: &'a [String],
     pub has_selection: bool,
+    /// Whether the clipboard holds a clip (`Editor::clip_ready`): Paste is enabled then.
+    pub has_clip: bool,
     /// Whether a group or component is selected.
     pub has_instance_selected: bool,
     /// Whether a group or component is open for editing.

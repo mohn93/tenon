@@ -274,14 +274,15 @@ impl Editor {
         let (cmd, alt) = (held.cmd || mods.cmd, held.alt || mods.alt);
         let shift = held.shift || mods.shift;
         // The Cmd chords of the window's Edit menu: Undo and Redo, Select All and None,
-        // Duplicate (not with Shift).
+        // Duplicate, Cut, Copy and Paste (these not with Shift).
         let edit_chord = matches!(key, Key::Char('z' | 'Z' | 'a' | 'A'))
-            || matches!(key, Key::Char('d')) && !shift;
+            || matches!(key, Key::Char('d' | 'x' | 'c' | 'v')) && !shift;
         if key != Key::CtrlTap && !(edit_chord && cmd) {
             if cmd {
                 return Err(
                     "with cmd or ctrl held only z (undo, with shift redo), a (select \
-                            all, with shift none) and d (duplicate) are taken"
+                            all, with shift none), d (duplicate), x (cut), c (copy) and v \
+                            (paste) are taken"
                         .into(),
                 );
             }
@@ -313,6 +314,16 @@ impl Editor {
             Key::Char('d') if cmd => {
                 // Refused with nothing selected; the status says so, as in the window.
                 let _ = self.duplicate();
+            }
+            // Refusals (nothing selected, no clip) are in the status, as in the window.
+            Key::Char('x') if cmd => {
+                let _ = self.cut();
+            }
+            Key::Char('c') if cmd => {
+                let _ = self.copy();
+            }
+            Key::Char('v') if cmd => {
+                let _ = self.paste(None);
             }
             key => {
                 self.key(editor_key(key, shift));

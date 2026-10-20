@@ -168,3 +168,30 @@ fn the_field_of_view_sheet_applies_whole_degrees() {
     );
     assert_eq!(click(&mut h, "Apply"), [UiAction::ConfirmFieldOfView(50.0)]);
 }
+
+/// Review Focus 5: with a text field focused, Copy and Paste are the field's: text goes to and
+/// from it and the panels ask for no geometry to be copied or pasted.
+#[test]
+fn a_focused_field_copies_and_pastes_text() {
+    let mut h = harness(Fixture {
+        sheet: Some(Sheet::NameComponent {
+            suggested: "Component 3".into(),
+        }),
+        ..Default::default()
+    });
+    // The field has focus with all of its text selected.
+    h.event(egui::Event::Copy);
+    // One frame: its output carries the copied text.
+    h.step();
+    let copied = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "Component 3"));
+    assert!(copied, "{:?}", h.output().platform_output.commands);
+    h.event(egui::Event::Paste("Shed".into()));
+    h.run_ok();
+    assert_eq!(field_text(&h, "Name"), "Shed");
+    assert_eq!(h.state_mut().take(), []);
+}

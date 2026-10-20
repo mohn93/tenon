@@ -93,6 +93,8 @@ impl Editor {
         self.tool_pressed = false;
         self.message = None;
         self.reset_tool();
+        // The Paste tool goes, back to the tool used before it, as Escape does.
+        self.end_paste();
         // Rotate's plane lock goes too (`reset_tool` keeps it: it is not about geometry).
         self.tool.lock_plane(None);
         self.invalidate_hover();
