@@ -15,11 +15,11 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
-    SE_FILE_OBJECT,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+    GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, GetTokenInformation, OWNER_SECURITY_INFORMATION,
+    DACL_SECURITY_INFORMATION, EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION,
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
@@ -164,6 +164,67 @@ pub fn current_user() -> io::Result<String> {
     unsafe { local_text(&text) }
 }
 
+/// Whether two SIDs, each given as a string (`S-1-5-...` or an SDDL alias such as `LA`), are
+/// the same SID. SDDL prints well-known SIDs as aliases, so strings cannot be compared as text.
+fn same_sid(a: &str, b: &str) -> io::Result<bool> {
+    let convert = |text: &str| -> io::Result<Local> {
+        let text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sid = ptr::null_mut();
+        // SAFETY: `text` is NUL-terminated; `sid` receives a `LocalAlloc`ed SID, owned by
+        // `Local`.
+        if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut sid) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Local(sid))
+    };
+    let (a, b) = (convert(a)?, convert(b)?);
+    // SAFETY: both are valid SIDs, alive until the end of this function.
+    Ok(unsafe { EqualSid(a.0, b.0) } != 0)
+}
+
+/// Checks that `sddl` (from `security_text`) is owned by the current user and has a protected
+/// DACL with exactly one entry: allow, full access, for that user. `inherit` is the entry's
+/// inheritance flags (`OICI` for a folder, none for a file), or `None` to accept any.
+/// Tests use this; SIDs are compared as SIDs, not as text.
+pub fn check_owner_only(sddl: &str, inherit: Option<&str>) -> Result<(), String> {
+    let user = current_user().map_err(|e| e.to_string())?;
+    let (owner, protected, entries) = owner_and_entries(sddl);
+    let is_user = |sid: &str| same_sid(sid, &user).map_err(|e| format!("{sid}: {e}"));
+    if !is_user(&owner)? {
+        return Err(format!("not owned by the current user: {sddl}"));
+    }
+    if !protected {
+        return Err(format!("the DACL is not protected: {sddl}"));
+    }
+    let [entry] = entries.as_slice() else {
+        return Err(format!("not exactly one entry: {sddl}"));
+    };
+    let parts: Vec<&str> = entry.split(';').collect();
+    let [kind, flags, rights, _, _, trustee] = parts.as_slice() else {
+        return Err(format!("an entry of an unexpected shape: {sddl}"));
+    };
+    if *kind != "A" || *rights != "FA" || inherit.is_some_and(|i| i != *flags) {
+        return Err(format!("not an allow-full-access entry as asked: {sddl}"));
+    }
+    if !is_user(trustee)? {
+        return Err(format!("the entry is not for the current user: {sddl}"));
+    }
+    Ok(())
+}
+
+/// The owner, whether the DACL is protected, and its entries, from SDDL.
+fn owner_and_entries(sddl: &str) -> (String, bool, Vec<String>) {
+    let rest = sddl.strip_prefix("O:").expect("an owner");
+    let (owner, dacl) = rest.split_once("D:").expect("a DACL");
+    let (flags, entries) = dacl.split_once('(').unwrap_or((dacl, ""));
+    let entries = format!("({entries}")
+        .split(['(', ')'])
+        .filter(|e| !e.is_empty())
+        .map(String::from)
+        .collect();
+    (owner.to_string(), flags.contains('P'), entries)
+}
+
 /// A security descriptor built from SDDL.
 struct Descriptor(Local);
 
@@ -255,45 +316,31 @@ mod tests {
 
     #[test]
     fn private_files_and_folders_are_the_owners_only() {
-        let user = current_user().unwrap();
         let dir = scratch("dir");
         create_private_dir(&dir).unwrap();
         let text = security_text(&dir).unwrap();
-        assert_eq!(
-            owner_and_entries(&text),
-            (user.clone(), true, vec![format!("A;OICI;FA;;;{user}")]),
-            "{text}"
-        );
+        check_owner_only(&text, Some("OICI")).unwrap();
         // A file made inside inherits it.
         std::fs::write(dir.join("inherits"), b"x").unwrap();
         let text = security_text(&dir.join("inherits")).unwrap();
         let (_, _, entries) = owner_and_entries(&text);
         assert_eq!(entries.len(), 1, "{text}");
-        assert!(entries[0].ends_with(&format!(";FA;;;{user}")), "{text}");
+        assert!(entries[0].contains(";FA;;;"), "{text}");
         let file = dir.join("private");
         drop(create_private_file(&file).unwrap());
         let text = security_text(&file).unwrap();
-        assert_eq!(
-            owner_and_entries(&text),
-            (user.clone(), true, vec![format!("A;;FA;;;{user}")]),
-            "{text}"
-        );
+        check_owner_only(&text, Some("")).unwrap();
         let e = create_private_file(&file).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
         assert!(create_private_dir(&dir).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The owner, whether the DACL is protected, and its entries, from SDDL.
-    fn owner_and_entries(sddl: &str) -> (String, bool, Vec<String>) {
-        let rest = sddl.strip_prefix("O:").expect("an owner");
-        let (owner, dacl) = rest.split_once("D:").expect("a DACL");
-        let (flags, entries) = dacl.split_once('(').unwrap_or((dacl, ""));
-        let entries = format!("({entries}")
-            .split(['(', ')'])
-            .filter(|e| !e.is_empty())
-            .map(String::from)
-            .collect();
-        (owner.to_string(), flags.contains('P'), entries)
+    #[test]
+    fn sids_are_compared_as_sids() {
+        // The built-in administrator has the SDDL alias LA and a long form.
+        assert!(same_sid("S-1-5-32-544", "BA").unwrap());
+        assert!(!same_sid("S-1-5-32-544", "S-1-5-32-545").unwrap());
+        assert!(same_sid("nonsense", "BA").is_err());
     }
 }

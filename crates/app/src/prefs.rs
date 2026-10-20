@@ -290,7 +290,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(home);
     }
 
-    #[cfg(unix)]
     #[test]
     fn prefs_round_trip_in_a_private_folder() {
         let home = home("round-trip");
@@ -313,9 +312,12 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  }\n}"
         );
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600);
-        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        #[cfg(unix)]
+        {
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&path), 0o600);
+            assert_eq!(mode(path.parent().unwrap()), 0o700);
+        }
         save(
             &path,
             &Prefs {
@@ -615,11 +617,18 @@ mod tests {
     #[test]
     fn m11d_prefs_load_with_defaults_for_the_new_keys() {
         let home = home("m11d");
+        // A rooted path with no drive is not absolute on Windows.
+        let house = format!("{}/a/house.skr", if cfg!(windows) { "C:" } else { "" });
         let path = path_in(&home);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            b"{\"theme\": \"dark\", \"dock\": {\"width\": 300.0, \"split\": 0.5, \"tab\": \"materials\"}, \"recent\": [\"/a/house.skr\"]}",
+            serde_json::to_vec(&json!({
+                "theme": "dark",
+                "dock": {"width": 300.0, "split": 0.5, "tab": "materials"},
+                "recent": [house],
+            }))
+            .unwrap(),
         )
         .unwrap();
         let prefs = load(&path);
@@ -632,7 +641,7 @@ mod tests {
                 tab: DockTab::Materials
             }
         );
-        assert_eq!(prefs.recent, [PathBuf::from("/a/house.skr")]);
+        assert_eq!(prefs.recent, [PathBuf::from(&house)]);
         assert_eq!(prefs.import, ImportOptions::default());
         assert_eq!(prefs.ui_scale, UiScale::P100);
         assert_eq!(prefs.trackpad, TrackpadScroll::Orbit);

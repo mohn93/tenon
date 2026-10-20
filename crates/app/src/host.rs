@@ -667,7 +667,6 @@ mod tests {
         json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]})
     }
 
-    #[cfg(unix)]
     #[test]
     fn work_an_agent_discards_is_kept_in_a_recovery_file() {
         let dir = recovery_dir("new");
@@ -704,8 +703,11 @@ mod tests {
                 .unwrap()
                 .contains(&kept[0].display().to_string())
         );
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o700);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
         // The file holds the dropped edge.
         let mut back = editor();
         back.execute(Command::Open {
@@ -927,15 +929,10 @@ mod tests {
         };
         crate::prefs::save(&found.prefs, &prefs).unwrap();
         assert_eq!(crate::prefs::load(&found.prefs), prefs);
-        let user = session::windows::current_user().unwrap();
         let owner_only = |p: &Path| {
             let sddl = session::windows::security_text(p).unwrap();
-            assert!(
-                sddl.starts_with(&format!("O:{user}D:P")),
-                "{}: {sddl}",
-                p.display()
-            );
-            assert_eq!(sddl.matches('(').count(), 1, "{}: {sddl}", p.display());
+            session::windows::check_owner_only(&sddl, None)
+                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         };
         owner_only(found.prefs.parent().unwrap());
         owner_only(&found.prefs);

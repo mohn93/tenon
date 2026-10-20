@@ -1147,7 +1147,9 @@ other reparse points count as symbolic links. Forms Windows reads specially are 
 device path (`\\.\...`), a name with `:` (an alternate data stream), a reserved device name
 (`CON`, `NUL`, `COM1`, ..., with any extension) and a name ending in a dot or a space. A root
 given in one of these forms stops the app. A share reached by its UNC name and the same folder
-reached by a drive letter are different paths: give the root in the form requests use.
+reached by a drive letter are different paths: give the root in the form requests use. For a UNC root, give the server and share names in
+the case requests use too: requests are compared with the root before the server and share are
+resolved.
 
 The window shows `Agents: N` in its status bar while N connections are open; View > Agent
 Activity lists the connections' requests (the last 100, newest first, with their results and how

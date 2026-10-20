@@ -444,12 +444,9 @@ mod tests {
         let dir = scratch("create-win");
         let _ = std::fs::remove_dir_all(&dir);
         ensure_private_dir(&dir).unwrap();
-        let user = session::windows::current_user().unwrap();
-        let sddl = session::windows::security_text(&dir).unwrap();
         // Owned by the user, protected, one entry: full control for the user, inherited.
-        assert!(sddl.starts_with(&format!("O:{user}D:P")), "{sddl}");
-        assert_eq!(sddl.matches('(').count(), 1, "{sddl}");
-        assert!(sddl.ends_with(&format!("(A;OICI;FA;;;{user})")), "{sddl}");
+        let sddl = session::windows::security_text(&dir).unwrap();
+        session::windows::check_owner_only(&sddl, Some("OICI")).unwrap();
         // An existing folder is accepted as it is.
         ensure_private_dir(&dir).unwrap();
         // Missing parents under an application data folder are made private too.
@@ -457,7 +454,7 @@ mod tests {
         ensure_private_xdg_dir(crate::paths::Os::Windows, &nested).unwrap();
         for d in [dir.join("a"), nested] {
             let sddl = session::windows::security_text(&d).unwrap();
-            assert!(sddl.starts_with(&format!("O:{user}D:P")), "{sddl}");
+            session::windows::check_owner_only(&sddl, Some("OICI")).unwrap();
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }

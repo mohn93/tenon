@@ -21,11 +21,28 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     .ok()
 }
 
-/// True when the default adapter is a software rasterizer (Mesa lavapipe, WARP).
+/// True when the default adapter is a software rasterizer (Mesa lavapipe, WARP). WARP is also
+/// matched by name, in case a backend does not report it as `DeviceType::Cpu`.
 fn software_adapter() -> bool {
     let instance = wgpu::Instance::default();
-    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .is_ok_and(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_ok_and(
+        |a| {
+            let info = a.get_info();
+            info.device_type == wgpu::DeviceType::Cpu
+                || info.name.contains("Basic Render Driver")
+                || info.name.contains("WARP")
+        },
+    )
+}
+
+/// Skips a pixel check that differs on software rasterizers (seen on the Windows CI runner's
+/// WARP); a real GPU still runs it.
+fn skip_on_software_adapter(what: &str) -> bool {
+    let software = software_adapter();
+    if software {
+        eprintln!("software GPU adapter, skipping {what}");
+    }
+    software
 }
 
 /// Renders one frame and returns tightly packed RGBA8 pixels, or None without a GPU.
@@ -1387,6 +1404,9 @@ fn a_preview_solid_under_a_face_is_hidden() {
 
 #[test]
 fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
+    if skip_on_software_adapter("the axes pixel counts") {
+        return;
+    }
     let cam = camera();
     let none = BTreeSet::new();
     let magenta_axes = ViewStyle {
@@ -1413,6 +1433,9 @@ fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
 
 #[test]
 fn a_pushed_in_preview_tints_the_box_sides_it_lies_on_evenly() {
+    if skip_on_software_adapter("the preview tint check") {
+        return;
+    }
     // A 0.6 m box with its top pushed 0.3 m down: the solid's sides lie in the box's side
     // planes, facing the same way. Every pixel of a side they cover is tinted, none speckled.
     let mut m = Model::new();

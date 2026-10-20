@@ -275,7 +275,7 @@ fn an_agent_is_kept_inside_its_api_root() {
     assert!(root.join("inside.skr").exists() && !base.join("outside.skr").exists());
     assert_eq!(
         replies[&4]["result"]["api_roots"],
-        json!([root.canonicalize().unwrap()])
+        json!([session::fspath::canonical(&root).unwrap()])
     );
 }
 

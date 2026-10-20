@@ -44,7 +44,7 @@ fn relative_paths_land_in_the_first_root() {
     let r = call(&mut h, "execute", json!({"type": "open", "path": "a.skr"}));
     assert!(r["result"].is_object(), "{r}");
     let file = call(&mut h, "query", json!({"type": "file"}));
-    let real = root.canonicalize().unwrap();
+    let real = session::fspath::canonical(&root).unwrap();
     assert_eq!(file["result"]["api_roots"], json!([real]));
     assert_eq!(file["result"]["path"], json!(real.join("a.skr")));
 }
@@ -191,7 +191,7 @@ fn a_root_folder_itself_is_not_a_file_to_write_or_read() {
     );
     edge(&mut h);
     std::fs::write(base.join("root.mtl"), "keep me").unwrap();
-    let real = root.canonicalize().unwrap();
+    let real = session::fspath::canonical(&root).unwrap();
     for path in [real.display().to_string(), "../root".to_string()] {
         let r = call(
             &mut h,
@@ -311,7 +311,6 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     std::fs::create_dir(outside.join("made")).unwrap();
     std::os::unix::fs::symlink(outside.join("nodir"), root.join("dangling")).unwrap();
     std::os::unix::fs::symlink(outside.join("made"), root.join("dangling-made")).unwrap();
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(
         outside.join("locked"),

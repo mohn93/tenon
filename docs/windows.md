@@ -73,7 +73,9 @@ still matches once resolved; a case-sensitive folder's sibling differing only in
 verbatim paths (`\\?\C:\...`) are judged as their
 plain form, junctions count as links, and drive-relative paths (`C:foo`), paths without a drive
 (`\foo`), alternate data streams (`a.skr:x`) and reserved device names (`CON`, `NUL.txt`, ...)
-are refused. Details in Access and safety in [agent-api.md](agent-api.md).
+are refused. A UNC root (`\\server\share\...`) must be given with the server and share names in the
+case requests use, and a share and the same folder by drive letter are different roots. Details in
+Access and safety in [agent-api.md](agent-api.md).
 
 ## The zip from CI
 

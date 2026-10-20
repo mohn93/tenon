@@ -228,6 +228,11 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    /// A fake absolute path: on Windows a rooted path needs a drive to count as absolute.
+    fn abs(path: &str) -> String {
+        format!("{}{path}", if cfg!(windows) { "C:" } else { "" })
+    }
+
     fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
         let map: HashMap<String, OsString> = vars
             .iter()
@@ -253,24 +258,34 @@ mod tests {
 
     #[test]
     fn macos_paths_are_unchanged() {
-        let tmp = Path::new("/var/folders/ab/T");
+        let tmp_dir = abs("/var/folders/ab/T");
+        let tmp = Path::new(&tmp_dir);
         let e = env(&[
-            ("HOME", "/Users/me"),
-            ("XDG_CONFIG_HOME", "/ignored"),
-            ("XDG_RUNTIME_DIR", "/ignored"),
+            ("HOME", abs("/Users/me").as_str()),
+            ("XDG_CONFIG_HOME", abs("/ignored").as_str()),
+            ("XDG_RUNTIME_DIR", abs("/ignored").as_str()),
         ]);
         let p = resolve_as(Os::MacOs, &e, tmp, 7, Some(0)).unwrap();
-        assert_eq!(p.prefs, Path::new("/Users/me/.sketchup-alt/prefs.json"));
-        assert_eq!(p.recovery, Path::new("/Users/me/.sketchup-alt/recovery"));
+        assert_eq!(
+            p.prefs,
+            Path::new(abs("/Users/me/.sketchup-alt/prefs.json").as_str())
+        );
+        assert_eq!(
+            p.recovery,
+            Path::new(abs("/Users/me/.sketchup-alt/recovery").as_str())
+        );
         assert_eq!(p.socket_dir, tmp, "the per-user temp folder");
         assert_eq!(p.legacy_prefs, None);
-        let long = PathBuf::from(format!("/{}", "x".repeat(100)));
+        let long = PathBuf::from(abs(&format!("/{}", "x".repeat(100))));
         let p = resolve_as(Os::MacOs, &e, &long, 7, Some(0)).unwrap();
-        assert_eq!(p.socket_dir, Path::new("/Users/me/.sketchup-alt"));
-        let p = resolve_as(Os::Other, &e, Path::new("/tmp"), 7, Some(0)).unwrap();
         assert_eq!(
             p.socket_dir,
-            Path::new("/Users/me/.sketchup-alt"),
+            Path::new(abs("/Users/me/.sketchup-alt").as_str())
+        );
+        let p = resolve_as(Os::Other, &e, Path::new(abs("/tmp").as_str()), 7, Some(0)).unwrap();
+        assert_eq!(
+            p.socket_dir,
+            Path::new(abs("/Users/me/.sketchup-alt").as_str()),
             "/tmp is shared"
         );
     }
@@ -341,28 +356,34 @@ mod tests {
 
     #[test]
     fn linux_paths_follow_xdg() {
-        let e = env(&[("HOME", "/home/me")]);
-        let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, None).unwrap();
+        let e = env(&[("HOME", abs("/home/me").as_str())]);
+        let p = resolve_as(Os::Linux, &e, Path::new(abs("/tmp").as_str()), 7, None).unwrap();
         assert_eq!(
             p.prefs,
-            Path::new("/home/me/.config/sketchup-alt/prefs.json")
+            Path::new(abs("/home/me/.config/sketchup-alt/prefs.json").as_str())
         );
         assert_eq!(
             p.recovery,
-            Path::new("/home/me/.local/state/sketchup-alt/recovery")
+            Path::new(abs("/home/me/.local/state/sketchup-alt/recovery").as_str())
         );
         assert_eq!(
             p.legacy_prefs.as_deref(),
-            Some(Path::new("/home/me/.sketchup-alt/prefs.json"))
+            Some(Path::new(abs("/home/me/.sketchup-alt/prefs.json").as_str()))
         );
         let e = env(&[
-            ("HOME", "/home/me"),
-            ("XDG_CONFIG_HOME", "/cfg"),
-            ("XDG_STATE_HOME", "/st"),
+            ("HOME", abs("/home/me").as_str()),
+            ("XDG_CONFIG_HOME", abs("/cfg").as_str()),
+            ("XDG_STATE_HOME", abs("/st").as_str()),
         ]);
-        let p = resolve_as(Os::Linux, &e, Path::new("/tmp"), 7, None).unwrap();
-        assert_eq!(p.prefs, Path::new("/cfg/sketchup-alt/prefs.json"));
-        assert_eq!(p.recovery, Path::new("/st/sketchup-alt/recovery"));
+        let p = resolve_as(Os::Linux, &e, Path::new(abs("/tmp").as_str()), 7, None).unwrap();
+        assert_eq!(
+            p.prefs,
+            Path::new(abs("/cfg/sketchup-alt/prefs.json").as_str())
+        );
+        assert_eq!(
+            p.recovery,
+            Path::new(abs("/st/sketchup-alt/recovery").as_str())
+        );
     }
 
     #[cfg(unix)]
@@ -492,7 +513,6 @@ mod tests {
         assert_eq!(at(Os::Linux, "/tmp"), Path::new("/tmp"));
     }
 
-    #[cfg(unix)]
     #[cfg(target_os = "linux")]
     #[test]
     fn current_uid_is_the_owner_of_a_new_file() {
