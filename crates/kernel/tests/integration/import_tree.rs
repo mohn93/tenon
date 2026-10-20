@@ -13,11 +13,17 @@ fn face(loops: &[&[usize]]) -> ImportFace {
         loops: loops.iter().map(|l| l.to_vec()).collect(),
         front: None,
         back: None,
+        tag: None,
     }
 }
 
 fn edge(a: usize, b: usize, soft: bool) -> ImportEdge {
-    ImportEdge { a, b, soft }
+    ImportEdge {
+        a,
+        b,
+        soft,
+        tag: None,
+    }
 }
 
 fn place(definition: usize, transform: DAffine3) -> ImportInstance {
@@ -25,6 +31,7 @@ fn place(definition: usize, transform: DAffine3) -> ImportInstance {
         definition,
         transform,
         material: None,
+        tag: None,
     }
 }
 

@@ -1119,6 +1119,8 @@ struct Archive<'a> {
     def_stack: Vec<u32>,
     /// Guide lines and points, stack-like with the geometry arenas.
     guides: Vec<RawGuide>,
+    /// The layer slot of each guide, parallel to `guides`.
+    guide_layers: Vec<u32>,
     /// See `ReadStats::hidden_guides`.
     hidden_guides: u64,
     /// Where the last image read ended, when it was a JPEG.
@@ -1242,6 +1244,7 @@ impl<'a> Archive<'a> {
             cur_loop: None,
             def_stack: Vec::new(),
             guides: Vec::new(),
+            guide_layers: Vec::new(),
             hidden_guides: 0,
             jpeg_end: None,
             emit: Emit::Batches,
@@ -1904,7 +1907,7 @@ impl<'a> Archive<'a> {
             }
             Cls::ConstructionLine => {
                 self.preamble()?;
-                let (_, _, _, hidden) = self.drawbase()?;
+                let (_, _, layer, hidden) = self.drawbase()?;
                 let point = self.c.f64s::<3>()?;
                 let direction = self.c.f64s::<3>()?;
                 // The start and end parameters of a bounded guide line. Our
@@ -1914,6 +1917,7 @@ impl<'a> Archive<'a> {
                     self.hidden_guides += 1;
                 } else {
                     self.guides.push(RawGuide::Line { point, direction });
+                    self.guide_layers.push(layer);
                 }
                 // The trailing block varies by writing *build*, not cleanly
                 // by version: 7 bytes on the 2017 calibration corpus, 4 on
@@ -1955,12 +1959,13 @@ impl<'a> Archive<'a> {
             }
             Cls::ConstructionPoint => {
                 self.preamble()?;
-                let (_, _, _, hidden) = self.drawbase()?;
+                let (_, _, layer, hidden) = self.drawbase()?;
                 let position = self.c.f64s::<3>()?;
                 if hidden {
                     self.hidden_guides += 1;
                 } else {
                     self.guides.push(RawGuide::Point { position });
+                    self.guide_layers.push(layer);
                 }
                 let _reserved = self.c.f64s::<3>()?;
                 self.c.skip(1)?;
@@ -2865,6 +2870,7 @@ impl<'a> Archive<'a> {
         self.face_loops.truncate(m.face_loops as usize);
         self.ftcs.truncate(m.ftcs as usize);
         self.guides.truncate(m.guides as usize);
+        self.guide_layers.truncate(m.guides as usize);
         {
             let from = core::cmp::min(m.slot.saturating_sub(self.base) as usize, self.slots.len());
             for i in from..self.slots.len() {
@@ -3061,6 +3067,8 @@ impl<'a> Archive<'a> {
         let guides = self.guides.get(m.guides as usize..).unwrap_or(&[]);
         spend(&mut self.budget, guides.len() as u64).ok()?;
         g.guides.extend_from_slice(guides);
+        let layers = self.guide_layers.get(m.guides as usize..).unwrap_or(&[]);
+        g.guide_layer = layers.iter().map(|&s| self.layer_index(s)).collect();
         Some(g)
     }
 

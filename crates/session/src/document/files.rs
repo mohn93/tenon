@@ -175,7 +175,7 @@ impl Document {
             ));
         }
         // A model opened from a SketchUp file has no file of its own; the original keeps
-        // what this app cannot (tags, scenes, curves, newer formats), so writing over it
+        // what this app cannot (scenes, curves, newer formats), so writing over it
         // needs `overwrite`.
         if !overwrite
             && self
@@ -338,6 +338,7 @@ fn export_skp(
         edges: stats.edges,
         guides: stats.guides,
         materials: stats.materials,
+        tags: stats.tags,
         warnings: stats.warnings,
         ..ExportReport::default()
     })

@@ -2,6 +2,7 @@
 //! the project's own legacy reader (`skp::legacy`), which is the check that the bytes walk.
 
 mod roundtrip;
+mod tags;
 
 use skp::container::{Container, Generation};
 use skp::legacy::{self, ReadStats};

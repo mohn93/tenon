@@ -171,12 +171,13 @@ fn desk_imports_its_placed_definitions_and_says_what_it_left_out() {
     // Its materials are only on the figure: none is added.
     assert_eq!(report["materials"], 0);
     assert!(materials_of(&d).is_empty());
-    let tags = tags_in(&path);
+    // Its layers (if any but Layer0) are tags now, with no warning.
     assert_eq!(
-        warnings.iter().any(|w| w.contains("tag")),
-        tags > 0,
-        "{warnings:?}"
+        report["tags"].as_u64().unwrap_or(0) as usize,
+        tags_in(&path),
+        "{report}"
     );
+    assert!(!warnings.iter().any(|w| w.contains("tag")), "{warnings:?}");
     let measured = size(&root_instances(&d)[0]);
     for (got, want) in measured.iter().zip([0.78, 2.0, 1.0]) {
         assert!((got - want).abs() < 1e-3, "{measured:?}");
@@ -776,7 +777,25 @@ mod craft {
     /// A placement: the definition's index, its transform and its material's pid.
     pub type Place = (usize, [f64; 13], Option<u64>);
 
-    fn instances(places: &[Place]) -> Vec<u8> {
+    /// The file's layers and which of them entities are on (by pid; `None`: no layer
+    /// reference).
+    #[derive(Default)]
+    pub struct Layering {
+        /// Pid, name and hidden flag of each layer.
+        pub layers: Vec<(u64, String, bool)>,
+        /// Every definition's edge.
+        pub edge: Option<u64>,
+        /// The root's placements.
+        pub instances: Option<u64>,
+        /// The root's guides.
+        pub guides: Option<u64>,
+    }
+
+    fn layer_ref(layer: Option<u64>) -> Vec<u8> {
+        layer.map_or_else(Vec::new, |l| id(t::DRAWING_ELEMENT_LAYER_PID_REF, l))
+    }
+
+    fn instances(places: &[Place], layer: Option<u64>) -> Vec<u8> {
         let mut list = Vec::new();
         for (k, (def, m, material)) in places.iter().enumerate() {
             let mut body = id(t::ENTITY_PID, 100_000 + k as u64);
@@ -786,6 +805,7 @@ mod craft {
             if let Some(material) = material {
                 body.extend(id(t::DRAWING_ELEMENT_MATERIAL_PID_REF, *material));
             }
+            body.extend(layer_ref(layer));
             list.extend(rec(t::COMPONENT_INSTANCE, &body));
         }
         rec(t::COMPONENT_INSTANCES, &list)
@@ -795,8 +815,8 @@ mod craft {
         10 + i as u64
     }
 
-    /// A one-inch edge along x.
-    fn edge() -> Vec<u8> {
+    /// A one-inch edge along x, on `layer`.
+    fn edge(layer: Option<u64>) -> Vec<u8> {
         let vertex = |pid: u64, x: f64| {
             let mut body = id(t::ENTITY_PID, pid);
             let p: Vec<u8> = [x, 0.0, 0.0].iter().flat_map(|c| c.to_le_bytes()).collect();
@@ -810,6 +830,7 @@ mod craft {
         let mut e = id(t::ENTITY_PID, 3);
         e.extend(id(t::EDGE_START_VERTEX_PID_REF, 1));
         e.extend(id(t::EDGE_END_VERTEX_PID_REF, 2));
+        e.extend(layer_ref(layer));
         out.extend(rec(t::COMPONENT_EDGES, &rec(t::EDGE, &e)));
         out
     }
@@ -824,23 +845,30 @@ mod craft {
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
     }
 
-    /// A component's guide lists (only those it has).
-    fn guide_lists(guides: &[Guide]) -> Vec<u8> {
+    /// A component's guide lists (only those it has), every guide on `layer`.
+    fn guide_lists(guides: &[Guide], layer: Option<u64>) -> Vec<u8> {
         let (mut lines, mut points) = (Vec::new(), Vec::new());
+        let element = || match layer {
+            Some(_) => rec(
+                t::CONSTRUCTION_GEOMETRY,
+                &rec(t::DRAWING_ELEMENT, &layer_ref(layer)),
+            ),
+            None => Vec::new(),
+        };
         for g in guides {
             match g {
                 Guide::Line(p, d) => {
                     // Point, direction, then the start and end parameters.
                     let body = doubles(&[p[0], p[1], p[2], d[0], d[1], d[2], 0.0, 0.0]);
-                    lines.extend(rec(
-                        t::CONSTRUCTION_LINE,
-                        &rec(t::CONSTRUCTION_LINE_GEOM_LINE, &body),
-                    ));
+                    let mut line = element();
+                    line.extend(rec(t::CONSTRUCTION_LINE_GEOM_LINE, &body));
+                    lines.extend(rec(t::CONSTRUCTION_LINE, &line));
                 }
-                Guide::Point(p) => points.extend(rec(
-                    t::CONSTRUCTION_POINT,
-                    &rec(t::CONSTRUCTION_POINT_POSITION, &doubles(p)),
-                )),
+                Guide::Point(p) => {
+                    let mut point = element();
+                    point.extend(rec(t::CONSTRUCTION_POINT_POSITION, &doubles(p)));
+                    points.extend(rec(t::CONSTRUCTION_POINT, &point));
+                }
             }
         }
         let mut out = Vec::new();
@@ -863,7 +891,14 @@ mod craft {
     ) -> Vec<u8> {
         let definitions: Vec<(Vec<Place>, Vec<Guide>)> =
             definitions.iter().map(|p| (p.clone(), vec![])).collect();
-        build(&definitions, root, &[], materials, entries)
+        build(
+            &definitions,
+            root,
+            &[],
+            materials,
+            entries,
+            &Layering::default(),
+        )
     }
 
     /// A SketchUp 2023 file whose definitions (placements, guides) and root have guides.
@@ -872,7 +907,24 @@ mod craft {
         root: &[Place],
         root_guides: &[Guide],
     ) -> Vec<u8> {
-        build(definitions, root, root_guides, &[], &[])
+        build(
+            definitions,
+            root,
+            root_guides,
+            &[],
+            &[],
+            &Layering::default(),
+        )
+    }
+
+    /// A SketchUp 2023 file with layers, its entities on them as `layering` says.
+    pub fn file_with_layers(
+        definitions: &[(Vec<Place>, Vec<Guide>)],
+        root: &[Place],
+        root_guides: &[Guide],
+        layering: &Layering,
+    ) -> Vec<u8> {
+        build(definitions, root, root_guides, &[], &[], layering)
     }
 
     fn build(
@@ -881,13 +933,14 @@ mod craft {
         root_guides: &[Guide],
         materials: &[(u64, String)],
         entries: &[(String, Vec<u8>)],
+        layering: &Layering,
     ) -> Vec<u8> {
         let mut defs = Vec::new();
         for (i, (places, guides)) in definitions.iter().enumerate() {
             let mut component = id(t::ENTITY_PID, def_pid(i));
-            component.extend(edge());
-            component.extend(instances(places));
-            component.extend(guide_lists(guides));
+            component.extend(edge(layering.edge));
+            component.extend(instances(places, None));
+            component.extend(guide_lists(guides, None));
             let mut d = rec(t::COMPONENT, &component);
             d.extend(rec(
                 t::COMPONENT_DEFINITION_NAME,
@@ -899,8 +952,8 @@ mod craft {
             t::SKETCH_UP_MODEL_COMPONENTS,
             &rec(t::DEFINITION_LIST, &rec(t::DEFINITION_LIST_DEFS, &defs)),
         );
-        let mut root = instances(root);
-        root.extend(guide_lists(root_guides));
+        let mut root = instances(root, layering.instances);
+        root.extend(guide_lists(root_guides, layering.guides));
         let root = rec(t::SKETCH_UP_MODEL_ROOT, &rec(t::COMPONENT, &root));
         let mut list = Vec::new();
         for (pid, name) in materials {
@@ -915,7 +968,21 @@ mod craft {
                 &rec(t::MATERIAL_MANAGER_MATERIALS, &list),
             ),
         );
-        let model = rec(t::SKETCH_UP_MODEL, &[materials, components, root].concat());
+        let mut layers = Vec::new();
+        for (pid, name, hidden) in &layering.layers {
+            let mut l = rec(t::ENTITY, &id(t::ENTITY_PID, *pid));
+            l.extend(rec(t::LAYER_NAME, name.as_bytes()));
+            l.extend(rec(t::LAYER_HIDDEN, &[u8::from(*hidden)]));
+            layers.extend(rec(t::LAYER, &l));
+        }
+        let layers = rec(
+            t::SKETCH_UP_MODEL_LAYERS,
+            &rec(t::LAYER_MANAGER, &rec(t::LAYER_MANAGER_LAYERS, &layers)),
+        );
+        let model = rec(
+            t::SKETCH_UP_MODEL,
+            &[layers, materials, components, root].concat(),
+        );
 
         let mut header = super::utf16_tag("SketchUp Model");
         header.extend(super::utf16_tag("{23.0.0}"));
@@ -1504,4 +1571,269 @@ fn a_skp_is_opened_by_its_header_and_a_bad_one_changes_nothing() {
     assert_eq!((root_instances(&d).len(), root_faces(&d)), before);
     assert_eq!(ask(&d, json!({"type": "file"}))["revision"], revision);
     d.scene().validate().unwrap();
+}
+
+fn tags_of(d: &Document) -> Vec<Value> {
+    ask(d, json!({"type": "tags"}))["tags"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// A tag's name, visibility and count, by name.
+fn tag_summary(d: &Document) -> Vec<(String, bool, u64)> {
+    tags_of(d)
+        .iter()
+        .map(|t| {
+            (
+                t["name"].as_str().unwrap().to_string(),
+                t["visible"].as_bool().unwrap(),
+                t["count"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn fixtures_with_only_layer0_import_untagged() {
+    for name in ["cupboard.skp", "desk.skp"]
+        .into_iter()
+        .chain(LEGACY_CUPBOARDS)
+    {
+        let (d, report) = import(&fixture(name));
+        assert!(report.get("tags").is_none(), "{name}: {report}");
+        assert!(tags_of(&d).is_empty(), "{name}");
+        assert!(
+            !warnings(&report).iter().any(|w| w.contains("tag")),
+            "{name}: {report}"
+        );
+    }
+}
+
+/// A crafted 2023 file with layers: Layer0, "Walls", a hidden "Roof", one named "Untagged"
+/// and one with a blank name; the definition's edge and the root's guides on "Walls", the
+/// root's placement on "Roof".
+fn layered_file() -> Vec<u8> {
+    use craft::{Guide, Layering, file_with_layers, scaled};
+    let layering = Layering {
+        layers: vec![
+            (500, "Layer0".into(), false),
+            (501, "Walls".into(), false),
+            (502, "Roof".into(), true),
+            (503, "Untagged".into(), false),
+            (504, "  ".into(), false),
+        ],
+        edge: Some(501),
+        instances: Some(502),
+        guides: Some(501),
+    };
+    file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[
+            Guide::Point([1.0, 2.0, 3.0]),
+            Guide::Line([0.0; 3], [1.0, 0.0, 0.0]),
+        ],
+        &layering,
+    )
+}
+
+#[test]
+fn layers_import_as_tags() {
+    let path = write("layered.skp", &layered_file());
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_tag", "name": "Walls", "color": [1, 2, 3]}),
+    )
+    .unwrap();
+    let before = tags_of(&d);
+    let r = run(&mut d, json!({"type": "import", "path": path})).unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["tags"], 4, "{report}");
+    assert!(
+        !warnings(report).iter().any(|w| w.contains("tag")),
+        "{report}"
+    );
+    // Names made unique against the model's tags (and "Untagged"); a blank one is "Tag".
+    // The edge (in the definition) and both guides are on the file's "Walls"; the placement
+    // on "Roof", which stays hidden.
+    assert_eq!(
+        tag_summary(&d),
+        [
+            ("Walls".to_string(), true, 0),
+            ("Walls 2".to_string(), true, 3),
+            ("Roof".to_string(), false, 1),
+            ("Untagged 2".to_string(), true, 0),
+            ("Tag".to_string(), true, 0),
+        ]
+    );
+    // The file has no colours for them: each takes the next free one.
+    let colors: Vec<Value> = tags_of(&d)[1..]
+        .iter()
+        .map(|t| t["color"].clone())
+        .collect();
+    assert_eq!(
+        colors,
+        kernel::TAG_COLORS[..4]
+            .iter()
+            .map(|c| json!(c))
+            .collect::<Vec<_>>()
+    );
+
+    // One undo step takes the tags back with the rest.
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(tags_of(&d), before);
+    assert!(root_instances(&d).is_empty());
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(tag_summary(&d).len(), 5);
+    d.scene().validate().unwrap();
+
+    // Opened as a new model, the names need no number.
+    let mut opened = doc();
+    run(&mut opened, json!({"type": "open", "path": path})).unwrap();
+    opened.scene().validate().unwrap();
+    assert_eq!(
+        tag_summary(&opened),
+        [
+            ("Walls".to_string(), true, 3),
+            ("Roof".to_string(), false, 1),
+            ("Untagged 2".to_string(), true, 0),
+            ("Tag".to_string(), true, 0),
+        ]
+    );
+    // The root's placement is on "Roof"; the root's guides on "Walls".
+    let roof = tags_of(&opened)[1]["id"].clone();
+    let walls = tags_of(&opened)[0]["id"].clone();
+    let placed = root_instances(&opened)[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        ask(&opened, json!({"type": "entity", "id": placed}))["tag"],
+        roof
+    );
+    let guides = ask(&opened, json!({"type": "entities", "kinds": ["guide"]}))["guides"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(guides.len(), 2);
+    for g in &guides {
+        let id = g["id"].as_str().unwrap();
+        assert_eq!(
+            ask(&opened, json!({"type": "entity", "id": id}))["tag"],
+            walls
+        );
+    }
+}
+
+#[test]
+fn a_failed_import_leaves_no_tags() {
+    // The layers are read and added, but the definitions nest too deep to build: refused.
+    use craft::{Layering, file_with_layers, scaled};
+    let n = kernel::MAX_IMPORT_DEPTH + 2;
+    let definitions: Vec<_> = (0..n)
+        .map(|i| {
+            let places = if i + 1 < n {
+                vec![(i + 1, scaled(1.0, 0.0), None)]
+            } else {
+                vec![]
+            };
+            (places, vec![])
+        })
+        .collect();
+    let bytes = file_with_layers(
+        &definitions,
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            layers: vec![(501, "Walls".into(), false)],
+            edge: Some(501),
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("layered-deep.skp", &bytes);
+    let (kind, message) = r.unwrap_err();
+    assert_eq!(kind, ErrorKind::File, "{message}");
+    assert!(message.contains("nested"), "{message}");
+    assert_eq!(d.scene(), doc().scene());
+}
+
+/// The tutorial (`$SKP_CORPUS/su2024/su007_Tutorial01_.skp`) has seven tags besides Layer0,
+/// six of them hidden. Opened from its SketchUp 2024 file and from its 2017-2020 copies
+/// (`$SKP_CORPUS/../legacy_out/tutorial01_v20xx.skp`), each gives the same tags (name,
+/// colour, visibility, entities on them); exported and opened again, the same.
+#[test]
+#[ignore = "needs a local corpus in SKP_CORPUS"]
+fn corpus_tutorial_tags() {
+    let Some(dir) = std::env::var_os("SKP_CORPUS") else {
+        println!("SKP_CORPUS is not set; skipping");
+        return;
+    };
+    let dir = Path::new(&dir);
+    let summary = |d: &Document| -> Vec<(String, Value, bool, u64)> {
+        tags_of(d)
+            .iter()
+            .map(|t| {
+                (
+                    t["name"].as_str().unwrap().to_string(),
+                    t["color"].clone(),
+                    t["visible"].as_bool().unwrap(),
+                    t["count"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let open = |path: &Path| {
+        let mut d = doc();
+        let r = run(
+            &mut d,
+            json!({"type": "open", "path": path.to_str().unwrap()}),
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+        d.scene().validate().unwrap();
+        (d, r)
+    };
+    let (d, r) = open(&dir.join("su2024/su007_Tutorial01_.skp"));
+    let want = summary(&d);
+    println!("tutorial: {want:?}");
+    assert_eq!(r["import"]["tags"], 7, "{}", r["import"]);
+    assert!(!warnings(&r["import"]).iter().any(|w| w.contains("tag")));
+    let mut names: Vec<&str> = want.iter().map(|t| t.0.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "Scene 01-03",
+            "Scene 02",
+            "Scene 03",
+            "Scene 04",
+            "Scene 04-12",
+            "Scene 05",
+            "Scene 07"
+        ]
+    );
+    assert_eq!(want.iter().filter(|t| !t.2).count(), 6, "{want:?}");
+    assert!(want.iter().any(|t| t.3 > 0), "{want:?}");
+
+    for year in 2017..=2020 {
+        let (d, _) = open(&dir.join(format!("../legacy_out/tutorial01_v{year}.skp")));
+        let got = summary(&d);
+        println!("{year}: {got:?}");
+        assert_eq!(got, want, "{year}");
+    }
+
+    let mut d = d;
+    let path = scratch("tutorial-tags.skp");
+    let _ = std::fs::remove_file(&path);
+    let out = run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    println!("exported: {}", out["export"]);
+    let (back, _) = open(&path);
+    let used: Vec<_> = want.iter().filter(|t| t.3 > 0).cloned().collect();
+    assert_eq!(summary(&back), used);
 }

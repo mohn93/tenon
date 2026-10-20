@@ -9,6 +9,7 @@
 //! u32 material count        overwrites the scaffold's 0 at 3396
 //! materials                 slots from 9
 //! scaffold[3400..3505]      layer marker, layer count, CLayer and Layer0 (2 slots)
+//! tags                      one CLayer each, after Layer0; the layer count includes them
 //! scaffold[3505..3507]      active-layer anchor: Layer0's slot, moved by the materials
 //! u32 definition count, definitions
 //! u32 root count, root entities
@@ -29,7 +30,7 @@ const MATERIAL_COUNT_POS: usize = 3396;
 const MATERIAL_INSERT_POS: usize = 3400;
 /// The first slot after the prefix: where the materials start numbering.
 const BASE: u32 = 9;
-/// The layer count, which stays 1 (Layer0).
+/// The layer count: Layer0 and the tags.
 const LAYER_COUNT_POS: usize = 3405;
 /// The active-layer anchor, a back-reference to Layer0.
 const ACTIVE_LAYER_ANCHOR_POS: usize = 3505;
@@ -125,6 +126,8 @@ pub enum WriteError {
     },
     /// A face or an instance names a material the document does not have.
     MaterialOutOfRange { index: usize },
+    /// An entity names a tag the document does not have.
+    TagOutOfRange { index: usize },
     /// A texture that is neither PNG nor JPEG.
     UnknownTextureFormat { material: usize },
     /// A name longer than a string record holds.
@@ -144,7 +147,8 @@ pub enum WriteError {
     TooManyMaterials,
     /// A texture whose width or height is not more than zero.
     TextureSize { material: usize },
-    /// Two materials, or two definitions, with the same name.
+    /// Two materials, two tags or two definitions with the same name, or a tag named
+    /// Layer0.
     DuplicateName { what: &'static str, name: String },
     /// A count or a length past what its `u32` field holds.
     TooLarge { what: &'static str },
@@ -186,6 +190,7 @@ impl fmt::Display for WriteError {
                 "instance {instance} of {owner} places definition {definition}, which is empty"
             ),
             Self::MaterialOutOfRange { index } => write!(f, "there is no material {index}"),
+            Self::TagOutOfRange { index } => write!(f, "there is no tag {index}"),
             Self::UnknownTextureFormat { material } => {
                 write!(f, "material {material}'s texture is neither PNG nor JPEG")
             }
@@ -241,16 +246,23 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     let material_shift = ar.next_slot - BASE;
 
     // The scaffold's layer section follows: its `CLayer` declaration and Layer0, moved by
-    // the materials. Nothing declared among the materials is needed again.
+    // the materials, then the tags. Nothing declared among the materials is needed again.
     ar.class_slot.clear();
     ar.class_slot.insert("CLayer", BASE + material_shift);
     ar.next_slot += LAYER_SECTION_SLOTS;
+    let tag_slots: Vec<u32> = doc
+        .tags
+        .iter()
+        .map(|t| ar.layer(&t.name, t.rgb, t.hidden))
+        .collect();
+    let tags_buf = std::mem::take(&mut ar.buf);
 
     let mut def_slots: Vec<Option<u32>> = vec![None; doc.definitions.len()];
     let ctx = Ctx {
         doc,
         plan: &plan,
         material_slots: &material_slots,
+        tag_slots: &tag_slots,
     };
     for &d in &plan.order {
         let (slot, count_at) = ar.definition_start();
@@ -268,7 +280,12 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     let last_pid = u32::try_from(ar.next_pid - 1).unwrap_or(u32::MAX);
 
     let mut out = Vec::with_capacity(
-        SCAFFOLD.len() + materials_buf.len() + defs_buf.len() + root_buf.len() + 64,
+        SCAFFOLD.len()
+            + materials_buf.len()
+            + tags_buf.len()
+            + defs_buf.len()
+            + root_buf.len()
+            + 64,
     );
     out.extend_from_slice(&SCAFFOLD[..MATERIAL_COUNT_POS]);
     put_u32(&mut out, PID_COUNTER_POS, last_pid);
@@ -281,8 +298,9 @@ pub fn write(doc: &Doc) -> Result<Vec<u8>, WriteError> {
     put_u32(
         &mut out,
         layers_at + (LAYER_COUNT_POS - MATERIAL_INSERT_POS),
-        1,
+        plan.layer_count,
     );
+    out.extend_from_slice(&tags_buf);
 
     let mut anchor = SCAFFOLD[ACTIVE_LAYER_ANCHOR_POS..DEF_COUNT_POS].to_vec();
     shift_ref(&mut anchor, 0, material_shift);
@@ -372,6 +390,8 @@ struct Plan {
     def_count: u32,
     /// How many materials there are, as the file's count.
     material_count: u32,
+    /// Layer0 and the tags, as the file's count.
+    layer_count: u32,
     def_guids: Vec<[u8; 16]>,
     root: GeomPlan,
     defs: Vec<GeomPlan>,
@@ -416,6 +436,13 @@ impl Plan {
             }
         }
         let material_count = fits_u32("material list", doc.materials.len())?;
+        let mut names = HashSet::from(["Layer0"]);
+        for t in &doc.tags {
+            check_string("tag name", &t.name)?;
+            check_string("tag name", &format!("Layer_{}", t.name))?;
+            unique(&mut names, "tag", &t.name)?;
+        }
+        let layer_count = fits_u32("tag list", doc.tags.len() + 1)?;
         let empty: Vec<bool> = doc
             .definitions
             .iter()
@@ -449,6 +476,7 @@ impl Plan {
             order,
             def_count,
             material_count,
+            layer_count,
             def_guids,
             root,
             defs,
@@ -532,6 +560,13 @@ fn material_in_range(doc: &Doc, m: Option<usize>) -> Result<(), WriteError> {
     }
 }
 
+fn tag_in_range(doc: &Doc, t: Option<usize>) -> Result<(), WriteError> {
+    match t {
+        Some(index) if index >= doc.tags.len() => Err(WriteError::TagOutOfRange { index }),
+        _ => Ok(()),
+    }
+}
+
 fn plan_geometry(
     doc: &Doc,
     owner: Owner,
@@ -544,6 +579,7 @@ fn plan_geometry(
     let nv = g.vertices.len();
     let mut by_pair: HashMap<(u32, u32), usize> = HashMap::with_capacity(g.edges.len());
     for (i, e) in g.edges.iter().enumerate() {
+        tag_in_range(doc, e.tag)?;
         for index in [e.a, e.b] {
             if index as usize >= nv {
                 return Err(WriteError::VertexOutOfRange { owner, index });
@@ -576,8 +612,11 @@ fn plan_geometry(
 
     let mut directions = Vec::new();
     for (i, guide) in g.guides.iter().enumerate() {
+        tag_in_range(doc, guide.tag())?;
         match guide {
-            Guide::Line { point, direction } => {
+            Guide::Line {
+                point, direction, ..
+            } => {
                 finite("guide point", point)?;
                 finite("guide direction", direction)?;
                 let len = dot(*direction, *direction).sqrt();
@@ -590,7 +629,7 @@ fn plan_geometry(
                 }
                 directions.push(direction.map(|c| c / len));
             }
-            Guide::Point { position } => finite("guide point", position)?,
+            Guide::Point { position, .. } => finite("guide point", position)?,
         }
     }
     Ok(GeomPlan { faces, directions })
@@ -633,7 +672,8 @@ fn check_instance(
             index: i,
         });
     }
-    material_in_range(doc, inst.material)
+    material_in_range(doc, inst.material)?;
+    tag_in_range(doc, inst.tag)
 }
 
 fn plan_face(
@@ -646,6 +686,7 @@ fn plan_face(
 ) -> Result<FacePlan, WriteError> {
     material_in_range(doc, f.front)?;
     material_in_range(doc, f.back)?;
+    tag_in_range(doc, f.tag)?;
     if f.loops.is_empty() {
         return Err(WriteError::ShortLoop { owner, face: fi });
     }
@@ -950,12 +991,18 @@ struct Ctx<'a> {
     doc: &'a Doc,
     plan: &'a Plan,
     material_slots: &'a [u32],
+    tag_slots: &'a [u32],
 }
 
 impl Ctx<'_> {
     fn material(&self, m: Option<usize>) -> u16 {
         m.and_then(|i| self.material_slots.get(i))
             .map_or(0, |s| *s as u16)
+    }
+
+    /// A tag's layer slot; 0 (Layer0) for none.
+    fn layer(&self, t: Option<usize>) -> u32 {
+        t.and_then(|i| self.tag_slots.get(i)).map_or(0, |s| *s)
     }
 
     /// One entity list: each face after the edges it is the first to use (vertices inline
@@ -982,7 +1029,7 @@ impl Ctx<'_> {
                         Some(s) => s,
                         None => {
                             count += 1;
-                            write_edge(ar, g, &g.edges[e], &mut vslot)
+                            self.write_edge(ar, g, &g.edges[e], &mut vslot)
                         }
                     };
                     eslot[e] = Some(slot);
@@ -991,8 +1038,8 @@ impl Ctx<'_> {
                 loops.push(out);
             }
             ar.face(
-                self.material(f.front),
-                self.material(f.back),
+                (self.material(f.front), self.material(f.back)),
+                self.layer(f.tag),
                 fp.plane,
                 &loops,
                 fp.uv,
@@ -1002,7 +1049,7 @@ impl Ctx<'_> {
 
         for (e, edge) in g.edges.iter().enumerate() {
             if eslot[e].is_none() {
-                eslot[e] = Some(write_edge(ar, g, edge, &mut vslot));
+                eslot[e] = Some(self.write_edge(ar, g, edge, &mut vslot));
                 count += 1;
             }
         }
@@ -1020,6 +1067,7 @@ impl Ctx<'_> {
                 def.is_group,
                 slot,
                 self.material(inst.material),
+                self.layer(inst.tag),
                 &inst.rotation,
                 &inst.translation,
                 name,
@@ -1030,32 +1078,40 @@ impl Ctx<'_> {
 
         let mut directions = plan.directions.iter();
         for guide in &g.guides {
+            let layer = self.layer(guide.tag());
             match guide {
                 Guide::Line { point, .. } => {
                     let d = directions.next().copied().unwrap_or([1.0, 0.0, 0.0]);
-                    ar.construction_line(*point, d);
+                    ar.construction_line(*point, d, layer);
                 }
-                Guide::Point { position } => ar.construction_point(*position),
+                Guide::Point { position, .. } => ar.construction_point(*position, layer),
             }
             count += 1;
         }
         count
     }
-}
 
-/// A top-level `CEdge`, its vertices inline the first time they are used.
-fn write_edge(ar: &mut Archive, g: &Geometry, e: &Edge, vslot: &mut [Option<u32>]) -> u32 {
-    let slot = ar.edge_start(DrawFlags {
-        hidden: e.hidden,
-        soft: e.soft,
-        smooth: e.smooth,
-    });
-    for v in [e.a as usize, e.b as usize] {
-        match vslot[v] {
-            Some(s) => ar.back_ref(s),
-            None => vslot[v] = Some(ar.vertex(g.vertices[v])),
+    /// A top-level `CEdge`, its vertices inline the first time they are used.
+    fn write_edge(
+        &self,
+        ar: &mut Archive,
+        g: &Geometry,
+        e: &Edge,
+        vslot: &mut [Option<u32>],
+    ) -> u32 {
+        let flags = DrawFlags {
+            hidden: e.hidden,
+            soft: e.soft,
+            smooth: e.smooth,
+        };
+        let slot = ar.edge_start(flags, self.layer(e.tag));
+        for v in [e.a as usize, e.b as usize] {
+            match vslot[v] {
+                Some(s) => ar.back_ref(s),
+                None => vslot[v] = Some(ar.vertex(g.vertices[v])),
+            }
         }
+        ar.edge_end();
+        slot
     }
-    ar.edge_end();
-    slot
 }

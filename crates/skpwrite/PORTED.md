@@ -12,7 +12,7 @@ This crate is a Rust port of the `.skp` writer in openskp, with the changes list
 | Upstream | Here |
 |---|---|
 | `packages/python/src/openskp/create.py`: `_ArchiveWriter` (slots, class declarations and references, back-references, persistent ids, preambles, drawbase, strings, and the vertex, edge, face, loop, edge-use, face-texture-coords, material, layer, definition, thumbnail, instance, group, construction line and point records) | `src/archive.rs` |
-| `create.py`: `SkpBuilder.__init__` and `to_bytes` (the splice), `_shift_ref`, `_plane_from_polygon`, `_solve_uv_matrix`, `_solve3x3`, `_scale_pins`, `_detect_image_subtype` | `src/write.rs` |
+| `create.py`: `SkpBuilder.__init__` and `to_bytes` (the splice), `add_layer` (the layer section after Layer0 and its count), `_shift_ref`, `_plane_from_polygon`, `_solve_uv_matrix`, `_solve3x3`, `_scale_pins`, `_detect_image_subtype` | `src/write.rs` |
 | `packages/python/src/openskp/_face_groups.py`: `face_uv_basis`, `VERTICAL_TOLERANCE` | `src/write.rs` (`uv_basis`) |
 | `packages/cpp/src/create.cpp`: the scaffold offsets as constants (lines 58-95), the Iso camera patches and the camera template | `src/write.rs`, `src/archive.rs` |
 | `packages/python/src/openskp/_scaffold/blank_v17.skp` (5,796 bytes, sha256 `809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8a6c3`, the same file as `packages/cpp/tests/fixtures/blank_v17.skp`) | `src/blank_v17.skp`, unchanged |
@@ -86,11 +86,21 @@ sequence"); the C++ and TypeScript ports restart them per section.
     the face's size; an absolute bound on the determinant refused small faces' pins.
 13. **Guides.** Guide lines are always infinite (start and end at -1e30 and 1e30) through
     the given point along the normalized direction; openskp also writes bounded segments.
-14. **Texture basis.** Pinned textures are solved in openskp's latest `face_uv_basis`
+14. **Tags.** `Doc::tags` are written as openskp's `add_layer` writes layers (`write_layer`:
+    two persistent ids, the hidden flag, `Layer_<name>`, the colour with alpha 255), after
+    the scaffold's Layer0 and before the active-layer anchor, which stays Layer0's slot;
+    the layer count is 1 plus the tags. Each edge, face, instance and guide names its tag's
+    layer in its drawbase, or 0 (Layer0) for none, as openskp's `layer` handles do. Changed
+    from openskp: edges carry their own tag (openskp writes every edge on layer 0); a layer
+    reference past slot 0x7fff takes the archive's escape (openskp writes a `u16`); the
+    `Doc` is checked first: a tag index out of range (`TagOutOfRange`), two tags with one
+    name or a tag named Layer0 (`DuplicateName`), and a name whose `Layer_<name>` does not
+    fit a string record (`StringTooLong`) are errors, where openskp de-duplicates by name.
+15. **Texture basis.** Pinned textures are solved in openskp's latest `face_uv_basis`
     (vertical tolerance 1e-3; a face looking down takes -X and +Y). The project's reader
     (`skp::geom::uv_axes`) uses 1e-9 and takes +X and -Y for a face looking down, so the
     two disagree on downward horizontal faces and on normals within 1e-3 of vertical; the
     round-trip tests pin faces both agree on.
-15. **Not ported:** layers other than Layer0, attribute dictionaries, curves (`CArcCurve`,
+16. **Not ported:** tag folders, attribute dictionaries, curves (`CArcCurve`,
     `CCurve`), images, dimensions, text, section planes, hidden faces and instances,
     component behaviours, opening and editing an existing file.

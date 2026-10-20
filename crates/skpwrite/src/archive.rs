@@ -284,11 +284,12 @@ impl Archive {
     }
 
     /// `CDrawingElement`: material, hidden, two bytes SketchUp drops the entity without
-    /// (1, 1), soft, smooth, a pad byte and the layer (always Layer0, 0).
-    fn drawbase(&mut self, material: u16, f: DrawFlags) {
+    /// (1, 1), soft, smooth, a pad byte and the layer: 0 for Layer0, else a reference to
+    /// the layer's slot.
+    fn drawbase(&mut self, material: u16, f: DrawFlags, layer: u32) {
         self.u16(material);
         self.bytes(&[f.hidden as u8, 1, 1, f.soft as u8, f.smooth as u8, 0]);
-        self.u16(0);
+        self.back_ref(layer);
     }
 
     // -- records ----------------------------------------------------------
@@ -302,10 +303,10 @@ impl Archive {
 
     /// A `CEdge` up to its vertices: the caller writes both (inline or as references),
     /// then calls `edge_end`.
-    pub(crate) fn edge_start(&mut self, flags: DrawFlags) -> u32 {
+    pub(crate) fn edge_start(&mut self, flags: DrawFlags, layer: u32) -> u32 {
         let slot = self.new_of_class("CEdge", EDGE_SCHEMA);
         self.preamble();
-        self.drawbase(0, flags);
+        self.drawbase(0, flags, layer);
         slot
     }
 
@@ -317,8 +318,8 @@ impl Archive {
     /// A `CFace`: the plane, the loops as edge uses (outer first), the back material.
     pub(crate) fn face(
         &mut self,
-        material: u16,
-        back_material: u16,
+        (material, back_material): (u16, u16),
+        layer: u32,
         plane: [f64; 4],
         loops: &[Vec<Use>],
         uv: Option<UvSides>,
@@ -328,7 +329,7 @@ impl Archive {
             Some(ftc) => self.preamble_with_container(Some(ftc)),
             None => self.preamble(),
         }
-        self.drawbase(material, DrawFlags::default());
+        self.drawbase(material, DrawFlags::default(), layer);
         self.f64s(&plane);
         // Validation refuses a count past u32 (`Plan::new`).
         self.u32(u32::try_from(loops.len()).unwrap_or(u32::MAX));
@@ -421,15 +422,33 @@ impl Archive {
 
     /// A definition's own copy of Layer0: no persistent ids.
     fn embedded_layer0(&mut self) -> u32 {
+        self.layer_record("Layer0", [0; 4], false, false)
+    }
+
+    /// A model layer (a tag): its name, colour and hidden flag, with persistent ids.
+    pub(crate) fn layer(&mut self, name: &str, rgb: [u8; 3], hidden: bool) -> u32 {
+        let [r, g, b] = rgb;
+        self.layer_record(name, [r, g, b, 255], hidden, true)
+    }
+
+    /// A `CLayer`: name, hidden flag, a second persistent id (two zero bytes before it),
+    /// its colour material's name and colour, an empty string and the 21-byte tail.
+    /// `with_pids` false writes both persistent ids as 0, as a definition's own copy of
+    /// Layer0 has them.
+    fn layer_record(&mut self, name: &str, rgba: [u8; 4], hidden: bool, with_pids: bool) -> u32 {
         let slot = self.new_of_class("CLayer", LAYER_SCHEMA);
-        self.preamble_no_pid();
-        self.string("Layer0");
-        // Hidden flag, two zero bytes, the second persistent id (0).
-        self.bytes(&[0, 0, 0]);
-        self.pid(0);
-        self.string("Layer_Layer0");
+        if with_pids {
+            self.preamble();
+        } else {
+            self.preamble_no_pid();
+        }
+        self.string(name);
+        self.bytes(&[hidden as u8, 0, 0]);
+        let second = if with_pids { self.alloc_pid() } else { 0 };
+        self.pid(second);
+        self.string(&format!("Layer_{name}"));
         self.u16(256);
-        self.bytes(&[0; 4]);
+        self.bytes(&rgba);
         self.string("");
         self.bytes(&[0; 8]);
         self.f64(0.5);
@@ -485,6 +504,7 @@ impl Archive {
         group: bool,
         definition: u32,
         material: u16,
+        layer: u32,
         rotation: &[[f64; 3]; 3],
         translation: &[f64; 3],
         name: &str,
@@ -497,7 +517,7 @@ impl Archive {
             self.new_of_class("CComponentInstance", INSTANCE_SCHEMA);
             self.preamble_with_container(None);
         }
-        self.drawbase(material, DrawFlags::default());
+        self.drawbase(material, DrawFlags::default(), layer);
         self.back_ref(definition);
         for row in rotation {
             self.f64s(row);
@@ -509,10 +529,10 @@ impl Archive {
     }
 
     /// An infinite `CConstructionLine` through `point` along the unit `direction`.
-    pub(crate) fn construction_line(&mut self, point: [f64; 3], direction: [f64; 3]) {
+    pub(crate) fn construction_line(&mut self, point: [f64; 3], direction: [f64; 3], layer: u32) {
         self.new_of_class("CConstructionLine", CONSTRUCTION_LINE_SCHEMA);
         self.preamble();
-        self.drawbase(0, DrawFlags::default());
+        self.drawbase(0, DrawFlags::default(), layer);
         self.f64s(&point);
         self.f64s(&direction);
         self.f64(-CLINE_INFINITE);
@@ -520,10 +540,10 @@ impl Archive {
         self.bytes(&[0; 4]);
     }
 
-    pub(crate) fn construction_point(&mut self, position: [f64; 3]) {
+    pub(crate) fn construction_point(&mut self, position: [f64; 3], layer: u32) {
         self.new_of_class("CConstructionPoint", CONSTRUCTION_POINT_SCHEMA);
         self.preamble();
-        self.drawbase(0, DrawFlags::default());
+        self.drawbase(0, DrawFlags::default(), layer);
         self.f64s(&position);
         self.f64s(&[0.0; 3]);
         self.u8(0);

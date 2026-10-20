@@ -162,3 +162,7 @@ Upstream's tests are not copied: they read a private corpus.
     against the element budget.
 25. `skip_thumbnail_quality`: removed a branch that could not be taken (a
     `u32` of at most 100 cannot start a definition) and reworded its comment.
+26. Guide layers: `DefGeometry::guide_layer`, parallel to `guides`, holds each kept guide's
+    layer as `edge_layer` and `face_layer` do: on the 2021+ path the layer pid of the
+    `ConstructionGeometry` wrapper's `DrawingElement` (or `NO_LAYER`), on the legacy path
+    the layer index of the guide's drawbase layer slot (which was read and dropped).

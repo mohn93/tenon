@@ -491,31 +491,82 @@ fn pulling_a_tagged_face_makes_untagged_geometry() {
 }
 
 #[test]
-fn an_import_tree_with_a_guide_on_a_missing_tag_is_refused() {
+fn an_import_tree_on_a_missing_tag_is_refused_and_keeps_its_tags() {
+    use kernel::{ImportDefinition, ImportEdge, ImportFace, ImportGeometry, ImportInstance};
     let (mut s, _) = square_scene();
     let walls = tag(&mut s, "Walls");
-    let tree = |t: TagId| kernel::ImportTree {
-        root: kernel::ImportGeometry {
-            guides: vec![Guide::point(p(1.0, 1.0, 1.0)).with_tag(Some(t))],
-            ..kernel::ImportGeometry::default()
-        },
-        definitions: Vec::new(),
+    let roof = tag(&mut s, "Roof");
+    // A square face on `face`, its first side on `edge`; a guide on `guide`; one placement
+    // of a definition holding the same square, on `instance`.
+    let square = |face: Option<TagId>, edge: Option<TagId>, guide: Option<TagId>| ImportGeometry {
+        points: vec![
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            p(1.0, 1.0, 0.0),
+            p(0.0, 1.0, 0.0),
+        ],
+        faces: vec![ImportFace {
+            loops: vec![vec![0, 1, 2, 3]],
+            front: None,
+            back: None,
+            tag: face,
+        }],
+        edges: vec![ImportEdge {
+            a: 1,
+            b: 0,
+            soft: false,
+            tag: edge,
+        }],
+        guides: vec![Guide::point(p(1.0, 1.0, 1.0)).with_tag(guide)],
+        instances: Vec::new(),
+    };
+    let tree = |t: [Option<TagId>; 4]| {
+        let mut root = square(t[0], t[1], t[2]);
+        root.instances.push(ImportInstance {
+            definition: 0,
+            transform: glam::DAffine3::IDENTITY,
+            material: None,
+            tag: t[3],
+        });
+        kernel::ImportTree {
+            definitions: vec![ImportDefinition {
+                name: "Inner".into(),
+                kind: DefinitionKind::Component,
+                geometry: square(Some(roof), None, None),
+            }],
+            root,
+        }
     };
     let before = s.clone();
-    let refused = s.import_tree(MeshId::Root, &tree(TagId(999)), DefinitionKind::Group, "x");
-    assert_eq!(refused.unwrap_err(), KernelError::TagNotFound);
-    assert_eq!(s, before);
+    for k in 0..4 {
+        let mut t = [Some(walls); 4];
+        t[k] = Some(TagId(999));
+        let refused = s.import_tree(MeshId::Root, &tree(t), DefinitionKind::Group, "x");
+        assert_eq!(refused.unwrap_err(), KernelError::TagNotFound, "{k}");
+        assert_eq!(s, before);
+    }
     let (placed, _, _) = s
-        .import_tree(MeshId::Root, &tree(walls), DefinitionKind::Group, "x")
+        .import_tree(
+            MeshId::Root,
+            &tree([Some(walls), Some(roof), Some(walls), Some(roof)]),
+            DefinitionKind::Group,
+            "x",
+        )
         .unwrap();
     s.validate().unwrap();
     let d = MeshId::Definition(s.root().instance(placed).unwrap().definition);
-    assert!(
-        s.mesh(d)
-            .unwrap()
-            .guides()
-            .all(|(_, g)| g.tag() == Some(walls))
-    );
+    let m = s.mesh(d).unwrap();
+    assert!(m.guides().all(|(_, g)| g.tag() == Some(walls)));
+    assert!(m.faces().all(|(_, f)| f.tag == Some(walls)));
+    assert!(m.instances().all(|(_, i)| i.tag == Some(roof)));
+    // The side the file has an edge for takes its tag; the others are Untagged.
+    let mut edges: Vec<Option<TagId>> = m.edges().map(|(_, e)| e.tag).collect();
+    edges.sort();
+    assert_eq!(edges, [None, None, None, Some(roof)]);
+    let inner = m.instances().next().unwrap().1.definition;
+    let inner = s.mesh(MeshId::Definition(inner)).unwrap();
+    assert!(inner.faces().all(|(_, f)| f.tag == Some(roof)));
+    assert!(inner.edges().all(|(_, e)| e.tag.is_none()));
 }
 
 #[test]

@@ -853,3 +853,177 @@ fn only_empty_groups_is_nothing_to_export() {
         "nothing to export: only empty groups or components"
     );
 }
+
+/// A rectangle on the ground: its face and its four edges.
+fn rectangle(d: &mut Document, corner: [f64; 2], opposite: [f64; 2]) -> (String, Vec<String>) {
+    let out = run(
+        d,
+        json!({"type": "add_rectangle", "corner": [corner[0], corner[1], 0],
+               "opposite": [opposite[0], opposite[1], 0]}),
+    )
+    .unwrap();
+    let created: Vec<String> = out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let face = created
+        .iter()
+        .find(|id| id.starts_with('f'))
+        .unwrap()
+        .clone();
+    let edges = created
+        .into_iter()
+        .filter(|id| id.starts_with('e'))
+        .collect();
+    (face, edges)
+}
+
+fn add_tag(d: &mut Document, v: Value) -> String {
+    let mut v = v;
+    v["type"] = json!("add_tag");
+    run(d, v).unwrap()["changes"]["tags"][0]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn set_tag(d: &mut Document, ids: &[&str], tag: &str) {
+    run(d, json!({"type": "set_tag", "ids": ids, "tag": tag})).unwrap();
+}
+
+/// Each tag's name, colour, visibility and count.
+fn tag_summary(d: &Document) -> Vec<(String, Value, bool, u64)> {
+    ask(d, json!({"type": "tags"}))["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["name"].as_str().unwrap().to_string(),
+                t["color"].clone(),
+                t["visible"].as_bool().unwrap(),
+                t["count"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn tags_round_trip() {
+    let mut d = doc();
+    let walls = add_tag(&mut d, json!({"name": "Walls", "color": [200, 30, 40]}));
+    let roof = add_tag(&mut d, json!({"name": "Roof", "color": [10, 20, 30]}));
+    let layer0 = add_tag(&mut d, json!({"name": "Layer0", "color": [5, 6, 7]}));
+    add_tag(&mut d, json!({"name": "Spare"}));
+    run(
+        &mut d,
+        json!({"type": "change_tag", "tag": roof, "visible": false}),
+    )
+    .unwrap();
+
+    // In the root: a face and one of its edges on Walls; a guide point on Walls and a guide
+    // line on the tag named Layer0.
+    let (face, edges) = rectangle(&mut d, [0.0, 0.0], [2.0, 2.0]);
+    set_tag(&mut d, &[&face, &edges[0]], &walls);
+    let point = run(
+        &mut d,
+        json!({"type": "add_guide_point", "position": [1, 1, 1]}),
+    )
+    .unwrap()["changes"]["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    set_tag(&mut d, &[&point], &walls);
+    let line = run(
+        &mut d,
+        json!({"type": "add_guide_line", "point": [0, 0, 3], "direction": [1, 0, 0]}),
+    )
+    .unwrap()["changes"]["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    set_tag(&mut d, &[&line], &layer0);
+
+    // A group on the hidden Roof, its face on Walls.
+    let (inner, _) = rectangle(&mut d, [5.0, 0.0], [7.0, 2.0]);
+    let group =
+        run(&mut d, json!({"type": "make_group", "ids": [inner]})).unwrap()["changes"]["created"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .find(|id| id.starts_with('i'))
+            .unwrap();
+    set_tag(&mut d, &[&group], &roof);
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    let inner_face = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    set_tag(&mut d, &[&inner_face], &walls);
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+
+    let path = scratch("tags.skp");
+    let report = export_to(&mut d, &path);
+    // Spare is on nothing: not written.
+    assert_eq!(report["tags"], 3, "{report}");
+
+    // Read back by the reader: Layer0 first, then the tags, the user's "Layer0" renamed.
+    let index = {
+        use skp::container::Container;
+        use skp::legacy::read_model_and_index;
+        use skp::scene::ReadOptions;
+        let src = skp::source::MemorySource::new(std::fs::read(&path).unwrap());
+        let c = Container::open(&src).unwrap();
+        read_model_and_index(&src, &c, &ReadOptions::default())
+            .unwrap()
+            .1
+    };
+    let layers: Vec<(&str, bool)> = index
+        .layers
+        .iter()
+        .map(|l| (l.name.as_str(), l.hidden))
+        .collect();
+    assert_eq!(
+        layers,
+        [
+            ("Layer0", false),
+            ("Walls", false),
+            ("Roof", true),
+            ("Layer0 2", false)
+        ]
+    );
+
+    // Opened: the same tags, colours, visibility and entities on them.
+    let back = open(path.to_str().unwrap());
+    assert_eq!(
+        tag_summary(&back),
+        [
+            ("Walls".to_string(), json!([200, 30, 40]), true, 4),
+            ("Roof".to_string(), json!([10, 20, 30]), false, 1),
+            ("Layer0 2".to_string(), json!([5, 6, 7]), true, 1),
+        ]
+    );
+    let walls_back = ask(&back, json!({"type": "tags"}))["tags"][0]["id"].clone();
+    let faces = ask(&back, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(faces.len(), 1);
+    let id = faces[0]["id"].as_str().unwrap();
+    assert_eq!(
+        ask(&back, json!({"type": "entity", "id": id}))["tag"],
+        walls_back
+    );
+
+    // Exported again and opened, the same tags.
+    let mut back = back;
+    let again = scratch("tags-again.skp");
+    export_to(&mut back, &again);
+    assert_eq!(
+        tag_summary(&open(again.to_str().unwrap())),
+        tag_summary(&back)
+    );
+}

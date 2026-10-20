@@ -199,6 +199,7 @@ fn edges_keep_their_flags() {
         soft,
         smooth,
         hidden,
+        tag: None,
     };
     let edges = vec![
         f(0, 1, true, false, false),
@@ -321,6 +322,7 @@ fn textured_doc() -> Doc {
     faces.push(up);
     Doc {
         materials,
+        tags: Vec::new(),
         definitions: Vec::new(),
         root: Geometry {
             vertices: more,
@@ -410,6 +412,7 @@ fn nested_doc() -> Doc {
         rotation,
         translation,
         material,
+        tag: None,
     };
     let b = Definition {
         name: "Shelf".into(),
@@ -440,6 +443,7 @@ fn nested_doc() -> Doc {
         rotation: IDENTITY,
         translation,
         material: None,
+        tag: None,
     };
     Doc {
         materials: vec![Material {
@@ -448,6 +452,7 @@ fn nested_doc() -> Doc {
             opacity: 1.0,
             texture: None,
         }],
+        tags: Vec::new(),
         definitions: vec![b, a],
         root: Geometry {
             instances: vec![group([0.0, 0.0, 0.0]), group([100.0, 0.0, 0.0])],
@@ -521,13 +526,16 @@ fn guides() {
         Guide::Line {
             point: [1.0, 2.0, 3.0],
             direction: [0.0, 0.0, 2.0],
+            tag: None,
         },
         Guide::Point {
             position: [4.0, 5.0, 6.0],
+            tag: None,
         },
         Guide::Line {
             point: [-1.0, 0.5, 0.0],
             direction: [3.0, 4.0, 0.0],
+            tag: None,
         },
     ];
     let (m, _, stats) = read(
@@ -562,6 +570,7 @@ fn a_guide_line_can_end_a_definition() {
     inner.guides = vec![Guide::Line {
         point: [0.0, 0.0, 1.0],
         direction: [1.0, 0.0, 0.0],
+        tag: None,
     }];
     let mut root = one_edge_root();
     root.instances = vec![Instance {
@@ -569,18 +578,22 @@ fn a_guide_line_can_end_a_definition() {
         rotation: IDENTITY,
         translation: [0.0; 3],
         material: None,
+        tag: None,
     }];
     root.guides = vec![
         Guide::Line {
             point: [0.0, 0.0, 2.0],
             direction: [0.0, 1.0, 0.0],
+            tag: None,
         },
         Guide::Point {
             position: [1.0, 1.0, 1.0],
+            tag: None,
         },
     ];
     let doc = Doc {
         materials: Vec::new(),
+        tags: Vec::new(),
         definitions: vec![Definition {
             name: "Marked".into(),
             is_group: false,
@@ -653,9 +666,11 @@ fn many_entities_cross_the_slot_escape() {
     root.guides = vec![
         Guide::Point {
             position: [1.0, 2.0, 3.0],
+            tag: None,
         },
         Guide::Point {
             position: [4.0, 5.0, 6.0],
+            tag: None,
         },
     ];
     root.instances = vec![Instance {
@@ -663,6 +678,7 @@ fn many_entities_cross_the_slot_escape() {
         rotation: IDENTITY,
         translation: [0.0; 3],
         material: None,
+        tag: None,
     }];
     // 254 UTF-16 units, two of them a surrogate pair.
     let name: String = core::iter::once('\u{10400}')
@@ -671,6 +687,7 @@ fn many_entities_cross_the_slot_escape() {
     assert_eq!(name.encode_utf16().count(), 254);
     let doc = Doc {
         materials: Vec::new(),
+        tags: Vec::new(),
         definitions: vec![Definition {
             name: name.clone(),
             is_group: false,
@@ -722,6 +739,7 @@ fn the_same_document_gives_the_same_bytes() {
     doc.root.instances = nested_doc().root.instances;
     doc.root.guides = vec![Guide::Point {
         position: [1.0, 1.0, 1.0],
+        tag: None,
     }];
     let first = write(&doc).expect("writes");
     let second = write(&doc.clone()).expect("writes");
@@ -751,6 +769,7 @@ fn invalid_documents_are_errors() {
         rotation: IDENTITY,
         translation: [0.0; 3],
         material: None,
+        tag: None,
     };
     let solid = |name: String| Material {
         name,

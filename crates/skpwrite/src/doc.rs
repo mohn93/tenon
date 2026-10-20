@@ -1,13 +1,25 @@
 //! What the writer takes: a whole document, in inches, with no ties to the modelling
-//! session. Indices are into the lists of the same document (materials) or the same
+//! session. Indices are into the lists of the same document (materials, tags) or the same
 //! geometry (vertices).
 
-/// A whole document: its materials, its component and group definitions, and the root.
+/// A whole document: its materials, its tags, its component and group definitions, and the
+/// root.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Doc {
     pub materials: Vec<Material>,
+    /// Written as layers after the file's own Layer0, which entities with no tag are on.
+    pub tags: Vec<Tag>,
     pub definitions: Vec<Definition>,
     pub root: Geometry,
+}
+
+/// A tag (a layer in the file): its name, colour and visibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tag {
+    /// Not "Layer0", which the file has already.
+    pub name: String,
+    pub rgb: [u8; 3],
+    pub hidden: bool,
 }
 
 /// A material: a colour, an opacity and an optional texture.
@@ -59,6 +71,8 @@ pub struct Edge {
     pub soft: bool,
     pub smooth: bool,
     pub hidden: bool,
+    /// Index into `Doc::tags`; `None` is Layer0.
+    pub tag: Option<usize>,
 }
 
 /// One texture pin: a point on the face and the texture coordinate, in tiles, it takes.
@@ -78,6 +92,8 @@ pub struct Face {
     pub front_uv: Option<[UvPin; 3]>,
     /// Three pins fixing the back texture's placement.
     pub back_uv: Option<[UvPin; 3]>,
+    /// Index into `Doc::tags`; `None` is Layer0.
+    pub tag: Option<usize>,
 }
 
 /// A placement of a definition.
@@ -91,16 +107,30 @@ pub struct Instance {
     pub translation: [f64; 3],
     /// Index into `Doc::materials`.
     pub material: Option<usize>,
+    /// Index into `Doc::tags`; `None` is Layer0.
+    pub tag: Option<usize>,
 }
 
-/// A guide line (infinite) or a guide point.
+/// A guide line (infinite) or a guide point, each with its tag (an index into `Doc::tags`;
+/// `None` is Layer0).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Guide {
     Line {
         point: [f64; 3],
         direction: [f64; 3],
+        tag: Option<usize>,
     },
     Point {
         position: [f64; 3],
+        tag: Option<usize>,
     },
+}
+
+impl Guide {
+    /// The guide's tag.
+    pub fn tag(&self) -> Option<usize> {
+        match *self {
+            Guide::Line { tag, .. } | Guide::Point { tag, .. } => tag,
+        }
+    }
 }

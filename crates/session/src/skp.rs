@@ -1,8 +1,8 @@
 //! Reading SketchUp files (2017 and newer) into an import tree: every definition once, with
-//! its faces (holes included), edges (soft, smooth and hidden ones soft), placements, guides
-//! and materials. Tags, scenes, images and hidden states are not carried; the notes say what
-//! was left out. Files from SketchUp 2017 to 2020 (the legacy container) are read by
-//! `skp::legacy` into the same shape as newer ones.
+//! its faces (holes included), edges (soft, smooth and hidden ones soft), placements, guides,
+//! materials and tags (the file's layers). Scenes, images and hidden states are not carried;
+//! the notes say what was left out. Files from SketchUp 2017 to 2020 (the legacy container)
+//! are read by `skp::legacy` into the same shape as newer ones.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,12 +11,13 @@ use kernel::geom::vector_area;
 use kernel::{
     DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
     ImportInstance, ImportTree, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material,
-    MaterialId, SceneChange, Texture, TreeReport,
+    MaterialId, SceneChange, Tag, TagId, Texture, TreeReport, UNTAGGED,
 };
 use skp::container::{Container, Generation};
-use skp::geom::{DefGeometry, RawGuide, RawInstance};
+use skp::geom::{DefGeometry, NO_LAYER, RawGuide, RawInstance};
+use skp::layers::color_is_unset;
 use skp::legacy;
-use skp::model::{MaterialDef, NO_MATERIAL, SceneIndex, TextureLocation, edge_flag};
+use skp::model::{LayerDef, MaterialDef, NO_MATERIAL, SceneIndex, TextureLocation, edge_flag};
 use skp::scene::{Model, ReadOptions, read_model};
 use skp::source::ByteSource;
 use skp::zip::{ZipDirectory, read_entry_within};
@@ -38,6 +39,9 @@ const OLDEST_VERSION: u32 = 17;
 /// The name of the tag every SketchUp model has (shown as "Untagged").
 const DEFAULT_TAG: &str = "Layer0";
 
+/// Most tags one import adds; what is on the file's further layers is imported Untagged.
+const MAX_IMPORT_TAGS: usize = 1024;
+
 /// The most a file's model (`model.dat`, or a 2017-2020 file's model stream) may unpack to.
 const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -46,7 +50,8 @@ const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024;
 /// bound on what reading costs.
 const MAX_ELEMENTS: u64 = 10_000_000;
 
-/// The longest material or definition name taken from a file, leaving room for a " 2" suffix.
+/// The longest material, tag or definition name taken from a file, leaving room for a " 2"
+/// suffix.
 const MAX_NAME: usize = 240;
 
 /// What reading a SketchUp file found besides the tree, for the import report.
@@ -76,7 +81,8 @@ pub(crate) struct SkpNotes {
     pub missing: usize,
     /// Instances whose transform is not finite or is flat.
     pub flat: usize,
-    pub tags: usize,
+    /// The file's layers past `MAX_IMPORT_TAGS`, not imported.
+    pub dropped_tags: usize,
     pub scenes: usize,
     /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
     /// caller, which counts the materials built faces keep).
@@ -93,6 +99,8 @@ pub(crate) struct SkpNotes {
     pub textures: usize,
     /// The materials added to the document, each with the change that added it.
     pub added: Vec<(MaterialId, SceneChange)>,
+    /// The changes adding the file's layers as tags, in order.
+    pub added_tags: Vec<SceneChange>,
     /// Textures not imported, by reason, in the order the reasons came up.
     pub texture_failures: Vec<(&'static str, usize)>,
 }
@@ -109,9 +117,15 @@ impl SkpNotes {
             }
         };
         say(
-            self.tags,
-            "tag was not imported (tags are not supported yet)",
-            "tags were not imported (tags are not supported yet)",
+            self.dropped_tags,
+            &format!(
+                "tag past the {MAX_IMPORT_TAGS} an import may add was left off; what is on it \
+                 is Untagged"
+            ),
+            &format!(
+                "tags past the {MAX_IMPORT_TAGS} an import may add were left off; what is on \
+                 them is Untagged"
+            ),
         );
         say(
             self.scenes,
@@ -213,9 +227,10 @@ impl SkpNotes {
 }
 
 /// Reads a SketchUp file's bytes into an import tree whose positions are meters times
-/// `scale`, adding the materials its faces and instances use to `document`'s scene (listed
-/// in the notes, so a caller can take them out again). With `only`, just the materials of
-/// those ids (the file's numbering) are added; the others import as no material. A file from
+/// `scale`, adding the materials its faces and instances use and its layers (as tags) to
+/// `document`'s scene (listed in the notes, so a caller can take them out again: see
+/// `remove_added`). With `only`, just the materials of those ids (the file's numbering) are
+/// added; the others import as no material. A file from
 /// before SketchUp 2017, or one whose placed model reaches beyond `MAX_COORDINATE`, is
 /// `invalid_input`; a file that cannot be read is a `file` error (the message does not name
 /// the file). Nothing is added on an error.
@@ -237,11 +252,6 @@ pub(crate) fn read_skp(
         faces_short: stats
             .as_ref()
             .map_or(0, |s| saturate(s.faces_short_of_exact)),
-        tags: index
-            .layers
-            .iter()
-            .filter(|l| l.name != DEFAULT_TAG)
-            .count(),
         scenes: index.scenes.len(),
         ..SkpNotes::default()
     };
@@ -339,9 +349,22 @@ pub(crate) fn read_skp(
     notes.texture_failures = materials.failures;
     notes.added = materials.added;
     notes.material_ids = materials.order;
+    let tags = match add_tags(document, &index.layers) {
+        Ok(tags) => tags,
+        Err(e) => {
+            remove_materials(document, &notes.added);
+            return Err(e);
+        }
+    };
+    notes.added_tags = tags.added;
+    notes.dropped_tags = tags.dropped;
+    let ids = Ids {
+        materials: &materials.ids,
+        tags: &tags.ids,
+    };
 
     let result = (|| {
-        let root = geometry(&model.root, unit, &by_pid, &materials.ids, &mut notes)?;
+        let root = geometry(&model.root, unit, &by_pid, &ids, &mut notes)?;
         let mut definitions = Vec::with_capacity(model.definitions.len());
         for (i, d) in model.definitions.iter().enumerate() {
             let kind = if component[i] {
@@ -356,7 +379,7 @@ pub(crate) fn read_skp(
             };
             // A definition the root does not reach is not built: it needs no geometry.
             let geometry = if reached[i] {
-                geometry(&d.geom, unit, &by_pid, &materials.ids, &mut notes)?
+                geometry(&d.geom, unit, &by_pid, &ids, &mut notes)?
             } else {
                 ImportGeometry::default()
             };
@@ -371,7 +394,7 @@ pub(crate) fn read_skp(
     match result {
         Ok(tree) => Ok((tree, notes)),
         Err(e) => {
-            remove_materials(document, &notes.added);
+            remove_added(document, &notes);
             Err(e)
         }
     }
@@ -604,6 +627,14 @@ fn grow(b: Option<Box3>, more: Box3) -> Box3 {
     }
 }
 
+/// Takes out the tags and materials an import added.
+pub(crate) fn remove_added(document: &mut Document, notes: &SkpNotes) {
+    document
+        .scene_mut()
+        .apply(&SceneChange::join(notes.added_tags.iter().cloned()).inverse());
+    remove_materials(document, &notes.added);
+}
+
 /// Takes out materials an import added.
 pub(crate) fn remove_materials(document: &mut Document, added: &[(MaterialId, SceneChange)]) {
     document
@@ -617,14 +648,32 @@ fn instance_material(i: &RawInstance) -> Option<u32> {
     (i.has_material && i.material < u64::from(NO_MATERIAL)).then_some(i.material as u32)
 }
 
+/// The materials and tags an import added, by the file's ids.
+struct Ids<'a> {
+    materials: &'a HashMap<u32, MaterialId>,
+    /// By the file's layer id (a 2021+ file's layer pid, a 2017-2020 file's layer index).
+    tags: &'a HashMap<u32, TagId>,
+}
+
+impl Ids<'_> {
+    /// The tag of a layer reference; None for Layer0, no layer or a layer not imported.
+    fn tag(&self, layer: u32) -> Option<TagId> {
+        (layer != NO_LAYER)
+            .then(|| self.tags.get(&layer).copied())
+            .flatten()
+    }
+}
+
 /// One mesh of the file in meters (`unit` per inch), counting what is left out in `notes`.
 fn geometry(
     g: &DefGeometry,
     unit: f64,
     by_pid: &HashMap<u64, usize>,
-    materials: &HashMap<u32, MaterialId>,
+    ids: &Ids,
     notes: &mut SkpNotes,
 ) -> Result<ImportGeometry, CommandError> {
+    let materials = ids.materials;
+    let layer = |at: &Vec<u32>, i: usize| at.get(i).and_then(|l| ids.tag(*l));
     let points: Vec<DVec3> = g
         .vertex_pos
         .as_chunks::<3>()
@@ -677,6 +726,7 @@ fn geometry(
             loops,
             front: material(g.face_material.get(f)),
             back: material(g.face_back_material.get(f)),
+            tag: layer(&g.face_layer, f),
         });
     }
 
@@ -691,6 +741,7 @@ fn geometry(
             a: ends[0] as usize,
             b: ends[1] as usize,
             soft: flags & (edge_flag::SOFT | edge_flag::SMOOTH | edge_flag::HIDDEN) != 0,
+            tag: layer(&g.edge_layer, e),
         });
     }
 
@@ -715,12 +766,16 @@ fn geometry(
             definition,
             transform,
             material: instance_material(i).and_then(|m| materials.get(&m).copied()),
+            tag: i
+                .has_layer
+                .then(|| u32::try_from(i.layer).ok().and_then(|l| ids.tag(l)))
+                .flatten(),
         });
     }
     let mut guides = Vec::with_capacity(g.guides.len());
-    for r in &g.guides {
+    for (k, r) in g.guides.iter().enumerate() {
         match guide(r, unit) {
-            Some(guide) => guides.push(guide),
+            Some(guide) => guides.push(guide.with_tag(layer(&g.guide_layer, k))),
             None => notes.skipped_guides += 1,
         }
     }
@@ -913,6 +968,81 @@ fn add_materials(
                 return Err(CommandError::new(
                     ErrorKind::File,
                     format!("material \"{name}\": {e}"),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The tags an import added, and how the file's layer ids map to them.
+struct AddedTags {
+    ids: HashMap<u32, TagId>,
+    added: Vec<SceneChange>,
+    /// Layers past `MAX_IMPORT_TAGS`.
+    dropped: usize,
+}
+
+/// Adds one tag per layer of the file but Layer0 (in the file's order, the first of a
+/// repeated id winning, at most `MAX_IMPORT_TAGS`): its name (made unique against the
+/// model's tags: "Walls 2"), colour (the next free tag colour when the file has none) and
+/// visibility.
+fn add_tags(document: &mut Document, layers: &[LayerDef]) -> Result<AddedTags, CommandError> {
+    let mut out = AddedTags {
+        ids: HashMap::new(),
+        added: Vec::new(),
+        dropped: 0,
+    };
+    let mut taken: HashSet<String> = document
+        .scene()
+        .tags()
+        .map(|(_, t)| t.name.clone())
+        .chain([UNTAGGED.to_string()])
+        .collect();
+    let mut next: HashMap<String, usize> = HashMap::new();
+    for l in layers {
+        if l.name == DEFAULT_TAG || out.ids.contains_key(&l.id) {
+            continue;
+        }
+        if out.added.len() == MAX_IMPORT_TAGS {
+            out.dropped += 1;
+            continue;
+        }
+        let base: String = match l.name.trim() {
+            "" => "Tag".to_string(),
+            n => n.chars().take(MAX_NAME).collect(),
+        };
+        let name = if taken.contains(&base) {
+            let n = next.entry(base.clone()).or_insert(2);
+            while taken.contains(&format!("{base} {n}")) {
+                *n += 1;
+            }
+            format!("{base} {n}")
+        } else {
+            base
+        };
+        taken.insert(name.clone());
+        let color = if color_is_unset(l.color) {
+            document.scene().next_tag_color()
+        } else {
+            [l.color[0], l.color[1], l.color[2]]
+        };
+        let tag = Tag {
+            name,
+            color,
+            visible: !l.hidden,
+        };
+        match document.scene_mut().add_tag(tag) {
+            Ok((id, change)) => {
+                out.ids.insert(l.id, id);
+                out.added.push(change);
+            }
+            Err(e) => {
+                let added = SceneChange::join(out.added.iter().cloned());
+                document.scene_mut().apply(&added.inverse());
+                return Err(CommandError::new(
+                    ErrorKind::File,
+                    format!("tag \"{}\": {e}", l.name),
                 ));
             }
         }

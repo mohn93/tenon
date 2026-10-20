@@ -77,6 +77,9 @@ pub struct ExportReport {
     /// SketchUp files: materials written. Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub materials: usize,
+    /// SketchUp files: tags written (those an entity written is on). Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tags: usize,
     /// What the file could not hold (glowing materials, curves, empty groups). Absent when
     /// there is nothing to say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

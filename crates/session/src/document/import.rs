@@ -16,7 +16,7 @@ use crate::import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
 };
-use crate::skp::{SkpNotes, read_skp, remove_materials};
+use crate::skp::{SkpNotes, read_skp, remove_added, remove_materials};
 use crate::sniff;
 
 /// The name of an imported definition whose file name gives none.
@@ -39,6 +39,8 @@ pub(super) struct BuiltSkp {
     change: SceneChange,
     /// The materials added and kept, each with the change that added it.
     kept: AddedMaterials,
+    /// The change adding the file's layers as tags.
+    tags: SceneChange,
 }
 
 /// Options of `Command::Import` besides the path.
@@ -186,14 +188,14 @@ impl Document {
         report.instance = Some(EntityId::Instance(instance));
         report.definition = definition;
         let added = SceneChange::join(b.kept.into_iter().map(|(_, c)| c));
-        let change = SceneChange::join([added, b.change]);
+        let change = SceneChange::join([added, b.tags, b.change]);
         self.place_import(mesh, instance, change, report, place, root_faces)
     }
 
     /// Reads a SketchUp file's `bytes` (from `path`, named in messages) and builds its tree
     /// into the scene with `build`, keeping only the materials the built faces and instances
-    /// use (at most `MAX_IMPORT_MATERIALS`; the bytes are read twice when more are used).
-    /// Nothing changes on failure.
+    /// use (at most `MAX_IMPORT_MATERIALS`; the bytes are read twice when more are used) and
+    /// every tag the file's layers made. Nothing changes on failure.
     pub(super) fn build_skp(
         &mut self,
         path: &str,
@@ -215,7 +217,7 @@ impl Document {
             let (instance, built, change) = match build(&mut self.scene, &tree) {
                 Ok(done) => done,
                 Err(e) => {
-                    remove_materials(self, &notes.added);
+                    remove_added(self, &notes);
                     return Err(file_error(e.to_string()));
                 }
             };
@@ -234,7 +236,7 @@ impl Document {
                     .collect();
                 if kept.len() > MAX_IMPORT_MATERIALS {
                     self.scene.apply(&change.inverse());
-                    remove_materials(self, &notes.added);
+                    remove_added(self, &notes);
                     dropped = kept.len() - MAX_IMPORT_MATERIALS;
                     capped = notes.capped_materials;
                     only = Some(kept.into_iter().take(MAX_IMPORT_MATERIALS).collect());
@@ -251,6 +253,7 @@ impl Document {
         };
         notes.dropped_materials = dropped;
         notes.capped_materials += capped;
+        let tags = SceneChange::join(notes.added_tags.iter().cloned());
         Ok(BuiltSkp {
             tree,
             notes,
@@ -258,6 +261,7 @@ impl Document {
             built,
             change,
             kept,
+            tags,
         })
     }
 
@@ -286,6 +290,7 @@ impl Document {
             vertices: b.built.vertices,
             skipped: b.notes.unread_faces + b.built.skipped,
             materials: b.kept.len(),
+            tags: b.notes.added_tags.len(),
             definitions: b.built.definitions,
             instances: b.built.instances,
             guides: given_guides.saturating_sub(b.built.skipped_guides),

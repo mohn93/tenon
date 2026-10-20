@@ -162,6 +162,9 @@ pub struct ImportReport {
     /// Materials added: from the OBJ's material library, or the SketchUp file's materials
     /// its faces and instances use.
     pub materials: usize,
+    /// SketchUp: tags added, one per layer of the file but Layer0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tags: usize,
     /// SketchUp: definitions made from the file's (each once, however often it is placed).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub definitions: usize,

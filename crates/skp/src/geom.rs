@@ -349,6 +349,9 @@ pub struct DefGeometry {
     pub instances: Vec<RawInstance>,
     /// Guide lines and guide points, in the definition's own coordinates (inches).
     pub guides: Vec<RawGuide>,
+    /// The layer of each guide, parallel to `guides`: a 2021+ file's layer pid (cut to 32
+    /// bits), a legacy file's layer index, or [`NO_LAYER`].
+    pub guide_layer: Vec<u32>,
     /// 2021+ files: hidden guides in this definition, skipped (not in `guides`). Legacy
     /// files count theirs in `legacy::ReadStats::hidden_guides` and leave this 0.
     pub hidden_guides: u32,
@@ -704,7 +707,8 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             _ => continue,
         };
         for r in sec.children() {
-            let (guide, flags) = guide_of(&r, points);
+            let (guide, common) = guide_of(&r, points);
+            let flags = common.flags;
             let Some(guide) = guide else {
                 g.unread_guides = g.unread_guides.saturating_add(1);
                 continue;
@@ -715,6 +719,11 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             }
             spend(budget, 1)?;
             g.guides.push(guide);
+            g.guide_layer.push(if common.has_layer {
+                common.layer as u32
+            } else {
+                NO_LAYER
+            });
         }
     }
 
@@ -802,21 +811,21 @@ fn parse_instance(rec: &Record, is_group: bool) -> RawInstance {
     i
 }
 
-/// One record of a guide list read as a guide, with its `DrawingElementFlags`. `None`
-/// when the record is not the guide its list holds (`points` says which), or lacks its
-/// point or line: a point needs three doubles, a line its eight (as openskp requires).
-fn guide_of(rec: &Record, points: bool) -> (Option<RawGuide>, u8) {
+/// One record of a guide list read as a guide, with its drawing element (flags and layer).
+/// `None` when the record is not the guide its list holds (`points` says which), or lacks
+/// its point or line: a point needs three doubles, a line its eight (as openskp requires).
+fn guide_of(rec: &Record, points: bool) -> (Option<RawGuide>, Common) {
     let (tag, body, need) = if points {
         (t::CONSTRUCTION_POINT, t::CONSTRUCTION_POINT_POSITION, 24)
     } else {
         (t::CONSTRUCTION_LINE, t::CONSTRUCTION_LINE_GEOM_LINE, 64)
     };
     if rec.tag != tag {
-        return (None, 0);
+        return (None, Common::default());
     }
-    let flags = rec
+    let common = rec
         .child(t::CONSTRUCTION_GEOMETRY)
-        .map_or(0, |cg| common_of(&cg).flags);
+        .map_or(Common::default(), |cg| common_of(&cg));
     let guide = rec
         .child(body)
         .filter(|b| b.payload.len() >= need)
@@ -831,7 +840,7 @@ fn guide_of(rec: &Record, points: bool) -> (Option<RawGuide>, u8) {
                 }
             })
         });
-    (guide, flags)
+    (guide, common)
 }
 
 fn is_sorted(v: &[u64]) -> bool {

@@ -10,7 +10,7 @@ use glam::{DAffine3, DVec3};
 use crate::MIN_DETERMINANT;
 use crate::edit::KernelError;
 use crate::geom::vector_area;
-use crate::ids::{DefinitionId, EdgeId, InstanceId, MaterialId, VertexId};
+use crate::ids::{DefinitionId, EdgeId, InstanceId, MaterialId, TagId, VertexId};
 use crate::import::{FLAT_TOL, MAX_IMPORT_FACES, normal_of, pieces, weld};
 use crate::model::{ChangeSet, Face, Guide, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
@@ -67,15 +67,17 @@ pub struct ImportFace {
     pub loops: Vec<Vec<usize>>,
     pub front: Option<MaterialId>,
     pub back: Option<MaterialId>,
+    pub tag: Option<TagId>,
 }
 
 /// An edge of the file: face sides and loose edges alike, so loose ones are kept and face
-/// sides can be softened.
+/// sides can be softened and tagged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImportEdge {
     pub a: usize,
     pub b: usize,
     pub soft: bool,
+    pub tag: Option<TagId>,
 }
 
 /// A placement of definition `definition` (an index into `ImportTree::definitions`).
@@ -84,6 +86,7 @@ pub struct ImportInstance {
     pub definition: usize,
     pub transform: DAffine3,
     pub material: Option<MaterialId>,
+    pub tag: Option<TagId>,
 }
 
 /// What building an import tree made. Counts are over every mesh built, each shared
@@ -119,8 +122,8 @@ impl Scene {
     /// tree's order), then the root geometry into one new definition named `name` of `kind`,
     /// placed once with the identity in mesh `parent`. Fails with `InvalidImport` for a
     /// malformed tree (see `check_tree`), `NotFinite` for a point that is not finite,
-    /// `MaterialNotFound` for a material the scene lacks, `TagNotFound` for a guide on a tag
-    /// the scene lacks, `TooManyFaces` past
+    /// `MaterialNotFound` for a material the scene lacks, `TagNotFound` for a face, edge,
+    /// instance or guide on a tag the scene lacks, `TooManyFaces` past
     /// `MAX_IMPORT_FACES` and `NothingToImport` when the root makes nothing; nothing changes
     /// then.
     pub fn import_tree(
@@ -183,13 +186,14 @@ impl Scene {
         }) {
             return Err(KernelError::MaterialNotFound);
         }
-        // Guides are the only imported entities that carry a tag; one the scene lacks would
-        // leave the guide on a dangling tag.
-        if geometries
-            .iter()
-            .flat_map(|g| &g.guides)
-            .any(|g| g.tag().is_some_and(|t| self.tag(t).is_none()))
-        {
+        // A tag the scene lacks would leave an entity on a dangling tag.
+        let lacks = |t: Option<TagId>| t.is_some_and(|t| self.tag(t).is_none());
+        if geometries.iter().any(|g| {
+            g.faces.iter().any(|f| lacks(f.tag))
+                || g.edges.iter().any(|e| lacks(e.tag))
+                || g.instances.iter().any(|i| lacks(i.tag))
+                || g.guides.iter().any(|g| lacks(g.tag()))
+        }) {
             return Err(KernelError::TagNotFound);
         }
         let given: usize = geometries.iter().map(|g| g.faces.len()).sum();
@@ -393,8 +397,8 @@ fn check_tree(tree: &ImportTree) -> Result<Vec<usize>, KernelError> {
 struct Shaped<'a> {
     points: Vec<DVec3>,
     faces: Vec<ShapedFace>,
-    /// Each edge once, with whether it is soft: face sides first, then the file's edges.
-    edges: Vec<(usize, usize, bool)>,
+    /// Each edge once: face sides first, then the file's edges.
+    edges: Vec<ShapedEdge>,
     guides: Vec<Guide>,
     instances: &'a [ImportInstance],
 }
@@ -405,6 +409,16 @@ struct ShapedFace {
     normal: DVec3,
     front: Option<MaterialId>,
     back: Option<MaterialId>,
+    tag: Option<TagId>,
+}
+
+/// An edge between two welded points: soft when the file marks it so, on the tag of the
+/// file's edge between them (a face side the file has no edge for is Untagged).
+struct ShapedEdge {
+    a: usize,
+    b: usize,
+    soft: bool,
+    tag: Option<TagId>,
 }
 
 /// Welds a geometry's points and makes its faces, edges and guides, counting what is
@@ -447,6 +461,7 @@ fn shape<'a>(
                     normal,
                     front: f.front,
                     back: f.back,
+                    tag: f.tag,
                 });
             }
         }
@@ -458,23 +473,35 @@ fn shape<'a>(
             report.holes_dropped += f.loops.len() - 1;
         }
     }
-    let mut edges: Vec<(usize, usize, bool)> = Vec::new();
+    let mut edges: Vec<ShapedEdge> = Vec::new();
     let mut index: HashMap<(usize, usize), usize> = HashMap::new();
-    let mut add = |a: usize, b: usize, soft: bool| {
+    // The first of the file's edges between two points gives the edge its tag.
+    let mut tagged: HashSet<usize> = HashSet::new();
+    let mut add = |a: usize, b: usize, file: Option<&ImportEdge>| {
         let at = *index.entry((a.min(b), a.max(b))).or_insert_with(|| {
-            edges.push((a, b, false));
+            edges.push(ShapedEdge {
+                a,
+                b,
+                soft: false,
+                tag: None,
+            });
             edges.len() - 1
         });
-        edges[at].2 |= soft;
+        if let Some(e) = file {
+            edges[at].soft |= e.soft;
+            if tagged.insert(at) {
+                edges[at].tag = e.tag;
+            }
+        }
     };
     for l in faces.iter().flat_map(|f| &f.loops) {
         for i in 0..l.len() {
-            add(l[i], l[(i + 1) % l.len()], false);
+            add(l[i], l[(i + 1) % l.len()], None);
         }
     }
     for e in &g.edges {
         match (map.get(e.a), map.get(e.b)) {
-            (Some(&a), Some(&b)) if a != b => add(a, b, e.soft),
+            (Some(&a), Some(&b)) if a != b => add(a, b, Some(e)),
             _ => report.skipped_edges += 1,
         }
     }
@@ -572,10 +599,10 @@ impl Model {
             })
         };
         let mut soft: Vec<EdgeId> = Vec::new();
-        for &(a, b, is_soft) in &s.edges {
-            let (va, vb) = (vertex_of(self, a), vertex_of(self, b));
-            let id = self.insert_edge(va, vb);
-            if is_soft {
+        for e in &s.edges {
+            let (va, vb) = (vertex_of(self, e.a), vertex_of(self, e.b));
+            let id = self.insert_edge_like(va, vb, None, false, false, e.tag);
+            if e.soft {
                 soft.push(id);
             }
         }
@@ -589,6 +616,7 @@ impl Model {
             let mut face = Face::new(outer, loops, f.normal);
             face.front = f.front;
             face.back = f.back;
+            face.tag = f.tag;
             self.insert_face(face);
         }
         report.faces += s.faces.len();
@@ -607,7 +635,7 @@ impl Model {
                 definition: ours[i.definition].expect("a reached definition is made"),
                 transform: i.transform,
                 material: i.material,
-                tag: None,
+                tag: i.tag,
             });
             report.instances += 1;
         }
@@ -638,6 +666,7 @@ mod tests {
                 loops: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]],
                 front: None,
                 back: None,
+                tag: None,
             }],
             ..Default::default()
         }

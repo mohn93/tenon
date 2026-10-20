@@ -1,23 +1,28 @@
 //! The whole scene as a SketchUp 2017 (`.skp`) file, written by `skpwrite`: the root and
 //! every definition the root reaches (each once, in its own coordinates), the materials,
-//! guides, holes, soft edges and texture placements. Meters become inches. What a SketchUp
-//! file cannot hold (glowing materials, curves as curves, empty groups) is reported.
+//! the tags entities are on (as layers), guides, holes, soft edges and texture placements.
+//! Meters become inches. What a SketchUp file cannot hold (glowing materials, curves as
+//! curves, empty groups) is reported.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use glam::{DVec2, DVec3};
 use kernel::{
-    DefinitionId, DefinitionKind, Face, Guide, MaterialId, Model, Scene, back_texture_position,
+    DefinitionId, DefinitionKind, Face, Guide, MaterialId, Model, Scene, TagId,
+    back_texture_position,
 };
-use skpwrite::{Definition, Doc, Edge, Geometry, Instance, Material, Texture, UvPin};
+use skpwrite::{Definition, Doc, Edge, Geometry, Instance, Material, Tag, Texture, UvPin};
 
 use crate::command::{CommandError, ErrorKind};
 
 const METERS_PER_INCH: f64 = 0.0254;
 
 /// The longest name written, in UTF-16 units: the file holds 254, and a " 1234" suffix
-/// that makes it unique must still fit.
+/// that makes it unique must still fit (and, for a tag, the "Layer_" before it).
 const MAX_NAME_UNITS: usize = 240;
+
+/// The name of the layer every SketchUp file has, which Untagged entities are on.
+const DEFAULT_LAYER: &str = "Layer0";
 
 /// What an export to `.skp` wrote, for the export report.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -30,6 +35,8 @@ pub(crate) struct SkpExportStats {
     pub edges: usize,
     pub guides: usize,
     pub materials: usize,
+    /// Tags written (those an entity written is on).
+    pub tags: usize,
     /// What the file could not hold.
     pub warnings: Vec<String>,
     /// Faces with a textured side whose placement could not be pinned, written with the
@@ -79,9 +86,40 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
     let def_index: HashMap<DefinitionId, usize> =
         written.iter().enumerate().map(|(i, d)| (*d, i)).collect();
 
+    // The tags an entity written is on, in id order, each named uniquely (and not Layer0).
+    let mut used: BTreeSet<TagId> = BTreeSet::new();
+    let meshes = std::iter::once(scene.root()).chain(
+        written
+            .iter()
+            .filter_map(|d| scene.definition(*d))
+            .map(|d| &d.mesh),
+    );
+    for m in meshes {
+        used.extend(m.edges().filter_map(|(_, e)| e.tag));
+        used.extend(m.faces().filter_map(|(_, f)| f.tag));
+        used.extend(
+            m.instances()
+                .filter(|(_, i)| def_index.contains_key(&i.definition))
+                .filter_map(|(_, i)| i.tag),
+        );
+        used.extend(m.guides().filter_map(|(_, g)| g.tag()));
+    }
+    let mut taken = HashSet::from([DEFAULT_LAYER.to_string()]);
+    let mut tag_index: HashMap<TagId, usize> = HashMap::new();
+    let mut tags = Vec::new();
+    for (id, t) in used.iter().filter_map(|id| Some((*id, scene.tag(*id)?))) {
+        tag_index.insert(id, tags.len());
+        tags.push(Tag {
+            name: unique_name(&mut taken, &t.name, "Tag"),
+            rgb: t.color,
+            hidden: !t.visible,
+        });
+    }
+
     let ctx = Ctx {
         scene,
         materials: &material_index,
+        tags: &tag_index,
         definitions: &def_index,
     };
     let mut curves = 0;
@@ -119,9 +157,11 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
     }
     stats.definitions = definitions.len();
     stats.materials = materials.len();
+    stats.tags = tags.len();
 
     let doc = Doc {
         materials,
+        tags,
         definitions,
         root,
     };
@@ -232,6 +272,7 @@ fn unique_name(taken: &mut HashSet<String>, name: &str, fallback: &str) -> Strin
 struct Ctx<'a> {
     scene: &'a Scene,
     materials: &'a HashMap<MaterialId, usize>,
+    tags: &'a HashMap<TagId, usize>,
     definitions: &'a HashMap<DefinitionId, usize>,
 }
 
@@ -260,6 +301,7 @@ impl Ctx<'_> {
                     soft: e.soft,
                     smooth: e.soft,
                     hidden: false,
+                    tag: self.tag(e.tag),
                 }
             })
             .collect();
@@ -282,6 +324,7 @@ impl Ctx<'_> {
                 back: self.material(f.back),
                 front_uv: front_uv.into_option(),
                 back_uv: back_uv.into_option(),
+                tag: self.tag(f.tag),
             });
         }
 
@@ -295,6 +338,7 @@ impl Ctx<'_> {
                     rotation: [0, 1, 2].map(|r| [c(0)[r], c(1)[r], c(2)[r]]),
                     translation: inches(i.transform.translation),
                     material: self.material(i.material),
+                    tag: self.tag(i.tag),
                 })
             })
             .collect();
@@ -303,13 +347,17 @@ impl Ctx<'_> {
             .guides()
             .map(|(_, g)| match *g {
                 Guide::Line {
-                    point, direction, ..
+                    point,
+                    direction,
+                    tag,
                 } => skpwrite::Guide::Line {
                     point: inches(point),
                     direction: direction.to_array(),
+                    tag: self.tag(tag),
                 },
-                Guide::Point { position, .. } => skpwrite::Guide::Point {
+                Guide::Point { position, tag } => skpwrite::Guide::Point {
                     position: inches(position),
+                    tag: self.tag(tag),
                 },
             })
             .collect();
@@ -330,6 +378,10 @@ impl Ctx<'_> {
 
     fn material(&self, m: Option<MaterialId>) -> Option<usize> {
         m.and_then(|m| self.materials.get(&m).copied())
+    }
+
+    fn tag(&self, t: Option<TagId>) -> Option<usize> {
+        t.and_then(|t| self.tags.get(&t).copied())
     }
 
     /// Three pins fixing a side's texture where the face shows it: three corners of the
