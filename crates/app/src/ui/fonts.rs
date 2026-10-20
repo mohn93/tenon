@@ -1,5 +1,6 @@
 //! The fonts built into the binary: Inter for text, JetBrains Mono for values and Phosphor for
-//! icons (see `assets/fonts/README.md`).
+//! icons (see `assets/fonts/README.md`; Inter Regular comes from the session crate, which draws
+//! 3D text with it).
 //!
 //! The icons have a family of their own, with Phosphor first: Inter 4 has glyphs of its own at
 //! some of the Private Use Area codepoints Phosphor uses (the cursor, the eraser, the undo
@@ -17,7 +18,7 @@ pub const MONO: &str = "jetbrains-mono";
 /// The name egui_phosphor gives its font.
 pub const PHOSPHOR: &str = "phosphor";
 
-static INTER_REGULAR_TTF: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
+static INTER_REGULAR_TTF: &[u8] = session::text3d::INTER_REGULAR_TTF;
 static INTER_SEMIBOLD_TTF: &[u8] = include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
 static MONO_TTF: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
 

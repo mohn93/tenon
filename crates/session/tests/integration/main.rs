@@ -31,6 +31,7 @@ mod skp;
 mod skp_export;
 mod soften;
 mod tags;
+mod text3d;
 mod texture_position;
 mod textures;
 mod transform;

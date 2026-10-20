@@ -518,6 +518,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddGuidePoint { .. }
         | Command::DeleteGuides {}
         | Command::AddScreenNote { .. }
+        | Command::Add3dText { .. }
         | Command::SetUnits { .. }
         | Command::CloseInstance {}
         | Command::RenameDefinition { .. }

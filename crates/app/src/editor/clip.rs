@@ -3,7 +3,7 @@
 
 use kernel::EntityId;
 use session::{Command, CommandError, ErrorKind, clip};
-use tools::PasteTool;
+use tools::{PasteTool, TextSpec};
 
 use super::{Editor, Message};
 use crate::clipboard::Clipboard;
@@ -84,6 +84,30 @@ impl Editor {
         self.select_tool(back);
         self.paste_return = Some(back);
         self.tool = Box::new(PasteTool::new(text, &outline));
+        self.sync_operation();
+        if in_view {
+            self.hover_now();
+        }
+        Ok(())
+    }
+
+    /// Brings out the Paste tool placing 3D text (Tools > 3D Text..., after its sheet): the
+    /// letters' outline follows the cursor, the first line's baseline start on the point under
+    /// it, until a click draws the text there as one `add_3d_text` step (Escape goes back to
+    /// the tool used before). Text with no letters the font has is refused in the status.
+    pub fn place_3d_text(&mut self, spec: TextSpec) -> Result<(), CommandError> {
+        let shape = session::text3d::shape(&spec.text, spec.height);
+        if shape.faces.is_empty() {
+            return Err(self.refuse(CommandError::new(
+                ErrorKind::InvalidInput,
+                "The text has no letters to draw",
+            )));
+        }
+        let in_view = !self.flying && !self.hover_hidden && !self.covered;
+        let back = self.paste_return.unwrap_or(self.kind);
+        self.select_tool(back);
+        self.paste_return = Some(back);
+        self.tool = Box::new(PasteTool::text(spec, shape.segments()));
         self.sync_operation();
         if in_view {
             self.hover_now();
@@ -240,6 +264,64 @@ mod tests {
         assert!(!e.pasting());
         assert_eq!(e.status_parts().tool, "Rectangle");
         assert_eq!(e.phase(), Phase::Idle, "the release started no rectangle");
+    }
+
+    fn spec(text: &str) -> TextSpec {
+        TextSpec {
+            text: text.into(),
+            height: 0.5,
+            depth: 0.1,
+            filled: true,
+        }
+    }
+
+    #[test]
+    fn text_3d_follows_the_cursor_and_a_click_draws_it_as_one_selected_group() {
+        let mut e = square();
+        e.select_tool(ToolKind::Line);
+        point_at(&mut e, DVec3::new(5.0, 0.0, 0.0));
+        e.place_3d_text(spec("Hi o")).unwrap();
+        assert!(e.pasting());
+        assert_eq!(e.status_parts().tool, "3D Text");
+        assert_eq!(e.tool_kind(), ToolKind::Line, "the tool to go back to");
+        e.refresh_hover();
+        assert!(!e.hud(false).lines.is_empty(), "the letters' outline shows");
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+        assert_eq!(e.doc().undo_label(), Some("add_3d_text"));
+        assert!(!e.pasting());
+        assert_eq!(e.status_parts().tool, "Line");
+        let selected: Vec<_> = e.doc().selection().iter().copied().collect();
+        let [kernel::EntityId::Instance(group)] = selected[..] else {
+            panic!("the new group is selected: {selected:?}")
+        };
+        let placed = e.doc().model().instance(group).unwrap();
+        assert!(
+            placed
+                .transform
+                .translation
+                .distance(DVec3::new(5.0, 0.0, 0.0))
+                < 1e-6
+        );
+        e.undo();
+        assert!(e.doc().model().instances().next().is_none(), "one step");
+        assert_eq!(faces(&e), 1);
+    }
+
+    #[test]
+    fn text_3d_without_letters_is_refused_and_escape_cancels_it() {
+        let mut e = square();
+        assert!(e.place_3d_text(spec("\u{4E2D}")).is_err());
+        assert!(!e.pasting());
+        assert_eq!(
+            e.status_parts().message.as_deref(),
+            Some("The text has no letters to draw")
+        );
+        e.place_3d_text(spec("A")).unwrap();
+        e.key(EditorKey::Escape);
+        assert!(!e.pasting());
+        assert_eq!(e.status_parts().tool, "Select");
+        assert!(e.doc().model().instances().next().is_none());
     }
 
     #[test]

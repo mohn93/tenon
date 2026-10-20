@@ -484,6 +484,10 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
             [UiAction::Tool(kind)]
         );
     }
+    assert_eq!(
+        click_menu(&mut harness(f()), &["Tools", "3D Text..."]),
+        [UiAction::Show3dText]
+    );
     for (item, action) in [
         ("Make Group", UiAction::MakeGroup),
         ("Make Component...", UiAction::MakeComponent),

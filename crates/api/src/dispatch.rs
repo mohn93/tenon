@@ -413,7 +413,7 @@ pub fn describe() -> Value {
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, revision})",
-                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, units?: Units, revision}: the Outcome plus revision",
+                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, text_3d?: Text3dReport, units?: Units, revision}: the Outcome plus revision",
                 "params_schema": any_of_root(vec![
                     schema::<Command>(),
                     schema::<ScreenCommand>(),

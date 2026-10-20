@@ -41,7 +41,7 @@ pub use move_tool::MoveTool;
 pub use offset::OffsetTool;
 pub use overlay::{Rgba, ScreenLine, Shape, Within};
 pub use paint::PaintTool;
-pub use paste::PasteTool;
+pub use paste::{PasteTool, TextSpec};
 pub use polygon::PolygonTool;
 pub use probe::{Hit, Reach, pick};
 pub use push_pull::PushPullTool;

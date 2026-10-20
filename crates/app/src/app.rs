@@ -9,7 +9,7 @@ use glam::DVec2;
 use kernel::{EntityId, InstanceId, MaterialId, TagId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
 use session::{Camera, Command, Lighting, OutlinerTable};
-use tools::{Axis, NoteRequest};
+use tools::{Axis, NoteRequest, TextSpec};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -722,6 +722,8 @@ struct State {
     sheet: Option<Sheet>,
     /// What the open sheet was opened over, so its confirm acts only if it still applies.
     sheet_origin: SheetOrigin,
+    /// What the 3D Text sheet last placed, which it opens with next (this session only).
+    text_3d: TextSpec,
     /// How many of the editor's recovery files the window has already shown.
     recovered_seen: usize,
     gui: Gui,
@@ -974,6 +976,7 @@ impl State {
             settings_open: false,
             sheet: None,
             sheet_origin: SheetOrigin::default(),
+            text_3d: default_text_3d(),
             recovered_seen: 0,
             gui,
             drawn: None,
@@ -1503,6 +1506,20 @@ impl State {
                     self.confirm_sheet(|s| matches!(s, Sheet::NoteText { .. }))
                 {
                     self.editor.finish_note(request, text);
+                }
+            }
+            UiAction::Show3dText => {
+                let spec = self.text_3d.clone();
+                self.open_sheet(Sheet::Text3d { spec });
+            }
+            // A refusal (no letters the font has) is in the status.
+            UiAction::Confirm3dText(spec) => {
+                if self
+                    .confirm_sheet(|s| matches!(s, Sheet::Text3d { .. }))
+                    .is_some()
+                {
+                    self.text_3d = spec.clone();
+                    let _ = self.editor.place_3d_text(spec);
                 }
             }
             UiAction::SetUnits(units) => {
@@ -2367,7 +2384,18 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         Sheet::NoteText { .. } if !editor.awaits_note_text() => {
             Err("The note is no longer being placed; nothing was added")
         }
-        Sheet::NoteText { .. } => Ok(()),
+        Sheet::NoteText { .. } | Sheet::Text3d { .. } => Ok(()),
+    }
+}
+
+/// What the 3D Text sheet first opens with: no text, capital letters 0.3 m tall, filled and
+/// 0.05 m deep.
+fn default_text_3d() -> TextSpec {
+    TextSpec {
+        text: String::new(),
+        height: 0.3,
+        depth: 0.05,
+        filled: true,
     }
 }
 
@@ -2507,6 +2535,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmDeleteTag(_)
             | UiAction::ConfirmDiscardRecovered
             | UiAction::ConfirmNote(_)
+            | UiAction::Confirm3dText(_)
             | UiAction::Quit
     )
 }
@@ -3495,6 +3524,7 @@ mod tests {
             UiAction::NewModel,
             UiAction::RenameComponent,
             UiAction::ShowFieldOfView,
+            UiAction::Show3dText,
             UiAction::ShowSettings(true),
         ] {
             assert!(!action_allowed_with_sheet(&dropped), "{dropped:?}");
@@ -3504,6 +3534,7 @@ mod tests {
             UiAction::ConfirmImport(crate::editor::ImportOptions::default()),
             UiAction::ConfirmName("Component 1".into()),
             UiAction::ConfirmFieldOfView(35.0),
+            UiAction::Confirm3dText(default_text_3d()),
             UiAction::Quit,
         ] {
             assert!(action_allowed_with_sheet(&passed), "{passed:?}");

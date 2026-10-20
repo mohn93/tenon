@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, `purged` for `purge_definitions`, and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -106,7 +106,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_dimension`,
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
-`set_units`, `add_material`,
+`add_3d_text`, `set_units`, `add_material`,
 `change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `paste`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
@@ -392,6 +392,29 @@ display units are set in the window in Settings, Model tab (`set_units` here).
 Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
 For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
 were not imported"); a 2021 or newer file's are not read, so not counted.
+
+### 3D text
+
+3D text is geometry, not an annotation: the letters' outlines in Inter Regular (built in), as
+faces with holes in a new group.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_3d_text", "text": "Hello o8%", "position": [1, 2, 0], "height": 0.5, "depth": 0.1, "filled": true}` | Draws `text` as a new group named "3D Text: " and the text's first 32 characters, placed at `position` (its instance's translation; points are those of the open context) and selected. The letters lie in the open context's XY plane, reading along +X, the first line's baseline through `position` and each further line `1.2 * height` lower (-Y); capital letters are `height` meters tall (0.001 to the coordinate limit). Each letter's contours become faces with holes (contours nested by containment, even-odd: an "o" is one face with one hole, an "8" one with two); curves become at most 12 straight edges each, within 1% of the height; letters advance by the font's widths, without kerning. `depth` (default 0: flat faces facing up) above 0 makes each letter the solid `push_pull` by `depth` makes of it: the face turned over as the base, a top `depth` higher and a side for each edge, all facing out. `filled` false (default true) draws only the letters' outline edges, no faces, and needs `depth` 0. Text has 1 to 1,024 characters, is not blank and has at most 64 lines; with a height or depth out of range, or the text reaching beyond the coordinate limit, it is `invalid_input` and changes nothing. |
+
+It is one undo step. The outcome's `text_3d` is `{"instance": "i5", "definition": "d4", "faces": 10,
+"skipped": [{"character": "中", "index": 2, "reason": "the font has no glyph for it"}]}`: the new
+group's instance and definition, the faces in it, and the characters left out, in order (`index`
+counts characters from 0, line breaks included): characters the font has no glyph for, and
+letters whose outlines cross or touch ("its outlines cross or touch"). Spaces only move the next
+letter on and are not listed. Text with no letter to draw (only spaces, or only characters the
+font lacks) is `invalid_input`.
+
+In the window, Tools > 3D Text... opens a sheet (the text, its height, depth and whether it is
+filled; it opens with the values placed last, at first 0.3 m tall and 0.05 m deep), then the
+letters' outline follows the cursor, the first line's baseline start on the snapped point under
+it, until a click draws them there as one `add_3d_text` step (Escape cancels and goes back to the
+tool used before, as Paste does; meanwhile `editor.status` names the tool "3D Text").
 
 ### Materials
 
@@ -1525,6 +1548,7 @@ under a pixel and where a click would snap.
 | Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Follow Me (select the path, click the face), Tape Measure, Dimension (Ctrl: diameter or radius), Text (and its note sheet), Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `follow_me` (`face`, `path`), `add_guide_line` / `add_guide_point`, `add_dimension`, `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Select: double-click a note, then its text in the note sheet | `change_note` |
+| Tools > 3D Text...: its sheet (text, height, depth, filled), then a click places the text | `add_3d_text` (`position`, `height`, `depth`, `filled`) |
 | Inference snapping, Shift and arrow-key locks, the marker and the snap label by the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock); `editor.snap_label` |
 | Hover highlight (Select, Push/Pull, Paint, Erase) | `editor.hovered`; `pick` for any pixel |
 | The orientation gizmo: an axis end, the centre | `standard_view`, `set_projection` |

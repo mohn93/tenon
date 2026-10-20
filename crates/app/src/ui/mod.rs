@@ -220,6 +220,10 @@ pub enum UiAction {
     /// The note sheet's Add or Change: the note's text (blank: a leader note's automatic
     /// text).
     ConfirmNote(String),
+    /// Open the 3D Text sheet (Tools > 3D Text...).
+    Show3dText,
+    /// The 3D Text sheet's Place: the text to place with the cursor.
+    Confirm3dText(tools::TextSpec),
     /// Autosave every so many minutes (0: off), and keep it in the preferences.
     SetAutosave(u32),
     /// Set the model's display units (Settings' Model tab), as an undo step.

@@ -8,7 +8,9 @@ use egui::{Id, Modal, RichText, Ui};
 
 use egui::text::{CCursor, CCursorRange};
 use kernel::{DefinitionKind, MAX_NOTE_CHARS, MAX_NOTE_LINES, TagId};
-use tools::NoteRequest;
+use session::MAX_COORDINATE;
+use session::text3d::MIN_TEXT_HEIGHT;
+use tools::{NoteRequest, TextSpec};
 
 use super::{UiAction, theme, widgets};
 use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis, is_sketchup_path};
@@ -49,6 +51,9 @@ pub enum Sheet {
         text: String,
         automatic: Option<String>,
     },
+    /// 3D Text: the text, its height and depth and whether it is filled, before the text is
+    /// placed with the cursor.
+    Text3d { spec: TextSpec },
 }
 
 /// A sheet's width, in points.
@@ -79,6 +84,8 @@ enum Values {
     Destination(Option<TagId>),
     /// A note's text.
     Note(String),
+    /// 3D text's text and sizes.
+    Text3d(TextSpec),
     /// A sheet with nothing to edit.
     Nothing,
 }
@@ -94,6 +101,7 @@ impl Values {
             Sheet::DeleteTag { .. } => Values::Destination(None),
             Sheet::DiscardRecovered { .. } => Values::Nothing,
             Sheet::NoteText { text, .. } => Values::Note(text.clone()),
+            Sheet::Text3d { spec } => Values::Text3d(spec.clone()),
         }
     }
 }
@@ -150,6 +158,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                     Values::Note(text),
                 ) => {
                     note_sheet(ui, request, automatic.as_deref(), text, fresh, actions);
+                }
+                (Sheet::Text3d { .. }, Values::Text3d(spec)) => {
+                    text_3d_sheet(ui, spec, fresh, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -446,6 +457,89 @@ fn note_sheet(
     }
     if buttons(ui, button, problem.is_none(), actions) {
         actions.push(UiAction::ConfirmNote(text.clone()));
+    }
+}
+
+/// The 3D Text sheet: a box for the text (several lines), its height, how deep (filled text
+/// only) and whether it is filled, then Cancel and Place, which reports `Confirm3dText` (a
+/// depth of 0 for text that is not filled). Text that is blank or over the length or line
+/// limits is not taken, and the sheet says why.
+fn text_3d_sheet(ui: &mut Ui, spec: &mut TextSpec, fresh: bool, actions: &mut Vec<UiAction>) {
+    let t = theme::tokens(ui.ctx().theme());
+    widgets::section_header(ui, "3D Text");
+    ui.add_space(theme::GRID);
+    let field_id = Id::new("sheet-3d-text");
+    let label = ui.label("Text to draw");
+    let output = egui::ScrollArea::vertical()
+        .max_height(NOTE_HEIGHT)
+        .show(ui, |ui| {
+            egui::TextEdit::multiline(&mut spec.text)
+                .id(field_id)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .show(ui)
+        })
+        .inner;
+    output.response.response.clone().labelled_by(label.id);
+    output.response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Text to draw");
+        info.current_text_value = Some(spec.text.clone());
+        info
+    });
+    if fresh {
+        output.response.request_focus();
+        let mut state = output.state.clone();
+        let all = CCursorRange::two(CCursor::new(0), CCursor::new(spec.text.chars().count()));
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), field_id);
+    }
+    ui.add_space(theme::GRID);
+    egui::Grid::new("text-3d-sizes")
+        .num_columns(2)
+        .spacing([theme::GRID * 2.0, theme::GRID])
+        .show(ui, |ui| {
+            let label = ui.label("Height");
+            ui.add(
+                egui::DragValue::new(&mut spec.height)
+                    .range(MIN_TEXT_HEIGHT..=MAX_COORDINATE)
+                    .speed(0.01)
+                    .max_decimals(3)
+                    .suffix(" m"),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
+            let label = ui.label("Depth");
+            ui.add_enabled(
+                spec.filled,
+                egui::DragValue::new(&mut spec.depth)
+                    .range(0.0..=MAX_COORDINATE)
+                    .speed(0.01)
+                    .max_decimals(3)
+                    .suffix(" m"),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
+        });
+    ui.checkbox(&mut spec.filled, "Filled");
+    let problem = if spec.text.trim().is_empty() {
+        Some("Type the text to draw".to_string())
+    } else if spec.text.chars().count() > MAX_NOTE_CHARS {
+        Some(format!("At most {MAX_NOTE_CHARS} characters"))
+    } else if spec.text.lines().count() > MAX_NOTE_LINES {
+        Some(format!("At most {MAX_NOTE_LINES} lines"))
+    } else {
+        None
+    };
+    let hint = problem
+        .as_deref()
+        .unwrap_or("Capital letters are this tall; depth 0 draws flat letters");
+    ui.label(RichText::new(hint).small().color(t.text_secondary));
+    if buttons(ui, "Place", problem.is_none(), actions) {
+        let mut spec = spec.clone();
+        if !spec.filled {
+            spec.depth = 0.0;
+        }
+        actions.push(UiAction::Confirm3dText(spec));
     }
 }
 

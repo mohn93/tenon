@@ -277,3 +277,62 @@ fn a_note_fixed_to_the_view_needs_text_within_the_limits() {
     assert!(h.get_by_label("Change").accesskit_node().is_disabled());
     assert!(drawn_texts(&h).iter().any(|t| t == "At most 64 lines"));
 }
+
+/// The 3D Text sheet starting with `text`, 0.3 m tall and 0.05 m deep, filled.
+fn text_3d_fixture(text: &str) -> Fixture {
+    Fixture {
+        sheet: Some(Sheet::Text3d {
+            spec: tools::TextSpec {
+                text: text.into(),
+                height: 0.3,
+                depth: 0.05,
+                filled: true,
+            },
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_3d_text_sheet_reports_the_text_and_its_sizes() {
+    let mut h = harness(text_3d_fixture(""));
+    assert!(h.query_by_label("3D Text").is_some(), "the title");
+    assert!(h.get_by_label("Place").accesskit_node().is_disabled());
+    assert!(drawn_texts(&h).iter().any(|t| t == "Type the text to draw"));
+    // The field has focus: typed text, over two lines, is the text.
+    h.event(egui::Event::Text("Hello".into()));
+    h.key_press(egui::Key::Enter);
+    h.event(egui::Event::Text("o8%".into()));
+    h.run_ok();
+    assert_eq!(field_text(&h, "Text to draw"), "Hello\no8%");
+    assert_eq!(h.state_mut().take(), [], "Enter makes a new line");
+    assert_eq!(
+        click(&mut h, "Place"),
+        [UiAction::Confirm3dText(tools::TextSpec {
+            text: "Hello\no8%".into(),
+            height: 0.3,
+            depth: 0.05,
+            filled: true,
+        })]
+    );
+    // Not filled: the depth is disabled and placed as 0.
+    let mut h = harness(text_3d_fixture("Plan"));
+    assert!(!h.get_by_label("Depth").accesskit_node().is_disabled());
+    assert_eq!(click(&mut h, "Filled"), []);
+    assert!(h.get_by_label("Depth").accesskit_node().is_disabled());
+    assert_eq!(
+        click(&mut h, "Place"),
+        [UiAction::Confirm3dText(tools::TextSpec {
+            text: "Plan".into(),
+            height: 0.3,
+            depth: 0.0,
+            filled: false,
+        })]
+    );
+    let long = vec!["line"; 65].join("\n");
+    let h = harness(text_3d_fixture(&long));
+    assert!(h.get_by_label("Place").accesskit_node().is_disabled());
+    assert!(drawn_texts(&h).iter().any(|t| t == "At most 64 lines"));
+    let mut h = harness(text_3d_fixture("Plan"));
+    assert_eq!(click(&mut h, "Cancel"), [UiAction::CloseSheet]);
+}

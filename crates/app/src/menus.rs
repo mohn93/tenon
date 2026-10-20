@@ -184,7 +184,12 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::Paint,
     ]
     .map(tool_item)
-    .into();
+    .into_iter()
+    .chain([
+        Entry::Separator,
+        Item::new("3D Text...", UiAction::Show3dText).entry(),
+    ])
+    .collect();
 
     let group = vec![
         bound_item("Make Group", Bound::MakeGroup, UiAction::MakeGroup)

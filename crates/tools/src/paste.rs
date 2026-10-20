@@ -1,6 +1,8 @@
 //! The Paste tool: the clip's edges follow the cursor, its base point on the inferred point
 //! under it, and a click pastes there. Escape ends it (the editor then goes back to the tool
-//! used before). Typed distances are not taken.
+//! used before). Typed distances are not taken. 3D text is placed the same way: its letters'
+//! outline follows the cursor, the first line's baseline start on the point under it, and a
+//! click draws it there.
 
 use glam::DVec3;
 use session::{ClipOutline, Command};
@@ -9,11 +11,32 @@ use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug)]
 pub struct PasteTool {
-    /// The clip text pasted on a click.
-    clip: String,
+    /// What a click places.
+    placing: Placing,
     /// The clip's edges, relative to its base point.
     outline: Vec<[DVec3; 2]>,
     hover: Option<DVec3>,
+}
+
+/// What the Paste tool places.
+#[derive(Clone, Debug)]
+enum Placing {
+    /// Clip text, pasted.
+    Clip(String),
+    /// 3D text, drawn.
+    Text(TextSpec),
+}
+
+/// 3D text as the window's 3D Text sheet sets it (see `session::Command::Add3dText`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSpec {
+    pub text: String,
+    /// The height of capital letters, in meters.
+    pub height: f64,
+    /// How far the letters are pushed up (0: flat).
+    pub depth: f64,
+    /// Faces, or (false) only the letters' outline edges.
+    pub filled: bool,
 }
 
 impl PasteTool {
@@ -22,12 +45,22 @@ impl PasteTool {
     pub fn new(clip: String, outline: &ClipOutline) -> Self {
         let base = outline.base;
         Self {
-            clip,
+            placing: Placing::Clip(clip),
             outline: outline
                 .segments
                 .iter()
                 .map(|[a, b]| [*a - base, *b - base])
                 .collect(),
+            hover: None,
+        }
+    }
+
+    /// A tool placing the 3D text `spec`, whose letters' sides are `outline` (relative to the
+    /// first line's baseline start: `session::text3d::shape(..).segments()`).
+    pub fn text(spec: TextSpec, outline: Vec<[DVec3; 2]>) -> Self {
+        Self {
+            placing: Placing::Text(spec),
+            outline,
             hover: None,
         }
     }
@@ -43,11 +76,17 @@ impl PasteTool {
 
 impl Tool for PasteTool {
     fn name(&self) -> &'static str {
-        "Paste"
+        match self.placing {
+            Placing::Clip(_) => "Paste",
+            Placing::Text(_) => "3D Text",
+        }
     }
 
     fn prompt(&self) -> &'static str {
-        "Click where to paste (Esc cancels)"
+        match self.placing {
+            Placing::Clip(_) => "Click where to paste (Esc cancels)",
+            Placing::Text(_) => "Click where the text starts (Esc cancels)",
+        }
     }
 
     fn measurement(&self) -> (&'static str, Option<String>) {
@@ -69,13 +108,26 @@ impl Tool for PasteTool {
             ToolEvent::Move(hit) => self.hover = Some(hit.point),
             ToolEvent::Click(hit) => {
                 self.hover = Some(hit.point);
-                out.commands.push(Command::Paste {
-                    clip: self.clip.clone(),
-                    at: Some(hit.point.to_array()),
+                out.commands.push(match &self.placing {
+                    Placing::Clip(clip) => Command::Paste {
+                        clip: clip.clone(),
+                        at: Some(hit.point.to_array()),
+                    },
+                    Placing::Text(spec) => Command::Add3dText {
+                        text: spec.text.clone(),
+                        position: hit.point.to_array(),
+                        height: spec.height,
+                        depth: spec.depth,
+                        filled: spec.filled,
+                    },
                 });
             }
             ToolEvent::Value(_) => {
-                out.message = Some("Click where to paste: typed distances are not taken".into());
+                let what = match self.placing {
+                    Placing::Clip(_) => "Click where to paste",
+                    Placing::Text(_) => "Click where the text starts",
+                };
+                out.message = Some(format!("{what}: typed distances are not taken"));
             }
             ToolEvent::Cancel
             | ToolEvent::ToggleCopy
@@ -168,5 +220,34 @@ mod tests {
             }]
         );
         assert!(out.preview.is_empty());
+    }
+
+    #[test]
+    fn text_follows_the_cursor_and_a_click_draws_it_there() {
+        let spec = TextSpec {
+            text: "Hi".into(),
+            height: 0.5,
+            depth: 0.1,
+            filled: true,
+        };
+        let outline = vec![[DVec3::ZERO, DVec3::new(0.5, 0.0, 0.0)]];
+        let mut t = PasteTool::text(spec, outline);
+        assert_eq!(t.name(), "3D Text");
+        let out = send(&mut t, ToolEvent::Move(at(DVec3::new(1.0, 2.0, 0.0))));
+        assert_eq!(
+            out.preview,
+            vec![[DVec3::new(1.0, 2.0, 0.0), DVec3::new(1.5, 2.0, 0.0)]]
+        );
+        let out = send(&mut t, ToolEvent::Click(at(DVec3::new(1.0, 2.0, 3.0))));
+        assert_eq!(
+            out.commands,
+            vec![Command::Add3dText {
+                text: "Hi".into(),
+                position: [1.0, 2.0, 3.0],
+                height: 0.5,
+                depth: 0.1,
+                filled: true,
+            }]
+        );
     }
 }

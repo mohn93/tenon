@@ -204,6 +204,7 @@ fn describe_lists_methods_and_schemas() {
         "add_note",
         "add_screen_note",
         "change_note",
+        "add_3d_text",
         "set_units",
         "select",
         "undo",

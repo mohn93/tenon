@@ -22,6 +22,7 @@ use crate::query::{
 };
 use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
+use crate::text3d::Text3dReport;
 use crate::units::Units;
 
 mod annotations;
@@ -36,6 +37,7 @@ mod placement;
 mod scenes;
 mod soften;
 mod tags;
+mod text3d;
 
 pub use annotations::{dimension_label, dimension_value, note_label};
 use import::ImportOptions;
@@ -96,6 +98,8 @@ pub struct Document {
     positioned: Option<usize>,
     /// How many definitions the last `purge_definitions` removed, until its outcome takes it.
     purged: Option<usize>,
+    /// What the last `add_3d_text` made, until its outcome takes it.
+    text_report: Option<Text3dReport>,
     /// Names this document since it was created, opened or imported as a new model (see
     /// `token`); not saved.
     token: String,
@@ -128,6 +132,7 @@ impl Document {
             soften_report: None,
             positioned: None,
             purged: None,
+            text_report: None,
             token: clip::new_token(),
             pasted: BTreeMap::new(),
         }
@@ -254,6 +259,7 @@ impl Document {
             outcome.soften = self.soften_report.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
+            outcome.text_3d = self.text_report.take();
             return Ok(outcome);
         }
         match command {
@@ -455,6 +461,7 @@ impl Document {
             | Command::AddNote { .. }
             | Command::AddScreenNote { .. }
             | Command::ChangeNote { .. }
+            | Command::Add3dText { .. }
             | Command::SetUnits { .. }
             | Command::PushPull { .. }
             | Command::Erase { .. }
@@ -576,6 +583,13 @@ impl Document {
             } => self.add_note_changes(*anchor, *position, text.clone()),
             Command::AddScreenNote { at, text } => self.add_screen_note_changes(*at, text),
             Command::ChangeNote { note, text } => self.change_note_changes(*note, text.clone()),
+            Command::Add3dText {
+                text,
+                position,
+                height,
+                depth,
+                filled,
+            } => self.add_3d_text_changes(text, *position, *height, *depth, *filled),
             Command::SetUnits { length, precision } => self.set_units_changes(*length, *precision),
             Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
             Command::Erase { ids } => self.erase_changes(ids),
@@ -813,6 +827,7 @@ impl Document {
                             soften: self.soften_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
+                            text_3d: self.text_report.take(),
                             units: (self.units != units_then).then_some(self.units),
                         }
                     }),

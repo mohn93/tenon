@@ -20,6 +20,7 @@ mod schema;
 mod skp;
 mod skp_export;
 mod sniff;
+pub mod text3d;
 pub mod texture;
 pub mod units;
 #[cfg(windows)]
@@ -55,4 +56,5 @@ pub use query::{
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;
 pub use schema::ModelPoint;
+pub use text3d::{SkippedCharacter, Text3dReport};
 pub use units::{LengthUnit, MAX_PRECISION, Units, format_length_in};

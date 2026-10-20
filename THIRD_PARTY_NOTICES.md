@@ -81,9 +81,10 @@ used only by tests; see `crates/skp/tests/fixtures/ATTRIBUTION.md`.
 
 ## Fonts (built into the app)
 
-`crates/app/assets/fonts` holds Inter 4.1 (https://github.com/rsms/inter) and JetBrains Mono 2.304
-(https://github.com/JetBrains/JetBrainsMono), both licensed under the SIL Open Font License,
-Version 1.1; sources and checksums are in `crates/app/assets/fonts/README.md`. The licence texts
+`crates/session/assets/fonts` holds Inter 4.1 Regular (https://github.com/rsms/inter), which draws
+3D text and the app's text, and `crates/app/assets/fonts` holds Inter 4.1 SemiBold and JetBrains
+Mono 2.304 (https://github.com/JetBrains/JetBrainsMono), all licensed under the SIL Open Font
+License, Version 1.1; sources and checksums are in the `README.md` beside them. The licence texts
 follow.
 
 ### Inter

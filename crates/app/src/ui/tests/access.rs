@@ -144,6 +144,17 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
             },
         ),
         (
+            "the 3D Text sheet",
+            Sheet::Text3d {
+                spec: tools::TextSpec {
+                    text: "Hello".into(),
+                    height: 0.3,
+                    depth: 0.05,
+                    filled: true,
+                },
+            },
+        ),
+        (
             "the Delete Tag sheet",
             Sheet::DeleteTag {
                 tag: kernel::TagId(1),

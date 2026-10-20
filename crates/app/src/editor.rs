@@ -2055,7 +2055,7 @@ impl Editor {
                     }
             );
             let is_turn = matches!(command, Command::Rotate { copies: None, .. });
-            let is_paste = matches!(command, Command::Paste { .. });
+            let is_paste = matches!(command, Command::Paste { .. } | Command::Add3dText { .. });
             let revision = self.doc.revision();
             let outcome = self.run(command);
             let unchanged =

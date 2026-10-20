@@ -12,6 +12,7 @@ use crate::camera::{Lighting, Projection, StandardView};
 use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 use crate::schema::ModelPoint;
+use crate::text3d::Text3dReport;
 use crate::units::{LengthUnit, Units};
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
@@ -160,6 +161,28 @@ pub enum Command {
         note: EntityId,
         #[serde(default)]
         text: Option<String>,
+    },
+    /// Add 3D text, as one undo step: the letters of `text` in Inter Regular, as faces with
+    /// holes in a new group named "3D Text: " and the text's start, placed at `position` and
+    /// selected. The text reads along +X in the open context's XY plane, the first line's
+    /// baseline through `position`, each further line `1.2 * height` lower; capital letters are
+    /// `height` meters tall (at least 0.001). With `depth` (default 0, flat) above 0 each letter
+    /// is pushed up by it into a solid, as `push_pull` does. With `filled` false (default true)
+    /// only the letters' outline edges are drawn, flat (`depth` must be 0). Curves become at
+    /// most 12 straight edges each, within 1% of the height. Text has 1 to 1024 characters, is
+    /// not blank and has at most 64 lines; the whole text must lie within the coordinate limit.
+    /// Characters the font has no glyph for, and letters whose outlines cross, are left out and
+    /// listed in the outcome's `text_3d.skipped`; spaces only move the next letter on.
+    #[serde(rename = "add_3d_text")]
+    Add3dText {
+        text: String,
+        #[schemars(with = "ModelPoint")]
+        position: [f64; 3],
+        height: f64,
+        #[serde(default)]
+        depth: f64,
+        #[serde(default = "yes")]
+        filled: bool,
     },
     /// Set the model's display units, which dimension and note labels are written in, as one
     /// undo step; absent fields stay as they are. `precision` is the decimals kept (0 to 6),
@@ -748,6 +771,9 @@ pub struct Outcome {
     /// other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
+    /// What an `add_3d_text` made and left out; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_3d: Option<Text3dReport>,
     /// The display units, after a command that changed them (`set_units`, or an undo or redo
     /// of such a step); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
