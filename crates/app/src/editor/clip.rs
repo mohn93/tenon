@@ -242,6 +242,38 @@ mod tests {
     }
 
     #[test]
+    fn pasting_from_select_shows_the_snap_marker_and_label() {
+        let mut e = square();
+        e.copy().unwrap();
+        assert_eq!(e.tool_kind(), ToolKind::Select);
+        point_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert!(e.hud(false).marker.is_none(), "Select shows no marker");
+        assert_eq!(e.snap_label(), None);
+        e.paste(None).unwrap();
+        e.refresh_hover();
+        assert!(
+            e.hud(false).marker.is_some(),
+            "the Paste tool shows the snap"
+        );
+        assert_eq!(e.snap_label().as_deref(), Some("Endpoint"));
+    }
+
+    #[test]
+    fn a_paste_that_changes_nothing_still_puts_the_paste_tool_away() {
+        let mut e = square();
+        e.copy().unwrap();
+        point_at(&mut e, DVec3::ZERO);
+        e.paste(None).unwrap();
+        let revision = e.doc().revision();
+        // The clip lands exactly on the square it was copied from.
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+        assert_eq!(e.doc().revision(), revision, "nothing changed");
+        assert!(!e.pasting());
+        assert_eq!(e.status_parts().tool, "Select");
+    }
+
+    #[test]
     fn escape_puts_the_paste_tool_away() {
         let mut e = square();
         e.copy().unwrap();

@@ -1,11 +1,11 @@
 //! Copy (clip text of a selection) and paste.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use glam::{DAffine3, DVec3};
-use kernel::{EntityId, MeshId, SceneChange};
+use kernel::{DefinitionId, EntityId, MeshId, SceneChange};
 
 use super::{Document, check_coordinates};
 use crate::clip;
@@ -14,7 +14,7 @@ use crate::command::{CommandError, ErrorKind};
 impl Document {
     /// The token naming this document since it was created, opened or imported as a new
     /// model (not saved). A clip records it, so pasting into the same document reuses its
-    /// component definitions.
+    /// component definitions, and pasting a clip again reuses those its last paste made.
     pub fn token(&self) -> &str {
         &self.token
     }
@@ -77,13 +77,30 @@ impl Document {
         }
         check_coordinates(&points)?;
 
+        // A clip definition is placed as the definition it was copied from (when the clip is
+        // from this document) or the one an earlier paste of it made; the kernel copies it when
+        // that is gone or no longer a component.
         let same_document = clip.source == self.token;
-        let reuse = move |id| same_document.then_some(id);
+        let offered: BTreeMap<DefinitionId, DefinitionId> = clip
+            .scene
+            .definitions()
+            .filter_map(|(id, _)| {
+                let original = (same_document && self.scene.definition(id).is_some()).then_some(id);
+                let earlier = || self.pasted.get(&(clip.source.clone(), id)).copied();
+                Some((id, original.or_else(earlier)?))
+            })
+            .collect();
+        let reuse = |id| offered.get(&id).copied();
         let parent = self.active();
         let (inserted, change) = self
             .scene
             .insert(parent, &clip.scene, placement, &reuse)
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))?;
+        for (from, to) in &inserted.definitions {
+            if !(same_document && from == to) {
+                self.pasted.insert((clip.source.clone(), *from), *to);
+            }
+        }
         self.selection = inserted
             .edges
             .iter()

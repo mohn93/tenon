@@ -343,7 +343,7 @@ fn components_pasted_into_a_new_model_get_new_definitions_materials_and_tags() {
     let token = d.token().to_string();
     run(&mut d, json!({"type": "new", "discard": true})).unwrap();
     assert_ne!(d.token(), token);
-    let out = paste(&mut d, &text, None).unwrap();
+    paste(&mut d, &text, None).unwrap();
     assert_eq!(definitions(&d), 2);
     let names: Vec<&str> = d
         .scene()
@@ -363,17 +363,46 @@ fn components_pasted_into_a_new_model_get_new_definitions_materials_and_tags() {
     let tags: Vec<&str> = d.scene().tags().map(|(_, t)| t.name.as_str()).collect();
     assert_eq!(tags, ["Walls"]);
     assert_eq!(d.selection().len(), 1);
-    let _ = instance_of(&out);
-    // Pasting again in the new model makes new definitions again: the clip is not from it.
+    // Pasting again in the new model places the definitions the first paste made.
+    let placed = |d: &Document| {
+        let [EntityId::Instance(i)] = d.selection().iter().copied().collect::<Vec<_>>()[..] else {
+            panic!("one instance is selected")
+        };
+        d.model().instance(i).unwrap().definition
+    };
+    let first = placed(&d);
     paste(&mut d, &text, Some([3.0, 0.0, 0.0])).unwrap();
-    assert_eq!(definitions(&d), 4);
+    assert_eq!(definitions(&d), 2);
     assert_eq!(d.scene().materials().count(), 1);
+    assert_eq!(placed(&d), first);
     // Undo takes back everything a paste added.
     run(&mut d, json!({"type": "undo", "count": 2})).unwrap();
     assert_eq!(definitions(&d), 0);
     assert_eq!(d.scene().materials().count(), 0);
     assert_eq!(d.scene().tags().count(), 0);
     assert_eq!(d.model().instances().count(), 0);
+    // The definitions the undone paste made are gone, so pasting makes them anew.
+    paste(&mut d, &text, None).unwrap();
+    assert_eq!(definitions(&d), 2);
+    // A new model forgets what was pasted into the last one.
+    run(&mut d, json!({"type": "new", "discard": true})).unwrap();
+    paste(&mut d, &text, None).unwrap();
+    assert_eq!(definitions(&d), 2);
+}
+
+#[test]
+fn pasting_into_the_source_after_its_definitions_were_purged_shares_the_new_ones() {
+    let mut d = doc();
+    let outer = nested_component(&mut d);
+    let id: EntityId = serde_json::from_value(json!(outer)).unwrap();
+    let text = d.clip(&[id]).unwrap();
+    run(&mut d, json!({"type": "erase", "ids": [outer]})).unwrap();
+    run(&mut d, json!({"type": "purge_definitions"})).unwrap();
+    assert_eq!(definitions(&d), 0);
+    paste(&mut d, &text, Some([5.0, 0.0, 0.0])).unwrap();
+    assert_eq!(definitions(&d), 2);
+    paste(&mut d, &text, Some([10.0, 0.0, 0.0])).unwrap();
+    assert_eq!(definitions(&d), 2);
 }
 
 #[test]
@@ -618,11 +647,20 @@ fn a_paste_in_an_atomic_batch_rolls_back_with_it() {
     assert!(d.selection().is_empty());
 }
 
-/// A clip of a component holding a square, with `levels` definitions stacked on it, each
-/// placing the one below `fan` times, and the root placing the top one.
-fn nested_clip(levels: u64, fan: u64) -> String {
+/// A clip of a component holding `squares` squares, with `levels` definitions stacked on it,
+/// each placing the one below `fan` times, and the root placing the top one.
+fn nested_clip(squares: u64, levels: u64, fan: u64) -> String {
     let mut d = doc();
-    let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let square = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    if squares > 1 {
+        let count = u32::try_from(squares - 1).unwrap();
+        run(
+            &mut d,
+            json!({"type": "copy", "ids": square, "offset": [2, 0, 0], "count": count}),
+        )
+        .unwrap();
+    }
+    let ids = everything(&d);
     let i = instance_of(
         &run(
             &mut d,
@@ -665,13 +703,42 @@ fn a_clip_placing_too_many_nested_instances_is_refused_quickly() {
     let (mut d, _) = target();
     // 10 levels of 10: about 1.1e10 placements, refused before anything walks them.
     let start = std::time::Instant::now();
-    refuses(&mut d, &nested_clip(10, 10), "10 levels of 10");
+    refuses(&mut d, &nested_clip(1, 10, 10), "10 levels of 10");
     // 5 levels of 10 places 111,111 instances: just over the cap.
-    refuses(&mut d, &nested_clip(5, 10), "5 levels of 10");
+    refuses(&mut d, &nested_clip(1, 5, 10), "5 levels of 10");
     assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
     // 3 levels of 10 (1,111) pastes, and its outline is the 1,000 squares.
-    let small = nested_clip(3, 10);
+    let small = nested_clip(1, 3, 10);
     assert_eq!(clip::outline(&small).unwrap().segments.len(), 4000);
     paste(&mut d, &small, Some([5.0, 0.0, 0.0])).unwrap();
     assert_eq!(definitions(&d), 4);
+}
+
+#[test]
+fn a_clip_nested_too_deep_is_refused_quickly() {
+    let (mut d, _) = target();
+    // A chain of 20,000 definitions, each placing the next once.
+    let deep = nested_clip(1, 19_999, 1);
+    let start = std::time::Instant::now();
+    refuses(&mut d, &deep, "20,000 levels");
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+    // 33 levels (the leaf and 32 above it) are refused; 32 paste.
+    let depth = kernel::MAX_IMPORT_DEPTH as u64;
+    refuses(&mut d, &nested_clip(1, depth, 1), "33 levels");
+    paste(&mut d, &nested_clip(1, depth - 1, 1), Some([5.0, 0.0, 0.0])).unwrap();
+    assert_eq!(definitions(&d), kernel::MAX_IMPORT_DEPTH);
+}
+
+#[test]
+fn a_clip_showing_too_many_faces_is_refused() {
+    let (mut d, _) = target();
+    // 4 levels of 17 place 88,741 instances (under the instance cap), showing the leaf's 250
+    // squares 83,521 times: about 20.9 million faces.
+    refuses(
+        &mut d,
+        &nested_clip(250, 4, 17),
+        "over the placed faces cap",
+    );
+    // With 230 squares, about 19.2 million faces: under the cap (the outline is capped too).
+    assert!(clip::outline(&nested_clip(230, 4, 17)).is_ok());
 }

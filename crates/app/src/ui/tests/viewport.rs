@@ -220,11 +220,29 @@ fn each_tool_has_its_cursor() {
         (ToolKind::Paint, C::Default),
         (ToolKind::Erase, C::Default),
     ] {
-        assert_eq!(cursor_icon(tool, false, false), icon, "{tool:?}");
+        assert_eq!(cursor_icon(tool, false, false, false), icon, "{tool:?}");
     }
-    assert_eq!(cursor_icon(ToolKind::Paint, true, false), C::PointingHand);
-    assert_eq!(cursor_icon(ToolKind::Erase, true, false), C::PointingHand);
-    assert_eq!(cursor_icon(ToolKind::Line, false, true), C::Grabbing);
+    assert_eq!(
+        cursor_icon(ToolKind::Paint, false, true, false),
+        C::PointingHand
+    );
+    assert_eq!(
+        cursor_icon(ToolKind::Erase, false, true, false),
+        C::PointingHand
+    );
+    assert_eq!(cursor_icon(ToolKind::Line, false, false, true), C::Grabbing);
+    // The Paste tool places a point, whatever tool it goes back to.
+    for tool in [ToolKind::Select, ToolKind::Move, ToolKind::Paint] {
+        assert_eq!(
+            cursor_icon(tool, true, true, false),
+            C::Crosshair,
+            "{tool:?}"
+        );
+    }
+    assert_eq!(
+        cursor_icon(ToolKind::Select, true, false, true),
+        C::Grabbing
+    );
 }
 
 #[test]

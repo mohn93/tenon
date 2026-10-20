@@ -1,12 +1,12 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use glam::{DAffine3, DVec3};
 use kernel::{
     DefinitionId, DefinitionKind, EdgeId, EntityId, FaceId, Guide, GuideId, ImageFormat, Inserted,
-    InstanceId, KernelError, MAX_TEXTURES, Material, MeshId, Model, PlacementEdit, Scene, Side,
-    Tag, Texture, TextureImage,
+    InstanceId, KernelError, MAX_IMPORT_DEPTH, MAX_TEXTURES, Material, MeshId, Model,
+    PlacementEdit, Scene, Side, Tag, Texture, TextureImage,
 };
 
 fn p(x: f64, y: f64, z: f64) -> DVec3 {
@@ -923,4 +923,73 @@ fn a_mirrored_insert_mirrors_positions_and_normals() {
         .map(|v| r(*v))
         .collect()
     );
+}
+
+/// A scene whose root places a chain of `levels` components, each placing the next once, the
+/// last holding a square; and the clip of that chain.
+fn chain(levels: usize) -> (Scene, Scene) {
+    let mut s = Scene::new();
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&square(p(0.0, 0.0, 0.0), 1.0))
+    })
+    .unwrap();
+    let (e, f) = all(s.root());
+    let (mut top, _) = s
+        .make_group(MeshId::Root, &e, &f, &[], DefinitionKind::Component, "L0")
+        .unwrap();
+    for k in 1..levels {
+        (top, _) = s
+            .make_group(
+                MeshId::Root,
+                &[],
+                &[],
+                &[top],
+                DefinitionKind::Component,
+                &format!("L{k}"),
+            )
+            .unwrap();
+    }
+    let clip = s
+        .extract(MeshId::Root, &[], &[], &[top], &[], DAffine3::IDENTITY)
+        .unwrap();
+    (s, clip)
+}
+
+#[test]
+fn copies_nested_deeper_than_the_import_depth_are_refused() {
+    let (_, clip) = chain(MAX_IMPORT_DEPTH);
+    let mut target = Scene::new();
+    let inserted = insert_root(&mut target, &clip, DAffine3::IDENTITY);
+    assert_eq!(target.definitions().count(), MAX_IMPORT_DEPTH);
+    target.validate().unwrap();
+    // Each clip definition maps to its copy.
+    assert_eq!(inserted.definitions.len(), MAX_IMPORT_DEPTH);
+    for (from, to) in &inserted.definitions {
+        assert_eq!(
+            clip.definition(*from).unwrap().name,
+            target.definition(*to).unwrap().name
+        );
+    }
+
+    let (_, clip) = chain(MAX_IMPORT_DEPTH + 1);
+    let mut target = Scene::new();
+    let before = target.clone();
+    assert!(matches!(
+        target.insert(MeshId::Root, &clip, DAffine3::IDENTITY, &no_reuse),
+        Err(KernelError::InvalidImport(_))
+    ));
+    assert!(target == before);
+}
+
+#[test]
+fn reused_definitions_are_listed_as_what_they_map_to() {
+    let (s, clip) = chain(2);
+    let mut target = s.clone();
+    let reuse = |d: DefinitionId| Some(d);
+    let (inserted, _) = target
+        .insert(MeshId::Root, &clip, DAffine3::IDENTITY, &reuse)
+        .unwrap();
+    // The top one is reused, so what it places is not walked.
+    let top = clip.root().instances().next().unwrap().1.definition;
+    assert_eq!(inserted.definitions, BTreeMap::from([(top, top)]));
 }

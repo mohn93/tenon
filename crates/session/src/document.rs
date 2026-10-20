@@ -1,12 +1,12 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::offset::{self, Polyline};
 use kernel::{
-    ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError,
-    MaterialEdit, MeshId, Model, PageId, PlacementEdit, Scene, SceneChange, SoftenReport, TagEdit,
-    VertexId,
+    ChangeSet, DefinitionId, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId,
+    KernelError, MaterialEdit, MeshId, Model, PageId, PlacementEdit, Scene, SceneChange,
+    SoftenReport, TagEdit, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
@@ -92,6 +92,9 @@ pub struct Document {
     /// Names this document since it was created, opened or imported as a new model (see
     /// `token`); not saved.
     token: String,
+    /// The definition each paste made, by the clip's source token and the clip definition it
+    /// copied, so pasting the same clip again places it; not saved, forgotten with the model.
+    pasted: BTreeMap<(String, DefinitionId), DefinitionId>,
 }
 
 impl Document {
@@ -118,6 +121,7 @@ impl Document {
             positioned: None,
             purged: None,
             token: clip::new_token(),
+            pasted: BTreeMap::new(),
         }
     }
 

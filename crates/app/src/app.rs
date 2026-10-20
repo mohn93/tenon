@@ -1596,6 +1596,7 @@ impl State {
             hud: &hud,
             cursor: viewport::cursor_icon(
                 self.editor.tool_kind(),
+                self.editor.pasting(),
                 self.editor.hovered().is_some(),
                 navigating,
             ),

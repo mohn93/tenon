@@ -120,11 +120,15 @@ pub fn hud(ui: &Ui, view_rect: Rect, hud: &Hud) {
 }
 
 /// The pointer over the 3D view with `tool` active: `Grabbing` while `navigating` (an orbit or
-/// pan drag), a crosshair for the drawing tools and Tape, move arrows for Move, a vertical
-/// resize for Push/Pull, and for Paint and Erase a pointing hand while `hovering` a target.
-pub fn cursor_icon(tool: ToolKind, hovering: bool, navigating: bool) -> CursorIcon {
+/// pan drag), a crosshair for the drawing tools, Tape and the Paste tool (while `pasting`,
+/// whatever `tool` it goes back to), move arrows for Move, a vertical resize for Push/Pull, and
+/// for Paint and Erase a pointing hand while `hovering` a target.
+pub fn cursor_icon(tool: ToolKind, pasting: bool, hovering: bool, navigating: bool) -> CursorIcon {
     if navigating {
         return CursorIcon::Grabbing;
+    }
+    if pasting {
+        return CursorIcon::Crosshair;
     }
     match tool {
         ToolKind::Select => CursorIcon::Default,

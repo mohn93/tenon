@@ -27,6 +27,12 @@ pub const MAX_OUTLINE_SEGMENTS: usize = 20_000;
 /// of what holds it (a component of 10 placed 10 times counts 110). Larger clips are refused,
 /// so walking a clip's placements stays bounded whatever text is pasted.
 pub const MAX_CLIP_INSTANCES: u64 = 100_000;
+/// The most levels of instances a clip may nest, as for imports. Deeper clips are refused,
+/// so walking a clip's nesting stays shallow whatever text is pasted.
+pub const MAX_CLIP_DEPTH: usize = kernel::MAX_IMPORT_DEPTH;
+/// The most faces a clip may show, counting a nested face once for every placement of what
+/// holds it, as for imports.
+pub const MAX_CLIP_PLACED_FACES: u64 = kernel::MAX_IMPORT_PLACED_FACES;
 /// The most instances [`outline`] walks into.
 const MAX_OUTLINE_VISITS: usize = 100_000;
 /// The archive entry holding the clip's model, as `.skr` writes its document.
@@ -131,10 +137,23 @@ pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
             "its base point is not finite or beyond +/-{MAX_COORDINATE} m"
         )));
     }
-    if expanded_instances(&scene).is_none_or(|n| n > MAX_CLIP_INSTANCES) {
+    let tally = tally(&scene)
+        .ok_or_else(|| damaged("its definitions do not form a tree of placements".into()))?;
+    if tally.depth > MAX_CLIP_DEPTH {
+        return Err(invalid(format!(
+            "the clip's instances are nested more than {MAX_CLIP_DEPTH} deep"
+        )));
+    }
+    if tally.instances > MAX_CLIP_INSTANCES {
         return Err(invalid(format!(
             "the clip places more than {MAX_CLIP_INSTANCES} instances, nested ones counted \
              once per placement"
+        )));
+    }
+    if tally.faces > MAX_CLIP_PLACED_FACES {
+        return Err(invalid(format!(
+            "the clip shows more than {MAX_CLIP_PLACED_FACES} faces, nested ones counted once \
+             per placement"
         )));
     }
     if info.source.len() > MAX_TOKEN_LEN {
@@ -228,21 +247,42 @@ fn children_first(scene: &Scene) -> Option<Vec<DefinitionId>> {
     Some(order)
 }
 
-/// How many instances the clip places, nested ones counted once per placement (saturating);
-/// None when its definitions do not form a tree of placements.
-fn expanded_instances(scene: &Scene) -> Option<u64> {
-    let mut counts: HashMap<DefinitionId, u64> = HashMap::new();
-    let placed = |m: &kernel::Model, counts: &HashMap<DefinitionId, u64>| {
-        m.instances().fold(0u64, |n, (_, i)| {
-            n.saturating_add(1)
-                .saturating_add(counts.get(&i.definition).copied().unwrap_or(0))
-        })
+/// What a clip places, nested placements counted.
+struct Tally {
+    /// Instances placed, nested ones counted once per placement (saturating).
+    instances: u64,
+    /// Faces shown, nested ones counted once per placement (saturating).
+    faces: u64,
+    /// The most levels of instances nested from the root (0 when it places none).
+    depth: usize,
+}
+
+/// The clip's [`Tally`], worked out once per definition; None when its definitions do not
+/// form a tree of placements.
+fn tally(scene: &Scene) -> Option<Tally> {
+    let mut tallies: HashMap<DefinitionId, Tally> = HashMap::new();
+    let of = |m: &kernel::Model, tallies: &HashMap<DefinitionId, Tally>| {
+        let mut t = Tally {
+            instances: 0,
+            faces: m.faces().count() as u64,
+            depth: 0,
+        };
+        for (_, i) in m.instances() {
+            let below = tallies.get(&i.definition);
+            t.instances = t
+                .instances
+                .saturating_add(1)
+                .saturating_add(below.map_or(0, |b| b.instances));
+            t.faces = t.faces.saturating_add(below.map_or(0, |b| b.faces));
+            t.depth = t.depth.max(1 + below.map_or(0, |b| b.depth));
+        }
+        t
     };
     for id in children_first(scene)? {
-        let n = placed(&scene.definition(id)?.mesh, &counts);
-        counts.insert(id, n);
+        let t = of(&scene.definition(id)?.mesh, &tallies);
+        tallies.insert(id, t);
     }
-    Some(placed(scene.mesh(MeshId::Root)?, &counts))
+    Some(of(scene.mesh(MeshId::Root)?, &tallies))
 }
 
 /// The box around each definition's vertices, guides' anchors and placed instances' boxes,

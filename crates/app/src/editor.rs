@@ -1736,15 +1736,21 @@ impl Editor {
     }
 
     /// The name of the snap under the cursor, e.g. "Endpoint" or "Midpoint in Group", as of
-    /// the last `refresh_hover`. None in Select (which shows no marker), while flying, with
-    /// the cursor outside the view or under a window (`set_covered`), and when there is no
-    /// snap to name.
+    /// the last `refresh_hover`. None in Select (which shows no marker) unless the Paste tool
+    /// is out, while flying, with the cursor outside the view or under a window
+    /// (`set_covered`), and when there is no snap to name.
     pub fn snap_label(&self) -> Option<String> {
-        if self.kind == ToolKind::Select || self.flying || self.covered {
+        if !self.shows_snaps() || self.flying || self.covered {
             return None;
         }
         let hit = self.hit?;
         snap_label(hit.kind, self.within)
+    }
+
+    /// Whether the snap under the cursor is shown (its marker and label): for every tool but
+    /// Select, and for the Paste tool whatever tool it goes back to.
+    fn shows_snaps(&self) -> bool {
+        self.pasting() || self.kind != ToolKind::Select
     }
 
     /// Whether a window, a menu or the gizmo lies over the cursor in the view, as the window
@@ -1823,7 +1829,7 @@ impl Editor {
             return hud;
         }
         hud.cursor = Some(self.cursor);
-        if self.kind != ToolKind::Select {
+        if self.shows_snaps() {
             hud.marker = hit.and_then(|h| {
                 let (shape, color) = marker(h.kind)?;
                 Some((camera.project(h.point)?, shape, color))
@@ -1863,7 +1869,6 @@ impl Editor {
         let is_value = matches!(event, ToolEvent::Value(_));
         let is_click = matches!(event, ToolEvent::Click(_));
         let is_cancel = matches!(event, ToolEvent::Cancel);
-        let revision = self.doc.revision();
         let mut out = self.handle(event.clone());
         if matches!(out.commands.first(), Some(Command::Undo { .. }))
             && self.tool_step != Some(self.doc.revision())
@@ -1893,9 +1898,10 @@ impl Editor {
                 .map_or("the default material", |m| m.name.as_str());
             self.message = Some(Message::info(format!("Painting with {name}")));
         }
-        self.apply(out);
-        // The Paste tool goes once it pasted, or on Escape.
-        if is_cancel || is_click && self.doc.revision() != revision {
+        let pasted = self.apply(out);
+        // The Paste tool goes once it pasted (even onto what is there, changing nothing), or on
+        // Escape.
+        if is_cancel || is_click && pasted {
             self.end_paste();
         }
         if is_value {
@@ -1957,10 +1963,12 @@ impl Editor {
     /// nothing (a copy landing on existing geometry, a rotation of what lies on its axis): it
     /// leaves no undo step for an array or a retyped angle to replace. If it
     /// fails after an undo from the same list (an array replacing a copy), the undo is redone
-    /// and the copy reselected; either way the tool drops its state.
-    fn apply(&mut self, out: ToolOutput) {
+    /// and the copy reselected; either way the tool drops its state. True when a `paste` ran
+    /// without error (changing something or not).
+    fn apply(&mut self, out: ToolOutput) -> bool {
         let start = self.doc.revision();
         let mut undone = false;
+        let mut pasted = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         for command in out.commands {
             let is_undo = matches!(command, Command::Undo { .. });
@@ -1973,6 +1981,7 @@ impl Editor {
                     }
             );
             let is_turn = matches!(command, Command::Rotate { copies: None, .. });
+            let is_paste = matches!(command, Command::Paste { .. });
             let revision = self.doc.revision();
             let outcome = self.run(command);
             let unchanged =
@@ -1999,9 +2008,10 @@ impl Editor {
                     }
                 }
                 self.reset_tool();
-                return;
+                return pasted;
             };
             undone |= is_undo;
+            pasted |= is_paste;
             if is_copy {
                 self.select_created(outcome);
             }
@@ -2012,6 +2022,7 @@ impl Editor {
         }
         self.preview = out.preview;
         self.solid = out.solid;
+        pasted
     }
 
     /// Selects the edges, faces, instances and guides a command created in the open context (a

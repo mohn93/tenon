@@ -290,6 +290,7 @@ impl Document {
         self.log_start = self.revision;
         self.clean_revision = self.revision;
         self.token = super::clip::new_token();
+        self.pasted.clear();
     }
 
     pub(super) fn rename_changes(

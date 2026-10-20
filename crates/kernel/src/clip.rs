@@ -9,6 +9,7 @@ use crate::data::MIN_DETERMINANT;
 use crate::edit::KernelError;
 use crate::group::whole;
 use crate::ids::{DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, TagId};
+use crate::import_tree::MAX_IMPORT_DEPTH;
 use crate::model::{Guide, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
 
@@ -23,6 +24,9 @@ pub struct Inserted {
     pub faces: Vec<FaceId>,
     pub instances: Vec<InstanceId>,
     pub guides: Vec<GuideId>,
+    /// The target definition each clip definition the insert placed maps to (an existing
+    /// component reused, or the new copy), by the clip definition's id.
+    pub definitions: BTreeMap<DefinitionId, DefinitionId>,
 }
 
 impl Scene {
@@ -109,9 +113,9 @@ impl Scene {
     /// painted faces' texture placements take up `placement`. Materials and tags are matched
     /// by name (an existing one is used as it is; a missing one the clip uses is added). A
     /// component definition is the one `reuse` maps it to when that is an existing component
-    /// that does not hold `parent`, else a new copy; a group always gets a new copy. A `placement` that
-    /// is not finite is `NotFinite`, one that flattens space `Squash`. On error nothing is
-    /// changed.
+    /// that does not hold `parent`, else a new copy; a group always gets a new copy. Copies
+    /// nested more than `MAX_IMPORT_DEPTH` deep are `InvalidImport`. A `placement` that is not
+    /// finite is `NotFinite`, one that flattens space `Squash`. On error nothing is changed.
     pub fn insert(
         &mut self,
         parent: MeshId,
@@ -258,12 +262,14 @@ impl Paste<'_> {
             Ok(m.take_changes())
         })?;
         self.done.push(change);
+        inserted.definitions = std::mem::take(&mut self.definitions);
         Ok(inserted)
     }
 
     /// The target definition clip definition `id` maps to, copying it (and what it places)
     /// unless it is a component `reuse` maps to an existing component that does not hold the
-    /// mesh being inserted into.
+    /// mesh being inserted into. Copies nest at most `MAX_IMPORT_DEPTH` deep, which bounds
+    /// this recursion.
     fn definition(
         &mut self,
         scene: &mut Scene,
@@ -284,11 +290,17 @@ impl Paste<'_> {
             self.definitions.insert(id, to);
             return Ok(to);
         }
-        if !self.open.insert(id) {
+        if self.open.contains(&id) {
             return Err(KernelError::InvalidImport(format!(
                 "definition {id} of the clip places itself"
             )));
         }
+        if self.open.len() >= MAX_IMPORT_DEPTH {
+            return Err(KernelError::InvalidImport(format!(
+                "the clip's instances are nested more than {MAX_IMPORT_DEPTH} deep"
+            )));
+        }
+        self.open.insert(id);
         let stencil = self.stencil_of(&original.mesh);
         let children = self.instances_of(scene, &original.mesh, DAffine3::IDENTITY)?;
         let guides = self.guides_of(&original.mesh, DAffine3::IDENTITY);
