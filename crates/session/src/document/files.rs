@@ -337,7 +337,8 @@ fn check_links<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Result<(), Comm
         Some(link) => Err(CommandError::new(
             ErrorKind::InvalidInput,
             format!(
-                "{} is a symbolic link: under --api-root the API does not write to links",
+                "{} is a symbolic link or, on Windows, another reparse point (a junction, a cloud \
+                 file placeholder): under --api-root the API does not write to links",
                 link.display()
             ),
         )),

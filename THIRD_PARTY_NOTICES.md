@@ -1,5 +1,10 @@
 # Third-party notices
 
+Known gap: this file lists the vendored code, test fixtures and fonts. The notices of the Rust
+crates compiled into the app (dependencies under MIT, Apache-2.0 and other licences, listed in
+`Cargo.lock`) are not yet included, here or in the Windows zip, and must be added before any
+public release.
+
 ## skp (vendored from openskp-rs)
 
 `crates/skp` is the `core/skpcore` reader of openskp-rs

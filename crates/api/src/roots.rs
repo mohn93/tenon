@@ -162,7 +162,8 @@ impl ApiRoots {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 format!(
-                    "{path} is a symbolic link: under --api-root the API does not write to links"
+                    "{path} is a symbolic link or, on Windows, another reparse point (a junction, a \
+                     cloud file placeholder): under --api-root the API does not write to links"
                 ),
             ));
         }

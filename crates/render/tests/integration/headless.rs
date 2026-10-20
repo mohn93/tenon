@@ -21,28 +21,33 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     .ok()
 }
 
-/// True when the default adapter is a software rasterizer (Mesa lavapipe, WARP). WARP is also
-/// matched by name, in case a backend does not report it as `DeviceType::Cpu`.
+/// True when the default adapter is a software rasterizer (Mesa lavapipe, WARP).
 fn software_adapter() -> bool {
+    let instance = wgpu::Instance::default();
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        .is_ok_and(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+}
+
+/// True when the default adapter is Windows' WARP software rasterizer (matched by name, whatever
+/// device type the backend reports for it).
+fn warp_adapter() -> bool {
     let instance = wgpu::Instance::default();
     pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).is_ok_and(
         |a| {
-            let info = a.get_info();
-            info.device_type == wgpu::DeviceType::Cpu
-                || info.name.contains("Basic Render Driver")
-                || info.name.contains("WARP")
+            let name = a.get_info().name;
+            name.contains("Basic Render Driver") || name.contains("WARP")
         },
     )
 }
 
-/// Skips a pixel check that differs on software rasterizers (seen on the Windows CI runner's
-/// WARP); a real GPU still runs it.
-fn skip_on_software_adapter(what: &str) -> bool {
-    let software = software_adapter();
-    if software {
-        eprintln!("software GPU adapter, skipping {what}");
+/// Skips a pixel check that differs on WARP (seen on the Windows CI runner); it passes on Mesa
+/// lavapipe and real GPUs, which still run it.
+fn skip_on_warp(what: &str) -> bool {
+    let warp = warp_adapter();
+    if warp {
+        eprintln!("WARP adapter, skipping {what}");
     }
-    software
+    warp
 }
 
 /// Renders one frame and returns tightly packed RGBA8 pixels, or None without a GPU.
@@ -1404,7 +1409,7 @@ fn a_preview_solid_under_a_face_is_hidden() {
 
 #[test]
 fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
-    if skip_on_software_adapter("the axes pixel counts") {
+    if skip_on_warp("the axes pixel counts") {
         return;
     }
     let cam = camera();
@@ -1433,7 +1438,7 @@ fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
 
 #[test]
 fn a_pushed_in_preview_tints_the_box_sides_it_lies_on_evenly() {
-    if skip_on_software_adapter("the preview tint check") {
+    if skip_on_warp("the preview tint check") {
         return;
     }
     // A 0.6 m box with its top pushed 0.3 m down: the solid's sides lie in the box's side

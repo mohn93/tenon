@@ -153,8 +153,24 @@ jobs:
           restore-keys: |
             cargo-windows-release-${{ env.RUST_VERSION }}-
 
+      # The C runtime is linked in, so the zip needs no Visual C++ redistributable.
       - name: Build
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --release --locked -p app
+
+      # Lists the DLLs named in app.exe (its import table holds them as plain ASCII) and fails
+      # when the Visual C++ runtime is among them.
+      - name: Check imports
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("target/release/app.exe")
+          $text = [System.Text.Encoding]::Latin1.GetString($bytes)
+          $dlls = [regex]::Matches($text, '[A-Za-z0-9_.-]{2,40}\.dll') |
+            ForEach-Object { $_.Value.ToLower() } | Sort-Object -Unique
+          $dlls
+          $bad = $dlls | Where-Object { $_ -match '^(vcruntime|msvcp|concrt|vccorlib)' }
+          if ($bad) { throw "app.exe imports the Visual C++ runtime: $bad" }
 
       - name: Zip
         shell: pwsh

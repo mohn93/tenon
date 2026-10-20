@@ -188,8 +188,19 @@ fn listen_pipe(name: &str, inbox: Inbox) -> io::Result<()> {
     let name = name.to_string();
     thread::spawn(move || {
         let mut waiting = first;
+        // The last error logged, so one that repeats is reported once.
+        let mut logged = None;
         loop {
-            let connected = waiting.accept().is_ok();
+            let accepted = waiting.accept();
+            // A client that connected and left at once (ERROR_NO_DATA) is not worth a line.
+            if let Err(e) = &accepted
+                && e.raw_os_error() != Some(232)
+                && logged != Some(e.raw_os_error())
+            {
+                eprintln!("agent API: accepting a connection on {name} failed: {e}");
+                logged = Some(e.raw_os_error());
+            }
+            let connected = accepted.is_ok();
             let next = Pipe::create(&name, false, &descriptor);
             if connected {
                 if let Ok((reader, writer)) = waiting.split() {
