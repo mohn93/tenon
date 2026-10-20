@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kernel::{
     ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, MaterialId,
-    TagId, TexturePlacement,
+    PageId, TagId, TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,12 @@ pub enum Query {
     Materials {},
     /// Every tag, with how many entities are on it.
     Tags {},
+    /// Every scene, in order: what each stores and which is selected.
+    Scenes {},
+    /// One scene: the view and the hidden tags it stores.
+    Scene {
+        scene: PageId,
+    },
     /// The open context: the path of instances being edited, from the root.
     Context {},
     /// The tree of placed groups and components: the root's instances, each with the
@@ -311,6 +317,31 @@ pub struct TagInfo {
     pub count: usize,
 }
 
+/// A scene in the `scenes` list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneInfo {
+    pub id: PageId,
+    pub name: String,
+    /// Whether it stores a view (camera, projection, lighting, color by tag).
+    pub camera: bool,
+    /// Whether it stores which tags are hidden.
+    pub tags: bool,
+    /// Whether it is the selected scene (the one last added or gone to).
+    pub selected: bool,
+}
+
+/// The view a scene stores, in the `camera` query's terms.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SceneView {
+    pub eye: [f64; 3],
+    pub target: [f64; 3],
+    pub up: [f64; 3],
+    pub fov_y_deg: f64,
+    pub projection: Projection,
+    pub lighting: Lighting,
+    pub color_by_tag: bool,
+}
+
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextureInfo {
@@ -388,6 +419,19 @@ pub enum QueryResult {
     },
     Tags {
         tags: Vec<TagInfo>,
+        revision: u64,
+    },
+    Scenes {
+        scenes: Vec<SceneInfo>,
+        revision: u64,
+    },
+    /// `view` is null when the scene does not store a view, `hidden_tags` when it does not
+    /// store tag visibility (else the tags it hides; every other tag is shown).
+    Scene {
+        id: PageId,
+        name: String,
+        view: Option<SceneView>,
+        hidden_tags: Option<Vec<TagId>>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

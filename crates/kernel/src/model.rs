@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
-    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, TagId,
-    VertexId,
+    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, PageId,
+    TagId, VertexId,
 };
 use crate::index::Index;
 use crate::texture::{TexturePlacement, is_level};
@@ -314,17 +314,22 @@ pub struct ChangeSummary {
     /// Absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<TagId>,
+    /// Scenes added, removed, renamed, moved or updated (see `SceneChange::summary`). Absent
+    /// when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<PageId>,
 }
 
 impl ChangeSummary {
     /// The net change of `summaries` applied in order: made then changed is made, made then
-    /// erased is absent, changed then erased is erased. A material or tag listed in any of them
-    /// is listed in the result.
+    /// erased is absent, changed then erased is erased. A material, tag or scene listed in any
+    /// of them is listed in the result.
     pub fn join<'a>(summaries: impl IntoIterator<Item = &'a ChangeSummary>) -> ChangeSummary {
         // entity -> (existed before, exists after)
         let mut state: BTreeMap<EntityId, (bool, bool)> = BTreeMap::new();
         let mut materials = BTreeSet::new();
         let mut tags = BTreeSet::new();
+        let mut scenes = BTreeSet::new();
         for s in summaries {
             let listed = s
                 .created
@@ -337,6 +342,7 @@ impl ChangeSummary {
             }
             materials.extend(s.materials.iter().copied());
             tags.extend(s.tags.iter().copied());
+            scenes.extend(s.scenes.iter().copied());
         }
         let mut net = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -349,6 +355,7 @@ impl ChangeSummary {
         }
         net.materials = materials.into_iter().collect();
         net.tags = tags.into_iter().collect();
+        net.scenes = scenes.into_iter().collect();
         net
     }
 }
@@ -1237,6 +1244,7 @@ mod tests {
             modified: vec![v(5)],
             materials: vec![],
             tags: vec![],
+            scenes: vec![],
         };
         let b = ChangeSummary {
             created: vec![v(3)],
@@ -1244,6 +1252,7 @@ mod tests {
             modified: vec![v(1)],
             materials: vec![],
             tags: vec![],
+            scenes: vec![],
         };
         let net = ChangeSummary::join([&a, &b]);
         // made then changed is made; made then erased is gone

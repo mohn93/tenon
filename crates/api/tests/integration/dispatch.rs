@@ -218,6 +218,12 @@ fn describe_lists_methods_and_schemas() {
         "change_tag",
         "delete_tag",
         "set_tag",
+        "add_scene",
+        "update_scene",
+        "change_scene",
+        "move_scene",
+        "delete_scene",
+        "go_to_scene",
         "position_texture",
         "soften_edges",
         "soften_by_angle",
@@ -240,6 +246,8 @@ fn describe_lists_methods_and_schemas() {
         "curve",
         "materials",
         "tags",
+        "scenes",
+        "\"scene\"",
         "outliner",
     ] {
         assert!(

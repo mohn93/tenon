@@ -46,6 +46,11 @@ pub enum KernelError {
     /// A tag name is blank, too long, "Untagged" or taken, or a deleted tag's entities would
     /// move to itself; the text says which.
     TagName(String),
+    /// A page id names no page (saved scene) in the scene.
+    PageNotFound,
+    /// A page name is blank, too long or taken, its view is invalid, or a move index is out
+    /// of range; the text says which.
+    Page(String),
     /// An import makes nothing: nothing in the file makes a face, edge, guide or instance.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -83,12 +88,14 @@ impl fmt::Display for KernelError {
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
             KernelError::MaterialNotFound => write!(f, "no such material"),
             KernelError::TagNotFound => write!(f, "no such tag"),
+            KernelError::PageNotFound => write!(f, "no such scene"),
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
             | KernelError::MaterialEmission(why)
             | KernelError::TexturePlacement(why)
             | KernelError::TagName(why)
+            | KernelError::Page(why)
             | KernelError::InvalidImport(why) => {
                 write!(f, "{why}")
             }

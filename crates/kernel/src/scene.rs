@@ -6,9 +6,10 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId, MaterialId, TagId};
+use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId, MaterialId, PageId, TagId};
 use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
+use crate::page::Page;
 use crate::tag::Tag;
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
@@ -53,6 +54,14 @@ pub enum Step {
     RemoveTag(TagId, Tag),
     /// A tag's name, color or visibility changed from the first to the second.
     ChangeTag(TagId, Tag, Tag),
+    /// A page put at the index in the page order.
+    AddPage(PageId, usize, Page),
+    /// A page taken from the index in the page order.
+    RemovePage(PageId, usize, Page),
+    /// A page's name, view or tags changed from the first to the second.
+    ChangePage(PageId, Page, Page),
+    /// A page moved from the first index in the page order to the second.
+    MovePage(PageId, usize, usize),
 }
 
 impl Step {
@@ -68,6 +77,10 @@ impl Step {
             Step::AddTag(id, t) => Step::RemoveTag(id, t),
             Step::RemoveTag(id, t) => Step::AddTag(id, t),
             Step::ChangeTag(id, from, to) => Step::ChangeTag(id, to, from),
+            Step::AddPage(id, index, p) => Step::RemovePage(id, index, p),
+            Step::RemovePage(id, index, p) => Step::AddPage(id, index, p),
+            Step::ChangePage(id, from, to) => Step::ChangePage(id, to, from),
+            Step::MovePage(id, from, to) => Step::MovePage(id, to, from),
         }
     }
 }
@@ -98,7 +111,8 @@ impl SceneChange {
 
     /// Net effect per entity across all meshes (ids are unique in a scene). Definitions are not
     /// listed; the instances that place them are. Materials added, removed or changed are
-    /// listed in `materials`, and tags so in `tags` (one added and removed again is not).
+    /// listed in `materials`, tags so in `tags` and pages added, removed, changed or moved in
+    /// `scenes` (one added and removed again is not).
     pub fn summary(&self) -> ChangeSummary {
         let ops = self
             .steps
@@ -142,6 +156,22 @@ impl SceneChange {
             .filter(|(_, (before, after))| *before || *after)
             .map(|(id, _)| id)
             .collect();
+        // page -> (existed before, exists after)
+        let mut pages: BTreeMap<PageId, (bool, bool)> = BTreeMap::new();
+        for step in &self.steps {
+            let (id, before, after) = match step {
+                Step::AddPage(id, _, _) => (*id, false, true),
+                Step::RemovePage(id, _, _) => (*id, true, false),
+                Step::ChangePage(id, _, _) | Step::MovePage(id, _, _) => (*id, true, true),
+                _ => continue,
+            };
+            pages.entry(id).or_insert((before, after)).1 = after;
+        }
+        summary.scenes = pages
+            .into_iter()
+            .filter(|(_, (before, after))| *before || *after)
+            .map(|(id, _)| id)
+            .collect();
         summary
     }
 }
@@ -161,18 +191,21 @@ pub struct Scene {
     materials: BTreeMap<MaterialId, Material>,
     /// The tags entities may be put on, shared by every mesh.
     tags: BTreeMap<TagId, Tag>,
+    /// The pages (saved scenes), in their order.
+    pub(crate) pages: Vec<(PageId, Page)>,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.
     next_id: u64,
 }
 
-/// Two scenes are equal when they hold the same entities, definitions, materials and tags
-/// under the same ids.
+/// Two scenes are equal when they hold the same entities, definitions, materials, tags and
+/// pages (in the same order) under the same ids.
 impl PartialEq for Scene {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
             && self.definitions == other.definitions
             && self.materials == other.materials
             && self.tags == other.tags
+            && self.pages == other.pages
     }
 }
 
@@ -189,6 +222,7 @@ impl Scene {
             definitions: BTreeMap::new(),
             materials: BTreeMap::new(),
             tags: BTreeMap::new(),
+            pages: Vec::new(),
         }
     }
 
@@ -199,6 +233,7 @@ impl Scene {
         definitions: BTreeMap<DefinitionId, Definition>,
         materials: BTreeMap<MaterialId, Material>,
         tags: BTreeMap<TagId, Tag>,
+        pages: Vec<(PageId, Page)>,
         next_id: u64,
     ) -> Self {
         let used = definitions
@@ -206,6 +241,7 @@ impl Scene {
             .map(|(id, d)| id.0.saturating_add(1).max(d.mesh.next_id()))
             .chain(materials.keys().map(|id| id.0.saturating_add(1)))
             .chain(tags.keys().map(|id| id.0.saturating_add(1)))
+            .chain(pages.iter().map(|(id, _)| id.0.saturating_add(1)))
             .chain([root.next_id(), next_id])
             .max()
             .unwrap_or(0);
@@ -214,6 +250,7 @@ impl Scene {
             definitions,
             materials,
             tags,
+            pages,
             next_id: used,
         }
     }
@@ -262,6 +299,27 @@ impl Scene {
     /// A tag id for a new tag, taken from the entity id counter.
     pub(crate) fn alloc_tag(&mut self) -> TagId {
         let id = TagId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    pub fn page(&self, id: PageId) -> Option<&Page> {
+        self.pages.iter().find(|(p, _)| *p == id).map(|(_, p)| p)
+    }
+
+    /// Every page, in order.
+    pub fn pages(&self) -> impl Iterator<Item = (PageId, &Page)> {
+        self.pages.iter().map(|(id, p)| (*id, p))
+    }
+
+    /// Where a page is in the order (0: first).
+    pub fn page_index(&self, id: PageId) -> Option<usize> {
+        self.pages.iter().position(|(p, _)| *p == id)
+    }
+
+    /// A page id for a new page, taken from the entity id counter.
+    pub(crate) fn alloc_page(&mut self) -> PageId {
+        let id = PageId(self.next_id);
         self.next_id += 1;
         id
     }
@@ -494,14 +552,34 @@ impl Scene {
                     *t = to.clone();
                 }
             }
+            Step::AddPage(id, index, p) => {
+                self.next_id = self.next_id.max(id.0.saturating_add(1));
+                let at = (*index).min(self.pages.len());
+                self.pages.insert(at, (*id, p.clone()));
+            }
+            Step::RemovePage(id, _, _) => {
+                self.pages.retain(|(p, _)| p != id);
+            }
+            Step::ChangePage(id, _, to) => {
+                if let Some((_, p)) = self.pages.iter_mut().find(|(p, _)| p == id) {
+                    *p = to.clone();
+                }
+            }
+            Step::MovePage(id, _, to) => {
+                if let Some(from) = self.page_index(*id) {
+                    let page = self.pages.remove(from);
+                    let at = (*to).min(self.pages.len());
+                    self.pages.insert(at, page);
+                }
+            }
         }
     }
 
     /// Checks every mesh, that instances place existing definitions, that no definition places
     /// itself (directly or deeper), that no number is the id of two things (entities in any
-    /// mesh, curves, definitions, materials and tags all take ids from one counter), that every
-    /// material painted and every tag used exists, that material and tag names are valid and
-    /// distinct, that material
+    /// mesh, curves, definitions, materials, tags and pages all take ids from one counter), that
+    /// every material painted and every tag used or hidden by a page exists, that material, tag
+    /// and page names are valid and distinct, that page views are valid, that material
     /// opacities are from 0 to 1 and emissions from 0 to `MAX_EMISSION`, that textures are
     /// valid and at most `MAX_TEXTURES`, and that face texture placements are in range.
     pub fn validate(&self) -> Result<(), String> {
@@ -531,10 +609,23 @@ impl Scene {
                 return Err(format!("tag {id}: two tags are named the same"));
             }
         }
+        let mut page_names = BTreeSet::new();
+        for (id, p) in &self.pages {
+            crate::page::check_name(&p.name).map_err(|e| format!("scene {id}: {e}"))?;
+            if !page_names.insert(p.name.as_str()) {
+                return Err(format!("scene {id}: two scenes are named the same"));
+            }
+            if let Some(v) = &p.view {
+                crate::page::check_view(v).map_err(|e| format!("scene {id}: {e}"))?;
+            }
+            if let Some(t) = p.tags.iter().flatten().find(|t| !self.tags.contains_key(t)) {
+                return Err(format!("scene {id} hides a missing tag {t}"));
+            }
+        }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
         // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "c", "d", "m",
-        // "t").
+        // "t", "p").
         let mut owner: BTreeMap<u64, char> = BTreeMap::new();
         let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
             None => Ok(()),
@@ -549,6 +640,9 @@ impl Scene {
         }
         for id in self.tags.keys() {
             claim(id.0, 't')?;
+        }
+        for (id, _) in &self.pages {
+            claim(id.0, 'p')?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;

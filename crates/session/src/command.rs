@@ -1,7 +1,9 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side, SoftenReport, TagId};
+use kernel::{
+    ChangeSummary, DefinitionId, EntityId, MaterialId, PageId, Side, SoftenReport, TagId,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -305,6 +307,40 @@ pub enum Command {
         #[serde(default)]
         tag: Option<TagId>,
     },
+    /// Save a scene after the last one, as one undo step: the current view (camera,
+    /// projection, lighting and color by tag) unless `camera` is false, and which tags are
+    /// hidden unless `tags` is false. Without `name` it is called "Scene 1" (or the lowest
+    /// number no scene has); names must be distinct, not blank and at most 256 characters.
+    /// The new scene is the selected one; its id is in the outcome's `changes.scenes`.
+    AddScene {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default = "yes")]
+        camera: bool,
+        #[serde(default = "yes")]
+        tags: bool,
+    },
+    /// Store the current view (`camera`) and hidden tags (`tags`) in a scene again, as one undo
+    /// step; false stops storing that part. Absent parts are stored again if the scene stores
+    /// them.
+    UpdateScene {
+        scene: PageId,
+        #[serde(default)]
+        camera: Option<bool>,
+        #[serde(default)]
+        tags: Option<bool>,
+    },
+    /// Rename a scene, as one undo step.
+    ChangeScene { scene: PageId, name: String },
+    /// Move a scene to `index` in the order (0: first), as one undo step. An index past the
+    /// last scene is invalid input.
+    MoveScene { scene: PageId, index: usize },
+    /// Remove a scene, as one undo step.
+    DeleteScene { scene: PageId },
+    /// Go to a scene: set the camera, projection, lighting and color by tag it stores (a view
+    /// change like `set_camera`, not an undo step), and show and hide tags as it stores (one
+    /// undo step, only when that changes a tag). It becomes the selected scene.
+    GoToScene { scene: PageId },
     /// Make edges of the open context soft (`soft`: true) or hard again, as one undo step: the
     /// edges in `ids` and the edges around the faces in `ids`. A soft edge is hidden and the
     /// faces on its sides are shaded as one smooth surface. Only an edge between exactly two
@@ -565,6 +601,10 @@ pub struct TextureSource {
     pub width: Option<f64>,
     #[serde(default)]
     pub height: Option<f64>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A field that may be absent (None), null (`Some(None)`) or a value.

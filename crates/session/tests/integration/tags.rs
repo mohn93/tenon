@@ -431,7 +431,10 @@ fn tags_are_saved_and_opened_with_their_entities() {
     )
     .unwrap();
     let document = stored(&path);
-    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(
+        document["schema_version"],
+        session::file::TAGS_SCHEMA_VERSION
+    );
     assert_eq!(document["schema_version"], 10);
     let before = tags(&d);
 

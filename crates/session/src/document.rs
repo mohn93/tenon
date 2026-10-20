@@ -5,7 +5,7 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError,
-    MaterialEdit, MeshId, Model, PlacementEdit, Scene, SceneChange, SoftenReport, TagEdit,
+    MaterialEdit, MeshId, Model, PageId, PlacementEdit, Scene, SceneChange, SoftenReport, TagEdit,
     VertexId,
 };
 
@@ -30,6 +30,7 @@ mod groups;
 mod import;
 mod materials;
 mod placement;
+mod scenes;
 mod soften;
 mod tags;
 
@@ -63,6 +64,8 @@ pub struct Document {
     /// Faces are drawn in their tags' colors; saved with the camera.
     pub color_by_tag: bool,
     selection: BTreeSet<EntityId>,
+    /// The scene last added or gone to (see `selected_scene`); not saved.
+    selected_scene: Option<PageId>,
     undo: Vec<Step>,
     redo: Vec<Step>,
     /// Stamped on the steps recorded from now on; `new` and `open` keep it.
@@ -96,6 +99,7 @@ impl Document {
             lighting: Lighting::Day,
             color_by_tag: false,
             selection: BTreeSet::new(),
+            selected_scene: None,
             undo: Vec::new(),
             redo: Vec::new(),
             origin: Origin::User,
@@ -411,6 +415,12 @@ impl Document {
             | Command::ChangeTag { .. }
             | Command::DeleteTag { .. }
             | Command::SetTag { .. }
+            | Command::AddScene { .. }
+            | Command::UpdateScene { .. }
+            | Command::ChangeScene { .. }
+            | Command::MoveScene { .. }
+            | Command::DeleteScene { .. }
+            | Command::GoToScene { .. }
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::PositionTexture { .. }
@@ -576,6 +586,19 @@ impl Document {
             ),
             Command::DeleteTag { tag, move_to } => self.delete_tag_changes(*tag, *move_to),
             Command::SetTag { ids, tag } => self.set_tag_changes(ids, *tag),
+            Command::AddScene { name, camera, tags } => {
+                self.add_scene_changes(name.as_deref(), *camera, *tags)
+            }
+            Command::UpdateScene {
+                scene,
+                camera,
+                tags,
+            } => self.update_scene_changes(*scene, *camera, *tags),
+            Command::ChangeScene { scene, name } => self.change_scene_changes(*scene, name),
+            Command::MoveScene { scene, index } => self.move_scene_changes(*scene, *index),
+            Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
+            // Its view change is made here too, outside the returned change.
+            Command::GoToScene { scene } => self.go_to_scene_changes(*scene),
             Command::SoftenEdges { ids, soft } => self.soften_changes(ids, *soft),
             Command::SoftenByAngle { ids, max_angle_deg } => {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
@@ -681,6 +704,7 @@ impl Document {
         let camera_before = self.camera.clone();
         let lighting_before = self.lighting;
         let color_by_tag_before = self.color_by_tag;
+        let selected_scene_before = self.selected_scene;
         let selection_before = self.selection.clone();
         let context_before = self.context.clone();
         let mut applied: Vec<SceneChange> = Vec::new();
@@ -730,6 +754,7 @@ impl Document {
                     self.camera = camera_before;
                     self.lighting = lighting_before;
                     self.color_by_tag = color_by_tag_before;
+                    self.selected_scene = selected_scene_before;
                     self.selection = selection_before;
                     self.context = context_before;
                     return Err(BatchError {
@@ -1618,6 +1643,11 @@ impl Document {
                 tags: self.tag_infos(),
                 revision: self.revision,
             },
+            Query::Scenes {} => QueryResult::Scenes {
+                scenes: self.scene_infos(),
+                revision: self.revision,
+            },
+            Query::Scene { scene } => self.scene_detail(*scene)?,
             Query::Context {} => QueryResult::Context {
                 path: self
                     .context

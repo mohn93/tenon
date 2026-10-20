@@ -282,6 +282,7 @@ impl Document {
         self.imported_from = None;
         self.context.clear();
         self.selection.clear();
+        self.selected_scene = None;
         self.undo.clear();
         self.redo.clear();
         self.revision += 1;

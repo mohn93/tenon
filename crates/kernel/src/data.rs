@@ -7,10 +7,11 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, TagId, VertexId,
+    CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, PageId, TagId, VertexId,
 };
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
+use crate::page::{Page, PageView};
 use crate::scene::{Definition, DefinitionKind, Scene};
 use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
@@ -37,6 +38,23 @@ pub struct SceneData {
     /// Absent in files written before tags existed (and when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<TagData>,
+    /// The pages (saved scenes), in order. Absent in files written before scenes existed (and
+    /// when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<PageData>,
+}
+
+/// A page (saved scene). `view` is absent when the page does not store the camera, `tags`
+/// when it does not store tag visibility; `tags` lists the tags hidden on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageData {
+    pub id: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<PageView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<u64>>,
 }
 
 /// A tag: `color` is sRGB red, green and blue.
@@ -240,6 +258,15 @@ impl Scene {
                     visible: t.visible,
                 })
                 .collect(),
+            pages: self
+                .pages()
+                .map(|(id, p)| PageData {
+                    id: id.0,
+                    name: p.name.clone(),
+                    view: p.view,
+                    tags: p.tags.as_ref().map(|t| t.iter().map(|t| t.0).collect()),
+                })
+                .collect(),
         }
     }
 
@@ -247,8 +274,9 @@ impl Scene {
     /// id is used twice (by things of any kind) or is not below [`MAX_ID`], `next_id` is over
     /// it, a number is not finite, an instance's transform
     /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]:
-    /// that includes painting with a missing material, an entity on a missing tag, and blank,
-    /// overlong or repeated material and tag names).
+    /// that includes painting with a missing material, an entity on a missing tag, a page
+    /// hiding a missing tag, an invalid page view, and blank, overlong or repeated material,
+    /// tag and page names).
     pub fn from_data(data: &SceneData) -> Result<Scene, String> {
         if data.next_id > MAX_ID {
             return Err(format!(
@@ -306,7 +334,23 @@ impl Scene {
                 return Err(format!("tag t{} appears twice", t.id));
             }
         }
-        let scene = Scene::from_meshes(root, definitions, materials, tags, data.next_id);
+        let mut pages: Vec<(PageId, Page)> = Vec::new();
+        for p in &data.pages {
+            check_id("scene p", p.id)?;
+            if pages.iter().any(|(id, _)| id.0 == p.id) {
+                return Err(format!("scene p{} appears twice", p.id));
+            }
+            let page = Page {
+                name: p.name.clone(),
+                view: p.view,
+                tags: p
+                    .tags
+                    .as_ref()
+                    .map(|t| t.iter().map(|t| TagId(*t)).collect()),
+            };
+            pages.push((PageId(p.id), page));
+        }
+        let scene = Scene::from_meshes(root, definitions, materials, tags, pages, data.next_id);
         scene.validate()?;
         Ok(scene)
     }

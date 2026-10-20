@@ -167,7 +167,7 @@ impl Scene {
     }
 
     /// Removes a tag. Everything on it, in every mesh, moves to `move_to` (None: Untagged)
-    /// first, so undo puts it back.
+    /// first, and every page hiding it stops hiding it, so undo puts it all back.
     pub fn delete_tag(
         &mut self,
         id: TagId,
@@ -192,6 +192,7 @@ impl Scene {
         for mesh in meshes {
             changes.push(self.edit(mesh, |m| Ok(m.retag(id, move_to)))?);
         }
+        changes.push(self.unhide_on_pages(id));
         let step = Step::RemoveTag(id, tag);
         self.apply_step(&step);
         changes.push(step.into());

@@ -36,12 +36,12 @@ pub use import::{
     ImportAs, ImportFormat, ImportReport, ImportUnits, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
 };
-pub use kernel::{CurveKind, ImageFormat, MaterialId, Side, TagId, TexturePlacement};
+pub use kernel::{CurveKind, ImageFormat, MaterialId, PageId, Side, TagId, TexturePlacement};
 pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
     Bounds, ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo,
     GuideKind, InstanceInfo, MaterialInfo, OutlinerNode, OutlinerRow, OutlinerTable, Query,
-    QueryResult, TagInfo, TextureInfo, VertexInfo,
+    QueryResult, SceneInfo, SceneView, TagInfo, TextureInfo, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;

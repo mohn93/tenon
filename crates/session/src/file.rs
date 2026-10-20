@@ -18,14 +18,17 @@ use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when the model has a tag
-/// or the view colors faces by tag.
+/// The newest schema version this build reads, and the one it writes when the model has a
+/// scene.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
-/// and version 10 tags and coloring by tag; older files still open (untagged before version
-/// 10).
-pub const SCHEMA_VERSION: u32 = 10;
+/// version 10 tags and coloring by tag, and version 11 scenes; older files still open
+/// (untagged before version 10, without scenes before version 11).
+pub const SCHEMA_VERSION: u32 = 11;
+/// The version written when the model has a tag or the view colors faces by tag, but no
+/// scene.
+pub const TAGS_SCHEMA_VERSION: u32 = 10;
 /// The version written when a face has a texture position but the model has no tag.
 pub const TEXTURE_POSITION_SCHEMA_VERSION: u32 = 9;
 /// The version written when a material glows or the view is lit by night but no face has a
@@ -125,6 +128,7 @@ pub(crate) fn write(
         .any(|m| m.faces.iter().any(|f| f.texture_position.is_some()));
     // An entity on a tag needs the tag, so tags alone decide.
     let tagged = !model.tags.is_empty() || color_by_tag;
+    let has_scenes = !model.pages.is_empty();
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -141,8 +145,10 @@ pub(crate) fn write(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if tagged {
+        schema_version: if has_scenes {
             SCHEMA_VERSION
+        } else if tagged {
+            TAGS_SCHEMA_VERSION
         } else if positioned {
             TEXTURE_POSITION_SCHEMA_VERSION
         } else if needs_lights_schema {
@@ -387,6 +393,13 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
         }
         if let Some(g) = guides.iter().find(|g| !within(&g.point)) {
             return Err(beyond(format!("guide g{}", g.id)));
+        }
+    }
+    for p in &model.pages {
+        if let Some(v) = &p.view
+            && !(within(&v.eye) && within(&v.target))
+        {
+            return Err(beyond(format!("scene p{}'s view", p.id)));
         }
     }
     Ok(())

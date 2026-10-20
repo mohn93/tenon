@@ -87,6 +87,8 @@ Queries:
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances and guides in the whole model are on it; see Tags below |
+| `{"type": "scenes"}` | every scene, in order: `id`, `name`, whether it stores a view (`camera`) and tag visibility (`tags`), and whether it is `selected`; plus `revision`; see Scenes below |
+| `{"type": "scene", "scene": "p40"}` | one scene: `id`, `name`, the `view` it stores (null when none) and the tags it hides (`hidden_tags`, null when it does not store tag visibility); see Scenes below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, `revision`, and `api_roots`: the folders `--api-root` limits files to, resolved (`null` without it) |
@@ -101,12 +103,12 @@ of silently doing nothing), and so are params given by position (an array).
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `scale`, `offset`, `follow_me`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `position_texture`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`, tags `t7`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -208,8 +210,8 @@ References are read only in a command's top-level `ids`, `face`, `id` and `mater
 `path` of `open_path` and `follow_me`. Any other string, such as a name or a file path, stays as written even
 when it looks like a reference. `material` takes only `m` references, the other fields only
 entity references; whether the entity suits the command (a face for `push_pull`) is checked by
-the command, as for a written id. Tag ids (`tag`, `move_to`) take no references: a `$` string
-there is not a tag id and fails the batch's parsing.
+the command, as for a written id. Tag ids (`tag`, `move_to`) and scene ids (`scene`) take no
+references: a `$` string there is not a tag or scene id and fails the batch's parsing.
 
 Errors:
 
@@ -521,6 +523,36 @@ light the scene. `"on": false` goes back to materials. Like `set_lighting` it is
 setting: not an undo step, no change to the revision, saved with the camera, put back by a
 failed atomic batch, and reported as the `camera` query's `color_by_tag`. `new` and opening a
 SketchUp file start with it off.
+
+### Scenes
+
+A scene saves a view and which tags are hidden, to go back to in one step (SketchUp's scenes).
+A scene may store the view, the tag visibility, both or neither. The scenes are in an order
+(their tabs' order in the window) and shared by the whole model.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting` and `color_by_tag`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. |
+| `{"type": "update_scene", "scene": "p40", "camera": true, "tags": false}` | Stores the current view and hidden tags in the scene again, as one undo step. An absent `camera` or `tags` stores that part again if the scene stores it; true starts storing it, false stops. Storing what it already stores is no step. |
+| `{"type": "change_scene", "scene": "p40", "name": "Back"}` | Renames a scene (name rules as for `add_scene`), as one undo step. |
+| `{"type": "move_scene", "scene": "p40", "index": 0}` | Moves a scene to `index` in the order (0: first), as one undo step. An index past the last scene is `invalid_input`. |
+| `{"type": "delete_scene", "scene": "p40"}` | Removes a scene, as one undo step; undo puts it back at its place with what it stored. |
+| `{"type": "go_to_scene", "scene": "p40"}` | Goes to a scene, straight (no transition). A stored view sets the camera, projection, lighting and color by tag, a view change like `set_camera` (not an undo step, no change to the revision, put back by a failed atomic batch). Stored tag visibility shows and hides tags to match (tags the scene does not hide are shown), as one undo step labeled `go_to_scene`, and only when that changes a tag; the outcome's `changes.tags` lists them. A part the scene does not store is left as it is. It becomes the selected scene. |
+
+Every scene command but `go_to_scene` is an undo step (when it changes something), changes the
+revision, marks the model modified and lists the scene in its `changes.scenes` (also in
+`changed` notifications and `events`). Unknown scene ids are `not_found`. Deleting a tag drops
+it from every scene that hides it, in the same undo step (those scenes are listed in
+`changes.scenes`), so undo puts it back in each.
+
+The selected scene is the one last added or gone to (the `scenes` query's `selected`); it is
+not saved, and `new` and `open` clear it, as does undoing its `add_scene`.
+
+`{"type": "scenes"}` gives, for example,
+`{"scenes": [{"id": "p40", "name": "Front", "camera": true, "tags": true, "selected": true}], "revision": 12}`.
+`{"type": "scene", "scene": "p40"}` gives the stored view in the `camera` query's terms (without
+`view_height`) and the hidden tag ids:
+`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false}, "hidden_tags": ["t31"], "revision": 12}`.
 
 ### Groups and components
 
@@ -944,11 +976,12 @@ there. `preview` no longer outlines the hovered target; agents read `editor.hove
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
-and dark is saved exactly as before opacity existed and older builds still open it; version 9
+and dark is saved exactly as before opacity existed and older builds still open it; version 10
+and older files open with no scenes; version 9
 and older files open with no tags and everything Untagged; version 8
 and older files open without texture positions; version 7
 and older files open without glow; version 6 and older files open without textures; version 5 files open with
@@ -957,7 +990,9 @@ versions 2 and 1, written before curves and guides, still open), the camera (eye
 of view, up, projection, `lighting` when it is `night`: a file without it opens lit by day,
 and `new` starts by day, and `"color_by_tag": true` when faces are colored by tag) and the model with every id, edges with their curve and soft flag,
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
-hidden) and each entity's `tag` (absent when Untagged). Each texture's image is stored in the archive as
+hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
+one's id, name, `view` when it stores one, and `tags`, the tag ids it hides, when it stores tag
+visibility). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
 `document.json` names it with its `width` and `height`.
 
@@ -977,7 +1012,8 @@ reason (a missing file, not a sketchup-alt file, a missing or newer schema versi
 over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
 fewer than two faces, a face or instance painted with a material the file lacks, an entity on a
-tag the file lacks, a material or tag name that is blank, too long or used twice (or a tag named
+tag the file lacks, a scene hiding a tag the file lacks or whose view is unusable or beyond the
+limit, a material, tag or scene name that is blank, too long or used twice (or a tag named
 `Untagged`), a material opacity outside 0 to 1, a texture
 whose image is missing, broken or too large, or whose size is out of range, or a face texture
 position out of range); error messages never quote the file's contents (a JSON fault gives its

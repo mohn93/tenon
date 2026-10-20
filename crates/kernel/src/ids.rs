@@ -266,6 +266,57 @@ impl TryFrom<String> for TagId {
     }
 }
 
+/// A saved scene (a SketchUp "page"): a stored view and tag visibility. Serialized as
+/// "p<n>". Page ids come from the same counter as entity ids, so they never repeat one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct PageId(pub u64);
+
+impl fmt::Display for PageId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "p{}", self.0)
+    }
+}
+
+impl FromStr for PageId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('p', n)) => Ok(PageId(n)),
+            _ => Err(format!("invalid scene id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for PageId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PageId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^p(0|[1-9][0-9]*)$",
+            "description": "Scene id: p<n>"
+        })
+    }
+}
+
+impl From<PageId> for String {
+    fn from(id: PageId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for PageId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +349,11 @@ mod tests {
         assert_eq!(TagId(5).to_string(), "t5");
         for s in ["", "t", "m5", "t05", "t+5"] {
             assert!(s.parse::<TagId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("p5".parse::<PageId>(), Ok(PageId(5)));
+        assert_eq!(PageId(5).to_string(), "p5");
+        for s in ["", "p", "t5", "p05", "p+5"] {
+            assert!(s.parse::<PageId>().is_err(), "{s:?} parsed");
         }
     }
 

@@ -18,6 +18,7 @@ mod material;
 mod mesh;
 mod model;
 pub mod offset;
+mod page;
 mod push_pull;
 mod regions;
 mod scene;
@@ -33,12 +34,12 @@ mod weld;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MIN_DETERMINANT,
-    MaterialData, MeshData, SceneData, TagData, TextureData, VertexData,
+    MaterialData, MeshData, PageData, SceneData, TagData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
-    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, TagId,
-    VertexId,
+    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, PageId,
+    TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -49,6 +50,7 @@ pub use import_tree::{
 pub use index::{Index, Shape};
 pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
+pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView};
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;

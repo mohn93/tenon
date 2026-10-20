@@ -23,6 +23,7 @@ mod perf;
 mod polygon;
 mod rotate;
 mod scale;
+mod scenes;
 mod selection;
 mod skp;
 mod skp_export;

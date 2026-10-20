@@ -485,6 +485,12 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddTag { .. }
         | Command::ChangeTag { .. }
         | Command::DeleteTag { .. }
+        | Command::AddScene { .. }
+        | Command::UpdateScene { .. }
+        | Command::ChangeScene { .. }
+        | Command::MoveScene { .. }
+        | Command::DeleteScene { .. }
+        | Command::GoToScene { .. }
         | Command::New { .. }
         | Command::Open { .. }
         | Command::Save { .. }

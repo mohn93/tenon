@@ -225,6 +225,7 @@ fn reference_keys_cover_every_id_field() {
     let variants = schema["oneOf"].as_array().expect("one schema per command");
     let mut checked = 0;
     let mut tag_fields = 0;
+    let mut scene_fields = 0;
     for variant in variants {
         let name = variant["properties"]["type"]["const"]
             .as_str()
@@ -239,6 +240,15 @@ fn reference_keys_cover_every_id_field() {
                 || (key == "path" && matches!(name, "open_path" | "follow_me"));
             // Tag ids are not references (a reference has no `t` kind), so a field holding
             // them must not be a reference key: "$0:t0" there is refused as a tag id.
+            // Scene ids likewise.
+            if !has_ids && text.contains("#/$defs/PageId") {
+                scene_fields += 1;
+                assert!(
+                    !reference_key,
+                    "{name}.{key} holds scene ids but is a reference key"
+                );
+                continue;
+            }
             if !has_ids && text.contains("#/$defs/TagId") {
                 tag_fields += 1;
                 assert!(
@@ -261,6 +271,10 @@ fn reference_keys_cover_every_id_field() {
     assert_eq!(
         tag_fields, 4,
         "change_tag.tag, delete_tag.tag and .move_to, set_tag.tag"
+    );
+    assert_eq!(
+        scene_fields, 5,
+        "update_scene, change_scene, move_scene, delete_scene and go_to_scene .scene"
     );
 }
 

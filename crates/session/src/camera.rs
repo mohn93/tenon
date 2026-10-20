@@ -1,5 +1,6 @@
 use glam::dcamera::rh::{proj::directx, view::look_at_mat4};
 use glam::{DAffine3, DMat4, DQuat, DVec2, DVec3, Mat4};
+use kernel::PageView;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -185,6 +186,20 @@ impl Camera {
 
     pub fn is_parallel(&self) -> bool {
         self.projection == Projection::Parallel
+    }
+
+    /// The view a scene stores: this camera (its `up` field, the field of view in degrees and
+    /// the projection), lit by `lighting`, its faces colored by tag or not.
+    pub fn page_view(&self, lighting: Lighting, color_by_tag: bool) -> PageView {
+        PageView {
+            eye: self.eye.to_array(),
+            target: self.target.to_array(),
+            up: self.up.to_array(),
+            fov_y: self.fov_y.to_degrees(),
+            parallel: self.is_parallel(),
+            night: lighting == Lighting::Night,
+            color_by_tag,
+        }
     }
 
     /// True when the view looks straight down or up (see `VERTICAL_TOLERANCE`).

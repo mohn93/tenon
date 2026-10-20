@@ -190,6 +190,7 @@ fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
         definitions: vec![],
         materials: vec![],
         tags: Vec::new(),
+        pages: Vec::new(),
     }
 }
 
@@ -420,6 +421,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         definitions,
         materials: vec![],
         tags: Vec::new(),
+        pages: Vec::new(),
     }
 }
 
