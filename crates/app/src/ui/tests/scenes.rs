@@ -168,6 +168,32 @@ fn a_rename_is_forgotten_when_its_scene_goes() {
 }
 
 #[test]
+fn a_rename_is_forgotten_when_the_document_is_replaced() {
+    for f in [with_scenes(), scenes_tab()] {
+        let mut h = harness(f);
+        // The tab's rename, or the Scenes tab's row's.
+        let at = if h.state().dock.tab == DockTab::Scenes {
+            panel_row(&h, "Top").rect().center()
+        } else {
+            rect_of(&h, "Top").center()
+        };
+        click_at(&mut h, at, egui::Modifiers::NONE);
+        click_at(&mut h, at, egui::Modifiers::NONE);
+        h.run_ok();
+        h.event(egui::Event::Text("Plan".into()));
+        h.run_ok();
+        assert!(h.query_by_label("Scene name").is_some());
+        h.state_mut().take();
+        // New or open: the same id is listed, but it names the new document's scene.
+        h.state_mut().documents += 1;
+        h.run_ok();
+        h.run_ok();
+        assert!(h.query_by_label("Scene name").is_none());
+        assert_eq!(h.state_mut().take(), [], "the typed name is dropped");
+    }
+}
+
+#[test]
 fn the_tab_menu_updates_renames_moves_deletes_and_adds() {
     for (item, action) in [
         ("Update", Some(UiAction::UpdateScene(TOP))),

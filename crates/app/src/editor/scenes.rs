@@ -38,7 +38,30 @@ impl Editor {
     /// Renames a scene. A refused name leaves it and says why in the status.
     pub fn rename_scene(&mut self, scene: PageId, name: String) -> bool {
         self.message = None;
-        self.run(Command::ChangeScene { scene, name });
+        self.run(Command::ChangeScene {
+            scene,
+            name: Some(name),
+            camera: None,
+            tags: None,
+        });
+        true
+    }
+
+    /// Starts (true) or stops storing the view (`camera`) or tag visibility (`tags`) in a
+    /// scene. A part started is stored from now; the other part keeps what it stores.
+    pub fn set_scene_stores(
+        &mut self,
+        scene: PageId,
+        camera: Option<bool>,
+        tags: Option<bool>,
+    ) -> bool {
+        self.message = None;
+        self.run(Command::ChangeScene {
+            scene,
+            name: None,
+            camera,
+            tags,
+        });
         true
     }
 
@@ -135,6 +158,37 @@ mod tests {
         assert_eq!(names(&e), ["Front", "Scene 2"]);
         e.undo();
         assert_eq!(names(&e), ["Scene 1", "Scene 2"]);
+    }
+
+    #[test]
+    fn the_checkboxes_keep_the_other_part_as_stored() {
+        let mut e = editor();
+        e.execute(Command::AddTag {
+            name: Some("Walls".into()),
+            color: None,
+        })
+        .unwrap();
+        let walls = e.doc().scene().tags().next().unwrap().0;
+        e.add_scene();
+        let one = ids(&e)[0];
+        let stored = e.doc().scene().page(one).unwrap().clone();
+        // Tag visibility changes, then Camera is unticked: the stored tags stay as they were.
+        e.set_tag_visible(walls, false);
+        e.standard_view(StandardView::Top);
+        e.set_scene_stores(one, Some(false), None);
+        let page = e.doc().scene().page(one).unwrap().clone();
+        assert_eq!(page.view, None);
+        assert_eq!(page.tags, stored.tags, "nothing hidden, as stored");
+        assert_eq!(e.doc().undo_label(), Some("change_scene"));
+        // Ticked again, the camera is stored from now; the tags still stay.
+        e.set_scene_stores(one, Some(true), None);
+        let page = e.doc().scene().page(one).unwrap().clone();
+        assert_eq!(
+            page.view.unwrap().eye,
+            e.doc().camera.eye.to_array(),
+            "the top view"
+        );
+        assert_eq!(page.tags, stored.tags);
     }
 
     #[test]

@@ -250,6 +250,85 @@ fn update_scene_stores_again_what_it_stores_unless_told() {
 }
 
 #[test]
+fn change_scene_drops_or_adds_a_part_and_keeps_what_stays_stored() {
+    let mut d = doc();
+    let walls = add_tag(&mut d, "Walls");
+    set_camera(&mut d, [1.0, -9.0, 4.0]);
+    let s = add_scene(&mut d, json!({}));
+    let stored = ask(&d, json!({"type": "scene", "scene": s}));
+    assert_eq!(stored["hidden_tags"], json!([]));
+    // Tag visibility changes and the camera moves; then the camera is no longer stored.
+    set_visible(&mut d, &walls, false);
+    set_camera(&mut d, [2.0, -9.0, 4.0]);
+    let depth = |d: &Document| ask(d, json!({"type": "history"}))["undo_depth"].clone();
+    let before = depth(&d);
+    let out = run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "camera": false}),
+    )
+    .unwrap();
+    assert_eq!(out["changes"]["scenes"], json!([s]));
+    assert_eq!(undo_labels(&d)[0], "change_scene");
+    assert_eq!(depth(&d), json!(before.as_u64().unwrap() + 1));
+    let detail = ask(&d, json!({"type": "scene", "scene": s}));
+    assert_eq!(detail["view"], Value::Null);
+    assert_eq!(
+        detail["hidden_tags"],
+        json!([]),
+        "the stored tags are unchanged"
+    );
+    assert_eq!(detail["name"], "Scene 1");
+    // Turned on again, the camera is stored from now; tags true keeps the stored tags.
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "camera": true, "tags": true}),
+    )
+    .unwrap();
+    let detail = ask(&d, json!({"type": "scene", "scene": s}));
+    assert_eq!(detail["view"]["eye"], json!([2.0, -9.0, 4.0]));
+    assert_eq!(detail["hidden_tags"], json!([]));
+    // Camera true on a scene that stores it keeps the stored view.
+    set_camera(&mut d, [3.0, -9.0, 4.0]);
+    let before = depth(&d);
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "camera": true}),
+    )
+    .unwrap();
+    let detail = ask(&d, json!({"type": "scene", "scene": s}));
+    assert_eq!(detail["view"]["eye"], json!([2.0, -9.0, 4.0]));
+    assert_eq!(depth(&d), before, "nothing changed: no step");
+    // Tags dropped, then stored from the current visibility.
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "tags": false}),
+    )
+    .unwrap();
+    assert_eq!(
+        ask(&d, json!({"type": "scene", "scene": s}))["hidden_tags"],
+        Value::Null
+    );
+    run(
+        &mut d,
+        json!({"type": "change_scene", "scene": s, "tags": true}),
+    )
+    .unwrap();
+    assert_eq!(
+        ask(&d, json!({"type": "scene", "scene": s}))["hidden_tags"],
+        json!([walls])
+    );
+    // Undo takes each change back.
+    run(&mut d, json!({"type": "undo", "count": 2})).unwrap();
+    assert_eq!(
+        ask(&d, json!({"type": "scene", "scene": s}))["hidden_tags"],
+        json!([])
+    );
+    // Something to change is needed.
+    let e = run(&mut d, json!({"type": "change_scene", "scene": s})).unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput, "{}", e.1);
+}
+
+#[test]
 fn move_scene_reorders_and_refuses_an_index_out_of_range() {
     let mut d = doc();
     let a = add_scene(&mut d, json!({"name": "A"}));

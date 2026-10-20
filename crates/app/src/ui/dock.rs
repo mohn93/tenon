@@ -1,5 +1,5 @@
-//! The dock on the right: Entity Info, Materials, Tags and Scenes as tabs over the Outliner, split by a
-//! divider. Its width, split and tab are kept in the preferences.
+//! The dock on the right: Entity Info, Materials, Tags and Scenes as tabs over the Outliner,
+//! split by a divider. Its width, split and tab are kept in the preferences.
 
 use std::ops::RangeInclusive;
 

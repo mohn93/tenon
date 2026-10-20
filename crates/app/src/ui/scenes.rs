@@ -203,7 +203,7 @@ fn scene_row(ui: &mut Ui, row: &SceneRow, actions: &mut Vec<UiAction>) {
 }
 
 /// What the selected scene stores: the Camera and Tag visibility checkboxes (off and disabled
-/// with no scene selected). Changing one stores the scene again.
+/// with no scene selected). Ticking one stores that part from now; unticking drops it.
 fn stores(ui: &mut Ui, chosen: Option<&SceneRow>, actions: &mut Vec<UiAction>) {
     ui.label(RichText::new("The selected scene stores").weak());
     let enabled = chosen.is_some();

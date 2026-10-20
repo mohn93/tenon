@@ -127,10 +127,11 @@ pub enum UiAction {
     AddScene,
     /// Store the current view and tag visibility in a scene again (the parts it stores).
     UpdateScene(PageId),
-    /// Start (true) or stop storing the camera in a scene; the scene's other part is stored
-    /// again too (`update_scene`).
+    /// Start (true: from the current view) or stop storing the camera in a scene; tag
+    /// visibility keeps what it stores (`change_scene`).
     StoreSceneCamera(PageId, bool),
-    /// Start (true) or stop storing tag visibility in a scene, as `StoreSceneCamera` does.
+    /// Start (true: from the current visibility) or stop storing tag visibility in a scene;
+    /// the camera keeps what it stores.
     StoreSceneTags(PageId, bool),
     RenameScene(PageId, String),
     /// Move a scene to this place in the order (0: first).

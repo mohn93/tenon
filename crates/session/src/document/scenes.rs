@@ -64,14 +64,41 @@ impl Document {
             .map_err(|e| scene_error(e, Some(id)))
     }
 
+    /// Renames a scene and chooses what it stores: a part turned off is dropped, a part
+    /// turned on is stored from the current state only when the scene lacks it, and a part that
+    /// stays keeps what was stored.
     pub(super) fn change_scene_changes(
         &mut self,
         id: PageId,
-        name: &str,
+        name: Option<&str>,
+        camera: Option<bool>,
+        tags: Option<bool>,
     ) -> Result<SceneChange, CommandError> {
+        if name.is_none() && camera.is_none() && tags.is_none() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "change_scene needs a name, camera or tags",
+            ));
+        }
+        let page = self.page(id)?;
+        let view = match camera {
+            Some(false) => None,
+            Some(true) => Some(page.view.unwrap_or_else(|| self.current_view())),
+            None => page.view,
+        };
+        let hidden = match tags {
+            Some(false) => None,
+            Some(true) => Some(
+                page.tags
+                    .clone()
+                    .unwrap_or_else(|| self.scene.hidden_tags()),
+            ),
+            None => page.tags.clone(),
+        };
         let page = Page {
-            name: name.to_string(),
-            ..self.page(id)?.clone()
+            name: name.map_or_else(|| page.name.clone(), str::to_string),
+            view,
+            tags: hidden,
         };
         self.scene
             .change_page(id, page)

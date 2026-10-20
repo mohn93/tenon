@@ -594,7 +594,12 @@ impl Document {
                 camera,
                 tags,
             } => self.update_scene_changes(*scene, *camera, *tags),
-            Command::ChangeScene { scene, name } => self.change_scene_changes(*scene, name),
+            Command::ChangeScene {
+                scene,
+                name,
+                camera,
+                tags,
+            } => self.change_scene_changes(*scene, name.as_deref(), *camera, *tags),
             Command::MoveScene { scene, index } => self.move_scene_changes(*scene, *index),
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
             // Its view change is made here too, outside the returned change.

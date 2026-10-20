@@ -1244,10 +1244,10 @@ impl State {
                 self.editor.update_scene(scene, None, None);
             }
             UiAction::StoreSceneCamera(scene, on) => {
-                self.editor.update_scene(scene, Some(on), None);
+                self.editor.set_scene_stores(scene, Some(on), None);
             }
             UiAction::StoreSceneTags(scene, on) => {
-                self.editor.update_scene(scene, None, Some(on));
+                self.editor.set_scene_stores(scene, None, Some(on));
             }
             UiAction::RenameScene(scene, name) => {
                 self.editor.rename_scene(scene, name);

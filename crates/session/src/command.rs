@@ -330,8 +330,19 @@ pub enum Command {
         #[serde(default)]
         tags: Option<bool>,
     },
-    /// Rename a scene, as one undo step.
-    ChangeScene { scene: PageId, name: String },
+    /// Rename a scene and choose what it stores, as one undo step (none when nothing changes).
+    /// At least one of `name`, `camera` and `tags` is needed. `camera` or `tags` false stops
+    /// storing that part; true stores it from the current view or tag visibility only if the
+    /// scene does not store it yet. A part that stays stored keeps exactly what was stored.
+    ChangeScene {
+        scene: PageId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        camera: Option<bool>,
+        #[serde(default)]
+        tags: Option<bool>,
+    },
     /// Move a scene to `index` in the order (0: first), as one undo step. An index past the
     /// last scene is invalid input.
     MoveScene { scene: PageId, index: usize },
