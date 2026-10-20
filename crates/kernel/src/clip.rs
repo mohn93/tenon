@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DAffine3;
 
+use crate::data::MIN_DETERMINANT;
 use crate::edit::KernelError;
 use crate::group::whole;
 use crate::ids::{DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, TagId};
@@ -31,7 +32,8 @@ impl Scene {
     /// same ids) and only the materials and tags the clip uses (under the same ids). Painted
     /// faces' texture placements take up `to_world`, so their textures stay where they were.
     /// Missing edges, faces and guides are skipped; a missing instance is `InstanceNotFound`,
-    /// a missing mesh `DefinitionNotFound`.
+    /// a missing mesh `DefinitionNotFound`, a `to_world` that is not finite `NotFinite` and
+    /// one that flattens space `Squash`.
     pub fn extract(
         &self,
         mesh: MeshId,
@@ -43,6 +45,9 @@ impl Scene {
     ) -> Result<Scene, KernelError> {
         if !to_world.is_finite() {
             return Err(KernelError::NotFinite);
+        }
+        if is_flat(&to_world) {
+            return Err(KernelError::Squash);
         }
         let source = self.mesh(mesh).ok_or(KernelError::DefinitionNotFound)?;
         let placed: Vec<Instance> = instances
@@ -66,9 +71,7 @@ impl Scene {
             if reached.contains_key(&id) {
                 continue;
             }
-            let d = self
-                .definition(id)
-                .expect("instance of a missing definition");
+            let d = self.definition(id).ok_or(KernelError::DefinitionNotFound)?;
             stack.extend(d.mesh.instances().map(|(_, i)| i.definition));
             reached.insert(id, d.clone());
         }
@@ -104,10 +107,11 @@ impl Scene {
     /// Puts `clip`'s root contents into mesh `parent`, placed by `placement`, as one change.
     /// Edges and faces are drawn like Move's copies, so they merge with geometry they touch;
     /// painted faces' texture placements take up `placement`. Materials and tags are matched
-    /// by name (an existing one is used as it is; a missing one is added). A component
-    /// definition is the one `reuse` maps it to when that is an existing component that does
-    /// not hold `parent`, else a new copy; a group always gets a new copy. On error nothing
-    /// is changed.
+    /// by name (an existing one is used as it is; a missing one the clip uses is added). A
+    /// component definition is the one `reuse` maps it to when that is an existing component
+    /// that does not hold `parent`, else a new copy; a group always gets a new copy. A `placement` that
+    /// is not finite is `NotFinite`, one that flattens space `Squash`. On error nothing is
+    /// changed.
     pub fn insert(
         &mut self,
         parent: MeshId,
@@ -117,6 +121,9 @@ impl Scene {
     ) -> Result<(Inserted, SceneChange), KernelError> {
         if !placement.is_finite() {
             return Err(KernelError::NotFinite);
+        }
+        if is_flat(&placement) {
+            return Err(KernelError::Squash);
         }
         if self.mesh(parent).is_none() {
             return Err(KernelError::DefinitionNotFound);
@@ -198,7 +205,12 @@ struct Paste<'a> {
 
 impl Paste<'_> {
     fn run(&mut self, scene: &mut Scene, placement: DAffine3) -> Result<Inserted, KernelError> {
-        for (id, m) in self.clip.materials() {
+        let (used_materials, used_tags) = self.clip.used();
+        for id in used_materials {
+            let m = self
+                .clip
+                .material(id)
+                .ok_or(KernelError::MaterialNotFound)?;
             let existing = scene.materials().find(|(_, t)| t.name == m.name);
             let to = match existing.map(|(to, _)| to) {
                 Some(to) => to,
@@ -210,7 +222,8 @@ impl Paste<'_> {
             };
             self.materials.insert(id, to);
         }
-        for (id, t) in self.clip.tags() {
+        for id in used_tags {
+            let t = self.clip.tag(id).ok_or(KernelError::TagNotFound)?;
             let existing = scene.tags().find(|(_, s)| s.name == t.name);
             let to = match existing.map(|(to, _)| to) {
                 Some(to) => to,
@@ -229,8 +242,7 @@ impl Paste<'_> {
         let guides = self.guides_of(root, placement);
         let mut inserted = Inserted::default();
         let change = scene.edit(self.parent, |m| {
-            let before: BTreeSet<FaceId> = m.faces().map(|(id, _)| id).collect();
-            let mut faces = m.draw_stencil(&stencil, &[placement]);
+            let faces = m.draw_stencil(&stencil, &[placement]);
             let mut edges = BTreeSet::new();
             for (a, b) in stencil.segments() {
                 let (a, b) = (
@@ -238,22 +250,6 @@ impl Paste<'_> {
                     placement.transform_point3(*b),
                 );
                 edges.extend(m.edges_along(a, b));
-            }
-            // A face that was there already and that the clip's edges wholly bound is one the
-            // clip's face was drawn onto.
-            for e in &edges {
-                let v = m.edge(*e).expect("edge along the clip").v[0];
-                for f in m.faces_at(v).filter(|f| before.contains(f)) {
-                    let outer = &m.face(f).expect("face at a vertex").outer;
-                    let n = outer.len();
-                    let bounded = (0..n).all(|i| {
-                        m.edge_between(outer[i], outer[(i + 1) % n])
-                            .is_some_and(|s| edges.contains(&s))
-                    });
-                    if bounded {
-                        faces.insert(f);
-                    }
-                }
             }
             inserted.edges = edges.into_iter().collect();
             inserted.faces = faces.into_iter().collect();
@@ -351,4 +347,9 @@ impl Paste<'_> {
             })
             .collect()
     }
+}
+
+/// True when `t` flattens space (its determinant is below `MIN_DETERMINANT` in size).
+fn is_flat(t: &DAffine3) -> bool {
+    t.matrix3.determinant().abs() < MIN_DETERMINANT
 }

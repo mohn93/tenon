@@ -779,3 +779,148 @@ fn pasting_onto_the_original_selects_the_faces_it_lands_on() {
     let (edges, faces) = all(s.root());
     assert_eq!((inserted.edges, inserted.faces), (edges, faces));
 }
+
+#[test]
+fn flat_transforms_are_refused() {
+    let (mut s, _) = painted_scene();
+    let flat = DAffine3::from_scale(p(1.0, 1.0, 0.0));
+    let (edges, faces) = all(s.root());
+    assert_eq!(
+        s.extract(MeshId::Root, &edges, &faces, &[], &[], flat),
+        Err(KernelError::Squash)
+    );
+    let clip = extract_root(&s, DAffine3::IDENTITY);
+    let before = s.clone();
+    assert_eq!(
+        s.insert(MeshId::Root, &clip, flat, &no_reuse).map(|_| ()),
+        Err(KernelError::Squash)
+    );
+    assert!(s == before);
+}
+
+#[test]
+fn an_edges_only_clip_pasted_onto_a_face_lists_no_faces() {
+    let mut s = Scene::new();
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&square(p(0.0, 0.0, 0.0), 1.0))
+    })
+    .unwrap();
+    let (edges, _) = all(s.root());
+    let clip = s
+        .extract(MeshId::Root, &edges, &[], &[], &[], DAffine3::IDENTITY)
+        .unwrap();
+    assert_eq!(clip.root().faces().count(), 0);
+    assert_eq!(clip.root().edges().count(), 4);
+    let inserted = insert_root(&mut s, &clip, DAffine3::IDENTITY);
+    assert_eq!(s.root().faces().count(), 1);
+    assert_eq!(inserted.edges, all(s.root()).0);
+    assert!(inserted.faces.is_empty());
+}
+
+#[test]
+fn materials_and_tags_a_clip_does_not_use_are_not_added() {
+    let mut clip = Scene::new();
+    clip.add_material("Unused", [1, 1, 1]).unwrap();
+    clip.add_tag(tag("Spare")).unwrap();
+    clip.edit(MeshId::Root, |m| {
+        m.add_polygon(&square(p(0.0, 0.0, 0.0), 1.0))
+    })
+    .unwrap();
+    let mut target = Scene::new();
+    let inserted = insert_root(&mut target, &clip, DAffine3::IDENTITY);
+    assert_eq!(inserted.faces.len(), 1);
+    assert_eq!(target.materials().count(), 0);
+    assert_eq!(target.tags().count(), 0);
+}
+
+fn only_face(s: &Scene) -> kernel::Face {
+    let mut faces = s.root().faces();
+    let (_, f) = faces.next().unwrap();
+    assert!(faces.next().is_none());
+    f.clone()
+}
+
+#[test]
+fn turned_inserts_turn_normals_and_carry_texture_placements() {
+    let mut s = Scene::new();
+    let (red, _) = s
+        .add_material_with_texture("Red", [200, 0, 0], 1.0, Some(texture()))
+        .unwrap();
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&square(p(0.0, 0.0, 0.0), 1.0))
+    })
+    .unwrap();
+    let (_, faces) = all(s.root());
+    s.paint(MeshId::Root, &faces, &[], Side::Front, Some(red))
+        .unwrap();
+    s.edit(MeshId::Root, |m| {
+        let edit = PlacementEdit {
+            offset: Some([0.25, 0.5]),
+            rotation_deg: Some(30.0),
+            ..PlacementEdit::default()
+        };
+        Ok(m.position_texture(&faces, edit)?.0)
+    })
+    .unwrap();
+    let up = only_face(&s).normal;
+    let clip = extract_root(&s, DAffine3::IDENTITY);
+
+    // About z, a level face stays level and its texture turns with it.
+    let mut about_z = Scene::new();
+    insert_root(&mut about_z, &clip, DAffine3::from_rotation_z(FRAC_PI_2));
+    let f = only_face(&about_z);
+    assert_eq!(r(f.normal), r(up));
+    let t = f.texture.unwrap();
+    assert!((t.rotation_deg - 120.0).abs() < 1e-9, "{t:?}");
+    assert!((DVec3::new(t.offset[0], t.offset[1], 0.0) - p(-0.5, 0.25, 0.0)).length() < 1e-9);
+    assert_eq!(t.scale, [1.0, 1.0]);
+
+    // About x, the face stands up.
+    let mut about_x = Scene::new();
+    insert_root(&mut about_x, &clip, DAffine3::from_rotation_x(FRAC_PI_2));
+    let f = only_face(&about_x);
+    assert_eq!(
+        r(f.normal),
+        r(DAffine3::from_rotation_x(FRAC_PI_2).transform_vector3(up))
+    );
+    assert!(f.texture.is_some());
+    assert_eq!(
+        f.paint()[0].map(|m| about_x.material(m).unwrap().name.clone()),
+        Some("Red".into())
+    );
+}
+
+#[test]
+fn a_mirrored_insert_mirrors_positions_and_normals() {
+    let mut s = Scene::new();
+    // A face standing in the plane x = 1.
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&[
+            p(1.0, 0.0, 0.0),
+            p(1.0, 2.0, 0.0),
+            p(1.0, 2.0, 1.0),
+            p(1.0, 0.0, 1.0),
+        ])
+    })
+    .unwrap();
+    let original = only_face(&s).normal;
+    let clip = extract_root(&s, DAffine3::IDENTITY);
+    let mirror = DAffine3::from_scale(p(-1.0, 1.0, 1.0));
+    let mut target = Scene::new();
+    let inserted = insert_root(&mut target, &clip, mirror);
+    assert_eq!(inserted.faces.len(), 1);
+    let f = only_face(&target);
+    assert_eq!(r(f.normal), r(p(-original.x, original.y, original.z)));
+    assert_eq!(
+        vertex_positions(target.root()),
+        [
+            p(-1.0, 0.0, 0.0),
+            p(-1.0, 2.0, 0.0),
+            p(-1.0, 2.0, 1.0),
+            p(-1.0, 0.0, 1.0)
+        ]
+        .iter()
+        .map(|v| r(*v))
+        .collect()
+    );
+}

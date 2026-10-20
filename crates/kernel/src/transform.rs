@@ -296,7 +296,7 @@ impl Model {
     /// original, and openings stay open. Drawing adds no faces the stencil does not have, apart
     /// from faces closed together with existing geometry; a region of an existing face that
     /// the drawing splits off stays a face. Returns the faces drawn as the stencil's (pieces of
-    /// them included).
+    /// them included, and existing faces a stencil face lands on exactly).
     pub(crate) fn draw_stencil(
         &mut self,
         stencil: &Stencil,
@@ -341,14 +341,16 @@ impl Model {
 
         self.draw_segments(&segments);
         // A face whose sides were all there already is not closed by drawing them: close it.
+        // An existing face it lands on exactly counts as drawn.
+        let mut landed: BTreeSet<FaceId> = BTreeSet::new();
         for f in &placed {
             let ring: Option<Vec<VertexId>> =
                 f.outer.iter().map(|p| self.find_vertex(*p)).collect();
             let Some(ring) = ring else { continue };
-            if self
-                .face_with_outer(&ring.iter().copied().collect())
-                .is_some()
-            {
+            if let Some(on) = self.face_with_outer(&ring.iter().copied().collect()) {
+                if existing.contains(&on) {
+                    landed.insert(on);
+                }
                 continue;
             }
             let n = ring.len();
@@ -502,7 +504,10 @@ impl Model {
                 self.tag_along(a, b, curve, marks.soft, marks.polygon);
             }
         }
-        own
+        own.into_iter()
+            .chain(landed)
+            .filter(|id| self.face(*id).is_some())
+            .collect()
     }
 
     /// A face's outer corners and a point inside it (the centre of its first triangle).
