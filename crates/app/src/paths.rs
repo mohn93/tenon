@@ -113,13 +113,10 @@ fn windows_paths(env: Env, temp: &Path) -> Option<Paths> {
 }
 
 /// `value` as a path when Windows reads it as absolute (a drive and a separator, or a share),
-/// whatever OS this runs on.
+/// whatever OS this runs on. A value that is not Unicode is not used.
 fn windows_absolute(value: OsString) -> Option<PathBuf> {
-    let absolute = match value.to_str() {
-        Some(text) => session::fspath::windows_is_absolute(text),
-        None => Path::new(&value).is_absolute(),
-    };
-    absolute.then(|| PathBuf::from(value))
+    let text = value.to_str()?;
+    session::fspath::windows_is_absolute(text).then(|| PathBuf::from(text))
 }
 
 /// `base` with `names` added, each after a backslash: `PathBuf::join` on Windows, on any OS.
@@ -275,6 +272,21 @@ mod tests {
             p.socket_dir,
             Path::new("/Users/me/.sketchup-alt"),
             "/tmp is shared"
+        );
+    }
+
+    #[test]
+    fn windows_folder_values_that_are_not_unicode_are_not_used() {
+        #[cfg(unix)]
+        let bad = <OsString as std::os::unix::ffi::OsStringExt>::from_vec(b"C:\\x\xff".to_vec());
+        #[cfg(windows)]
+        let bad = <OsString as std::os::windows::ffi::OsStringExt>::from_wide(&[
+            0x43, 0x3a, 0x5c, 0xd800,
+        ]);
+        assert_eq!(windows_absolute(bad), None);
+        assert_eq!(
+            windows_absolute(OsString::from(r"C:\x")),
+            Some(PathBuf::from(r"C:\x"))
         );
     }
 

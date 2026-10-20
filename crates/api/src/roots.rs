@@ -8,8 +8,9 @@ use session::{Command, CommandError, ErrorKind, TextureSource};
 /// Folders every path the API reads or writes must lie within, resolved after symlinks.
 /// Empty: no limit (the default).
 ///
-/// On Windows paths are compared without regard to case, verbatim forms (`\\?\C:\`,
-/// `\\?\UNC\`) are judged as their plain ones, junctions and other reparse points count as
+/// On Windows the paths compared are canonical, so names are compared exactly (a folder may be
+/// case-sensitive) and a request in another case matches once resolved; verbatim forms
+/// (`\\?\C:\`, `\\?\UNC\`) are judged as their plain ones, junctions and other reparse points count as
 /// links, and forms Windows reads specially are refused (see `fspath::windows_refusal`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ApiRoots {
@@ -324,9 +325,20 @@ mod tests {
             format!("{}/a.skr", text.replace('\\', "/")),
             r"sub\..\a.skr".to_string(),
         ] {
+            // Resolved part by part, so the case on disk is what is compared.
             assert_eq!(roots.read(&given).unwrap(), want, "{given}");
-            assert_eq!(roots.write(&given).unwrap(), want, "{given}");
+            // The file to write keeps its name as given; its folder is resolved.
+            let written = roots.write(&given).unwrap();
+            assert_eq!(written.parent(), Some(root.as_path()), "{given}");
+            assert!(
+                written.ends_with("a.skr") || written.ends_with("A.SKR"),
+                "{given}"
+            );
         }
+        // The root's own name in another case, not yet resolved, names no file within it.
+        let upper_name = base.join("ROOT");
+        let e = roots.write(upper_name.to_str().unwrap()).unwrap_err();
+        assert!(e.message.contains("outside"), "{}", e.message);
         // The root itself, in any form, is no file in it.
         for given in [text.to_uppercase(), format!(r"\\?\{text}")] {
             assert_eq!(

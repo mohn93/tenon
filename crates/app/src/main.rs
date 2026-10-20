@@ -86,10 +86,11 @@ fn main() {
             file,
             api_roots,
         } => {
-            // Started from Explorer: no console window beside the app's.
+            let roots = roots(&api_roots);
+            // Started from Explorer: no console window beside the app's. Only once the
+            // arguments are known good, so a message about a bad one stays readable.
             #[cfg(windows)]
             windows::hide_own_console();
-            let roots = roots(&api_roots);
             // A socket in the fallback directory is only safe if that directory is private.
             let socket = match cli::private_dir_for_endpoint(&socket).map(cli::ensure_private_dir) {
                 Some(Err(e)) => {

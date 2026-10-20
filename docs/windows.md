@@ -68,7 +68,9 @@ saved, and an agent's command that would discard work fails without discarding i
 
 ## Agent API files (`--api-root`)
 
-Paths are compared without regard to case, verbatim paths (`\\?\C:\...`) are judged as their
+Paths are resolved to the names on disk and then compared exactly (a request in another case
+still matches once resolved; a case-sensitive folder's sibling differing only in case does not),
+verbatim paths (`\\?\C:\...`) are judged as their
 plain form, junctions count as links, and drive-relative paths (`C:foo`), paths without a drive
 (`\foo`), alternate data streams (`a.skr:x`) and reserved device names (`CON`, `NUL.txt`, ...)
 are refused. Details in Access and safety in [agent-api.md](agent-api.md).

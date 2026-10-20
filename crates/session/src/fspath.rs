@@ -28,9 +28,12 @@ pub fn strip_verbatim(path: &str) -> Cow<'_, str> {
     Cow::Borrowed(path)
 }
 
-/// Whether the Windows path `path` is `base` or lies within it, comparing names without
-/// regard to case (as Windows does) and either slash as a separator. Verbatim prefixes are
-/// stripped first, so `\\?\C:\a\b` lies within `c:\A`.
+/// Whether the Windows path `path` is `base` or lies within it, with either slash as a
+/// separator. Names are compared exactly: the paths compared are canonical (in the case the
+/// folders have on disk), and a folder may be case-sensitive (WSL's `setCaseSensitiveInfo`),
+/// so `C:\p\root` must not count as `C:\p\Root`. Only the drive letter and the verbatim
+/// prefix are folded: `\\?\c:\a\b` lies within `C:\a`, and a name that differs in case,
+/// such as one never canonicalised, fails closed.
 pub fn windows_starts_with(path: &str, base: &str) -> bool {
     let (path, base) = (strip_verbatim(path), strip_verbatim(base));
     let (path_head, path_rest) = split_head(&path);
@@ -39,7 +42,7 @@ pub fn windows_starts_with(path: &str, base: &str) -> bool {
         return false;
     }
     let mut names = names(path_rest);
-    self::names(base_rest).all(|b| names.next().is_some_and(|n| same_name(n, b)))
+    self::names(base_rest).all(|b| names.next() == Some(b))
 }
 
 /// Why the API refuses the Windows path `path`, or None when it does not: a drive-relative
@@ -114,18 +117,6 @@ fn split_head(path: &str) -> (Head, &str) {
 fn names(rest: &str) -> impl Iterator<Item = &str> {
     rest.split(is_separator)
         .filter(|n| !n.is_empty() && *n != ".")
-}
-
-/// Whether two names are the same to Windows: equal after simple upper-casing.
-fn same_name(a: &str, b: &str) -> bool {
-    fn upper(c: char) -> char {
-        let mut u = c.to_uppercase();
-        match (u.next(), u.next()) {
-            (Some(x), None) => x,
-            _ => c,
-        }
-    }
-    a.chars().map(upper).eq(b.chars().map(upper))
 }
 
 /// A name Windows opens as a device whatever folder it is in: `CON`, `NUL`, `COM1` and the
@@ -231,10 +222,21 @@ mod tests {
     }
 
     #[test]
-    fn windows_paths_compare_case_insensitively() {
-        assert!(windows_starts_with(r"c:\Work\Sub\A.SKR", r"C:\work"));
-        assert!(windows_starts_with(r"C:\ÄRGER\x", r"c:\ärger"));
-        assert!(windows_starts_with(r"C:/work//sub/", r"C:\WORK\"));
+    fn windows_paths_compare_names_exactly() {
+        // Only the drive letter and the verbatim prefix are folded.
+        assert!(windows_starts_with(r"c:\Work\Sub\A.SKR", r"C:\Work"));
+        assert!(windows_starts_with(r"\\?\c:\Work\a", r"C:\Work"));
+        assert!(windows_starts_with(
+            r"\\?\unc\Server\Share\a",
+            r"\\Server\Share"
+        ));
+        assert!(windows_starts_with(r"C:/work//sub/", r"C:\work\"));
+        // A sibling differing only in case is another folder (a case-sensitive one can hold
+        // both), so it is outside.
+        assert!(!windows_starts_with(r"C:\p\root\secret", r"C:\p\Root"));
+        assert!(!windows_starts_with(r"C:\ÄRGER\x", r"C:\ärger"));
+        assert!(!windows_starts_with(r"C:\WORK", r"C:\work"));
+        assert!(!windows_starts_with(r"\\server\SHARE\a", r"\\server\share"));
         assert!(windows_starts_with(r"C:\work", r"C:\work"));
         assert!(windows_starts_with(r"C:\work", r"C:\"));
         // Whole names only, and the same start.
@@ -273,6 +275,9 @@ mod tests {
             (r"\\.\pipe\x", "device"),
             (r"\\.\C:\x", "device"),
             (r"\\?\Volume{0b1c}\a", "device"),
+            (r"\\?\GLOBALROOT\Device\x", "device"),
+            (r"//?/C:/x", "device"),
+            (r"\??\C:\x", "without a drive"),
             (r"C:\work\a:stream", ":"),
             (r"ab:stream", ":"),
             // One letter before the colon reads as a drive.
