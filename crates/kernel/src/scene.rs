@@ -188,9 +188,9 @@ pub struct Scene {
     root: Model,
     definitions: BTreeMap<DefinitionId, Definition>,
     /// The materials faces and instances may be painted with, shared by every mesh.
-    materials: BTreeMap<MaterialId, Material>,
+    pub(crate) materials: BTreeMap<MaterialId, Material>,
     /// The tags entities may be put on, shared by every mesh.
-    tags: BTreeMap<TagId, Tag>,
+    pub(crate) tags: BTreeMap<TagId, Tag>,
     /// The pages (saved scenes), in their order.
     pub(crate) pages: Vec<(PageId, Page)>,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.

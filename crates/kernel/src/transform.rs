@@ -295,8 +295,13 @@ impl Model {
     /// edges, so they merge with geometry they touch; each face keeps the orientation of its
     /// original, and openings stay open. Drawing adds no faces the stencil does not have, apart
     /// from faces closed together with existing geometry; a region of an existing face that
-    /// the drawing splits off stays a face.
-    pub(crate) fn draw_stencil(&mut self, stencil: &Stencil, places: &[DAffine3]) {
+    /// the drawing splits off stays a face. Returns the faces drawn as the stencil's (pieces of
+    /// them included).
+    pub(crate) fn draw_stencil(
+        &mut self,
+        stencil: &Stencil,
+        places: &[DAffine3],
+    ) -> BTreeSet<FaceId> {
         let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
         let segments: Vec<(DVec3, DVec3)> = places
             .iter()
@@ -497,6 +502,7 @@ impl Model {
                 self.tag_along(a, b, curve, marks.soft, marks.polygon);
             }
         }
+        own
     }
 
     /// A face's outer corners and a point inside it (the centre of its first triangle).
@@ -538,6 +544,28 @@ struct SegmentMarks {
 }
 
 impl Stencil {
+    /// The segments drawn, by position.
+    pub(crate) fn segments(&self) -> &[(DVec3, DVec3)] {
+        &self.segments
+    }
+
+    /// The stencil with every material and tag replaced by what `material` and `tag` map it
+    /// to (another scene's ids); one mapped to None is left off.
+    pub(crate) fn remapped(
+        mut self,
+        material: impl Fn(MaterialId) -> Option<MaterialId>,
+        tag: impl Fn(TagId) -> Option<TagId>,
+    ) -> Stencil {
+        for m in &mut self.marks {
+            m.tag = m.tag.and_then(&tag);
+        }
+        for f in &mut self.faces {
+            f.paint = f.paint.map(|side| side.and_then(&material));
+            f.tag = f.tag.and_then(&tag);
+        }
+        self
+    }
+
     /// The stencil with `material` on every face side that has no material of its own (an
     /// exploded instance's material passing to its faces).
     pub(crate) fn painted_over(mut self, material: Option<MaterialId>) -> Stencil {

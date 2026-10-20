@@ -1,6 +1,7 @@
 //! Geometry kernel: vertices, edges and faces with SketchUp-style sticky geometry.
 //! No GPU or UI dependencies.
 
+mod clip;
 mod connected;
 mod curves;
 mod data;
@@ -31,6 +32,7 @@ mod transform;
 mod triangles;
 mod weld;
 
+pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MIN_DETERMINANT,

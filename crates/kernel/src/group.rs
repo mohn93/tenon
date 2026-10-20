@@ -278,7 +278,7 @@ impl Scene {
 }
 
 /// Every edge and face of a mesh, as a stencil.
-fn whole(m: &Model) -> Stencil {
+pub(crate) fn whole(m: &Model) -> Stencil {
     let edges: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
     let faces: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
     m.stencil(&edges, &faces)
