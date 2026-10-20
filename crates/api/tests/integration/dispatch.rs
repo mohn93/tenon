@@ -193,6 +193,7 @@ fn describe_lists_methods_and_schemas() {
         "copy",
         "rotate",
         "scale",
+        "offset",
         "add_guide_line",
         "add_guide_point",
         "delete_guides",

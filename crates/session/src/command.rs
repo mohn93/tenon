@@ -162,6 +162,20 @@ pub enum Command {
         origin: [f64; 3],
         factors: [f64; 3],
     },
+    /// Draw a copy of a face's loops, or of a chain of edges, moved `distance` meters sideways
+    /// in its plane, as one undo step. `ids` is one face (`distance` > 0 offsets inward: the
+    /// outer loop shrinks and the holes grow; < 0 outward), or edges forming one unbranched
+    /// chain in one plane (open or closed), offset to the side of `toward` (a point in their
+    /// plane, off the chain; required for edges, not allowed for a face) by a positive
+    /// `distance`. Corners are mitred, very sharp ones bevelled. A loop or chain whose edges
+    /// are all on one curve gives a new curve of the same kind.
+    Offset {
+        ids: Vec<EntityId>,
+        distance: f64,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        toward: Option<[f64; 3]>,
+    },
     /// Turn edges, faces (with their edges), instances and guides into a group: they move into
     /// a new definition, placed by one new instance where they were. Guides alone cannot be
     /// grouped. The instance becomes the selection.

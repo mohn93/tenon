@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use glam::{DAffine3, DVec2, DVec3};
+use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError,
     MaterialEdit, MeshId, Model, PlacementEdit, Scene, SceneChange, SoftenReport, VertexId,
@@ -370,6 +371,7 @@ impl Document {
             | Command::Copy { .. }
             | Command::Rotate { .. }
             | Command::Scale { .. }
+            | Command::Offset { .. }
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
@@ -472,6 +474,11 @@ impl Document {
                 origin,
                 factors,
             } => self.scale_changes(ids, *origin, *factors),
+            Command::Offset {
+                ids,
+                distance,
+                toward,
+            } => self.offset_changes(ids, *distance, *toward),
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
@@ -999,6 +1006,163 @@ impl Document {
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
+    }
+
+    fn offset_changes(
+        &mut self,
+        ids: &[EntityId],
+        distance: f64,
+        toward: Option<[f64; 3]>,
+    ) -> Result<SceneChange, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        if ids.is_empty() {
+            return Err(invalid(
+                "ids must list one face, or edges forming one chain",
+            ));
+        }
+        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
+        if !missing.is_empty() {
+            return Err(
+                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
+            );
+        }
+        let least = 10.0 * kernel::geom::LENGTH_TOL;
+        if !distance.is_finite() || distance.abs() < least || distance.abs() > MAX_COORDINATE {
+            return Err(invalid(&format!(
+                "distance must be finite, at least {least} m and at most {MAX_COORDINATE} m in size"
+            )));
+        }
+        if let Some(t) = toward {
+            check_coordinates(&[t])?;
+        }
+        let ids: Vec<EntityId> = ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let lines = match ids[..] {
+            [EntityId::Face(face)] => {
+                if toward.is_some() {
+                    return Err(invalid(
+                        "toward is only for edges: for a face the sign of distance picks the side (positive: inward)",
+                    ));
+                }
+                self.face_offset(face, distance)
+            }
+            _ => {
+                let others: Vec<EntityId> = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| !matches!(id, EntityId::Edge(_)))
+                    .collect();
+                if !others.is_empty() {
+                    return Err(
+                        invalid("offset takes one face, or edges forming one chain")
+                            .with_ids(others),
+                    );
+                }
+                if distance < 0.0 {
+                    return Err(invalid(
+                        "distance must be positive for edges: toward picks the side",
+                    ));
+                }
+                let Some(toward) = toward else {
+                    return Err(invalid("toward is required for edges: it picks the side"));
+                };
+                let edges: Vec<EdgeId> = ids
+                    .iter()
+                    .filter_map(|id| match id {
+                        EntityId::Edge(e) => Some(*e),
+                        _ => None,
+                    })
+                    .collect();
+                self.chain_offset(&edges, distance, DVec3::from(toward))
+            }
+        }
+        .map_err(|e| e.with_ids(ids.clone()))?;
+        let points: Vec<[f64; 3]> = lines
+            .iter()
+            .flat_map(|l| l.points.iter().map(|p| p.to_array()))
+            .collect();
+        check_coordinates(&points)?;
+        self.edit_mesh(|m| m.add_polylines(&lines))
+            .map_err(|e| self.kernel_error(e, &ids))
+    }
+
+    /// The new loops of a face offset by `distance` (positive: inward).
+    fn face_offset(&self, face: FaceId, distance: f64) -> Result<Vec<Polyline>, CommandError> {
+        let m = self.model();
+        let f = m.face(face).expect("checked");
+        let loops: Vec<&Vec<VertexId>> = std::iter::once(&f.outer).chain(&f.holes).collect();
+        let rings: Vec<Vec<DVec3>> = loops
+            .iter()
+            .map(|l| l.iter().map(|v| m.position(*v).unwrap()).collect())
+            .collect();
+        let new = offset::offset_face(&rings, f.normal, distance).map_err(|_| too_far())?;
+        Ok(loops
+            .iter()
+            .zip(new)
+            .map(|(l, points)| {
+                let n = l.len();
+                let edges: Vec<EdgeId> = (0..n)
+                    .filter_map(|i| m.edge_between(l[i], l[(i + 1) % n]))
+                    .collect();
+                Polyline {
+                    points,
+                    closed: true,
+                    curve: one_curve(m, &edges),
+                }
+            })
+            .collect())
+    }
+
+    /// The new chain of edges offset by `distance` to the side of `toward`.
+    fn chain_offset(
+        &self,
+        edges: &[EdgeId],
+        distance: f64,
+        toward: DVec3,
+    ) -> Result<Vec<Polyline>, CommandError> {
+        let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
+        let m = self.model();
+        let Some((vertices, closed)) = m.edge_chain(edges) else {
+            return Err(invalid(
+                "the edges must form one connected chain without branches",
+            ));
+        };
+        let points: Vec<DVec3> = vertices.iter().map(|v| m.position(*v).unwrap()).collect();
+        let tol = kernel::geom::LENGTH_TOL;
+        let normal = match offset::plane_normal(&points) {
+            Some(n) => {
+                if points.iter().any(|p| (*p - points[0]).dot(n).abs() >= tol) {
+                    return Err(invalid("the edges must lie in one plane"));
+                }
+                if (toward - points[0]).dot(n).abs() >= tol {
+                    return Err(invalid("toward must lie in the plane of the edges"));
+                }
+                n
+            }
+            // A straight chain: its plane is the one through toward.
+            None => (points[1] - points[0])
+                .cross(toward - points[0])
+                .try_normalize()
+                .ok_or_else(|| invalid("toward must lie to one side of the edges"))?,
+        };
+        let Some(side) = offset::side_of(&points, closed, normal, toward) else {
+            return Err(invalid("toward must lie to one side of the edges"));
+        };
+        let new = if closed {
+            offset::offset_loop(&points, normal, side * distance)
+        } else {
+            offset::offset_chain(&points, normal, side * distance)
+        }
+        .map_err(|_| too_far())?;
+        Ok(vec![Polyline {
+            points: new,
+            closed,
+            curve: one_curve(m, edges),
+        }])
     }
 
     fn copy_changes(
@@ -1588,6 +1752,24 @@ pub fn unit_vector(v: DVec3) -> Option<DVec3> {
         return None;
     }
     v.try_normalize().or_else(|| (v / largest).try_normalize())
+}
+
+/// The refusal of an offset that the shape is too small for.
+fn too_far() -> CommandError {
+    CommandError::new(
+        ErrorKind::InvalidInput,
+        "the offset distance is too large for this shape",
+    )
+}
+
+/// Some(polygon flag) when every one of `edges` is on one curve, so their offset is a curve too.
+fn one_curve(m: &Model, edges: &[EdgeId]) -> Option<bool> {
+    let first = m.edge(*edges.first()?)?;
+    let curve = first.curve?;
+    edges
+        .iter()
+        .all(|e| m.edge(*e).is_some_and(|e| e.curve == Some(curve)))
+        .then_some(first.polygon)
 }
 
 /// Rejects non-finite or out-of-range coordinates before they reach the kernel or camera.

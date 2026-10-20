@@ -17,6 +17,7 @@ mod index;
 mod material;
 mod mesh;
 mod model;
+pub mod offset;
 mod push_pull;
 mod regions;
 mod scene;

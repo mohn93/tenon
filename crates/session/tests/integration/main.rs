@@ -16,6 +16,7 @@ mod import;
 mod lights;
 mod materials;
 mod modeling;
+mod offset;
 mod outliner;
 mod perf;
 mod polygon;

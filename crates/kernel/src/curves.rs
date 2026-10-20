@@ -434,15 +434,15 @@ impl Model {
 }
 
 /// Edges in order along a chain, with its vertices.
-struct Chain {
-    edges: Vec<EdgeId>,
-    vertices: Vec<VertexId>,
-    closed: bool,
+pub(crate) struct Chain {
+    pub(crate) edges: Vec<EdgeId>,
+    pub(crate) vertices: Vec<VertexId>,
+    pub(crate) closed: bool,
 }
 
 /// The edges as one unbranched chain (open or closed), or None if they branch, fall apart,
 /// or are none.
-fn chain(edges: &[(EdgeId, [VertexId; 2])]) -> Option<Chain> {
+pub(crate) fn chain(edges: &[(EdgeId, [VertexId; 2])]) -> Option<Chain> {
     let mut at: BTreeMap<VertexId, Vec<usize>> = BTreeMap::new();
     for (i, (_, [a, b])) in edges.iter().enumerate() {
         at.entry(*a).or_default().push(i);
