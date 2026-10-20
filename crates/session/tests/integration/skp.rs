@@ -2164,6 +2164,8 @@ fn imported_scene_names_within_a_file_and_blank_ones() {
                 page(" "),
                 page(""),
                 page(&"x".repeat(300)),
+                page("  Padded  "),
+                page(" A "),
             ],
             ..Layering::default()
         },
@@ -2174,6 +2176,69 @@ fn imported_scene_names_within_a_file_and_blank_ones() {
     let names = scene_names(&d);
     assert_eq!(names[..4], ["A", "A 2", "Scene 1", "Scene 2"]);
     assert_eq!(names[4], "x".repeat(240));
+    assert_eq!(names[5..], ["Padded", "A 3"]);
+}
+
+#[test]
+fn scenes_past_the_import_limit_are_left_off() {
+    use craft::{Layering, Page, file_with_layers, scaled};
+    let pages = (0..1025)
+        .map(|k| Page {
+            name: format!("S{k}"),
+            flags: Some(0x20),
+            camera: None,
+            layers: vec![],
+        })
+        .collect();
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            pages,
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("many-scenes.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["scenes"], 1024, "{report}");
+    assert!(
+        warnings(report)
+            .contains(&"1 scene past the 1024 an import may add was left off".to_string()),
+        "{report}"
+    );
+    let names = scene_names(&d);
+    assert_eq!(names.len(), 1024);
+    assert_eq!(names[1023], "S1023");
+}
+
+#[test]
+fn imported_scenes_hide_only_the_layers_that_became_tags() {
+    // The page lists Walls, a layer pid past 32 bits and a pid no layer has: it hides Walls.
+    use craft::{Layering, Page, file_with_layers, scaled};
+    let wide = (1u64 << 32) + 777;
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            layers: vec![(501, "Walls".into(), false), (wide, "Wide".into(), false)],
+            pages: vec![Page {
+                name: "Some".into(),
+                flags: Some(0x20),
+                camera: None,
+                layers: vec![wide, 999, 501],
+            }],
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("scene-unknown-layers.skp", &bytes);
+    r.unwrap();
+    d.scene().validate().unwrap();
+    let some = scene_by_name(&d, "Some");
+    assert_eq!(some["hidden_tags"], json!([tag_id(&d, "Walls")]), "{some}");
 }
 
 #[test]
@@ -2206,7 +2271,8 @@ fn imported_scene_cameras_follow_the_scale_and_the_open_instance() {
 
 #[test]
 fn imported_scenes_without_usable_cameras_keep_their_tags() {
-    // Eye on the target: the scene keeps its tags and leaves the camera alone, with a warning.
+    // Eye on the target, and a scene restoring a camera the file does not have: each keeps its
+    // tags and leaves the camera alone, with a warning.
     use craft::{Camera, Layering, Page, file_with_layers, scaled};
     let bytes = file_with_layers(
         &[(vec![], vec![])],
@@ -2214,19 +2280,27 @@ fn imported_scenes_without_usable_cameras_keep_their_tags() {
         &[],
         &Layering {
             layers: vec![(501, "Walls".into(), false)],
-            pages: vec![Page {
-                name: "Broken".into(),
-                flags: None,
-                camera: Some(Camera {
-                    eye: [1.0, 2.0, 3.0],
-                    target: [1.0, 2.0, 3.0],
-                    up: [0.0, 0.0, 1.0],
-                    perspective: true,
-                    fov: 35.0,
-                    height: 0.0,
-                }),
-                layers: vec![501],
-            }],
+            pages: vec![
+                Page {
+                    name: "Broken".into(),
+                    flags: None,
+                    camera: Some(Camera {
+                        eye: [1.0, 2.0, 3.0],
+                        target: [1.0, 2.0, 3.0],
+                        up: [0.0, 0.0, 1.0],
+                        perspective: true,
+                        fov: 35.0,
+                        height: 0.0,
+                    }),
+                    layers: vec![501],
+                },
+                Page {
+                    name: "No camera".into(),
+                    flags: None,
+                    camera: None,
+                    layers: vec![],
+                },
+            ],
             ..Layering::default()
         },
     );
@@ -2235,7 +2309,7 @@ fn imported_scenes_without_usable_cameras_keep_their_tags() {
     d.scene().validate().unwrap();
     assert!(
         warnings(&r["import"]).contains(
-            &"1 scene's camera could not be used; the scene leaves the camera alone".to_string()
+            &"2 scenes' cameras could not be used; those scenes leave the camera alone".to_string()
         ),
         "{}",
         r["import"]
@@ -2243,6 +2317,9 @@ fn imported_scenes_without_usable_cameras_keep_their_tags() {
     let broken = scene_by_name(&d, "Broken");
     assert!(broken["view"].is_null(), "{broken}");
     assert_eq!(broken["hidden_tags"], json!([tag_id(&d, "Walls")]));
+    let none = scene_by_name(&d, "No camera");
+    assert!(none["view"].is_null(), "{none}");
+    assert_eq!(none["hidden_tags"], json!([]));
 }
 
 #[test]
@@ -2260,9 +2337,10 @@ fn opening_a_file_with_scenes_keeps_them() {
 }
 
 /// The tutorial's twelve scenes each show their own tags (a tag named "Scene 02" is shown
-/// only on the second scene); its 2017-2020 copies keep the warning.
+/// only on the second scene); its 2017-2020 copies keep the warning. `SKP_CORPUS` must be an
+/// absolute path (the files are opened by path, not from the test's directory).
 #[test]
-#[ignore = "needs a local corpus in SKP_CORPUS"]
+#[ignore = "needs a local corpus in SKP_CORPUS (an absolute path)"]
 fn corpus_tutorial_scenes() {
     let Some(dir) = std::env::var_os("SKP_CORPUS") else {
         println!("SKP_CORPUS is not set; skipping");

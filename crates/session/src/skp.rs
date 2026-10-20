@@ -49,6 +49,9 @@ const DEFAULT_TAG: &str = "Layer0";
 /// Most tags one import adds; what is on the file's further layers is imported Untagged.
 const MAX_IMPORT_TAGS: usize = 1024;
 
+/// Most scenes one import adds; the file's further scenes are left off.
+const MAX_IMPORT_SCENES: usize = 1024;
+
 /// The most a file's model (`model.dat`, or a 2017-2020 file's model stream) may unpack to.
 const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -92,9 +95,11 @@ pub(crate) struct SkpNotes {
     pub dropped_tags: usize,
     /// Scenes not imported (a 2017-2020 file's, whose scenes are not read).
     pub scenes: usize,
-    /// Imported scenes whose camera could not be used (an eye on its target, say): they
-    /// store no view.
+    /// Imported scenes whose camera could not be used (an eye on its target, or none read
+    /// though the scene restores one): they store no view.
     pub unusable_views: usize,
+    /// The file's scenes past `MAX_IMPORT_SCENES`, not imported.
+    pub dropped_scenes: usize,
     /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
     /// caller, which counts the materials built faces keep).
     pub dropped_materials: usize,
@@ -144,6 +149,11 @@ impl SkpNotes {
             self.scenes,
             "scene was not imported",
             "scenes were not imported",
+        );
+        say(
+            self.dropped_scenes,
+            &format!("scene past the {MAX_IMPORT_SCENES} an import may add was left off"),
+            &format!("scenes past the {MAX_IMPORT_SCENES} an import may add were left off"),
         );
         say(
             self.unusable_views,
@@ -385,6 +395,7 @@ pub(crate) fn read_skp(
             Ok(pages) => {
                 notes.added_pages = pages.added;
                 notes.unusable_views = pages.unusable_views;
+                notes.dropped_scenes = pages.dropped;
             }
             Err(e) => {
                 remove_added(document, &notes);
@@ -1092,13 +1103,16 @@ struct AddedPages {
     added: Vec<SceneChange>,
     /// Scenes whose camera could not be used.
     unusable_views: usize,
+    /// Scenes past `MAX_IMPORT_SCENES`.
+    dropped: usize,
 }
 
 /// Adds one scene per page of a 2021+ file, in the file's order and after the model's scenes,
-/// none selected. Its name is cut to `MAX_NAME` characters (a blank one is "Scene N", the
-/// lowest number free) and made unique against the model's scenes ("Front 2"). It stores the
-/// page's camera when the page restores one (else no view; a camera that cannot be used is
-/// counted and left out too), and its hidden layers as hidden tags when the page restores tag
+/// none selected, at most `MAX_IMPORT_SCENES` (further ones are counted). Its name is trimmed
+/// and cut to `MAX_NAME` characters (a blank one is "Scene N", the lowest number free) and
+/// made unique against the model's scenes ("Front 2"). It stores the page's camera when the
+/// page restores one (else no view; a camera that cannot be used, or none read, is counted and
+/// left out too), and its hidden layers as hidden tags when the page restores tag
 /// visibility (else no tag visibility); Layer0 and layers not imported are left out of them.
 ///
 /// The camera is in meters (`unit` per inch) and in the root's coordinates: it goes through
@@ -1114,6 +1128,7 @@ fn add_pages(
     let mut out = AddedPages {
         added: Vec::new(),
         unusable_views: 0,
+        dropped: scenes.len().saturating_sub(MAX_IMPORT_SCENES),
     };
     let mut taken: HashSet<String> = document
         .scene()
@@ -1123,9 +1138,9 @@ fn add_pages(
     let mut next: HashMap<String, usize> = HashMap::new();
     let mut blank = 1;
     let context = document.context_transform();
-    for def in scenes {
-        let base: String = def.name.chars().take(MAX_NAME).collect();
-        let name = if base.trim().is_empty() {
+    for def in scenes.iter().take(MAX_IMPORT_SCENES) {
+        let base: String = def.name.trim().chars().take(MAX_NAME).collect();
+        let name = if base.is_empty() {
             while taken.contains(&format!("{PAGE_NAME_BASE} {blank}")) {
                 blank += 1;
             }
@@ -1142,7 +1157,7 @@ fn add_pages(
         taken.insert(name.clone());
         let view = if def.flags & page_flag::CAMERA_LOCATION != 0 {
             let view = page_view(document, def, unit / INCH_TO_MM, context);
-            out.unusable_views += usize::from(view.is_none() && def.eye.is_some());
+            out.unusable_views += usize::from(view.is_none());
             view
         } else {
             None

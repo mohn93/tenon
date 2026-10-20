@@ -528,8 +528,8 @@ SketchUp file start with it off.
 
 A scene saves a view and which tags are hidden, to go back to in one step (SketchUp's scenes).
 A scene may store the view, the tag visibility, both or neither. The scenes are in an order
-(their tabs' order in the window) and shared by the whole model. Importing or opening a SketchUp file
-(2021 or newer) adds its scenes (see Import).
+(their tabs' order in the window) and shared by the whole model. Importing or opening a
+SketchUp file (2021 or newer) adds its scenes (see Import).
 
 | Command | Effect |
 |---|---|
@@ -1170,17 +1170,18 @@ supported"). What is carried:
   existing tags are never changed. At most 1,024 tags are added; what is on the file's further
   layers is imported Untagged, with a warning.
 - Scenes (from SketchUp 2021 and newer files): each of the file's scenes becomes a scene, after
-  the model's, in the file's order, with its name (cut to 240 characters, a blank one named as
-  `add_scene` names it, and made unique against the model's scenes: `Front 2`). A scene that
+  the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
+  named as `add_scene` names it, and made unique against the model's scenes: `Front 2`). A scene that
   restores the camera stores its view: the file's camera in meters times `scale`, in model
   coordinates (through the open instance's placement, like the geometry), perspective or
   parallel, its field of view (a parallel camera keeps the height of its view through it),
   lit by day, not colored by tag. A scene that restores tag visibility stores the tags of its
   hidden layers as its hidden tags (Layer0, which is Untagged, and layers not imported are left
   out). What a scene does not restore it does not store. A camera that cannot be used (its eye
-  on its target, or beyond +/-1e6 m) is left out, with a warning ("1 scene's camera could not
-  be used; the scene leaves the camera alone"). No scene is selected and the camera is not
-  moved; `open` views the model as described there.
+  on its target, beyond +/-1e6 m, or missing from a scene that restores one) is left out, with
+  a warning ("1 scene's camera could not be used; the scene leaves the camera alone"). At most
+  1,024 scenes are added; the file's further scenes are left off, with a warning. No scene is
+  selected and the camera is not moved; `open` views the model as described there.
 
 Not carried, each counted in `warnings`: scenes of 2017-2020 files ("12 scenes were not
 imported"),
@@ -1206,9 +1207,9 @@ For a SketchUp file `polygons` counts the faces of the file's top level and of t
 it places (each definition once), `faces` the faces made (a face made from its outer loop
 may make several), `vertices` the vertices made, `skipped` faces that made none (an outline
 that cannot be read, fewer than three distinct corners, no area, or a duplicate), and
-`materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added), `definitions` and
-`instances` (made from the file's, without the wrapper), `guides` (guides made), `textures`
-(materials added with a texture) and `warnings`
+`materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added),
+`definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
+made), `textures` (materials added with a texture) and `warnings`
 (sentences, such as "2 scenes were not imported", "3 hidden faces were imported visible",
 "1 image was skipped", "5 face holes could not be read and were dropped", "2 hidden guides were not imported", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for
