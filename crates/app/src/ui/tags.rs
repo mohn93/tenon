@@ -26,6 +26,7 @@ fn rename_key() -> Id {
 
 /// The Tags tab (the tab is its title); the dock's top area scrolls it.
 pub(super) fn tags(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+    forget_gone(ui, view);
     let mut on = view.color_by_tag;
     if ui
         .checkbox(&mut on, "Color by tag")
@@ -104,12 +105,54 @@ fn tag_row(ui: &mut Ui, row: &TagRow, chosen: &mut Option<TagId>, actions: &mut 
     });
 }
 
+/// An open color picker: its tag, the color the tag had when it opened, the color picked so
+/// far, and the pass that last drew it.
+#[derive(Clone, Copy)]
+struct Picking {
+    tag: TagId,
+    opened: [u8; 3],
+    color: Color32,
+    pass: u64,
+}
+
+/// The egui memory key of the open color picker (one at a time).
+fn picking_key() -> Id {
+    Id::new("tag-color-picking")
+}
+
+/// The popup id of `tag`'s color picker.
+fn picker_id(tag: TagId) -> Id {
+    Id::new(("tag-color", tag.0)).with("popup")
+}
+
+/// Forgets what was held for tags no longer listed (deleted, or the model replaced): the name
+/// being typed and the color being picked. A color picker its row stopped drawing (the tab
+/// left) closes with its color dropped.
+fn forget_gone(ui: &Ui, view: &View) {
+    let listed = |t: TagId| view.tags.iter().any(|r| r.id == t);
+    let renamed = ui.data(|d| d.get_temp::<(TagId, String, bool)>(rename_key()));
+    if let Some((t, ..)) = renamed
+        && !listed(t)
+    {
+        ui.data_mut(|d| d.remove::<(TagId, String, bool)>(rename_key()));
+    }
+    let picking = ui.data(|d| d.get_temp::<Picking>(picking_key()));
+    if let Some(p) = picking
+        && (!listed(p.tag) || p.pass + 1 < ui.ctx().cumulative_pass_nr())
+    {
+        ui.data_mut(|d| d.remove::<Picking>(picking_key()));
+        Popup::close_id(ui.ctx(), picker_id(p.tag));
+    }
+}
+
 /// The tag's color swatch. While its picker is open the color being picked lives in egui's
-/// memory (and shows in the swatch); when the picker closes, a changed color is reported once.
+/// memory (and shows in the swatch); when the picker closes, a color other than the one it
+/// opened with is reported once.
 fn color_swatch(ui: &mut Ui, row: &TagRow, actions: &mut Vec<UiAction>) {
-    let key = Id::new(("tag-color", row.id.0));
-    let picking = ui.data(|d| d.get_temp::<Color32>(key));
-    let mut color = picking.unwrap_or(rgb(row.color));
+    let picking = ui
+        .data(|d| d.get_temp::<Picking>(picking_key()))
+        .filter(|p| p.tag == row.id);
+    let mut color = picking.map_or(rgb(row.color), |p| p.color);
     let swatch = widgets::swatch(
         ui,
         Fill::Color(color),
@@ -117,7 +160,7 @@ fn color_swatch(ui: &mut Ui, row: &TagRow, actions: &mut Vec<UiAction>) {
         false,
     );
     let open = Popup::menu(&swatch)
-        .id(key.with("popup"))
+        .id(picker_id(row.id))
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             egui::color_picker::color_picker_color32(
@@ -127,11 +170,17 @@ fn color_swatch(ui: &mut Ui, row: &TagRow, actions: &mut Vec<UiAction>) {
             );
         });
     if open.is_some() {
-        ui.data_mut(|d| d.insert_temp(key, color));
-    } else if let Some(picked) = picking {
-        ui.data_mut(|d| d.remove::<Color32>(key));
-        let picked = [picked.r(), picked.g(), picked.b()];
-        if picked != row.color {
+        let held = Picking {
+            tag: row.id,
+            opened: picking.map_or(row.color, |p| p.opened),
+            color,
+            pass: ui.ctx().cumulative_pass_nr(),
+        };
+        ui.data_mut(|d| d.insert_temp(picking_key(), held));
+    } else if let Some(p) = picking {
+        ui.data_mut(|d| d.remove::<Picking>(picking_key()));
+        let picked = [p.color.r(), p.color.g(), p.color.b()];
+        if picked != p.opened {
             actions.push(UiAction::RecolorTag(row.id, picked));
         }
     }

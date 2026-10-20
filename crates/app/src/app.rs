@@ -1456,10 +1456,7 @@ impl State {
         if self.outliner.as_ref().map(|(r, _)| *r) != Some(revision) {
             self.outliner = Some((revision, self.editor.doc().outliner_rows()));
         }
-        let built = (self.editor.documents(), revision);
-        if self.tag_rows.as_ref().map(|(b, _)| *b) != Some(built) {
-            self.tag_rows = Some((built, tag_rows(self.editor.doc())));
-        }
+        refresh_tag_rows(&mut self.tag_rows, &self.editor);
         let context: Vec<EntityId> = self
             .editor
             .doc()
@@ -1834,6 +1831,15 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
             Err("The tag was already deleted")
         }
         Sheet::DeleteTag { .. } => Ok(()),
+    }
+}
+
+/// Rebuilds the Tags tab's rows when the document or its revision changed since `cache` was
+/// built (an edit, an undo, or an agent's command).
+fn refresh_tag_rows(cache: &mut Option<((u64, u64), Vec<TagRow>)>, editor: &Editor) {
+    let built = (editor.documents(), editor.doc().revision());
+    if cache.as_ref().map(|(b, _)| *b) != Some(built) {
+        *cache = Some((built, tag_rows(editor.doc())));
     }
 }
 
@@ -2994,6 +3000,39 @@ mod tests {
         // An agent deletes the tag meanwhile.
         e.delete_tag(walls, None);
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn the_tag_rows_follow_an_agents_add_and_undo() {
+        let mut e = editor_with_selection();
+        let mut cache = None;
+        let names = |c: &Option<((u64, u64), Vec<TagRow>)>| -> Vec<String> {
+            c.as_ref()
+                .unwrap()
+                .1
+                .iter()
+                .map(|r| r.name.clone())
+                .collect()
+        };
+        refresh_tag_rows(&mut cache, &e);
+        assert!(names(&cache).is_empty());
+        e.execute(session::Command::AddTag {
+            name: Some("Walls".into()),
+            color: None,
+        })
+        .unwrap();
+        refresh_tag_rows(&mut cache, &e);
+        assert_eq!(names(&cache), ["Walls"]);
+        e.execute(session::Command::Undo {
+            count: None,
+            expect: None,
+        })
+        .unwrap();
+        refresh_tag_rows(&mut cache, &e);
+        assert!(names(&cache).is_empty(), "the undo took it away");
+        e.execute(session::Command::Redo { count: None }).unwrap();
+        refresh_tag_rows(&mut cache, &e);
+        assert_eq!(names(&cache), ["Walls"]);
     }
 
     #[test]

@@ -133,11 +133,15 @@ fn double_clicking_a_name_renames_the_tag() {
     assert!(h.query_by_label("Tag name").is_none());
 }
 
-#[test]
-fn a_picked_color_is_one_change_when_the_picker_closes() {
-    let mut h = harness(tags_tab());
-    assert_eq!(click(&mut h, "Color of Walls"), [], "the picker opens");
-    let popup = egui::Id::new(("tag-color", WALLS.0)).with("popup");
+/// The egui memory key of the Walls color picker's popup.
+fn walls_picker() -> egui::Id {
+    egui::Id::new(("tag-color", WALLS.0)).with("popup")
+}
+
+/// Opens Walls' color picker and drags across its color square; nothing is reported.
+fn open_and_pick(h: &mut H) {
+    assert_eq!(click(h, "Color of Walls"), [], "the picker opens");
+    let popup = walls_picker();
     let area = h
         .ctx
         .memory(|m| m.area_rect(popup))
@@ -183,6 +187,12 @@ fn a_picked_color_is_one_change_when_the_picker_closes() {
     });
     h.run_ok();
     assert_eq!(h.state_mut().take(), [], "nothing while the picker is open");
+}
+
+#[test]
+fn a_picked_color_is_one_change_when_the_picker_closes() {
+    let mut h = harness(tags_tab());
+    open_and_pick(&mut h);
     // A click outside closes it: the color picked last is set, once.
     let outside = h.state().central.center();
     let mut actions = click_at(&mut h, outside, egui::Modifiers::NONE);
@@ -271,4 +281,92 @@ fn entity_info_puts_the_selection_on_a_tag() {
         ..Default::default()
     });
     assert!(h.query_by_label("Tag").is_none());
+}
+
+#[test]
+fn a_color_an_agent_set_while_the_picker_is_open_stays_when_it_closes_unchanged() {
+    let mut h = harness(tags_tab());
+    click(&mut h, "Color of Walls");
+    // An agent recolors Walls meanwhile.
+    h.state_mut().tags[0].color = [1, 2, 3];
+    h.run_ok();
+    let outside = h.state().central.center();
+    let mut actions = click_at(&mut h, outside, egui::Modifiers::NONE);
+    h.run_ok();
+    actions.extend(h.state_mut().take());
+    assert_eq!(actions, [], "the picker's own color was not changed");
+}
+
+/// Whether anything is held for a picker or a rename.
+fn held(h: &H) -> (bool, bool) {
+    let renaming = h.ctx.data(|d| {
+        d.get_temp::<(TagId, String, bool)>(egui::Id::new("tag-rename"))
+            .is_some()
+    });
+    (renaming, egui::Popup::is_id_open(&h.ctx, walls_picker()))
+}
+
+#[test]
+fn a_picker_whose_tab_closes_drops_its_color() {
+    let mut h = harness(tags_tab());
+    open_and_pick(&mut h);
+    h.state_mut().dock.tab = DockTab::EntityInfo;
+    h.run_ok();
+    h.state_mut().dock.tab = DockTab::Tags;
+    h.run_ok();
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), [], "nothing committed later");
+    assert!(!egui::Popup::is_id_open(&h.ctx, walls_picker()), "closed");
+    // Opened again, it starts from the tag's color: closing it changes nothing.
+    click(&mut h, "Color of Walls");
+    let outside = h.state().central.center();
+    assert_eq!(click_at(&mut h, outside, egui::Modifiers::NONE), []);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+}
+
+#[test]
+fn a_tag_an_agent_deletes_while_renamed_or_recolored_is_forgotten() {
+    let mut h = harness(tags_tab());
+    let walls = rect_of(&h, "Walls").center();
+    click_at(&mut h, walls, egui::Modifiers::NONE);
+    click_at(&mut h, walls, egui::Modifiers::NONE);
+    h.run_ok();
+    h.event(egui::Event::Text("Old".into()));
+    h.run_ok();
+    assert!(held(&h).0, "renaming");
+    // An agent deletes Walls.
+    h.state_mut().tags.remove(0);
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+    assert!(!held(&h).0, "the typed name is dropped");
+    assert!(h.query_by_label("Tag name").is_none());
+    // The same while its color is picked.
+    let mut h = harness(tags_tab());
+    open_and_pick(&mut h);
+    h.state_mut().tags.remove(0);
+    h.run_ok();
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+    assert!(!held(&h).1, "the picker closed");
+}
+
+#[test]
+fn the_list_follows_tags_an_agent_adds_and_an_undo_removes() {
+    let mut h = harness(tags_tab());
+    h.state_mut().tags.push(TagRow {
+        id: TagId(3),
+        name: "Tag".into(),
+        color: [9, 9, 9],
+        visible: true,
+        count: 0,
+    });
+    h.run_ok();
+    h.get_by_label("Tag");
+    h.get_by_label("Color of Tag");
+    h.state_mut().tags.pop();
+    h.run_ok();
+    assert!(h.query_by_label("Color of Tag").is_none());
 }
