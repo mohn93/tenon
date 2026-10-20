@@ -24,7 +24,7 @@ impl Editor {
         self.clip_ready = self
             .clipboard
             .get_text()
-            .is_some_and(|text| text.starts_with(clip::HEADER));
+            .is_ok_and(|text| text.is_some_and(|t| t.starts_with(clip::HEADER)));
     }
 
     /// Whether the clipboard held a clip when last looked at: Paste and Paste In Place are
@@ -38,15 +38,16 @@ impl Editor {
         self.paste_return.is_some()
     }
 
-    /// Copies the selection to the clipboard as a clip (Cmd+C). With nothing selected, or
-    /// when the clipboard cannot be written, the status says why and nothing changes.
+    /// Copies the selection to the clipboard as a clip (Cmd+C), putting the Paste tool away
+    /// (it holds the clip before). With nothing selected, or when the clipboard cannot be
+    /// written, the status says why and nothing changes.
     pub fn copy(&mut self) -> Result<(), CommandError> {
         let ids = self.selected_for("copy")?;
         self.put_clip(&ids)
     }
 
     /// Copies the selection to the clipboard, then erases it as one undo step labelled `cut`
-    /// (Cmd+X). Nothing is erased when the copy fails.
+    /// (Cmd+X), putting the Paste tool away. Nothing is erased when the copy fails.
     pub fn cut(&mut self) -> Result<(), CommandError> {
         let ids = self.selected_for("cut")?;
         self.put_clip(&ids)?;
@@ -119,7 +120,8 @@ impl Editor {
         Ok(self.doc.selection().iter().copied().collect())
     }
 
-    /// Puts the clip of `ids` on the clipboard.
+    /// Puts the clip of `ids` on the clipboard. The Paste tool, if out, goes: its clip is no
+    /// longer the clipboard's.
     fn put_clip(&mut self, ids: &[EntityId]) -> Result<(), CommandError> {
         let text = match self.doc.clip(ids) {
             Ok(text) => text,
@@ -132,17 +134,25 @@ impl Editor {
             )));
         }
         self.clip_ready = true;
+        self.end_paste();
         Ok(())
     }
 
     /// The clipboard's text when it is a clip (by its header; pasting checks the rest).
     fn clip_text(&mut self) -> Result<String, CommandError> {
         match self.clipboard.get_text() {
-            Some(text) if text.starts_with(clip::HEADER) => {
+            Ok(Some(text)) if text.starts_with(clip::HEADER) => {
                 self.clip_ready = true;
                 Ok(text)
             }
-            _ => {
+            Err(why) => {
+                self.clip_ready = false;
+                Err(self.refuse(CommandError::new(
+                    ErrorKind::File,
+                    format!("Could not read the clipboard: {why}"),
+                )))
+            }
+            Ok(_) => {
                 self.clip_ready = false;
                 Err(self.refuse(CommandError::new(ErrorKind::InvalidInput, NOT_A_CLIP)))
             }
@@ -275,8 +285,8 @@ mod tests {
     struct Broken;
 
     impl Clipboard for Broken {
-        fn get_text(&mut self) -> Option<String> {
-            None
+        fn get_text(&mut self) -> Result<Option<String>, String> {
+            Err("timed out".into())
         }
 
         fn set_text(&mut self, _text: String) -> Result<(), String> {
@@ -295,7 +305,38 @@ mod tests {
             Some("Could not copy to the clipboard: no display")
         );
         assert_eq!(e.doc().revision(), revision);
-        assert!(e.paste(None).is_err());
-        assert_eq!(e.status_parts().message.as_deref(), Some(NOT_A_CLIP));
+        // Reading fails too: said as such, not as text that is no clip.
+        for in_place in [true, false] {
+            let err = if in_place {
+                e.paste_in_place()
+            } else {
+                e.paste(None)
+            }
+            .unwrap_err();
+            assert_eq!(err.kind, ErrorKind::File);
+            assert_eq!(
+                e.status_parts().message.as_deref(),
+                Some("Could not read the clipboard: timed out")
+            );
+        }
+        assert!(!e.pasting());
+        assert_eq!(e.doc().revision(), revision);
+    }
+
+    #[test]
+    fn copying_or_cutting_puts_the_paste_tool_away() {
+        let mut e = square();
+        e.copy().unwrap();
+        e.select_tool(ToolKind::Rectangle);
+        point_at(&mut e, DVec3::new(5.0, 0.0, 0.0));
+        e.paste(None).unwrap();
+        e.copy().unwrap();
+        assert!(!e.pasting(), "copy");
+        assert_eq!(e.status_parts().tool, "Rectangle");
+        e.paste(None).unwrap();
+        e.cut().unwrap();
+        assert!(!e.pasting(), "cut");
+        assert_eq!(e.status_parts().tool, "Rectangle");
+        assert_eq!(faces(&e), 0);
     }
 }

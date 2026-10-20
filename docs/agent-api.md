@@ -863,8 +863,9 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   is over a window, a menu or the gizmo above the view, where the window shows neither.
   `tool_input` puts the cursor in the view under no window, so its result reports both.
 
-Editor commands go through `execute` (not `batch`), are not undo steps and do not change the
-revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
+Editor commands go through `execute` (not `batch`). They are not undo steps of their own and,
+except for `cut_selection`, `paste_clipboard` with `at` and `paste_in_place`, which each run one
+model step (`cut` or `paste`), do not change the revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 
 | Command | Effect |
 |---|---|
@@ -876,8 +877,8 @@ revision; each returns `{"editor": {...}, "revision": n}`, the state after it:
 | `{"type": "duplicate"}` | Starts Move copying the selection, as Edit > Duplicate (Cmd+D) does: with the cursor in the view the base point is the point under it, so the copy follows the cursor; otherwise Move waits for a base point. With nothing selected it is `invalid_input`. The copy is made by the next click or typed distance (one `copy` step). |
 | `{"type": "copy_selection"}` | Edit > Copy (Cmd+C): puts the selection on the app's clipboard as clip text (see Clipboard); the window's is the system clipboard, so another app process can paste it. With nothing selected it is `invalid_input`; a clipboard that cannot be written is `file`. Not an undo step. (It is named apart from `copy`, which copies by an offset.) |
 | `{"type": "cut_selection"}` | Edit > Cut (Cmd+X): `copy_selection`, then erases the selection as one undo step labelled `cut`. Nothing is erased when the copy fails. |
-| `{"type": "paste_clipboard", "at": [3, 0, 0]}` | Edit > Paste (Cmd+V). With `at` (a point of the open context), runs `paste` with the clipboard's clip there. Without it the Paste tool comes out: the clip's edges follow the cursor, its base point on the snapped point under it, and the next click (`tool_input`) pastes there as one `paste` step; then, or on Escape or `cancel`, the tool used before comes back (`editor.tool` stays that tool meanwhile, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`). Typed distances are not taken. Text that is not a clip is `invalid_input` with the message `The clipboard does not hold sketchup-alt geometry`, and changes nothing. |
-| `{"type": "paste_in_place"}` | Edit > Paste In Place: runs `paste` with the clipboard's clip and no `at`, so it lands where it was copied from in world coordinates. Refused as `paste_clipboard` is. |
+| `{"type": "paste_clipboard", "at": [3, 0, 0]}` | Edit > Paste (Cmd+V). With `at` (a point of the open context), runs `paste` with the clipboard's clip there. Without it the Paste tool comes out: the clip's edges follow the cursor, its base point on the snapped point under it, and the next click (`tool_input`) pastes there as one `paste` step (the pasted entities become the selection; see `selection`); then, or on Escape or `cancel`, the tool used before comes back (`editor.tool` stays that tool meanwhile, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`). Typed distances are not taken. With `at` too the pasted entities become the selection. Text that is not a clip is `invalid_input` with the message `The clipboard does not hold sketchup-alt geometry`, and changes nothing; a clipboard that cannot be read is `file` (`Could not read the clipboard: ...`). |
+| `{"type": "paste_in_place"}` | Edit > Paste In Place: runs `paste` with the clipboard's clip and no `at`, so it lands where it was copied from in world coordinates, and the pasted entities become the selection (see `selection`). Refused as `paste_clipboard` is. |
 | `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
 | `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
 

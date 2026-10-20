@@ -3,8 +3,8 @@
 
 /// Text on a clipboard.
 pub trait Clipboard {
-    /// The text on the clipboard; None when it holds none or cannot be read.
-    fn get_text(&mut self) -> Option<String>;
+    /// The text on the clipboard (None: it holds no text); Err says why it could not be read.
+    fn get_text(&mut self) -> Result<Option<String>, String>;
     /// Puts `text` on the clipboard; Err says why it could not.
     fn set_text(&mut self, text: String) -> Result<(), String>;
 }
@@ -16,8 +16,8 @@ pub struct MemoryClipboard {
 }
 
 impl Clipboard for MemoryClipboard {
-    fn get_text(&mut self) -> Option<String> {
-        self.text.clone()
+    fn get_text(&mut self) -> Result<Option<String>, String> {
+        Ok(self.text.clone())
     }
 
     fn set_text(&mut self, text: String) -> Result<(), String> {
@@ -43,8 +43,13 @@ impl SystemClipboard {
 }
 
 impl Clipboard for SystemClipboard {
-    fn get_text(&mut self) -> Option<String> {
-        self.board().ok()?.get_text().ok()
+    fn get_text(&mut self) -> Result<Option<String>, String> {
+        match self.board()?.get_text() {
+            Ok(text) => Ok(Some(text)),
+            // Empty, or holding something other than text (an image): no text.
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn set_text(&mut self, text: String) -> Result<(), String> {
@@ -59,9 +64,9 @@ mod tests {
     #[test]
     fn the_memory_clipboard_keeps_the_last_text() {
         let mut c = MemoryClipboard::default();
-        assert_eq!(c.get_text(), None);
+        assert_eq!(c.get_text(), Ok(None));
         c.set_text("a".into()).unwrap();
         c.set_text("b".into()).unwrap();
-        assert_eq!(c.get_text().as_deref(), Some("b"));
+        assert_eq!(c.get_text(), Ok(Some("b".into())));
     }
 }
