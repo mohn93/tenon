@@ -86,6 +86,9 @@ pub(crate) struct SkpNotes {
     pub lost_entities: usize,
     /// Faces of a 2017-2020 file read short of their holes.
     pub faces_short: usize,
+    /// Dimensions and text labels of a 2017-2020 file, which are not imported (a newer
+    /// file's are not read, so not counted).
+    pub annotations: usize,
     pub images: usize,
     /// Instances of definitions the file does not have.
     pub missing: usize,
@@ -149,6 +152,11 @@ impl SkpNotes {
             self.scenes,
             "scene was not imported",
             "scenes were not imported",
+        );
+        say(
+            self.annotations,
+            "dimension or text label was not imported",
+            "dimensions and text labels were not imported",
         );
         say(
             self.dropped_scenes,
@@ -280,6 +288,7 @@ pub(crate) fn read_skp(
         faces_short: stats
             .as_ref()
             .map_or(0, |s| saturate(s.faces_short_of_exact)),
+        annotations: stats.as_ref().map_or(0, |s| saturate(s.annotations)),
         // A 2017-2020 file's scenes are not read (counted); a newer file's are added below.
         scenes: match container.generation {
             Generation::Legacy => index.scenes.len(),

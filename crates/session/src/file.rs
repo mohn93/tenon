@@ -462,7 +462,8 @@ fn read_limited(reader: impl Read, limit: u64, what: &str) -> Result<Vec<u8>, St
 /// Fails, naming the entity, when a vertex, an instance's position, a guide's point or an
 /// annotation's numbers are beyond `MAX_COORDINATE`, the limit commands keep to (a dimension's
 /// offset and a radial dimension's leader reach from one point within it to another, so up
-/// to twice the limit).
+/// to twice the limit; a fixed circle's center plus or minus its radius along each axis is
+/// within it).
 fn check_coordinates(model: &SceneData) -> Result<(), String> {
     let meshes = std::iter::once(&model.root).chain(model.definitions.iter().map(|d| &d.mesh));
     let within = |xs: &[f64]| xs.iter().all(|x| x.abs() <= MAX_COORDINATE);
@@ -500,7 +501,11 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
                 } => {
                     let center = match curve {
                         RadialAnchorData::Curve(_) => true,
-                        RadialAnchorData::Fixed(c) => within(&c.center) && reach(&[c.radius]),
+                        // The circle reaches its radius from the center along each axis.
+                        RadialAnchorData::Fixed(c) => c
+                            .center
+                            .iter()
+                            .all(|x| x.abs() + c.radius.abs() <= MAX_COORDINATE),
                     };
                     (id, center && reach(leader))
                 }

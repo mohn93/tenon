@@ -171,3 +171,7 @@ Upstream's tests are not copied: they read a private corpus.
     32 bits, which could name another layer). Instances keep the full pid in
     `RawInstance::layer`; the importer drops one past 32 bits the same way. A layer's own id
     saturates at `u32::MAX` (`NO_LAYER`), so nothing can refer to such a layer.
+28. Legacy annotations counted: `ReadStats::annotations` counts the `CDimensionLinear` and
+    `CText` records `new_obj` reads (they were read only to stay in step and dropped), so the
+    importer can say how many it left out. `CDimensionRadial` is still not a known class (see
+    the module notes). A unit test in `legacy.rs` reads a crafted `CText` record.

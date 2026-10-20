@@ -244,6 +244,8 @@ pub struct ReadStats {
     pub lost_entities: u64,
     /// Hidden guide lines and points, which `read_model` leaves out.
     pub hidden_guides: u64,
+    /// `CDimensionLinear` and `CText` records read (and left out of the model).
+    pub annotations: u64,
     /// Human-readable notes about anything that did not go cleanly.
     pub notes: Vec<String>,
 }
@@ -1123,6 +1125,8 @@ struct Archive<'a> {
     guide_layers: Vec<u32>,
     /// See `ReadStats::hidden_guides`.
     hidden_guides: u64,
+    /// See `ReadStats::annotations`.
+    annotations: u64,
     /// Where the last image read ended, when it was a JPEG.
     jpeg_end: Option<u64>,
     /// What a completed definition is turned into.
@@ -1246,6 +1250,7 @@ impl<'a> Archive<'a> {
             guides: Vec::new(),
             guide_layers: Vec::new(),
             hidden_guides: 0,
+            annotations: 0,
             jpeg_end: None,
             emit: Emit::Batches,
             topo_defs: Vec::new(),
@@ -1435,6 +1440,7 @@ impl<'a> Archive<'a> {
         self.set(slot, entry);
         if matches!(cls, Cls::DimLinear | Cls::Text) {
             self.annot_watermark = Some(self.next_slot());
+            self.annotations += 1;
         }
         Ok((slot, entry))
     }
@@ -5449,6 +5455,7 @@ impl<'a> Archive<'a> {
             faces_short_of_exact: self.faces_short,
             lost_entities: self.lost,
             hidden_guides: self.hidden_guides,
+            annotations: self.annotations,
             notes: core::mem::take(&mut self.notes),
         };
         (index, stats)
@@ -5726,4 +5733,42 @@ fn apply_4x4(m: &[f64; 16], p: [f64; 3]) -> [f64; 3] {
         m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7],
         m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11],
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::MemorySource;
+    use alloc::vec::Vec;
+
+    /// A `CText` record as a 2016 file (no wide entity preamble) writes it: the class, no
+    /// attributes, a drawing element on layer 0, no font, the eleven-byte block before the
+    /// text, the text "Hi" and its five trailing bytes.
+    fn text_record() -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&[0xff, 0xff, 0, 0, 5, 0]);
+        b.extend_from_slice(b"CText");
+        b.extend_from_slice(&[0, 0]); // no attribute container
+        b.extend_from_slice(&[0; 8]); // drawing element
+        b.extend_from_slice(&[0, 0]); // layer slot
+        b.extend_from_slice(&[0, 0]); // no font
+        b.extend_from_slice(&[1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1]);
+        b.extend_from_slice(&[0xff, 0xfe, 0xff, 2, b'H', 0, b'i', 0]);
+        b.extend_from_slice(&[0; 5]);
+        b.extend_from_slice(&[0; 8]); // what follows the record
+        b
+    }
+
+    #[test]
+    fn text_records_are_counted_as_annotations() {
+        use crate::source::ByteSource;
+        let src = MemorySource::new(text_record());
+        let end = src.len();
+        let c = Cur::new(&src, 0, end);
+        let mut archive = Archive::new(c, 16, &VersionMap::default());
+        let (_, slot) = archive.read_object(None).unwrap().unwrap();
+        assert!(slot.is(Cls::Text));
+        assert_eq!(archive.annotations, 1);
+        assert_eq!(archive.c.left(), 8);
+    }
 }

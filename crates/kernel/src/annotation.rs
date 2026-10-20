@@ -232,7 +232,7 @@ impl Circle {
     /// an ellipse; the circle kept has the same area: its radius is the old one times the
     /// square root of how `t` scales area in the circle's plane (the absolute determinant of
     /// `t`'s 2x2 block on that plane, |t(u) x t(v)| for an orthonormal pair u, v in it).
-    fn transformed(self, t: DAffine3) -> Circle {
+    pub fn transformed(self, t: DAffine3) -> Circle {
         let normal = (t.matrix3.inverse().transpose() * self.normal)
             .try_normalize()
             .unwrap_or(self.normal);
@@ -247,6 +247,22 @@ impl Circle {
             normal,
             radius: self.radius * area.sqrt(),
         }
+    }
+
+    /// The center and the points `radius` from it along each axis: what a coordinate limit
+    /// on the circle checks.
+    pub fn extent(&self) -> [DVec3; 7] {
+        let r = self.radius.abs();
+        let c = self.center;
+        [
+            c,
+            c + DVec3::X * r,
+            c - DVec3::X * r,
+            c + DVec3::Y * r,
+            c - DVec3::Y * r,
+            c + DVec3::Z * r,
+            c - DVec3::Z * r,
+        ]
     }
 }
 
@@ -326,36 +342,37 @@ impl Model {
         }
     }
 
-    /// The points that place the mesh's annotations: each anchor where it is now, the ends of
-    /// a linear dimension's line, a radial dimension's center and label point, and a leader
-    /// note's text position (a screen note has none). What the coordinate limit applies to.
-    pub fn annotation_points(&self) -> Vec<DVec3> {
+    /// The points that place the mesh's annotations, mapped by `t` (an instance's transform,
+    /// or the identity): each anchor, a linear dimension's end moved by its offset and the
+    /// ends of its line, a radial dimension's label point and the center and reach of its
+    /// circle as `t` maps it (`Circle::extent`), and a leader note's text position (a screen
+    /// note has none). What the coordinate limit applies to.
+    pub fn annotation_points(&self, t: DAffine3) -> Vec<DVec3> {
+        let at = |p: DVec3| t.transform_point3(p);
         let mut out = Vec::new();
         for (id, d) in self.dimensions() {
             match d {
-                Dimension::Linear { .. } => {
-                    out.extend(
-                        self.dimension_points(id)
-                            .into_iter()
-                            .flat_map(|(a, b)| [a, b]),
-                    );
-                    out.extend(
-                        self.dimension_line(id)
-                            .into_iter()
-                            .flat_map(|(a, b)| [a, b]),
-                    );
+                Dimension::Linear { offset, .. } => {
+                    if let Some((a, b)) = self.dimension_points(id) {
+                        out.extend([at(a), at(b), at(a + *offset)]);
+                    }
+                    if let Some((a, b)) = self.dimension_line(id) {
+                        out.extend([at(a), at(b)]);
+                    }
                 }
                 Dimension::Radial { leader, .. } => {
                     if let Some(c) = self.radial_circle(id) {
-                        out.extend([c.center, c.center + *leader]);
+                        let placed = c.transformed(t);
+                        out.extend(placed.extent());
+                        out.push(placed.center + t.transform_vector3(*leader));
                     }
                 }
             }
         }
         for (id, n) in self.notes() {
             if let Note::Leader { position, .. } = n {
-                out.extend(self.note_point(id));
-                out.push(*position);
+                out.extend(self.note_point(id).map(at));
+                out.push(at(*position));
             }
         }
         out

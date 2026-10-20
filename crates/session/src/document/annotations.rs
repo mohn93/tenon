@@ -2,7 +2,7 @@
 
 use glam::{DAffine3, DVec3};
 use kernel::{
-    Anchor, CurveKind, Dimension, DimensionId, EntityId, KernelError, Model, Note, NoteId,
+    Anchor, Circle, CurveKind, Dimension, DimensionId, EntityId, KernelError, Model, Note, NoteId,
     RadialAnchor, SceneChange, VertexId,
 };
 
@@ -108,7 +108,15 @@ impl Document {
             return Err(not_round());
         };
         check_coordinates(&[leader])?;
-        check_coordinates(&[(circle.center + DVec3::from(leader)).to_array()])?;
+        let reach = Circle {
+            center: circle.center,
+            normal: circle.normal,
+            radius: circle.radius,
+        }
+        .extent();
+        let mut points: Vec<[f64; 3]> = reach.iter().map(|p| p.to_array()).collect();
+        points.push((circle.center + DVec3::from(leader)).to_array());
+        check_coordinates(&points)?;
         self.edit_mesh(|m| {
             m.add_dimension(Dimension::Radial {
                 curve: RadialAnchor::Curve(curve.id),
@@ -292,8 +300,9 @@ impl Document {
 
     /// The points annotations of the open context would have under `t`: their anchors (a
     /// vertex anchor moves only when `follows` it), the ends of a linear dimension's line, a
-    /// radial dimension's center (moved when its curve's vertices follow) and label point,
-    /// and a leader note's text position.
+    /// radial dimension's label point and its circle's center and reach along each axis (the
+    /// circle mapped when it is fixed or its curve's vertices follow), and a leader note's
+    /// text position.
     pub(super) fn annotation_points_placed(
         &self,
         dimensions: &[DimensionId],
@@ -320,8 +329,16 @@ impl Document {
                     out.extend([pa, pb, pa + offset, pa + shift, pb + shift]);
                 }
                 Dimension::Radial { curve, leader, .. } => {
-                    let center = match curve {
-                        RadialAnchor::Fixed { center, .. } => center,
+                    let circle = match curve {
+                        RadialAnchor::Fixed {
+                            center,
+                            normal,
+                            radius,
+                        } => Circle {
+                            center,
+                            normal,
+                            radius,
+                        },
                         RadialAnchor::Curve(c) => {
                             let Some(circle) = m.radial_circle(*id) else {
                                 continue;
@@ -329,14 +346,11 @@ impl Document {
                             let moves = m
                                 .curve(c)
                                 .is_some_and(|c| c.vertices.iter().all(|v| follows(*v)));
-                            if moves {
-                                t.transform_point3(circle.center)
-                            } else {
-                                circle.center
-                            }
+                            if moves { circle.transformed(t) } else { circle }
                         }
                     };
-                    out.extend([center, center + leader]);
+                    out.extend(circle.extent());
+                    out.push(circle.center + leader);
                 }
             }
         }

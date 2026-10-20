@@ -279,19 +279,23 @@ impl Document {
                     ));
                 }
                 let mut done = Vec::new();
+                let mut units = None;
                 for _ in 0..n {
                     let step = self.undo.pop().expect("counted");
                     let inverse = step.changes.inverse();
                     self.scene.apply(&inverse);
-                    if let Some((from, _)) = step.units {
+                    let restored = step.units.map(|(from, _)| from);
+                    if let Some(from) = restored {
                         self.units = from;
+                        units = restored;
                     }
                     self.redo.push(step);
-                    self.changed(&inverse);
+                    self.changed(&inverse, restored);
                     done.push(inverse);
                 }
                 Ok(Outcome {
                     changes: SceneChange::join(done).summary(),
+                    units,
                     ..Outcome::default()
                 })
             }
@@ -304,18 +308,22 @@ impl Document {
                     ));
                 }
                 let mut done = Vec::new();
+                let mut units = None;
                 for _ in 0..n {
                     let step = self.redo.pop().expect("counted");
                     self.scene.apply(&step.changes);
-                    if let Some((_, to)) = step.units {
+                    let restored = step.units.map(|(_, to)| to);
+                    if let Some(to) = restored {
                         self.units = to;
+                        units = restored;
                     }
-                    self.changed(&step.changes);
+                    self.changed(&step.changes, restored);
                     done.push(step.changes.clone());
                     self.undo.push(step);
                 }
                 Ok(Outcome {
                     changes: SceneChange::join(done).summary(),
+                    units,
                     ..Outcome::default()
                 })
             }
@@ -790,6 +798,7 @@ impl Document {
         // The edits' names: the step is labeled by theirs when they share one.
         let mut names: Vec<String> = Vec::new();
         for (index, command) in commands.iter().enumerate() {
+            let units_then = self.units;
             let result = match command.resolve(&outcomes) {
                 Err(error) => Err(error),
                 Ok(command) => match self.edit(&command) {
@@ -804,6 +813,7 @@ impl Document {
                             soften: self.soften_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
+                            units: (self.units != units_then).then_some(self.units),
                         }
                     }),
                     None if matches!(
@@ -1011,7 +1021,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one vertex, edge, face, instance or guide",
+                "ids must list at least one vertex, edge, face, instance, guide, dimension or note",
             ));
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -1050,7 +1060,7 @@ impl Document {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         if ids.is_empty() {
             return Err(invalid(
-                "ids must list at least one vertex, edge, face, instance or guide",
+                "ids must list at least one vertex, edge, face, instance, guide, dimension or note",
             ));
         }
         check_coordinates(&[center])?;
@@ -1107,7 +1117,7 @@ impl Document {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         if ids.is_empty() {
             return Err(invalid(
-                "ids must list at least one vertex, edge, face, instance or guide",
+                "ids must list at least one vertex, edge, face, instance, guide, dimension or note",
             ));
         }
         check_coordinates(&[origin])?;
@@ -1364,7 +1374,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face, instance or guide",
+                "ids must list at least one edge, face, instance, guide, dimension or note",
             ));
         }
         if !(1..=MAX_COPIES).contains(&count) {
@@ -1512,7 +1522,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face, instance or guide",
+                "ids must list at least one edge, face, instance, guide, dimension or note",
             ));
         }
         let parts = self.parts(ids)?;
@@ -1581,7 +1591,7 @@ impl Document {
         if changes.is_empty() && units.is_none() {
             return Outcome::default();
         }
-        let outcome = self.changed(&changes);
+        let outcome = self.changed(&changes, units.map(|(_, after)| after));
         self.undo.push(Step {
             label,
             origin: self.origin,
@@ -1592,9 +1602,10 @@ impl Document {
         outcome
     }
 
-    /// Bumps the revision, logs the change, closes open instances that no longer exist and
-    /// drops entities that are no longer in the open context from the selection.
-    fn changed(&mut self, changes: &SceneChange) -> Outcome {
+    /// Bumps the revision, logs the change (with the display `units` it set, if any), closes
+    /// open instances that no longer exist and drops entities that are no longer in the open
+    /// context from the selection.
+    fn changed(&mut self, changes: &SceneChange, units: Option<Units>) -> Outcome {
         self.revision += 1;
         while self.scene.resolve(&self.context).is_none() {
             self.context.pop();
@@ -1609,12 +1620,14 @@ impl Document {
         self.events.push_back(ChangeEvent {
             revision: self.revision,
             changes: summary.clone(),
+            units,
         });
         if self.events.len() > EVENT_LOG_LEN {
             self.events.pop_front();
         }
         Outcome {
             changes: summary,
+            units,
             ..Outcome::default()
         }
     }

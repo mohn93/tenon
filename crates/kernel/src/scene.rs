@@ -481,11 +481,7 @@ impl Scene {
                 m.guides()
                     .map(|(_, g)| instance.transform.transform_point3(g.anchor())),
             );
-            out.extend(
-                m.annotation_points()
-                    .into_iter()
-                    .map(|p| instance.transform.transform_point3(p)),
-            );
+            out.extend(m.annotation_points(instance.transform));
             for (_, i) in m.instances() {
                 let placed = Instance::new(i.definition, instance.transform * i.transform);
                 out.extend(self.instance_guide_anchors(&placed));

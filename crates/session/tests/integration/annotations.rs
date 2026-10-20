@@ -1180,3 +1180,155 @@ fn exports_report_the_annotations_they_leave_out() {
         );
     }
 }
+
+#[test]
+fn a_malformed_anchor_says_what_an_anchor_is() {
+    for anchor in [json!("e"), json!([1, 2]), json!({"vertex": 3}), json!(5)] {
+        let err = serde_json::from_value::<Command>(
+            json!({"type": "add_note", "anchor": anchor, "position": [0, 0, 0]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("a vertex id such as \"v3\", or a point [x, y, z]"),
+            "{anchor}: {err}"
+        );
+    }
+}
+
+#[test]
+fn scaling_a_fixed_circle_past_the_limit_is_refused_and_the_model_still_saves() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 200}),
+    )
+    .unwrap();
+    let edges = created(&out, 'e');
+    let out = run(
+        &mut d,
+        json!({"type": "add_radial_dimension", "edge": edges[0], "leader": [1, 0, 0]}),
+    )
+    .unwrap();
+    let r = made(&out, 'r');
+    // Erasing the circle leaves the dimension on a fixed circle of radius 200.
+    let ids: Vec<Value> = edges.iter().map(|e| json!(e)).collect();
+    run(&mut d, json!({"type": "erase", "ids": ids})).unwrap();
+    let before = entity(&d, &r);
+    assert!(before.get("curve").is_none(), "{before}");
+    // Scaled by 1e4 the circle would reach 2e6 m: refused, nothing changed.
+    let revision = d.revision();
+    let (kind, message, _) = run(
+        &mut d,
+        json!({"type": "scale", "ids": [r], "origin": [0, 0, 0], "factors": [1e4, 1e4, 1e4]}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert!(message.contains("within"), "{message}");
+    assert_eq!(d.revision(), revision);
+    assert_eq!(entity(&d, &r), before);
+    // A smaller scale is fine, and the model saves and opens.
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [r], "origin": [0, 0, 0], "factors": [100, 100, 100]}),
+    )
+    .unwrap();
+    let path = scratch("scaled-circle.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(entity(&e, &r)["radius"], 20000.0);
+    // A file whose fixed circle reaches past the limit is refused.
+    edit_file(&path, |doc| {
+        doc["model"]["root"]["dimensions"][0]["curve"]["fixed"]["radius"] = json!(2e6);
+    });
+    let (kind, message, _) = run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("dimension r"), "{message}");
+}
+
+#[test]
+fn a_fixed_circle_inside_a_group_is_checked_when_the_group_is_scaled() {
+    let mut d = doc();
+    let r = rectangle(&mut d);
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 200}),
+    )
+    .unwrap();
+    let circle = created(&out, 'e');
+    let out = run(
+        &mut d,
+        json!({"type": "add_radial_dimension", "edge": circle[0], "leader": [1, 0, 0]}),
+    )
+    .unwrap();
+    let dim = made(&out, 'r');
+    let ids: Vec<Value> = circle.iter().map(|e| json!(e)).collect();
+    run(&mut d, json!({"type": "erase", "ids": ids})).unwrap();
+    let out = run(&mut d, json!({"type": "make_group", "ids": [r.face, dim]})).unwrap();
+    let group = made(&out, 'i');
+    let (kind, _, ids) = run(
+        &mut d,
+        json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [1e4, 1e4, 1]}),
+    )
+    .unwrap_err();
+    assert_eq!((kind, ids), (ErrorKind::InvalidInput, vec![group.clone()]));
+}
+
+#[test]
+fn outcomes_and_events_carry_the_display_units_they_set() {
+    let mut d = doc();
+    let start = d.revision();
+    let out = run(&mut d, json!({"type": "set_units", "length": "inches"})).unwrap();
+    assert_eq!(out["units"], json!({"length": "inches", "precision": 3}));
+    let out = run(
+        &mut d,
+        json!({"type": "add_note", "anchor": [0, 0, 0], "position": [1, 1, 1]}),
+    )
+    .unwrap();
+    assert!(out.get("units").is_none(), "{out}");
+    let out = run(&mut d, json!({"type": "undo", "count": 2})).unwrap();
+    assert_eq!(out["units"], json!({"length": "meters", "precision": 3}));
+    let out = run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(out["units"], json!({"length": "inches", "precision": 3}));
+    let events = ask(&d, json!({"type": "events", "since": start}))["events"].clone();
+    let set: Vec<Value> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.get("units").cloned().unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(
+        set,
+        vec![
+            json!({"length": "inches", "precision": 3}),
+            Value::Null,
+            Value::Null,
+            json!({"length": "meters", "precision": 3}),
+            json!({"length": "inches", "precision": 3}),
+        ]
+    );
+    // In an atomic batch, the command that set them says so.
+    let batch: Vec<Command> = vec![
+        serde_json::from_value(json!({"type": "set_units", "precision": 1})).unwrap(),
+        serde_json::from_value(
+            json!({"type": "add_note", "anchor": [0, 0, 0], "position": [1, 1, 1]}),
+        )
+        .unwrap(),
+    ];
+    let outcomes = d.execute_batch(batch, true).unwrap();
+    assert_eq!(outcomes[0].units, Some(units(LengthUnit::Inches, 1)));
+    assert_eq!(outcomes[1].units, None);
+}

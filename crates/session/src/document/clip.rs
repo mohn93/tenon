@@ -28,7 +28,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face, instance or guide",
+                "ids must list at least one edge, face, instance, guide, dimension or note",
             ));
         }
         let parts = self.parts(ids)?;
@@ -62,7 +62,11 @@ impl Document {
         let at = |p: DVec3| placement.transform_point3(p).to_array();
         let mut points: Vec<[f64; 3]> = root.vertices().map(|(_, v)| at(v.pos)).collect();
         points.extend(root.guides().map(|(_, g)| at(g.anchor())));
-        points.extend(root.annotation_points().into_iter().map(at));
+        points.extend(
+            root.annotation_points(placement)
+                .into_iter()
+                .map(|p| p.to_array()),
+        );
         for (_, i) in root.instances() {
             let placed = placement * i.transform;
             match boxes.get(&i.definition).copied().flatten() {

@@ -66,7 +66,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face, instance or guide",
+                "ids must list at least one edge, face, instance, guide, dimension or note",
             ));
         }
         self.parts(ids)?;

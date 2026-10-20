@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, and `purged` for `purge_definitions` |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, `purged` for `purge_definitions`, and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -349,7 +349,7 @@ exploded and copied to the clipboard like a guide.
 | `{"type": "add_note", "anchor": "v3", "position": [3, 2, 1], "text": "Door"}` | A leader note: `text` at `position` with a line to `anchor` (a vertex id or a point, as for dimensions). Without `text` it shows the anchored point's coordinates in root coordinates and the display units, "(2 m, 1 m, 0 m)". Text has 1 to 1,024 characters, is not blank and has at most 64 lines (`invalid_input`). |
 | `{"type": "add_screen_note", "at": [0.1, 0.9], "text": "Plan A"}` | A note fixed to the view: `at` is fractions (0 to 1) of the view's width and height from its top left corner. Only the root holds screen notes: one added while an instance is open is `invalid_input`, and grouping leaves them in the root. |
 | `{"type": "change_note", "note": "n6", "text": "Exit"}` | Changes a note's text; absent or null `text` gives a leader note its automatic text again, and is `invalid_input` for a screen note. The same text changes nothing (no undo step). |
-| `{"type": "set_units", "length": "feet_inches", "precision": 4}` | Sets the model's display units, which dimension and note labels are written in; absent fields stay (one of them is needed). `length` is `meters` (the default), `centimeters`, `millimeters`, `inches` or `feet_inches`; `precision` (default 3) is the decimals kept, 0 to 6, or for `feet_inches` the finest fraction of an inch, 1/2^precision (0: whole inches, 4: 1/16, 6: 1/64). Labels round to it and drop trailing zeros: "1.5 m", "12.35 cm", `12.5"`, `5' 3 1/2"` (a value that rounds up to 12 inches carries to a foot: `1'`). Saved with the model; the same units again change nothing. The Measurements box and Entity Info keep meters. |
+| `{"type": "set_units", "length": "feet_inches", "precision": 4}` | Sets the model's display units, which dimension and note labels are written in; absent fields stay (one of them is needed). `length` is `meters` (the default), `centimeters`, `millimeters`, `inches` or `feet_inches`; `precision` (default 3) is the decimals kept, 0 to 6, or for `feet_inches` the finest fraction of an inch, 1/2^precision (0: whole inches, 4: 1/16, 6: 1/64). Labels round to it and drop trailing zeros: "1.5 m", "12.35 cm", `12.5"`, `5' 3 1/2"` (a value that rounds up to 12 inches carries to a foot: `1'`). Saved with the model; the same units again change nothing. The outcome, and the `changed` notification and `events` entry of the step (and of its undo or redo), carry `units`, the display units now, since `changes` lists no entity for them. The Measurements box and Entity Info keep meters. |
 
 Each is one undo step. A dimension's `entity` result (and its entry in `annotations`) is
 `{"type": "dimension", "id": "r5", "kind": "linear", "a": {"point": [0,0,0], "vertex": "v3"},
@@ -366,10 +366,13 @@ Annotations follow the geometry they are anchored to. When an edit removes an an
 a radial dimension whose curve is gone or no longer a circle or an arc keeps the circle it last
 had, in the same undo step, so undo attaches them again. A dimension whose two ends an edit
 brings together is removed in that step. Annotations inside a group anchor to the group's
-vertices and are in its coordinates, like everything else there.
+vertices and are in its coordinates, like everything else there: queries give anchor points,
+positions and circles in the open context's coordinates, while a leader note's automatic text
+writes its point in root coordinates.
 
-Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported,
-and the import report does not count them: the reader does not parse them.
+Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
+For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
+were not imported"); a 2021 or newer file's are not read, so not counted.
 
 ### Materials
 
@@ -1309,7 +1312,8 @@ that cannot be read, fewer than three distinct corners, no area, or a duplicate)
 `materials` the materials added. It also has `tags` (tags added), `scenes` (scenes added),
 `definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
 made), `textures` (materials added with a texture) and `warnings`
-(sentences, such as "2 scenes were not imported", "3 hidden faces were imported visible",
+(sentences, such as "2 scenes were not imported", "4 dimensions and text labels were not
+imported" (2017-2020 files only), "3 hidden faces were imported visible",
 "1 image was skipped", "5 face holes could not be read and were dropped", "2 hidden guides were not imported", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for
 OBJ and STL:
@@ -1414,7 +1418,7 @@ agent or the person at the window):
 
 | Notification | Params | When |
 |---|---|---|
-| `changed` | `{revision, changes}` | after every model change, in order (see Methods) |
+| `changed` | `{revision, changes}`, plus `units` when the change set the display units | after every model change, in order (see Methods) |
 | `resync` | `{revision}` | changes were missed: read the model again |
 | `selection` | `{ids, revision}`, as the `selection` query returns | the selection changed |
 | `camera` | the `camera` query's result (without `type`) | the camera or the lighting changed: navigating in the window, fly mode, camera commands |

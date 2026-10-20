@@ -12,7 +12,7 @@ use crate::camera::{Lighting, Projection, StandardView};
 use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 use crate::schema::ModelPoint;
-use crate::units::LengthUnit;
+use crate::units::{LengthUnit, Units};
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
@@ -171,9 +171,9 @@ pub enum Command {
         #[serde(default)]
         precision: Option<u8>,
     },
-    /// Erase edges, faces, instances, guides, dimensions and notes as one undo step. An erased
-    /// edge takes the faces it bounds with it, except that two faces in one plane meeting there merge into
-    /// one. Vertices go away with their last edge and cannot be erased directly. A group's
+    /// Erase edges, faces, instances, guides, dimensions and notes as one undo step. An erased edge
+    /// takes the faces it bounds with it, except that two faces in one plane meeting there merge
+    /// into one. Vertices go away with their last edge and cannot be erased directly. A group's
     /// definition goes with its last instance.
     Erase { ids: Vec<EntityId> },
     /// Move vertices, edges, faces, instances, guides, dimensions and notes by `offset` meters
@@ -184,11 +184,11 @@ pub enum Command {
         ids: Vec<EntityId>,
         offset: [f64; 3],
     },
-    /// Copy edges, faces, instances, guides, dimensions and notes `count` times (default 1),
-    /// copy k shifted by `k * offset`, as one undo step. A copied annotation anchored to a
-    /// copied vertex anchors to that vertex's copy; its other vertex anchors become points. Copies merge with geometry they touch; copied faces keep
-    /// their orientation. A copied component instance places the same definition; a copied
-    /// group gets a definition of its own.
+    /// Copy edges, faces, instances, guides, dimensions and notes `count` times (default 1), copy k
+    /// shifted by `k * offset`, as one undo step. A copied annotation anchored to a copied vertex
+    /// anchors to that vertex's copy; its other vertex anchors become points. Copies merge with
+    /// geometry they touch; copied faces keep their orientation. A copied component instance places
+    /// the same definition; a copied group gets a definition of its own.
     Copy {
         ids: Vec<EntityId>,
         offset: [f64; 3],
@@ -704,7 +704,10 @@ where
 
 /// An annotation's anchor: a vertex id ("v3"), followed as it moves, or a fixed point.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "an anchor: a vertex id such as \"v3\", or a point [x, y, z]"
+)]
 pub enum AnchorInput {
     Vertex(EntityId),
     #[schemars(with = "ModelPoint")]
@@ -745,6 +748,10 @@ pub struct Outcome {
     /// other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
+    /// The display units, after a command that changed them (`set_units`, or an undo or redo
+    /// of such a step); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Units>,
 }
 
 /// Who made an undo step.

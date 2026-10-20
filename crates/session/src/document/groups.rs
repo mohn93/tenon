@@ -81,7 +81,12 @@ impl Document {
             {
                 let at = |p: glam::DVec3| inst.transform.transform_point3(p).to_array();
                 points.extend(def.mesh.guides().map(|(_, g)| at(g.anchor())));
-                points.extend(def.mesh.annotation_points().into_iter().map(at));
+                points.extend(
+                    def.mesh
+                        .annotation_points(inst.transform)
+                        .into_iter()
+                        .map(|p| p.to_array()),
+                );
             }
             if check_coordinates(&points).is_err() {
                 return Err(CommandError::new(

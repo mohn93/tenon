@@ -563,4 +563,8 @@ pub enum QueryResult {
 pub struct ChangeEvent {
     pub revision: u64,
     pub changes: ChangeSummary,
+    /// The display units, when the change set them (`set_units`, or an undo or redo of such a
+    /// step); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<Units>,
 }
