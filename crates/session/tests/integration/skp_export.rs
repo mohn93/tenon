@@ -916,7 +916,12 @@ fn tags_round_trip() {
     let walls = add_tag(&mut d, json!({"name": "Walls", "color": [200, 30, 40]}));
     let roof = add_tag(&mut d, json!({"name": "Roof", "color": [10, 20, 30]}));
     let layer0 = add_tag(&mut d, json!({"name": "Layer0", "color": [5, 6, 7]}));
-    add_tag(&mut d, json!({"name": "Spare"}));
+    let spare = add_tag(&mut d, json!({"name": "Spare", "color": [1, 1, 1]}));
+    run(
+        &mut d,
+        json!({"type": "change_tag", "tag": spare, "visible": false}),
+    )
+    .unwrap();
     run(
         &mut d,
         json!({"type": "change_tag", "tag": roof, "visible": false}),
@@ -967,8 +972,8 @@ fn tags_round_trip() {
 
     let path = scratch("tags.skp");
     let report = export_to(&mut d, &path);
-    // Spare is on nothing: not written.
-    assert_eq!(report["tags"], 3, "{report}");
+    // Every tag is written, Spare (on nothing, hidden) too.
+    assert_eq!(report["tags"], 4, "{report}");
 
     // Read back by the reader: Layer0 first, then the tags, the user's "Layer0" renamed.
     let index = {
@@ -992,7 +997,8 @@ fn tags_round_trip() {
             ("Layer0", false),
             ("Walls", false),
             ("Roof", true),
-            ("Layer0 2", false)
+            ("Layer0 2", false),
+            ("Spare", true)
         ]
     );
 
@@ -1004,6 +1010,7 @@ fn tags_round_trip() {
             ("Walls".to_string(), json!([200, 30, 40]), true, 4),
             ("Roof".to_string(), json!([10, 20, 30]), false, 1),
             ("Layer0 2".to_string(), json!([5, 6, 7]), true, 1),
+            ("Spare".to_string(), json!([1, 1, 1]), false, 0),
         ]
     );
     let walls_back = ask(&back, json!({"type": "tags"}))["tags"][0]["id"].clone();

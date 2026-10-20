@@ -984,7 +984,7 @@ struct AddedTags {
 }
 
 /// Adds one tag per layer of the file but Layer0 (in the file's order, the first of a
-/// repeated id winning, at most `MAX_IMPORT_TAGS`): its name (made unique against the
+/// repeated id winning, at most `MAX_IMPORT_TAGS`; further ids are counted once each): its name (made unique against the
 /// model's tags: "Walls 2"), colour (the next free tag colour when the file has none) and
 /// visibility.
 fn add_tags(document: &mut Document, layers: &[LayerDef]) -> Result<AddedTags, CommandError> {
@@ -1000,8 +1000,10 @@ fn add_tags(document: &mut Document, layers: &[LayerDef]) -> Result<AddedTags, C
         .chain([UNTAGGED.to_string()])
         .collect();
     let mut next: HashMap<String, usize> = HashMap::new();
+    // Layer ids met, so that a repeated id (added or dropped) counts once.
+    let mut seen: HashSet<u32> = HashSet::new();
     for l in layers {
-        if l.name == DEFAULT_TAG || out.ids.contains_key(&l.id) {
+        if l.name == DEFAULT_TAG || !seen.insert(l.id) {
             continue;
         }
         if out.added.len() == MAX_IMPORT_TAGS {

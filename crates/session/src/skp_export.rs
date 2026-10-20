@@ -1,6 +1,6 @@
 //! The whole scene as a SketchUp 2017 (`.skp`) file, written by `skpwrite`: the root and
 //! every definition the root reaches (each once, in its own coordinates), the materials,
-//! the tags entities are on (as layers), guides, holes, soft edges and texture placements.
+//! every tag (as layers), guides, holes, soft edges and texture placements.
 //! Meters become inches. What a SketchUp file cannot hold (glowing materials, curves as
 //! curves, empty groups) is reported.
 
@@ -35,7 +35,7 @@ pub(crate) struct SkpExportStats {
     pub edges: usize,
     pub guides: usize,
     pub materials: usize,
-    /// Tags written (those an entity written is on).
+    /// Tags written (every tag of the model).
     pub tags: usize,
     /// What the file could not hold.
     pub warnings: Vec<String>,
@@ -86,28 +86,12 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
     let def_index: HashMap<DefinitionId, usize> =
         written.iter().enumerate().map(|(i, d)| (*d, i)).collect();
 
-    // The tags an entity written is on, in id order, each named uniquely (and not Layer0).
-    let mut used: BTreeSet<TagId> = BTreeSet::new();
-    let meshes = std::iter::once(scene.root()).chain(
-        written
-            .iter()
-            .filter_map(|d| scene.definition(*d))
-            .map(|d| &d.mesh),
-    );
-    for m in meshes {
-        used.extend(m.edges().filter_map(|(_, e)| e.tag));
-        used.extend(m.faces().filter_map(|(_, f)| f.tag));
-        used.extend(
-            m.instances()
-                .filter(|(_, i)| def_index.contains_key(&i.definition))
-                .filter_map(|(_, i)| i.tag),
-        );
-        used.extend(m.guides().filter_map(|(_, g)| g.tag()));
-    }
+    // Every tag, used or not (SketchUp files keep unused layers), in id order, each named
+    // uniquely (and not Layer0).
     let mut taken = HashSet::from([DEFAULT_LAYER.to_string()]);
     let mut tag_index: HashMap<TagId, usize> = HashMap::new();
     let mut tags = Vec::new();
-    for (id, t) in used.iter().filter_map(|id| Some((*id, scene.tag(*id)?))) {
+    for (id, t) in scene.tags() {
         tag_index.insert(id, tags.len());
         tags.push(Tag {
             name: unique_name(&mut taken, &t.name, "Tag"),

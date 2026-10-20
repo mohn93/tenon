@@ -151,6 +151,17 @@ fn varint(r: &Record) -> u64 {
     v
 }
 
+/// An entity's layer reference as the 32-bit layer id `parse_layers` gives: [`NO_LAYER`]
+/// when it has none, or when its pid does not fit 32 bits (a layer's own id saturates there,
+/// so such a reference could only name the wrong layer).
+pub fn layer_ref(c: &Common) -> u32 {
+    if c.has_layer {
+        u32::try_from(c.layer).unwrap_or(NO_LAYER)
+    } else {
+        NO_LAYER
+    }
+}
+
 /// Read `Entity`/`DrawingElement` state out of whichever of the two wraps it.
 ///
 /// A `Vertex` carries a bare `Entity`; everything drawable carries a
@@ -561,11 +572,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
                 edge_start.push(a);
                 edge_end.push(b);
                 g.edge_flags.push(c.flags);
-                g.edge_layer.push(if c.has_layer {
-                    c.layer as u32
-                } else {
-                    NO_LAYER
-                });
+                g.edge_layer.push(layer_ref(&c));
             }
         }
     }
@@ -634,11 +641,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             });
             g.face_back_material
                 .push(if has_back { back as u32 } else { NO_MATERIAL });
-            g.face_layer.push(if c.has_layer {
-                c.layer as u32
-            } else {
-                NO_LAYER
-            });
+            g.face_layer.push(layer_ref(&c));
             g.face_flags.push(c.flags);
             match front_texture_info(&f) {
                 // The identity carries no information: under the recipe in
@@ -719,11 +722,7 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             }
             spend(budget, 1)?;
             g.guides.push(guide);
-            g.guide_layer.push(if common.has_layer {
-                common.layer as u32
-            } else {
-                NO_LAYER
-            });
+            g.guide_layer.push(layer_ref(&common));
         }
     }
 

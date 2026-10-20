@@ -1834,6 +1834,68 @@ fn corpus_tutorial_tags() {
     .unwrap();
     println!("exported: {}", out["export"]);
     let (back, _) = open(&path);
-    let used: Vec<_> = want.iter().filter(|t| t.3 > 0).cloned().collect();
-    assert_eq!(summary(&back), used);
+    assert_eq!(summary(&back), want);
+}
+
+#[test]
+fn tags_past_the_import_limit_are_left_off_untagged() {
+    // 1025 layers besides Layer0, one of them listed twice: the last one's entities (the
+    // definition's edge, the root's placement and guide) import Untagged, with one warning.
+    use craft::{Guide, Layering, file_with_layers, scaled};
+    let mut layers: Vec<(u64, String, bool)> = vec![(500, "Layer0".into(), false)];
+    layers.extend((0..1025u64).map(|k| (1000 + k, format!("L{k}"), false)));
+    layers.push((2024, "L1024 again".into(), true));
+    let last = Some(2024);
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[Guide::Point([1.0, 2.0, 3.0])],
+        &Layering {
+            layers,
+            edge: last,
+            instances: last,
+            guides: last,
+        },
+    );
+    let (d, r, _) = import_timed("many-layers.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["tags"], 1024, "{report}");
+    assert!(
+        warnings(report).contains(
+            &"1 tag past the 1024 an import may add was left off; what is on it is Untagged"
+                .to_string()
+        ),
+        "{report}"
+    );
+    let all = tags_of(&d);
+    assert_eq!(all.len(), 1024);
+    assert_eq!(all[1023]["name"], "L1023");
+    assert!(all.iter().all(|t| t["count"] == 0));
+}
+
+#[test]
+fn layer_references_past_32_bits_import_untagged() {
+    // References to a pid past 32 bits whose low half is Walls' pid: they name no layer, so
+    // the definition's edge, the root's placement and its guide import Untagged.
+    use craft::{Guide, Layering, file_with_layers, scaled};
+    let wide = (1u64 << 32) + 501;
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[Guide::Point([1.0, 2.0, 3.0])],
+        &Layering {
+            layers: vec![(501, "Walls".into(), false), (wide, "Wide".into(), false)],
+            edge: Some(wide),
+            instances: Some(wide),
+            guides: Some(wide),
+        },
+    );
+    let (d, r, _) = import_timed("wide-layers.skp", &bytes);
+    r.unwrap();
+    d.scene().validate().unwrap();
+    let all = tags_of(&d);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert!(all.iter().all(|t| t["count"] == 0), "{all:?}");
 }

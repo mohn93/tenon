@@ -166,3 +166,8 @@ Upstream's tests are not copied: they read a private corpus.
     layer as `edge_layer` and `face_layer` do: on the 2021+ path the layer pid of the
     `ConstructionGeometry` wrapper's `DrawingElement` (or `NO_LAYER`), on the legacy path
     the layer index of the guide's drawbase layer slot (which was read and dropped).
+27. Layer references past 32 bits (2021+ path): `geom::layer_ref` gives `NO_LAYER` for a
+    face's, edge's or guide's layer pid that does not fit a `u32` (upstream cut it to its low
+    32 bits, which could name another layer). Instances keep the full pid in
+    `RawInstance::layer`; the importer drops one past 32 bits the same way. A layer's own id
+    saturates at `u32::MAX` (`NO_LAYER`), so nothing can refer to such a layer.
