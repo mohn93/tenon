@@ -16,6 +16,7 @@ mod native_menu;
 mod navigation;
 mod paths;
 mod prefs;
+mod recovery;
 mod shortcuts;
 mod ui;
 #[cfg(windows)]
@@ -130,11 +131,21 @@ fn main() {
                 );
             }
             let recovery = found.as_ref().map(|p| p.recovery.clone());
+            let session = recovery.as_deref().and_then(|dir| {
+                recovery::Session::start(dir)
+                    .inspect_err(|e| {
+                        eprintln!(
+                            "warning: autosave disabled: cannot use {}: {e}",
+                            dir.display()
+                        );
+                    })
+                    .ok()
+            });
             let prefs = found.map(|p| prefs::PrefsFile {
                 path: p.prefs,
                 legacy: p.legacy_prefs,
             });
-            let mut app = app::App::new(&event_loop, socket, file, roots, recovery, prefs);
+            let mut app = app::App::new(&event_loop, socket, file, roots, recovery, session, prefs);
             event_loop.run_app(&mut app).expect("run app");
         }
     }

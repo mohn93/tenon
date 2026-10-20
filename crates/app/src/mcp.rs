@@ -27,6 +27,7 @@ impl Backend for LocalBackend {
             quit: &mut self.quit,
             roots: &self.roots,
             recovery: None,
+            session: None,
         };
         api::call(&mut host, method, params)
     }

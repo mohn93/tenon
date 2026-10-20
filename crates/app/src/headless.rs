@@ -84,6 +84,7 @@ fn serve(
             quit: &mut quit,
             roots,
             recovery: None,
+            session: None,
         };
         if !hub.process_blocking(&mut host) {
             return;

@@ -35,6 +35,7 @@ use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::paths;
 use crate::prefs::{self, Prefs};
+use crate::recovery::Session;
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
@@ -585,6 +586,8 @@ struct State {
     roots: ApiRoots,
     /// Where discarded work is kept (None: nowhere).
     recovery: Option<PathBuf>,
+    /// This window's hold on the recovery folder (None: it could not be used).
+    session: Option<Session>,
     /// The window's preferences, as chosen in this session.
     prefs: Prefs,
     /// Where they are kept between sessions (None: HOME is not set; they last the session).
@@ -681,6 +684,7 @@ impl State {
         window: Arc<Window>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
+        session: Option<Session>,
         prefs_file: Option<prefs::PrefsFile>,
     ) -> Self {
         let prefs = prefs_file
@@ -725,6 +729,7 @@ impl State {
             quit: false,
             roots,
             recovery,
+            session,
             prefs,
             prefs_path,
             recent_shown,
@@ -1746,6 +1751,7 @@ impl State {
             quit: &mut self.quit,
             roots: &self.roots,
             recovery: self.recovery.as_deref(),
+            session: self.session.as_ref(),
         }
     }
 
@@ -2172,6 +2178,8 @@ pub struct App {
     roots: ApiRoots,
     /// Where work an agent discards is kept.
     recovery: Option<PathBuf>,
+    /// The recovery session, handed to the window when it is made.
+    session: Option<Session>,
     /// The window's preferences file (None: HOME is not set).
     prefs: Option<prefs::PrefsFile>,
     /// Carries native menu and AccessKit events to the loop.
@@ -2187,6 +2195,7 @@ impl App {
         file: Option<PathBuf>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
+        session: Option<Session>,
         prefs: Option<prefs::PrefsFile>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
@@ -2212,6 +2221,7 @@ impl App {
             file,
             roots,
             recovery,
+            session,
             prefs,
             proxy,
         }
@@ -2319,6 +2329,7 @@ impl ApplicationHandler<AppEvent> for App {
             window,
             self.roots.clone(),
             self.recovery.clone(),
+            self.session.take(),
             self.prefs.clone(),
         );
         // The adapter before the window is first shown (it panics otherwise), then the window,

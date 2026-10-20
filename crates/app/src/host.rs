@@ -16,8 +16,8 @@ use session::{
 };
 use tools::Phase;
 
-use crate::cli;
 use crate::editor::{DriveError, Driven, Editor, Stopped};
+use crate::recovery::{self, Session};
 
 /// How long a quitting app waits for its last replies to be written.
 pub const CLOSE_WAIT: Duration = Duration::from_secs(2);
@@ -66,6 +66,9 @@ pub struct AppHost<'a> {
     /// them (the window's; None keeps nothing, as headless, where the agent's work is all
     /// there is).
     pub recovery: Option<&'a Path>,
+    /// The window's recovery session (None headless): kept files get its sidecars, and a
+    /// save, new or open removes its autosave.
+    pub session: Option<&'a Session>,
 }
 
 /// Whether `command` drops unsaved changes when it runs.
@@ -76,23 +79,19 @@ fn discards(command: &Command) -> bool {
     )
 }
 
+/// Whether `command`, when it succeeds, leaves the window's autosave stale: the model was
+/// saved, or replaced.
+fn ends_autosave(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Save { .. } | Command::New { .. } | Command::Open { .. }
+    )
+}
+
 /// A free file name in `dir` for a recovery copy of the model at `open_file` (or an unsaved
 /// one), stamped with `now` in seconds.
 pub fn recovery_path(dir: &Path, open_file: Option<&Path>, now: SystemTime) -> PathBuf {
-    let stem: String = open_file
-        .and_then(Path::file_stem)
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "untitled".into())
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let stem = recovery::file_stem(open_file);
     let secs = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let mut path = dir.join(format!("{stem}-{secs}.skr"));
     let mut n = 2;
@@ -130,11 +129,7 @@ impl AppHost<'_> {
                 ),
             )
         };
-        if let Some(parent) = cli::private_dir_for(dir) {
-            cli::ensure_private_dir(parent).map_err(|e| failed(e.to_string()))?;
-        }
-        cli::ensure_private_xdg_dir(crate::paths::Os::current(), dir)
-            .map_err(|e| failed(e.to_string()))?;
+        recovery::ensure_folder(dir).map_err(|e| failed(e.to_string()))?;
         let path = recovery_path(dir, self.editor.doc().path(), SystemTime::now());
         self.editor
             .doc()
@@ -143,8 +138,26 @@ impl AppHost<'_> {
         Ok(Some(path))
     }
 
+    /// Notes a recovery file the work dropped from the model at `original` was kept in: in
+    /// the status, and in a sidecar of the session's.
+    fn note_kept(&mut self, path: PathBuf, original: Option<&Path>) {
+        if let Some(session) = self.session {
+            session.note_discarded(&path, original);
+        }
+        self.editor.note_recovery(path);
+    }
+
+    /// Removes the session's autosave, after a save, new or open.
+    fn end_autosave(&self) {
+        if let Some(session) = self.session {
+            session.clear_autosave();
+        }
+    }
+
     /// Runs `command`, first keeping the work it would discard.
     fn execute_keeping(&mut self, command: Command) -> Result<Outcome, CommandError> {
+        let ends = ends_autosave(&command);
+        let original = self.editor.doc().path().map(Path::to_path_buf);
         let kept = if discards(&command) {
             self.keep_discarded()?
         } else {
@@ -153,12 +166,15 @@ impl AppHost<'_> {
         let result = self.editor.execute(command);
         if let Some(path) = kept {
             match &result {
-                Ok(_) => self.editor.note_recovery(path),
+                Ok(_) => self.note_kept(path, original.as_deref()),
                 // Nothing was dropped.
                 Err(_) => {
                     let _ = std::fs::remove_file(path);
                 }
             }
+        }
+        if ends && result.is_ok() {
+            self.end_autosave();
         }
         result
     }
@@ -205,7 +221,20 @@ impl Host for AppHost<'_> {
                 }
                 return Ok(completed);
             }
-            host.editor.execute_batch(commands, atomic)
+            let ends: Vec<bool> = commands
+                .iter()
+                .map(|c| ends_autosave(c.command()))
+                .collect();
+            let result = host.editor.execute_batch(commands, atomic);
+            let done = match &result {
+                Ok(outcomes) => outcomes.len(),
+                Err(e) if e.rolled_back => 0,
+                Err(e) => e.completed.len(),
+            };
+            if ends.iter().take(done).any(|&e| e) {
+                host.end_autosave();
+            }
+            result
         })
     }
 
@@ -282,8 +311,9 @@ impl Host for AppHost<'_> {
 
     fn quit(&mut self, discard: bool) -> Result<(), CommandError> {
         self.editor.doc().check_unsaved(discard)?;
+        let original = self.editor.doc().path().map(Path::to_path_buf);
         if let Some(path) = self.keep_discarded()? {
-            self.editor.note_recovery(path);
+            self.note_kept(path, original.as_deref());
         }
         *self.quit = true;
         Ok(())
@@ -404,6 +434,7 @@ mod tests {
             quit,
             roots: &ApiRoots::default(),
             recovery: None,
+            session: None,
         };
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
@@ -651,6 +682,17 @@ mod tests {
     }
 
     fn call_kept(e: &mut Editor, dir: &Path, method: &str, params: Value) -> Value {
+        call_in(e, dir, None, method, params)
+    }
+
+    /// `call_kept` with the window's recovery session.
+    fn call_in(
+        e: &mut Editor,
+        dir: &Path,
+        session: Option<&Session>,
+        method: &str,
+        params: Value,
+    ) -> Value {
         let (mut offscreen, mut quit) = (Offscreen::headless(), false);
         let roots = ApiRoots::default();
         let mut host = AppHost {
@@ -659,6 +701,7 @@ mod tests {
             quit: &mut quit,
             roots: &roots,
             recovery: Some(dir),
+            session,
         };
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
@@ -847,7 +890,7 @@ mod tests {
     #[test]
     fn the_sketchup_alt_folder_is_made_private_with_the_recovery_folder_in_it() {
         let base = recovery_dir("home");
-        let dir = base.join(cli::FALLBACK_DIR).join("recovery");
+        let dir = base.join(crate::cli::FALLBACK_DIR).join("recovery");
         std::fs::create_dir_all(&base).unwrap();
         let mut e = editor();
         call_kept(&mut e, &dir, "execute", add_edge());
@@ -958,6 +1001,136 @@ mod tests {
         owner_only(&found.recovery);
         owner_only(&kept[0]);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The model files in `dir`: neither sidecars nor lock files.
+    fn models_in(dir: &Path) -> Vec<PathBuf> {
+        files_in(dir)
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|x| x == "skr"))
+            .collect()
+    }
+
+    #[test]
+    fn work_kept_in_the_window_gets_a_sidecar_and_lists_once_the_session_ends() {
+        let dir = recovery_dir("sidecar");
+        let session = Session::start(&dir).unwrap();
+        let mut e = editor();
+        call_in(&mut e, &dir, Some(&session), "execute", add_edge());
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        let kept = models_in(&dir);
+        assert_eq!(kept.len(), 1);
+        let mut note = kept[0].as_os_str().to_owned();
+        note.push(".json");
+        let note: Value = serde_json::from_slice(&std::fs::read(note).unwrap()).unwrap();
+        assert_eq!(note["kind"], "discarded");
+        assert_eq!(note["session"], session.id());
+        assert!(note.get("original").is_none(), "{note}");
+        // Quitting with discard keeps a second one, noted the same way.
+        call_in(&mut e, &dir, Some(&session), "execute", add_edge());
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "quit",
+            json!({"discard": true}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        assert!(recovery::list(&dir, &session, true).is_empty(), "ours");
+        drop(session);
+        let other = Session::start(&dir).unwrap();
+        let found = recovery::list(&dir, &other, true);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|f| f.kind == recovery::Kind::Discarded));
+        assert!(recovery::list(&dir, &other, false).is_empty());
+        drop(other);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_agents_save_new_or_open_removes_the_autosave() {
+        let dir = recovery_dir("clean-up");
+        let session = Session::start(&dir).unwrap();
+        let saved = dir.with_extension("skr");
+        let mut e = editor();
+        let autosaves = || {
+            files_in(&dir)
+                .iter()
+                .filter(|p| p.to_string_lossy().contains(".autosave."))
+                .count()
+        };
+        call_in(&mut e, &dir, Some(&session), "execute", add_edge());
+        session.write_autosave(e.doc(), None).unwrap();
+        assert_eq!(autosaves(), 2, "the model and its sidecar");
+        // A command that fails leaves it.
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "execute",
+            json!({"type": "open", "path": "/no/such.skr", "discard": true}),
+        );
+        assert!(r["error"].is_object(), "{r}");
+        assert_eq!(autosaves(), 2);
+        // Save: gone; the saved file is the user's.
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "execute",
+            json!({"type": "save", "path": saved.display().to_string()}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        assert_eq!(autosaves(), 0);
+        assert!(saved.is_file());
+        // New, in a batch.
+        call_in(&mut e, &dir, Some(&session), "execute", add_edge());
+        session.write_autosave(e.doc(), e.doc().path()).unwrap();
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "batch",
+            json!({"commands": [{"type": "new", "discard": true}, add_edge()]}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        assert_eq!(autosaves(), 0);
+        // Open, in a batch that runs no discard.
+        session.write_autosave(e.doc(), None).unwrap();
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "batch",
+            json!({"commands": [
+                {"type": "save", "path": saved.display().to_string()},
+                {"type": "open", "path": saved.display().to_string()}
+            ]}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        assert_eq!(autosaves(), 0);
+        // A batch that fails before its save leaves it.
+        call_in(&mut e, &dir, Some(&session), "execute", add_edge());
+        session.write_autosave(e.doc(), None).unwrap();
+        let r = call_in(
+            &mut e,
+            &dir,
+            Some(&session),
+            "batch",
+            json!({"commands": [{"type": "undo", "expect": {"label": "nothing"}}, {"type": "save"}]}),
+        );
+        assert!(r["error"].is_object(), "{r}");
+        assert_eq!(autosaves(), 2);
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&saved);
     }
 
     #[test]

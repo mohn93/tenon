@@ -14,7 +14,7 @@ use crate::ui::theme::{ThemeChoice, UiScale};
 
 /// What the prefs file keeps. Keys it does not know are ignored, and dropped at the next save;
 /// a key missing (a file from before it) is its default.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
     pub theme: ThemeChoice,
@@ -30,7 +30,30 @@ pub struct Prefs {
     pub recent: Vec<PathBuf>,
     /// The Import Options sheet's values when Import was last pressed.
     pub import: ImportOptions,
+    /// How often the open model is copied to the recovery folder, in minutes (0: never).
+    /// Loaded at most `MAX_AUTOSAVE_MINUTES`.
+    pub autosave_minutes: u32,
 }
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs {
+            theme: ThemeChoice::default(),
+            ui_scale: UiScale::default(),
+            trackpad: TrackpadScroll::default(),
+            dock: DockLayout::default(),
+            recent: Vec::new(),
+            import: ImportOptions::default(),
+            autosave_minutes: DEFAULT_AUTOSAVE_MINUTES,
+        }
+    }
+}
+
+/// The autosave interval of a new prefs file, in minutes.
+pub const DEFAULT_AUTOSAVE_MINUTES: u32 = 5;
+
+/// The longest autosave interval, in minutes.
+pub const MAX_AUTOSAVE_MINUTES: u32 = 60;
 
 /// How many recent files the prefs keep.
 pub const RECENT_LEN: usize = 10;
@@ -104,8 +127,8 @@ pub fn load_file(file: &PrefsFile) -> Prefs {
 
 /// The prefs at `path`: the defaults when there is no file, and the defaults with a warning
 /// on stderr when it cannot be read or is not valid (it is replaced at the next change). The
-/// warning never quotes the file. Dock values out of range are brought into it, and the
-/// recent files are cleaned (see `cleaned`).
+/// warning never quotes the file. Dock values and the autosave interval out of range are
+/// brought into it, and the recent files are cleaned (see `cleaned`).
 pub fn load(path: &Path) -> Prefs {
     let bytes = match read(path) {
         Ok(Some(bytes)) => bytes,
@@ -130,6 +153,7 @@ pub fn load(path: &Path) -> Prefs {
     Prefs {
         dock: prefs.dock.clamped(),
         recent: cleaned(prefs.recent),
+        autosave_minutes: prefs.autosave_minutes.min(MAX_AUTOSAVE_MINUTES),
         ..prefs
     }
 }
@@ -210,7 +234,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
 
 /// Creates the file `path` for writing, failing when anything is there: mode 0600 on Unix, and
 /// on Windows a DACL for the current user only.
-fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
+pub(crate) fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -310,7 +334,7 @@ mod tests {
         assert_eq!(load(&path).trackpad, TrackpadScroll::Zoom);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  }\n}"
+            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  },\n  \"autosave_minutes\": 5\n}"
         );
         #[cfg(unix)]
         {
@@ -350,6 +374,7 @@ mod tests {
             ui_scale: UiScale::P125,
             trackpad: TrackpadScroll::Zoom,
             import: ImportOptions::default(),
+            autosave_minutes: 30,
         };
         assert_ne!(prefs.theme, ThemeChoice::default());
         assert_ne!(prefs.dock, DockLayout::default());
@@ -373,6 +398,7 @@ mod tests {
                 ui_scale: UiScale::P100,
                 trackpad: TrackpadScroll::Orbit,
                 import: ImportOptions::default(),
+                autosave_minutes: 5,
             }
         );
         std::fs::write(
@@ -710,6 +736,43 @@ mod tests {
                 String::from_utf8_lossy(bad)
             );
         }
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn autosave_minutes_default_to_5_and_load_clamped() {
+        assert_eq!(Prefs::default().autosave_minutes, 5);
+        let home = home("autosave");
+        let path = path_in(&home);
+        // Makes the folder, private.
+        save(&path, &Prefs::default()).unwrap();
+        let load_json = |json: &str| {
+            std::fs::write(&path, json).unwrap();
+            load(&path)
+        };
+        assert_eq!(
+            load_json("{\"theme\": \"dark\"}").autosave_minutes,
+            5,
+            "an older file"
+        );
+        assert_eq!(
+            load_json("{\"autosave_minutes\": 0}").autosave_minutes,
+            0,
+            "off"
+        );
+        assert_eq!(load_json("{\"autosave_minutes\": 60}").autosave_minutes, 60);
+        assert_eq!(
+            load_json("{\"autosave_minutes\": 500}").autosave_minutes,
+            60
+        );
+        // Not a count of minutes: the file is not valid, so all defaults.
+        assert_eq!(load_json("{\"autosave_minutes\": -1}"), Prefs::default());
+        let prefs = Prefs {
+            autosave_minutes: 12,
+            ..Prefs::default()
+        };
+        save(&path, &prefs).unwrap();
+        assert_eq!(load(&path), prefs);
         std::fs::remove_dir_all(home).unwrap();
     }
 

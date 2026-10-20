@@ -251,6 +251,12 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8], access: Access) -> Result<
     result
 }
 
+/// [`replace_file`] for a file only the user may read (0600; on Windows an owner-only DACL):
+/// the notes the window keeps beside its recovery copies.
+pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    replace_file(path, bytes, Access::Private)
+}
+
 /// Creates the file `path` for writing, failing when anything is there. `Access::Private`:
 /// mode 0600 on Unix, and on Windows a DACL for the current user only.
 fn create_new(path: &Path, access: Access) -> std::io::Result<std::fs::File> {
