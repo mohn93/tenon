@@ -12,6 +12,7 @@ use crate::camera::{Lighting, Projection, StandardView};
 use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
 use crate::schema::ModelPoint;
+use crate::units::LengthUnit;
 
 /// Every state change a client can make. Values are explicit (meters, degrees, entity ids);
 /// commands never refer to screen positions or cursor state. Points, offsets and entity ids are
@@ -118,19 +119,74 @@ pub enum Command {
     /// Erase every guide of the open context, as one undo step (nothing to erase is not an
     /// error and makes no undo step).
     DeleteGuides {},
-    /// Erase edges, faces, instances and guides as one undo step. An erased edge takes the
-    /// faces it bounds with it, except that two faces in one plane meeting there merge into
+    /// Add a linear dimension measuring the distance between `a` and `b`, as one undo step.
+    /// Each end is a vertex id ("v3"), which the dimension follows, or a point. The dimension
+    /// line is drawn from `a` to `b` moved by `offset`, of which only the part perpendicular
+    /// to a-b is kept. Ends that coincide are refused.
+    AddDimension {
+        a: AnchorInput,
+        b: AnchorInput,
+        offset: [f64; 3],
+    },
+    /// Add a linear dimension between the two vertices of `edge`, as one undo step.
+    AddEdgeDimension { edge: EntityId, offset: [f64; 3] },
+    /// Add a radial dimension to the circle or arc `edge` (any of its edges) is part of, as
+    /// one undo step: its radius, or with `diameter` its diameter, labelled at `leader` from
+    /// the center. It follows the curve while the curve stays a circle or an arc.
+    AddRadialDimension {
+        edge: EntityId,
+        #[serde(default)]
+        diameter: bool,
+        leader: [f64; 3],
+    },
+    /// Add a leader note, as one undo step: `text` at `position` with a line to `anchor` (a
+    /// vertex id, which it follows, or a point). Without `text` the note shows the anchored
+    /// point's coordinates in the display units. Text has 1 to 1024 characters, is not blank
+    /// and has at most 64 lines.
+    AddNote {
+        anchor: AnchorInput,
+        #[schemars(with = "ModelPoint")]
+        position: [f64; 3],
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Add a note fixed to the view, as one undo step: `text` at `at`, fractions (0 to 1) of
+    /// the view's width and height from its top left corner. Only the root holds screen notes:
+    /// refused while an instance is open.
+    AddScreenNote { at: [f64; 2], text: String },
+    /// Change a note's text, as one undo step. Absent or null `text` gives a leader note its
+    /// automatic text (the anchored point's coordinates); a screen note needs text.
+    ChangeNote {
+        note: EntityId,
+        #[serde(default)]
+        text: Option<String>,
+    },
+    /// Set the model's display units, which dimension and note labels are written in, as one
+    /// undo step; absent fields stay as they are. `precision` is the decimals kept (0 to 6),
+    /// or for `feet_inches` the finest fraction of an inch, 1/2^precision (6: 1/64). Saved
+    /// with the model.
+    SetUnits {
+        #[serde(default)]
+        length: Option<LengthUnit>,
+        #[serde(default)]
+        precision: Option<u8>,
+    },
+    /// Erase edges, faces, instances, guides, dimensions and notes as one undo step. An erased
+    /// edge takes the faces it bounds with it, except that two faces in one plane meeting there merge into
     /// one. Vertices go away with their last edge and cannot be erased directly. A group's
     /// definition goes with its last instance.
     Erase { ids: Vec<EntityId> },
-    /// Move vertices, edges, faces, instances and guides by `offset` meters as one undo step.
-    /// Faces that share some of the moved vertices stretch and may tilt, but must stay flat.
+    /// Move vertices, edges, faces, instances, guides, dimensions and notes by `offset` meters
+    /// as one undo step. Faces that share some of the moved vertices stretch and may tilt, but
+    /// must stay flat. An annotation's fixed points and offsets move; its vertex anchors move
+    /// with their vertices; a dimension whose two ends the move brings together is removed.
     Move {
         ids: Vec<EntityId>,
         offset: [f64; 3],
     },
-    /// Copy edges, faces, instances and guides `count` times (default 1), copy k shifted by
-    /// `k * offset`, as one undo step. Copies merge with geometry they touch; copied faces keep
+    /// Copy edges, faces, instances, guides, dimensions and notes `count` times (default 1),
+    /// copy k shifted by `k * offset`, as one undo step. A copied annotation anchored to a
+    /// copied vertex anchors to that vertex's copy; its other vertex anchors become points. Copies merge with geometry they touch; copied faces keep
     /// their orientation. A copied component instance places the same definition; a copied
     /// group gets a definition of its own.
     Copy {
@@ -139,7 +195,8 @@ pub enum Command {
         #[serde(default)]
         count: Option<u32>,
     },
-    /// Rotate vertices, edges, faces (their vertices), instances and guides by `angle` degrees
+    /// Rotate vertices, edges, faces (their vertices), instances, guides and annotations (as
+    /// `move` moves them) by `angle` degrees
     /// about the line through `center` along `axis` (default Z), counter-clockwise looking
     /// down the axis, as one undo step. Faces that share some of the turned vertices stretch
     /// and may tilt, but must stay flat. With `copies`, the originals stay and that many copies
@@ -154,7 +211,8 @@ pub enum Command {
         #[serde(default)]
         copies: Option<u32>,
     },
-    /// Scale vertices, edges, faces (their vertices), instances and guides by `factors` along
+    /// Scale vertices, edges, faces (their vertices), instances, guides and annotations (as
+    /// `move` moves them; a fixed circle keeps its area) by `factors` along
     /// model x, y and z about `origin`, as one undo step. Each factor is finite, non-zero and
     /// between 1e-4 and 1e4 in size; a negative factor mirrors (faces stay facing out). Faces
     /// that share some of the scaled vertices stretch and may tilt, but must stay flat.
@@ -188,9 +246,10 @@ pub enum Command {
     /// path segments, on one curve that is not a polygon are soft. `path` may not include the
     /// face's own edges unless it is exactly the outer loop of another face.
     FollowMe { face: EntityId, path: Vec<EntityId> },
-    /// Turn edges, faces (with their edges), instances and guides into a group: they move into
-    /// a new definition, placed by one new instance where they were. Guides alone cannot be
-    /// grouped. The instance becomes the selection.
+    /// Turn edges, faces (with their edges), instances, guides and annotations into a group:
+    /// they move into a new definition, placed by one new instance where they were. Guides and
+    /// annotations alone cannot be grouped; screen notes stay in the root. The instance
+    /// becomes the selection.
     MakeGroup { ids: Vec<EntityId> },
     /// Like `MakeGroup`, but the definition is a named component: copies of its instances
     /// share it, so editing one edits them all.
@@ -300,8 +359,8 @@ pub enum Command {
         #[serde(default)]
         move_to: Option<TagId>,
     },
-    /// Put edges, faces, instances and guides of the open context on `tag` (absent or null:
-    /// Untagged), as one undo step. Vertices cannot be tagged.
+    /// Put edges, faces, instances, guides, dimensions and notes of the open context on `tag`
+    /// (absent or null: Untagged), as one undo step. Vertices cannot be tagged.
     SetTag {
         ids: Vec<EntityId>,
         #[serde(default)]
@@ -420,6 +479,7 @@ pub enum Command {
     /// places written once, faces with holes, soft edges, guides and materials with their
     /// textures; its `export` counts definitions, instances, faces, edges, guides and
     /// materials, with `warnings` for what the file cannot hold (glow, curves, empty groups).
+    /// No format holds dimensions or notes: `warnings` counts those left out.
     /// An existing file that is not of the format written, or the SketchUp file the model
     /// was opened from, is refused unless `overwrite` is true.
     Export {
@@ -478,14 +538,15 @@ pub enum Command {
         #[schemars(with = "Option<ModelPoint>")]
         at: Option<[f64; 3]>,
     },
-    /// Change the selection of edges, faces, instances and guides. Not recorded in undo history.
+    /// Change the selection of edges, faces, instances, guides, dimensions and notes. Not
+    /// recorded in undo history.
     Select {
         #[serde(default)]
         ids: Vec<EntityId>,
         #[serde(default)]
         mode: SelectMode,
-        /// Everything in the open context (edges, faces, instances and guides) in place of
-        /// `ids`, combined by `mode` the same way.
+        /// Everything in the open context (edges, faces, instances, guides, dimensions and
+        /// notes) in place of `ids`, combined by `mode` the same way.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         all: bool,
     },
@@ -639,6 +700,15 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// An annotation's anchor: a vertex id ("v3"), followed as it moves, or a fixed point.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AnchorInput {
+    Vertex(EntityId),
+    #[schemars(with = "ModelPoint")]
+    Point([f64; 3]),
 }
 
 /// How `Command::Select` combines `ids` with the current selection.

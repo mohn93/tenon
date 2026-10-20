@@ -48,6 +48,31 @@ impl ExportFormat {
     }
 }
 
+/// What an export leaves out of `scene`'s annotations, as warnings: "2 dimensions were not
+/// written", "1 note was not written". The root and every definition it places count, each
+/// definition once.
+pub(crate) fn annotation_warnings(scene: &Scene) -> Vec<String> {
+    let meshes = std::iter::once(scene.root()).chain(
+        crate::skp_export::reached(scene)
+            .into_iter()
+            .filter_map(|d| scene.definition(d).map(|d| &d.mesh)),
+    );
+    let (mut dimensions, mut notes) = (0, 0);
+    for m in meshes {
+        dimensions += m.dimensions().count();
+        notes += m.notes().count();
+    }
+    let said = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one} was not written")),
+        n => Some(format!("{n} {many} were not written")),
+    };
+    said(dimensions, "dimension", "dimensions")
+        .into_iter()
+        .chain(said(notes, "note", "notes"))
+        .collect()
+}
+
 /// The default material's front color (sRGB), as the window shows it.
 const DEFAULT_COLOR: [f64; 3] = [0.93, 0.93, 0.90];
 
@@ -80,8 +105,8 @@ pub struct ExportReport {
     /// SketchUp files: tags written (every tag of the model). Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tags: usize,
-    /// What the file could not hold (glowing materials, curves, empty groups). Absent when
-    /// there is nothing to say.
+    /// What the file could not hold (glowing materials, curves, empty groups; for every
+    /// format, dimensions and notes). Absent when there is nothing to say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }

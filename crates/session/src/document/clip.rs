@@ -19,7 +19,8 @@ impl Document {
         &self.token
     }
 
-    /// The clip text of `ids` (edges, faces, instances and guides of the open context): them,
+    /// The clip text of `ids` (edges, faces, instances, guides and annotations of the open
+    /// context): them,
     /// in world coordinates, with every definition, material and tag they use. An empty list
     /// is `invalid_input`; vertex ids are `invalid_input` and unknown ids `not_found`, as for
     /// `erase`.
@@ -34,14 +35,7 @@ impl Document {
         let invalid = |e: String| CommandError::new(ErrorKind::InvalidInput, e);
         let scene = self
             .scene
-            .extract(
-                self.active(),
-                &parts.edges,
-                &parts.faces,
-                &parts.instances,
-                &parts.guides,
-                self.context_transform(),
-            )
+            .extract_with(self.active(), &parts, self.context_transform())
             .map_err(|e| invalid(e.to_string()))?;
         clip::encode(&scene, &self.token, &self.camera, self.view_look()).map_err(invalid)
     }
@@ -68,6 +62,7 @@ impl Document {
         let at = |p: DVec3| placement.transform_point3(p).to_array();
         let mut points: Vec<[f64; 3]> = root.vertices().map(|(_, v)| at(v.pos)).collect();
         points.extend(root.guides().map(|(_, g)| at(g.anchor())));
+        points.extend(root.annotation_points().into_iter().map(at));
         for (_, i) in root.instances() {
             let placed = placement * i.transform;
             match boxes.get(&i.definition).copied().flatten() {
@@ -108,6 +103,8 @@ impl Document {
             .chain(inserted.faces.iter().map(|f| EntityId::Face(*f)))
             .chain(inserted.instances.iter().map(|i| EntityId::Instance(*i)))
             .chain(inserted.guides.iter().map(|g| EntityId::Guide(*g)))
+            .chain(inserted.dimensions.iter().map(|r| EntityId::Dimension(*r)))
+            .chain(inserted.notes.iter().map(|n| EntityId::Note(*n)))
             .collect::<BTreeSet<_>>();
         Ok(change)
     }

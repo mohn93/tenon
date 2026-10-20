@@ -235,9 +235,19 @@ fn reference_keys_cover_every_id_field() {
         };
         for (key, property) in properties {
             let text = property.to_string();
-            let has_ids = text.contains("#/$defs/EntityId") || text.contains("#/$defs/MaterialId");
+            // An annotation's anchor may be a vertex id.
+            let has_ids = text.contains("#/$defs/EntityId")
+                || text.contains("#/$defs/MaterialId")
+                || text.contains("#/$defs/AnchorInput");
             let reference_key = matches!(key.as_str(), "ids" | "face" | "id" | "material")
-                || (key == "path" && matches!(name, "open_path" | "follow_me"));
+                || matches!(
+                    (key.as_str(), name),
+                    ("path", "open_path" | "follow_me")
+                        | ("a" | "b", "add_dimension")
+                        | ("edge", "add_edge_dimension" | "add_radial_dimension")
+                        | ("anchor", "add_note")
+                        | ("note", "change_note")
+                );
             // Tag ids are not references (a reference has no `t` kind), so a field holding
             // them must not be a reference key: "$0:t0" there is refused as a tag id.
             // Scene ids likewise.

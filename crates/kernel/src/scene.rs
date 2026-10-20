@@ -470,15 +470,21 @@ impl Scene {
         enclose(&placed_box(instance.transform, b))
     }
 
-    /// The anchors of the guides inside an instance's definition, nested definitions
-    /// included, in the coordinates of the mesh holding the instance. Bounds leave guides
-    /// out; this lets callers check them.
+    /// The anchors of the guides and the annotation points (see `Model::annotation_points`)
+    /// inside an instance's definition, nested definitions included, in the coordinates of
+    /// the mesh holding the instance. Bounds leave guides and annotations out; this lets
+    /// callers check them.
     pub fn instance_guide_anchors(&self, instance: &Instance) -> Vec<DVec3> {
         let mut out = Vec::new();
         if let Some(m) = self.mesh(MeshId::Definition(instance.definition)) {
             out.extend(
                 m.guides()
                     .map(|(_, g)| instance.transform.transform_point3(g.anchor())),
+            );
+            out.extend(
+                m.annotation_points()
+                    .into_iter()
+                    .map(|p| instance.transform.transform_point3(p)),
             );
             for (_, i) in m.instances() {
                 let placed = Instance::new(i.definition, instance.transform * i.transform);

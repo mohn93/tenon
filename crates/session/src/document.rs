@@ -5,7 +5,7 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, DefinitionId, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId,
-    KernelError, MaterialEdit, MeshId, Model, PageId, PlacementEdit, Scene, SceneChange,
+    KernelError, MaterialEdit, MeshId, Model, PageId, Parts, PlacementEdit, Scene, SceneChange,
     SoftenReport, TagEdit, VertexId,
 };
 
@@ -22,7 +22,9 @@ use crate::query::{
 };
 use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
+use crate::units::Units;
 
+mod annotations;
 mod camera;
 mod clip;
 mod files;
@@ -35,6 +37,7 @@ mod scenes;
 mod soften;
 mod tags;
 
+pub use annotations::{dimension_label, dimension_value, note_label};
 use import::ImportOptions;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
@@ -51,6 +54,8 @@ struct Step {
     label: String,
     origin: Origin,
     changes: SceneChange,
+    /// The display units before and after, when the step changed them.
+    units: Option<(Units, Units)>,
 }
 
 /// The open model plus everything needed to edit it: camera, selection, the open context and
@@ -64,6 +69,8 @@ pub struct Document {
     pub lighting: Lighting,
     /// Faces are drawn in their tags' colors; saved with the camera.
     pub color_by_tag: bool,
+    /// How labels write lengths; saved with the model, changed by undo steps.
+    units: Units,
     selection: BTreeSet<EntityId>,
     /// The scene last added or gone to (see `selected_scene`); not saved.
     selected_scene: Option<PageId>,
@@ -105,6 +112,7 @@ impl Document {
             camera: Camera::new(viewport),
             lighting: Lighting::Day,
             color_by_tag: false,
+            units: Units::default(),
             selection: BTreeSet::new(),
             selected_scene: None,
             undo: Vec::new(),
@@ -237,8 +245,11 @@ impl Document {
         command: Command,
         label: impl Into<String>,
     ) -> Result<Outcome, CommandError> {
+        let units_before = self.units;
         if let Some(changes) = self.edit(&command) {
-            let mut outcome = self.record(label.into(), changes?);
+            let changes = changes?;
+            let units = self.units_change(units_before);
+            let mut outcome = self.record(label.into(), changes, units);
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
             outcome.positioned = self.positioned.take();
@@ -272,6 +283,9 @@ impl Document {
                     let step = self.undo.pop().expect("counted");
                     let inverse = step.changes.inverse();
                     self.scene.apply(&inverse);
+                    if let Some((from, _)) = step.units {
+                        self.units = from;
+                    }
                     self.redo.push(step);
                     self.changed(&inverse);
                     done.push(inverse);
@@ -293,6 +307,9 @@ impl Document {
                 for _ in 0..n {
                     let step = self.redo.pop().expect("counted");
                     self.scene.apply(&step.changes);
+                    if let Some((_, to)) = step.units {
+                        self.units = to;
+                    }
                     self.changed(&step.changes);
                     done.push(step.changes.clone());
                     self.undo.push(step);
@@ -390,6 +407,16 @@ impl Document {
                                 .filter(|(_, g)| shown(g.tag()))
                                 .map(|(id, _)| EntityId::Guide(id)),
                         )
+                        .chain(
+                            m.dimensions()
+                                .filter(|(_, a)| shown(a.tag()))
+                                .map(|(id, _)| EntityId::Dimension(id)),
+                        )
+                        .chain(
+                            m.notes()
+                                .filter(|(_, n)| shown(n.tag()))
+                                .map(|(id, _)| EntityId::Note(id)),
+                        )
                         .collect()
                 } else {
                     self.parts(&ids)?;
@@ -414,6 +441,13 @@ impl Document {
             | Command::AddGuideLine { .. }
             | Command::AddGuidePoint { .. }
             | Command::DeleteGuides {}
+            | Command::AddDimension { .. }
+            | Command::AddEdgeDimension { .. }
+            | Command::AddRadialDimension { .. }
+            | Command::AddNote { .. }
+            | Command::AddScreenNote { .. }
+            | Command::ChangeNote { .. }
+            | Command::SetUnits { .. }
             | Command::PushPull { .. }
             | Command::Erase { .. }
             | Command::Move { .. }
@@ -518,6 +552,23 @@ impl Document {
                     .edit_mesh(|m| Ok(m.erase_guides(&all)))
                     .expect("erasing guides cannot fail"))
             }
+            Command::AddDimension { a, b, offset } => self.add_dimension_changes(*a, *b, *offset),
+            Command::AddEdgeDimension { edge, offset } => {
+                self.add_edge_dimension_changes(*edge, *offset)
+            }
+            Command::AddRadialDimension {
+                edge,
+                diameter,
+                leader,
+            } => self.add_radial_dimension_changes(*edge, *diameter, *leader),
+            Command::AddNote {
+                anchor,
+                position,
+                text,
+            } => self.add_note_changes(*anchor, *position, text.clone()),
+            Command::AddScreenNote { at, text } => self.add_screen_note_changes(*at, text),
+            Command::ChangeNote { note, text } => self.change_note_changes(*note, text.clone()),
+            Command::SetUnits { length, precision } => self.set_units_changes(*length, *precision),
             Command::PushPull { face, distance } => self.push_pull_changes(*face, *distance),
             Command::Erase { ids } => self.erase_changes(ids),
             Command::Move { ids, offset } => self.move_changes(ids, *offset),
@@ -734,6 +785,7 @@ impl Document {
         let selected_scene_before = self.selected_scene;
         let selection_before = self.selection.clone();
         let context_before = self.context.clone();
+        let units_before = self.units;
         let mut applied: Vec<SceneChange> = Vec::new();
         // The edits' names: the step is labeled by theirs when they share one.
         let mut names: Vec<String> = Vec::new();
@@ -784,6 +836,7 @@ impl Document {
                     self.selected_scene = selected_scene_before;
                     self.selection = selection_before;
                     self.context = context_before;
+                    self.units = units_before;
                     return Err(BatchError {
                         index,
                         error,
@@ -797,7 +850,8 @@ impl Document {
             Some(first) if names.iter().all(|n| n == first) => first.clone(),
             _ => "batch".to_string(),
         };
-        self.record(label, SceneChange::join(applied));
+        let units = self.units_change(units_before);
+        self.record(label, SceneChange::join(applied), units);
         Ok(outcomes)
     }
 
@@ -968,14 +1022,18 @@ impl Document {
         }
         check_coordinates(&[offset])?;
         let vertices = self.vertex_ids(ids);
-        let (instances, guides) = (instance_ids(ids), guide_ids(ids));
+        let parts = Parts::of(ids);
         let offset = DVec3::from(offset);
         let shift = DAffine3::from_translation(offset);
-        self.check_placed(&vertices, &instances, &guides, &[shift])?;
+        self.check_placed(&vertices, &parts, &[shift], false)?;
         self.edit_mesh(|m| {
             let mut c = m.move_vertices(&vertices, offset)?;
-            c.ops.extend(m.move_instances(&instances, offset).ops);
-            c.ops.extend(m.transform_guides(&guides, shift).ops);
+            c.ops.extend(m.move_instances(&parts.instances, offset).ops);
+            c.ops.extend(m.transform_guides(&parts.guides, shift).ops);
+            c.ops.extend(
+                m.transform_annotations(&parts.dimensions, &parts.notes, shift)
+                    .ops,
+            );
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -1024,12 +1082,7 @@ impl Document {
             let places: Vec<DAffine3> = (1..=count)
                 .map(|k| rotation(center, axis, angle * k as f64))
                 .collect();
-            self.check_placed(
-                &self.vertex_ids(ids),
-                &parts.instances,
-                &parts.guides,
-                &places,
-            )?;
+            self.check_placed(&self.vertex_ids(ids), &parts, &places, true)?;
             return self.copy_placed_changes(ids, &parts, &places);
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -1039,16 +1092,10 @@ impl Document {
             );
         }
         let vertices = self.vertex_ids(ids);
-        let (instances, guides) = (instance_ids(ids), guide_ids(ids));
+        let parts = Parts::of(ids);
         let turn = rotation(center, axis, angle);
-        self.check_placed(&vertices, &instances, &guides, &[turn])?;
-        self.edit_mesh(|m| {
-            let mut c = m.transform_vertices(&vertices, turn)?;
-            c.ops.extend(m.transform_instances(&instances, turn).ops);
-            c.ops.extend(m.transform_guides(&guides, turn).ops);
-            Ok(c)
-        })
-        .map_err(|e| self.kernel_error(e, ids))
+        self.check_placed(&vertices, &parts, &[turn], false)?;
+        self.transform_changes(ids, &vertices, &parts, turn)
     }
 
     fn scale_changes(
@@ -1086,9 +1133,10 @@ impl Document {
             * DAffine3::from_scale(DVec3::from(factors))
             * DAffine3::from_translation(-origin);
         let vertices = self.vertex_ids(ids);
-        let (instances, guides) = (instance_ids(ids), guide_ids(ids));
+        let parts = Parts::of(ids);
         // An instance squeezed this flat could not be opened again once saved.
-        let flat: Vec<EntityId> = instances
+        let flat: Vec<EntityId> = parts
+            .instances
             .iter()
             .filter(|i| {
                 self.model().instance(**i).is_some_and(|i| {
@@ -1102,11 +1150,28 @@ impl Document {
                 invalid("scaling would squeeze an instance too flat to keep").with_ids(flat),
             );
         }
-        self.check_placed(&vertices, &instances, &guides, &[scale])?;
+        self.check_placed(&vertices, &parts, &[scale], false)?;
+        self.transform_changes(ids, &vertices, &parts, scale)
+    }
+
+    /// Transforms `vertices` and the instances, guides and annotations of `parts` by `t` as
+    /// one change. The geometry goes first, so a radial dimension whose circle the change
+    /// bends is frozen to the circle it had and then transformed with the rest.
+    fn transform_changes(
+        &mut self,
+        ids: &[EntityId],
+        vertices: &BTreeSet<VertexId>,
+        parts: &Parts,
+        t: DAffine3,
+    ) -> Result<SceneChange, CommandError> {
         self.edit_mesh(|m| {
-            let mut c = m.transform_vertices(&vertices, scale)?;
-            c.ops.extend(m.transform_instances(&instances, scale).ops);
-            c.ops.extend(m.transform_guides(&guides, scale).ops);
+            let mut c = m.transform_vertices(vertices, t)?;
+            c.ops.extend(m.transform_instances(&parts.instances, t).ops);
+            c.ops.extend(m.transform_guides(&parts.guides, t).ops);
+            c.ops.extend(
+                m.transform_annotations(&parts.dimensions, &parts.notes, t)
+                    .ops,
+            );
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -1287,12 +1352,7 @@ impl Document {
         let places: Vec<DAffine3> = (1..=count)
             .map(|k| DAffine3::from_translation(offset * k as f64))
             .collect();
-        self.check_placed(
-            &self.vertex_ids(ids),
-            &parts.instances,
-            &parts.guides,
-            &places,
-        )?;
+        self.check_placed(&self.vertex_ids(ids), &parts, &places, true)?;
         if offset.length() < kernel::geom::LENGTH_TOL {
             return Err(self.kernel_error(KernelError::ZeroDistance, ids));
         }
@@ -1323,6 +1383,8 @@ impl Document {
         parts: &Parts,
         places: &[DAffine3],
     ) -> Result<SceneChange, CommandError> {
+        // Worked out before the copy, which may split the copied edges.
+        let copied = self.model().vertices_of(&parts.edges, &parts.faces);
         let geometry = if parts.edges.is_empty() && parts.faces.is_empty() {
             SceneChange::default()
         } else {
@@ -1345,20 +1407,28 @@ impl Document {
             }
         };
         let guides = self
-            .edit_mesh(|m| Ok(m.copy_guides(&parts.guides, places)))
-            .expect("copying guides cannot fail");
+            .edit_mesh(|m| {
+                let mut c = m.copy_guides(&parts.guides, places);
+                c.ops.extend(
+                    m.copy_annotations(&parts.dimensions, &parts.notes, places, &copied)
+                        .ops,
+                );
+                Ok(c)
+            })
+            .expect("copying guides and annotations cannot fail");
         Ok(SceneChange::join([geometry, placed, guides]))
     }
 
     /// Rejects moves, rotations or copies that would put a vertex, an instance's bounding
-    /// box (its origin when it has nothing in it) or a guide's point beyond `MAX_COORDINATE`
-    /// under any of `places`.
+    /// box (its origin when it has nothing in it), a guide's point or an annotation's points
+    /// (see `annotation_points_placed`) beyond `MAX_COORDINATE` under any of `places`.
+    /// `copies`: the annotations are copied, so every anchor of theirs is placed.
     fn check_placed(
         &self,
         vertices: &BTreeSet<VertexId>,
-        instances: &[InstanceId],
-        guides: &[GuideId],
+        parts: &Parts,
         places: &[DAffine3],
+        copies: bool,
     ) -> Result<(), CommandError> {
         let m = self.model();
         let mut moved: Vec<[f64; 3]> = Vec::new();
@@ -1366,12 +1436,19 @@ impl Document {
             let at = |p: DVec3| t.transform_point3(p).to_array();
             moved.extend(vertices.iter().map(|v| at(m.position(*v).unwrap())));
             moved.extend(
-                guides
+                parts
+                    .guides
                     .iter()
                     .filter_map(|g| m.guide(*g))
                     .map(|g| at(g.anchor())),
             );
-            for id in instances {
+            let follows = |v: VertexId| copies || vertices.contains(&v);
+            moved.extend(
+                self.annotation_points_placed(&parts.dimensions, &parts.notes, *t, &follows)
+                    .into_iter()
+                    .map(|p| p.to_array()),
+            );
+            for id in &parts.instances {
                 let Some(i) = m.instance(*id) else { continue };
                 let placed = Instance::new(i.definition, *t * i.transform);
                 let mut points: Vec<[f64; 3]> = match self.scene.instance_bounds(&placed) {
@@ -1441,7 +1518,9 @@ impl Document {
         let parts = self.parts(ids)?;
         let erased = self
             .edit_mesh(|m| {
-                let mut c = m.erase(&parts.edges, &parts.faces);
+                // Annotations first, so erasing their geometry does not freeze them.
+                let mut c = m.erase_annotations(&parts.dimensions, &parts.notes);
+                c.ops.extend(m.erase(&parts.edges, &parts.faces).ops);
                 c.ops.extend(m.erase_guides(&parts.guides).ops);
                 Ok(c)
             })
@@ -1451,8 +1530,8 @@ impl Document {
         Ok(SceneChange::join([erased, removed]))
     }
 
-    /// Splits ids (each counted once) into edges, faces, instances and guides of the open
-    /// context.
+    /// Splits ids (each counted once) into edges, faces, instances, guides, dimensions and
+    /// notes of the open context.
     /// Vertex ids are invalid input and unknown ids are not found; both errors list the
     /// offending ids.
     fn parts(&self, ids: &[EntityId]) -> Result<Parts, CommandError> {
@@ -1464,7 +1543,7 @@ impl Document {
         if !vertices.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "only edges, faces, instances and guides are accepted here, not vertices",
+                "only edges, faces, instances, guides, dimensions and notes are accepted here, not vertices",
             )
             .with_ids(vertices));
         }
@@ -1474,18 +1553,7 @@ impl Document {
                 CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
             );
         }
-        let mut parts = Parts::default();
-        for id in ids.iter().collect::<BTreeSet<_>>() {
-            match *id {
-                EntityId::Edge(e) => parts.edges.push(e),
-                EntityId::Face(f) => parts.faces.push(f),
-                EntityId::Instance(i) => parts.instances.push(i),
-                EntityId::Guide(g) => parts.guides.push(g),
-                // Commands do not take annotations yet.
-                EntityId::Vertex(_) | EntityId::Dimension(_) | EntityId::Note(_) => {}
-            }
-        }
-        Ok(parts)
+        Ok(Parts::of(ids))
     }
 
     /// Whether the open context holds the entity.
@@ -1502,9 +1570,15 @@ impl Document {
         }
     }
 
-    /// Records `changes` as an undo step labeled `label`, unless there are none.
-    fn record(&mut self, label: String, changes: SceneChange) -> Outcome {
-        if changes.is_empty() {
+    /// Records `changes` and the change of display `units` (before, after) as an undo step
+    /// labeled `label`, unless there are none.
+    fn record(
+        &mut self,
+        label: String,
+        changes: SceneChange,
+        units: Option<(Units, Units)>,
+    ) -> Outcome {
+        if changes.is_empty() && units.is_none() {
             return Outcome::default();
         }
         let outcome = self.changed(&changes);
@@ -1512,6 +1586,7 @@ impl Document {
             label,
             origin: self.origin,
             changes,
+            units,
         });
         self.redo.clear();
         outcome
@@ -1620,12 +1695,13 @@ impl Document {
                     EntityId::Guide(g) => QueryResult::Guide(
                         m.guide(g).map(|_| self.guide_info(g)).ok_or_else(missing)?,
                     ),
-                    EntityId::Dimension(_) | EntityId::Note(_) => {
-                        return Err(CommandError::new(
-                            ErrorKind::InvalidInput,
-                            format!("no entity info for {id} yet"),
-                        )
-                        .with_ids(vec![*id]));
+                    EntityId::Dimension(r) => QueryResult::Dimension(
+                        m.dimension(r)
+                            .map(|_| self.dimension_info(r))
+                            .ok_or_else(missing)?,
+                    ),
+                    EntityId::Note(n) => {
+                        QueryResult::Note(m.note(n).map(|_| self.note_info(n)).ok_or_else(missing)?)
                     }
                 }
             }
@@ -1717,6 +1793,15 @@ impl Document {
                     truncated,
                 }
             }
+            Query::Annotations {} => QueryResult::Annotations {
+                dimensions: m
+                    .dimensions()
+                    .map(|(id, _)| self.dimension_info(id))
+                    .collect(),
+                notes: m.notes().map(|(id, _)| self.note_info(id)).collect(),
+                revision: self.revision,
+            },
+            Query::Units {} => QueryResult::Units(self.units),
         })
     }
 
@@ -1862,35 +1947,6 @@ impl Document {
             tag: f.tag,
         }
     }
-}
-
-/// Edges, faces, instances and guides named by a command.
-#[derive(Default)]
-struct Parts {
-    edges: Vec<EdgeId>,
-    faces: Vec<FaceId>,
-    instances: Vec<InstanceId>,
-    guides: Vec<GuideId>,
-}
-
-/// The instances among `ids`.
-fn instance_ids(ids: &[EntityId]) -> Vec<InstanceId> {
-    ids.iter()
-        .filter_map(|id| match id {
-            EntityId::Instance(i) => Some(*i),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The guides among `ids`.
-fn guide_ids(ids: &[EntityId]) -> Vec<GuideId> {
-    ids.iter()
-        .filter_map(|id| match id {
-            EntityId::Guide(g) => Some(*g),
-            _ => None,
-        })
-        .collect()
 }
 
 /// `v` scaled to unit length, or None when it is zero or not finite. Very long and very

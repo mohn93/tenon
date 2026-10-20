@@ -35,28 +35,17 @@ impl Document {
         if parts.edges.is_empty() && parts.faces.is_empty() && parts.instances.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "guides alone cannot be grouped: include an edge, face or instance",
+                "guides and annotations alone cannot be grouped: include an edge, face or instance",
             )
             .with_ids(ids.to_vec()));
         }
         let mesh = self.active();
         let (instance, change) = self
             .scene
-            .make_group(
-                mesh,
-                &parts.edges,
-                &parts.faces,
-                &parts.instances,
-                kind,
-                name,
-            )
+            .make_group_with(mesh, &parts, kind, name)
             .map_err(|e| invalid(e, ids))?;
-        let definition = self.model().instance(instance).expect("placed").definition;
-        let guides = self
-            .scene
-            .move_guides(mesh, MeshId::Definition(definition), &parts.guides);
         self.selection = BTreeSet::from([EntityId::Instance(instance)]);
-        Ok(SceneChange::join([change, guides]))
+        Ok(change)
     }
 
     /// Explodes instances and selects what comes out of them.
@@ -86,15 +75,13 @@ impl Document {
         for i in &parts.instances {
             let placed = self.instance_box(*i).into_iter().flatten();
             let mut points: Vec<[f64; 3]> = placed.map(|p| p.to_array()).collect();
-            // Guides come out too, and the instance box does not cover them.
+            // Guides and annotations come out too, and the instance box does not cover them.
             if let Some(inst) = self.model().instance(*i)
                 && let Some(def) = self.scene.definition(inst.definition)
             {
-                points.extend(
-                    def.mesh
-                        .guides()
-                        .map(|(_, g)| inst.transform.transform_point3(g.anchor()).to_array()),
-                );
+                let at = |p: glam::DVec3| inst.transform.transform_point3(p).to_array();
+                points.extend(def.mesh.guides().map(|(_, g)| at(g.anchor())));
+                points.extend(def.mesh.annotation_points().into_iter().map(at));
             }
             if check_coordinates(&points).is_err() {
                 return Err(CommandError::new(

@@ -555,7 +555,7 @@ fn scenes_are_saved_and_opened_in_order() {
     .unwrap();
     assert_eq!(
         stored(&path)["schema_version"],
-        session::file::SCHEMA_VERSION
+        session::file::SCENES_SCHEMA_VERSION
     );
     assert_eq!(stored(&path)["schema_version"], 11);
     let details = |d: &Document| -> Vec<Value> {

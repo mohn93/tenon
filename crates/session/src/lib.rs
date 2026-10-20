@@ -20,6 +20,7 @@ mod skp;
 mod skp_export;
 mod sniff;
 pub mod texture;
+pub mod units;
 #[cfg(windows)]
 pub mod windows;
 
@@ -29,10 +30,13 @@ pub use camera::{Camera, Lighting, Projection, Projector, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use clip::ClipOutline;
 pub use command::{
-    BatchError, Command, CommandError, ErrorKind, ExpectedStep, Origin, Outcome, SelectMode,
-    TextureSource,
+    AnchorInput, BatchError, Command, CommandError, ErrorKind, ExpectedStep, Origin, Outcome,
+    SelectMode, TextureSource,
 };
-pub use document::{Document, MAX_COORDINATE, MAX_COPIES, check_coordinates, unit_vector};
+pub use document::{
+    Document, MAX_COORDINATE, MAX_COPIES, check_coordinates, dimension_label, dimension_value,
+    note_label, unit_vector,
+};
 pub use export::ExportReport;
 pub use import::{
     ImportAs, ImportFormat, ImportReport, ImportUnits, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
@@ -41,10 +45,12 @@ pub use import::{
 pub use kernel::{CurveKind, ImageFormat, MaterialId, PageId, Side, TagId, TexturePlacement};
 pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
-    Bounds, ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo,
-    GuideKind, InstanceInfo, MaterialInfo, OutlinerNode, OutlinerRow, OutlinerTable, Query,
-    QueryResult, SceneInfo, SceneView, TagInfo, TextureInfo, VertexInfo,
+    AnchorInfo, Bounds, ChangeEvent, CurveInfo, DefinitionInfo, DimensionInfo, DimensionKind,
+    EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind, InstanceInfo, MaterialInfo, NoteInfo,
+    NoteKind, OutlinerNode, OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo, SceneView,
+    TagInfo, TextureInfo, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;
 pub use schema::ModelPoint;
+pub use units::{LengthUnit, Units, format_length_in};

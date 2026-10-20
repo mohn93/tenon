@@ -1,9 +1,9 @@
 //! Batch commands that refer to ids made by earlier commands of the same batch.
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
-//! kind K (`v e f i g` from `changes.created`, `m` from `changes.materials`) in command N's
-//! outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance and guide
-//! command N created (not vertices: `"$N:v*"` names those). `*` references expand in place in
+//! kind K (`v e f i g r n` from `changes.created`, `m` from `changes.materials`) in command N's
+//! outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
+//! dimension and note command N created (not vertices: `"$N:v*"` names those). `*` references expand in place in
 //! id lists only.
 //!
 //! A parsed command holds stand-in ids (numbers from `STAND_IN_BASE` up) where its references
@@ -16,7 +16,7 @@ use kernel::{
 };
 use serde_json::Value;
 
-use crate::command::{Command, CommandError, ErrorKind, Outcome};
+use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
 
 /// The first stand-in id number. The ids a document makes come from one counter that never gets
 /// near it, but ids a client names or a document holds (a crafted file) may in principle be that
@@ -32,6 +32,8 @@ pub enum RefKind {
     Face,
     Instance,
     Guide,
+    Dimension,
+    Note,
     Material,
 }
 
@@ -43,6 +45,8 @@ impl RefKind {
             'f' => RefKind::Face,
             'i' => RefKind::Instance,
             'g' => RefKind::Guide,
+            'r' => RefKind::Dimension,
+            'n' => RefKind::Note,
             'm' => RefKind::Material,
             _ => return None,
         })
@@ -55,6 +59,8 @@ impl RefKind {
             RefKind::Face => 'f',
             RefKind::Instance => 'i',
             RefKind::Guide => 'g',
+            RefKind::Dimension => 'r',
+            RefKind::Note => 'n',
             RefKind::Material => 'm',
         }
     }
@@ -72,6 +78,10 @@ impl RefKind {
             RefKind::Instance => "instances",
             RefKind::Guide if one => "guide",
             RefKind::Guide => "guides",
+            RefKind::Dimension if one => "dimension",
+            RefKind::Dimension => "dimensions",
+            RefKind::Note if one => "note",
+            RefKind::Note => "notes",
             RefKind::Material if one => "material",
             RefKind::Material => "materials",
         }
@@ -85,6 +95,8 @@ impl RefKind {
                 | (RefKind::Face, EntityId::Face(_))
                 | (RefKind::Instance, EntityId::Instance(_))
                 | (RefKind::Guide, EntityId::Guide(_))
+                | (RefKind::Dimension, EntityId::Dimension(_))
+                | (RefKind::Note, EntityId::Note(_))
         )
     }
 }
@@ -93,7 +105,7 @@ impl RefKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BatchRef {
     pub command: usize,
-    /// None: `*`, every edge, face, instance and guide the command created (not vertices).
+    /// None: `*`, every entity but vertices the command created.
     pub kind: Option<RefKind>,
     /// None: `*`, every id of the kind.
     pub index: Option<usize>,
@@ -113,7 +125,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigm])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnm])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -224,10 +236,17 @@ impl From<Command> for BatchCommand {
 }
 
 /// The top-level fields where references are recognised; `path` only in `open_path` and
-/// `follow_me`.
+/// `follow_me`, and the anchors, edges and notes of the annotation commands only there.
 fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
-        || (key == "path" && matches!(command_type, Some("open_path" | "follow_me")))
+        || matches!(
+            (key, command_type),
+            ("path", Some("open_path" | "follow_me"))
+                | ("a" | "b", Some("add_dimension"))
+                | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
+                | ("anchor", Some("add_note"))
+                | ("note", Some("change_note"))
+        )
 }
 
 impl BatchCommand {
@@ -461,6 +480,22 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
         Command::OpenPath { path } => f(Slot::List(path)),
+        Command::AddDimension { a, b, .. } => {
+            for anchor in [a, b] {
+                if let AnchorInput::Vertex(id) = anchor {
+                    f(Slot::One(id));
+                }
+            }
+        }
+        Command::AddNote { anchor, .. } => {
+            if let AnchorInput::Vertex(id) = anchor {
+                f(Slot::One(id));
+            }
+        }
+        Command::AddEdgeDimension { edge, .. } | Command::AddRadialDimension { edge, .. } => {
+            f(Slot::One(edge))
+        }
+        Command::ChangeNote { note, .. } => f(Slot::One(note)),
         Command::FollowMe { face, path } => {
             f(Slot::One(face));
             f(Slot::List(path));
@@ -482,6 +517,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddGuideLine { .. }
         | Command::AddGuidePoint { .. }
         | Command::DeleteGuides {}
+        | Command::AddScreenNote { .. }
+        | Command::SetUnits { .. }
         | Command::CloseInstance {}
         | Command::RenameDefinition { .. }
         | Command::PurgeDefinitions {}

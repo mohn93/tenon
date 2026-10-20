@@ -78,15 +78,17 @@ Queries:
 | `{"type": "entities", "kinds": ["face"]}` | only the listed kinds (`vertex`, `edge`, `face`, `instance`, `guide`) |
 | `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error |
 | `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box; a guide point: its position) all lie in the box, bounds included; an instance with nothing in it and a guide line are in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
-| `{"type": "entity", "id": "f7"}` | one entity, or a not-found error |
+| `{"type": "entity", "id": "f7"}` | one entity, or a not-found error; a dimension (`r5`) or note (`n6`) gives its info with its label (see Dimensions and notes) |
+| `{"type": "annotations"}` | every dimension and note of the open context, each as `entity` gives it, plus `revision`; see Dimensions and notes below |
+| `{"type": "units"}` | the model's display units: `length` and `precision`; see Dimensions and notes below |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
 | `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`; see Camera below |
-| `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
+| `{"type": "selection"}` | the selected edge, face, instance, guide, dimension and note ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
-| `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances and guides in the whole model are on it; see Tags below |
+| `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances, guides, dimensions and notes in the whole model are on it; see Tags below |
 | `{"type": "scenes"}` | every scene, in order: `id`, `name`, whether it stores a view (`camera`) and tag visibility (`tags`), and whether it is `selected`; plus `revision`; see Scenes below |
 | `{"type": "scene", "scene": "p40"}` | one scene: `id`, `name`, the `view` it stores (null when none) and the tags it hides (`hidden_tags`, null when it does not store tag visibility); see Scenes below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
@@ -102,13 +104,15 @@ of silently doing nothing), and so are params given by position (an array).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `scale`, `offset`, `follow_me`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
-`purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
+`purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_dimension`,
+`add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
+`set_units`, `add_material`,
 `change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `paste`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -122,28 +126,28 @@ Modeling commands, each one undo step:
 | `{"type": "add_arc", "center": [0,0,0], "start": [2,0,0], "angle": 90}` | An arc around `center` from `start`, turning `angle` degrees counter-clockwise around `normal` (default `[0,0,1]`; a negative angle turns clockwise), as `segments` equal straight edges (default 12 whatever the angle, 2 to 360) that form one curve. `start` must lie in the plane through `center` with that normal (within 0.001 mm); the radius is its distance from `center`. The angle must be more than 0 and less than 360 degrees in size (a whole circle is `add_circle`), and each segment at least 0.01 mm long. Its points snap and split like `add_edge`'s, so an arc ending on existing edges can close a face. |
 | `{"type": "add_arc", "start": [0,0,0], "end": [2,0,0], "through": [1,1,0]}` | The arc from `start` to `end` passing through `through`, the way three clicks pick it: the three points set its plane, so `normal` is not allowed (the curve query reports the normal about which start, through and end run counter-clockwise). The points must be apart and not on one line. `segments` as above. |
 | `{"type": "add_arc", "start": [0,0,0], "end": [2,0,0], "bulge": 1}` | The arc from `start` to `end` whose middle lies `bulge` meters from the chord, to the left of start-to-end looking down `normal` (default `[0,0,1]`; negative: to the right), as the Arc tool pulls it: a bulge of half the chord is a half circle. `start` and `end` must lie in one plane with the normal and apart; the bulge must not be 0. Give `center` with `angle`, or `end` with `through` or `bulge`; any other mix is `invalid_input`. |
-| `{"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}` | Moves vertices, edges and faces (their vertices), instances and guides by `offset` (an instance must keep its bounding box, or its origin when it holds nothing, and a guide its point, within the coordinate limit; so must copies). Faces that share only some moved vertices stretch and may tilt but must stay flat: a move that would bend one is `invalid_input` naming that face. A move that would collapse an edge, turn a face over, make a face cross itself, push a hole out of its face or land a vertex on another is `invalid_input` naming the ids. Moved geometry does not merge with what it ends up touching. Unknown ids are `not_found`. |
-| `{"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 4}` | Copies edges, faces, instances and guides `count` times (default 1, at most 1,000); copy k is shifted by `k * offset`. Copies are drawn like new edges, so they merge with what they touch: a copy has the faces its original had, made even where their sides already exist as bare edges, plus faces it closes together with existing edges. A copy drawn on a face splits it and every piece stays a face (also under an opening of the copy); elsewhere an opening in a copied face stays open and a loop the original had no face in gets none. Copied faces keep the orientation of their originals. A copied component instance places the same definition; a copied group gets a definition of its own. Vertex ids are `invalid_input`. |
+| `{"type": "move", "ids": ["f8"], "offset": [0, 0, 1]}` | Moves vertices, edges and faces (their vertices), instances, guides, dimensions and notes by `offset` (an instance must keep its bounding box, or its origin when it holds nothing, a guide its point and an annotation its points, within the coordinate limit; so must copies). An annotation's fixed points, offset and text position move; its vertex anchors move with their vertices (only when those are moved too), and a dimension whose two ends the move brings together is removed (undo brings it back). Faces that share only some moved vertices stretch and may tilt but must stay flat: a move that would bend one is `invalid_input` naming that face. A move that would collapse an edge, turn a face over, make a face cross itself, push a hole out of its face or land a vertex on another is `invalid_input` naming the ids. Moved geometry does not merge with what it ends up touching. Unknown ids are `not_found`. |
+| `{"type": "copy", "ids": ["f8"], "offset": [3, 0, 0], "count": 4}` | Copies edges, faces, instances, guides, dimensions and notes `count` times (default 1, at most 1,000); copy k is shifted by `k * offset`. Copies are drawn like new edges, so they merge with what they touch: a copy has the faces its original had, made even where their sides already exist as bare edges, plus faces it closes together with existing edges. A copy drawn on a face splits it and every piece stays a face (also under an opening of the copy); elsewhere an opening in a copied face stays open and a loop the original had no face in gets none. Copied faces keep the orientation of their originals. A copied component instance places the same definition; a copied group gets a definition of its own. A copied dimension or note anchored to a vertex copied with it anchors to that vertex's copy; its other vertex anchors become fixed points where the copy puts them, and a radial dimension whose circle is not copied keeps it as a fixed circle. Vertex ids are `invalid_input`. |
 | `{"type": "paste", "clip": "sketchup-alt clip 1\n...", "at": [3, 0, 0]}` | Pastes clip text (what Copy puts on the clipboard; see Clipboard) into the open context, as one undo step labelled `paste`, and selects what it pasted. With `at` (a point of the open context), the clip's base point lands there, moved only (not turned); without it (Paste In Place), the clip lands where it was copied from in world coordinates, wherever it is pasted. Edges and faces merge with what they touch, as `copy`'s do, and painted faces keep their texture positions. Materials and tags are matched by name: an existing one of the same name is used, a missing one is added (textures included). A component instance copied from this same document (since it was created, opened or imported as a new model) places its definition when that still exists; otherwise it places the definition an earlier paste of a clip from the same source made for it, while that still exists (the document remembers these until a new model is created or opened, and does not save them; an undone paste's definitions are gone, so pasting again makes new ones); otherwise, and for every group, a new definition is made (nested ones included). Text that is not a clip, is damaged, holds a model a `.skr` file could not hold, decodes to over 64 MiB, nests instances more than 32 deep, places over 100,000 instances or shows over 20,000,000 faces (a nested instance or face counted once for every placement of what holds it), or lands beyond the coordinate limit is `invalid_input` and changes nothing. |
-| `{"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 90}` | Turns vertices, edges and faces (their vertices), instances and guides by `angle` degrees about the line through `center` along `axis` (default `[0,0,1]`), counter-clockwise looking down the axis (right-hand rule), under the rules of `move`: faces that share only some turned vertices must stay flat, and so on; geometry turned whole keeps its shape. Multiples of 90 degrees are exact. An instance turns with its transform. The `axis` is a direction of any length; a zero or non-finite one and whole turns (0, 360, ..., or within 1e-9 degrees of one) are `invalid_input`. With `"copies": n` (1 to 1,000) the originals stay and n copies are made under the rules of `copy`, copy k turned by `k * angle` (a radial array; vertex ids are then `invalid_input`, and so is a count where a copy would complete a whole turn and land on the original, e.g. angle 90 with 4 copies). Vertices on the axis do not move, and a rotation that moves nothing changes nothing. |
-| `{"type": "scale", "ids": ["f8"], "origin": [0, 0, 0], "factors": [2, 1, 1]}` | Scales vertices, edges and faces (their vertices), instances and guides by `factors` along model X, Y and Z about `origin`, under the rules of `move`: faces that share only some scaled vertices must stay flat, and an edge scaled shorter than the merge tolerance is `invalid_input`. Each factor must be finite and between 1e-4 and 1e4 in size, else `invalid_input`; all three exactly 1 is `invalid_input` too. A negative factor mirrors: faces scaled whole keep facing out (their loops are reversed), also a face lying on the mirror plane, which is turned over though none of its vertices move (a ground rectangle scaled `[1, 1, -1]` about z = 0 then faces down); a face that would fold over is `invalid_input`. Scaling that would bring two vertices, or a face's sides or holes, within the merge tolerance of each other is `invalid_input`, and so is squeezing an instance so flat that its transform's determinant falls below 1e-12 (naming it). An instance's transform is scaled (also non-uniformly, and along model axes when it is turned), and a guide line turns with the scaled direction. No copies. Empty `ids` is `invalid_input`; unknown ids are `not_found`. |
+| `{"type": "rotate", "ids": ["f8"], "center": [0, 0, 0], "angle": 90}` | Turns vertices, edges and faces (their vertices), instances, guides and annotations (as `move` moves them) by `angle` degrees about the line through `center` along `axis` (default `[0,0,1]`), counter-clockwise looking down the axis (right-hand rule), under the rules of `move`: faces that share only some turned vertices must stay flat, and so on; geometry turned whole keeps its shape. Multiples of 90 degrees are exact. An instance turns with its transform. The `axis` is a direction of any length; a zero or non-finite one and whole turns (0, 360, ..., or within 1e-9 degrees of one) are `invalid_input`. With `"copies": n` (1 to 1,000) the originals stay and n copies are made under the rules of `copy`, copy k turned by `k * angle` (a radial array; vertex ids are then `invalid_input`, and so is a count where a copy would complete a whole turn and land on the original, e.g. angle 90 with 4 copies). Vertices on the axis do not move, and a rotation that moves nothing changes nothing. |
+| `{"type": "scale", "ids": ["f8"], "origin": [0, 0, 0], "factors": [2, 1, 1]}` | Scales vertices, edges and faces (their vertices), instances, guides and annotations (as `move` moves them; a fixed circle keeps its area, and a radial dimension scaled with a circle that the scale makes an ellipse keeps that circle, scaled) by `factors` along model X, Y and Z about `origin`, under the rules of `move`: faces that share only some scaled vertices must stay flat, and an edge scaled shorter than the merge tolerance is `invalid_input`. Each factor must be finite and between 1e-4 and 1e4 in size, else `invalid_input`; all three exactly 1 is `invalid_input` too. A negative factor mirrors: faces scaled whole keep facing out (their loops are reversed), also a face lying on the mirror plane, which is turned over though none of its vertices move (a ground rectangle scaled `[1, 1, -1]` about z = 0 then faces down); a face that would fold over is `invalid_input`. Scaling that would bring two vertices, or a face's sides or holes, within the merge tolerance of each other is `invalid_input`, and so is squeezing an instance so flat that its transform's determinant falls below 1e-12 (naming it). An instance's transform is scaled (also non-uniformly, and along model axes when it is turned), and a guide line turns with the scaled direction. No copies. Empty `ids` is `invalid_input`; unknown ids are `not_found`. |
 | `{"type": "offset", "ids": ["f8"], "distance": 0.1}` | Draws a copy of a face's loops, or of a chain of edges, moved `distance` meters sideways in its plane, as one undo step; what it draws merges with what it touches like any drawn edge (an inward offset splits the face into the inner face and a ring around it). `ids` is one face, or edges forming one unbranched chain in one plane (open, or closed into a loop). For a face, a positive `distance` offsets inward (the outer loop shrinks, the holes grow) and a negative one outward (only the outer loop: the holes stay as they are); `toward` is not allowed. For edges, `toward` (a point in the edges' plane, not on them or straight ahead of an end; for a straight chain it picks the plane too) is required and picks the side, and `distance` must be positive; the ends of an open chain move square to their own edge (an arc's ends move along its radii, so its offset is an arc around the same center). An edge offset may touch or cross the original edges (a chain that bends back on itself), which are then split as a hand drawing splits them. Corners are mitred; a corner on the outside of a turn whose miter would reach farther than 4 times the distance is bevelled (two corners). A loop or chain whose edges are all on one curve gives a new curve of the same kind (a circle gives a circle of as many segments, an arc an arc, a polygon a polygon). `distance` must be finite and at least 0.01 mm in size, else `invalid_input`; so is an offset the shape is too small for ("the offset distance is too large for this shape": a side would reverse or vanish, the offset would cross itself, or, for a face, a new loop would leave the face or meet another loop; outward, the new outer loop must enclose the face), edges that fall apart or branch, edges not in one plane, and anything but one face or edges. Unknown ids are `not_found`. |
 | `{"type": "follow_me", "face": "f8", "path": ["e2", "e3"]}` | Sweeps a face (the profile) along `path`, edges forming one connected chain (open, or closed into a loop; branching is `invalid_input`), as one undo step. The sweep starts at the path end nearest the face's plane (for a closed path the path vertex nearest it, passing over one where the path turns within the face's plane; on a tie the one nearer the middle of the face's outer loop, then the first in chain order, and a closed path is walked toward the neighbour that leaves the face's plane more steeply), and the face is carried as it is, not moved onto the path: a face drawn beside a circle sweeps around it (a lathe). The face keeps its place relative to the path as the path turns (each segment turns it by the turn between the two directions); a vertex in the middle of a straight run of the path is no corner (the run is swept as one segment); corners are mitred, and a closed path that would come back twisted has the twist spread over its segments (the sides are then split into two triangles with a soft diagonal). Every profile side and path segment gives a side face; an open path gets a cap at each end (square to the first and last segment, with the face's holes and its front and back materials), a closed one none. The profile face is removed; its edges stay where they bound new faces, except where one lies across a side face (a face not square to the path), which is erased so the side stays one face. What is drawn merges with what it touches like any drawn edge, and faces point out of the swept solid. An edge between the faces of two profile sides on one curve that is not a polygon is soft (a swept circle is smooth, a polygon is not), and so is an edge between the faces of two path segments on one such curve (a ring around a circle has soft joints). `path` may not include the face's own edges unless it is exactly the outer loop of another face. Sweeping into an existing solid merges with it by sticky geometry but does not subtract from it (an end cap landing on an existing face in its plane leaves that face: the two merge, the cap is not cut out of it), and only folds between neighbouring segments are caught: a path that comes back near itself can make a sweep that crosses itself. `invalid_input`: `face` not a face, `path` empty or not all edges, a path edge shorter than 0.01 mm, a profile too big for a turn of the path ("the profile is too big for a turn of the path": a point of it would not move forward between two corners), a path that turns straight back or runs in (or within a hair of) the face's plane where it starts ("the path turns straight back, or the profile lies along the path": a section would be under 0.01 mm across); unknown ids are `not_found`. A refusal changes nothing. |
-| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges, faces, instances and guides (a group's definition goes with its last instance). An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Faces are erased before edges, so erasing a face together with the seam it shares with a coplanar neighbour removes the neighbour too: the seam then bounds only one face. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with `ids`; empty `ids` is `invalid_input`. |
-| `{"type": "make_group", "ids": ["e2", "f8", "i4"]}` | Moves edges, faces (with their edges), instances and guides (keeping their ids) into a new group definition and places one instance of it where they were; the instance becomes the selection. Edges that still bound a face left behind stay outside too. Vertex ids are `invalid_input`, and so are ids naming only guides. |
+| `{"type": "erase", "ids": ["e2", "f8"]}` | Erases edges, faces, instances, guides, dimensions and notes (a group's definition goes with its last instance). An erased face leaves its edges. An erased edge takes the faces it bounds with it, except that two faces in one plane meeting at it merge into one. Vertices go with their last edge; a vertex left between two collinear edges is healed away. Faces are erased before edges, so erasing a face together with the seam it shares with a coplanar neighbour removes the neighbour too: the seam then bounds only one face. Vertex ids are `invalid_input` and unknown ids are `not_found`, both with `ids`; empty `ids` is `invalid_input`. |
+| `{"type": "make_group", "ids": ["e2", "f8", "i4"]}` | Moves edges, faces (with their edges), instances, guides, dimensions and notes (keeping their ids) into a new group definition and places one instance of it where they were; the instance becomes the selection. Edges that still bound a face left behind stay outside too. An annotation anchored to a vertex that goes inside stays anchored to it; one anchored to a vertex left outside anchors to where that vertex is, and a radial dimension whose circle stays outside keeps it as a fixed circle. Screen notes stay in the root. Vertex ids are `invalid_input`, and so are ids naming only guides and annotations. |
 | `{"type": "make_component", "ids": ["f8"], "name": "Chair"}` | Like `make_group`, but makes a named component: its copies share the definition, so editing one edits them all. An empty name is `invalid_input`. |
-| `{"type": "explode", "ids": ["i4"]}` | Replaces instances by their geometry, which merges with what it touches; instances and guides inside come out as instances and guides (with new ids). What comes out becomes the selection. Ids that are not instances are `invalid_input`, and so is an instance whose geometry or guides would land beyond the coordinate limit (naming it). |
+| `{"type": "explode", "ids": ["i4"]}` | Replaces instances by their geometry, which merges with what it touches; instances, guides, dimensions and notes inside come out as such (with new ids; annotations stay anchored to their vertices, placed by the instance's transform). What comes out becomes the selection. Ids that are not instances are `invalid_input`, and so is an instance whose geometry, guides or annotations would land beyond the coordinate limit (naming it). |
 | `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in; pushed in exactly as far as a parallel face that holds it (the back of a wall), it cuts an opening through. A face whose neighbors all run along the normal, like a box top, moves and stretches them; moved back flush with the surface around it (a recess or bump pushed back), it closes up and the seams heal. When the face is extruded, its sides along a curve get a moved copy on the cap that is a curve of its own, and the swept edges between two sides of one curve are soft (`"soft": true`), so a pulled circle is a cylinder with a smooth side. |
 
 `{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges, faces,
-instances and guides; `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and
+instances, guides, dimensions and notes; `mode` is `replace` (default), `add`, `remove` or `toggle`). It is not an undo step and
 does not change the revision. The window shows the selection and agents see what the user
 selected with the `selection` query. Vertex ids are `invalid_input` and unknown ids are
 `not_found`, both with `ids`. Empty or absent `ids` with mode `replace` clears the selection
 (Select None).
 
-`{"type": "select", "all": true, "mode": "replace"}` selects every edge, face, instance and guide
-of the open context that no hidden tag hides (see Tags), combined with the current selection by `mode` as `ids` are. `ids` must then
+`{"type": "select", "all": true, "mode": "replace"}` selects every edge, face, instance, guide,
+dimension and note of the open context that no hidden tag hides (see Tags), combined with the current selection by `mode` as `ids` are. `ids` must then
 be absent or empty: giving both is `invalid_input` ("select takes ids or all, not both").
 
 `{"type": "select", "box": {"from": [100, 80], "to": [300, 240]}, "mode": "add"}` selects by a box
@@ -187,7 +191,7 @@ shape too.
 
 Copy turns a selection into clip text: the line `sketchup-alt clip 1`, then base64 (standard
 alphabet; line breaks are ignored) of a zip archive holding `model.json`, the selected edges,
-faces, instances and guides with every definition, material and tag they use, written as a
+faces, instances, guides, dimensions and notes with every definition, material and tag they use, written as a
 `.skr` file writes its document (textures as entries beside it), and `clip.json`
 `{"base": [x, y, z], "source": "<token>"}`. The clip is stored in world coordinates (what was
 copied inside an open group is placed by the group's transform); `base` is the minimum corner of
@@ -209,20 +213,22 @@ predicting them:
 ], "atomic": true}
 ```
 
-A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigm])(0|[1-9][0-9]*|\*)|\*)$`:
+A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnm])(0|[1-9][0-9]*|\*)|\*)$`:
 
 - `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
-  face, `i` instance, `g` guide from its `changes.created` (lowest id first, which is the order
-  they were made), or `m` material from its `changes.materials`.
-- `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance and guide
-  it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
+  face, `i` instance, `g` guide, `r` dimension, `n` note from its `changes.created` (lowest id
+  first, which is the order they were made), or `m` material from its `changes.materials`.
+- `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance, guide,
+  dimension and note it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
   `*` references are allowed only in id lists (`ids`, and `path` of `open_path` and `follow_me`), where they
   expand in place, keeping order; one that expands to nothing leaves nothing in its place.
 - N counts commands of the batch from 0 and must be lower than the referring command's own
   position.
 
-References are read only in a command's top-level `ids`, `face`, `id` and `material`, and in
-`path` of `open_path` and `follow_me`. Any other string, such as a name or a file path, stays as written even
+References are read only in a command's top-level `ids`, `face`, `id` and `material`, in
+`path` of `open_path` and `follow_me`, in `a` and `b` of `add_dimension`, `edge` of
+`add_edge_dimension` and `add_radial_dimension`, `anchor` of `add_note` and `note` of
+`change_note`. Any other string, such as a name or a file path, stays as written even
 when it looks like a reference. `material` takes only `m` references, the other fields only
 entity references; whether the entity suits the command (a face for `push_pull`) is checked by
 the command, as for a written id. Tag ids (`tag`, `move_to`) and scene ids (`scene`) take no
@@ -327,6 +333,43 @@ definition) and are saved with the model.
 guide keeps its id and is reported as `modified`). A guide's `entity` result, and each entry of
 the `guides` list in `entities`, is `{"id": "g9", "kind": "line", "point": [...], "direction":
 [...]}` (`kind` `point` has no `direction`). `stats` counts no guides.
+
+### Dimensions and notes
+
+Dimensions and notes are annotations, drawn over the model: they bound no faces and no export
+writes them (see Export). Each lives in a mesh like a guide (the root
+or a definition) and is selected, erased, moved, turned, scaled, copied, tagged, grouped,
+exploded and copied to the clipboard like a guide.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_dimension", "a": "v3", "b": [2, 0, 0], "offset": [0, -1, 0]}` | A linear dimension measuring the distance from `a` to `b`. Each end is a vertex id of the open context, which the end follows, or a point. The dimension line is drawn from `a` to `b` moved by `offset`, of which only the part perpendicular to a-b is kept. Ends that coincide are `invalid_input` ("the two ends coincide"); an id that is not a vertex is `invalid_input` and a missing vertex `not_found`, naming it. The ends and the line moved by the offset must be within the coordinate limit. |
+| `{"type": "add_edge_dimension", "edge": "e4", "offset": [0, -1, 0]}` | A linear dimension between the edge's two vertices. |
+| `{"type": "add_radial_dimension", "edge": "e7", "diameter": true, "leader": [1, 1, 0]}` | A radial dimension on the circle or arc `edge` is part of (any of its edges): its radius, or with `"diameter": true` its diameter, labelled at `leader` from the center. An edge on no curve, or on a curve that is not a circle or an arc (a polygon, a bent curve), is `invalid_input`. |
+| `{"type": "add_note", "anchor": "v3", "position": [3, 2, 1], "text": "Door"}` | A leader note: `text` at `position` with a line to `anchor` (a vertex id or a point, as for dimensions). Without `text` it shows the anchored point's coordinates in root coordinates and the display units, "(2 m, 1 m, 0 m)". Text has 1 to 1,024 characters, is not blank and has at most 64 lines (`invalid_input`). |
+| `{"type": "add_screen_note", "at": [0.1, 0.9], "text": "Plan A"}` | A note fixed to the view: `at` is fractions (0 to 1) of the view's width and height from its top left corner. Only the root holds screen notes: one added while an instance is open is `invalid_input`, and grouping leaves them in the root. |
+| `{"type": "change_note", "note": "n6", "text": "Exit"}` | Changes a note's text; absent or null `text` gives a leader note its automatic text again, and is `invalid_input` for a screen note. The same text changes nothing (no undo step). |
+| `{"type": "set_units", "length": "feet_inches", "precision": 4}` | Sets the model's display units, which dimension and note labels are written in; absent fields stay (one of them is needed). `length` is `meters` (the default), `centimeters`, `millimeters`, `inches` or `feet_inches`; `precision` (default 3) is the decimals kept, 0 to 6, or for `feet_inches` the finest fraction of an inch, 1/2^precision (0: whole inches, 4: 1/16, 6: 1/64). Labels round to it and drop trailing zeros: "1.5 m", "12.35 cm", `12.5"`, `5' 3 1/2"` (a value that rounds up to 12 inches carries to a foot: `1'`). Saved with the model; the same units again change nothing. The Measurements box and Entity Info keep meters. |
+
+Each is one undo step. A dimension's `entity` result (and its entry in `annotations`) is
+`{"type": "dimension", "id": "r5", "kind": "linear", "a": {"point": [0,0,0], "vertex": "v3"},
+"b": {"point": [2,0,0]}, "offset": [0,-1,0], "line": [[0,-1,0],[2,-1,0]], "value": 2.0, "label":
+"2 m", "tag": null}`: each end where it is now, with `vertex` while it follows one; `value` is
+the length in meters. A radial one has `kind` `radial`, `curve` ("c12", while it follows the
+curve), `center`, `normal`, `radius`, `diameter` (when true), `leader`, and a label "R 1.5 m" or
+"Ø 3 m". A note's is `{"type": "note", "id": "n6", "kind": "leader", "anchor": {...},
+"position": [...], "text": "Door", "label": "Door", "tag": null}` (`text` absent for automatic
+text) or, for a screen note, `kind` `screen` with `at` and `text`.
+
+Annotations follow the geometry they are anchored to. When an edit removes an anchor vertex
+(erase, a weld, a heal, a redraw), that end becomes a fixed point where the vertex last was, and
+a radial dimension whose curve is gone or no longer a circle or an arc keeps the circle it last
+had, in the same undo step, so undo attaches them again. A dimension whose two ends an edit
+brings together is removed in that step. Annotations inside a group anchor to the group's
+vertices and are in its coordinates, like everything else there.
+
+Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported,
+and the import report does not count them: the reader does not parse them.
 
 ### Materials
 
@@ -487,8 +530,8 @@ typed value).
 
 ### Tags
 
-A tag is a named color that edges, faces, instances (groups and components) and guides can be
-put on, to show or hide them together; an entity is on at most one tag, and on none it is
+A tag is a named color that edges, faces, instances (groups and components), guides, dimensions
+and notes can be put on, to show or hide them together; an entity is on at most one tag, and on none it is
 Untagged (which is not a tag). Vertices cannot be tagged. Tags are shared by the whole model.
 
 | Command | Effect |
@@ -496,7 +539,7 @@ Untagged (which is not a tag). Vertices cannot be tagged. Tags are shared by the
 | `{"type": "add_tag", "name": "Walls", "color": [200, 80, 60]}` | Adds a shown tag. Without `name` it is called `Tag` (`Tag 2`, ... when taken). A name must not be blank or `Untagged`, must have at most 256 characters and must differ from every other tag's (case counts, as for materials; `invalid_input`). Without `color` (sRGB, whole numbers 0 to 255) it takes the first of a fixed palette of twelve colors no tag has (once all are used, the next in turn). The new id is the outcome's `changes.tags`, e.g. `["t31"]`. |
 | `{"type": "change_tag", "tag": "t31", "name": "Old walls", "color": [9, 9, 9], "visible": false}` | Renames, recolors, hides (`visible`: false) or shows a tag; absent fields stay. Hiding and showing are undo steps like any other change and mark the model modified. |
 | `{"type": "delete_tag", "tag": "t31", "move_to": "t32"}` | Removes a tag. Everything on it, anywhere in the model, moves to `move_to` (absent or null: Untagged) in the same undo step, so undo restores the tag and every entity's tag. `move_to` naming the deleted tag is `invalid_input`. |
-| `{"type": "set_tag", "ids": ["e4", "f8", "i12", "g20"], "tag": "t31"}` | Puts edges, faces, instances and guides of the open context on a tag (absent or null `tag`: Untagged), as one undo step. Vertex ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. Entities already on it are left as they are. |
+| `{"type": "set_tag", "ids": ["e4", "f8", "i12", "g20"], "tag": "t31"}` | Puts edges, faces, instances, guides, dimensions and notes of the open context on a tag (absent or null `tag`: Untagged), as one undo step. Vertex ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. Entities already on it are left as they are. |
 
 A command that adds, removes, renames, recolors, shows or hides a tag lists it in its
 `changes.tags` (also in `changed` notifications and `events`); `set_tag` and `delete_tag`
@@ -1003,11 +1046,12 @@ there (unless the Paste tool is out). `preview` no longer outlines the hovered t
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
-and dark is saved exactly as before opacity existed and older builds still open it; version 10
+and dark is saved exactly as before opacity existed and older builds still open it; version 11
+and older files open with no dimensions or notes and in the default display units; version 10
 and older files open with no scenes; version 9
 and older files open with no tags and everything Untagged; version 8
 and older files open without texture positions; version 7
@@ -1020,7 +1064,8 @@ the materials and what is painted with them, the tags (name, color, and `"visibl
 hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
 one's id, name, `view` when it stores one (`eye`, `target`, `up`, `fov_y` in radians, and
 `parallel`, `night` and `color_by_tag` when true), and `tags`, the tag ids it hides, when it
-stores tag visibility). Each texture's image is stored in the archive as
+stores tag visibility), each mesh's `dimensions` and `notes` (see Dimensions and notes; absent
+when none), and the display `units` (absent when the default). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
 `document.json` names it with its `width` and `height`.
 
@@ -1142,7 +1187,9 @@ written, each definition counted once: `definitions`, `instances`, `faces`, `edg
 cannot hold: "N materials glow; SketchUp files cannot store that", "N curves were written as
 separate edges", "N empty groups or components were left out", "N textured faces kept the
 default texture placement; their corners are too close to a line", and what it does not write:
-"N scenes were not written" (scenes are not exported). A binary STL holds at most 2^32 - 1
+"N scenes were not written" (scenes are not exported). Every format, `skp` included, leaves out
+dimensions and notes; `warnings` then says "N dimensions were not written" and "N notes were
+not written" (the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
 triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused
 with `invalid_input` and nothing is written.
 

@@ -33,6 +33,7 @@ impl Document {
         ViewLook {
             lighting: self.lighting,
             color_by_tag: self.color_by_tag,
+            units: self.units,
         }
     }
 
@@ -70,11 +71,13 @@ impl Document {
         {
             return self.open_skp(path).map(Some);
         }
-        let (scene, c) = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
+        let opened = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
+        let c = opened.camera;
         let camera = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
             .unwrap_or_else(|_| Camera::new(self.camera.viewport));
-        self.replace(scene, camera);
+        self.replace(opened.scene, camera);
+        self.units = opened.units;
         self.lighting = c.lighting;
         self.color_by_tag = c.color_by_tag;
         self.path = Some(PathBuf::from(path));
@@ -87,11 +90,13 @@ impl Document {
     pub fn open_recovered(&mut self, path: &Path) -> Result<(), CommandError> {
         let name = path.display().to_string();
         check_nul(path)?;
-        let (scene, c) = file::read(path).map_err(|e| file_error(&name, e))?;
+        let opened = file::read(path).map_err(|e| file_error(&name, e))?;
+        let c = opened.camera;
         let camera = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
             .unwrap_or_else(|_| Camera::new(self.camera.viewport));
-        self.replace(scene, camera);
+        self.replace(opened.scene, camera);
+        self.units = opened.units;
         self.lighting = c.lighting;
         self.color_by_tag = c.color_by_tag;
         self.path = None;
@@ -289,15 +294,18 @@ impl Document {
         Ok(ExportReport {
             triangles: triangles.len(),
             skipped_faces,
+            warnings: export::annotation_warnings(&self.scene),
             ..ExportReport::default()
         })
     }
 
     /// Swaps in another model: history, selection and the open context start over, and event
     /// subscribers are told to read the model again.
+    /// The display units go back to the default; a file's are set after.
     fn replace(&mut self, scene: Scene, camera: Camera) {
         self.scene = scene;
         self.camera = camera;
+        self.units = crate::units::Units::default();
         self.imported_from = None;
         self.context.clear();
         self.selection.clear();

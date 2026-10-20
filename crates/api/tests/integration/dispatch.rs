@@ -198,6 +198,13 @@ fn describe_lists_methods_and_schemas() {
         "add_guide_line",
         "add_guide_point",
         "delete_guides",
+        "add_dimension",
+        "add_edge_dimension",
+        "add_radial_dimension",
+        "add_note",
+        "add_screen_note",
+        "change_note",
+        "set_units",
         "select",
         "undo",
         "redo",
@@ -250,6 +257,8 @@ fn describe_lists_methods_and_schemas() {
         "scenes",
         "\"scene\"",
         "outliner",
+        "annotations",
+        "units",
     ] {
         assert!(
             query_schema.contains(variant),

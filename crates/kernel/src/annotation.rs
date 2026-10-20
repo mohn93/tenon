@@ -326,6 +326,41 @@ impl Model {
         }
     }
 
+    /// The points that place the mesh's annotations: each anchor where it is now, the ends of
+    /// a linear dimension's line, a radial dimension's center and label point, and a leader
+    /// note's text position (a screen note has none). What the coordinate limit applies to.
+    pub fn annotation_points(&self) -> Vec<DVec3> {
+        let mut out = Vec::new();
+        for (id, d) in self.dimensions() {
+            match d {
+                Dimension::Linear { .. } => {
+                    out.extend(
+                        self.dimension_points(id)
+                            .into_iter()
+                            .flat_map(|(a, b)| [a, b]),
+                    );
+                    out.extend(
+                        self.dimension_line(id)
+                            .into_iter()
+                            .flat_map(|(a, b)| [a, b]),
+                    );
+                }
+                Dimension::Radial { leader, .. } => {
+                    if let Some(c) = self.radial_circle(id) {
+                        out.extend([c.center, c.center + *leader]);
+                    }
+                }
+            }
+        }
+        for (id, n) in self.notes() {
+            if let Note::Leader { position, .. } = n {
+                out.extend(self.note_point(id));
+                out.push(*position);
+            }
+        }
+        out
+    }
+
     /// The point a leader note points at now.
     pub fn note_point(&self, id: NoteId) -> Option<DVec3> {
         match self.note(id)? {

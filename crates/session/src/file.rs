@@ -8,13 +8,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kernel::{MAX_ID, MAX_TEXTURES, MeshData, Scene, SceneData, TextureImage};
+use kernel::{
+    AnchorData, DimensionData, MAX_ID, MAX_TEXTURES, MeshData, NoteData, RadialAnchorData, Scene,
+    SceneData, TextureImage,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::camera::{Camera, Lighting, Projection};
 use crate::document::MAX_COORDINATE;
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
+use crate::units::{Units, check_precision};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
@@ -23,9 +27,13 @@ pub const FORMAT: &str = "sketchup-alt";
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
-/// version 10 tags and coloring by tag, and version 11 scenes; older files still open
-/// (untagged before version 10, without scenes before version 11).
-pub const SCHEMA_VERSION: u32 = 11;
+/// version 10 tags and coloring by tag, version 11 scenes, and version 12 dimensions, notes
+/// and display units; older files still open (untagged before version 10, without scenes
+/// before version 11, without annotations and in the default units before version 12).
+pub const SCHEMA_VERSION: u32 = 12;
+/// The version written when the model has a scene but no dimension or note and the default
+/// display units.
+pub const SCENES_SCHEMA_VERSION: u32 = 11;
 /// The version written when the model has a tag or the view colors faces by tag, but no
 /// scene.
 pub const TAGS_SCHEMA_VERSION: u32 = 10;
@@ -54,6 +62,9 @@ struct Stored {
     format: String,
     schema_version: u32,
     camera: StoredCamera,
+    /// The display units; absent for the default (meters, 3 decimals) and before version 12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    units: Option<Units>,
     model: SceneData,
 }
 
@@ -81,11 +92,12 @@ fn is_day(lighting: &Lighting) -> bool {
     *lighting == Lighting::Day
 }
 
-/// How the view looks, saved with the camera.
+/// How the view looks, saved with the camera, and the display units, saved with the model.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ViewLook {
     pub lighting: Lighting,
     pub color_by_tag: bool,
+    pub units: Units,
 }
 
 /// Writes the model, camera, lighting and coloring to `path`, replacing it only once the whole
@@ -114,6 +126,7 @@ pub(crate) fn write_bytes(
     let ViewLook {
         lighting,
         color_by_tag,
+        units,
     } = look;
     let mut model = scene.to_data();
     // Materials sharing an image share its entry, so the file reads back within the texture
@@ -144,6 +157,10 @@ pub(crate) fn write_bytes(
     // An entity on a tag needs the tag, so tags alone decide.
     let tagged = !model.tags.is_empty() || color_by_tag;
     let has_scenes = !model.pages.is_empty();
+    let annotated = std::iter::once(&model.root)
+        .chain(model.definitions.iter().map(|d| &d.mesh))
+        .any(|m| !m.dimensions.is_empty() || !m.notes.is_empty())
+        || units != Units::default();
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -160,8 +177,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if has_scenes {
+        schema_version: if annotated {
             SCHEMA_VERSION
+        } else if has_scenes {
+            SCENES_SCHEMA_VERSION
         } else if tagged {
             TAGS_SCHEMA_VERSION
         } else if positioned {
@@ -184,6 +203,7 @@ pub(crate) fn write_bytes(
             lighting,
             color_by_tag,
         },
+        units: (units != Units::default()).then_some(units),
         model,
     };
     let json = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
@@ -287,11 +307,18 @@ fn json_error(e: serde_json::Error) -> String {
     }
 }
 
-/// Reads a file written by [`write`]: the model and the saved view.
-pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
+/// What [`read`] reads: the model, the saved view and the display units.
+pub(crate) struct Opened {
+    pub scene: Scene,
+    pub camera: StoredCamera,
+    pub units: Units,
+}
+
+/// Reads a file written by [`write`]: the model, the saved view and the display units.
+pub(crate) fn read(path: &Path) -> Result<Opened, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let (scene, camera, _) = read_archive(file, ENTRY, &[])?;
-    Ok((scene, camera))
+    let (opened, _) = read_archive(file, ENTRY, &[])?;
+    Ok(opened)
 }
 
 /// Reads an archive written by [`write_bytes`] with the document under `entry`, with the same
@@ -302,14 +329,15 @@ pub(crate) fn read_bytes(
     entry: &str,
     extra: &[(&str, u64)],
 ) -> Result<(Scene, StoredCamera, Vec<Vec<u8>>), String> {
-    read_archive(std::io::Cursor::new(bytes), entry, extra)
+    let (opened, extras) = read_archive(std::io::Cursor::new(bytes), entry, extra)?;
+    Ok((opened.scene, opened.camera, extras))
 }
 
 fn read_archive<R: Read + Seek>(
     reader: R,
     document: &str,
     extra: &[(&str, u64)],
-) -> Result<(Scene, StoredCamera, Vec<Vec<u8>>), String> {
+) -> Result<(Opened, Vec<Vec<u8>>), String> {
     let mut zip =
         zip::ZipArchive::new(reader).map_err(|_| "not a sketchup-alt file".to_string())?;
     let entry = zip
@@ -331,6 +359,8 @@ fn read_archive<R: Read + Seek>(
     }
     let mut stored: Stored = serde_json::from_slice(&json).map_err(json_error)?;
     check_coordinates(&stored.model)?;
+    let units = stored.units.unwrap_or_default();
+    check_precision(units.precision).map_err(|e| format!("the display units: {e}"))?;
     // Refuse before decoding anything: each decode can take far more memory than its entry.
     if stored
         .model
@@ -394,7 +424,12 @@ fn read_archive<R: Read + Seek>(
             .map_err(|_| format!("the archive has no {name}"))?;
         extras.push(read_limited(entry, *limit, name)?);
     }
-    Ok((scene, stored.camera, extras))
+    let opened = Opened {
+        scene,
+        camera: stored.camera,
+        units,
+    };
+    Ok((opened, extras))
 }
 
 /// The bytes of texture entry `file` of material `id`, within [`MAX_TEXTURE_BYTES`].
@@ -424,8 +459,10 @@ fn read_limited(reader: impl Read, limit: u64, what: &str) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
-/// Fails, naming the entity, when a vertex, an instance's position or a guide's point is beyond
-/// `MAX_COORDINATE`, the limit commands keep to.
+/// Fails, naming the entity, when a vertex, an instance's position, a guide's point or an
+/// annotation's numbers are beyond `MAX_COORDINATE`, the limit commands keep to (a dimension's
+/// offset and a radial dimension's leader reach from one point within it to another, so up
+/// to twice the limit).
 fn check_coordinates(model: &SceneData) -> Result<(), String> {
     let meshes = std::iter::once(&model.root).chain(model.definitions.iter().map(|d| &d.mesh));
     let within = |xs: &[f64]| xs.iter().all(|x| x.abs() <= MAX_COORDINATE);
@@ -435,6 +472,8 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
             vertices,
             instances,
             guides,
+            dimensions,
+            notes,
             ..
         } = mesh;
         if let Some(v) = vertices.iter().find(|v| !within(&v.position)) {
@@ -445,6 +484,42 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
         }
         if let Some(g) = guides.iter().find(|g| !within(&g.point)) {
             return Err(beyond(format!("guide g{}", g.id)));
+        }
+        let anchor = |a: &AnchorData| match a {
+            AnchorData::Vertex(_) => true,
+            AnchorData::Point(p) => within(p),
+        };
+        let reach = |xs: &[f64]| xs.iter().all(|x| x.abs() <= 2.0 * MAX_COORDINATE);
+        for d in dimensions {
+            let (id, ok) = match d {
+                DimensionData::Linear {
+                    id, a, b, offset, ..
+                } => (id, anchor(a) && anchor(b) && reach(offset)),
+                DimensionData::Radial {
+                    id, curve, leader, ..
+                } => {
+                    let center = match curve {
+                        RadialAnchorData::Curve(_) => true,
+                        RadialAnchorData::Fixed(c) => within(&c.center) && reach(&[c.radius]),
+                    };
+                    (id, center && reach(leader))
+                }
+            };
+            if !ok {
+                return Err(beyond(format!("dimension r{id}")));
+            }
+        }
+        for n in notes {
+            if let NoteData::Leader {
+                id,
+                anchor: a,
+                position,
+                ..
+            } = n
+                && !(anchor(a) && within(position))
+            {
+                return Err(beyond(format!("note n{id}")));
+            }
         }
     }
     for p in &model.pages {
@@ -503,6 +578,7 @@ mod tests {
         let look = ViewLook {
             lighting: Lighting::Day,
             color_by_tag: false,
+            units: Units::default(),
         };
         let err = write(&path, &scene, &camera, look, Access::Default).unwrap_err();
         assert!(err.contains("scene p") && err.contains("beyond"), "{err}");

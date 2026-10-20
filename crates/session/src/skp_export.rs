@@ -187,11 +187,14 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         "scene was not written",
         "scenes were not written",
     );
+    stats
+        .warnings
+        .extend(crate::export::annotation_warnings(scene));
     Ok((bytes, stats))
 }
 
 /// The definitions placed from the root, at any depth, in id order.
-fn reached(scene: &Scene) -> BTreeSet<DefinitionId> {
+pub(crate) fn reached(scene: &Scene) -> BTreeSet<DefinitionId> {
     let mut seen = BTreeSet::new();
     let mut stack: Vec<DefinitionId> = scene
         .root()

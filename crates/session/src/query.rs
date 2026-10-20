@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::{Lighting, Projection};
 use crate::command::Origin;
+use crate::units::Units;
 
 /// Read-only questions about the document. Entities and coordinates are those of the open
 /// context (see `Command::OpenInstance`).
@@ -27,7 +28,7 @@ pub enum Query {
         #[serde(default)]
         within: Option<Bounds>,
     },
-    /// One entity by id ("v3", "e7", "f2", "i4", "g9").
+    /// One entity by id ("v3", "e7", "f2", "i4", "g9", "r5", "n6").
     Entity {
         id: EntityId,
     },
@@ -38,7 +39,7 @@ pub enum Query {
     Camera {},
     Stats {},
     History {},
-    /// The selected edges, faces, instances and guides.
+    /// The selected edges, faces, instances, guides, dimensions and notes.
     Selection {},
     /// Every group and component definition.
     Definitions {},
@@ -67,6 +68,10 @@ pub enum Query {
     Events {
         since: u64,
     },
+    /// Every dimension and note of the open context, with its label text.
+    Annotations {},
+    /// The model's display units (see `set_units`).
+    Units {},
 }
 
 /// An axis-aligned box, bounds included.
@@ -208,6 +213,89 @@ pub struct GuideInfo {
     pub tag: Option<TagId>,
 }
 
+/// A dimension end or a leader note's anchor, where it is now: on vertex `vertex`, which it
+/// follows, or (no `vertex`) a fixed point.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AnchorInfo {
+    pub point: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex: Option<EntityId>,
+}
+
+/// Whether a dimension measures a distance or a circle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionKind {
+    Linear,
+    Radial,
+}
+
+/// A dimension. Linear: the distance between `a` and `b`, drawn along `line` (the two ends
+/// moved by `offset`, which is perpendicular to them). Radial: the radius (or with `diameter`
+/// the diameter) of the circle at `center` with `normal` and `radius`, measuring curve
+/// `curve` while it is attached to one, labelled at `center + leader`. `value` is the length
+/// measured in meters, `label` how it is written in the display units ("R 1.5 m", "Ø 3 m").
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DimensionInfo {
+    pub id: EntityId,
+    pub kind: DimensionKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a: Option<AnchorInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<AnchorInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<[[f64; 3]; 2]>,
+    /// "c12" while the dimension follows a curve; absent for a fixed circle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    /// True for a radial dimension measuring the diameter. Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub diameter: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<[f64; 3]>,
+    pub value: f64,
+    pub label: String,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
+}
+
+/// Whether a note points at the model or is fixed to the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteKind {
+    Leader,
+    Screen,
+}
+
+/// A note. Leader: text at `position` with a line to `anchor`. Screen: text fixed to the view
+/// at `at`, fractions (0 to 1) of its width and height from the top left corner. `text` is
+/// what was written (absent for a leader note showing its anchor's coordinates); `label` is
+/// what is shown.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteInfo {
+    pub id: EntityId,
+    pub kind: NoteKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<AnchorInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub label: String,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DefinitionInfo {
     pub id: DefinitionId,
@@ -312,8 +400,8 @@ pub struct TagInfo {
     pub color: [u8; 3],
     /// False when what is on it is hidden.
     pub visible: bool,
-    /// Edges, faces, instances and guides on it, in the whole model (each definition counted
-    /// once).
+    /// Edges, faces, instances, guides, dimensions and notes on it, in the whole model (each
+    /// definition counted once).
     pub count: usize,
 }
 
@@ -368,6 +456,8 @@ pub enum QueryResult {
     Face(FaceInfo),
     Instance(InstanceInfo),
     Guide(GuideInfo),
+    Dimension(DimensionInfo),
+    Note(NoteInfo),
     Curve(CurveInfo),
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
@@ -459,6 +549,13 @@ pub enum QueryResult {
         events: Vec<ChangeEvent>,
         truncated: bool,
     },
+    /// The open context's dimensions and notes, in id order.
+    Annotations {
+        dimensions: Vec<DimensionInfo>,
+        notes: Vec<NoteInfo>,
+        revision: u64,
+    },
+    Units(Units),
 }
 
 /// One model change: the revision it produced and what it changed.
