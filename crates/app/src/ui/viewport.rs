@@ -347,7 +347,7 @@ pub fn chip_rect(cursor: Pos2, size: Vec2, view_rect: Rect) -> Rect {
 
 /// Paints a dimension's or note's label at `at` (points; its center, or a screen note's top
 /// left corner): its text on a small card in the theme's colors, the accent's when selected or
-/// hovered. Returns the card's rectangle.
+/// hovered, the danger color's when Erase hovers it. Returns the card's rectangle.
 fn label(painter: &Painter, at: Pos2, l: &HudLabel) -> Rect {
     let t = theme::tokens(painter.ctx().theme());
     let (text, stroke) = match l.look {
@@ -355,6 +355,7 @@ fn label(painter: &Painter, at: Pos2, l: &HudLabel) -> Rect {
         LabelLook::Faded => (t.text_disabled, Stroke::new(1.0, t.border)),
         LabelLook::Selected => (t.accent, Stroke::new(1.5, t.accent)),
         LabelLook::Hovered => (t.text_primary, Stroke::new(1.5, t.accent)),
+        LabelLook::Erasing => (t.danger, Stroke::new(1.5, t.danger)),
     };
     let galley = painter.layout_no_wrap(
         l.text.clone(),

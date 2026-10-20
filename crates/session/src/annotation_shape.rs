@@ -5,6 +5,8 @@ use glam::{DAffine3, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{Circle, Dimension, EntityId, Model, Note};
 
+use crate::units::{Units, format_length_in};
+
 /// An annotation placed in some coordinates (a mesh's own, or another by `transformed`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnnotationShape {
@@ -121,18 +123,23 @@ impl AnnotationShape {
     /// dimension's line from its start through the circle to the label; a leader note's
     /// leader. None for a screen note.
     pub fn segments(&self) -> Vec<[DVec3; 2]> {
+        let mut out = Vec::with_capacity(3);
+        self.for_each_segment(|s| out.push(s));
+        out
+    }
+
+    /// `segments`, each given to `f` as it is worked out (nothing is collected).
+    pub fn for_each_segment(&self, mut f: impl FnMut([DVec3; 2])) {
         let far = |p: DVec3, q: DVec3| p.distance(q) > LENGTH_TOL;
         match *self {
             AnnotationShape::Linear { a, b, line } => {
-                let mut out = Vec::with_capacity(3);
                 if far(a, line[0]) {
-                    out.push([a, line[0]]);
+                    f([a, line[0]]);
                 }
                 if far(b, line[1]) {
-                    out.push([b, line[1]]);
+                    f([b, line[1]]);
                 }
-                out.push(line);
-                out
+                f(line);
             }
             AnnotationShape::Radial {
                 circle,
@@ -146,15 +153,38 @@ impl AnnotationShape {
                 } else {
                     center
                 };
-                let mut out = vec![[start, near]];
-                // The label beyond the circle: the line goes on to it.
-                if (label - center).length() > circle.radius + LENGTH_TOL {
-                    out.push([near, label]);
+                f([start, near]);
+                // The label beyond the circle (measured in its plane, as `near` is): the line
+                // goes on to it.
+                let v = label - center;
+                let across = (v - circle.normal * v.dot(circle.normal)).length();
+                if across > circle.radius + LENGTH_TOL {
+                    f([near, label]);
                 }
-                out
             }
-            AnnotationShape::Leader { anchor, position } => vec![[anchor, position]],
-            AnnotationShape::Screen { .. } => Vec::new(),
+            AnnotationShape::Leader { anchor, position } => f([anchor, position]),
+            AnnotationShape::Screen { .. } => {}
+        }
+    }
+
+    /// A dimension's label as the shape is placed, in `units`: its length ("1.5 m"), or for a
+    /// radial dimension "R 1.5 m" (radius) or "Ø 3 m" (diameter). A dimension inside a scaled
+    /// group measures what is drawn, not its own coordinates. None for notes.
+    pub fn dimension_label(&self, units: &Units) -> Option<String> {
+        match *self {
+            AnnotationShape::Linear { a, b, .. } => Some(format_length_in(a.distance(b), units)),
+            AnnotationShape::Radial {
+                circle, diameter, ..
+            } => {
+                let value = if diameter {
+                    2.0 * circle.radius
+                } else {
+                    circle.radius
+                };
+                let prefix = if diameter { "Ø" } else { "R" };
+                Some(format!("{prefix} {}", format_length_in(value, units)))
+            }
+            AnnotationShape::Leader { .. } | AnnotationShape::Screen { .. } => None,
         }
     }
 
@@ -211,5 +241,49 @@ mod tests {
         assert_eq!(s.segments(), vec![[DVec3::ZERO, DVec3::X]]);
         assert_eq!(s.label_point(), Some(DVec3::new(0.5, 0.0, 0.0)));
         assert_eq!(AnnotationShape::Screen { at: [0.5, 0.5] }.points(), vec![]);
+    }
+
+    #[test]
+    fn a_label_off_the_circles_plane_but_within_its_radius_ends_the_line_at_the_circle() {
+        let circle = Circle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 1.0,
+        };
+        // 0.5 across the plane, 2 above it: inside the circle as seen along its normal.
+        let r = AnnotationShape::Radial {
+            circle,
+            label: DVec3::new(0.5, 0.0, 2.0),
+            diameter: false,
+        };
+        assert_eq!(r.segments(), vec![[DVec3::ZERO, DVec3::X]]);
+    }
+
+    #[test]
+    fn dimension_labels_measure_the_placed_shape() {
+        let units = Units::default();
+        let s = AnnotationShape::Linear {
+            a: DVec3::ZERO,
+            b: DVec3::X,
+            line: [DVec3::ZERO, DVec3::X],
+        };
+        let scaled = s.transformed(DAffine3::from_scale(DVec3::splat(2.0)));
+        assert_eq!(scaled.dimension_label(&units).as_deref(), Some("2 m"));
+        let circle = Circle {
+            center: DVec3::ZERO,
+            normal: DVec3::Z,
+            radius: 1.5,
+        };
+        let r = AnnotationShape::Radial {
+            circle,
+            label: DVec3::new(3.0, 0.0, 0.0),
+            diameter: true,
+        };
+        assert_eq!(r.dimension_label(&units).as_deref(), Some("Ø 3 m"));
+        let leader = AnnotationShape::Leader {
+            anchor: DVec3::ZERO,
+            position: DVec3::X,
+        };
+        assert_eq!(leader.dimension_label(&units), None);
     }
 }

@@ -369,16 +369,18 @@ a radial dimension whose curve is gone or no longer a circle or an arc keeps the
 had, in the same undo step, so undo attaches them again. A dimension whose two ends an edit
 brings together is removed in that step. Annotations inside a group anchor to the group's
 vertices and are in its coordinates, like everything else there: queries give anchor points,
-positions and circles in the open context's coordinates, while a leader note's automatic text
-writes its point in root coordinates.
+positions and circles in the open context's coordinates, and a dimension's `value` and `label`
+measure it there (in a group scaled by 2, half what is drawn), while a leader note's automatic
+text writes its point in root coordinates. The window's labels and Entity Info measure a
+dimension as drawn, placed in root coordinates (the scaled length).
 
 How they are drawn: a linear dimension has extension lines from its ends to the dimension line,
-running 4 pixels past it, and arrows 10 pixels long at the line's ends; a radial dimension a
+running 4 points past it, and arrows 10 points long at the line's ends; a radial dimension a
 line from the center (for a diameter, from the far side of the circle) through the circle to its
 label, with an arrow where it meets the circle; a leader note a line from its anchor to its
 text, with an arrow at the anchor. Their labels (the dimension's length at the middle of its
-line, a note's text) are written by the window over the view, and hidden when their point is
-behind the eye; a screen note is only a label. `render_view` draws the lines but no labels. In
+line, a note's text) are written by the window over the view, and left out when their point is
+out of view or behind the eye; a screen note is only a label. `render_view` draws the lines but no labels. In
 the window, clicking a dimension's or note's lines or label selects it (or the group holding
 it), and `editor.hovered` names it under the cursor.
 

@@ -1269,7 +1269,12 @@ impl Renderer {
         let overlay = mesh(&self.device, "overlay", overlay);
         // Guides and annotations: both drawn anew for the camera, in the same pipeline.
         let mut guide_vertices = guide_lines(&self.guides, camera);
-        guide_vertices.extend(annotation_lines(&self.annotations, camera));
+        annotation_lines(
+            &self.annotations,
+            camera,
+            f64::from(self.pixels_per_point),
+            &mut guide_vertices,
+        );
         let guides = mesh(&self.device, "guides", &guide_vertices);
         if let Some(glass) = &mut self.glass {
             glass.sort(&self.queue, camera);

@@ -59,6 +59,8 @@ pub enum LabelLook {
     Faded,
     Selected,
     Hovered,
+    /// Hovered with the Erase tool: a click erases it.
+    Erasing,
 }
 
 impl Hud {

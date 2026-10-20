@@ -2,8 +2,8 @@
 //! them, and the rectangles it last wrote them in, which the tools pick by.
 
 use kernel::EntityId;
-use session::{dimension_label, note_label};
-use tools::{Label, Owner};
+use session::note_label;
+use tools::{Label, Owner, ToolKind};
 
 use super::{Editor, scenery_in};
 use crate::feedback::{HudLabel, LabelAnchor, LabelLook};
@@ -28,10 +28,12 @@ impl Editor {
 
     /// The label of every dimension and note in view, in view pixels: a dimension's at the
     /// middle of its line (a radial one's at its label point), a leader note's at its text's
-    /// position, a screen note's at its place on the view. Labels whose point the camera does
-    /// not see (behind the eye) are left out, and so are those on hidden tags. Those of the
-    /// open context, or of an instance of it, are lit as it is selected or hovered; those
-    /// outside the open instance are faded.
+    /// position, a screen note's at its place on the view. A dimension measures what is drawn
+    /// (its shape placed in root coordinates), so one in a scaled group shows the scaled
+    /// length. Labels whose point is out of view (or behind the eye) are left out, and so are
+    /// those on hidden tags. Those of the open context, or of an instance of it, are lit as it
+    /// is selected or hovered (in the danger color when Erase hovers); those outside the open
+    /// instance are faded.
     pub(super) fn hud_labels(&self) -> Vec<HudLabel> {
         let layout = self.layout();
         let scenery = scenery_in(&layout, &self.doc);
@@ -44,7 +46,8 @@ impl Editor {
         for &(k, id, shape) in scenery.annotations() {
             let part = scenery.part(k);
             let text = match id {
-                EntityId::Dimension(d) => dimension_label(part.model, d, &units),
+                // Measured as drawn: a scaled group's dimension shows the scaled length.
+                EntityId::Dimension(_) => shape.transformed(to_root).dimension_label(&units),
                 EntityId::Note(n) => note_label(part.model, n, &units, to_root * part.place),
                 EntityId::Vertex(_)
                 | EntityId::Edge(_)
@@ -58,6 +61,10 @@ impl Editor {
                     let Some(at) = camera.project(to_root.transform_point3(p)) else {
                         continue;
                     };
+                    // Out of view: not drawn, so not picked either.
+                    if !(at.cmpge(glam::DVec2::ZERO).all() && at.cmple(camera.viewport).all()) {
+                        continue;
+                    }
                     (at, LabelAnchor::Center)
                 }
                 (None, session::AnnotationShape::Screen { at }) => (
@@ -76,6 +83,9 @@ impl Editor {
             let look = match lit {
                 None => LabelLook::Faded,
                 Some(lit) if selection.contains(&lit) => LabelLook::Selected,
+                Some(lit) if hovered == Some(lit) && self.kind == ToolKind::Erase => {
+                    LabelLook::Erasing
+                }
                 Some(lit) if hovered == Some(lit) => LabelLook::Hovered,
                 Some(_) => LabelLook::Normal,
             };
@@ -305,5 +315,95 @@ mod tests {
         })
         .unwrap();
         assert!(matches!(click(&mut e)[..], [EntityId::Face(_)]));
+    }
+
+    /// A 2 x 2 rectangle and the dimension of its 2 m side (line at y = -1), grouped.
+    fn grouped(e: &mut Editor) -> (EntityId, EntityId) {
+        e.execute(Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        })
+        .unwrap();
+        let d = dimension(e);
+        e.execute(Command::Select {
+            ids: Vec::new(),
+            mode: SelectMode::Replace,
+            all: true,
+        })
+        .unwrap();
+        let ids: Vec<EntityId> = e.doc().selection().iter().copied().collect();
+        let group = e
+            .execute(Command::MakeGroup { ids })
+            .unwrap()
+            .changes
+            .created
+            .into_iter()
+            .find(|id| matches!(id, EntityId::Instance(_)))
+            .unwrap();
+        (group, d)
+    }
+
+    /// The label text and the Entity Info lines of dimension `d` selected inside `group`.
+    fn label_and_info(e: &mut Editor, group: EntityId, d: EntityId) -> (String, Vec<String>) {
+        let label = labels(e).remove(0).text;
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        select(e, vec![d]);
+        let info = crate::info::entity_info(e.doc());
+        e.execute(Command::CloseInstance {}).unwrap();
+        (label, info)
+    }
+
+    #[test]
+    fn a_dimension_in_a_scaled_or_turned_group_is_labelled_as_drawn() {
+        let mut e = editor();
+        let (group, d) = grouped(&mut e);
+        e.execute(Command::Scale {
+            ids: vec![group],
+            origin: [0.0, 0.0, 0.0],
+            factors: [2.0, 2.0, 2.0],
+        })
+        .unwrap();
+        let (label, info) = label_and_info(&mut e, group, d);
+        assert_eq!(label, "4 m");
+        assert_eq!(info, ["Editing group", "1 linear dimension", "Text: 4 m"]);
+        // Turned a quarter about Z (and still scaled): the same length, at the turned line.
+        e.execute(Command::Rotate {
+            ids: vec![group],
+            center: [0.0, 0.0, 0.0],
+            axis: None,
+            angle: 90.0,
+            copies: None,
+        })
+        .unwrap();
+        let mid = e.doc().camera.project(DVec3::new(2.0, 2.0, 0.0)).unwrap();
+        assert!(labels(&mut e)[0].at.distance(mid) < 1e-6);
+        let (label, info) = label_and_info(&mut e, group, d);
+        assert_eq!(label, "4 m");
+        assert_eq!(info[2], "Text: 4 m");
+    }
+
+    #[test]
+    fn labels_out_of_view_are_left_out_and_erase_hovers_in_danger() {
+        let mut e = editor();
+        let d = dimension(&mut e);
+        // Far to the side, out of view.
+        let point = |p: [f64; 3]| AnchorInput::Point(p);
+        create(
+            &mut e,
+            Command::AddDimension {
+                a: point([5000.0, 0.0, 0.0]),
+                b: point([5002.0, 0.0, 0.0]),
+                offset: [0.0, -1.0, 0.0],
+            },
+        );
+        let shown: Vec<EntityId> = labels(&mut e).iter().map(|l| l.id).collect();
+        assert_eq!(shown, vec![d]);
+        e.select_tool(tools::ToolKind::Erase);
+        let on_line = e.doc().camera.project(DVec3::new(1.5, -1.0, 0.0)).unwrap();
+        e.cursor_moved(on_line);
+        e.refresh_hover();
+        assert_eq!(e.hovered(), Some(d));
+        assert_eq!(labels(&mut e)[0].look, LabelLook::Erasing);
     }
 }

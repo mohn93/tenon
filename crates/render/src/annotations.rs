@@ -1,6 +1,6 @@
 //! Dimensions and leader notes, drawn anew each frame for the camera like guides: their lines
 //! are fixed in the model, but their arrows and the extension lines' overshoot are sized in
-//! pixels. Labels are the window's (egui); screen notes have no lines.
+//! points on screen. Labels are the window's (egui); screen notes have no lines.
 
 use glam::{DVec2, DVec3};
 use session::{AnnotationShape, Camera};
@@ -11,10 +11,10 @@ pub const ANNOTATION_COLOR: [f32; 4] = [0.12, 0.12, 0.16, 1.0];
 /// Annotations outside the open instance, while one is open.
 pub const FADED_ANNOTATION_COLOR: [f32; 4] = [0.66, 0.66, 0.70, 1.0];
 
-/// How long an arrowhead's sides are, in physical pixels.
-pub const ARROW_PX: f64 = 10.0;
-/// How far an extension line goes past the dimension line, in physical pixels.
-pub const OVERSHOOT_PX: f64 = 4.0;
+/// How long an arrowhead's sides are, in points.
+pub const ARROW_PT: f64 = 10.0;
+/// How far an extension line goes past the dimension line, in points.
+pub const OVERSHOOT_PT: f64 = 4.0;
 /// Half the angle at an arrow's tip.
 const ARROW_HALF_ANGLE: f64 = 0.35;
 
@@ -25,27 +25,50 @@ pub struct AnnotationLook {
     pub color: [f32; 4],
 }
 
-/// Line pairs drawing `annotations` as `camera` sees them.
-pub fn annotation_lines(annotations: &[AnnotationLook], camera: &Camera) -> Vec<LineVertex> {
-    let mut out = Vec::new();
+/// Line pairs drawing `annotations` as `camera` sees them, on a display of `pixels_per_point`,
+/// appended to `out`.
+pub fn annotation_lines(
+    annotations: &[AnnotationLook],
+    camera: &Camera,
+    pixels_per_point: f64,
+    out: &mut Vec<LineVertex>,
+) {
     for look in annotations {
-        for [a, b] in annotation_segments(&look.shape, camera) {
+        each_segment(&look.shape, camera, pixels_per_point, |[a, b]| {
             for p in [a, b] {
                 out.push(LineVertex {
                     pos: p.as_vec3().to_array(),
                     color: look.color,
                 });
             }
-        }
+        });
     }
+}
+
+/// The segments drawing `shape` for `camera` on a display of `pixels_per_point`, collected
+/// (see `each_segment`).
+pub fn annotation_segments(
+    shape: &AnnotationShape,
+    camera: &Camera,
+    pixels_per_point: f64,
+) -> Vec<[DVec3; 2]> {
+    let mut out = Vec::new();
+    each_segment(shape, camera, pixels_per_point, |s| out.push(s));
     out
 }
 
-/// The segments drawing `shape` for `camera`: its lines (see `AnnotationShape::segments`),
-/// the extension lines' overshoot past the dimension line, and arrowheads `ARROW_PX` long at
-/// the dimension line's ends, where a radial line meets the circle, and at a leader's anchor.
-pub fn annotation_segments(shape: &AnnotationShape, camera: &Camera) -> Vec<[DVec3; 2]> {
-    let mut out = shape.segments();
+/// Gives `f` each segment drawing `shape` for `camera`: its lines (see
+/// `AnnotationShape::segments`), the extension lines' overshoot `OVERSHOOT_PT` past the
+/// dimension line, and arrowheads `ARROW_PT` long at the dimension line's ends, where a radial
+/// line meets the circle, and at a leader's anchor; points are `pixels_per_point` pixels.
+fn each_segment(
+    shape: &AnnotationShape,
+    camera: &Camera,
+    pixels_per_point: f64,
+    mut f: impl FnMut([DVec3; 2]),
+) {
+    shape.for_each_segment(&mut f);
+    let arrow_px = ARROW_PT * pixels_per_point;
     match *shape {
         AnnotationShape::Linear { a, b, line } => {
             for (from, to) in [(a, line[0]), (b, line[1])] {
@@ -53,17 +76,18 @@ pub fn annotation_segments(shape: &AnnotationShape, camera: &Camera) -> Vec<[DVe
                     && from.distance(to) > kernel::geom::LENGTH_TOL
                     && camera.sees_depth(to)
                 {
-                    // How much of a unit along `dir` the screen shows, so the overshoot is
-                    // OVERSHOOT_PX long however the line is foreshortened.
+                    // How much of a unit along `dir` the screen shows, so the overshoot is as
+                    // long on screen however the line is foreshortened.
                     let across = DVec2::new(dir.dot(camera.right()), dir.dot(camera.up())).length();
                     if across > 0.05 {
-                        let len = OVERSHOOT_PX * camera.pixel_size(to) / across;
-                        out.push([to, to + dir * len]);
+                        let px = OVERSHOOT_PT * pixels_per_point;
+                        let len = px * camera.pixel_size(to) / across;
+                        f([to, to + dir * len]);
                     }
                 }
             }
-            out.extend(arrow(camera, line[0], line[0] - line[1]));
-            out.extend(arrow(camera, line[1], line[1] - line[0]));
+            arrow(camera, line[0], line[0] - line[1], arrow_px, &mut f);
+            arrow(camera, line[1], line[1] - line[0], arrow_px, &mut f);
         }
         AnnotationShape::Radial {
             circle,
@@ -72,37 +96,34 @@ pub fn annotation_segments(shape: &AnnotationShape, camera: &Camera) -> Vec<[DVe
         } => {
             let near = AnnotationShape::radial_point(&circle, label);
             let out_dir = near - circle.center;
-            out.extend(arrow(camera, near, out_dir));
+            arrow(camera, near, out_dir, arrow_px, &mut f);
             if diameter {
-                out.extend(arrow(camera, circle.center - out_dir, -out_dir));
+                arrow(camera, circle.center - out_dir, -out_dir, arrow_px, &mut f);
             }
         }
         AnnotationShape::Leader { anchor, position } => {
-            out.extend(arrow(camera, anchor, anchor - position));
+            arrow(camera, anchor, anchor - position, arrow_px, &mut f);
         }
         AnnotationShape::Screen { .. } => {}
     }
-    out
 }
 
 /// An arrowhead with its tip at `tip`, pointing along `dir` as the screen shows it: two
-/// strokes `ARROW_PX` long back from the tip. None where the camera does not see the tip, or
-/// `dir` points along the view.
-fn arrow(camera: &Camera, tip: DVec3, dir: DVec3) -> Vec<[DVec3; 2]> {
+/// strokes `size_px` pixels long back from the tip. None where the camera does not see the
+/// tip, or `dir` points along the view.
+fn arrow(camera: &Camera, tip: DVec3, dir: DVec3, size_px: f64, f: &mut impl FnMut([DVec3; 2])) {
     if !camera.sees_depth(tip) {
-        return Vec::new();
+        return;
     }
     let (right, up) = (camera.right(), camera.up());
     let Some(d) = DVec2::new(dir.dot(right), dir.dot(up)).try_normalize() else {
-        return Vec::new();
+        return;
     };
-    let size = ARROW_PX * camera.pixel_size(tip);
-    [ARROW_HALF_ANGLE, -ARROW_HALF_ANGLE]
-        .map(|angle| {
-            let back = DVec2::from_angle(angle).rotate(-d);
-            [tip, tip + (right * back.x + up * back.y) * size]
-        })
-        .to_vec()
+    let size = size_px * camera.pixel_size(tip);
+    for angle in [ARROW_HALF_ANGLE, -ARROW_HALF_ANGLE] {
+        let back = DVec2::from_angle(angle).rotate(-d);
+        f([tip, tip + (right * back.x + up * back.y) * size]);
+    }
 }
 
 #[cfg(test)]
@@ -128,7 +149,7 @@ mod tests {
             b,
             line: [a + shift, b + shift],
         };
-        let s = annotation_segments(&shape, &c);
+        let s = annotation_segments(&shape, &c, 1.0);
         // Two extension lines, the dimension line, two overshoots and two arrows of two.
         assert_eq!(s.len(), 3 + 2 + 4);
         assert_eq!(s[0], [a, a + shift]);
@@ -136,24 +157,32 @@ mod tests {
         let over = s[3];
         assert_eq!(over[0], a + shift);
         let len = screen(&c, over[0]).distance(screen(&c, over[1]));
-        assert!((len - OVERSHOOT_PX).abs() < 1.0, "overshoot {len} px");
+        assert!((len - OVERSHOOT_PT).abs() < 1.0, "overshoot {len} px");
         for arrow in &s[5..] {
             let len = screen(&c, arrow[0]).distance(screen(&c, arrow[1]));
-            assert!((len - ARROW_PX).abs() < 0.5, "arrow {len} px");
+            assert!((len - ARROW_PT).abs() < 0.5, "arrow {len} px");
         }
         // The arrows at a's end point back along the line toward b.
         let tip = screen(&c, a + shift);
         let wing = screen(&c, s[5][1]);
         let toward_b = screen(&c, b + shift) - tip;
         assert!((wing - tip).dot(toward_b) > 0.0);
-        let v = annotation_lines(
-            &[AnnotationLook {
-                shape,
-                color: ANNOTATION_COLOR,
-            }],
-            &c,
-        );
+        let mut v = Vec::new();
+        let look = AnnotationLook {
+            shape,
+            color: ANNOTATION_COLOR,
+        };
+        annotation_lines(&[look], &c, 1.0, &mut v);
         assert_eq!(v.len(), 2 * s.len());
+        // On a display of two pixels a point, arrows and overshoot are twice as many pixels.
+        let s2 = annotation_segments(&shape, &c, 2.0);
+        let len = |w: [DVec3; 2]| screen(&c, w[0]).distance(screen(&c, w[1]));
+        assert!(
+            (len(s2[3]) - 2.0 * OVERSHOOT_PT).abs() < 1.0,
+            "{}",
+            len(s2[3])
+        );
+        assert!((len(s2[5]) - 2.0 * ARROW_PT).abs() < 0.5, "{}", len(s2[5]));
     }
 
     #[test]
@@ -170,7 +199,7 @@ mod tests {
             label,
             diameter: false,
         };
-        let s = annotation_segments(&radius, &c);
+        let s = annotation_segments(&radius, &c, 1.0);
         assert_eq!(s.len(), 2 + 2);
         assert!(s[2..].iter().all(|w| w[0] == DVec3::X));
         let diameter = AnnotationShape::Radial {
@@ -178,7 +207,7 @@ mod tests {
             label,
             diameter: true,
         };
-        let s = annotation_segments(&diameter, &c);
+        let s = annotation_segments(&diameter, &c, 1.0);
         assert_eq!(s.len(), 2 + 4);
         assert_eq!(s[0], [-DVec3::X, DVec3::X]);
         assert!(s[4..].iter().all(|w| w[0] == -DVec3::X));
@@ -191,15 +220,17 @@ mod tests {
             anchor: DVec3::ZERO,
             position: DVec3::new(1.0, 1.0, 1.0),
         };
-        let s = annotation_segments(&leader, &c);
+        let s = annotation_segments(&leader, &c, 1.0);
         assert_eq!(s.len(), 3);
         assert!(s[1..].iter().all(|w| w[0] == DVec3::ZERO));
-        assert!(annotation_segments(&AnnotationShape::Screen { at: [0.1, 0.1] }, &c).is_empty());
+        assert!(
+            annotation_segments(&AnnotationShape::Screen { at: [0.1, 0.1] }, &c, 1.0).is_empty()
+        );
         // Behind the eye: the leader's line is kept (the GPU clips it), the arrow is not.
         let behind = AnnotationShape::Leader {
             anchor: c.eye - c.forward() * 5.0,
             position: c.target,
         };
-        assert_eq!(annotation_segments(&behind, &c).len(), 1);
+        assert_eq!(annotation_segments(&behind, &c, 1.0).len(), 1);
     }
 }

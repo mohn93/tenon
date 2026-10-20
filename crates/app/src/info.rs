@@ -2,7 +2,7 @@
 
 use glam::{DAffine3, DMat3, DQuat};
 use kernel::{CurveKind, DefinitionKind, Dimension, EdgeId, EntityId, Guide, Model, Note};
-use session::{Document, dimension_label, note_label};
+use session::{AnnotationShape, Document, note_label};
 use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
@@ -161,7 +161,8 @@ fn selection_info(doc: &Document) -> Vec<String> {
 
 /// The kind and label text of the dimension or note `id` of the open context: "1 linear
 /// dimension", "1 radial dimension" or "1 diameter dimension", or "1 leader note" or "1
-/// screen note", then its text as the view writes it (in the display units). A note's text is
+/// screen note", then its text as the view writes it (in the display units; a dimension
+/// measured as placed, so in a scaled open group it shows the scaled length). A note's text is
 /// given by its first line, with an ellipsis when it has more.
 fn annotation_info(doc: &Document, id: EntityId) -> Vec<String> {
     let m = doc.model();
@@ -176,7 +177,10 @@ fn annotation_info(doc: &Document, id: EntityId) -> Vec<String> {
                 Some(Dimension::Radial { diameter: true, .. }) => "1 diameter dimension",
                 None => return Vec::new(),
             };
-            (kind, dimension_label(m, d, &units))
+            // As its label is drawn: measured placed in root coordinates (scaled with the
+            // open group).
+            let placed = AnnotationShape::of(m, id).map(|s| s.transformed(doc.context_transform()));
+            (kind, placed.and_then(|s| s.dimension_label(&units)))
         }
         EntityId::Note(n) => {
             let kind = match m.note(n) {
