@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use glam::{DAffine3, DVec3};
-use kernel::{EntityId, Instance, MeshId, SceneChange};
+use kernel::{EntityId, MeshId, SceneChange};
 
 use super::{Document, check_coordinates};
 use crate::clip;
@@ -61,23 +61,19 @@ impl Document {
             Some(at) => DAffine3::from_translation(DVec3::from(at) - clip.base),
             None => self.context_transform().inverse(),
         };
-        // What lands in the open context must keep to the limit commands keep to.
+        // What lands in the open context must keep to the limit commands keep to. Each
+        // definition's box is worked out once, so a nested clip costs no more than its size.
         let root = clip.scene.mesh(MeshId::Root).expect("a scene has a root");
+        let boxes = clip::definition_boxes(&clip.scene);
         let at = |p: DVec3| placement.transform_point3(p).to_array();
         let mut points: Vec<[f64; 3]> = root.vertices().map(|(_, v)| at(v.pos)).collect();
         points.extend(root.guides().map(|(_, g)| at(g.anchor())));
         for (_, i) in root.instances() {
-            let placed = Instance::new(i.definition, placement * i.transform);
-            match clip.scene.instance_bounds(&placed) {
-                Some(b) => points.extend(b.map(|p| p.to_array())),
-                None => points.push(placed.transform.translation.to_array()),
+            let placed = placement * i.transform;
+            match boxes.get(&i.definition).copied().flatten() {
+                Some(b) => points.extend(clip::corners(placed, b).map(|p| p.to_array())),
+                None => points.push(placed.translation.to_array()),
             }
-            points.extend(
-                clip.scene
-                    .instance_guide_anchors(&placed)
-                    .iter()
-                    .map(|p| p.to_array()),
-            );
         }
         check_coordinates(&points)?;
 

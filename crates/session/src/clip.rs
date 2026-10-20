@@ -7,7 +7,9 @@
 
 use base64::Engine;
 use glam::{DAffine3, DVec3};
-use kernel::{MeshId, Scene};
+use std::collections::HashMap;
+
+use kernel::{DefinitionId, MeshId, Scene};
 use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
@@ -21,6 +23,10 @@ pub const HEADER: &str = "sketchup-alt clip 1";
 pub const MAX_CLIP_BYTES: usize = 64 * 1024 * 1024;
 /// The most segments [`outline`] returns.
 pub const MAX_OUTLINE_SEGMENTS: usize = 20_000;
+/// The most instances a clip may place, counting a nested instance once for every placement
+/// of what holds it (a component of 10 placed 10 times counts 110). Larger clips are refused,
+/// so walking a clip's placements stays bounded whatever text is pasted.
+pub const MAX_CLIP_INSTANCES: u64 = 100_000;
 /// The most instances [`outline`] walks into.
 const MAX_OUTLINE_VISITS: usize = 100_000;
 /// The archive entry holding the clip's model, as `.skr` writes its document.
@@ -101,10 +107,13 @@ pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
     if body.len() > encoded_limit * 2 {
         return Err(too_large());
     }
-    let compact: Vec<u8> = body.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if compact.len() > encoded_limit {
+    // Counted before the copy is made, so an over-long body is never copied.
+    let length = body.bytes().filter(|b| !b.is_ascii_whitespace()).count();
+    if length > encoded_limit {
         return Err(too_large());
     }
+    let mut compact = Vec::with_capacity(length);
+    compact.extend(body.bytes().filter(|b| !b.is_ascii_whitespace()));
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&compact)
         .map_err(|_| invalid("the clip is damaged: its body is not valid base64".into()))?;
@@ -120,6 +129,12 @@ pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
     if !base.is_finite() || base.abs().max_element() > MAX_COORDINATE {
         return Err(damaged(format!(
             "its base point is not finite or beyond +/-{MAX_COORDINATE} m"
+        )));
+    }
+    if expanded_instances(&scene).is_none_or(|n| n > MAX_CLIP_INSTANCES) {
+        return Err(invalid(format!(
+            "the clip places more than {MAX_CLIP_INSTANCES} instances, nested ones counted \
+             once per placement"
         )));
     }
     if info.source.len() > MAX_TOKEN_LEN {
@@ -169,21 +184,106 @@ fn add_segments(scene: &Scene, mesh: MeshId, to_world: DAffine3, out: &mut Vec<[
     }
 }
 
-/// The minimum corner of the box around the root's vertices, instances (or their positions,
-/// when empty) and guides' anchors; the origin for an empty root.
+/// The minimum corner of the box around the root's vertices, guides' anchors and instances
+/// (their definitions' boxes placed, or their positions when empty); the origin for an empty
+/// root.
 fn base_point(scene: &Scene) -> DVec3 {
     let root = scene.mesh(MeshId::Root).expect("a scene has a root");
-    let mut points: Vec<DVec3> = root.vertices().map(|(_, v)| v.pos).collect();
-    for (_, i) in root.instances() {
-        match scene.instance_bounds(i) {
-            Some([lo, hi]) => points.extend([lo, hi]),
+    mesh_box(root, &definition_boxes(scene)).map_or(DVec3::ZERO, |[lo, _]| lo)
+}
+
+/// The clip's definitions, each after every definition it places; None when one places
+/// itself (directly or deeper) or places a definition the clip lacks.
+fn children_first(scene: &Scene) -> Option<Vec<DefinitionId>> {
+    // 0: not seen, 1: on the path, 2: done.
+    let mut state: HashMap<DefinitionId, u8> = HashMap::new();
+    let mut order = Vec::new();
+    for (start, _) in scene.definitions() {
+        if state.contains_key(&start) {
+            continue;
+        }
+        let mut stack = vec![(start, false)];
+        while let Some((id, children_done)) = stack.pop() {
+            if children_done {
+                state.insert(id, 2);
+                order.push(id);
+                continue;
+            }
+            match state.get(&id) {
+                Some(2) => continue,
+                Some(_) => return None,
+                None => {}
+            }
+            state.insert(id, 1);
+            stack.push((id, true));
+            for (_, i) in scene.definition(id)?.mesh.instances() {
+                match state.get(&i.definition) {
+                    Some(2) => {}
+                    Some(_) => return None,
+                    None => stack.push((i.definition, false)),
+                }
+            }
+        }
+    }
+    Some(order)
+}
+
+/// How many instances the clip places, nested ones counted once per placement (saturating);
+/// None when its definitions do not form a tree of placements.
+fn expanded_instances(scene: &Scene) -> Option<u64> {
+    let mut counts: HashMap<DefinitionId, u64> = HashMap::new();
+    let placed = |m: &kernel::Model, counts: &HashMap<DefinitionId, u64>| {
+        m.instances().fold(0u64, |n, (_, i)| {
+            n.saturating_add(1)
+                .saturating_add(counts.get(&i.definition).copied().unwrap_or(0))
+        })
+    };
+    for id in children_first(scene)? {
+        let n = placed(&scene.definition(id)?.mesh, &counts);
+        counts.insert(id, n);
+    }
+    Some(placed(scene.mesh(MeshId::Root)?, &counts))
+}
+
+/// The box around each definition's vertices, guides' anchors and placed instances' boxes,
+/// in its own coordinates (None when it holds none of these), worked out once per definition.
+/// Boxes of instances are the boxes around their definitions' boxes placed, as the kernel's
+/// `bounds` takes them.
+pub(crate) fn definition_boxes(scene: &Scene) -> HashMap<DefinitionId, Option<[DVec3; 2]>> {
+    let mut boxes = HashMap::new();
+    for id in children_first(scene).unwrap_or_default() {
+        let Some(d) = scene.definition(id) else {
+            continue;
+        };
+        let b = mesh_box(&d.mesh, &boxes);
+        boxes.insert(id, b);
+    }
+    boxes
+}
+
+/// The box around `m`'s vertices, guides' anchors and instances (by `boxes`, or their
+/// positions when empty).
+fn mesh_box(
+    m: &kernel::Model,
+    boxes: &HashMap<DefinitionId, Option<[DVec3; 2]>>,
+) -> Option<[DVec3; 2]> {
+    let mut points: Vec<DVec3> = m.vertices().map(|(_, v)| v.pos).collect();
+    points.extend(m.guides().map(|(_, g)| g.anchor()));
+    for (_, i) in m.instances() {
+        match boxes.get(&i.definition).copied().flatten() {
+            Some(b) => points.extend(corners(i.transform, b)),
             None => points.push(i.transform.translation),
         }
-        points.extend(scene.instance_guide_anchors(i));
     }
-    points.extend(root.guides().map(|(_, g)| g.anchor()));
-    points
-        .into_iter()
-        .reduce(|a, b| a.min(b))
-        .unwrap_or(DVec3::ZERO)
+    let lo = points.iter().copied().reduce(DVec3::min)?;
+    let hi = points.iter().copied().reduce(DVec3::max)?;
+    Some([lo, hi])
+}
+
+/// The eight corners of box `b` placed by `t`.
+pub(crate) fn corners(t: DAffine3, [lo, hi]: [DVec3; 2]) -> [DVec3; 8] {
+    std::array::from_fn(|k| {
+        let pick = |bit: usize, axis: usize| if k & bit == 0 { lo[axis] } else { hi[axis] };
+        t.transform_point3(DVec3::new(pick(1, 0), pick(2, 1), pick(4, 2)))
+    })
 }

@@ -378,9 +378,8 @@ fn components_pasted_into_a_new_model_get_new_definitions_materials_and_tags() {
 
 #[test]
 fn opening_a_file_gives_the_document_a_new_token_and_saving_keeps_it() {
-    let dir = std::env::temp_dir().join(format!("clip-token-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("m.skr");
+    let dir = TempDir::new("clip-token");
+    let path = dir.0.join("m.skr");
     let mut d = doc();
     let outer = nested_component(&mut d);
     let id: EntityId = serde_json::from_value(json!(outer)).unwrap();
@@ -401,7 +400,25 @@ fn opening_a_file_gives_the_document_a_new_token_and_saving_keeps_it() {
     // The reopened model is another document: its components are copied anew.
     paste(&mut d, &text, Some([4.0, 0.0, 0.0])).unwrap();
     assert_eq!(definitions(&d), 4);
-    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A new folder under the system's temporary folder, removed when dropped (a failing test
+/// included).
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("{name}-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[test]
@@ -599,4 +616,62 @@ fn a_paste_in_an_atomic_batch_rolls_back_with_it() {
     assert!(d.execute_batch(commands, true).is_err());
     assert_eq!(stats(&d)["edges"], before["edges"]);
     assert!(d.selection().is_empty());
+}
+
+/// A clip of a component holding a square, with `levels` definitions stacked on it, each
+/// placing the one below `fan` times, and the root placing the top one.
+fn nested_clip(levels: u64, fan: u64) -> String {
+    let mut d = doc();
+    let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let i = instance_of(
+        &run(
+            &mut d,
+            json!({"type": "make_component", "ids": ids, "name": "Leaf"}),
+        )
+        .unwrap(),
+    );
+    let id: EntityId = serde_json::from_value(json!(i)).unwrap();
+    let parts = entries(&header_body(&d.clip(&[id]).unwrap()));
+    let mut model: Value = serde_json::from_slice(&parts[0].1).unwrap();
+    let leaf = model["model"]["definitions"][0].clone();
+    let kind = leaf["kind"].clone();
+    let mut below = leaf["id"].as_u64().unwrap();
+    let mut next = 10_000u64;
+    let place = |definition: u64, k: u64, next: &mut u64| {
+        *next += 1;
+        json!({"id": *next, "definition": definition,
+               "transform": [1, 0, 0, 0, 1, 0, 0, 0, 1, k as f64 * 2.0, 0, 0]})
+    };
+    for level in 0..levels {
+        let instances: Vec<Value> = (0..fan).map(|k| place(below, k, &mut next)).collect();
+        next += 1;
+        let id = next;
+        model["model"]["definitions"].as_array_mut().unwrap().push(
+            json!({"id": id, "name": format!("Level {level}"), "kind": kind,
+                "mesh": {"vertices": [], "edges": [], "faces": [], "instances": instances}}),
+        );
+        below = id;
+    }
+    model["model"]["root"]["instances"] = json!([place(below, 0, &mut next)]);
+    model["model"]["next_id"] = json!(next + 1);
+    rezip(&[
+        ("model.json".into(), serde_json::to_vec(&model).unwrap()),
+        parts[1].clone(),
+    ])
+}
+
+#[test]
+fn a_clip_placing_too_many_nested_instances_is_refused_quickly() {
+    let (mut d, _) = target();
+    // 10 levels of 10: about 1.1e10 placements, refused before anything walks them.
+    let start = std::time::Instant::now();
+    refuses(&mut d, &nested_clip(10, 10), "10 levels of 10");
+    // 5 levels of 10 places 111,111 instances: just over the cap.
+    refuses(&mut d, &nested_clip(5, 10), "5 levels of 10");
+    assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+    // 3 levels of 10 (1,111) pastes, and its outline is the 1,000 squares.
+    let small = nested_clip(3, 10);
+    assert_eq!(clip::outline(&small).unwrap().segments.len(), 4000);
+    paste(&mut d, &small, Some([5.0, 0.0, 0.0])).unwrap();
+    assert_eq!(definitions(&d), 4);
 }
