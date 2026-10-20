@@ -444,7 +444,7 @@ pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool
     let mut base = walk.base;
     if !context.is_empty()
         && let Some((mesh, t)) = scene.resolve(context)
-        && let Some([lo, hi]) = scene.bounds(mesh)
+        && let Some([lo, hi]) = scene.shown_bounds(mesh, &[])
     {
         let corner = |k: usize| {
             let c = DVec3::new(
@@ -1505,6 +1505,39 @@ mod tests {
         assert_eq!(count(CONTEXT_BOX_COLOR), 24, "twelve box edges");
     }
 
+    #[test]
+    fn the_open_context_box_holds_only_what_is_shown() {
+        let (mut s, first, _) = two_squares();
+        let d = MeshId::Definition(s.root().instance(first).unwrap().definition);
+        // An edge reaching up to z = 5 inside the component, on a hidden tag.
+        let tall = s
+            .edit(d, |m| m.add_edge(DVec3::ZERO, DVec3::new(0.0, 0.0, 5.0)))
+            .unwrap()
+            .summary()
+            .created
+            .into_iter()
+            .filter(|id| matches!(id, EntityId::Edge(_)))
+            .collect::<Vec<_>>();
+        let (hidden, _) = s
+            .add_tag(kernel::Tag {
+                name: "Hidden".into(),
+                color: [0, 0, 0],
+                visible: false,
+            })
+            .unwrap();
+        let top = |s: &Scene| {
+            let g = scene_geometry(s, &[first], &BTreeSet::new());
+            g.edges
+                .iter()
+                .filter(|v| v.color == CONTEXT_BOX_COLOR)
+                .map(|v| v.pos[2])
+                .fold(f32::MIN, f32::max)
+        };
+        assert_eq!(top(&s), 5.0, "shown, the edge is boxed");
+        s.set_tags(d, &tall, Some(hidden)).unwrap();
+        assert_eq!(top(&s), 0.0, "hidden, it is not");
+    }
+
     fn texture(width: f64, height: f64) -> kernel::Texture {
         kernel::Texture {
             image: std::sync::Arc::new(kernel::TextureImage {
@@ -1657,7 +1690,7 @@ mod tests {
             walk.mesh(MeshId::Root, DAffine3::IDENTITY, false, None);
             if !context.is_empty()
                 && let Some((mesh, t)) = scene.resolve(context)
-                && let Some([lo, hi]) = scene.bounds(mesh)
+                && let Some([lo, hi]) = scene.shown_bounds(mesh, &[])
             {
                 let corner = |k: usize| {
                     let c = DVec3::new(

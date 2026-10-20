@@ -53,6 +53,8 @@ pub(super) struct Fixture {
     pub material: Option<MaterialId>,
     pub tags: Vec<TagRow>,
     pub color_by_tag: bool,
+    /// How many times the document was replaced.
+    pub documents: u64,
     pub selection_tag: Option<SelectionTag>,
     pub outliner: OutlinerTable,
     pub context: Vec<EntityId>,
@@ -121,6 +123,7 @@ impl Default for Fixture {
             material: None,
             tags: Vec::new(),
             color_by_tag: false,
+            documents: 0,
             selection_tag: None,
             outliner: OutlinerTable {
                 roots: Vec::new(),
@@ -177,6 +180,7 @@ impl Fixture {
             material: self.material,
             tags: &self.tags,
             color_by_tag: self.color_by_tag,
+            documents: self.documents,
             selection_tag: self.selection_tag,
             outliner: &self.outliner,
             context: &self.context,

@@ -1525,6 +1525,7 @@ impl State {
             material: self.editor.current_material(),
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
+            documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
             context: &context,

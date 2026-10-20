@@ -254,6 +254,9 @@ pub struct View<'a> {
     pub tags: &'a [TagRow],
     /// Whether faces are drawn in their tags' colors.
     pub color_by_tag: bool,
+    /// How many times the document was replaced (`Editor::documents`): what a panel holds by
+    /// id from before names other things after.
+    pub documents: u64,
     /// The selection's tag, when everything selected can be tagged (Entity Info's Tag field).
     pub selection_tag: Option<SelectionTag>,
     /// The placed groups and components (`Document::outliner_rows`).

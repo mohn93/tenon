@@ -514,7 +514,7 @@ fn set_tag_ids_take_batch_references_and_tag_fields_do_not() {
 }
 
 #[test]
-fn follow_me_makes_untagged_geometry_from_a_tagged_profile() {
+fn follow_me_caps_keep_the_profile_tag_and_the_sides_are_untagged() {
     let mut d = doc();
     let path = run(
         &mut d,
@@ -554,7 +554,14 @@ fn follow_me_makes_untagged_geometry_from_a_tagged_profile() {
     let all = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]}));
     let faces = all["faces"].as_array().unwrap();
     assert_eq!(faces.len(), 6);
-    assert!(faces.iter().all(|f| f["tag"].is_null()), "{faces:?}");
+    // The end caps (square to the path along x) take the profile's tag, as its paint; the
+    // sides are Untagged.
+    for f in faces {
+        let cap = f["normal"][0].as_f64().unwrap().abs() > 0.5;
+        let expected = if cap { json!(walls) } else { Value::Null };
+        assert_eq!(f["tag"], expected, "{f}");
+    }
+    assert_eq!(faces.iter().filter(|f| !f["tag"].is_null()).count(), 2);
     // Edges the sweep made are Untagged; the profile's edges that stay keep their tag.
     let edges = all["edges"].as_array().unwrap();
     assert!(edges.iter().any(|e| old.contains(&e["id"])), "{edges:?}");

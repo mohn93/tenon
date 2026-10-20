@@ -493,9 +493,9 @@ Tags follow the geometry: the pieces of a split edge or face keep its tag, two e
 two faces merged by an erase keep one's, copies (of geometry, guides and instances) keep their
 tags, and `make_group` and `make_component` keep the tags of what goes inside (the new instance is
 Untagged). Exploding an instance keeps each piece's own tag; what came out Untagged (edges,
-faces, instances, guides) takes the instance's tag. New geometry is Untagged: the faces and
-edges push/pull and follow_me make (cap, sides, end caps) are Untagged whatever the source face
-is on, which keeps its own tag. A copy or explode drawn over coincident existing edges puts
+faces, instances, guides) takes the instance's tag. Push/pull's cap (the pushed face moved)
+keeps the pushed face's tag, and follow_me's end caps take the profile face's, as they take its
+paint; the sides and new edges they make are Untagged whatever the face is on. A copy or explode drawn over coincident existing edges puts
 them on the incoming edges' tag (when those have one), as drawn geometry takes the copy's paint.
 
 What a hidden tag is on is hidden: an edge, face or guide on a hidden tag, and a group or

@@ -465,7 +465,7 @@ fn make_group_keeps_tags_and_explode_passes_the_instance_tag_to_untagged_content
 }
 
 #[test]
-fn pulling_a_tagged_face_makes_untagged_geometry() {
+fn a_pulled_cap_keeps_the_face_tag_and_the_sides_are_untagged() {
     for distance in [1.0, -1.0] {
         let (mut s, face) = square_scene();
         let walls = tag(&mut s, "Walls");
@@ -477,12 +477,16 @@ fn pulling_a_tagged_face_makes_untagged_geometry() {
         let m = s.root();
         assert_eq!(m.faces().count(), 6);
         assert_eq!(m.edges().count(), 12);
-        // The source face and its edges keep their tag; the cap, the sides and the new edges
-        // are new geometry, Untagged.
+        // The source face and its edges keep their tag, and so does the cap (the face moved,
+        // as it keeps its paint); the sides and the new edges are new geometry, Untagged.
         assert_eq!(m.face(face).unwrap().tag, Some(walls));
+        let mut capped = 0;
         for (id, f) in m.faces() {
-            assert_eq!(f.tag.is_some(), id == face, "{id:?}");
+            let level = f.normal.z.abs() > 0.5;
+            assert_eq!(f.tag, level.then_some(walls), "{id:?}");
+            capped += usize::from(level && id != face);
         }
+        assert_eq!(capped, 1);
         for (id, e) in m.edges() {
             let old = ids.contains(&EntityId::Edge(id));
             assert_eq!(e.tag, old.then_some(walls), "{id:?}");

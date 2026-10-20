@@ -370,3 +370,33 @@ fn the_list_follows_tags_an_agent_adds_and_an_undo_removes() {
     h.run_ok();
     assert!(h.query_by_label("Color of Tag").is_none());
 }
+
+#[test]
+fn a_replaced_document_drops_the_rename_the_picker_and_the_choice() {
+    // The new document has a tag under the same id: what was held must not reach it.
+    let mut h = harness(tags_tab());
+    let walls = rect_of(&h, "Walls").center();
+    click_at(&mut h, walls, egui::Modifiers::NONE);
+    click_at(&mut h, walls, egui::Modifiers::NONE);
+    h.run_ok();
+    h.event(egui::Event::Text("Old".into()));
+    h.run_ok();
+    assert!(held(&h).0, "renaming");
+    h.state_mut().documents += 1;
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+    assert!(!held(&h).0, "the typed name is dropped");
+    assert!(h.query_by_label("Tag name").is_none());
+    // The chosen tag is forgotten too: Delete has nothing to delete.
+    assert_eq!(click(&mut h, "Delete tag"), []);
+
+    let mut h = harness(tags_tab());
+    open_and_pick(&mut h);
+    h.state_mut().documents += 1;
+    h.run_ok();
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+    assert!(!held(&h).1, "the picker closed");
+}

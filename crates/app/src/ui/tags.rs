@@ -125,11 +125,23 @@ fn picker_id(tag: TagId) -> Id {
     Id::new(("tag-color", tag.0)).with("popup")
 }
 
+/// The egui memory key of the document count (`View::documents`) the tab last drew.
+fn document_key() -> Id {
+    Id::new("tags-document")
+}
+
 /// Forgets what was held for tags no longer listed (deleted, or the model replaced): the name
-/// being typed and the color being picked. A color picker its row stopped drawing (the tab
-/// left) closes with its color dropped.
+/// being typed, the color being picked and the chosen tag. When the document was replaced
+/// (new, open), all of it goes, as its tag ids may name other tags now. A color picker its
+/// row stopped drawing (the tab left) closes with its color dropped.
 fn forget_gone(ui: &Ui, view: &View) {
-    let listed = |t: TagId| view.tags.iter().any(|r| r.id == t);
+    let seen = ui.data(|d| d.get_temp::<u64>(document_key()));
+    ui.data_mut(|d| d.insert_temp(document_key(), view.documents));
+    let replaced = seen.is_some_and(|n| n != view.documents);
+    let listed = |t: TagId| !replaced && view.tags.iter().any(|r| r.id == t);
+    if replaced {
+        ui.data_mut(|d| d.remove::<TagId>(chosen_key()));
+    }
     let renamed = ui.data(|d| d.get_temp::<(TagId, String, bool)>(rename_key()));
     if let Some((t, ..)) = renamed
         && !listed(t)

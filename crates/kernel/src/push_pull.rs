@@ -263,9 +263,10 @@ impl Model {
         } else {
             (face.paint(), face.texture)
         };
-        // The cap and sides are new geometry: Untagged, whatever the pushed face (or a
-        // coplanar face they were cut from) is on.
-        let new_tag = None;
+        // The cap is the pushed face moved: it keeps the face's tag. The sides are new
+        // geometry: Untagged, whatever the pushed face (or a coplanar face they were cut
+        // from) is on.
+        let cap_tag = face.tag;
         let created: Vec<FaceId> = self
             .faces()
             .map(|(f, _)| f)
@@ -288,7 +289,7 @@ impl Model {
                 self.orient(f, cap_normal);
                 self.set_paint(f, new_paint);
                 self.set_texture(f, cap_texture);
-                self.set_tag(EntityId::Face(f), new_tag);
+                self.set_tag(EntityId::Face(f), cap_tag);
                 continue;
             }
             // A side face lies inside a side's swept rectangle. Other new faces in a side's
@@ -314,7 +315,7 @@ impl Model {
             // (one made inside a coplanar old face inherited that face's).
             self.set_paint(f, new_paint);
             self.set_texture(f, None);
-            self.set_tag(EntityId::Face(f), new_tag);
+            self.set_tag(EntityId::Face(f), None);
         }
         if cut {
             self.remove_strays(&vertices_before, &sides, offset);
