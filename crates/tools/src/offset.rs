@@ -347,6 +347,9 @@ impl OffsetTool {
             Some(v) if v.abs() < LEAST => {
                 out.message = Some("The offset distance is too small".into());
             }
+            Some(v) if v < 0.0 && matches!(last.source, Source::Chain { .. }) => {
+                out.message = Some("Type a positive distance: the cursor picks the side".into());
+            }
             Some(v) => {
                 let distance = match last.source {
                     Source::Face { .. } if last.distance < 0.0 => -v,

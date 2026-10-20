@@ -381,6 +381,7 @@ mod tests {
         assert_eq!(plain('z'), None);
         assert_eq!(plain('5'), None);
         // Cmd chords are not plain keys.
+        assert_eq!(plain('i'), None);
         assert_eq!(plain('o'), Some(Bound::Tool(ToolKind::Offset)));
         assert_eq!(plain('s'), Some(Bound::Tool(ToolKind::Scale)));
     }
