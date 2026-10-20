@@ -34,6 +34,12 @@ pub enum Sheet {
         count: usize,
         others: Vec<(TagId, String)>,
     },
+    /// Discard Recovered, asking before the recovered copies at `models` are removed
+    /// (`names`: the models' names, in the same order).
+    DiscardRecovered {
+        models: Vec<PathBuf>,
+        names: Vec<String>,
+    },
 }
 
 /// A sheet's width, in points.
@@ -59,6 +65,8 @@ enum Values {
     Degrees(f64),
     /// Where what is on a deleted tag goes (None: Untagged).
     Destination(Option<TagId>),
+    /// A sheet with nothing to edit.
+    Nothing,
 }
 
 impl Values {
@@ -70,6 +78,7 @@ impl Values {
             Sheet::Rename { target } => Values::Name(target.name.clone()),
             Sheet::FieldOfView { degrees } => Values::Degrees(degrees.round()),
             Sheet::DeleteTag { .. } => Values::Destination(None),
+            Sheet::DiscardRecovered { .. } => Values::Nothing,
         }
     }
 }
@@ -115,6 +124,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                     Values::Destination(to),
                 ) => {
                     delete_tag_sheet(ui, name, *count, others, to, actions);
+                }
+                (Sheet::DiscardRecovered { names, .. }, Values::Nothing) => {
+                    discard_recovered_sheet(ui, names, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -320,6 +332,27 @@ fn delete_tag_sheet(
     });
     if buttons(ui, "Delete", true, actions) {
         actions.push(UiAction::ConfirmDeleteTag(*to));
+    }
+}
+
+/// The Discard Recovered sheet: which recovered models go, that this cannot be undone, and
+/// Discard.
+fn discard_recovered_sheet(ui: &mut Ui, names: &[String], actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "Discard Recovered");
+    ui.add_space(theme::GRID);
+    let (question, whose) = match names {
+        [name] => (format!("Discard the recovered model {name}?"), "Its"),
+        names => (
+            format!("Discard all {} recovered models?", names.len()),
+            "Their",
+        ),
+    };
+    ui.label(question);
+    ui.label(format!(
+        "{whose} unsaved changes will be lost. This cannot be undone."
+    ));
+    if buttons(ui, "Discard", true, actions) {
+        actions.push(UiAction::ConfirmDiscardRecovered);
     }
 }
 

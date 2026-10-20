@@ -6,6 +6,7 @@ fn the_file_menu_reports_its_items() {
     for (item, action) in [
         ("New", UiAction::NewModel),
         ("Open...", UiAction::OpenFile),
+        ("Recover Models...", UiAction::ShowRecover(true)),
         ("Save", UiAction::SaveFile),
         ("Save As...", UiAction::SaveFileAs),
         ("Import...", UiAction::ImportFile),
@@ -14,19 +15,22 @@ fn the_file_menu_reports_its_items() {
         let mut h = harness(Fixture::default());
         assert_eq!(click_menu(&mut h, &["File", item]), [action], "{item}");
     }
-    // Open Recent sits between Open... and Save.
+    // Open Recent and Recover Models... sit between Open... and Save.
     let bar = crate::menus::menu_bar(&Fixture::default().view(), false);
     let file = &bar.iter().find(|m| m.title == "File").unwrap().entries;
     let labels: Vec<&str> = file
         .iter()
-        .take(4)
+        .take(5)
         .map(|entry| match entry {
             crate::menus::Entry::Item(i) => i.label.as_str(),
             crate::menus::Entry::Submenu { label, .. } => label,
             crate::menus::Entry::Separator => "-",
         })
         .collect();
-    assert_eq!(labels, ["New", "Open...", "Open Recent", "Save"]);
+    assert_eq!(
+        labels,
+        ["New", "Open...", "Open Recent", "Recover Models...", "Save"]
+    );
 }
 
 // egui names a submenu's button with its arrow.

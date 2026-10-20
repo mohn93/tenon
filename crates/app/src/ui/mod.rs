@@ -25,6 +25,7 @@ mod materials;
 mod menu_bar;
 mod outliner;
 mod rail;
+mod recover;
 mod right;
 mod scene_tabs;
 mod scenes;
@@ -205,6 +206,19 @@ pub enum UiAction {
     ClearRecent,
     /// Hide the empty-model card for the rest of the session.
     DismissStart,
+    /// Open (listing the recovery folder again, discarded work too) or close the Recover
+    /// Models window.
+    ShowRecover(bool),
+    /// Open the recovered model whose copy is at this path (after asking about unsaved
+    /// changes).
+    OpenRecovered(PathBuf),
+    /// Ask before discarding the recovered model whose copy is at this path (None: every
+    /// one listed).
+    DiscardRecovered(Option<PathBuf>),
+    /// The Discard Recovered sheet's Discard: remove the copies it names.
+    ConfirmDiscardRecovered,
+    /// Autosave every so many minutes (0: off), and keep it in the preferences.
+    SetAutosave(u32),
 }
 
 /// A material as the Materials list shows it.
@@ -343,6 +357,25 @@ pub struct View<'a> {
     pub rename: Option<&'a RenameTarget>,
     /// What the Settings window shows; Some while it is open.
     pub settings: Option<SettingsView>,
+    /// The models the Recover Models window lists; Some while it is open.
+    pub recover: Option<&'a [RecoverRow]>,
+}
+
+/// A model the Recover Models window lists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecoverRow {
+    /// Its copy in the recovery folder: what Open and Discard act on.
+    pub model: PathBuf,
+    /// The name it went by: its file's stem, or "Untitled".
+    pub name: String,
+    /// The file it was a copy of (None: never saved).
+    pub original: Option<PathBuf>,
+    /// When the copy was written, as "5 min ago".
+    pub saved: String,
+    /// Unsaved work an agent discarded, rather than an autosave.
+    pub discarded: bool,
+    /// Why it cannot be opened (it can only be discarded).
+    pub error: Option<String>,
 }
 
 /// The preferences the Settings window shows.
@@ -350,6 +383,8 @@ pub struct View<'a> {
 pub struct SettingsView {
     pub ui_scale: UiScale,
     pub trackpad: TrackpadScroll,
+    /// Minutes between autosaves (0: off).
+    pub autosave_minutes: u32,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.
@@ -472,6 +507,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     if view.shortcuts {
         dialogs::shortcuts_window(ui, actions);
+    }
+    if let Some(rows) = view.recover {
+        recover::recover_window(ui, rows, actions);
     }
     let central = ui.available_rect_before_wrap();
     // In the root's own layer, under every window and menu.

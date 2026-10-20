@@ -9,6 +9,7 @@ fn settings_fixture() -> Fixture {
         settings: Some(SettingsView {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
+            autosave_minutes: 5,
         }),
         ..Default::default()
     }
@@ -79,6 +80,7 @@ fn the_input_tab_sets_the_trackpad() {
         settings: Some(SettingsView {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Zoom,
+            autosave_minutes: 5,
         }),
         ..Default::default()
     });

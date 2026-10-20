@@ -99,6 +99,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             label: OPEN_RECENT,
             entries: recent_entries(view.recent),
         },
+        Item::new("Recover Models...", UiAction::ShowRecover(true)).entry(),
         bound_item("Save", Bound::SaveFile, UiAction::SaveFile).entry(),
         bound_item("Save As...", Bound::SaveFileAs, UiAction::SaveFileAs).entry(),
         Entry::Separator,

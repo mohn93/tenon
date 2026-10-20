@@ -1053,9 +1053,28 @@ a client that means it, or has asked the user, passes `"discard": true`. In the 
 `<name>-<seconds>.skr` in the recovery folder (macOS `~/.sketchup-alt/recovery`; Linux
 `$XDG_STATE_HOME/sketchup-alt/recovery`, by default `~/.local/state/sketchup-alt/recovery`; files
 an earlier version left in `~/.sketchup-alt/recovery` stay there); the window's status bar and
-its Agent Activity window name it; only the user may read it (0600). If the file cannot be
+its Agent Activity window name it; only the user may read it (0600). A sidecar note
+`<file>.json` beside it records that an agent discarded it, the window session, the file it was a
+copy of and when; File > Recover Models... lists it from then on. If the file cannot be
 written the command fails with `file` and nothing is discarded. Headless, nothing is written. The window asks the user
-itself before its own New and Open. `new`, `open`, `save` and `export` are not allowed in an
+itself before its own New and Open.
+
+The window also autosaves: while the model has unsaved changes, every few minutes (Settings >
+Files, 5 by default, Off turns it off) it copies the model to
+`<name>-<session>.autosave.skr` in the same folder, with its sidecar, overwriting that one copy in
+place; it waits while a tool operation is in progress. The user's own file is never written by
+autosave. The copy and its sidecar are removed when the model is saved, when New or Open replaces
+it (the window's or an agent's `save`, `new` and `open`), and when the window quits normally.
+Each window holds a lock on `session-<session>.lock` in the folder while it runs, so copies of a
+window that is still open are never offered elsewhere. A window that ended without cleaning up
+(a crash) leaves its autosave behind: at the next start the Recover Models window opens and
+lists it, with Open (after the unsaved-changes prompt, the copy opens as an untitled model with
+unsaved changes, titled `<name> (recovered)`, and becomes the new window's autosave) and Discard
+(after asking). A copy that cannot be read is listed with why and can only be discarded. On
+macOS and Linux the listing skips links and any note or copy other users can read (each file
+must be 0600); on Windows it relies on the folder's owner-only access list and does not check
+each file. If the folder cannot be used the window starts with autosave off and says so in the
+status bar. Headless and MCP modes do not autosave. `new`, `open`, `save` and `export` are not allowed in an
 atomic batch.
 
 ### Export
@@ -1327,7 +1346,8 @@ that does not match is refused).
 The window shows `Agents: N` in its status bar while N connections are open; View > Agent
 Activity lists the connections' requests (the last 100, newest first, with their results and how
 long ago they came; control and format characters, such as bidi overrides, show as spaces)
-and any recovery files.
+and any recovery files agents' discards wrote this session. File > Recover Models... lists the
+autosaves and discarded work of windows that have ended.
 
 ### Notifications
 
@@ -1373,12 +1393,13 @@ under a pixel and where a click would snap.
 |---|---|
 | File > New, Open... (`.skr` or `.skp`), Save, Save As... (Cmd+N, Cmd+O, Cmd+S, Shift+Cmd+S), the unsaved-changes prompt | `new`, `open` (`discard`), `save` (`path`); the prompt reads `Do you want to save changes to "<name>"?` (Save, Don't Save, Cancel); it is still `unsaved_changes` / `discard` |
 | File > Open Recent (the last 10 files) and Clear Menu | `open` (`path`); the list is chrome |
+| File > Recover Models... and the window that opens at start after a crash: Open, Discard, Discard All | none: window chrome over the recovery folder (see the autosave paragraph above); agents' `save`, `new` and `open` remove the window's autosave |
 | The empty-model card's New, Open... and recent files | `new`, `open` (`path`) |
 | File > Import... (Cmd+I) and its options sheet (units, up axis, import as, merge coplanar faces; only import as for a `.skp`) | `import` (`scale`, `up`, `as`, `merge_coplanar`); `set_import_units`, `editor.import_units` |
 | File > Export... (Shift+Cmd+E) | `export` (`format`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
-| Settings (Cmd+,): Appearance (theme, UI scale) and Input (trackpad scroll); View > Theme | none: window chrome, kept in the prefs file (see below) |
+| Settings (Cmd+,): Appearance (theme, UI scale), Input (trackpad scroll) and Files (autosave interval); View > Theme | none: window chrome, kept in the prefs file (see below) |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |

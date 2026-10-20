@@ -37,10 +37,12 @@ window warns, keeps no preferences and no recovery files.
 | What | Location |
 |---|---|
 | Preferences | `$XDG_CONFIG_HOME/sketchup-alt/prefs.json` (default `~/.config/sketchup-alt/prefs.json`) |
-| Recovery files (work an agent discards) | `$XDG_STATE_HOME/sketchup-alt/recovery/` (default `~/.local/state/sketchup-alt/recovery/`) |
+| Recovery files (autosaves, work an agent discards, their `.json` notes and the open windows' `session-*.lock` files) | `$XDG_STATE_HOME/sketchup-alt/recovery/` (default `~/.local/state/sketchup-alt/recovery/`) |
 | Default agent socket | `sketchup-alt-<pid>.sock` in `$XDG_RUNTIME_DIR`, else in `$TMPDIR`, else in `~/.sketchup-alt/` (see below) |
 
-Folders the app creates are mode 0700 and files 0600. The runtime folder is used only when it is
+Folders the app creates are mode 0700 and files 0600. File > Recover Models... lists only notes
+and copies that are regular 0600 files; links and files others can read are skipped or shown as
+unusable. The runtime folder is used only when it is
 a real folder you own that group and others cannot write to, and the socket path fits the Unix
 limit. Otherwise the socket goes in `$TMPDIR` when that is set to a folder other than `/tmp`
 and short enough for a socket path, and failing that in `~/.sketchup-alt/` (created 0700).

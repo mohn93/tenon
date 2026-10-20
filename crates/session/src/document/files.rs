@@ -81,6 +81,25 @@ impl Document {
         Ok(None)
     }
 
+    /// Replaces the model, view and lighting with those of the `.skr` copy at `path` (a
+    /// recovery file), as a model never saved: it has no file of its own and counts as
+    /// modified until it is saved. Nothing changes on failure.
+    pub fn open_recovered(&mut self, path: &Path) -> Result<(), CommandError> {
+        let name = path.display().to_string();
+        check_nul(path)?;
+        let (scene, c) = file::read(path).map_err(|e| file_error(&name, e))?;
+        let camera = self
+            .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
+            .unwrap_or_else(|_| Camera::new(self.camera.viewport));
+        self.replace(scene, camera);
+        self.lighting = c.lighting;
+        self.color_by_tag = c.color_by_tag;
+        self.path = None;
+        // The revision before the model was replaced, which it never returns to.
+        self.clean_revision = self.revision - 1;
+        Ok(())
+    }
+
     /// Replaces the model with a SketchUp file's: its root geometry and instances go into the
     /// root (no wrapper), the view zooms to them, lit by day, and the model has no file (so
     /// saving asks for a `.skr` path). Nothing changes on failure.

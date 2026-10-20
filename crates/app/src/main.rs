@@ -131,16 +131,15 @@ fn main() {
                 );
             }
             let recovery = found.as_ref().map(|p| p.recovery.clone());
-            let session = recovery.as_deref().and_then(|dir| {
-                recovery::Session::start(dir)
-                    .inspect_err(|e| {
-                        eprintln!(
-                            "warning: autosave disabled: cannot use {}: {e}",
-                            dir.display()
-                        );
-                    })
-                    .ok()
-            });
+            // Without it the window says autosave is off.
+            let session = match recovery.as_deref() {
+                Some(dir) => recovery::Session::start(dir)
+                    .map_err(|e| format!("cannot use {}: {e}", dir.display())),
+                None => Err("there is no folder to keep autosaves in".into()),
+            };
+            if let Err(why) = &session {
+                eprintln!("warning: autosave disabled: {why}");
+            }
             let prefs = found.map(|p| prefs::PrefsFile {
                 path: p.prefs,
                 legacy: p.legacy_prefs,

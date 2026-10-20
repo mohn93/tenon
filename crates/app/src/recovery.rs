@@ -4,9 +4,6 @@
 //! `session-<id>.lock` while it runs; an entry whose session lock is gone or can be taken
 //! belongs to a process that ended without cleaning up (a crash), and is offered back.
 
-// Until the window's autosave and Recover Models window use them (M16b task 2).
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::cell::RefCell;
 use std::fs::File;
 use std::io;
@@ -262,7 +259,8 @@ impl Session {
         named.file_type().is_file()
     }
 
-    /// This session's id.
+    /// This session's id (the tests name its files by it).
+    #[cfg(test)]
     pub fn id(&self) -> &str {
         &self.id
     }

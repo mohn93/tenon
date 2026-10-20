@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use api::{ApiRoots, EditorState, Endpoint, Hub, listen};
 use glam::DVec2;
@@ -35,12 +35,12 @@ use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::paths;
 use crate::prefs::{self, Prefs};
-use crate::recovery::Session;
+use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, SceneRow, SettingsView, Sheet, StartCard, TagRow, TexturePosition,
-    TextureRow, UiAction, View,
+    Agents, MaterialRow, RecoverRow, SceneRow, SettingsView, Sheet, StartCard, TagRow,
+    TexturePosition, TextureRow, UiAction, View,
 };
 use crate::ui::{theme, viewport};
 
@@ -254,6 +254,77 @@ fn wake_decision(now: Instant, deadline: Option<Instant>) -> Wake {
         Some(t) => Wake::Until(t),
         None => Wake::Wait,
     }
+}
+
+/// When the next autosave is due: `interval` after `since` (the later of the last autosave
+/// and the first unsaved change), while autosave is on, the model is `modified`, its
+/// `revision` is not the one last autosaved and no tool operation is in progress (`busy`).
+/// None: nothing to wait for (an operation ends with input, which looks again).
+fn autosave_deadline(
+    since: Instant,
+    interval: Duration,
+    revision: u64,
+    saved_revision: Option<u64>,
+    modified: bool,
+    busy: bool,
+) -> Option<Instant> {
+    (!interval.is_zero() && modified && !busy && saved_revision != Some(revision))
+        .then(|| since + interval)
+}
+
+/// The deadline the event loop wakes at: the earlier of the pending repaint and the next
+/// autosave.
+fn wake_deadline(repaint: Option<Instant>, autosave: Option<Instant>) -> Option<Instant> {
+    match autosave {
+        Some(t) => Some(earliest(repaint, t)),
+        None => repaint,
+    }
+}
+
+/// Whether the Recover Models window opens at start, given the autosaves of windows that
+/// ended without cleaning up (`recovery::list` without discarded work).
+fn opens_recover_at_start(crashed: &[recovery::Entry]) -> bool {
+    crashed.iter().any(|e| e.kind == recovery::Kind::Autosave)
+}
+
+/// How long before `now` a recovery copy was `saved`: "just now", "5 min ago", "3 h ago",
+/// "2 days ago".
+fn saved_ago(now: SystemTime, saved: SystemTime) -> String {
+    let secs = now.duration_since(saved).map_or(0, |d| d.as_secs());
+    match secs {
+        0..60 => "just now".into(),
+        60..7200 => format!("{} min ago", secs / 60),
+        7200..172_800 => format!("{} h ago", secs / 3600),
+        _ => format!("{} days ago", secs / 86_400),
+    }
+}
+
+/// The Recover Models window's rows for `entries`, their ages as of `now`.
+fn recover_rows(entries: &[recovery::Entry], now: SystemTime) -> Vec<RecoverRow> {
+    entries
+        .iter()
+        .map(|e| RecoverRow {
+            model: e.model.clone(),
+            name: e.name.clone(),
+            original: e.original.clone(),
+            saved: saved_ago(now, e.saved),
+            discarded: e.kind == recovery::Kind::Discarded,
+            error: e.error.clone(),
+        })
+        .collect()
+}
+
+/// The Discard Recovered sheet for the entries among `entries` whose copies are `which`
+/// (None: all of them); None when none is listed.
+fn discard_sheet(entries: &[recovery::Entry], which: Option<&Path>) -> Option<Sheet> {
+    let chosen: Vec<&recovery::Entry> = entries
+        .iter()
+        .filter(|e| which.is_none_or(|m| e.model == m))
+        .collect();
+    (!chosen.is_empty()).then(|| Sheet::DiscardRecovered {
+        models: chosen.iter().map(|e| e.model.clone()).collect(),
+        names: chosen.iter().map(|e| e.name.clone()).collect(),
+    })
 }
 
 /// Tapping Ctrl (pressing and releasing it with no other input in between) switches copying;
@@ -588,6 +659,12 @@ struct State {
     recovery: Option<PathBuf>,
     /// This window's hold on the recovery folder (None: it could not be used).
     session: Option<Session>,
+    /// What the window autosaved and when.
+    autosave: Autosave,
+    /// The model opened from the Recover Models window, while it is the open document.
+    recovered_doc: Option<RecoveredDoc>,
+    /// The Recover Models window's entries; Some while it is open.
+    recover: Option<RecoverList>,
     /// The window's preferences, as chosen in this session.
     prefs: Prefs,
     /// Where they are kept between sessions (None: HOME is not set; they last the session).
@@ -657,6 +734,104 @@ struct State {
     native: Option<NativeMenu>,
 }
 
+/// What the window autosaved and when.
+#[derive(Debug, Default)]
+struct Autosave {
+    /// The revision last autosaved, while its copy is this session's autosave.
+    revision: Option<u64>,
+    /// When an autosave was last written or tried.
+    at: Option<Instant>,
+    /// When the open model was first seen with unsaved changes since it was opened or saved.
+    dirty_since: Option<Instant>,
+    /// `Editor::documents` when last looked at: a new model starts over.
+    documents: u64,
+    /// The last failure shown, so each kind is shown once.
+    failure: Option<String>,
+}
+
+impl Autosave {
+    /// Copies the open model to `session`'s autosave when one is due (see
+    /// `recovery::autosave_due`; every `minutes`, 0: never), naming the model's file, else
+    /// `recovered` (the file a recovered model was a copy of). Returns when the next one is
+    /// due. A failure is shown in the status once per kind, and tried again an interval
+    /// later.
+    fn tick(
+        &mut self,
+        now: Instant,
+        session: &Session,
+        editor: &mut Editor,
+        minutes: u32,
+        recovered: Option<&Path>,
+    ) -> Option<Instant> {
+        let doc = editor.doc();
+        let modified = doc.is_modified();
+        let revision = doc.revision();
+        if self.documents != editor.documents() {
+            self.documents = editor.documents();
+            self.dirty_since = None;
+        }
+        if !modified {
+            // Saved or replaced (by the window or an agent): there is no autosave of it.
+            self.dirty_since = None;
+            self.revision = None;
+        } else if self.dirty_since.is_none() {
+            self.dirty_since = Some(now);
+        }
+        let since = match (self.dirty_since, self.at) {
+            (Some(d), Some(t)) => d.max(t),
+            (d, t) => d.or(t).unwrap_or(now),
+        };
+        let interval = Duration::from_secs(u64::from(minutes) * 60);
+        let busy = editor.operation_in_progress();
+        if !recovery::autosave_due(
+            now,
+            since,
+            interval,
+            revision,
+            self.revision,
+            modified,
+            busy,
+        ) {
+            return autosave_deadline(since, interval, revision, self.revision, modified, busy);
+        }
+        let original = doc.path().or(recovered);
+        let written = session.write_autosave(doc, original);
+        self.at = Some(now);
+        match written {
+            Ok(()) => {
+                self.revision = Some(revision);
+                self.failure = None;
+            }
+            Err(why) => {
+                if self.failure.as_deref() != Some(why.as_str()) {
+                    editor.show_error(&format!("Autosave failed: {why}"));
+                    self.failure = Some(why);
+                }
+            }
+        }
+        autosave_deadline(now, interval, revision, self.revision, true, false)
+    }
+}
+
+/// A model opened from the Recover Models window.
+#[derive(Clone, Debug)]
+struct RecoveredDoc {
+    /// `Editor::documents` once it was opened: a later document is not it.
+    documents: u64,
+    /// The name it went by, for the title.
+    name: String,
+    /// The file it was a copy of, which its autosaves keep naming.
+    original: Option<PathBuf>,
+}
+
+/// The Recover Models window's list.
+#[derive(Debug)]
+struct RecoverList {
+    /// Whether it lists the work agents discarded too (File > Recover Models...).
+    discarded: bool,
+    entries: Vec<recovery::Entry>,
+}
+
 impl State {
     fn command_held(&self) -> bool {
         command_held(
@@ -684,7 +859,7 @@ impl State {
         window: Arc<Window>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
-        session: Option<Session>,
+        session: Result<Session, String>,
         prefs_file: Option<prefs::PrefsFile>,
     ) -> Self {
         let prefs = prefs_file
@@ -714,6 +889,9 @@ impl State {
         editor.set_import_options(prefs.import);
         editor.set_trackpad(prefs.trackpad);
         editor.set_clipboard(Box::new(SystemClipboard::default()));
+        let session = session
+            .inspect_err(|why| editor.show_error(&format!("Autosave is off: {why}")))
+            .ok();
         Self {
             window,
             instance,
@@ -730,6 +908,9 @@ impl State {
             roots,
             recovery,
             session,
+            autosave: Autosave::default(),
+            recovered_doc: None,
+            recover: None,
             prefs,
             prefs_path,
             recent_shown,
@@ -866,6 +1047,7 @@ impl State {
     fn new_model(&mut self) {
         if self.settle_changes() {
             self.editor.new_model();
+            self.clear_autosave();
         }
     }
 
@@ -873,11 +1055,129 @@ impl State {
         if !self.settle_changes() {
             return;
         }
-        if let Some(path) = open_dialog().pick_file()
-            && self.editor.open_file(&path)
-        {
+        if let Some(path) = open_dialog().pick_file() {
+            self.open_file(&path);
+        }
+    }
+
+    /// Opens the file at `path` (unsaved changes settled); a file that fails to open says why
+    /// in the status.
+    fn open_file(&mut self, path: &Path) {
+        if self.editor.open_file(path) {
+            self.clear_autosave();
             self.remember_file();
         }
+    }
+
+    /// Removes this window's autosave: the model it copied was saved or replaced.
+    fn clear_autosave(&mut self) {
+        if let Some(session) = &self.session {
+            session.clear_autosave();
+        }
+        self.autosave.revision = None;
+    }
+
+    /// The model opened from the Recover Models window, while it is the open document.
+    fn recovered_doc(&self) -> Option<&RecoveredDoc> {
+        self.recovered_doc
+            .as_ref()
+            .filter(|r| r.documents == self.editor.documents())
+    }
+
+    /// Writes the autosave when it is due; returns when the next one is.
+    fn autosave_tick(&mut self, now: Instant) -> Option<Instant> {
+        let session = self.session.as_ref()?;
+        let recovered = self.recovered_doc().and_then(|r| r.original.clone());
+        self.autosave.tick(
+            now,
+            session,
+            &mut self.editor,
+            self.prefs.autosave_minutes,
+            recovered.as_deref(),
+        )
+    }
+
+    /// Opens the Recover Models window listing the recovery folder's entries (with
+    /// `discarded`, the work agents discarded too), or lists them again while it is open.
+    fn list_recovered(&mut self, discarded: bool) {
+        let (Some(dir), Some(session)) = (self.recovery.as_deref(), self.session.as_ref()) else {
+            self.editor
+                .show_error("Recovery is not available: the recovery folder cannot be used");
+            return;
+        };
+        self.recover = Some(RecoverList {
+            discarded,
+            entries: recovery::list(dir, session, discarded),
+        });
+    }
+
+    /// Lists the Recover Models window's entries again, closing it once none is left.
+    fn refresh_recovered(&mut self) {
+        if let Some(discarded) = self.recover.as_ref().map(|r| r.discarded) {
+            self.list_recovered(discarded);
+            if self.recover.as_ref().is_some_and(|r| r.entries.is_empty()) {
+                self.recover = None;
+            }
+        }
+    }
+
+    /// Opens the recovered model whose copy is `model`, once unsaved changes are settled, as
+    /// an untitled model with unsaved changes; its copy becomes this window's autosave.
+    fn open_recovered(&mut self, model: &Path) {
+        let Some(entry) = self
+            .recover
+            .as_ref()
+            .and_then(|r| r.entries.iter().find(|e| e.model == model))
+            .filter(|e| e.error.is_none())
+            .cloned()
+        else {
+            return;
+        };
+        if !self.settle_changes() || !self.editor.open_recovered(&entry.model) {
+            return;
+        }
+        self.recovered_doc = Some(RecoveredDoc {
+            documents: self.editor.documents(),
+            name: entry.name.clone(),
+            original: entry.original.clone(),
+        });
+        let now = Instant::now();
+        let adopted = self.session.as_ref().map(|s| s.adopt(&entry));
+        match adopted {
+            Some(Ok(_)) => {
+                // The copy holds this model as it is now.
+                self.autosave.revision = Some(self.editor.doc().revision());
+                self.autosave.at = Some(now);
+            }
+            Some(Err(e)) => {
+                // The model replaced is gone: so is its autosave.
+                self.clear_autosave();
+                self.editor.show_error(&format!(
+                    "The recovered model is open, but its copy could not be kept: {e}"
+                ));
+            }
+            None => {}
+        }
+        self.refresh_recovered();
+    }
+
+    /// Removes the recovered copies the confirmed Discard Recovered sheet named.
+    fn discard_recovered(&mut self, models: &[PathBuf]) {
+        let entries = self.recover.as_ref().map_or(&[][..], |r| &r.entries[..]);
+        let failed: Vec<String> = entries
+            .iter()
+            .filter(|e| models.contains(&e.model))
+            .filter_map(|e| {
+                recovery::discard(e)
+                    .err()
+                    .map(|why| format!("{}: {why}", e.name))
+            })
+            .collect();
+        if let Some(first) = failed.first() {
+            self.editor
+                .show_error(&format!("Cannot discard the recovered model {first}"));
+        }
+        self.refresh_recovered();
     }
 
     /// Puts the model's file first in the recent files, and keeps that in the preferences.
@@ -893,7 +1193,11 @@ impl State {
     /// is set. False if cancelled or the save failed.
     fn save(&mut self, choose: bool) -> bool {
         let path = if choose || self.editor.doc().path().is_none() {
-            let name = save_name(self.editor.doc().path(), self.editor.doc().imported_from());
+            let name = save_name(
+                self.editor.doc().path(),
+                self.editor.doc().imported_from(),
+                self.recovered_doc().map(|r| r.name.as_str()),
+            );
             match skr_dialog().set_file_name(name).save_file() {
                 Some(path) => Some(path),
                 None => return false,
@@ -903,6 +1207,7 @@ impl State {
         };
         let saved = self.editor.save_file(path.as_deref());
         if saved {
+            self.clear_autosave();
             self.remember_file();
         }
         saved
@@ -1013,7 +1318,12 @@ impl State {
     /// Closes the open sheet once the document it was opened over is replaced (new or open,
     /// by the window or an agent): what it names may no longer exist.
     fn drop_outlived_sheet(&mut self) {
-        if self.sheet.is_some() && self.editor.documents() != self.sheet_origin.document {
+        if self
+            .sheet
+            .as_ref()
+            .is_some_and(|s| !matches!(s, Sheet::DiscardRecovered { .. }))
+            && self.editor.documents() != self.sheet_origin.document
+        {
             self.sheet = None;
         }
     }
@@ -1362,8 +1672,8 @@ impl State {
             }
             UiAction::OpenRecent(path) => {
                 // A file that fails to open says why in the status and stays in the list.
-                if self.settle_changes() && self.editor.open_file(&path) {
-                    self.remember_file();
+                if self.settle_changes() {
+                    self.open_file(&path);
                 }
             }
             UiAction::ClearRecent => {
@@ -1374,6 +1684,29 @@ impl State {
                 }
             }
             UiAction::DismissStart => self.start_dismissed = true,
+            UiAction::ShowRecover(true) => self.list_recovered(true),
+            UiAction::ShowRecover(false) => self.recover = None,
+            UiAction::OpenRecovered(model) => self.open_recovered(&model),
+            UiAction::DiscardRecovered(which) => {
+                let entries = self.recover.as_ref().map_or(&[][..], |r| &r.entries[..]);
+                if let Some(sheet) = discard_sheet(entries, which.as_deref()) {
+                    self.open_sheet(sheet);
+                }
+            }
+            UiAction::ConfirmDiscardRecovered => {
+                if let Some(Sheet::DiscardRecovered { models, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::DiscardRecovered { .. }))
+                {
+                    self.discard_recovered(&models);
+                }
+            }
+            UiAction::SetAutosave(minutes) => {
+                let minutes = minutes.min(prefs::MAX_AUTOSAVE_MINUTES);
+                if self.prefs.autosave_minutes != minutes {
+                    self.prefs.autosave_minutes = minutes;
+                    self.save_prefs();
+                }
+            }
         }
     }
 
@@ -1485,6 +1818,7 @@ impl State {
         let title = window_title(
             doc.path(),
             doc.imported_from(),
+            self.recovered_doc().map(|r| r.name.as_str()),
             modified,
             cfg!(target_os = "macos"),
         );
@@ -1551,6 +1885,10 @@ impl State {
         });
         self.drop_outlived_sheet();
         let rename = self.editor.rename_target();
+        let recover_rows = self
+            .recover
+            .as_ref()
+            .map(|r| recover_rows(&r.entries, SystemTime::now()));
         let panels = View {
             undo: self.editor.doc().undo_label(),
             redo: self.editor.doc().redo_label(),
@@ -1616,7 +1954,9 @@ impl State {
             settings: self.settings_open.then_some(SettingsView {
                 ui_scale: self.prefs.ui_scale,
                 trackpad: self.prefs.trackpad,
+                autosave_minutes: self.prefs.autosave_minutes,
             }),
+            recover: recover_rows.as_deref(),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -1869,6 +2209,10 @@ impl SheetOrigin {
 /// Whether `sheet`, opened over `origin`, still applies to what `editor` holds now (an agent
 /// may have changed it meanwhile). Err: what the status says when it does not.
 fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result<(), &'static str> {
+    // Recovered copies are not the model's.
+    if matches!(sheet, Sheet::DiscardRecovered { .. }) {
+        return Ok(());
+    }
     if editor.documents() != origin.document {
         return Err("The model was replaced; nothing was done");
     }
@@ -1891,7 +2235,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         Sheet::DeleteTag { tag, .. } if editor.doc().scene().tag(*tag).is_none() => {
             Err("The tag was already deleted")
         }
-        Sheet::DeleteTag { .. } => Ok(()),
+        Sheet::DeleteTag { .. } | Sheet::DiscardRecovered { .. } => Ok(()),
     }
 }
 
@@ -1999,6 +2343,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmName(_)
             | UiAction::ConfirmFieldOfView(_)
             | UiAction::ConfirmDeleteTag(_)
+            | UiAction::ConfirmDiscardRecovered
             | UiAction::Quit
     )
 }
@@ -2024,9 +2369,11 @@ fn open_dialog() -> rfd::FileDialog {
 
 /// The name the save dialog suggests: the file's, else the SketchUp file's stem with `.skr`
 /// (never the SketchUp file itself), else "Untitled.skr".
-fn save_name(path: Option<&Path>, imported_from: Option<&Path>) -> String {
-    match (path, imported_from.and_then(|p| p.file_stem())) {
-        (None, Some(stem)) => format!("{}.skr", stem.to_string_lossy()),
+/// A recovered model never saved (`recovered`: its name) suggests "<name>.skr".
+fn save_name(path: Option<&Path>, imported_from: Option<&Path>, recovered: Option<&str>) -> String {
+    match (path, imported_from.and_then(|p| p.file_stem()), recovered) {
+        (None, Some(stem), _) => format!("{}.skr", stem.to_string_lossy()),
+        (None, None, Some(name)) => format!("{name}.skr"),
         _ => file_name(path),
     }
 }
@@ -2041,15 +2388,18 @@ fn file_name(path: Option<&Path>) -> String {
 
 /// The window title: the file name alone on macOS, where the close button shows unsaved
 /// changes; elsewhere "house.skr* - sketchup-alt". A model opened from a SketchUp file and
-/// not saved yet is "desk.skp (imported)".
+/// not saved yet is "desk.skp (imported)"; one opened from the Recover Models window
+/// (`recovered`: its name) "house (recovered)".
 fn window_title(
     path: Option<&Path>,
     imported_from: Option<&Path>,
+    recovered: Option<&str>,
     modified: bool,
     mac: bool,
 ) -> String {
-    let name = match (path, imported_from.and_then(|p| p.file_name())) {
-        (None, Some(n)) => format!("{} (imported)", n.to_string_lossy()),
+    let name = match (path, imported_from.and_then(|p| p.file_name()), recovered) {
+        (None, Some(n), _) => format!("{} (imported)", n.to_string_lossy()),
+        (None, None, Some(name)) => format!("{name} (recovered)"),
         _ => file_name(path),
     };
     if mac {
@@ -2178,8 +2528,8 @@ pub struct App {
     roots: ApiRoots,
     /// Where work an agent discards is kept.
     recovery: Option<PathBuf>,
-    /// The recovery session, handed to the window when it is made.
-    session: Option<Session>,
+    /// The recovery session, handed to the window when it is made (Err: why there is none).
+    session: Option<Result<Session, String>>,
     /// The window's preferences file (None: HOME is not set).
     prefs: Option<prefs::PrefsFile>,
     /// Carries native menu and AccessKit events to the loop.
@@ -2195,7 +2545,7 @@ impl App {
         file: Option<PathBuf>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
-        session: Option<Session>,
+        session: Result<Session, String>,
         prefs: Option<prefs::PrefsFile>,
     ) -> Self {
         let proxy = event_loop.create_proxy();
@@ -2221,7 +2571,7 @@ impl App {
             file,
             roots,
             recovery,
-            session,
+            session: Some(session),
             prefs,
             proxy,
         }
@@ -2275,11 +2625,19 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(endpoint) = self.socket.take() {
             endpoint.remove();
         }
+        // A normal exit: unsaved changes were saved or discarded, so the autosave goes.
+        if let Some(s) = self.state.as_mut() {
+            s.clear_autosave();
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let deadline = self.state.as_ref().and_then(|s| s.repaint_at);
-        match wake_decision(Instant::now(), deadline) {
+        let now = Instant::now();
+        let deadline = self
+            .state
+            .as_mut()
+            .and_then(|s| wake_deadline(s.repaint_at, s.autosave_tick(now)));
+        match wake_decision(now, deadline) {
             Wake::Redraw => {
                 if let Some(s) = self.state.as_mut() {
                     s.repaint_at = None;
@@ -2329,7 +2687,9 @@ impl ApplicationHandler<AppEvent> for App {
             window,
             self.roots.clone(),
             self.recovery.clone(),
-            self.session.take(),
+            self.session
+                .take()
+                .unwrap_or_else(|| Err("the recovery folder was already in use".into())),
             self.prefs.clone(),
         );
         // The adapter before the window is first shown (it panics otherwise), then the window,
@@ -2338,6 +2698,16 @@ impl ApplicationHandler<AppEvent> for App {
             .gui
             .init_accesskit(event_loop, &state.window, self.proxy.clone());
         state.window.set_visible(true);
+        // Autosaves of windows that ended without saving are offered back.
+        if let (Some(dir), Some(session)) = (state.recovery.as_deref(), state.session.as_ref()) {
+            let crashed = recovery::list(dir, session, false);
+            if opens_recover_at_start(&crashed) {
+                state.recover = Some(RecoverList {
+                    discarded: false,
+                    entries: crashed,
+                });
+            }
+        }
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),
@@ -3178,33 +3548,36 @@ mod tests {
     fn titles_name_the_file_and_mark_unsaved_changes() {
         let house = Some(Path::new("/m/house.skr"));
         assert_eq!(
-            window_title(None, None, false, false),
+            window_title(None, None, None, false, false),
             "Untitled.skr - sketchup-alt"
         );
         assert_eq!(
-            window_title(house, None, true, false),
+            window_title(house, None, None, true, false),
             "house.skr* - sketchup-alt"
         );
         // macOS: the close button's dot shows unsaved changes.
-        assert_eq!(window_title(house, None, true, true), "house.skr");
-        assert_eq!(window_title(None, None, true, true), "Untitled.skr");
+        assert_eq!(window_title(house, None, None, true, true), "house.skr");
+        assert_eq!(window_title(None, None, None, true, true), "Untitled.skr");
     }
 
     #[test]
     fn a_model_opened_from_sketchup_is_titled_imported_until_saved() {
         let desk = Some(Path::new("/m/desk.skp"));
-        assert_eq!(window_title(None, desk, false, true), "desk.skp (imported)");
         assert_eq!(
-            window_title(None, desk, true, false),
+            window_title(None, desk, None, false, true),
+            "desk.skp (imported)"
+        );
+        assert_eq!(
+            window_title(None, desk, None, true, false),
             "desk.skp (imported)* - sketchup-alt"
         );
         // Saving gives it a path of its own (and the document forgets the SketchUp file).
         let saved = Some(Path::new("/m/desk.skr"));
-        assert_eq!(window_title(saved, None, false, true), "desk.skr");
+        assert_eq!(window_title(saved, None, None, false, true), "desk.skr");
         // The save dialog suggests a .skr beside it, never the .skp.
-        assert_eq!(save_name(None, desk), "desk.skr");
-        assert_eq!(save_name(saved, None), "desk.skr");
-        assert_eq!(save_name(None, None), "Untitled.skr");
+        assert_eq!(save_name(None, desk, None), "desk.skr");
+        assert_eq!(save_name(saved, None, None), "desk.skr");
+        assert_eq!(save_name(None, None, None), "Untitled.skr");
     }
 
     #[test]
@@ -3526,5 +3899,334 @@ mod tests {
             assert_eq!(d, DVec2::new(5.0, -2.0));
         }
         assert_eq!(look_delta((3.0, 1.0), f64::NAN), DVec2::new(3.0, 1.0));
+    }
+
+    /// A fresh recovery folder for one test.
+    fn recovery_folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sketchup-alt-app-recovery-{}-{name}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The model files in `dir` (autosaves and kept discards).
+    fn models_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".skr"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn edited_editor() -> Editor {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        e.execute(session::Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        e
+    }
+
+    #[test]
+    fn the_autosave_deadline_waits_for_changes_the_interval_and_the_tools() {
+        let t = Instant::now();
+        let five = Duration::from_secs(300);
+        assert_eq!(
+            autosave_deadline(t, five, 3, None, true, false),
+            Some(t + five)
+        );
+        assert_eq!(
+            autosave_deadline(t, five, 3, Some(2), true, false),
+            Some(t + five)
+        );
+        assert_eq!(
+            autosave_deadline(t, five, 3, Some(3), true, false),
+            None,
+            "saved"
+        );
+        assert_eq!(
+            autosave_deadline(t, five, 3, None, false, false),
+            None,
+            "unmodified"
+        );
+        assert_eq!(
+            autosave_deadline(t, five, 3, None, true, true),
+            None,
+            "a tool is busy"
+        );
+        assert_eq!(
+            autosave_deadline(t, Duration::ZERO, 3, None, true, false),
+            None,
+            "off"
+        );
+    }
+
+    #[test]
+    fn the_loop_wakes_for_the_earlier_of_a_repaint_and_an_autosave() {
+        let now = Instant::now();
+        let soon = now + Duration::from_millis(16);
+        let later = now + Duration::from_secs(300);
+        assert_eq!(wake_deadline(None, None), None);
+        assert_eq!(wake_deadline(Some(soon), None), Some(soon));
+        assert_eq!(wake_deadline(None, Some(later)), Some(later));
+        assert_eq!(wake_deadline(Some(soon), Some(later)), Some(soon));
+        assert_eq!(wake_deadline(Some(later), Some(soon)), Some(soon));
+        assert_eq!(
+            wake_decision(now, wake_deadline(None, Some(later))),
+            Wake::Until(later)
+        );
+    }
+
+    #[test]
+    fn the_recover_window_opens_at_start_only_for_crashed_autosaves() {
+        let entry = |kind| recovery::Entry {
+            kind,
+            name: "house".into(),
+            original: None,
+            saved: SystemTime::UNIX_EPOCH,
+            model: PathBuf::from("/r/house-1-2.autosave.skr"),
+            error: None,
+        };
+        assert!(!opens_recover_at_start(&[]));
+        assert!(opens_recover_at_start(&[entry(recovery::Kind::Autosave)]));
+        assert!(!opens_recover_at_start(&[entry(recovery::Kind::Discarded)]));
+    }
+
+    #[test]
+    fn recover_rows_say_how_long_ago_each_copy_was_saved() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let ago = |secs| saved_ago(now, now - Duration::from_secs(secs));
+        assert_eq!(ago(5), "just now");
+        assert_eq!(ago(300), "5 min ago");
+        assert_eq!(ago(3 * 3600), "3 h ago");
+        assert_eq!(ago(3 * 86_400), "3 days ago");
+        assert_eq!(
+            saved_ago(now, now + Duration::from_secs(60)),
+            "just now",
+            "a clock set back"
+        );
+        let entries = [
+            recovery::Entry {
+                kind: recovery::Kind::Autosave,
+                name: "house".into(),
+                original: Some(PathBuf::from("/m/house.skr")),
+                saved: now - Duration::from_secs(600),
+                model: PathBuf::from("/r/house-1-2.autosave.skr"),
+                error: None,
+            },
+            recovery::Entry {
+                kind: recovery::Kind::Discarded,
+                name: "Untitled".into(),
+                original: None,
+                saved: now,
+                model: PathBuf::from("/r/untitled-3.skr"),
+                error: Some("the model file cannot be used".into()),
+            },
+        ];
+        let rows = recover_rows(&entries, now);
+        assert_eq!(rows[0].saved, "10 min ago");
+        assert!(!rows[0].discarded);
+        assert_eq!(rows[0].original.as_deref(), Some(Path::new("/m/house.skr")));
+        assert!(rows[1].discarded);
+        assert!(rows[1].error.is_some());
+        // Discard asks about one; Discard All about every one listed.
+        assert_eq!(
+            discard_sheet(&entries, Some(Path::new("/r/untitled-3.skr"))),
+            Some(Sheet::DiscardRecovered {
+                models: vec![PathBuf::from("/r/untitled-3.skr")],
+                names: vec!["Untitled".into()],
+            })
+        );
+        let Some(Sheet::DiscardRecovered { models, .. }) = discard_sheet(&entries, None) else {
+            panic!("a sheet for all");
+        };
+        assert_eq!(models.len(), 2);
+        assert_eq!(
+            discard_sheet(&entries, Some(Path::new("/r/gone.skr"))),
+            None
+        );
+        assert_eq!(discard_sheet(&[], None), None);
+    }
+
+    #[test]
+    fn a_recovered_model_is_titled_recovered_until_saved() {
+        assert_eq!(
+            window_title(None, None, Some("house"), true, true),
+            "house (recovered)"
+        );
+        assert_eq!(
+            window_title(None, None, Some("Untitled"), true, false),
+            "Untitled (recovered)* - sketchup-alt"
+        );
+        let saved = Some(Path::new("/m/house.skr"));
+        assert_eq!(
+            window_title(saved, None, Some("house"), false, true),
+            "house.skr"
+        );
+        assert_eq!(save_name(None, None, Some("house")), "house.skr");
+        assert_eq!(save_name(saved, None, Some("house")), "house.skr");
+    }
+
+    #[test]
+    fn a_discard_sheet_outlives_a_new_model() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        let origin = SheetOrigin::of(&e);
+        let sheet = Sheet::DiscardRecovered {
+            models: vec![PathBuf::from("/r/a.skr")],
+            names: vec!["a".into()],
+        };
+        e.execute(session::Command::New { discard: true }).unwrap();
+        assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
+        assert!(action_allowed_with_sheet(
+            &UiAction::ConfirmDiscardRecovered
+        ));
+    }
+
+    #[test]
+    fn autosave_writes_once_the_interval_passed_and_follows_the_model() {
+        let dir = recovery_folder("tick");
+        let session = Session::start(&dir).unwrap();
+        let mut a = Autosave::default();
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        let t = Instant::now();
+        let min = Duration::from_secs(60);
+        assert_eq!(
+            a.tick(t, &session, &mut e, 5, None),
+            None,
+            "nothing unsaved"
+        );
+        e.execute(session::Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        // The first unsaved change starts the interval.
+        assert_eq!(a.tick(t, &session, &mut e, 5, None), Some(t + 5 * min));
+        assert_eq!(
+            a.tick(t + min, &session, &mut e, 5, None),
+            Some(t + 5 * min)
+        );
+        assert!(models_in(&dir).is_empty());
+        assert_eq!(
+            a.tick(t + 5 * min, &session, &mut e, 5, None),
+            None,
+            "written"
+        );
+        assert_eq!(models_in(&dir).len(), 1);
+        assert!(models_in(&dir)[0].starts_with("untitled-"));
+        // The next change waits an interval from the last autosave.
+        e.execute(session::Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [0.0, 1.0, 0.0],
+        })
+        .unwrap();
+        let next = a.tick(t + 6 * min, &session, &mut e, 5, None);
+        assert_eq!(next, Some(t + 10 * min));
+        // Not while a tool operation is in progress: it waits for the next look.
+        e.select_tool(tools::ToolKind::Line);
+        let px = e
+            .doc()
+            .camera
+            .project(glam::DVec3::new(3.0, 3.0, 0.0))
+            .unwrap();
+        e.cursor_moved(px);
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+        assert!(e.operation_in_progress());
+        assert_eq!(
+            a.tick(t + 11 * min, &session, &mut e, 5, None),
+            None,
+            "busy"
+        );
+        e.key(EditorKey::Escape);
+        assert_eq!(
+            a.tick(t + 11 * min, &session, &mut e, 5, None),
+            None,
+            "written now"
+        );
+        // Off: nothing more.
+        e.execute(session::Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [0.0, 0.0, 1.0],
+        })
+        .unwrap();
+        assert_eq!(a.tick(t + 30 * min, &session, &mut e, 0, None), None);
+        // A recovered model's autosave keeps naming its original file.
+        a.tick(
+            t + 30 * min,
+            &session,
+            &mut e,
+            5,
+            Some(Path::new("/m/house.skr")),
+        );
+        let models = models_in(&dir);
+        assert_eq!(models.len(), 1);
+        assert!(models[0].starts_with("house-"), "{models:?}");
+        // Saving makes it clean: the window clears the autosave, and the next change is
+        // autosaved again.
+        let saved = dir.with_extension("saved.skr");
+        assert!(e.save_file(Some(&saved)));
+        session.clear_autosave();
+        assert_eq!(a.tick(t + 31 * min, &session, &mut e, 5, None), None);
+        assert_eq!(a.revision, None);
+        assert!(models_in(&dir).is_empty());
+        e.execute(session::Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [2.0, 0.0, 0.0],
+        })
+        .unwrap();
+        assert_eq!(
+            a.tick(t + 32 * min, &session, &mut e, 5, None),
+            Some(t + 37 * min)
+        );
+        assert_eq!(a.tick(t + 37 * min, &session, &mut e, 5, None), None);
+        assert_eq!(models_in(&dir).len(), 1);
+        let _ = std::fs::remove_file(&saved);
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_autosave_is_shown_once_and_tried_again_an_interval_later() {
+        let dir = recovery_folder("failing");
+        let session = Session::start(&dir).unwrap();
+        let mut a = Autosave::default();
+        let mut e = edited_editor();
+        let t = Instant::now();
+        let min = Duration::from_secs(60);
+        a.tick(t, &session, &mut e, 1, None);
+        // The folder is gone, and a file stands in its place: the folder check fails.
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::write(&dir, b"not a folder").unwrap();
+        assert_eq!(
+            a.tick(t + min, &session, &mut e, 1, None),
+            Some(t + 2 * min)
+        );
+        assert!(e.status().contains("Autosave failed"), "{}", e.status());
+        e.show_error("something else");
+        assert_eq!(
+            a.tick(t + 2 * min, &session, &mut e, 1, None),
+            Some(t + 3 * min)
+        );
+        assert!(
+            e.status().contains("something else"),
+            "shown once: {}",
+            e.status()
+        );
+        std::fs::remove_file(&dir).unwrap();
+        assert_eq!(
+            a.tick(t + 3 * min, &session, &mut e, 1, None),
+            None,
+            "written"
+        );
+        assert!(a.failure.is_none());
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

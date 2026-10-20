@@ -236,6 +236,7 @@ fn settings_open() -> Fixture {
         settings: Some(SettingsView {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
+            autosave_minutes: 5,
         }),
         ..Default::default()
     }
@@ -335,7 +336,7 @@ fn icon_buttons_are_named_by_their_label() {
 }
 
 /// Sends AccessKit's `action` to the node named `label`, runs, and returns the actions.
-fn accesskit_action(h: &mut H, label: &str, action: Action) -> Vec<UiAction> {
+pub(super) fn accesskit_action(h: &mut H, label: &str, action: Action) -> Vec<UiAction> {
     let (target_node, target_tree) = h.get_by_label(label).accesskit_node().locate();
     h.event(egui::Event::AccessKitActionRequest(
         egui::accesskit::ActionRequest {

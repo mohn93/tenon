@@ -20,9 +20,9 @@ use session::{
 pub use session::{ImportAs, ImportUnits, UpAxis};
 use tools::overlay::{marker, preview_lines, snap_label};
 use tools::{
-    Axis, Guides, Inference, Layout, Lock, Owner, Remembered, Scenery, Slab, SnapKind, Solid, Tool,
-    ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in, face_under_in,
-    infer_detail,
+    Axis, Guides, Inference, Layout, Lock, Owner, Phase, Remembered, Scenery, Slab, SnapKind,
+    Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in,
+    face_under_in, infer_detail,
 };
 
 use crate::clipboard::{Clipboard, MemoryClipboard};
@@ -69,6 +69,13 @@ impl Default for ImportOptions {
             merge_coplanar: true,
         }
     }
+}
+
+/// Whether a tool operation is in progress, given the tool's `phase` and whether a press it
+/// took is held (`pressed`): a drag, or a multi-click tool between its clicks. The Paste tool
+/// counts while it is out.
+fn operation_in_progress(phase: &Phase, pressed: bool) -> bool {
+    pressed || matches!(phase, Phase::Active { .. })
 }
 
 /// Whether `command` replaces the document (a new model, a file opened).
@@ -1458,6 +1465,34 @@ impl Editor {
             )));
         }
         opened
+    }
+
+    /// Opens the recovery copy at `path` as a model never saved, with unsaved changes,
+    /// dropping the open model (the window asks about its unsaved changes first). False if it
+    /// cannot be opened; the status then says why.
+    pub fn open_recovered(&mut self, path: &Path) -> bool {
+        self.reset_tool();
+        self.typed.clear();
+        self.message = None;
+        let opened = match self.doc.open_recovered(path) {
+            Ok(()) => {
+                self.documents += 1;
+                self.material = None;
+                true
+            }
+            Err(e) => {
+                self.message = Some(Message::error(e.message));
+                false
+            }
+        };
+        self.invalidate_hover();
+        opened
+    }
+
+    /// Whether a tool operation is in progress: a press the tool took is held, or the tool
+    /// is between the clicks of an operation.
+    pub fn operation_in_progress(&self) -> bool {
+        operation_in_progress(&self.tool.phase(), self.tool_pressed)
     }
 
     /// Saves to `path`, or to the file last opened or saved. False if it cannot be saved; the
@@ -6076,5 +6111,54 @@ mod tests {
         e.open_path(vec![group]);
         assert!(!e.doc().context().is_empty());
         assert!(!e.untouched());
+    }
+
+    #[test]
+    fn an_operation_is_in_progress_while_a_press_is_held_or_a_tool_is_between_clicks() {
+        let active = Phase::Active { points: Vec::new() };
+        assert!(!operation_in_progress(&Phase::Idle, false));
+        assert!(operation_in_progress(&Phase::Idle, true), "a drag");
+        assert!(operation_in_progress(&active, false), "between clicks");
+        assert!(operation_in_progress(&active, true));
+        let mut e = editor();
+        e.select_tool(ToolKind::Line);
+        assert!(!e.operation_in_progress());
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert!(e.operation_in_progress(), "a line started");
+        e.key(EditorKey::Escape);
+        assert!(!e.operation_in_progress());
+    }
+
+    #[test]
+    fn a_recovered_model_opens_untitled_with_unsaved_changes() {
+        let mut e = editor();
+        ground_square(&mut e);
+        let path = temp_file("recovered.autosave.skr");
+        e.doc().write_copy(&path).unwrap();
+        e.new_model();
+        let documents = e.documents();
+        assert!(e.open_recovered(&path));
+        assert_eq!(e.documents(), documents + 1);
+        assert_eq!(e.doc().path(), None);
+        assert!(e.doc().is_modified());
+        assert_eq!(stats(&e).1, 1, "the square's face");
+        assert!(!e.untouched());
+        // An edit and its undo leave it unsaved.
+        e.execute(Command::AddGuidePoint {
+            position: [1.0, 2.0, 0.0],
+        })
+        .unwrap();
+        e.undo();
+        assert!(e.doc().is_modified());
+        // A copy that cannot be read changes nothing.
+        let _ = std::fs::remove_file(&path);
+        assert!(!e.open_recovered(&path));
+        assert_eq!(e.documents(), documents + 1);
+        assert_eq!(stats(&e).1, 1);
+        assert!(
+            e.status().contains("recovered.autosave.skr"),
+            "{}",
+            e.status()
+        );
     }
 }

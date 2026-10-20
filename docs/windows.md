@@ -51,7 +51,7 @@ The first runs its own headless model; the second drives a window started with
 | What | Location |
 |---|---|
 | Preferences | `%APPDATA%\sketchup-alt\prefs.json` |
-| Recovery files (work an agent discards) | `%LOCALAPPDATA%\sketchup-alt\recovery\` |
+| Recovery files (autosaves, work an agent discards, their `.json` notes and the open windows' `session-*.lock` files) | `%LOCALAPPDATA%\sketchup-alt\recovery\` |
 | Agent API | the named pipe `\\.\pipe\sketchup-alt-<pid>` (see [agent-api.md](https://github.com/mohn93/sketchup/blob/main/docs/agent-api.md)) |
 
 `APPDATA` and `LOCALAPPDATA` count only when set to an absolute path (a drive and a backslash,
@@ -64,7 +64,9 @@ protected access list: full control for you, nothing for anyone else, and nothin
 the folder above; files made in them inherit that. Preferences and recovery files are also
 created with that access list. A folder that already exists keeps its access list, but one that
 is a symbolic link, a junction or another reparse point is refused (preferences are then not
-saved, and an agent's command that would discard work fails without discarding it).
+saved, and an agent's command that would discard work fails without discarding it, and autosave
+is off). File > Recover Models... relies on the recovery folder's access list: it skips links
+but does not check each file's access list.
 
 ## Agent API files (`--api-root`)
 
