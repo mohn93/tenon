@@ -1821,3 +1821,148 @@ fn cmd_x_c_and_v_cut_copy_and_paste_with_the_paste_tool() {
     );
     assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
 }
+
+#[test]
+fn the_dimension_tool_measures_two_points_an_edge_and_a_circle() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "dimension");
+    // Two corners, then a typed offset on the cursor's side.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [2, 0, 0]},
+            {"type": "move", "point": [1, -1, 0]}
+        ]),
+    );
+    assert_eq!(r["editor"]["tool"], "dimension");
+    assert_eq!(r["editor"]["points"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(r["preview"].as_array().unwrap().len(), 3, "{r}");
+    let r = input(&mut e, json!([{"type": "type", "text": "0.5"}]));
+    assert_eq!(ran(&r), ["add_dimension"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(c["a"].as_str().unwrap().starts_with('v'), "a vertex: {c}");
+    assert!(c["b"].as_str().unwrap().starts_with('v'), "a vertex: {c}");
+    assert!(near(&c["offset"], [0.0, -0.5, 0.0]), "{c}");
+    let dimension = created(&r["commands"][0]["outcome"], 'r')[0].clone();
+    let info = ask(&mut e, json!({"type": "entity", "id": dimension}));
+    assert_eq!(info["label"], "2 m", "{info}");
+    // An edge away from its ends, then where the line goes.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0.6, 0, 0]},
+            {"type": "click", "point": [1, -1, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_edge_dimension"], "{r}");
+    assert!(near(
+        &r["commands"][0]["command"]["offset"],
+        [0.0, -1.0, 0.0]
+    ));
+    // A circle's edge: a diameter, or after Ctrl a radius.
+    exec(
+        &mut e,
+        json!({"type": "add_circle", "center": [0, 6, 0], "radius": 2, "segments": 8}),
+    );
+    let on = [
+        2.0 - 0.3 * (2.0 - 2f64.sqrt()),
+        6.0 + 0.3 * 2f64.sqrt(),
+        0.0,
+    ];
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": on},
+            {"type": "key", "key": "ctrl"},
+            {"type": "click", "point": [3, 7, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_radial_dimension"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert_eq!(c["diameter"], false, "{c}");
+    assert!(near(&c["leader"], [3.0, 1.0, 0.0]), "{c}");
+    // Escape drops a dimension in progress.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "key", "key": "escape"}
+        ]),
+    );
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert_eq!(ran(&r), Vec::<String>::new());
+}
+
+#[test]
+fn the_text_tool_places_leader_and_screen_notes_with_typed_text() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "text");
+    // A corner, then where the text goes: the text is asked for.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [2, 2, 0]},
+            {"type": "click", "point": [3, 3, 0]}
+        ]),
+    );
+    assert_eq!(r["editor"]["phase"], "active", "{r}");
+    assert_eq!(
+        r["editor"]["prompt"],
+        "Type the note's text (none: the point's coordinates)"
+    );
+    let r = input(&mut e, json!([{"type": "type", "text": "Corner"}]));
+    assert_eq!(ran(&r), ["add_note"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(c["anchor"].as_str().unwrap().starts_with('v'), "{c}");
+    assert_eq!(c["text"], "Corner");
+    // Enter with nothing typed: the automatic text.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [2, 0, 0]},
+            {"type": "click", "point": [3, -1, 0]},
+            {"type": "key", "key": "enter"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_note"], "{r}");
+    assert!(r["commands"][0]["command"]["text"].is_null(), "{r}");
+    let note = created(&r["commands"][0]["outcome"], 'n')[0].clone();
+    let info = ask(&mut e, json!({"type": "entity", "id": note}));
+    assert_eq!(info["label"], "(2 m, 0 m, 0 m)", "{info}");
+    // Empty space: a note fixed to the view, which needs text.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "pixel": [80, 30]},
+            {"type": "key", "key": "enter"}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(
+        r["editor"]["message"],
+        "A note fixed to the view needs text"
+    );
+    let r = input(&mut e, json!([{"type": "type", "text": "Plan"}]));
+    assert_eq!(ran(&r), ["add_screen_note"], "{r}");
+    let at = &r["commands"][0]["command"]["at"];
+    assert!(
+        (at[0].as_f64().unwrap() - 0.1).abs() < 1e-9
+            && (at[1].as_f64().unwrap() - 0.05).abs() < 1e-9,
+        "{at}"
+    );
+    // Escape drops the note while its text is asked for.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [-1, -1, 0]},
+            {"type": "key", "key": "escape"},
+            {"type": "type", "text": "late"}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(r["editor"]["phase"], "idle");
+}

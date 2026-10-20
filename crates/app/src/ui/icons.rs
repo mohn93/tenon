@@ -49,6 +49,8 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Offset => ph::FRAME_CORNERS,
         ToolKind::FollowMe => ph::PATH,
         ToolKind::TapeMeasure => ph::RULER,
+        ToolKind::Dimension => ph::ARROWS_HORIZONTAL,
+        ToolKind::Text => ph::TEXT_T,
     }
 }
 

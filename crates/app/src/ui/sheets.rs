@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use egui::{Id, Modal, RichText, Ui};
 
 use egui::text::{CCursor, CCursorRange};
-use kernel::{DefinitionKind, TagId};
+use kernel::{DefinitionKind, MAX_NOTE_CHARS, MAX_NOTE_LINES, TagId};
+use tools::NoteRequest;
 
 use super::{UiAction, theme, widgets};
 use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis, is_sketchup_path};
@@ -40,10 +41,21 @@ pub enum Sheet {
         models: Vec<PathBuf>,
         names: Vec<String>,
     },
+    /// A note's text: of the note the Text tool is placing, or of a note to change
+    /// (`request`), starting with `text`. With `automatic` (a leader note's automatic text,
+    /// shown while the field is empty) the text may be left blank; otherwise it is needed.
+    NoteText {
+        request: NoteRequest,
+        text: String,
+        automatic: Option<String>,
+    },
 }
 
 /// A sheet's width, in points.
 const WIDTH: f32 = 340.0;
+
+/// The most the note sheet's text box grows to before it scrolls, in points.
+const NOTE_HEIGHT: f32 = 160.0;
 
 /// The id of the sheet's modal area, and the egui memory key of what it holds while open.
 fn sheet_id() -> Id {
@@ -65,6 +77,8 @@ enum Values {
     Degrees(f64),
     /// Where what is on a deleted tag goes (None: Untagged).
     Destination(Option<TagId>),
+    /// A note's text.
+    Note(String),
     /// A sheet with nothing to edit.
     Nothing,
 }
@@ -79,6 +93,7 @@ impl Values {
             Sheet::FieldOfView { degrees } => Values::Degrees(degrees.round()),
             Sheet::DeleteTag { .. } => Values::Destination(None),
             Sheet::DiscardRecovered { .. } => Values::Nothing,
+            Sheet::NoteText { text, .. } => Values::Note(text.clone()),
         }
     }
 }
@@ -127,6 +142,14 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                 }
                 (Sheet::DiscardRecovered { names, .. }, Values::Nothing) => {
                     discard_recovered_sheet(ui, names, actions);
+                }
+                (
+                    Sheet::NoteText {
+                        request, automatic, ..
+                    },
+                    Values::Note(text),
+                ) => {
+                    note_sheet(ui, request, automatic.as_deref(), text, fresh, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -353,6 +376,76 @@ fn discard_recovered_sheet(ui: &mut Ui, names: &[String], actions: &mut Vec<UiAc
     ));
     if buttons(ui, "Discard", true, actions) {
         actions.push(UiAction::ConfirmDiscardRecovered);
+    }
+}
+
+/// The note sheet: a box for the note's text, several lines long, then Cancel and Add (a
+/// new note) or Change. Blank text is taken only for a leader note (`automatic`, shown in the
+/// empty box, is what it then shows); text over the length or line limits is not taken, and
+/// the sheet says why. Add or Change reports `ConfirmNote`.
+fn note_sheet(
+    ui: &mut Ui,
+    request: &NoteRequest,
+    automatic: Option<&str>,
+    text: &mut String,
+    fresh: bool,
+    actions: &mut Vec<UiAction>,
+) {
+    let t = theme::tokens(ui.ctx().theme());
+    let (title, button) = match request {
+        NoteRequest::Edit(_) => ("Edit Text", "Change"),
+        NoteRequest::Leader { .. } | NoteRequest::Screen { .. } => ("Add Text", "Add"),
+    };
+    widgets::section_header(ui, title);
+    ui.add_space(theme::GRID);
+    let field_id = Id::new("sheet-note");
+    let label = ui.label("Note text");
+    let mut field = egui::TextEdit::multiline(text)
+        .id(field_id)
+        .desired_rows(4)
+        .desired_width(f32::INFINITY);
+    if let Some(automatic) = automatic {
+        field = field.hint_text(automatic);
+    }
+    // Long text scrolls inside the sheet.
+    let output = egui::ScrollArea::vertical()
+        .max_height(NOTE_HEIGHT)
+        .show(ui, |ui| field.show(ui))
+        .inner;
+    output.response.response.clone().labelled_by(label.id);
+    output.response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Note text");
+        info.current_text_value = Some(text.clone());
+        info
+    });
+    if fresh {
+        output.response.request_focus();
+        let mut state = output.state.clone();
+        let all = CCursorRange::two(CCursor::new(0), CCursor::new(text.chars().count()));
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), field_id);
+    }
+    let problem = if text.trim().is_empty() {
+        automatic
+            .is_none()
+            .then_some("Type the text the note shows".to_string())
+    } else if text.chars().count() > MAX_NOTE_CHARS {
+        Some(format!("At most {MAX_NOTE_CHARS} characters"))
+    } else if text.lines().count() > MAX_NOTE_LINES {
+        Some(format!("At most {MAX_NOTE_LINES} lines"))
+    } else {
+        None
+    };
+    let hint = match (&problem, automatic) {
+        (Some(problem), _) => Some(problem.as_str()),
+        (None, Some(_)) => Some("Leave it empty to show the point's coordinates"),
+        (None, None) => None,
+    };
+    if let Some(hint) = hint {
+        ui.label(RichText::new(hint).small().color(t.text_secondary));
+    }
+    if buttons(ui, button, problem.is_none(), actions) {
+        actions.push(UiAction::ConfirmNote(text.clone()));
     }
 }
 

@@ -5,10 +5,11 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     DefinitionKind, EntityId, Guide, InstanceId, MeshId, Model, Scene, Tag, TagEdit, TagId,
 };
-use session::{Camera, Ray};
+use session::{AnchorInput, Camera, Command, Ray};
 use tools::{
-    Guides, Label, Owner, Reach, Scenery, SnapKind, annotation_under_where, edge_under_in,
-    face_under_in, guide_under_where, infer_in, label_under, pick, select_box,
+    DimensionTool, Guides, Label, NoteRequest, Owner, Reach, Scenery, SnapKind, TextTool, Tool,
+    ToolContext, ToolEvent, ToolOutput, annotation_under_where, edge_under_in, face_under_in,
+    guide_under_where, infer_in, label_under, pick, select_box,
 };
 
 const R: f64 = 10.0;
@@ -503,4 +504,76 @@ fn the_topmost_label_under_the_cursor_is_picked() {
     );
     assert_eq!(label_under(&labels, at(120.0, 5.0), open), None);
     assert_eq!(label_under(&labels, at(95.0, 5.0), |_| true), None);
+}
+
+/// Clicks `tool` at each of `points` from the root of `s`, seen by the default camera moved
+/// closer, and returns what the last click gave.
+fn clicked(s: &Scene, tool: &mut dyn Tool, points: &[DVec3]) -> ToolOutput {
+    let view = Scenery::of(s, &[]).unwrap();
+    let mut c = camera(DVec3::ZERO);
+    c.eye = c.target + (c.eye - c.target) * 0.3;
+    let selection = Default::default();
+    let mut out = ToolOutput::default();
+    for &q in points {
+        let cursor = px(&c, q);
+        let guides = Guides {
+            anchor: tool.anchor(),
+            ..Guides::default()
+        };
+        let hit = infer_in(&view, &c, cursor, &guides, R);
+        let ctx = ToolContext {
+            model: s.root(),
+            scenery: &view,
+            camera: &c,
+            cursor,
+            pick_radius: R,
+            drag_threshold: 4.0,
+            quick_press: false,
+            shift: false,
+            selection: &selection,
+            material: None,
+            sample: false,
+            labels: &[],
+        };
+        out = tool.handle(ToolEvent::Click(hit), &ctx);
+    }
+    out
+}
+
+/// Whether `anchor` is a fixed point at about `q`.
+fn fixed_at(anchor: AnchorInput, q: DVec3) -> bool {
+    matches!(anchor, AnchorInput::Point(a) if DVec3::from(a).abs_diff_eq(q, 1e-9))
+}
+
+#[test]
+fn dimensions_and_notes_on_a_group_from_the_root_hold_fixed_points() {
+    let (s, _) = scene();
+    // The group's front bottom edge, from (3, 0, 0) to (4, 0, 0) in the root: its ends are
+    // not the root's, so the dimension measures fixed points.
+    let mut tool = DimensionTool::new();
+    let out = clicked(&s, &mut tool, &[p(3.3, 0.0, 0.0), p(3.5, -1.0, 0.0)]);
+    let [Command::AddDimension { a, b, offset }] = out.commands[..] else {
+        panic!("{:?}", out.commands);
+    };
+    let ends = [a, b];
+    assert!(
+        ends.iter().any(|e| fixed_at(*e, p(3.0, 0.0, 0.0)))
+            && ends.iter().any(|e| fixed_at(*e, p(4.0, 0.0, 0.0))),
+        "{ends:?}"
+    );
+    assert!(DVec3::from(offset).abs_diff_eq(p(0.0, -1.0, 0.0), 1e-6));
+    // The root's own edge is measured by its vertices.
+    let out = clicked(&s, &mut tool, &[p(0.3, -2.0, 0.0), p(0.5, -3.0, 0.0)]);
+    assert!(
+        matches!(out.commands[..], [Command::AddEdgeDimension { .. }]),
+        "{:?}",
+        out.commands
+    );
+    // A note on the group's corner points at the corner's place.
+    let mut tool = TextTool::new();
+    let out = clicked(&s, &mut tool, &[p(4.0, 0.0, 0.0), p(5.0, -1.0, 0.0)]);
+    let Some(NoteRequest::Leader { anchor, .. }) = out.note else {
+        panic!("{:?}", out.note);
+    };
+    assert!(fixed_at(anchor, p(4.0, 0.0, 0.0)), "{anchor:?}");
 }

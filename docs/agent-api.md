@@ -384,6 +384,11 @@ out of view or behind the eye; a screen note is only a label. `render_view` draw
 the window, clicking a dimension's or note's lines or label selects it (or the group holding
 it), and `editor.hovered` names it under the cursor.
 
+In the window the Dimension and Text tools (Tools menu and rail; no keys) make them; through
+`tool_input` they are `set_tool` `dimension` and `text` (see Driving the tools). Double-clicking
+a note with Select opens the window's note sheet to change its text (`change_note` here). The
+display units are set in the window in Settings, Model tab (`set_units` here).
+
 Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
 For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
 were not imported"); a 2021 or newer file's are not read, so not counted.
@@ -885,13 +890,14 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `polygon`, `arc`, `push_pull`, `move`,
-  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `erase` or `paint`. The editor starts in the Select tool.
+  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `dimension`, `text`, `erase` or
+  `paint`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
   Polygon, the center; Arc, the start, then the end; Push/Pull, where the face was clicked; Move,
   the base point; Rotate, the center, then where the angle starts; Scale, the point that stays
-  put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts. The Select tool is `active` with no points while its button is held (a
+  put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts; Dimension, the ends clicked (or the clicked edge's ends), or a circle's center; Text, the point the note points at, then where its text goes (none for a note fixed to the view). The Select tool is `active` with no points while its button is held (a
   click or a box, both on screen); Erase, Paint and Follow Me are always `idle`.
 - `paint_material` is the material the Paint tool paints with (`null`: the default material);
   `import_units` is what one unit of an imported OBJ or STL file is in the window's import options
@@ -913,8 +919,10 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 - `soften_angle` is the Soften Edges window's angle in degrees, and `dialog` the window open
   over the view: `soften_edges` or `null`. The window's file and unsaved-changes dialogs are
   modal: while one is open the window handles no requests, which wait until it closes. Its
-  sheets (import options, component name, rename, field of view) and the Settings window are
-  chrome and do not hold requests.
+  sheets (import options, component name, rename, field of view, a note's text) and the
+  Settings window are chrome and do not hold requests. The note sheet of a note the Text tool
+  is placing closes when the tool no longer waits for its text (a `cancel`, a `set_tool`, or
+  the text typed through `tool_input`).
 - `modifiers` are the modifier keys held (`cmd` is Cmd or Ctrl): the user's in the window and
   those a `tool_input` `modifiers` event holds (see Driving the tools).
 - `hovered` is what a click would act on now with Select, Push/Pull, Paint or Erase (an id of
@@ -972,7 +980,7 @@ Events, run in order:
 | `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool selects a face with its edges, or an edge with its faces, opens the group under it, or closes the open one when there is nothing of it there. Push/Pull repeats the last pull distance on the face (the one being pulled, else the one under the cursor). In Push/Pull, a click that finishes a pull, followed within the double-click time by another click, repeats the pull (the SketchUp convention). The second click of a `double_click` (and the second and third of a `triple_click`) comes within the double-click time; its first does not, so a `click` that starts a pull followed by a `double_click` finishes the pull with the double-click's first click. In the window, Push/Pull ignores a second press within the double-click time near the first click (a jittery double-click) rather than finishing a pull of a few pixels; a later click there finishes it. |
 | `{"type": "triple_click", "point": [1, 2, 0]}` | Three left clicks there: the Select tool selects everything connected to the edge or face under it (a triple-click that follows a double-click that opened or closed a group does nothing more). |
 | `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. With Line, Rectangle, Circle, Polygon, Arc, Push/Pull or Scale (pressed on a grip), a drag acts as two clicks when the release is at least the drag threshold (4 px) from the press, inside the view. While a navigation drag turns the view, the hover waits, as in the window. |
-| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making, Polygon inscribed and circumscribed, Scale scaling about the center). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none), `d` (duplicate, as the `duplicate` command), `x` (cut, as `cut_selection`), `c` (copy, as `copy_selection`) and `v` (paste, as `paste_clipboard` without `at`) are taken, the last four not with `shift`; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
+| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making, Polygon inscribed and circumscribed, Scale scaling about the center, Dimension a radial dimension's diameter and radius). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none), `d` (duplicate, as the `duplicate` command), `x` (cut, as `cut_selection`), `c` (copy, as `copy_selection`) and `v` (paste, as `paste_clipboard` without `at`) are taken, the last four not with `shift`; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
 | `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go, so `{"type": "modifiers"}` lets go of all): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Shift switches the Scale tool between uniform and per-axis scaling, Cmd or Ctrl makes a Paint click sample the material. They stay held across calls (see Modifiers below). |
 | `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as Rotate retypes its last angle, Scale its last scale and Offset its last distance; Move only replaces a copy with an array (`5x`, `/5`). A retyped pull is refused ("Click a face first") if another step has come in between. |
 
@@ -1019,6 +1027,26 @@ Events, run in order:
   else selected, or nothing, the message is "Select the path edges, then click the profile
   face" and nothing runs. It makes one `follow_me` command; a refusal (a profile too big for a
   turn, a bad path) shows the command's message and changes nothing. It takes no typed value.
+- **Dimension** (no key): `click` a point, `click` a second one, `move` to where the dimension
+  line goes and `click`, or `type` the line's distance from the ends (on the cursor's side) once
+  the cursor has moved off their line; it makes one `add_dimension`, each end the vertex
+  clicked (an endpoint snap on the open context's vertex, which the end then follows) or the
+  point. `click` an edge away from its ends instead, then where the line goes: one
+  `add_edge_dimension` (an edge inside a group, seen from outside it, gives an `add_dimension`
+  between its ends as points). `click` an edge of a circle or an arc, then where the label
+  goes: one `add_radial_dimension`, a diameter for a circle and a radius for an arc, which a
+  `ctrl` key switches before that click. Clicking the first point again is refused with a
+  message. Typed again right after, a distance moves the line of the dimension just added
+  (`undo`, then the command again).
+- **Text** (no key): `click` a point on the model (a vertex, which the note follows, or a point
+  on an edge, a face or a guide), then where the text goes; or `click` empty space (the ground
+  or nothing) for a note fixed to the view there (refused with a message while a group is
+  open). The tool then asks for the text (`editor.phase` stays `active`, the prompt says so):
+  in the window a sheet asks; here `type` it (a single line), or a `key` `enter` with nothing
+  typed for a leader note's automatic text (a note fixed to the view needs text and says so).
+  It makes one `add_note` or `add_screen_note`. A `cancel`, an `escape` key or another `click`
+  drops the note being placed. A `double_click` on a note with Select selects it and, in the
+  window, opens the same sheet to change its text; agents use `change_note`.
 - **Modifiers** a `modifiers` event holds stay held after the call, until a later `modifiers`
   event lets them go or `cancel` (so a Shift lock can be set in one call and used in the
   next); arrow-key locks last until the operation ends. A `key` event's own modifiers are
@@ -1478,6 +1506,7 @@ under a pixel and where a click would snap.
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
 | Settings (Cmd+,): Appearance (theme, UI scale), Input (trackpad scroll) and Files (autosave interval); View > Theme | none: window chrome, kept in the prefs file (see below) |
+| Settings, Model tab: the model's display units and precision (saved in the model) | `set_units`; the `units` query |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
 | Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |
@@ -1493,7 +1522,8 @@ under a pixel and where a click would snap.
 | Drawing by dragging (Line, Rectangle, Circle, Polygon, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
-| Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Follow Me (select the path, click the face), Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `follow_me` (`face`, `path`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
+| Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Follow Me (select the path, click the face), Tape Measure, Dimension (Ctrl: diameter or radius), Text (and its note sheet), Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `follow_me` (`face`, `path`), `add_guide_line` / `add_guide_point`, `add_dimension`, `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
+| Select: double-click a note, then its text in the note sheet | `change_note` |
 | Inference snapping, Shift and arrow-key locks, the marker and the snap label by the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock); `editor.snap_label` |
 | Hover highlight (Select, Push/Pull, Paint, Erase) | `editor.hovered`; `pick` for any pixel |
 | The orientation gizmo: an axis end, the centre | `standard_view`, `set_projection` |
@@ -1530,7 +1560,7 @@ the face's loops, the pulled loops and the edges joining them), and the orientat
 view's corner. `render_view` never shows the hover highlight, markers, preview lines, solid or
 gizmo. The file dialogs are chrome too (commands take paths); while one, or the unsaved-changes
 prompt, is open, the window answers no requests. The sheets (import options, component name,
-rename, field of view) and the Settings window are chrome as well, and hold no requests. The window
+rename, field of view, a note's text) and the Settings window are chrome as well, and hold no requests. The window
 is exposed to screen readers such as VoiceOver through AccessKit; that is chrome too.
 
 ## Example

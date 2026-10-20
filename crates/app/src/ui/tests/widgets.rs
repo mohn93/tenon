@@ -20,7 +20,8 @@ pub(super) fn kit<'a>(f: impl FnMut(&mut Ui) + 'a) -> Harness<'a> {
 fn a_tool_button_is_named_for_its_tool_and_shows_its_key() {
     let mut clicked = false;
     let mut h = kit(|ui| {
-        clicked |= widgets::tool_button(ui, ToolKind::Rectangle, true).clicked();
+        clicked |=
+            widgets::tool_button(ui, ToolKind::Rectangle, true, theme::RAIL_BUTTON).clicked();
     });
     assert_eq!(is_on(&h, "Rectangle"), Some(true));
     let side = Vec2::splat(theme::RAIL_BUTTON);

@@ -5,11 +5,13 @@ use std::collections::BTreeSet;
 use glam::{DVec2, DVec3};
 use kernel::{EntityId, MaterialId, Model};
 use session::{
-    Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS, DEFAULT_POLYGON_SIDES,
+    AnchorInput, Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS,
+    DEFAULT_POLYGON_SIDES,
 };
 
 use crate::arc::ArcTool;
 use crate::circle::CircleTool;
+use crate::dimension::DimensionTool;
 use crate::erase::EraseTool;
 use crate::follow_me::FollowMeTool;
 use crate::inference::{Axis, Inference};
@@ -25,6 +27,7 @@ use crate::scale::ScaleTool;
 use crate::scenery::{Label, Scenery};
 use crate::select::SelectTool;
 use crate::tape::TapeMeasureTool;
+use crate::text::TextTool;
 
 /// What a tool may look at while handling an event. Points, the camera and entity ids are in
 /// the open context's coordinates (see `session::Document::context`).
@@ -96,6 +99,26 @@ pub struct ToolOutput {
     pub info: bool,
     /// A material the tool picked up to paint with next (Some(None): the default material).
     pub sampled: Option<Option<MaterialId>>,
+    /// A note whose text the window should ask for (its note sheet).
+    pub note: Option<NoteRequest>,
+}
+
+/// A note whose text is asked for: one the Text tool is placing (its text then goes back to
+/// the tool as a `ToolEvent::Value`), or one of the open context to change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NoteRequest {
+    /// A leader note pointing at `anchor` (at `point`), its text at `position`; no text gives
+    /// it its automatic text.
+    Leader {
+        anchor: AnchorInput,
+        point: DVec3,
+        position: DVec3,
+    },
+    /// A note fixed to the view at `at` (fractions of its width and height from the top left);
+    /// it needs text.
+    Screen { at: [f64; 2] },
+    /// The note of the open context to change the text of (a double-click with Select).
+    Edit(EntityId),
 }
 
 /// A translucent solid a tool previews (Push/Pull's pulled shape), in the open context's
@@ -155,6 +178,10 @@ pub trait Tool {
     /// The axis `lock_plane` locked, if any.
     fn plane_lock(&self) -> Option<Axis> {
         None
+    }
+    /// Whether the tool waits for the text of a note it asked for (`ToolOutput::note`).
+    fn awaits_text(&self) -> bool {
+        false
     }
 }
 
@@ -226,13 +253,15 @@ pub enum ToolKind {
     Offset,
     FollowMe,
     TapeMeasure,
+    Dimension,
+    Text,
     Erase,
     Paint,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 15] = [
+    pub const ALL: [ToolKind; 17] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -246,6 +275,8 @@ impl ToolKind {
         ToolKind::Offset,
         ToolKind::FollowMe,
         ToolKind::TapeMeasure,
+        ToolKind::Dimension,
+        ToolKind::Text,
         ToolKind::Erase,
         ToolKind::Paint,
     ];
@@ -274,6 +305,8 @@ impl ToolKind {
             ToolKind::Offset => Box::new(OffsetTool::with_distance(r.offset_distance)),
             ToolKind::FollowMe => Box::new(FollowMeTool::new()),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
+            ToolKind::Dimension => Box::new(DimensionTool::new()),
+            ToolKind::Text => Box::new(TextTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
             ToolKind::Paint => Box::new(PaintTool::new()),
         }
@@ -295,14 +328,16 @@ impl ToolKind {
             ToolKind::Offset => "Offset",
             ToolKind::FollowMe => "Follow Me",
             ToolKind::TapeMeasure => "Tape Measure",
+            ToolKind::Dimension => "Dimension",
+            ToolKind::Text => "Text",
             ToolKind::Erase => "Erase",
             ToolKind::Paint => "Paint",
         }
     }
 
-    /// The key that selects the tool.
-    pub fn shortcut(self) -> char {
-        match self {
+    /// The key that selects the tool, if it has one (the Dimension and Text tools have none).
+    pub fn shortcut(self) -> Option<char> {
+        Some(match self {
             ToolKind::Select => ' ',
             ToolKind::Line => 'l',
             ToolKind::Rectangle => 'r',
@@ -316,14 +351,15 @@ impl ToolKind {
             ToolKind::Offset => 'o',
             ToolKind::FollowMe => 'j',
             ToolKind::TapeMeasure => 't',
+            ToolKind::Dimension | ToolKind::Text => return None,
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',
-        }
+        })
     }
 
     pub fn from_shortcut(c: char) -> Option<ToolKind> {
         let c = c.to_ascii_lowercase();
-        Self::ALL.into_iter().find(|k| k.shortcut() == c)
+        Self::ALL.into_iter().find(|k| k.shortcut() == Some(c))
     }
 }
 
@@ -337,8 +373,12 @@ mod tests {
     fn labels_match_tool_names_and_shortcuts_round_trip() {
         for kind in ToolKind::ALL {
             assert_eq!(kind.make().name(), kind.label());
-            assert_eq!(ToolKind::from_shortcut(kind.shortcut()), Some(kind));
+            if let Some(c) = kind.shortcut() {
+                assert_eq!(ToolKind::from_shortcut(c), Some(kind));
+            }
         }
+        assert_eq!(ToolKind::Dimension.shortcut(), None);
+        assert_eq!(ToolKind::Text.shortcut(), None);
         assert_eq!(ToolKind::from_shortcut('E'), Some(ToolKind::Erase));
         assert_eq!(ToolKind::from_shortcut('z'), None);
     }

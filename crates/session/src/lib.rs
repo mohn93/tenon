@@ -55,4 +55,4 @@ pub use query::{
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;
 pub use schema::ModelPoint;
-pub use units::{LengthUnit, Units, format_length_in};
+pub use units::{LengthUnit, MAX_PRECISION, Units, format_length_in};

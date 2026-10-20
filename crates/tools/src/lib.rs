@@ -3,6 +3,7 @@
 
 pub mod arc;
 pub mod circle;
+pub mod dimension;
 pub mod erase;
 pub mod follow_me;
 pub mod inference;
@@ -21,11 +22,13 @@ pub mod scale;
 pub mod scenery;
 pub mod select;
 pub mod tape;
+pub mod text;
 pub mod tool;
 pub mod vcb;
 
 pub use arc::ArcTool;
 pub use circle::CircleTool;
+pub use dimension::DimensionTool;
 pub use erase::EraseTool;
 pub use follow_me::FollowMeTool;
 pub use inference::{
@@ -48,4 +51,7 @@ pub use scale::ScaleTool;
 pub use scenery::{Label, Layout, Owner, Part, Placed, Scenery, Slab};
 pub use select::{SelectTool, select_box};
 pub use tape::TapeMeasureTool;
-pub use tool::{Phase, Remembered, Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};
+pub use text::TextTool;
+pub use tool::{
+    NoteRequest, Phase, Remembered, Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput,
+};

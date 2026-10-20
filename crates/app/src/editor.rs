@@ -20,8 +20,8 @@ use session::{
 pub use session::{ImportAs, ImportUnits, UpAxis};
 use tools::overlay::{marker, preview_lines, snap_label};
 use tools::{
-    Axis, Guides, Inference, Layout, Lock, Owner, Phase, Remembered, Scenery, Slab, SnapKind,
-    Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in,
+    Axis, Guides, Inference, Layout, Lock, NoteRequest, Owner, Phase, Remembered, Scenery, Slab,
+    SnapKind, Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput, Within, edge_under_in,
     face_under_in, infer_detail,
 };
 
@@ -36,6 +36,7 @@ mod clip;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
 mod labels;
+mod notes;
 mod scenes;
 mod soften;
 mod tags;
@@ -279,6 +280,8 @@ pub struct Editor {
     paste_return: Option<ToolKind>,
     /// The dimension and note labels the window last drew (see `set_labels`).
     labels: labels::DrawnLabels,
+    /// A note whose text a tool asked for, until the window takes it (`take_note_request`).
+    note: Option<NoteRequest>,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -356,6 +359,7 @@ impl Editor {
             clip_ready: false,
             paste_return: None,
             labels: None,
+            note: None,
         }
     }
 
@@ -789,12 +793,12 @@ impl Editor {
 
     /// The copy modifier (Ctrl) was tapped. The Move and Rotate tools switch copying, the Tape
     /// Measure switches guide creation, the Polygon tool switches inscribed and circumscribed,
-    /// the Scale tool switches scaling about the center; elsewhere it does nothing and returns
-    /// false.
+    /// the Scale tool switches scaling about the center, the Dimension tool a radial dimension
+    /// between diameter and radius; elsewhere it does nothing and returns false.
     pub fn toggle_copy(&mut self) -> bool {
         let takes_ctrl = matches!(
             self.kind,
-            ToolKind::TapeMeasure | ToolKind::Polygon | ToolKind::Scale
+            ToolKind::TapeMeasure | ToolKind::Polygon | ToolKind::Scale | ToolKind::Dimension
         );
         if self.flying || self.pasting() || !copies(self.kind) && !takes_ctrl {
             return false;
@@ -1072,6 +1076,11 @@ impl Editor {
             EditorKey::Backspace if self.typed.is_empty() => self.erase_selection(),
             EditorKey::Backspace => self.typed.pop().is_some(),
             EditorKey::Delete => self.erase_selection(),
+            // A note's text asked for: no text (a leader note's automatic text).
+            EditorKey::Enter if self.typed.is_empty() && self.awaits_note_text() => {
+                self.send(ToolEvent::Value(String::new()));
+                true
+            }
             EditorKey::Enter if self.typed.is_empty() => false,
             EditorKey::Enter => {
                 let text = std::mem::take(&mut self.typed);
@@ -1947,6 +1956,9 @@ impl Editor {
                     MessageKind::Error
                 },
             });
+        }
+        if out.note.is_some() {
+            self.note = out.note;
         }
         if let Some(sampled) = out.sampled {
             self.material = sampled;
@@ -4174,7 +4186,7 @@ mod tests {
     fn the_editor_does_what_the_table_says_of_plain_letters() {
         use crate::shortcuts::Bound;
         let mut e = editor();
-        for kind in ToolKind::ALL {
+        for kind in ToolKind::ALL.into_iter().filter(|k| k.shortcut().is_some()) {
             e.select_tool(if kind == ToolKind::Line {
                 ToolKind::Move
             } else {

@@ -195,3 +195,85 @@ fn a_focused_field_copies_and_pastes_text() {
     assert_eq!(field_text(&h, "Name"), "Shed");
     assert_eq!(h.state_mut().take(), []);
 }
+
+/// The note sheet for `request`, starting with `text`, blank allowed with `automatic`.
+fn note_fixture(request: tools::NoteRequest, text: &str, automatic: Option<&str>) -> Fixture {
+    Fixture {
+        sheet: Some(Sheet::NoteText {
+            request,
+            text: text.into(),
+            automatic: automatic.map(Into::into),
+        }),
+        ..Default::default()
+    }
+}
+
+fn leader() -> tools::NoteRequest {
+    tools::NoteRequest::Leader {
+        anchor: session::AnchorInput::Point([2.0, 0.0, 0.0]),
+        point: glam::DVec3::new(2.0, 0.0, 0.0),
+        position: glam::DVec3::new(3.0, -1.0, 0.0),
+    }
+}
+
+#[test]
+fn the_note_sheet_takes_text_or_none_for_a_leader_note() {
+    let automatic = "(2 m, 0 m, 0 m)";
+    let mut h = harness(note_fixture(leader(), "", Some(automatic)));
+    assert!(h.query_by_label("Add Text").is_some(), "the title");
+    assert_eq!(field_text(&h, "Note text"), "");
+    let texts = drawn_texts(&h);
+    assert!(texts.iter().any(|t| t == automatic), "the hint: {texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "Leave it empty to show the point's coordinates")
+    );
+    assert_eq!(click(&mut h, "Add"), [UiAction::ConfirmNote(String::new())]);
+    // The field has focus: typed text, over two lines, is the note's.
+    let mut h = harness(note_fixture(leader(), "", Some(automatic)));
+    h.event(egui::Event::Text("North".into()));
+    h.key_press(egui::Key::Enter);
+    h.event(egui::Event::Text("wall".into()));
+    h.run_ok();
+    assert_eq!(field_text(&h, "Note text"), "North\nwall");
+    assert_eq!(h.state_mut().take(), [], "Enter makes a new line");
+    assert_eq!(
+        click(&mut h, "Add"),
+        [UiAction::ConfirmNote("North\nwall".into())]
+    );
+    let mut h = harness(note_fixture(leader(), "", Some(automatic)));
+    assert_eq!(click(&mut h, "Cancel"), [UiAction::CloseSheet]);
+}
+
+#[test]
+fn a_note_fixed_to_the_view_needs_text_within_the_limits() {
+    let screen = tools::NoteRequest::Screen { at: [0.1, 0.05] };
+    let mut h = harness(note_fixture(screen, "", None));
+    assert!(h.get_by_label("Add").accesskit_node().is_disabled());
+    assert!(
+        drawn_texts(&h)
+            .iter()
+            .any(|t| t == "Type the text the note shows")
+    );
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+    h.event(egui::Event::Text("Plan".into()));
+    h.run_ok();
+    assert_eq!(
+        click(&mut h, "Add"),
+        [UiAction::ConfirmNote("\nPlan".into())],
+        "Enter made a new line"
+    );
+    // Changing a note: its text in the field; too many lines are not taken.
+    let edit = tools::NoteRequest::Edit("n4".parse().unwrap());
+    let h = harness(note_fixture(edit, "Old", None));
+    assert!(h.query_by_label("Edit Text").is_some());
+    assert_eq!(field_text(&h, "Note text"), "Old");
+    assert!(!h.get_by_label("Change").accesskit_node().is_disabled());
+    let long = vec!["line"; 65].join("\n");
+    let h = harness(note_fixture(edit, &long, Some("(0 m, 0 m, 0 m)")));
+    assert!(h.get_by_label("Change").accesskit_node().is_disabled());
+    assert!(drawn_texts(&h).iter().any(|t| t == "At most 64 lines"));
+}

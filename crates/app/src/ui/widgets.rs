@@ -40,27 +40,31 @@ pub fn icon_button(
         .on_disabled_hover_ui(|ui| hint(ui, tooltip, bound))
 }
 
-/// A tool's button on the rail: its glyph in a `RAIL_BUTTON` square, on an accent fill while
-/// it is the active tool (otherwise framed only under the pointer, as a selectable label is).
-/// Named for the tool; the tooltip names the tool and its key.
-pub fn tool_button(ui: &mut Ui, kind: ToolKind, selected: bool) -> Response {
+/// A tool's button on the rail: its glyph in a square `side` points wide (`RAIL_BUTTON`, less
+/// in a short window), on an accent fill while it is the active tool (otherwise framed only
+/// under the pointer, as a selectable label is). Named for the tool; the tooltip names the
+/// tool and its key, when it has one.
+pub fn tool_button(ui: &mut Ui, kind: ToolKind, selected: bool, side: f32) -> Response {
     let t = theme::tokens(ui.ctx().theme());
+    // A smaller button has a glyph smaller by as much.
+    let size = theme::RAIL_ICON - (theme::RAIL_BUTTON - side).max(0.0);
     let mut glyph = RichText::new(icons::tool(kind))
         .family(fonts::icons())
-        .size(theme::RAIL_ICON);
+        .size(size);
     if selected {
         glyph = glyph.color(t.on_accent);
     }
     // The glyph and the padding around it add up to the button's side.
-    let line = ui.fonts_mut(|f| f.row_height(&egui::FontId::new(theme::RAIL_ICON, fonts::icons())));
-    let padding = Vec2::splat(((theme::RAIL_BUTTON - line) / 2.0).max(0.0));
+    let line = ui.fonts_mut(|f| f.row_height(&egui::FontId::new(size, fonts::icons())));
+    let padding = Vec2::splat(((side - line) / 2.0).max(0.0));
     let response = ui
         .scope(|ui| {
             ui.spacing_mut().button_padding = padding;
+            // Buttons are at least this tall; a short window's rail has smaller ones.
+            ui.spacing_mut().interact_size.y = side;
             // `selectable` reports the selected state to AccessKit and frames the button only
             // when selected or under the pointer.
-            let mut button =
-                egui::Button::selectable(selected, glyph).min_size(Vec2::splat(theme::RAIL_BUTTON));
+            let mut button = egui::Button::selectable(selected, glyph).min_size(Vec2::splat(side));
             if selected {
                 button = button.fill(t.accent);
             }

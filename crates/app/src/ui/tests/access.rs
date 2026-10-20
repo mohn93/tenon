@@ -136,6 +136,14 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
             Sheet::FieldOfView { degrees: 35.0 },
         ),
         (
+            "the note sheet",
+            Sheet::NoteText {
+                request: tools::NoteRequest::Screen { at: [0.5, 0.5] },
+                text: "Plan".into(),
+                automatic: None,
+            },
+        ),
+        (
             "the Delete Tag sheet",
             Sheet::DeleteTag {
                 tag: kernel::TagId(1),
@@ -237,6 +245,7 @@ fn settings_open() -> Fixture {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
             autosave_minutes: 5,
+            units: session::Units::default(),
         }),
         ..Default::default()
     }

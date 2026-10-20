@@ -383,19 +383,16 @@ mod tests {
     #[test]
     fn tool_keys_are_the_tools_own() {
         for kind in ToolKind::ALL {
-            let key = match kind.shortcut() {
+            let key = kind.shortcut().map(|c| match c {
                 ' ' => Key::Space,
                 c => Key::Letter(c),
-            };
-            assert_eq!(
-                chord(Bound::Tool(kind)),
-                Some(Chord {
-                    command: false,
-                    shift: false,
-                    key
-                }),
-                "{kind:?}"
-            );
+            });
+            let expected = key.map(|key| Chord {
+                command: false,
+                shift: false,
+                key,
+            });
+            assert_eq!(chord(Bound::Tool(kind)), expected, "{kind:?}");
         }
     }
 

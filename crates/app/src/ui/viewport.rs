@@ -175,7 +175,9 @@ pub fn cursor_icon(tool: ToolKind, pasting: bool, hovering: bool, navigating: bo
         | ToolKind::Scale
         | ToolKind::Offset
         | ToolKind::FollowMe
-        | ToolKind::TapeMeasure => CursorIcon::Crosshair,
+        | ToolKind::TapeMeasure
+        | ToolKind::Dimension
+        | ToolKind::Text => CursorIcon::Crosshair,
         ToolKind::Move => CursorIcon::Move,
         ToolKind::PushPull => CursorIcon::ResizeVertical,
         ToolKind::Paint | ToolKind::Erase if hovering => CursorIcon::PointingHand,

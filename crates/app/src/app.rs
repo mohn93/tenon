@@ -9,7 +9,7 @@ use glam::DVec2;
 use kernel::{EntityId, InstanceId, MaterialId, TagId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
 use session::{Camera, Command, Lighting, OutlinerTable};
-use tools::Axis;
+use tools::{Axis, NoteRequest};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
@@ -1402,13 +1402,21 @@ impl State {
     }
 
     /// Closes the open sheet once the document it was opened over is replaced (new or open,
-    /// by the window or an agent): what it names may no longer exist.
+    /// by the window or an agent): what it names may no longer exist. The note sheet of a
+    /// note being placed closes once the Text tool no longer places it (an agent's `cancel`
+    /// or `set_tool`, or its text typed through `tool_input`).
     fn drop_outlived_sheet(&mut self) {
         if self
             .sheet
             .as_ref()
             .is_some_and(|s| !matches!(s, Sheet::DiscardRecovered { .. }))
             && self.editor.documents() != self.sheet_origin.document
+        {
+            self.sheet = None;
+        }
+        if let Some(Sheet::NoteText { request, .. }) = &self.sheet
+            && !matches!(request, NoteRequest::Edit(_))
+            && !self.editor.awaits_note_text()
         {
             self.sheet = None;
         }
@@ -1482,7 +1490,24 @@ impl State {
                     self.editor.import_file(&path);
                 }
             }
-            UiAction::CloseSheet => self.sheet = None,
+            UiAction::CloseSheet => {
+                // A note being placed is dropped with its sheet.
+                if let Some(Sheet::NoteText { request, .. }) = self.sheet.take()
+                    && !matches!(request, NoteRequest::Edit(_))
+                {
+                    self.editor.cancel_note();
+                }
+            }
+            UiAction::ConfirmNote(text) => {
+                if let Some(Sheet::NoteText { request, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::NoteText { .. }))
+                {
+                    self.editor.finish_note(request, text);
+                }
+            }
+            UiAction::SetUnits(units) => {
+                self.editor.set_units(units);
+            }
             UiAction::ExportFile => self.export(),
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
@@ -1969,6 +1994,14 @@ impl State {
                 .map(|a| activity_line(a, now))
                 .collect()
         });
+        // A tool asked for a note's text: the note sheet asks.
+        if let Some(sheet) = self
+            .editor
+            .take_note_request()
+            .and_then(|r| note_sheet(&self.editor, r))
+        {
+            self.open_sheet(sheet);
+        }
         self.drop_outlived_sheet();
         let rename = self.editor.rename_target();
         let panels = View {
@@ -2037,6 +2070,7 @@ impl State {
                 ui_scale: self.prefs.ui_scale,
                 trackpad: self.prefs.trackpad,
                 autosave_minutes: self.prefs.autosave_minutes,
+                units: self.editor.doc().units(),
             }),
             recover: self.recover.as_ref().map(|r| RecoverView {
                 rows: &r.rows,
@@ -2324,7 +2358,31 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
             Err("The tag was already deleted")
         }
         Sheet::DeleteTag { .. } | Sheet::DiscardRecovered { .. } => Ok(()),
+        Sheet::NoteText {
+            request: NoteRequest::Edit(EntityId::Note(n)),
+            ..
+        } if editor.doc().model().note(*n).is_none() => {
+            Err("The note is gone; its text was not changed")
+        }
+        Sheet::NoteText {
+            request: NoteRequest::Edit(_),
+            ..
+        } => Ok(()),
+        Sheet::NoteText { .. } if !editor.awaits_note_text() => {
+            Err("The note is no longer being placed; nothing was added")
+        }
+        Sheet::NoteText { .. } => Ok(()),
     }
+}
+
+/// The note sheet for `request`, when it still applies (a note to change may be gone).
+fn note_sheet(editor: &Editor, request: NoteRequest) -> Option<Sheet> {
+    let start = editor.note_text(request)?;
+    Some(Sheet::NoteText {
+        request,
+        text: start.text,
+        automatic: start.automatic,
+    })
 }
 
 /// Rebuilds the Tags tab's rows when the document or its revision changed since `cache` was
@@ -2432,6 +2490,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmFieldOfView(_)
             | UiAction::ConfirmDeleteTag(_)
             | UiAction::ConfirmDiscardRecovered
+            | UiAction::ConfirmNote(_)
             | UiAction::Quit
     )
 }
@@ -3614,6 +3673,81 @@ mod tests {
         let origin = SheetOrigin::of(&e);
         assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
         e.set_projection(session::Projection::Parallel);
+        assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    /// Clicks `e`'s tool at the model point `p` (seen by the document camera).
+    fn click_at(e: &mut Editor, p: glam::DVec3) {
+        let px = e.doc().camera.project(p).unwrap();
+        e.cursor_moved(px);
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+    }
+
+    #[test]
+    fn the_note_sheet_answers_the_text_tool_and_double_clicks_on_notes() {
+        use glam::DVec3;
+        let mut e = editor_with_selection();
+        e.select_tool(tools::ToolKind::Text);
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        assert_eq!(
+            e.take_note_request(),
+            None,
+            "where the text goes comes first"
+        );
+        click_at(&mut e, DVec3::new(3.0, 3.0, 0.0));
+        let request = e.take_note_request().expect("the text is asked for");
+        assert_eq!(e.take_note_request(), None, "asked once");
+        let sheet = note_sheet(&e, request).unwrap();
+        let Sheet::NoteText {
+            ref text,
+            ref automatic,
+            ..
+        } = sheet
+        else {
+            panic!("{sheet:?}");
+        };
+        assert_eq!(text, "");
+        assert_eq!(automatic.as_deref(), Some("(2 m, 2 m, 0 m)"));
+        let origin = SheetOrigin::of(&e);
+        assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
+        assert!(e.finish_note(request, "Corner".into()));
+        assert_eq!(e.doc().undo_label(), Some("add_note"));
+        assert!(
+            sheet_applies(&sheet, &origin, &e).is_err(),
+            "the note is placed"
+        );
+        let (note, _) = e.doc().model().notes().next().unwrap();
+        // A double-click on the note's leader with Select asks for its new text.
+        e.select_tool(tools::ToolKind::Select);
+        let on_leader = DVec3::new(2.5, 2.5, 0.0);
+        click_at(&mut e, on_leader);
+        click_at(&mut e, on_leader);
+        e.double_click();
+        let request = e.take_note_request().expect("a double-click on a note");
+        assert_eq!(request, NoteRequest::Edit(EntityId::Note(note)));
+        let sheet = note_sheet(&e, request).unwrap();
+        assert!(
+            matches!(&sheet, Sheet::NoteText { text, automatic: Some(_), .. } if text == "Corner"),
+            "{sheet:?}"
+        );
+        // Blank: the automatic text again.
+        assert!(e.finish_note(request, " ".into()));
+        assert_eq!(e.doc().model().note(note).unwrap().text(), None);
+        assert_eq!(e.doc().undo_label(), Some("change_note"));
+        // Closing the sheet drops a note being placed.
+        e.select_tool(tools::ToolKind::Text);
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(-1.0, -1.0, 0.0));
+        assert!(e.awaits_note_text());
+        e.cancel_note();
+        assert!(!e.awaits_note_text());
+        // A note that is gone has no sheet, and its sheet no longer applies.
+        e.execute(session::Command::Erase {
+            ids: vec![EntityId::Note(note)],
+        })
+        .unwrap();
+        assert_eq!(note_sheet(&e, request), None);
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
     }
 

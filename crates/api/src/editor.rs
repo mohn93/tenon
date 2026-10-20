@@ -25,6 +25,8 @@ pub enum ToolName {
     Offset,
     FollowMe,
     TapeMeasure,
+    Dimension,
+    Text,
     Erase,
     Paint,
 }
@@ -45,6 +47,8 @@ impl From<ToolKind> for ToolName {
             ToolKind::Offset => ToolName::Offset,
             ToolKind::FollowMe => ToolName::FollowMe,
             ToolKind::TapeMeasure => ToolName::TapeMeasure,
+            ToolKind::Dimension => ToolName::Dimension,
+            ToolKind::Text => ToolName::Text,
             ToolKind::Erase => ToolName::Erase,
             ToolKind::Paint => ToolName::Paint,
         }
@@ -67,6 +71,8 @@ impl From<ToolName> for ToolKind {
             ToolName::Offset => ToolKind::Offset,
             ToolName::FollowMe => ToolKind::FollowMe,
             ToolName::TapeMeasure => ToolKind::TapeMeasure,
+            ToolName::Dimension => ToolKind::Dimension,
+            ToolName::Text => ToolKind::Text,
             ToolName::Erase => ToolKind::Erase,
             ToolName::Paint => ToolKind::Paint,
         }

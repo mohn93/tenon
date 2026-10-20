@@ -211,6 +211,8 @@ fn each_tool_has_its_cursor() {
         (ToolKind::Polygon, C::Crosshair),
         (ToolKind::Arc, C::Crosshair),
         (ToolKind::TapeMeasure, C::Crosshair),
+        (ToolKind::Dimension, C::Crosshair),
+        (ToolKind::Text, C::Crosshair),
         (ToolKind::Rotate, C::Crosshair),
         (ToolKind::Scale, C::Crosshair),
         (ToolKind::Offset, C::Crosshair),

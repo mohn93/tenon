@@ -16,7 +16,7 @@ use crate::inference::{
     annotation_under_where, edge_under_where, face_under_in, guide_under_where, label_under,
 };
 use crate::scenery::{Label, Owner, Scenery};
-use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{NoteRequest, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
 pub struct SelectTool {
@@ -466,6 +466,11 @@ impl Tool for SelectTool {
                     None if ctx.scenery.inside_instance() => {
                         out.commands.push(Command::CloseInstance {});
                         self.opened = true;
+                    }
+                    // A note: selected alone, and its text asked for.
+                    Some(id @ EntityId::Note(_)) => {
+                        widen(bounded(ctx.model, id), ctx, &mut out);
+                        out.note = Some(NoteRequest::Edit(id));
                     }
                     Some(id) => widen(bounded(ctx.model, id), ctx, &mut out),
                     None => {}
@@ -1177,6 +1182,26 @@ mod tests {
         }];
         let out = r.drag(DVec2::new(60.0, 40.0), DVec2::new(60.0, 40.0));
         assert_eq!(selected(&out).0, vec![]);
+    }
+
+    #[test]
+    fn double_clicking_a_note_selects_it_and_asks_for_its_text() {
+        let (mut r, dimension, note) = annotated();
+        let at = DVec3::new(-3.0, 3.0, 0.0);
+        let px = r.px(at);
+        r.labels = vec![Label {
+            owner: Owner::Open,
+            id: note,
+            min: px - DVec2::splat(10.0),
+            max: px + DVec2::splat(10.0),
+        }];
+        let out = r.double_click(at);
+        assert_eq!(selected(&out).0, vec![note]);
+        assert_eq!(out.note, Some(crate::tool::NoteRequest::Edit(note)));
+        // A dimension's double-click asks for nothing.
+        let out = r.double_click(DVec3::new(1.5, -1.0, 0.0));
+        assert_eq!(selected(&out).0, vec![dimension]);
+        assert_eq!(out.note, None);
     }
 
     #[test]

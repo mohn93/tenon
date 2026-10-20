@@ -84,11 +84,17 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
                 r.min.x >= 0.0 && r.max.x <= theme::RAIL_WIDTH,
                 "{k:?} in the rail: {r:?}"
             );
-            assert_eq!(
-                (r.width(), r.height()),
-                (theme::RAIL_BUTTON, theme::RAIL_BUTTON),
-                "{k:?}"
+            // Full size in a roomy window; smaller, but every tool there, in the smallest.
+            let side = if size == SCREEN {
+                theme::RAIL_BUTTON
+            } else {
+                rects[0].width()
+            };
+            assert!(
+                (crate::ui::rail::MIN_BUTTON..=theme::RAIL_BUTTON).contains(&side),
+                "{side}"
             );
+            assert_eq!((r.width(), r.height()), (side, side), "{k:?} at {size:?}");
             assert!(
                 r.max.y <= h.state().central.max.y,
                 "{k:?} above the status bar at {size:?}"

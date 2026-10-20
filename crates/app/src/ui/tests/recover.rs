@@ -157,6 +157,7 @@ fn files_tab(minutes: u32) -> H {
             ui_scale: UiScale::P100,
             trackpad: TrackpadScroll::Orbit,
             autosave_minutes: minutes,
+            units: session::Units::default(),
         }),
         ..Default::default()
     });

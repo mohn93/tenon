@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use egui::{Panel, Ui};
 use kernel::{DefinitionId, EntityId, PageId, TagId, TexturePlacement};
-use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView};
+use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView, Units};
 use tools::ToolKind;
 
 use crate::editor::{ImportOptions, RenameTarget, SelectionTag, Status};
@@ -217,8 +217,13 @@ pub enum UiAction {
     DiscardRecovered(Option<PathBuf>),
     /// The Discard Recovered sheet's Discard: remove the copies it names.
     ConfirmDiscardRecovered,
+    /// The note sheet's Add or Change: the note's text (blank: a leader note's automatic
+    /// text).
+    ConfirmNote(String),
     /// Autosave every so many minutes (0: off), and keep it in the preferences.
     SetAutosave(u32),
+    /// Set the model's display units (Settings' Model tab), as an undo step.
+    SetUnits(Units),
 }
 
 /// A material as the Materials list shows it.
@@ -394,6 +399,8 @@ pub struct SettingsView {
     pub trackpad: TrackpadScroll,
     /// Minutes between autosaves (0: off).
     pub autosave_minutes: u32,
+    /// The model's display units (saved with the model, not in the preferences).
+    pub units: Units,
 }
 
 /// What the empty-model card lists; `View::start` is None when the card is hidden.

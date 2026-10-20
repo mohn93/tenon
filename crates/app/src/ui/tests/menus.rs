@@ -474,6 +474,8 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
         ToolKind::Offset,
         ToolKind::FollowMe,
         ToolKind::TapeMeasure,
+        ToolKind::Dimension,
+        ToolKind::Text,
         ToolKind::Erase,
         ToolKind::Paint,
     ] {
