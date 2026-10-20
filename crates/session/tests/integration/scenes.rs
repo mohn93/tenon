@@ -728,3 +728,54 @@ fn go_to_scene_in_an_open_group_places_the_camera_in_model_coordinates() {
         json!([3.0, -9.0, 4.0])
     );
 }
+
+#[test]
+fn a_camera_beyond_the_coordinate_limit_is_not_stored() {
+    // Window navigation can take the camera past the limit; no scene command stores it.
+    let mut d = doc();
+    let kept = add_scene(&mut d, json!({}));
+    let unstored = add_scene(&mut d, json!({"camera": false}));
+    let revision = ask(&d, json!({"type": "scenes"}))["revision"].clone();
+    d.camera.eye = glam::DVec3::new(2.0e6, 0.0, 0.0);
+    for command in [
+        json!({"type": "add_scene"}),
+        json!({"type": "update_scene", "scene": kept}),
+        json!({"type": "change_scene", "scene": unstored, "camera": true}),
+    ] {
+        let (kind, message) = run(&mut d, command.clone()).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{command}");
+        assert!(message.contains("beyond +/-1000000 m"), "{message}");
+    }
+    assert_eq!(names(&d), ["Scene 1", "Scene 2"]);
+    assert_eq!(ask(&d, json!({"type": "scenes"}))["revision"], revision);
+    // What does not store the camera still works.
+    run(&mut d, json!({"type": "add_scene", "camera": false})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "update_scene", "scene": kept, "camera": false}),
+    )
+    .unwrap();
+
+    // Back near the model, a scene stores the view, saves and opens again.
+    set_camera(&mut d, [10.0, -10.0, 5.0]);
+    run(
+        &mut d,
+        json!({"type": "update_scene", "scene": kept, "camera": true}),
+    )
+    .unwrap();
+    let path = scratch("far-camera.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut back = doc();
+    run(
+        &mut back,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(names(&back), ["Scene 1", "Scene 2", "Scene 3"]);
+    let view = &ask(&back, json!({"type": "scene", "scene": kept}))["view"];
+    assert_eq!(view["eye"], json!([10.0, -10.0, 5.0]));
+}

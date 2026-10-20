@@ -533,9 +533,9 @@ SketchUp file (2021 or newer) adds its scenes (see Import).
 
 | Command | Effect |
 |---|---|
-| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting` and `color_by_tag`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. |
-| `{"type": "update_scene", "scene": "p40", "camera": true, "tags": false}` | Stores the current view and hidden tags in the scene again, as one undo step. An absent `camera` or `tags` stores that part again if the scene stores it; true starts storing it, false stops. Storing what it already stores is no step. |
-| `{"type": "change_scene", "scene": "p40", "name": "Back", "camera": false, "tags": true}` | Renames a scene (name rules as for `add_scene`) and chooses what it stores, as one undo step (none when nothing changes). Each of `name`, `camera` and `tags` is optional, but at least one is needed (`invalid_input`). `camera` or `tags` false stops storing that part; true stores it from the current view or tag visibility only if the scene does not store it yet. A part that stays stored keeps exactly what was stored (unlike `update_scene`, which stores it again). |
+| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting` and `color_by_tag`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. A camera whose eye or target is beyond +/-1e6 m (window navigation can go that far) is not stored: `invalid_input` ("the camera is beyond +/-1000000 m: a scene cannot store it"); move the view closer first. |
+| `{"type": "update_scene", "scene": "p40", "camera": true, "tags": false}` | Stores the current view and hidden tags in the scene again, as one undo step. An absent `camera` or `tags` stores that part again if the scene stores it; true starts storing it, false stops. Storing what it already stores is no step. Storing the camera beyond +/-1e6 m is refused as for `add_scene`. In the window, Update on a scene that stores neither part says so in the status and changes nothing. |
+| `{"type": "change_scene", "scene": "p40", "name": "Back", "camera": false, "tags": true}` | Renames a scene (name rules as for `add_scene`) and chooses what it stores, as one undo step (none when nothing changes). Each of `name`, `camera` and `tags` is optional, but at least one is needed (`invalid_input`). `camera` or `tags` false stops storing that part; true stores it from the current view or tag visibility only if the scene does not store it yet. A part that stays stored keeps exactly what was stored (unlike `update_scene`, which stores it again). Starting to store the camera beyond +/-1e6 m is refused as for `add_scene`. |
 | `{"type": "move_scene", "scene": "p40", "index": 0}` | Moves a scene to `index` in the order (0: first), as one undo step. An index past the last scene is `invalid_input`. |
 | `{"type": "delete_scene", "scene": "p40"}` | Removes a scene, as one undo step; undo puts it back at its place with what it stored. |
 | `{"type": "go_to_scene", "scene": "p40"}` | Goes to a scene, straight (no transition). A stored view sets the camera, projection, lighting and color by tag, a view change like `set_camera` (not an undo step, no change to the revision, put back by a failed atomic batch); the camera comes back exactly as stored, so an `update_scene` right after stores no change. Stored tag visibility shows and hides tags to match (tags the scene does not hide are shown), as one undo step labeled `go_to_scene`, and only when that changes a tag; the outcome's `changes.tags` lists them. A part the scene does not store is left as it is. It becomes the selected scene. |
@@ -1005,7 +1005,7 @@ the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `t
 
 | Command | Effect |
 |---|---|
-| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete: the bytes go to a new hidden `.sketchup-alt-<pid>-<n>.partial` beside it, renamed over it at the end; no other file is touched). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. |
+| `{"type": "save", "path": "/abs/house.skr"}` | Writes the file (the old file is replaced only once the new one is complete: the bytes go to a new hidden `.sketchup-alt-<pid>-<n>.partial` beside it, renamed over it at the end; no other file is touched). Without `path` it saves to the file last opened or saved; a model never saved then gives `invalid_input`. An existing file at `path` that is not a model (any other file but an empty one) is refused with `invalid_input` unless `"overwrite": true`. A model `open` would refuse (a scene's view beyond +/-1e6 m, say) is not written: the error is `file` and names it ("scene p40's view is beyond +/-1000000 m"). |
 | `{"type": "open", "path": "/abs/house.skr"}` | Replaces the model and the view with the file's. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. A SketchUp file (a `.skp` path, or a file whose header is SketchUp's) opens as a new model not saved anywhere: what `import` reads from it (see Import) goes straight into the root, with no wrapping group (the file's top-level faces, edges and instances are the root's), lit by day, with the view zoomed to it; the outcome carries the `import` report (without `instance` and `definition`); `file` reports no `path` and `modified` false, so `save` needs a `path` (a `.skr`), and never writes over the `.skp`. |
 | `{"type": "new"}` | An empty model with the default view, not saved anywhere. With unsaved changes it fails with `unsaved_changes` unless it has `"discard": true`. |
 
@@ -1090,9 +1090,10 @@ written, each definition counted once: `definitions`, `instances`, `faces`, `edg
 `materials` and `tags` (each absent when 0), and `warnings` (absent when empty) for what the file
 cannot hold: "N materials glow; SketchUp files cannot store that", "N curves were written as
 separate edges", "N empty groups or components were left out", "N textured faces kept the
-default texture placement; their corners are too close to a line". A binary STL holds at most 2^32 - 1 triangles and a
-`.glb` at most 4 GiB (about 59 million triangles); a larger model is refused with
-`invalid_input` and nothing is written.
+default texture placement; their corners are too close to a line", and what it does not write:
+"N scenes were not written" (scenes are not exported). A binary STL holds at most 2^32 - 1
+triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused
+with `invalid_input` and nothing is written.
 
 ### Import
 
@@ -1171,11 +1172,11 @@ supported"). What is carried:
   layers is imported Untagged, with a warning.
 - Scenes (from SketchUp 2021 and newer files): each of the file's scenes becomes a scene, after
   the model's, in the file's order, with its name (trimmed, cut to 240 characters, a blank one
-  named as `add_scene` names it, and made unique against the model's scenes: `Front 2`). A scene that
-  restores the camera stores its view: the file's camera in meters times `scale`, in model
-  coordinates (through the open instance's placement, like the geometry), perspective or
-  parallel, its field of view (a parallel camera keeps the height of its view through it),
-  lit by day, not colored by tag. A scene that restores tag visibility stores the tags of its
+  named as `add_scene` names it, and made unique against the model's scenes: `Front 2`). A
+  scene that restores the camera stores its view: the file's camera in meters times `scale`, in
+  model coordinates (through the open instance's placement, like the geometry), perspective or
+  parallel, its field of view (a parallel camera keeps the height of its view through it), lit
+  by day, not colored by tag. A scene that restores tag visibility stores the tags of its
   hidden layers as its hidden tags (Layer0, which is Untagged, and layers not imported are left
   out). What a scene does not restore it does not store. A camera that cannot be used (its eye
   on its target, beyond +/-1e6 m, or missing from a scene that restores one) is left out, with

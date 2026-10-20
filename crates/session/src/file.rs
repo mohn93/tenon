@@ -123,6 +123,8 @@ pub(crate) fn write(
             "the model has used ids past {MAX_ID}, more than a file can hold"
         ));
     }
+    // What opening checks, so no file is written that will not open.
+    check_coordinates(&model)?;
     let positioned = std::iter::once(&model.root)
         .chain(model.definitions.iter().map(|d| &d.mesh))
         .any(|m| m.faces.iter().any(|f| f.texture_position.is_some()));
@@ -425,6 +427,38 @@ fn sync_parent(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scene_view_beyond_the_limit_is_not_written() {
+        let mut scene = Scene::new();
+        let far = kernel::PageView {
+            eye: [2.0 * MAX_COORDINATE, 0.0, 0.0],
+            target: [0.0; 3],
+            up: [0.0, 0.0, 1.0],
+            fov_y: 35f64.to_radians(),
+            parallel: false,
+            night: false,
+            color_by_tag: false,
+        };
+        let page = kernel::Page {
+            name: "Far".into(),
+            view: Some(far),
+            tags: None,
+        };
+        scene.add_page(page).unwrap();
+        let dir = std::env::temp_dir().join(format!("session-file-far-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("far.skr");
+        let camera = Camera::new(glam::DVec2::new(800.0, 600.0));
+        let look = ViewLook {
+            lighting: Lighting::Day,
+            color_by_tag: false,
+        };
+        let err = write(&path, &scene, &camera, look, Access::Default).unwrap_err();
+        assert!(err.contains("scene p") && err.contains("beyond"), "{err}");
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn reading_stops_past_the_limit() {

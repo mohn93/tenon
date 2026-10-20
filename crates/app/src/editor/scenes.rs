@@ -3,7 +3,7 @@
 use kernel::PageId;
 use session::Command;
 
-use super::Editor;
+use super::{Editor, Message};
 
 impl Editor {
     /// Adds a scene after the last one, storing the current view and hidden tags ("Scene 1",
@@ -19,7 +19,8 @@ impl Editor {
     }
 
     /// Stores the current view and hidden tags in a scene again, the parts it stores; with
-    /// `camera` or `tags`, starts (true) or stops (false) storing that part.
+    /// `camera` or `tags`, starts (true) or stops (false) storing that part. A scene that
+    /// stores neither part has nothing to update: the status says so.
     pub fn update_scene(
         &mut self,
         scene: PageId,
@@ -27,6 +28,18 @@ impl Editor {
         tags: Option<bool>,
     ) -> bool {
         self.message = None;
+        let stores_nothing = self
+            .doc
+            .scene()
+            .page(scene)
+            .is_some_and(|p| p.view.is_none() && p.tags.is_none());
+        if stores_nothing && camera.is_none() && tags.is_none() {
+            self.message = Some(Message::info(
+                "This scene stores neither the camera nor tag visibility: tick Camera or Tag \
+                 visibility to store them",
+            ));
+            return true;
+        }
         self.run(Command::UpdateScene {
             scene,
             camera,
@@ -189,6 +202,22 @@ mod tests {
             "the top view"
         );
         assert_eq!(page.tags, stored.tags);
+    }
+
+    #[test]
+    fn updating_a_scene_that_stores_nothing_says_so() {
+        let mut e = editor();
+        e.add_scene();
+        let one = ids(&e)[0];
+        e.set_scene_stores(one, Some(false), Some(false));
+        let revision = e.doc().revision();
+        e.update_scene(one, None, None);
+        let message = e.status_parts().message.expect("a status note");
+        assert!(message.contains("neither"), "{message}");
+        assert_eq!(e.doc().revision(), revision);
+        // Ticking a part stores it as before.
+        e.update_scene(one, Some(true), None);
+        assert!(e.doc().scene().page(one).unwrap().view.is_some());
     }
 
     #[test]

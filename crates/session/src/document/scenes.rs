@@ -4,7 +4,7 @@ use kernel::{KernelError, Page, PageId, PageView, SceneChange, TagEdit};
 
 use glam::DVec3;
 
-use super::{Document, unit_vector};
+use super::{Document, MAX_COORDINATE, unit_vector};
 use crate::camera::{Lighting, Projection};
 use crate::command::{CommandError, ErrorKind};
 use crate::query::{QueryResult, SceneInfo, SceneView};
@@ -21,6 +21,27 @@ impl Document {
         self.camera.page_view(self.lighting, self.color_by_tag)
     }
 
+    /// The current view to store, refused (`invalid_input`) when the eye or target is beyond
+    /// `MAX_COORDINATE`, the limit a file's scenes keep to (window navigation can go past it).
+    fn view_to_store(&self) -> Result<PageView, CommandError> {
+        let view = self.current_view();
+        if view
+            .eye
+            .iter()
+            .chain(&view.target)
+            .any(|x| x.abs() > MAX_COORDINATE)
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "the camera is beyond +/-{MAX_COORDINATE} m: a scene cannot store it (move \
+                     the view closer to the model)"
+                ),
+            ));
+        }
+        Ok(view)
+    }
+
     /// Adds a scene after the last one, storing the current view (`camera`) and hidden tags
     /// (`tags`); without `name` it is "Scene 1" (or the lowest free number). It becomes the
     /// selected scene.
@@ -32,7 +53,7 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         let page = Page {
             name: name.map_or_else(|| self.scene.free_page_name(), str::to_string),
-            view: camera.then(|| self.current_view()),
+            view: camera.then(|| self.view_to_store()).transpose()?,
             tags: tags.then(|| self.scene.hidden_tags()),
         };
         let (id, change) = self
@@ -56,7 +77,7 @@ impl Document {
         let tags = tags.unwrap_or(page.tags.is_some());
         let page = Page {
             name: page.name.clone(),
-            view: camera.then(|| self.current_view()),
+            view: camera.then(|| self.view_to_store()).transpose()?,
             tags: tags.then(|| self.scene.hidden_tags()),
         };
         self.scene
@@ -83,7 +104,10 @@ impl Document {
         let page = self.page(id)?;
         let view = match camera {
             Some(false) => None,
-            Some(true) => Some(page.view.unwrap_or_else(|| self.current_view())),
+            Some(true) => Some(match page.view {
+                Some(v) => v,
+                None => self.view_to_store()?,
+            }),
             None => page.view,
         };
         let hidden = match tags {

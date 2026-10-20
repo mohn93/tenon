@@ -662,6 +662,31 @@ fn warnings() {
 }
 
 #[test]
+fn scenes_are_not_written_and_say_so() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "add_scene"})).unwrap();
+    let report = export_to(&mut d, &scratch("one-scene.skp"));
+    assert_eq!(
+        report["warnings"],
+        json!(["1 scene was not written"]),
+        "{report}"
+    );
+    run(&mut d, json!({"type": "add_scene"})).unwrap();
+    run(&mut d, json!({"type": "add_scene"})).unwrap();
+    let report = export_to(&mut d, &scratch("three-scenes.skp"));
+    assert_eq!(
+        report["warnings"],
+        json!(["3 scenes were not written"]),
+        "{report}"
+    );
+}
+
+#[test]
 fn empty_groups_are_left_out_with_a_warning() {
     // A face beside a group whose contents were all erased: the group stays, empty.
     let mut d = doc();

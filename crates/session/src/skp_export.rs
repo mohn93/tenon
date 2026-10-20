@@ -2,7 +2,7 @@
 //! every definition the root reaches (each once, in its own coordinates), the materials,
 //! every tag (as layers), guides, holes, soft edges and texture placements.
 //! Meters become inches. What a SketchUp file cannot hold (glowing materials, curves as
-//! curves, empty groups) is reported.
+//! curves, empty groups) and what is not written (scenes) is reported.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -181,6 +181,11 @@ pub(crate) fn encode_skp(scene: &Scene) -> Result<(Vec<u8>, SkpExportStats), Com
         empty,
         "empty group or component was left out",
         "empty groups or components were left out",
+    );
+    warn(
+        scene.pages().count(),
+        "scene was not written",
+        "scenes were not written",
     );
     Ok((bytes, stats))
 }
