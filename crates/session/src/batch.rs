@@ -496,6 +496,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::Save { .. }
         | Command::Export { .. }
         | Command::Import { .. }
+        | Command::Paste { .. }
         | Command::Undo { .. }
         | Command::Redo { .. }
         | Command::SetCamera { .. }

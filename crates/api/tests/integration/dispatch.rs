@@ -227,6 +227,7 @@ fn describe_lists_methods_and_schemas() {
         "position_texture",
         "soften_edges",
         "soften_by_angle",
+        "paste",
         "new",
         "open",
         "save",

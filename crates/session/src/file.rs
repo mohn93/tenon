@@ -3,7 +3,7 @@
 //! images as the files they were read from (`textures/m<id>.png` or `.jpg`).
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -98,6 +98,19 @@ pub(crate) fn write(
     look: ViewLook,
     access: Access,
 ) -> Result<(), String> {
+    let bytes = write_bytes(scene, camera, look, ENTRY, &[])?;
+    replace_file(path, &bytes, access)
+}
+
+/// The archive [`write`] writes, with the document under the name `entry` and the `extra`
+/// entries (name, bytes) after the textures.
+pub(crate) fn write_bytes(
+    scene: &Scene,
+    camera: &Camera,
+    look: ViewLook,
+    entry: &str,
+    extra: &[(&str, &[u8])],
+) -> Result<Vec<u8>, String> {
     let ViewLook {
         lighting,
         color_by_tag,
@@ -177,7 +190,7 @@ pub(crate) fn write(
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
-    zip.start_file(ENTRY, options).map_err(|e| e.to_string())?;
+    zip.start_file(entry, options).map_err(|e| e.to_string())?;
     zip.write_all(&json).map_err(|e| e.to_string())?;
     // PNG and JPEG files are compressed already.
     let stored =
@@ -187,8 +200,11 @@ pub(crate) fn write(
             .map_err(|e| e.to_string())?;
         zip.write_all(&image.encoded).map_err(|e| e.to_string())?;
     }
-    let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    replace_file(path, &bytes, access)
+    for (name, bytes) in extra {
+        zip.start_file(*name, options).map_err(|e| e.to_string())?;
+        zip.write_all(bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
 }
 
 /// Who may read a file written: as the user's other files (the umask or the folder's
@@ -268,9 +284,30 @@ fn json_error(e: serde_json::Error) -> String {
 /// Reads a file written by [`write`]: the model and the saved view.
 pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a sketchup-alt file".to_string())?;
+    let (scene, camera, _) = read_archive(file, ENTRY, &[])?;
+    Ok((scene, camera))
+}
+
+/// Reads an archive written by [`write_bytes`] with the document under `entry`, with the same
+/// checks as [`read`]; also returns the bytes of the `extra` entries (name, most bytes), in
+/// order.
+pub(crate) fn read_bytes(
+    bytes: &[u8],
+    entry: &str,
+    extra: &[(&str, u64)],
+) -> Result<(Scene, StoredCamera, Vec<Vec<u8>>), String> {
+    read_archive(std::io::Cursor::new(bytes), entry, extra)
+}
+
+fn read_archive<R: Read + Seek>(
+    reader: R,
+    document: &str,
+    extra: &[(&str, u64)],
+) -> Result<(Scene, StoredCamera, Vec<Vec<u8>>), String> {
+    let mut zip =
+        zip::ZipArchive::new(reader).map_err(|_| "not a sketchup-alt file".to_string())?;
     let entry = zip
-        .by_name(ENTRY)
+        .by_name(document)
         .map_err(|_| "not a sketchup-alt file".to_string())?;
     let json = read_limited(entry, MAX_DOCUMENT_BYTES, "the document")?;
     // Check the header first, so a newer file gets a clear message rather than a field error.
@@ -303,7 +340,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     let mut sizes: HashMap<String, u64> = HashMap::new();
     for m in &stored.model.materials {
         let Some(t) = &m.texture else { continue };
-        if t.file == ENTRY || sizes.contains_key(&t.file) {
+        if t.file == document || sizes.contains_key(&t.file) {
             continue;
         }
         let bytes = texture_entry(&mut zip, m.id, &t.file)?;
@@ -316,7 +353,7 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     let mut decoded: HashMap<String, Arc<TextureImage>> = HashMap::new();
     for m in &mut stored.model.materials {
         let Some(t) = &mut m.texture else { continue };
-        if t.file == ENTRY {
+        if t.file == document {
             return Err(format!("material m{}'s texture is not an image", m.id));
         }
         let image = match decoded.get(&t.file) {
@@ -344,12 +381,19 @@ pub(crate) fn read(path: &Path) -> Result<(Scene, StoredCamera), String> {
     {
         return Err("the camera has a number that is not finite".into());
     }
-    Ok((scene, stored.camera))
+    let mut extras = Vec::new();
+    for (name, limit) in extra {
+        let entry = zip
+            .by_name(name)
+            .map_err(|_| format!("the archive has no {name}"))?;
+        extras.push(read_limited(entry, *limit, name)?);
+    }
+    Ok((scene, stored.camera, extras))
 }
 
 /// The bytes of texture entry `file` of material `id`, within [`MAX_TEXTURE_BYTES`].
-fn texture_entry(
-    zip: &mut zip::ZipArchive<std::fs::File>,
+fn texture_entry<R: Read + Seek>(
+    zip: &mut zip::ZipArchive<R>,
     id: u64,
     file: &str,
 ) -> Result<Vec<u8>, String> {

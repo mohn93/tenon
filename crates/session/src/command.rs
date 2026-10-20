@@ -464,6 +464,20 @@ pub enum Command {
         #[serde(skip)]
         library_roots: Option<Vec<PathBuf>>,
     },
+    /// Paste clip text (what Copy put on the clipboard) into the open context, as one undo
+    /// step, and select what was pasted. With `at`, the clip's base point (the minimum corner
+    /// of its bounding box) lands at `at`, moved only; without it, the clip lands where it was
+    /// copied from in world coordinates. Edges and faces merge with geometry they touch, as
+    /// copies do. Materials and tags are matched by name (missing ones are added). Components
+    /// copied from this same document (since it was created or opened) keep their
+    /// definitions; otherwise, and for every group, new definitions are made. Text that is not
+    /// a clip, is damaged or too large (over 64 MiB) is `invalid_input`.
+    Paste {
+        clip: String,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        at: Option<[f64; 3]>,
+    },
     /// Change the selection of edges, faces, instances and guides. Not recorded in undo history.
     Select {
         #[serde(default)]

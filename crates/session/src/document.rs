@@ -24,6 +24,7 @@ use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
 
 mod camera;
+mod clip;
 mod files;
 mod follow_me;
 mod groups;
@@ -88,6 +89,9 @@ pub struct Document {
     positioned: Option<usize>,
     /// How many definitions the last `purge_definitions` removed, until its outcome takes it.
     purged: Option<usize>,
+    /// Names this document since it was created, opened or imported as a new model (see
+    /// `token`); not saved.
+    token: String,
 }
 
 impl Document {
@@ -113,6 +117,7 @@ impl Document {
             soften_report: None,
             positioned: None,
             purged: None,
+            token: clip::new_token(),
         }
     }
 
@@ -424,7 +429,8 @@ impl Document {
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::PositionTexture { .. }
-            | Command::Import { .. } => {
+            | Command::Import { .. }
+            | Command::Paste { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
@@ -644,6 +650,7 @@ impl Document {
                     library_roots: library_roots.clone(),
                 },
             ),
+            Command::Paste { clip, at } => self.paste_changes(clip, *at),
             Command::New { .. }
             | Command::Open { .. }
             | Command::Save { .. }

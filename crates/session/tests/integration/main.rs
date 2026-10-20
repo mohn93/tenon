@@ -4,6 +4,7 @@
 mod batch_refs;
 mod camera;
 mod circle;
+mod clip;
 mod commands;
 mod contract;
 mod curves;

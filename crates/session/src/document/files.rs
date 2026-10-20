@@ -29,7 +29,7 @@ impl Document {
     }
 
     /// The lighting and coloring a file saves with the camera.
-    fn view_look(&self) -> ViewLook {
+    pub(super) fn view_look(&self) -> ViewLook {
         ViewLook {
             lighting: self.lighting,
             color_by_tag: self.color_by_tag,
@@ -289,6 +289,7 @@ impl Document {
         self.events.clear();
         self.log_start = self.revision;
         self.clean_revision = self.revision;
+        self.token = super::clip::new_token();
     }
 
     pub(super) fn rename_changes(

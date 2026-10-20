@@ -4,6 +4,7 @@ mod arc;
 mod batch;
 pub mod camera;
 mod circle;
+pub mod clip;
 mod command;
 mod document;
 pub mod export;
@@ -26,6 +27,7 @@ pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points, arc_through};
 pub use batch::{BatchCommand, BatchRef, RefKind, STAND_IN_BASE, check_references};
 pub use camera::{Camera, Lighting, Projection, Projector, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
+pub use clip::ClipOutline;
 pub use command::{
     BatchError, Command, CommandError, ErrorKind, ExpectedStep, Origin, Outcome, SelectMode,
     TextureSource,
