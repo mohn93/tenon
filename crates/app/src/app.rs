@@ -1994,12 +1994,8 @@ impl State {
                 .map(|a| activity_line(a, now))
                 .collect()
         });
-        // A tool asked for a note's text: the note sheet asks.
-        if let Some(sheet) = self
-            .editor
-            .take_note_request()
-            .and_then(|r| note_sheet(&self.editor, r))
-        {
+        // A tool asked for a note's text: the note sheet asks, once no other sheet is open.
+        if let Some(sheet) = next_note_sheet(self.sheet.as_ref(), &mut self.editor) {
             self.open_sheet(sheet);
         }
         self.drop_outlived_sheet();
@@ -2375,8 +2371,28 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
     }
 }
 
-/// The note sheet for `request`, when it still applies (a note to change may be gone).
+/// The note sheet to open now for the note a tool asked about, if any. While another sheet is
+/// open the request waits in the editor until it closes (the user's sheet is never replaced);
+/// the note sheet of a note being placed gives way to the next one the Text tool asks about.
+fn next_note_sheet(open: Option<&Sheet>, editor: &mut Editor) -> Option<Sheet> {
+    let replaceable = match open {
+        None => true,
+        Some(Sheet::NoteText { request, .. }) => !matches!(request, NoteRequest::Edit(_)),
+        Some(_) => false,
+    };
+    if !replaceable {
+        return None;
+    }
+    let request = editor.take_note_request()?;
+    note_sheet(editor, request)
+}
+
+/// The note sheet for `request`, when it still applies (a note to change may be gone, a note
+/// being placed dropped meanwhile).
 fn note_sheet(editor: &Editor, request: NoteRequest) -> Option<Sheet> {
+    if !matches!(request, NoteRequest::Edit(_)) && !editor.awaits_note_text() {
+        return None;
+    }
     let start = editor.note_text(request)?;
     Some(Sheet::NoteText {
         request,
@@ -3749,6 +3765,31 @@ mod tests {
         .unwrap();
         assert_eq!(note_sheet(&e, request), None);
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn a_note_request_waits_while_another_sheet_is_open() {
+        use glam::DVec3;
+        let mut e = editor_with_selection();
+        e.select_tool(tools::ToolKind::Text);
+        click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
+        click_at(&mut e, DVec3::new(3.0, 3.0, 0.0));
+        // The user's Field of View sheet stays; the request waits.
+        let theirs = Sheet::FieldOfView { degrees: 35.0 };
+        assert_eq!(next_note_sheet(Some(&theirs), &mut e), None);
+        let sheet = next_note_sheet(None, &mut e).expect("asked once the sheet closed");
+        assert!(matches!(sheet, Sheet::NoteText { .. }), "{sheet:?}");
+        assert_eq!(next_note_sheet(None, &mut e), None, "asked once");
+        // The next note the Text tool asks about replaces a note sheet of its own.
+        click_at(&mut e, DVec3::new(0.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(-1.0, -1.0, 0.0));
+        let next = next_note_sheet(Some(&sheet), &mut e).expect("the new note's sheet");
+        assert_ne!(next, sheet);
+        // A note dropped while it waited has no sheet.
+        click_at(&mut e, DVec3::new(2.0, 0.0, 0.0));
+        click_at(&mut e, DVec3::new(3.0, -1.0, 0.0));
+        e.cancel_note();
+        assert_eq!(next_note_sheet(None, &mut e), None);
     }
 
     #[test]

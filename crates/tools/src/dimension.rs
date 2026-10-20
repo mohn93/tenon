@@ -8,10 +8,10 @@
 
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
-use kernel::{Circle, CurveKind, EntityId};
+use kernel::{Circle, CurveKind, EdgeId, EntityId};
 use session::{AnchorInput, AnnotationShape, Command};
 
-use crate::inference::{Inference, SnapKind, edge_under_in};
+use crate::inference::{Guides, Inference, SnapKind, infer_detail};
 use crate::scenery::Owner;
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length};
@@ -119,13 +119,42 @@ impl DimensionTool {
         Some(square_to(self.hover? - a.point, a.point, b.point))
     }
 
+    /// The edge `hit` snapped onto (`SnapKind::OnEdge`): whose it is, the edge (an id in its
+    /// own mesh) and its ends in the open context's coordinates. The inference's own detail:
+    /// before the first click a tool has no anchor, so the editor's inference (its reference
+    /// edge and locks need an anchor) is `infer_detail`'s without guides.
+    fn snapped_edge(hit: &Inference, ctx: &ToolContext) -> Option<(Owner, EdgeId, DVec3, DVec3)> {
+        if hit.kind != SnapKind::OnEdge {
+            return None;
+        }
+        let guides = Guides::default();
+        let (again, involved) = infer_detail(
+            ctx.scenery,
+            ctx.camera,
+            ctx.cursor,
+            &guides,
+            ctx.pick_radius,
+        );
+        if again.kind != SnapKind::OnEdge || again.point.distance(hit.point) > LENGTH_TOL {
+            return None;
+        }
+        let [(k, EntityId::Edge(e))] = involved[..] else {
+            return None;
+        };
+        let part = ctx.scenery.part(k);
+        let [a, b] = part.model.edge(e)?.v;
+        let end = |v| {
+            part.model
+                .vertex(v)
+                .map(|at| part.place.transform_point3(at.pos))
+        };
+        Some((part.owner, e, end(a)?, end(b)?))
+    }
+
     /// What a first click at `hit` starts: on an edge away from its ends, a dimension of the
     /// edge (radial on a circle or an arc of the open context); elsewhere at a point.
     fn start(hit: &Inference, ctx: &ToolContext) -> Step {
-        if hit.kind == SnapKind::OnEdge
-            && let Some((owner, e, a, b)) =
-                edge_under_in(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius)
-        {
+        if let Some((owner, e, a, b)) = Self::snapped_edge(hit, ctx) {
             let point = |p: DVec3| End {
                 point: p,
                 input: AnchorInput::Point(p.to_array()),
@@ -192,6 +221,10 @@ impl DimensionTool {
             out.message = Some(format!("Not a length: {text}"));
             return;
         };
+        if length.abs() <= LENGTH_TOL {
+            out.message = Some("The dimension line must stand off the measured line".into());
+            return;
+        }
         match (self.step, self.last) {
             (Step::Offset { a, b, edge }, _) => {
                 match self.offset(a, b).and_then(DVec3::try_normalize) {
@@ -330,7 +363,15 @@ impl Tool for DimensionTool {
                     }
                     Step::Offset { a, b, edge } => {
                         let offset = square_to(hit.point - a.point, a.point, b.point);
-                        self.finish(a, b, edge, offset, &mut out);
+                        // On the measured line there is no side for the line to stand off
+                        // to (nor for a distance typed next).
+                        if offset.length() <= LENGTH_TOL {
+                            out.message = Some(
+                                "Click off the measured line, where the dimension goes".into(),
+                            );
+                        } else {
+                            self.finish(a, b, edge, offset, &mut out);
+                        }
                     }
                     Step::Radial {
                         edge,
@@ -547,8 +588,28 @@ pub(crate) mod tests {
             out.commands
         );
         assert!(offset_of(&out.commands).abs_diff_eq(v(0.0, -0.75), 1e-9));
+        let out = r.send(ToolEvent::Value("0".into()));
+        assert!(out.commands.is_empty() && out.message.unwrap().contains("stand off"));
         let out = r.send(ToolEvent::Value("one".into()));
         assert!(out.commands.is_empty() && out.message.unwrap().contains("Not a length"));
+    }
+
+    #[test]
+    fn a_click_on_the_measured_line_is_refused_and_typing_still_places_the_line() {
+        let mut r = rig();
+        r.click(v(0.0, -2.0));
+        r.click(v(3.0, -2.0));
+        let out = r.click(v(1.5, -2.0));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert!(out.message.unwrap().contains("off the measured line"));
+        assert!(matches!(r.tool.phase(), Phase::Active { ref points } if points.len() == 2));
+        // The offset step goes on: a typed distance on the cursor's side, then retyped.
+        r.hover(v(1.5, -1.0));
+        let out = r.send(ToolEvent::Value("0.5".into()));
+        assert!(offset_of(&out.commands).abs_diff_eq(v(0.0, 0.5), 1e-9));
+        let out = r.send(ToolEvent::Value("0.25".into()));
+        assert!(matches!(out.commands[0], Command::Undo { .. }));
+        assert!(offset_of(&out.commands).abs_diff_eq(v(0.0, 0.25), 1e-9));
     }
 
     #[test]

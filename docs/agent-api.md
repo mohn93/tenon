@@ -922,7 +922,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   sheets (import options, component name, rename, field of view, a note's text) and the
   Settings window are chrome and do not hold requests. The note sheet of a note the Text tool
   is placing closes when the tool no longer waits for its text (a `cancel`, a `set_tool`, or
-  the text typed through `tool_input`).
+  the text typed through `tool_input`). A note sheet never replaces another sheet the user has
+  open: it opens once that one closes, if the note is still being placed (or still there).
 - `modifiers` are the modifier keys held (`cmd` is Cmd or Ctrl): the user's in the window and
   those a `tool_input` `modifiers` event holds (see Driving the tools).
 - `hovered` is what a click would act on now with Select, Push/Pull, Paint or Erase (an id of
@@ -1035,8 +1036,8 @@ Events, run in order:
   `add_edge_dimension` (an edge inside a group, seen from outside it, gives an `add_dimension`
   between its ends as points). `click` an edge of a circle or an arc, then where the label
   goes: one `add_radial_dimension`, a diameter for a circle and a radius for an arc, which a
-  `ctrl` key switches before that click. Clicking the first point again is refused with a
-  message. Typed again right after, a distance moves the line of the dimension just added
+  `ctrl` key switches before that click. Clicking the first point again, or placing the line
+  on the measured line itself (or typing a zero distance), is refused with a message. Typed again right after, a distance moves the line of the dimension just added
   (`undo`, then the command again).
 - **Text** (no key): `click` a point on the model (a vertex, which the note follows, or a point
   on an edge, a face or a guide), then where the text goes; or `click` empty space (the ground

@@ -1966,3 +1966,70 @@ fn the_text_tool_places_leader_and_screen_notes_with_typed_text() {
     assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
     assert_eq!(r["editor"]["phase"], "idle");
 }
+
+#[test]
+fn dimensions_and_notes_inside_an_opened_moved_group_anchor_to_its_vertices() {
+    let mut e = editor();
+    square(&mut e);
+    select_all(&mut e);
+    let ids = ask(&mut e, json!({"type": "selection"}))["ids"].clone();
+    let r = exec(&mut e, json!({"type": "make_group", "ids": ids}));
+    let group = created(&r, 'i')[0].clone();
+    exec(
+        &mut e,
+        json!({"type": "move", "ids": [group], "offset": [5, 0, 0]}),
+    );
+    exec(&mut e, json!({"type": "open_instance", "id": group}));
+    // Points are the group's own: its corners are at (0, 0, 0) to (2, 2, 0) there.
+    tool(&mut e, "dimension");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [2, 0, 0]},
+            {"type": "click", "point": [1, -1, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_dimension"], "{r}");
+    let c = &r["commands"][0]["command"];
+    for end in ["a", "b"] {
+        let id = c[end].clone();
+        assert!(id.as_str().unwrap().starts_with('v'), "{c}");
+        let v = ask(&mut e, json!({"type": "entity", "id": id}));
+        assert!(v["error"].is_null(), "a vertex of the open group: {v}");
+    }
+    let dimension = created(&r["commands"][0]["outcome"], 'r')[0].clone();
+    let info = ask(&mut e, json!({"type": "entity", "id": dimension}));
+    assert!(near(&info["a"]["point"], [0.0, 0.0, 0.0]), "{info}");
+    assert!(info["a"]["vertex"].is_string(), "{info}");
+    // A note at a corner: its automatic text is in root coordinates.
+    tool(&mut e, "text");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [2, 2, 0]},
+            {"type": "click", "point": [3, 3, 0]},
+            {"type": "key", "key": "enter"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_note"], "{r}");
+    assert!(
+        r["commands"][0]["command"]["anchor"]
+            .as_str()
+            .unwrap()
+            .starts_with('v')
+    );
+    let note = created(&r["commands"][0]["outcome"], 'n')[0].clone();
+    let info = ask(&mut e, json!({"type": "entity", "id": note}));
+    assert_eq!(info["label"], "(7 m, 2 m, 0 m)", "{info}");
+    // A note fixed to the view is refused while the group is open.
+    let r = input(&mut e, json!([{"type": "click", "pixel": [80, 30]}]));
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert!(
+        r["editor"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("close the group"),
+        "{r}"
+    );
+}

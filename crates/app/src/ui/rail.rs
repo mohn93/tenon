@@ -50,13 +50,13 @@ pub(super) fn rail(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     ui.spacing_mut().item_spacing.y = 0.0;
     for (i, group) in GROUPS.iter().enumerate() {
         if i > 0 {
-            // The line is 1 pt thick, centered in the gap.
-            let side = (theme::RAIL_GROUP_GAP - 1.0) / 2.0;
-            ui.add_space(side);
+            // The line is 1 pt thick, as wide as a button, centered in the gap.
+            let margin = (theme::RAIL_GROUP_GAP - 1.0) / 2.0;
+            ui.add_space(margin);
             let (rect, _) = ui.allocate_exact_size(Vec2::new(side, 1.0), egui::Sense::hover());
             ui.painter()
                 .hline(rect.x_range(), rect.center().y, Stroke::new(1.0, t.border));
-            ui.add_space(side);
+            ui.add_space(margin);
         }
         for (k, &kind) in group.iter().enumerate() {
             if k > 0 {

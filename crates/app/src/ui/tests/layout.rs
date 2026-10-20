@@ -108,6 +108,13 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
         let gap =
             |a: ToolKind, b: ToolKind| rect_of(&h, b.label()).min.y - rect_of(&h, a.label()).max.y;
         assert!((gap(ToolKind::Select, ToolKind::Erase) - 4.0).abs() < 0.5);
+        let lines: Vec<[Pos2; 2]> = drawn_shapes(&h)
+            .into_iter()
+            .filter_map(|s| match s {
+                egui::Shape::LineSegment { points, .. } => Some(points),
+                _ => None,
+            })
+            .collect();
         for (a, b) in [
             (ToolKind::Paint, ToolKind::Line),
             (ToolKind::Arc, ToolKind::PushPull),
@@ -117,6 +124,18 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
             assert!(
                 (between - theme::RAIL_GROUP_GAP).abs() < 0.5,
                 "{a:?} to {b:?}: {between}"
+            );
+            // A separator line as wide as the buttons runs across the gap.
+            let (above, below) = (rect_of(&h, a.label()), rect_of(&h, b.label()));
+            let separator = lines.iter().find(|[p, q]| {
+                p.y == q.y && p.y > above.max.y && p.y < below.min.y && p.x < theme::RAIL_WIDTH
+            });
+            let Some([p, q]) = separator else {
+                panic!("no separator between {a:?} and {b:?} at {size:?}");
+            };
+            assert!(
+                ((q.x - p.x).abs() - above.width()).abs() < 0.5,
+                "{a:?} to {b:?}: {p:?} {q:?}"
             );
         }
     }
