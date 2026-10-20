@@ -17,6 +17,8 @@ mod paths;
 mod prefs;
 mod shortcuts;
 mod ui;
+#[cfg(windows)]
+mod windows;
 
 use std::path::PathBuf;
 
@@ -43,7 +45,11 @@ fn roots(dirs: &[PathBuf]) -> api::ApiRoots {
 
 fn main() {
     env_logger::init();
-    let mode = match cli::parse(std::env::args().skip(1)) {
+    let args = cli::unicode_args(std::env::args_os().skip(1)).unwrap_or_else(|message| {
+        eprintln!("{message}");
+        std::process::exit(2);
+    });
+    let mode = match cli::parse(args) {
         Ok(mode) => mode,
         Err(message) => {
             eprintln!("{message}\n{}", cli::USAGE);
@@ -80,6 +86,9 @@ fn main() {
             file,
             api_roots,
         } => {
+            // Started from Explorer: no console window beside the app's.
+            #[cfg(windows)]
+            windows::hide_own_console();
             let roots = roots(&api_roots);
             // A socket in the fallback directory is only safe if that directory is private.
             let socket = match cli::private_dir_for_endpoint(&socket).map(cli::ensure_private_dir) {
@@ -100,7 +109,8 @@ fn main() {
             let event_loop = builder.build().expect("create event loop");
             // Redraw on demand only; the loop sleeps until input or an API request arrives.
             event_loop.set_control_flow(ControlFlow::Wait);
-            // Without an absolute HOME the files would land under the working folder.
+            // Without an absolute HOME (on Windows, application data folders) the files would
+            // land under the working folder.
             let found = paths::resolve(
                 paths::Os::current(),
                 &|k| std::env::var_os(k),
@@ -108,8 +118,13 @@ fn main() {
                 std::process::id(),
             );
             if found.is_none() {
+                let what = if cfg!(windows) {
+                    "APPDATA or LOCALAPPDATA is not set, nor USERPROFILE"
+                } else {
+                    "HOME is not set"
+                };
                 eprintln!(
-                    "warning: HOME is not set: work an agent discards in the window is not kept, and preferences last only for the session"
+                    "warning: {what}: work an agent discards in the window is not kept, and preferences last only for the session"
                 );
             }
             let recovery = found.as_ref().map(|p| p.recovery.clone());

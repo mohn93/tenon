@@ -893,6 +893,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&target);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn prefs_and_recovery_work_under_temp_application_data_folders() {
+        let base = recovery_dir("appdata");
+        let (roaming, local) = (base.join("Roaming"), base.join("Local"));
+        std::fs::create_dir_all(&roaming).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
+        let vars = [("APPDATA", &roaming), ("LOCALAPPDATA", &local)];
+        let env = |k: &str| {
+            vars.iter()
+                .find(|(name, _)| *name == k)
+                .map(|(_, dir)| dir.as_os_str().to_owned())
+        };
+        let found = crate::paths::resolve(
+            crate::paths::Os::Windows,
+            &env,
+            &std::env::temp_dir(),
+            std::process::id(),
+        )
+        .unwrap();
+        assert_eq!(found.prefs, roaming.join("sketchup-alt").join("prefs.json"));
+        assert_eq!(found.recovery, local.join("sketchup-alt").join("recovery"));
+        // Preferences: the folder and the file are the user's only.
+        let prefs = crate::prefs::Prefs {
+            recent: vec![base.join("house.skr")],
+            ..Default::default()
+        };
+        crate::prefs::save(&found.prefs, &prefs).unwrap();
+        assert_eq!(crate::prefs::load(&found.prefs), prefs);
+        let user = session::windows::current_user().unwrap();
+        let owner_only = |p: &Path| {
+            let sddl = session::windows::security_text(p).unwrap();
+            assert!(
+                sddl.starts_with(&format!("O:{user}D:P")),
+                "{}: {sddl}",
+                p.display()
+            );
+            assert_eq!(sddl.matches('(').count(), 1, "{}: {sddl}", p.display());
+        };
+        owner_only(found.prefs.parent().unwrap());
+        owner_only(&found.prefs);
+        // Recovery: both missing folders are made, and the kept file is the user's only.
+        let mut e = editor();
+        call_kept(&mut e, &found.recovery, "execute", add_edge());
+        let r = call_kept(
+            &mut e,
+            &found.recovery,
+            "execute",
+            json!({"type": "new", "discard": true}),
+        );
+        assert!(r["result"].is_object(), "{r}");
+        let kept = files_in(&found.recovery);
+        assert_eq!(kept.len(), 1);
+        owner_only(found.recovery.parent().unwrap());
+        owner_only(&found.recovery);
+        owner_only(&kept[0]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn recovery_names_follow_the_open_file_and_never_collide() {
         let dir = recovery_dir("names");

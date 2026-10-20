@@ -159,8 +159,8 @@ pub(crate) fn write(
     replace_file(path, &bytes, access)
 }
 
-/// Who may read a file written: as the user's other files (the umask decides), or the user
-/// only (0600).
+/// Who may read a file written: as the user's other files (the umask or the folder's
+/// inherited permissions decide), or the user only (0600; on Windows an owner-only DACL).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Access {
     Default,
@@ -180,22 +180,13 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8], access: Access) -> Result<
     let (partial, mut file) = loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let partial = dir.join(format!(".sketchup-alt-{}-{n}.partial", std::process::id()));
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        if access == Access::Private {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        match options.open(&partial) {
+        match create_new(&partial, access) {
             Ok(file) => break (partial, file),
             // Another file (a process's that reused this id, say) has the name.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e.to_string()),
         }
     };
-    #[cfg(not(unix))]
-    let _ = access;
     let result = (|| -> Result<(), String> {
         file.write_all(bytes).map_err(|e| e.to_string())?;
         // The data must be on disk before the rename makes it the file.
@@ -210,6 +201,20 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8], access: Access) -> Result<
         let _ = std::fs::remove_file(&partial);
     }
     result
+}
+
+/// Creates the file `path` for writing, failing when anything is there. `Access::Private`:
+/// mode 0600 on Unix, and on Windows a DACL for the current user only.
+fn create_new(path: &Path, access: Access) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    if access == Access::Private {
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        #[cfg(windows)]
+        return crate::windows::create_private_file(path);
+    }
+    options.open(path)
 }
 
 /// A document that does not parse, said without quoting it: serde's own messages quote the

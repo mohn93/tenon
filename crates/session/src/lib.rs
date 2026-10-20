@@ -8,6 +8,7 @@ mod command;
 mod document;
 pub mod export;
 pub mod file;
+pub mod fspath;
 mod import;
 mod polygon;
 mod query;
@@ -18,6 +19,8 @@ mod skp;
 mod skp_export;
 mod sniff;
 pub mod texture;
+#[cfg(windows)]
+pub mod windows;
 
 pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points, arc_through};
 pub use batch::{BatchCommand, BatchRef, RefKind, STAND_IN_BASE, check_references};

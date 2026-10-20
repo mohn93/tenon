@@ -330,10 +330,10 @@ fn export_skp(
     })
 }
 
-/// Refuses the first of `paths` that is a symbolic link: under `--api-root` the API does not
-/// write through links.
+/// Refuses the first of `paths` that is a symbolic link (on Windows any reparse point, such as
+/// a junction): under `--api-root` the API does not write through links.
 fn check_links<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Result<(), CommandError> {
-    match paths.find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())) {
+    match paths.find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| crate::fspath::is_link(&m))) {
         Some(link) => Err(CommandError::new(
             ErrorKind::InvalidInput,
             format!(

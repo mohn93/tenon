@@ -374,8 +374,10 @@ impl Document {
                 // Under roots, the resolved file is what is read.
                 let library = match roots {
                     None => library,
-                    Some(roots) => match library.canonicalize() {
-                        Ok(real) if roots.iter().any(|r| real.starts_with(r)) => real,
+                    Some(roots) => match crate::fspath::canonical(&library) {
+                        Ok(real) if roots.iter().any(|r| crate::fspath::starts_with(&real, r)) => {
+                            real
+                        }
                         _ => continue,
                     },
                 };

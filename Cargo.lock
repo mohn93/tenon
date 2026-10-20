@@ -291,6 +291,7 @@ dependencies = [
  "session",
  "tools",
  "wgpu",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
@@ -3108,6 +3109,7 @@ dependencies = [
  "serde_json",
  "skp",
  "skpwrite",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

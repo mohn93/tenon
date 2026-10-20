@@ -2,7 +2,6 @@
 //! chrome: never part of a model, never read or written by the API or in headless mode.
 
 use std::io::{self, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -161,8 +160,9 @@ fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-/// Writes `prefs` to `path` (mode 0600), in a folder made or checked private like the app's
-/// other private folders (0700, not a link; on Linux missing parents are created). The bytes go
+/// Writes `prefs` to `path` (mode 0600; on Windows owner-only), in a folder made or checked
+/// private like the app's other private folders (0700, not a link; on Linux and Windows missing
+/// parents are created). The bytes go
 /// first to a new hidden file beside it (`.prefs-<pid>-<n>.partial`), created only where nothing
 /// is, so they never go through a link; it is renamed over `path` once written, or removed if
 /// the write fails.
@@ -177,12 +177,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
     let (partial, mut file) = loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let partial = dir.join(format!(".prefs-{}-{n}.partial", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&partial)
-        {
+        match create_private_file(&partial) {
             Ok(file) => break (partial, file),
             // Left by an earlier run with this process id.
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -210,6 +205,24 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
             let _ = std::fs::remove_file(&partial);
             Err(e)
         }
+    }
+}
+
+/// Creates the file `path` for writing, failing when anything is there: mode 0600 on Unix, and
+/// on Windows a DACL for the current user only.
+fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+    }
+    #[cfg(windows)]
+    {
+        session::windows::create_private_file(path)
     }
 }
 

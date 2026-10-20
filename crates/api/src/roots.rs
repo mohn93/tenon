@@ -2,10 +2,15 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use session::fspath::{self, canonical, is_link, same};
 use session::{Command, CommandError, ErrorKind, TextureSource};
 
 /// Folders every path the API reads or writes must lie within, resolved after symlinks.
 /// Empty: no limit (the default).
+///
+/// On Windows paths are compared without regard to case, verbatim forms (`\\?\C:\`,
+/// `\\?\UNC\`) are judged as their plain ones, junctions and other reparse points count as
+/// links, and forms Windows reads specially are refused (see `fspath::windows_refusal`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ApiRoots {
     roots: Vec<PathBuf>,
@@ -16,13 +21,14 @@ impl ApiRoots {
     pub fn new(dirs: &[PathBuf]) -> Result<ApiRoots, String> {
         let mut roots: Vec<PathBuf> = Vec::new();
         for dir in dirs {
-            let real = dir
-                .canonicalize()
-                .map_err(|e| format!("--api-root {}: {e}", dir.display()))?;
+            if let Some(reason) = windows_refusal(dir.as_os_str().to_str()) {
+                return Err(format!("--api-root {}: {reason}", dir.display()));
+            }
+            let real = canonical(dir).map_err(|e| format!("--api-root {}: {e}", dir.display()))?;
             if !real.is_dir() {
                 return Err(format!("--api-root {}: not a folder", dir.display()));
             }
-            if !roots.contains(&real) {
+            if !roots.iter().any(|r| same(r, &real)) {
                 roots.push(real);
             }
         }
@@ -40,13 +46,15 @@ impl ApiRoots {
 
     fn inside(&self, real: &Path) -> bool {
         // A root itself is not a file within it (a write there would put files beside it).
-        self.roots.iter().any(|r| real != *r && real.starts_with(r))
+        self.roots
+            .iter()
+            .any(|r| !same(real, r) && fspath::starts_with(real, r))
     }
 
     /// Refuses `real` (`path` as given) unless it lies within a root. A root itself is
     /// refused as a folder.
     fn check_inside(&self, path: &str, real: &Path) -> Result<(), CommandError> {
-        if self.roots.iter().any(|r| r == real) {
+        if self.roots.iter().any(|r| same(r, real)) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 format!("{path} is a folder, not a file"),
@@ -59,14 +67,26 @@ impl ApiRoots {
     }
 
     /// `path` as given, made absolute against the first root. A NUL byte, which no file name
-    /// can hold, is refused.
+    /// can hold, is refused, and on Windows the forms `fspath::windows_refusal` names.
     fn absolute(&self, path: &str) -> Result<PathBuf, CommandError> {
         if path.contains('\0') {
             return Err(nul(path));
         }
+        if let Some(reason) = windows_refusal(Some(path)) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("{path} is {reason}, which the API does not take on Windows"),
+            ));
+        }
+        // On Windows a verbatim path is taken as its plain form, as the roots are.
+        let given = if cfg!(windows) {
+            PathBuf::from(fspath::strip_verbatim(path).as_ref())
+        } else {
+            PathBuf::from(path)
+        };
         Ok(match self.roots.first() {
-            Some(first) if Path::new(path).is_relative() => first.join(path),
-            _ => PathBuf::from(path),
+            Some(first) if given.is_relative() => first.join(given),
+            _ => given,
         })
     }
 
@@ -76,25 +96,27 @@ impl ApiRoots {
     /// link) is the one refusal for outside, so an agent learns nothing of what lies outside
     /// the roots. A part missing within a root is a `file` error.
     fn resolve(&self, path: &str, absolute: &Path) -> Result<PathBuf, CommandError> {
-        let within = |p: &Path| self.roots.iter().any(|r| p.starts_with(r));
-        let holds_root = |p: &Path| self.roots.iter().any(|r| r.starts_with(p));
+        let within = |p: &Path| self.roots.iter().any(|r| fspath::starts_with(p, r));
+        let holds_root = |p: &Path| self.roots.iter().any(|r| fspath::starts_with(r, p));
         let mut real = PathBuf::new();
         for c in absolute.components() {
             match c {
-                Component::Prefix(_) | Component::RootDir => real.push(c),
+                // A drive or share alone (`C:`) is no folder yet: judged with its root.
+                Component::Prefix(_) => {
+                    real.push(c);
+                    continue;
+                }
+                Component::RootDir => real.push(c),
                 Component::CurDir => {}
                 Component::ParentDir => {
                     real.pop();
                 }
                 Component::Normal(name) => {
                     let next = real.join(name);
-                    match next.canonicalize() {
+                    match canonical(&next) {
                         Ok(r) => real = r,
                         Err(_) if !within(&real) => return Err(outside(path)),
-                        Err(_)
-                            if std::fs::symlink_metadata(&next)
-                                .is_ok_and(|m| m.file_type().is_symlink()) =>
-                        {
+                        Err(_) if std::fs::symlink_metadata(&next).is_ok_and(|m| is_link(&m)) => {
                             return Err(outside(path));
                         }
                         Err(e) => return Err(file_error(path, &e)),
@@ -118,8 +140,9 @@ impl ApiRoots {
     /// The file to write at `path`: its folder, resolved after symlinks, must lie within a
     /// root, and the file must not be a symbolic link.
     pub fn write(&self, path: &str) -> Result<PathBuf, CommandError> {
-        // `sub/.` and `dir/..` normalize to a folder; a trailing slash or nothing names none.
-        let last = path.rsplit('/').next().unwrap_or("");
+        // `sub/.` and `dir/..` normalize to a folder; a trailing separator or nothing names
+        // none.
+        let last = path.rsplit(std::path::is_separator).next().unwrap_or("");
         let absolute = self.absolute(path)?;
         let named = !matches!(last, "" | "." | "..");
         let Some(Component::Normal(name)) =
@@ -130,10 +153,11 @@ impl ApiRoots {
                 format!("{path} names no file"),
             ));
         };
-        let folder = absolute.parent().unwrap_or(Path::new("/"));
+        // A path ending in a name has a folder (perhaps empty, which no root holds).
+        let folder = absolute.parent().unwrap_or(Path::new(""));
         let real = self.resolve(path, folder)?.join(name);
         self.check_inside(path, &real)?;
-        if std::fs::symlink_metadata(&real).is_ok_and(|m| m.file_type().is_symlink()) {
+        if std::fs::symlink_metadata(&real).is_ok_and(|m| is_link(&m)) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 format!(
@@ -214,6 +238,16 @@ fn outside(path: &str) -> CommandError {
     )
 }
 
+/// Why Windows would read `path` (as text; None when it is not Unicode) other than as a
+/// plain file path, on Windows; never elsewhere.
+fn windows_refusal(path: Option<&str>) -> Option<&'static str> {
+    if cfg!(windows) {
+        path.and_then(fspath::windows_refusal)
+    } else {
+        None
+    }
+}
+
 fn nul(path: &str) -> CommandError {
     CommandError::new(
         ErrorKind::InvalidInput,
@@ -248,9 +282,143 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("roots-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir.canonicalize().unwrap()
+        canonical(&dir).unwrap()
     }
 
+    /// A junction at `link` to the folder `target` (needs no privilege, unlike a symlink).
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_forms_of_a_path_are_judged_alike() {
+        let base = scratch("winforms");
+        let root = base.join("Root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.skr"), "").unwrap();
+        let text = root.to_str().unwrap().to_string();
+        // Given in other case or verbatim, the root is the folder as the system names it.
+        for given in [
+            text.to_uppercase(),
+            text.to_lowercase(),
+            format!(r"\\?\{text}"),
+        ] {
+            let roots = ApiRoots::new(&[PathBuf::from(&given)]).unwrap();
+            assert_eq!(roots.dirs(), std::slice::from_ref(&root), "{given}");
+        }
+        let roots = ApiRoots::new(&[PathBuf::from(text.to_lowercase())]).unwrap();
+        let want = root.join("a.skr");
+        for given in [
+            format!(r"{}\A.SKR", text.to_uppercase()),
+            format!(r"\\?\{text}\a.skr"),
+            format!(r"{text}\sub\..\a.skr"),
+            format!("{}/a.skr", text.replace('\\', "/")),
+            r"sub\..\a.skr".to_string(),
+        ] {
+            assert_eq!(roots.read(&given).unwrap(), want, "{given}");
+            assert_eq!(roots.write(&given).unwrap(), want, "{given}");
+        }
+        // The root itself, in any form, is no file in it.
+        for given in [text.to_uppercase(), format!(r"\\?\{text}")] {
+            assert_eq!(
+                roots.read(&given).unwrap_err().kind,
+                ErrorKind::InvalidInput
+            );
+        }
+        // Beside the root, whatever the form, stays outside.
+        std::fs::write(base.join("secret"), "").unwrap();
+        for given in [
+            format!(r"{text}\..\secret"),
+            format!(r"\\?\{text}\..\secret"),
+            r"..\secret".to_string(),
+            base.join("secret").to_str().unwrap().to_uppercase(),
+            format!("{text}shop\\a.skr"),
+        ] {
+            let e = roots.read(&given).unwrap_err();
+            assert!(e.message.contains("outside"), "{given}: {}", e.message);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_forms_read_specially_are_refused() {
+        let base = scratch("winrefused");
+        let roots = ApiRoots::new(std::slice::from_ref(&base)).unwrap();
+        for given in [
+            r"C:foo",
+            r"\foo",
+            "a.skr:x",
+            "nul.txt",
+            r"sub\CON",
+            "a. ",
+            r"\\.\pipe\x",
+        ] {
+            let e = roots.write(given).unwrap_err();
+            assert_eq!(e.kind, ErrorKind::InvalidInput, "{given}");
+            assert!(e.message.contains("Windows"), "{given}: {}", e.message);
+            assert!(roots.read(given).is_err(), "{given}");
+        }
+        assert!(ApiRoots::new(&[PathBuf::from(r"\foo")]).is_err());
+        assert!(ApiRoots::new(&[PathBuf::from("C:")]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctions_count_as_links() {
+        let base = scratch("junction");
+        let (root, outside) = (base.join("root"), base.join("outside"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("x"), "").unwrap();
+        junction(&root.join("out"), &outside);
+        junction(&root.join("in"), &root.join("sub"));
+        let roots = ApiRoots::new(std::slice::from_ref(&root)).unwrap();
+        // Through a junction to outside: refused; to inside: the folder it points at.
+        assert!(
+            roots
+                .read(r"out\x")
+                .unwrap_err()
+                .message
+                .contains("outside")
+        );
+        assert!(
+            roots
+                .write(r"out\a.skr")
+                .unwrap_err()
+                .message
+                .contains("outside")
+        );
+        assert_eq!(
+            roots.write(r"in\a.skr").unwrap(),
+            root.join("sub").join("a.skr")
+        );
+        // A junction is never written to.
+        let e = roots.write("in").unwrap_err();
+        assert!(e.message.contains("link"), "{}", e.message);
+        // A junction whose target is gone tells nothing of it.
+        std::fs::remove_dir_all(&outside).unwrap();
+        assert!(
+            roots
+                .read(r"out\x")
+                .unwrap_err()
+                .message
+                .contains("outside")
+        );
+        // A root given through a junction is its target.
+        let roots = ApiRoots::new(&[root.join("in")]).unwrap();
+        assert_eq!(roots.dirs(), [root.join("sub")]);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_root_given_through_a_link_resolves_to_its_target() {
         let base = scratch("rootlink");

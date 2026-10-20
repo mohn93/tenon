@@ -1,18 +1,20 @@
 //! Where the app keeps its files, per platform.
 //!
-//! macOS (and anything else, until Windows is done) keeps everything under `~/.sketchup-alt`.
-//! Linux follows the XDG Base Directory layout: preferences in the config folder, recovery
-//! files in the state folder, and the default agent socket in the runtime folder.
-//! `resolve` is pure apart from looking at the runtime folder, so tests pass a fake
-//! environment for either OS.
+//! macOS (and any other Unix) keeps everything under `~/.sketchup-alt`. Linux follows the XDG
+//! Base Directory layout: preferences in the config folder, recovery files in the state folder,
+//! and the default agent socket in the runtime folder. Windows keeps preferences in the roaming
+//! application data folder and recovery files in the local one (its agent API uses a named
+//! pipe, so no socket folder). `resolve` is pure apart from looking at the runtime folder, so
+//! tests pass a fake environment for any OS.
 
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::cli::FALLBACK_DIR;
 
-/// The app's folder name under the XDG base folders.
+/// The app's folder name under the XDG base folders and the Windows application data folders.
 const XDG_DIR: &str = "sketchup-alt";
 
 /// Unix socket paths are limited to about 104 bytes on macOS (108 on Linux).
@@ -23,6 +25,7 @@ pub const MAX_SOCKET_PATH: usize = 100;
 pub enum Os {
     MacOs,
     Linux,
+    Windows,
     Other,
 }
 
@@ -32,6 +35,8 @@ impl Os {
             Os::MacOs
         } else if cfg!(target_os = "linux") {
             Os::Linux
+        } else if cfg!(windows) {
+            Os::Windows
         } else {
             Os::Other
         }
@@ -42,7 +47,8 @@ impl Os {
 pub struct Paths {
     pub prefs: PathBuf,
     pub recovery: PathBuf,
-    /// The folder the default agent socket goes in.
+    /// The folder the default agent socket goes in (on Windows, which uses a named pipe, the
+    /// temp folder, unused).
     pub socket_dir: PathBuf,
     /// The earlier prefs location, read once when `prefs` does not exist yet (Linux only).
     pub legacy_prefs: Option<PathBuf>,
@@ -51,12 +57,16 @@ pub struct Paths {
 pub type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// The paths for `os`, or None when `HOME` is missing or not absolute (an empty or relative
-/// one would put the files under the working folder).
+/// one would put the files under the working folder); on Windows, when neither the folder
+/// variables nor `USERPROFILE` give an absolute path (see `windows_paths`).
 pub fn resolve(os: Os, env: Env, temp: &Path, pid: u32) -> Option<Paths> {
     resolve_as(os, env, temp, pid, current_uid())
 }
 
 fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Option<Paths> {
+    if os == Os::Windows {
+        return windows_paths(env, temp);
+    }
     let home = home(env)?;
     let fallback = home.join(FALLBACK_DIR);
     let socket_dir = socket_dir_as(os, env, temp, Some(&home), pid, uid);
@@ -71,7 +81,8 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
                 legacy_prefs: Some(fallback.join("prefs.json")),
             }
         }
-        Os::MacOs | Os::Other => Paths {
+        // Windows was resolved above, without HOME.
+        Os::MacOs | Os::Windows | Os::Other => Paths {
             prefs: fallback.join("prefs.json"),
             recovery: fallback.join("recovery"),
             socket_dir,
@@ -80,8 +91,52 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
     })
 }
 
+/// Windows: preferences in `%APPDATA%\sketchup-alt`, recovery files in
+/// `%LOCALAPPDATA%\sketchup-alt\recovery`. A variable counts only when set to an absolute
+/// path; a missing one falls back to `%USERPROFILE%\AppData\Roaming` or `\Local`. None when
+/// either folder is still unknown.
+fn windows_paths(env: Env, temp: &Path) -> Option<Paths> {
+    let profile = env("USERPROFILE").and_then(windows_absolute);
+    let folder = |var: &str, under: &str| {
+        env(var)
+            .and_then(windows_absolute)
+            .or_else(|| Some(windows_join(profile.as_ref()?, &["AppData", under])))
+    };
+    let roaming = folder("APPDATA", "Roaming")?;
+    let local = folder("LOCALAPPDATA", "Local")?;
+    Some(Paths {
+        prefs: windows_join(&roaming, &[XDG_DIR, "prefs.json"]),
+        recovery: windows_join(&local, &[XDG_DIR, "recovery"]),
+        socket_dir: temp.to_path_buf(),
+        legacy_prefs: None,
+    })
+}
+
+/// `value` as a path when Windows reads it as absolute (a drive and a separator, or a share),
+/// whatever OS this runs on.
+fn windows_absolute(value: OsString) -> Option<PathBuf> {
+    let absolute = match value.to_str() {
+        Some(text) => session::fspath::windows_is_absolute(text),
+        None => Path::new(&value).is_absolute(),
+    };
+    absolute.then(|| PathBuf::from(value))
+}
+
+/// `base` with `names` added, each after a backslash: `PathBuf::join` on Windows, on any OS.
+fn windows_join(base: &Path, names: &[&str]) -> PathBuf {
+    let mut path = base.as_os_str().to_owned();
+    for name in names {
+        if !matches!(path.as_encoded_bytes().last(), Some(b'\\' | b'/')) {
+            path.push("\\");
+        }
+        path.push(name);
+    }
+    PathBuf::from(path)
+}
+
 /// The default socket path for this process. Works without `HOME` (the socket then stays in
 /// the temp folder, and listening reports any error).
+#[cfg(unix)]
 pub fn default_socket(env: Env, temp: &Path, pid: u32) -> PathBuf {
     let home = home(env);
     socket_dir_as(
@@ -143,6 +198,7 @@ fn choose_temp_or_fallback(temp: &Path, home: Option<&Path>, name: &str) -> Path
 }
 
 /// A real folder owned by `uid` that group and others cannot write to.
+#[cfg(unix)]
 fn is_private_dir_of(dir: &Path, uid: u32) -> bool {
     // `symlink_metadata`: a symlink is not a real folder, even when it points at one.
     std::fs::symlink_metadata(dir)
@@ -152,8 +208,20 @@ fn is_private_dir_of(dir: &Path, uid: u32) -> bool {
 /// The user this process runs as: the owner of `/proc/self` (Linux). None elsewhere, which
 /// leaves the runtime folder unused. A non-dumpable process (setuid, or `prctl` off) sees
 /// `/proc/self` owned by root, so the runtime folder is then not used: a safe fallback.
+#[cfg(unix)]
 fn current_uid() -> Option<u32> {
     std::fs::metadata("/proc/self").ok().map(|m| m.uid())
+}
+
+/// No runtime folder off Unix.
+#[cfg(not(unix))]
+fn is_private_dir_of(_: &Path, _: u32) -> bool {
+    false
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> Option<u32> {
+    None
 }
 
 #[cfg(test)]
@@ -205,6 +273,55 @@ mod tests {
             Path::new("/Users/me/.sketchup-alt"),
             "/tmp is shared"
         );
+    }
+
+    #[test]
+    fn windows_paths_use_appdata() {
+        let at =
+            |vars: &[(&str, &str)]| resolve_as(Os::Windows, &env(vars), Path::new("/t"), 7, None);
+        let p = at(&[
+            ("APPDATA", r"C:\Users\me\AppData\Roaming"),
+            ("LOCALAPPDATA", r"D:\local"),
+            ("USERPROFILE", r"C:\Users\me"),
+            ("HOME", "/ignored"),
+            ("XDG_CONFIG_HOME", "/ignored"),
+        ])
+        .unwrap();
+        assert_eq!(
+            p.prefs.as_os_str(),
+            r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json"
+        );
+        assert_eq!(p.recovery.as_os_str(), r"D:\local\sketchup-alt\recovery");
+        assert_eq!(p.legacy_prefs, None);
+        // Relative, drive-relative, rooted without a drive or empty: ignored for USERPROFILE.
+        for bad in ["", "AppData", r"C:AppData", r"\AppData", r"\\.\C:\AppData"] {
+            let p = at(&[
+                ("APPDATA", bad),
+                ("LOCALAPPDATA", bad),
+                ("USERPROFILE", r"C:\Users\me"),
+            ])
+            .unwrap();
+            assert_eq!(
+                p.prefs.as_os_str(),
+                r"C:\Users\me\AppData\Roaming\sketchup-alt\prefs.json",
+                "{bad:?}"
+            );
+            assert_eq!(
+                p.recovery.as_os_str(),
+                r"C:\Users\me\AppData\Local\sketchup-alt\recovery"
+            );
+        }
+        // A share counts; a profile ending in a separator gets no second one.
+        let p = at(&[("USERPROFILE", r"\\server\home\me\")]).unwrap();
+        assert_eq!(
+            p.prefs.as_os_str(),
+            r"\\server\home\me\AppData\Roaming\sketchup-alt\prefs.json"
+        );
+        // No usable profile: no paths, unless both folders are given.
+        assert_eq!(at(&[]), None);
+        assert_eq!(at(&[("USERPROFILE", "me"), ("HOME", "/home/me")]), None);
+        assert_eq!(at(&[("APPDATA", r"C:\r")]), None);
+        assert!(at(&[("APPDATA", r"C:\r"), ("LOCALAPPDATA", r"C:\l")]).is_some());
     }
 
     #[test]

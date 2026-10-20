@@ -1134,7 +1134,17 @@ needs a path. A batch with a path outside the roots runs nothing (`-32001`, its 
 the command). Commands run on the resolved path, so `query file` shows it; `query file` also
 lists the roots as `api_roots` (null without `--api-root`). The window's own dialogs and the
 FILE argument are not limited. A root that is not an existing folder stops the app (exit code
-2). The window shows `Agents: N` in its status bar while N connections are open; View > Agent
+2).
+
+On Windows, names are compared without regard to case, so `c:\models\A.SKR` lies within a
+root given as `C:\Models`; a verbatim path (`\\?\C:\...`, `\\?\UNC\server\share\...`) is
+judged as its plain form, and roots and resolved paths are reported in plain form. Junctions and
+other reparse points count as symbolic links. Forms Windows reads specially are refused with
+`invalid_input`: a drive-relative path (`C:foo`), a path rooted without a drive (`\foo`), a
+device path (`\\.\...`), a name with `:` (an alternate data stream), a reserved device name
+(`CON`, `NUL`, `COM1`, ..., with any extension) and a name ending in a dot or a space. A root
+given in one of these forms stops the app. A share reached by its UNC name and the same folder
+reached by a drive letter are different paths: give the root in the form requests use. The window shows `Agents: N` in its status bar while N connections are open; View > Agent
 Activity lists the connections' requests (the last 100, newest first, with their results and how
 long ago they came; control and format characters, such as bidi overrides, show as spaces)
 and any recovery files.

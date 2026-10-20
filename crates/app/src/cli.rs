@@ -1,7 +1,7 @@
 //! Command-line modes.
 
+use std::ffi::OsString;
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use api::Endpoint;
@@ -87,49 +87,93 @@ pub fn private_dir_for_endpoint(_: &Endpoint) -> Option<&Path> {
     None
 }
 
-/// Makes sure `dir` exists, is a real directory (not a symlink) and is closed to group and
-/// others. A missing directory is created with mode 0700; its parent must exist.
+/// Makes sure `dir` exists, is a real directory (not a symlink, nor on Windows a junction or
+/// other reparse point) and is closed to other users. A missing directory is created private
+/// (Unix: mode 0700; Windows: a protected DACL for the current user only, inherited by what is
+/// made in it); its parent must exist. An existing one must be mode 0700 on Unix; on Windows
+/// its permissions are left as they are.
 pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => std::fs::DirBuilder::new()
-            .recursive(false)
-            .mode(0o700)
-            .create(dir),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => create_private_dir(dir),
         Err(e) => Err(e),
         Ok(meta) => {
-            if !meta.file_type().is_dir() {
+            if !meta.file_type().is_dir() || session::fspath::is_link(&meta) {
                 return Err(io::Error::other(format!(
                     "{} is not a real directory",
                     dir.display()
                 )));
             }
-            if meta.permissions().mode() & 0o077 != 0 {
-                return Err(io::Error::other(format!(
-                    "{} is accessible to other users; chmod 700 it",
-                    dir.display()
-                )));
-            }
-            Ok(())
+            check_private(dir, &meta)
         }
     }
 }
 
-/// `ensure_private_dir` for a folder under an XDG base: on Linux missing parent folders are
-/// created too (mode 0700; only `dir` itself is checked, so an existing parent such as
-/// `~/.config` keeps its mode). Elsewhere it is `ensure_private_dir`, so a missing parent (such
-/// as HOME) stays an error.
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(false)
+        .mode(0o700)
+        .create(dir)
+}
+
+#[cfg(windows)]
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    session::windows::create_private_dir(dir)
+}
+
+#[cfg(unix)]
+fn check_private(dir: &Path, meta: &std::fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::other(format!(
+            "{} is accessible to other users; chmod 700 it",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// An existing folder's ACL is the user's choice: not checked or rewritten.
+#[cfg(windows)]
+fn check_private(_: &Path, _: &std::fs::Metadata) -> io::Result<()> {
+    Ok(())
+}
+
+/// `ensure_private_dir` for a folder under an XDG base or a Windows application data folder:
+/// on Linux and Windows missing parent folders are created too, private (only `dir` itself is
+/// checked, so an existing parent such as `~/.config` keeps its mode). Elsewhere it is
+/// `ensure_private_dir`, so a missing parent (such as HOME) stays an error.
 pub fn ensure_private_xdg_dir(os: crate::paths::Os, dir: &Path) -> io::Result<()> {
+    let missing = |p: &&Path| !p.as_os_str().is_empty() && std::fs::symlink_metadata(p).is_err();
+    #[cfg(unix)]
     if os == crate::paths::Os::Linux
-        && let Some(parent) = dir.parent()
-        && !parent.as_os_str().is_empty()
-        && std::fs::symlink_metadata(parent).is_err()
+        && let Some(parent) = dir.parent().filter(missing)
     {
+        use std::os::unix::fs::DirBuilderExt;
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(parent)?;
     }
+    if os == crate::paths::Os::Windows {
+        // Outermost first, each made private like `dir`.
+        let parents: Vec<&Path> = dir.ancestors().skip(1).take_while(missing).collect();
+        for parent in parents.into_iter().rev() {
+            ensure_private_dir(parent)?;
+        }
+    }
     ensure_private_dir(dir)
+}
+
+/// The command-line arguments as text; one that is not valid Unicode is an error naming it.
+pub fn unicode_args(args: impl IntoIterator<Item = OsString>) -> Result<Vec<String>, String> {
+    args.into_iter()
+        .map(|arg| {
+            arg.into_string()
+                .map_err(|arg| format!("the argument {arg:?} is not valid Unicode"))
+        })
+        .collect()
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
@@ -341,6 +385,18 @@ mod tests {
     }
 
     #[test]
+    fn arguments_that_are_not_unicode_are_refused() {
+        let ok = unicode_args(["--headless".into(), "ü.skr".into()]);
+        assert_eq!(ok.unwrap(), ["--headless", "ü.skr"]);
+        #[cfg(unix)]
+        let bad = <OsString as std::os::unix::ffi::OsStringExt>::from_vec(vec![b'a', 0xff]);
+        #[cfg(windows)]
+        let bad = <OsString as std::os::windows::ffi::OsStringExt>::from_wide(&[0x61, 0xd800]);
+        let e = unicode_args(["--headless".into(), bad]).unwrap_err();
+        assert!(e.contains("not valid Unicode"), "{e}");
+    }
+
+    #[test]
     fn help_flags_return_help() {
         assert_eq!(parse(args("-h")).unwrap(), Mode::Help);
         assert_eq!(parse(args("--headless --help")).unwrap(), Mode::Help);
@@ -379,6 +435,52 @@ mod tests {
                 .contains("needs a path")
         );
         assert!(parse(args("--fly")).unwrap_err().contains("--fly"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ensure_private_dir_creates_an_owner_only_folder() {
+        let dir = scratch("create-win");
+        let _ = std::fs::remove_dir_all(&dir);
+        ensure_private_dir(&dir).unwrap();
+        let user = session::windows::current_user().unwrap();
+        let sddl = session::windows::security_text(&dir).unwrap();
+        // Owned by the user, protected, one entry: full control for the user, inherited.
+        assert!(sddl.starts_with(&format!("O:{user}D:P")), "{sddl}");
+        assert_eq!(sddl.matches('(').count(), 1, "{sddl}");
+        assert!(sddl.ends_with(&format!("(A;OICI;FA;;;{user})")), "{sddl}");
+        // An existing folder is accepted as it is.
+        ensure_private_dir(&dir).unwrap();
+        // Missing parents under an application data folder are made private too.
+        let nested = dir.join("a").join("b");
+        ensure_private_xdg_dir(crate::paths::Os::Windows, &nested).unwrap();
+        for d in [dir.join("a"), nested] {
+            let sddl = session::windows::security_text(&d).unwrap();
+            assert!(sddl.starts_with(&format!("O:{user}D:P")), "{sddl}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ensure_private_dir_refuses_a_junction() {
+        let target = scratch("junction-target");
+        let link = scratch("junction");
+        let _ = std::fs::remove_dir_all(&target);
+        let _ = std::fs::remove_dir(&link);
+        ensure_private_dir(&target).unwrap();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let e = ensure_private_dir(&link).unwrap_err();
+        assert!(e.to_string().contains("not a real directory"), "{e}");
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(&target).unwrap();
     }
 
     #[test]

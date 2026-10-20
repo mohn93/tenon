@@ -28,5 +28,11 @@ objc2-foundation.workspace = true
 objc2-app-kit.workspace = true
 muda.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
 [dev-dependencies]
 egui_kittest.workspace = true
