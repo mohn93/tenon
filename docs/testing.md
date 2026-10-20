@@ -1,7 +1,12 @@
 # Testing
 
 `cargo test --workspace` runs everything. Rendering tests need a GPU adapter; without one they
-print "no GPU adapter, skipping" and pass.
+print "no GPU adapter, skipping" and pass. There are no doc tests, so
+`cargo test --workspace --lib --bins --tests` runs the same tests without building doc-test
+runners. Dependencies are built optimized in dev and test builds (`[profile.dev.package."*"]` in
+the root `Cargo.toml`); the workspace crates stay unoptimized. Run tests with `cargo test`, not a
+process-per-test runner such as cargo-nextest: the rendering tests then each create their own GPU
+device and the run takes longer.
 
 Each crate's integration tests are modules of one test binary, `tests/integration/main.rs`, so a
 full run starts one test program per crate (on macOS every new program is scanned before it runs,

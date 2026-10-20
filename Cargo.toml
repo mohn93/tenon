@@ -32,3 +32,9 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = ["
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-alloc"] }
 zip = { version = "=9.0.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# Dependencies are built optimized in dev and test builds: tests that inflate, parse JSON or draw
+# with wgpu run several times faster, and the workspace crates stay unoptimized so they rebuild
+# quickly.
+[profile.dev.package."*"]
+opt-level = 2
