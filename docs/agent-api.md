@@ -1055,16 +1055,20 @@ a client that means it, or has asked the user, passes `"discard": true`. In the 
 an earlier version left in `~/.sketchup-alt/recovery` stay there); the window's status bar and
 its Agent Activity window name it; only the user may read it (0600). A sidecar note
 `<file>.json` beside it records that an agent discarded it, the window session, the file it was a
-copy of and when; File > Recover Models... lists it from then on. If the file cannot be
+copy of and when; once that window has ended, File > Recover Models... in another window lists
+it. If the file cannot be
 written the command fails with `file` and nothing is discarded. Headless, nothing is written. The window asks the user
 itself before its own New and Open.
 
 The window also autosaves: while the model has unsaved changes, every few minutes (Settings >
 Files, 5 by default, Off turns it off) it copies the model to
 `<name>-<session>.autosave.skr` in the same folder, with its sidecar, overwriting that one copy in
-place; it waits while a tool operation is in progress. The user's own file is never written by
+place; while a drag or a tool operation that has not changed the model yet is in progress it
+waits, at most one interval more. The user's own file is never written by
 autosave. The copy and its sidecar are removed when the model is saved, when New or Open replaces
-it (the window's or an agent's `save`, `new` and `open`), and when the window quits normally.
+it (the window's or an agent's `save`, `new` and `open`), and when the window quits after the unsaved
+prompt or an agent's `quit` (a quit the system asks for without the prompt, such as logging
+out on macOS, keeps it).
 Each window holds a lock on `session-<session>.lock` in the folder while it runs, so copies of a
 window that is still open are never offered elsewhere. A window that ended without cleaning up
 (a crash) leaves its autosave behind: at the next start the Recover Models window opens and

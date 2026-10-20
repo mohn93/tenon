@@ -71,11 +71,12 @@ impl Default for ImportOptions {
     }
 }
 
-/// Whether a tool operation is in progress, given the tool's `phase` and whether a press it
-/// took is held (`pressed`): a drag, or a multi-click tool between its clicks. The Paste tool
-/// counts while it is out.
-fn operation_in_progress(phase: &Phase, pressed: bool) -> bool {
-    pressed || matches!(phase, Phase::Active { .. })
+/// Whether a tool operation is in progress: a press the tool took is held (`pressed`, a
+/// drag), or the tool is in an operation that has not changed the model yet (`active_since`,
+/// the revision when it began, is still `revision`). A Line chain past its first segment or
+/// the Paste tool waiting for a click holds nothing back.
+fn operation_busy(pressed: bool, active_since: Option<u64>, revision: u64) -> bool {
+    pressed || active_since == Some(revision)
 }
 
 /// Whether `command` replaces the document (a new model, a file opened).
@@ -192,6 +193,8 @@ pub struct Editor {
     shift: bool,
     /// Whether the left-button press reached the tool, so its release should too.
     tool_pressed: bool,
+    /// The document revision when the tool's current operation began (None: no operation).
+    operation_since: Option<u64>,
     /// Whether the next left press comes within the double-click time of the last click's
     /// release (`quick_press`); the press clears it.
     quick_press: bool,
@@ -312,6 +315,7 @@ impl Editor {
             remembered: Remembered::default(),
             shift: false,
             tool_pressed: false,
+            operation_since: None,
             tool_step: None,
             quick_press: false,
             reference: None,
@@ -416,6 +420,7 @@ impl Editor {
         self.solid = None;
         self.typed.clear();
         self.message = None;
+        self.sync_operation();
         self.invalidate_hover();
     }
 
@@ -1489,10 +1494,20 @@ impl Editor {
         opened
     }
 
-    /// Whether a tool operation is in progress: a press the tool took is held, or the tool
-    /// is between the clicks of an operation.
+    /// Whether a tool operation is in progress (see `operation_busy`).
     pub fn operation_in_progress(&self) -> bool {
-        operation_in_progress(&self.tool.phase(), self.tool_pressed)
+        operation_busy(self.tool_pressed, self.operation_since, self.doc.revision())
+    }
+
+    /// Notes whether the tool is in an operation, and since which revision, after something
+    /// that may have started or ended one.
+    pub(crate) fn sync_operation(&mut self) {
+        let active = matches!(self.tool.phase(), Phase::Active { .. });
+        self.operation_since = match (active, self.operation_since) {
+            (false, _) => None,
+            (true, Some(since)) => Some(since),
+            (true, None) => Some(self.doc.revision()),
+        };
     }
 
     /// Saves to `path`, or to the file last opened or saved. False if it cannot be saved; the
@@ -1904,6 +1919,8 @@ impl Editor {
         let is_value = matches!(event, ToolEvent::Value(_));
         let is_click = matches!(event, ToolEvent::Click(_));
         let is_cancel = matches!(event, ToolEvent::Cancel);
+        // An operation this event starts began before what it commits.
+        let before = self.doc.revision();
         let mut out = self.handle(event.clone());
         if matches!(out.commands.first(), Some(Command::Undo { .. }))
             && self.tool_step != Some(self.doc.revision())
@@ -1946,6 +1963,10 @@ impl Editor {
                 .filter(|m| m.kind == MessageKind::Error)
                 .map(|m| m.text.clone());
         }
+        if self.operation_since.is_none() && matches!(self.tool.phase(), Phase::Active { .. }) {
+            self.operation_since = Some(before);
+        }
+        self.sync_operation();
         self.invalidate_hover();
     }
 
@@ -2088,6 +2109,7 @@ impl Editor {
         self.tool.on_external_change();
         self.preview.clear();
         self.solid = None;
+        self.sync_operation();
     }
 
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
@@ -6115,18 +6137,32 @@ mod tests {
 
     #[test]
     fn an_operation_is_in_progress_while_a_press_is_held_or_a_tool_is_between_clicks() {
-        let active = Phase::Active { points: Vec::new() };
-        assert!(!operation_in_progress(&Phase::Idle, false));
-        assert!(operation_in_progress(&Phase::Idle, true), "a drag");
-        assert!(operation_in_progress(&active, false), "between clicks");
-        assert!(operation_in_progress(&active, true));
+        assert!(!operation_busy(false, None, 3));
+        assert!(operation_busy(true, None, 3), "a drag");
+        assert!(
+            operation_busy(false, Some(3), 3),
+            "between clicks, nothing made yet"
+        );
+        assert!(
+            !operation_busy(false, Some(2), 3),
+            "the operation made something"
+        );
+        assert!(operation_busy(true, Some(2), 3));
         let mut e = editor();
         e.select_tool(ToolKind::Line);
         assert!(!e.operation_in_progress());
         click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
         assert!(e.operation_in_progress(), "a line started");
+        // The chain goes on after its first segment, which is made.
+        click_at(&mut e, DVec3::new(3.0, 1.0, 0.0));
+        assert!(matches!(e.phase(), Phase::Active { .. }));
+        assert!(!e.operation_in_progress(), "a segment was made");
         e.key(EditorKey::Escape);
         assert!(!e.operation_in_progress());
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert!(e.operation_in_progress(), "a new line");
+        e.select_tool(ToolKind::Select);
+        assert!(!e.operation_in_progress(), "another tool");
     }
 
     #[test]

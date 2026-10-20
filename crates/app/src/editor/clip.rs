@@ -84,6 +84,7 @@ impl Editor {
         self.select_tool(back);
         self.paste_return = Some(back);
         self.tool = Box::new(PasteTool::new(text, &outline));
+        self.sync_operation();
         if in_view {
             self.hover_now();
         }

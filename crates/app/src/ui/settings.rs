@@ -1,6 +1,7 @@
 //! The Settings window: a non-modal window with an Appearance tab (theme and UI scale), an
-//! Input tab (what trackpad scrolling does) and a Files tab (how often to autosave). Each change is reported at once through
-//! `UiAction`; the window holds only which tab is showing, in egui's memory.
+//! Input tab (what trackpad scrolling does) and a Files tab (how often to autosave). Each
+//! change is reported at once through `UiAction`; the window holds only which tab is showing,
+//! in egui's memory.
 
 use egui::{Button, Id, Ui};
 

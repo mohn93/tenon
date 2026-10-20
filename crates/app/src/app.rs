@@ -257,19 +257,34 @@ fn wake_decision(now: Instant, deadline: Option<Instant>) -> Wake {
 }
 
 /// When the next autosave is due: `interval` after `since` (the later of the last autosave
-/// and the first unsaved change), while autosave is on, the model is `modified`, its
-/// `revision` is not the one last autosaved and no tool operation is in progress (`busy`).
-/// None: nothing to wait for (an operation ends with input, which looks again).
+/// and the first unsaved change), while autosave is on, the model is `modified` and its
+/// `revision` is not the one last autosaved; while a tool operation holds it back (`held`,
+/// see `held_by_operation`), when that hold ends. None: nothing to wait for.
 fn autosave_deadline(
     since: Instant,
     interval: Duration,
     revision: u64,
     saved_revision: Option<u64>,
     modified: bool,
-    busy: bool,
+    held: bool,
 ) -> Option<Instant> {
-    (!interval.is_zero() && modified && !busy && saved_revision != Some(revision))
-        .then(|| since + interval)
+    let waits = if held { 2 } else { 1 };
+    (!interval.is_zero() && modified && saved_revision != Some(revision))
+        .then(|| since + interval * waits)
+}
+
+/// Whether a tool operation in progress (`busy`) holds a due autosave back at `now`: at most
+/// one interval past when it was due (`since + interval`).
+fn held_by_operation(busy: bool, now: Instant, since: Instant, interval: Duration) -> bool {
+    busy && now < since + interval * 2
+}
+
+/// Whether the window removes its autosave as it exits: when the exit was settled (the
+/// unsaved prompt answered, or an agent's `quit`), or there is nothing unsaved. An exit the
+/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down) keeps it, to
+/// be offered at the next start.
+fn clears_autosave_at_exit(settled: bool, modified: bool) -> bool {
+    settled || !modified
 }
 
 /// The deadline the event loop wakes at: the earlier of the pending repaint and the next
@@ -650,8 +665,8 @@ struct State {
     /// What `render_view` renders with, on the window's device.
     offscreen: Offscreen,
     editor: Editor,
-    /// The app should end: an agent's `quit`, or the Quit action once any unsaved changes were
-    /// saved or discarded.
+    /// The app should end: an agent's `quit`, or the Quit action or closing the window once
+    /// any unsaved changes were saved or discarded. An exit without it was not settled.
     quit: bool,
     /// The folders the API's file paths must lie within (empty: no limit).
     roots: ApiRoots,
@@ -782,7 +797,7 @@ impl Autosave {
             (d, t) => d.or(t).unwrap_or(now),
         };
         let interval = Duration::from_secs(u64::from(minutes) * 60);
-        let busy = editor.operation_in_progress();
+        let busy = held_by_operation(editor.operation_in_progress(), now, since, interval);
         if !recovery::autosave_due(
             now,
             since,
@@ -2625,8 +2640,11 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(endpoint) = self.socket.take() {
             endpoint.remove();
         }
-        // A normal exit: unsaved changes were saved or discarded, so the autosave goes.
-        if let Some(s) = self.state.as_mut() {
+        // A normal exit: unsaved changes were saved or discarded, so the autosave goes. The
+        // session's lock goes with the window either way.
+        if let Some(s) = self.state.as_mut()
+            && clears_autosave_at_exit(s.quit, s.editor.doc().is_modified())
+        {
             s.clear_autosave();
         }
     }
@@ -2689,7 +2707,7 @@ impl ApplicationHandler<AppEvent> for App {
             self.recovery.clone(),
             self.session
                 .take()
-                .unwrap_or_else(|| Err("the recovery folder was already in use".into())),
+                .unwrap_or_else(|| Err("autosave already started".into())),
             self.prefs.clone(),
         );
         // The adapter before the window is first shown (it panics otherwise), then the window,
@@ -2749,6 +2767,7 @@ impl ApplicationHandler<AppEvent> for App {
         let changed = match event {
             WindowEvent::CloseRequested => {
                 if s.settle_changes() {
+                    s.quit = true;
                     event_loop.exit();
                 }
                 false
@@ -2917,6 +2936,7 @@ impl ApplicationHandler<AppEvent> for App {
                     match bound {
                         Some(Bound::Quit) => {
                             if s.settle_changes() {
+                                s.quit = true;
                                 event_loop.exit();
                             }
                             false
@@ -3957,13 +3977,37 @@ mod tests {
         );
         assert_eq!(
             autosave_deadline(t, five, 3, None, true, true),
-            None,
-            "a tool is busy"
+            Some(t + 2 * five),
+            "held by a tool operation for one interval more"
         );
+        // A busy tool holds a due autosave back for one interval at most.
+        assert!(!held_by_operation(false, t + five, t, five));
+        assert!(held_by_operation(true, t + five, t, five));
+        assert!(held_by_operation(
+            true,
+            t + 2 * five - Duration::from_secs(1),
+            t,
+            five
+        ));
+        assert!(!held_by_operation(true, t + 2 * five, t, five));
         assert_eq!(
             autosave_deadline(t, Duration::ZERO, 3, None, true, false),
             None,
             "off"
+        );
+    }
+
+    #[test]
+    fn only_a_settled_exit_or_a_saved_model_removes_the_autosave() {
+        assert!(
+            clears_autosave_at_exit(true, true),
+            "prompt answered or agent quit"
+        );
+        assert!(clears_autosave_at_exit(false, false), "nothing unsaved");
+        assert!(clears_autosave_at_exit(true, false));
+        assert!(
+            !clears_autosave_at_exit(false, true),
+            "the system ended the app"
         );
     }
 
@@ -4128,7 +4172,7 @@ mod tests {
         .unwrap();
         let next = a.tick(t + 6 * min, &session, &mut e, 5, None);
         assert_eq!(next, Some(t + 10 * min));
-        // Not while a tool operation is in progress: it waits for the next look.
+        // Not while a tool operation is in progress, for one interval more at most.
         e.select_tool(tools::ToolKind::Line);
         let px = e
             .doc()
@@ -4141,15 +4185,16 @@ mod tests {
         assert!(e.operation_in_progress());
         assert_eq!(
             a.tick(t + 11 * min, &session, &mut e, 5, None),
-            None,
+            Some(t + 15 * min),
             "busy"
         );
-        e.key(EditorKey::Escape);
+        assert!(e.operation_in_progress());
         assert_eq!(
-            a.tick(t + 11 * min, &session, &mut e, 5, None),
+            a.tick(t + 15 * min, &session, &mut e, 5, None),
             None,
-            "written now"
+            "written although still busy"
         );
+        e.key(EditorKey::Escape);
         // Off: nothing more.
         e.execute(session::Command::AddEdge {
             start: [0.0, 0.0, 0.0],
