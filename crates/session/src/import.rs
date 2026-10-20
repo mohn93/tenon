@@ -165,6 +165,9 @@ pub struct ImportReport {
     /// SketchUp: tags added, one per layer of the file but Layer0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tags: usize,
+    /// SketchUp: scenes added, one per scene of a SketchUp 2021 or newer file.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub scenes: usize,
     /// SketchUp: definitions made from the file's (each once, however often it is placed).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub definitions: usize,

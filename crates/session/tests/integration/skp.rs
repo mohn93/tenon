@@ -789,6 +789,62 @@ mod craft {
         pub instances: Option<u64>,
         /// The root's guides.
         pub guides: Option<u64>,
+        /// The file's scenes, in tab order.
+        pub pages: Vec<Page>,
+    }
+
+    /// A scene as a file states it: its name, its flags (`None`: no flags record), its
+    /// camera and the layer pids its layer list names.
+    pub struct Page {
+        pub name: String,
+        pub flags: Option<u32>,
+        pub camera: Option<Camera>,
+        pub layers: Vec<u64>,
+    }
+
+    /// A camera in inches: eye, target, up, perspective (else parallel), field of view in
+    /// degrees and the parallel view's height.
+    pub struct Camera {
+        pub eye: [f64; 3],
+        pub target: [f64; 3],
+        pub up: [f64; 3],
+        pub perspective: bool,
+        pub fov: f64,
+        pub height: f64,
+    }
+
+    fn pages(pages: &[Page]) -> Vec<u8> {
+        let mut list = Vec::new();
+        for p in pages {
+            let mut body = rec(
+                t::SKETCH_UP_PAGE,
+                &rec(t::SKETCH_UP_PAGE_NAME, p.name.as_bytes()),
+            );
+            if let Some(flags) = p.flags {
+                body.extend(rec(t::VIEW_PAGE_FLAGS, &flags.to_le_bytes()));
+            }
+            if let Some(c) = &p.camera {
+                let mut camera = rec(t::CAMERA_EYE, &doubles(&c.eye));
+                camera.extend(rec(t::CAMERA_TARGET, &doubles(&c.target)));
+                camera.extend(rec(t::CAMERA_UP, &doubles(&c.up)));
+                camera.extend(rec(t::CAMERA_PERSPECTIVE, &[u8::from(c.perspective)]));
+                camera.extend(rec(t::CAMERA_HEIGHT, &doubles(&[c.height])));
+                camera.extend(rec(t::CAMERA_FOV, &doubles(&[c.fov])));
+                body.extend(rec(t::VIEW_PAGE_CAMERA, &rec(t::CAMERA, &camera)));
+            }
+            // Each pid as (width, little-endian bytes): 8 wide.
+            let refs: Vec<u8> = p
+                .layers
+                .iter()
+                .flat_map(|l| [vec![8u8], l.to_le_bytes().to_vec()].concat())
+                .collect();
+            body.extend(rec(t::VIEW_PAGE_LAYER_PID_REFS, &refs));
+            list.extend(rec(t::VIEW_PAGE, &body));
+        }
+        rec(
+            t::SKETCH_UP_MODEL_PAGES,
+            &rec(t::PAGE_LIST, &rec(t::PAGE_LIST_PAGES, &list)),
+        )
     }
 
     fn layer_ref(layer: Option<u64>) -> Vec<u8> {
@@ -979,10 +1035,11 @@ mod craft {
             t::SKETCH_UP_MODEL_LAYERS,
             &rec(t::LAYER_MANAGER, &rec(t::LAYER_MANAGER_LAYERS, &layers)),
         );
-        let model = rec(
-            t::SKETCH_UP_MODEL,
-            &[layers, materials, components, root].concat(),
-        );
+        let mut sections = vec![layers, materials, components, root];
+        if !layering.pages.is_empty() {
+            sections.push(pages(&layering.pages));
+        }
+        let model = rec(t::SKETCH_UP_MODEL, &sections.concat());
 
         let mut header = super::utf16_tag("SketchUp Model");
         header.extend(super::utf16_tag("{23.0.0}"));
@@ -1626,6 +1683,7 @@ fn layered_file() -> Vec<u8> {
         edge: Some(501),
         instances: Some(502),
         guides: Some(501),
+        ..Layering::default()
     };
     file_with_layers(
         &[(vec![], vec![])],
@@ -1855,6 +1913,7 @@ fn tags_past_the_import_limit_are_left_off_untagged() {
             edge: last,
             instances: last,
             guides: last,
+            ..Layering::default()
         },
     );
     let (d, r, _) = import_timed("many-layers.skp", &bytes);
@@ -1890,6 +1949,7 @@ fn layer_references_past_32_bits_import_untagged() {
             edge: Some(wide),
             instances: Some(wide),
             guides: Some(wide),
+            ..Layering::default()
         },
     );
     let (d, r, _) = import_timed("wide-layers.skp", &bytes);
@@ -1898,4 +1958,379 @@ fn layer_references_past_32_bits_import_untagged() {
     let all = tags_of(&d);
     assert_eq!(all.len(), 2, "{all:?}");
     assert!(all.iter().all(|t| t["count"] == 0), "{all:?}");
+}
+
+/// A crafted 2023 file with layers Layer0 (500), "Walls" (501) and "Roof" (502) and four
+/// scenes: "Front" (a perspective camera, hiding Roof and Layer0), "Plan" (a parallel camera
+/// looking down, hiding nothing), "Tags only" (no camera, hiding Walls) and "Nothing" (flags
+/// restoring neither camera nor tags; its layer list is ignored).
+fn scenes_file() -> Vec<u8> {
+    use craft::{Camera, Layering, Page, file_with_layers, scaled};
+    let page = |name: &str, flags, camera, layers: &[u64]| Page {
+        name: name.into(),
+        flags,
+        camera,
+        layers: layers.to_vec(),
+    };
+    let front = Camera {
+        eye: [100.0, 0.0, 50.0],
+        target: [0.0, 0.0, 0.0],
+        up: [0.0, 0.0, 1.0],
+        perspective: true,
+        fov: 40.0,
+        height: 133.0,
+    };
+    let plan = Camera {
+        eye: [0.0, 0.0, 500.0],
+        target: [0.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        perspective: false,
+        fov: 35.0,
+        height: 200.0,
+    };
+    let layering = Layering {
+        layers: vec![
+            (500, "Layer0".into(), false),
+            (501, "Walls".into(), false),
+            (502, "Roof".into(), false),
+        ],
+        edge: Some(501),
+        pages: vec![
+            page("Front", Some(0x1ff), Some(front), &[502, 500]),
+            page("Plan", None, Some(plan), &[]),
+            page("Tags only", Some(0x20), None, &[501]),
+            page("Nothing", Some(0x0), None, &[501]),
+        ],
+        ..Layering::default()
+    };
+    file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &layering,
+    )
+}
+
+fn scene_list(d: &Document) -> Vec<Value> {
+    ask(d, json!({"type": "scenes"}))["scenes"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+fn scene_names(d: &Document) -> Vec<String> {
+    scene_list(d)
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn scene_by_name(d: &Document, name: &str) -> Value {
+    let id = scene_list(d)
+        .iter()
+        .find(|s| s["name"] == name)
+        .unwrap_or_else(|| panic!("no scene {name}"))["id"]
+        .clone();
+    ask(d, json!({"type": "scene", "scene": id}))
+}
+
+fn tag_id(d: &Document, name: &str) -> Value {
+    tags_of(d).iter().find(|t| t["name"] == name).unwrap()["id"].clone()
+}
+
+fn assert_near(got: &Value, want: [f64; 3], tolerance: f64) {
+    for i in 0..3 {
+        let g = got[i].as_f64().unwrap();
+        assert!((g - want[i]).abs() <= tolerance, "{got} != {want:?}");
+    }
+}
+
+#[test]
+fn scenes_import_with_their_cameras_and_hidden_tags() {
+    let (mut d, r, _) = import_timed("scenes.skp", &scenes_file());
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    let report = &r["import"];
+    assert_eq!(report["scenes"], 4, "{report}");
+    assert!(
+        !warnings(report).iter().any(|w| w.contains("scene")),
+        "{report}"
+    );
+    assert_eq!(scene_names(&d), ["Front", "Plan", "Tags only", "Nothing"]);
+    // The import selects no scene and leaves the camera alone.
+    assert!(scene_list(&d).iter().all(|s| s["selected"] == false));
+    assert_eq!(
+        ask(&d, json!({"type": "camera"})),
+        ask(&doc(), json!({"type": "camera"}))
+    );
+    assert_eq!(r["changes"]["scenes"].as_array().unwrap().len(), 4, "{r}");
+
+    // Inches to meters; Layer0 is Untagged, which no scene hides.
+    let front = scene_by_name(&d, "Front");
+    let view = &front["view"];
+    assert_near(&view["eye"], [2.54, 0.0, 1.27], 1e-12);
+    assert_near(&view["target"], [0.0; 3], 1e-12);
+    assert_near(&view["up"], [0.0, 0.0, 1.0], 1e-12);
+    assert!(
+        (view["fov_y_deg"].as_f64().unwrap() - 40.0).abs() < 1e-9,
+        "{front}"
+    );
+    assert_eq!(view["projection"], "perspective");
+    assert_eq!(view["lighting"], "day");
+    assert_eq!(front["hidden_tags"], json!([tag_id(&d, "Roof")]));
+
+    // A parallel camera keeps its view's height (200 inches) at the target, 500 inches
+    // away; looking straight down, its up is the file's.
+    let plan = scene_by_name(&d, "Plan");
+    let view = &plan["view"];
+    assert_eq!(view["projection"], "parallel", "{plan}");
+    assert_near(&view["eye"], [0.0, 0.0, 12.7], 1e-12);
+    assert_near(&view["up"], [0.0, 1.0, 0.0], 1e-12);
+    let fov = view["fov_y_deg"].as_f64().unwrap().to_radians();
+    assert!(
+        (2.0 * 12.7 * (fov / 2.0).tan() - 5.08).abs() < 1e-9,
+        "{plan}"
+    );
+    assert_eq!(plan["hidden_tags"], json!([]));
+
+    let tags_only = scene_by_name(&d, "Tags only");
+    assert!(tags_only["view"].is_null(), "{tags_only}");
+    assert_eq!(tags_only["hidden_tags"], json!([tag_id(&d, "Walls")]));
+    let nothing = scene_by_name(&d, "Nothing");
+    assert!(nothing["view"].is_null(), "{nothing}");
+    assert!(nothing["hidden_tags"].is_null(), "{nothing}");
+
+    // Going to a scene works; the import is one undo step, scenes and tags included.
+    run(&mut d, json!({"type": "go_to_scene", "scene": front["id"]})).unwrap();
+    let camera = ask(&d, json!({"type": "camera"}));
+    assert_near(&camera["eye"], [2.54, 0.0, 1.27], 1e-9);
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert!(scene_list(&d).is_empty());
+    assert!(tags_of(&d).is_empty());
+    assert!(root_instances(&d).is_empty());
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(scene_names(&d), ["Front", "Plan", "Tags only", "Nothing"]);
+    d.scene().validate().unwrap();
+}
+
+#[test]
+fn imported_scene_names_are_made_unique() {
+    let mut d = doc();
+    run(&mut d, json!({"type": "add_scene", "name": "Front"})).unwrap();
+    run(&mut d, json!({"type": "add_scene", "name": "Plan 2"})).unwrap();
+    run(&mut d, json!({"type": "add_scene", "name": "Plan"})).unwrap();
+    let path = write("scenes-clash.skp", &scenes_file());
+    run(&mut d, json!({"type": "import", "path": path})).unwrap();
+    d.scene().validate().unwrap();
+    assert_eq!(
+        scene_names(&d),
+        [
+            "Front",
+            "Plan 2",
+            "Plan",
+            "Front 2",
+            "Plan 3",
+            "Tags only",
+            "Nothing"
+        ]
+    );
+    // Importing the same file again: the file's names are all taken now.
+    run(&mut d, json!({"type": "import", "path": path})).unwrap();
+    d.scene().validate().unwrap();
+    assert_eq!(
+        scene_names(&d)[7..],
+        ["Front 3", "Plan 4", "Tags only 2", "Nothing 2"]
+    );
+}
+
+#[test]
+fn imported_scene_names_within_a_file_and_blank_ones() {
+    use craft::{Layering, Page, file_with_layers, scaled};
+    let page = |name: &str| Page {
+        name: name.into(),
+        flags: Some(0x20),
+        camera: None,
+        layers: vec![],
+    };
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            pages: vec![
+                page("A"),
+                page("A"),
+                page(" "),
+                page(""),
+                page(&"x".repeat(300)),
+            ],
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("scene-names.skp", &bytes);
+    r.unwrap();
+    d.scene().validate().unwrap();
+    let names = scene_names(&d);
+    assert_eq!(names[..4], ["A", "A 2", "Scene 1", "Scene 2"]);
+    assert_eq!(names[4], "x".repeat(240));
+}
+
+#[test]
+fn imported_scene_cameras_follow_the_scale_and_the_open_instance() {
+    // A first import placed and moved 1 m along x, then opened: the second import goes into
+    // it at scale 2, so its scenes' cameras are scaled by 2 and moved 1 m along x.
+    let mut d = doc();
+    let path = write("scenes-placed.skp", &scenes_file());
+    let first = run(&mut d, json!({"type": "import", "path": path})).unwrap();
+    let outer = first["import"]["instance"].clone();
+    run(
+        &mut d,
+        json!({"type": "move", "ids": [outer], "offset": [1, 0, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "open_instance", "id": outer})).unwrap();
+    run(&mut d, json!({"type": "import", "path": path, "scale": 2})).unwrap();
+    d.scene().validate().unwrap();
+    let front = scene_by_name(&d, "Front 2");
+    assert_near(&front["view"]["eye"], [1.0 + 5.08, 0.0, 2.54], 1e-9);
+    assert_near(&front["view"]["target"], [1.0, 0.0, 0.0], 1e-9);
+    let plan = scene_by_name(&d, "Plan 2");
+    let view = &plan["view"];
+    let fov = view["fov_y_deg"].as_f64().unwrap().to_radians();
+    assert!(
+        (2.0 * 25.4 * (fov / 2.0).tan() - 10.16).abs() < 1e-9,
+        "{plan}"
+    );
+}
+
+#[test]
+fn imported_scenes_without_usable_cameras_keep_their_tags() {
+    // Eye on the target: the scene keeps its tags and leaves the camera alone, with a warning.
+    use craft::{Camera, Layering, Page, file_with_layers, scaled};
+    let bytes = file_with_layers(
+        &[(vec![], vec![])],
+        &[(0, scaled(1.0, 0.0), None)],
+        &[],
+        &Layering {
+            layers: vec![(501, "Walls".into(), false)],
+            pages: vec![Page {
+                name: "Broken".into(),
+                flags: None,
+                camera: Some(Camera {
+                    eye: [1.0, 2.0, 3.0],
+                    target: [1.0, 2.0, 3.0],
+                    up: [0.0, 0.0, 1.0],
+                    perspective: true,
+                    fov: 35.0,
+                    height: 0.0,
+                }),
+                layers: vec![501],
+            }],
+            ..Layering::default()
+        },
+    );
+    let (d, r, _) = import_timed("scene-broken.skp", &bytes);
+    let r = r.unwrap();
+    d.scene().validate().unwrap();
+    assert!(
+        warnings(&r["import"]).contains(
+            &"1 scene's camera could not be used; the scene leaves the camera alone".to_string()
+        ),
+        "{}",
+        r["import"]
+    );
+    let broken = scene_by_name(&d, "Broken");
+    assert!(broken["view"].is_null(), "{broken}");
+    assert_eq!(broken["hidden_tags"], json!([tag_id(&d, "Walls")]));
+}
+
+#[test]
+fn opening_a_file_with_scenes_keeps_them() {
+    let path = write("scenes-open.skp", &scenes_file());
+    let mut d = doc();
+    let r = run(&mut d, json!({"type": "open", "path": path})).unwrap();
+    d.scene().validate().unwrap();
+    assert_eq!(r["import"]["scenes"], 4, "{}", r["import"]);
+    assert_eq!(scene_names(&d), ["Front", "Plan", "Tags only", "Nothing"]);
+    assert!(scene_list(&d).iter().all(|s| s["selected"] == false));
+    let front = scene_by_name(&d, "Front");
+    assert_near(&front["view"]["eye"], [2.54, 0.0, 1.27], 1e-12);
+    assert_eq!(front["hidden_tags"], json!([tag_id(&d, "Roof")]));
+}
+
+/// The tutorial's twelve scenes each show their own tags (a tag named "Scene 02" is shown
+/// only on the second scene); its 2017-2020 copies keep the warning.
+#[test]
+#[ignore = "needs a local corpus in SKP_CORPUS"]
+fn corpus_tutorial_scenes() {
+    let Some(dir) = std::env::var_os("SKP_CORPUS") else {
+        println!("SKP_CORPUS is not set; skipping");
+        return;
+    };
+    let dir = Path::new(&dir);
+    let mut d = doc();
+    let path = dir.join("su2024/su007_Tutorial01_.skp");
+    let r = run(
+        &mut d,
+        json!({"type": "import", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    assert_eq!(r["import"]["scenes"], 12, "{}", r["import"]);
+    assert!(!warnings(&r["import"]).iter().any(|w| w.contains("scene")));
+    let names = scene_names(&d);
+    assert_eq!(
+        names,
+        (1..=12).map(|n| format!("Scene {n}")).collect::<Vec<_>>()
+    );
+    let shown = |scene: &str| -> Vec<String> {
+        let s = scene_by_name(&d, scene);
+        assert!(!s["view"].is_null(), "{s}");
+        let hidden: Vec<Value> = s["hidden_tags"].as_array().unwrap().clone();
+        let mut out: Vec<String> = tags_of(&d)
+            .iter()
+            .filter(|t| !hidden.contains(&t["id"]))
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        out.sort();
+        out
+    };
+    for n in 1..=12 {
+        println!("Scene {n}: {:?}", shown(&format!("Scene {n}")));
+    }
+    assert_eq!(shown("Scene 1"), ["Scene 01-03"]);
+    assert_eq!(shown("Scene 2"), ["Scene 01-03", "Scene 02"]);
+    assert_eq!(shown("Scene 3"), ["Scene 01-03", "Scene 03"]);
+    assert_eq!(shown("Scene 4"), ["Scene 04", "Scene 04-12"]);
+    assert_eq!(shown("Scene 5"), ["Scene 04-12", "Scene 05"]);
+    assert_eq!(shown("Scene 6"), ["Scene 04-12"]);
+    assert_eq!(shown("Scene 7"), ["Scene 04-12", "Scene 07"]);
+    assert_eq!(shown("Scene 12"), ["Scene 04-12"]);
+
+    // Going to the second scene shows its tags.
+    let id = scene_by_name(&d, "Scene 2")["id"].clone();
+    run(&mut d, json!({"type": "go_to_scene", "scene": id})).unwrap();
+    let visible: Vec<String> = tags_of(&d)
+        .iter()
+        .filter(|t| t["visible"] == true)
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(visible.len(), 2, "{visible:?}");
+
+    for year in 2017..=2020 {
+        let path = dir.join(format!("../legacy_out/tutorial01_v{year}.skp"));
+        let mut d = doc();
+        let r = run(
+            &mut d,
+            json!({"type": "import", "path": path.to_str().unwrap()}),
+        )
+        .unwrap();
+        assert!(
+            warnings(&r["import"]).contains(&"12 scenes were not imported".to_string()),
+            "{year}: {}",
+            r["import"]
+        );
+        assert!(scene_list(&d).is_empty(), "{year}");
+    }
 }

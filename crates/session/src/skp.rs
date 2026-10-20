@@ -1,8 +1,9 @@
 //! Reading SketchUp files (2017 and newer) into an import tree: every definition once, with
 //! its faces (holes included), edges (soft, smooth and hidden ones soft), placements, guides,
-//! materials and tags (the file's layers). Scenes, images and hidden states are not carried;
-//! the notes say what was left out. Files from SketchUp 2017 to 2020 (the legacy container)
-//! are read by `skp::legacy` into the same shape as newer ones.
+//! materials, tags (the file's layers) and, from SketchUp 2021 and newer files, scenes. Images
+//! and hidden states are not carried; the notes say what was left out. Files from SketchUp
+//! 2017 to 2020 (the legacy container) are read by `skp::legacy` into the same shape as newer
+//! ones, without their scenes.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,17 +12,23 @@ use kernel::geom::vector_area;
 use kernel::{
     DefinitionKind, Guide, ImportDefinition, ImportEdge, ImportFace, ImportGeometry,
     ImportInstance, ImportTree, MAX_TEXTURE_SIZE, MIN_DETERMINANT, MIN_TEXTURE_SIZE, Material,
-    MaterialId, SceneChange, Tag, TagId, Texture, TreeReport, UNTAGGED,
+    MaterialId, PAGE_NAME_BASE, Page, PageView, SceneChange, Tag, TagId, Texture, TreeReport,
+    UNTAGGED,
 };
 use skp::container::{Container, Generation};
 use skp::geom::{DefGeometry, NO_LAYER, RawGuide, RawInstance};
 use skp::layers::color_is_unset;
 use skp::legacy;
-use skp::model::{LayerDef, MaterialDef, NO_MATERIAL, SceneIndex, TextureLocation, edge_flag};
+use skp::model::{
+    INCH_TO_MM, LayerDef, MaterialDef, NO_MATERIAL, SceneDef, SceneIndex, TextureLocation,
+    edge_flag,
+};
+use skp::pages::page_flag;
 use skp::scene::{Model, ReadOptions, read_model};
 use skp::source::ByteSource;
 use skp::zip::{ZipDirectory, read_entry_within};
 
+use crate::camera::Projection;
 use crate::command::{CommandError, ErrorKind};
 use crate::import::{MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, dimensions, texture_from_bytes};
@@ -83,7 +90,11 @@ pub(crate) struct SkpNotes {
     pub flat: usize,
     /// The file's layers past `MAX_IMPORT_TAGS`, not imported.
     pub dropped_tags: usize,
+    /// Scenes not imported (a 2017-2020 file's, whose scenes are not read).
     pub scenes: usize,
+    /// Imported scenes whose camera could not be used (an eye on its target, say): they
+    /// store no view.
+    pub unusable_views: usize,
     /// Materials used past `MAX_IMPORT_MATERIALS`, imported as no material (set by the
     /// caller, which counts the materials built faces keep).
     pub dropped_materials: usize,
@@ -101,6 +112,8 @@ pub(crate) struct SkpNotes {
     pub added: Vec<(MaterialId, SceneChange)>,
     /// The changes adding the file's layers as tags, in order.
     pub added_tags: Vec<SceneChange>,
+    /// The changes adding the file's scenes, in order.
+    pub added_pages: Vec<SceneChange>,
     /// Textures not imported, by reason, in the order the reasons came up.
     pub texture_failures: Vec<(&'static str, usize)>,
 }
@@ -131,6 +144,11 @@ impl SkpNotes {
             self.scenes,
             "scene was not imported",
             "scenes were not imported",
+        );
+        say(
+            self.unusable_views,
+            "scene's camera could not be used; the scene leaves the camera alone",
+            "scenes' cameras could not be used; those scenes leave the camera alone",
         );
         say(
             self.hidden_faces,
@@ -252,7 +270,11 @@ pub(crate) fn read_skp(
         faces_short: stats
             .as_ref()
             .map_or(0, |s| saturate(s.faces_short_of_exact)),
-        scenes: index.scenes.len(),
+        // A 2017-2020 file's scenes are not read (counted); a newer file's are added below.
+        scenes: match container.generation {
+            Generation::Legacy => index.scenes.len(),
+            Generation::Vff => 0,
+        },
         ..SkpNotes::default()
     };
 
@@ -358,6 +380,18 @@ pub(crate) fn read_skp(
     };
     notes.added_tags = tags.added;
     notes.dropped_tags = tags.dropped;
+    if container.generation == Generation::Vff {
+        match add_pages(document, &index.scenes, &tags.ids, unit) {
+            Ok(pages) => {
+                notes.added_pages = pages.added;
+                notes.unusable_views = pages.unusable_views;
+            }
+            Err(e) => {
+                remove_added(document, &notes);
+                return Err(e);
+            }
+        }
+    }
     let ids = Ids {
         materials: &materials.ids,
         tags: &tags.ids,
@@ -627,11 +661,12 @@ fn grow(b: Option<Box3>, more: Box3) -> Box3 {
     }
 }
 
-/// Takes out the tags and materials an import added.
+/// Takes out the scenes, tags and materials an import added.
 pub(crate) fn remove_added(document: &mut Document, notes: &SkpNotes) {
+    let added = notes.added_tags.iter().chain(&notes.added_pages).cloned();
     document
         .scene_mut()
-        .apply(&SceneChange::join(notes.added_tags.iter().cloned()).inverse());
+        .apply(&SceneChange::join(added).inverse());
     remove_materials(document, &notes.added);
 }
 
@@ -1050,6 +1085,144 @@ fn add_tags(document: &mut Document, layers: &[LayerDef]) -> Result<AddedTags, C
         }
     }
     Ok(out)
+}
+
+/// The scenes an import added.
+struct AddedPages {
+    added: Vec<SceneChange>,
+    /// Scenes whose camera could not be used.
+    unusable_views: usize,
+}
+
+/// Adds one scene per page of a 2021+ file, in the file's order and after the model's scenes,
+/// none selected. Its name is cut to `MAX_NAME` characters (a blank one is "Scene N", the
+/// lowest number free) and made unique against the model's scenes ("Front 2"). It stores the
+/// page's camera when the page restores one (else no view; a camera that cannot be used is
+/// counted and left out too), and its hidden layers as hidden tags when the page restores tag
+/// visibility (else no tag visibility); Layer0 and layers not imported are left out of them.
+///
+/// The camera is in meters (`unit` per inch) and in the root's coordinates: it goes through
+/// the open context's transform, as the imported geometry does, so the scene frames what it
+/// framed in the file. A parallel camera keeps its view's height at the target (scaled with
+/// the geometry) through the field of view, which is what sets that height here.
+fn add_pages(
+    document: &mut Document,
+    scenes: &[SceneDef],
+    tags: &HashMap<u32, TagId>,
+    unit: f64,
+) -> Result<AddedPages, CommandError> {
+    let mut out = AddedPages {
+        added: Vec::new(),
+        unusable_views: 0,
+    };
+    let mut taken: HashSet<String> = document
+        .scene()
+        .pages()
+        .map(|(_, p)| p.name.clone())
+        .collect();
+    let mut next: HashMap<String, usize> = HashMap::new();
+    let mut blank = 1;
+    let context = document.context_transform();
+    for def in scenes {
+        let base: String = def.name.chars().take(MAX_NAME).collect();
+        let name = if base.trim().is_empty() {
+            while taken.contains(&format!("{PAGE_NAME_BASE} {blank}")) {
+                blank += 1;
+            }
+            format!("{PAGE_NAME_BASE} {blank}")
+        } else if taken.contains(&base) {
+            let n = next.entry(base.clone()).or_insert(2);
+            while taken.contains(&format!("{base} {n}")) {
+                *n += 1;
+            }
+            format!("{base} {n}")
+        } else {
+            base
+        };
+        taken.insert(name.clone());
+        let view = if def.flags & page_flag::CAMERA_LOCATION != 0 {
+            let view = page_view(document, def, unit / INCH_TO_MM, context);
+            out.unusable_views += usize::from(view.is_none() && def.eye.is_some());
+            view
+        } else {
+            None
+        };
+        let tags = (def.flags & page_flag::VISIBLE_LAYERS != 0).then(|| {
+            def.hidden_layer_ids
+                .iter()
+                .filter_map(|l| tags.get(l).copied())
+                .collect()
+        });
+        let page = Page { name, view, tags };
+        match document.scene_mut().add_page(page) {
+            Ok((_, change)) => out.added.push(change),
+            Err(e) => {
+                let added = SceneChange::join(out.added.iter().cloned());
+                document.scene_mut().apply(&added.inverse());
+                return Err(CommandError::new(
+                    ErrorKind::File,
+                    format!("scene \"{}\": {e}", def.name),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A page's camera as a stored view: `per_mm` meters per millimetre (the reader's unit),
+/// through `context` into the root's coordinates, checked as `set_camera` checks a camera.
+/// None when the page has no camera or it cannot be used.
+fn page_view(
+    document: &Document,
+    def: &SceneDef,
+    per_mm: f64,
+    context: DAffine3,
+) -> Option<PageView> {
+    let (eye, target) = (def.eye?, def.target?);
+    let eye = context.transform_point3(DVec3::from(eye) * per_mm);
+    let target = context.transform_point3(DVec3::from(target) * per_mm);
+    let up = context.transform_vector3(DVec3::from(def.up.unwrap_or([0.0, 0.0, 1.0])));
+    // The context's scale, for lengths that are not positions.
+    let scale = context.matrix3.determinant().abs().cbrt();
+    let degrees = if def.perspective {
+        // A horizontal field of view is made vertical by the camera's own aspect, when it
+        // has one (SketchUp's files store vertical ones).
+        let fov = def.fov_deg.to_radians();
+        if def.fov_is_height || def.aspect_ratio <= 0.0 {
+            def.fov_deg
+        } else {
+            (2.0 * ((fov / 2.0).tan() / def.aspect_ratio).atan()).to_degrees()
+        }
+    } else {
+        // The parallel view's height at the target is 2 d tan(fov / 2).
+        let height = def.ortho_height * per_mm * scale;
+        (2.0 * (height / (2.0 * eye.distance(target))).atan()).to_degrees()
+    };
+    // Inside the range `set_camera` takes, also once converted to radians and back.
+    let degrees = degrees.clamp(1.0 + 1e-9, 170.0 - 1e-9);
+    let projection = if def.perspective {
+        Projection::Perspective
+    } else {
+        Projection::Parallel
+    };
+    let camera = document
+        .camera_for(
+            eye.to_array(),
+            target.to_array(),
+            Some(degrees),
+            Some(up.to_array()),
+            Some(projection),
+        )
+        .ok()?;
+    Some(PageView {
+        eye: camera.eye.to_array(),
+        target: camera.target.to_array(),
+        up: camera.up.to_array(),
+        fov_y: camera.fov_y,
+        parallel: !def.perspective,
+        night: false,
+        color_by_tag: false,
+    })
 }
 
 /// Why a texture was not imported, as the warnings say it.

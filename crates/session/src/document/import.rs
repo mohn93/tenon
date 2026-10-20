@@ -39,8 +39,8 @@ pub(super) struct BuiltSkp {
     change: SceneChange,
     /// The materials added and kept, each with the change that added it.
     kept: AddedMaterials,
-    /// The change adding the file's layers as tags.
-    tags: SceneChange,
+    /// The change adding the file's layers as tags, then its scenes.
+    tags_and_scenes: SceneChange,
 }
 
 /// Options of `Command::Import` besides the path.
@@ -188,14 +188,14 @@ impl Document {
         report.instance = Some(EntityId::Instance(instance));
         report.definition = definition;
         let added = SceneChange::join(b.kept.into_iter().map(|(_, c)| c));
-        let change = SceneChange::join([added, b.tags, b.change]);
+        let change = SceneChange::join([added, b.tags_and_scenes, b.change]);
         self.place_import(mesh, instance, change, report, place, root_faces)
     }
 
     /// Reads a SketchUp file's `bytes` (from `path`, named in messages) and builds its tree
     /// into the scene with `build`, keeping only the materials the built faces and instances
     /// use (at most `MAX_IMPORT_MATERIALS`; the bytes are read twice when more are used) and
-    /// every tag the file's layers made. Nothing changes on failure.
+    /// every tag the file's layers made and every scene. Nothing changes on failure.
     pub(super) fn build_skp(
         &mut self,
         path: &str,
@@ -253,7 +253,8 @@ impl Document {
         };
         notes.dropped_materials = dropped;
         notes.capped_materials += capped;
-        let tags = SceneChange::join(notes.added_tags.iter().cloned());
+        let tags_and_scenes =
+            SceneChange::join(notes.added_tags.iter().chain(&notes.added_pages).cloned());
         Ok(BuiltSkp {
             tree,
             notes,
@@ -261,7 +262,7 @@ impl Document {
             built,
             change,
             kept,
-            tags,
+            tags_and_scenes,
         })
     }
 
@@ -291,6 +292,7 @@ impl Document {
             skipped: b.notes.unread_faces + b.built.skipped,
             materials: b.kept.len(),
             tags: b.notes.added_tags.len(),
+            scenes: b.notes.added_pages.len(),
             definitions: b.built.definitions,
             instances: b.built.instances,
             guides: given_guides.saturating_sub(b.built.skipped_guides),
