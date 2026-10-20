@@ -46,14 +46,16 @@ fn selection_info(doc: &Document) -> Vec<String> {
         let xyz = |v: glam::DVec3| v.to_array().map(number).join(", ");
         let place = |v: glam::DVec3| v.to_array().map(format_length).join(", ");
         return match m.guide(*g) {
-            Some(Guide::Line { point, direction }) => {
+            Some(Guide::Line {
+                point, direction, ..
+            }) => {
                 vec![
                     "1 guide line".into(),
                     format!("Direction: {}", xyz(*direction)),
                     format!("Through: {}", place(*point)),
                 ]
             }
-            Some(Guide::Point { position }) => {
+            Some(Guide::Point { position, .. }) => {
                 vec![
                     "1 guide point".into(),
                     format!("Position: {}", place(*position)),

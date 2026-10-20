@@ -3278,7 +3278,12 @@ mod tests {
         assert!(e.status().contains("Length: 1.5 m"), "{}", e.status());
         type_text(&mut e, "2");
         let guides: Vec<kernel::Guide> = e.doc().model().guides().map(|(_, g)| *g).collect();
-        let [kernel::Guide::Line { point, direction }] = guides[..] else {
+        let [
+            kernel::Guide::Line {
+                point, direction, ..
+            },
+        ] = guides[..]
+        else {
             panic!("{guides:?}");
         };
         assert!((point.y + 1.0).abs() < 1e-9, "{point:?}");

@@ -274,7 +274,7 @@ fn snap_point(
     offer(DVec3::ZERO, SnapKind::Origin, Vec::new());
     let guides = scenery.guides();
     for &(k, id, g) in guides {
-        if let Guide::Point { position } = g {
+        if let Guide::Point { position, .. } = g {
             offer(
                 position,
                 SnapKind::GuidePoint,
@@ -291,7 +291,9 @@ fn snap_point(
     let guide_lines: Vec<(usize, GuideId, DVec3, DVec3)> = guides
         .iter()
         .filter_map(|&(k, id, g)| match g {
-            Guide::Line { point, direction } => Some((k, id, point, direction)),
+            Guide::Line {
+                point, direction, ..
+            } => Some((k, id, point, direction)),
             Guide::Point { .. } => None,
         })
         .filter(|&(_, _, point, dir)| {
@@ -399,10 +401,10 @@ pub fn guide_under_where(
                 return None;
             }
             let p = match g {
-                Guide::Point { position } => position,
-                Guide::Line { point, direction } => {
-                    closest_on_line_to_ray(point, direction, &ray, false)
-                }
+                Guide::Point { position, .. } => position,
+                Guide::Line {
+                    point, direction, ..
+                } => closest_on_line_to_ray(point, direction, &ray, false),
             };
             let d = projector.project(p)?.distance(cursor);
             (d <= radius_px).then_some((d, (owner, id, g, p)))
@@ -916,6 +918,7 @@ mod tests {
         m.add_guide(Guide::Line {
             point: DVec3::new(-5.0, 0.5, 0.0),
             direction: DVec3::X,
+            tag: None,
         })
         .unwrap();
         let v = Scenery::single(&m);
@@ -1335,16 +1338,19 @@ mod tests {
         let mut m = Model::new();
         m.add_guide(Guide::Point {
             position: DVec3::new(2.0, 1.0, 0.0),
+            tag: None,
         })
         .unwrap();
         m.add_guide(Guide::Line {
             point: DVec3::new(0.0, 3.0, 0.0),
             direction: DVec3::X,
+            tag: None,
         })
         .unwrap();
         m.add_guide(Guide::Line {
             point: DVec3::new(5.0, 0.0, 0.0),
             direction: DVec3::Y,
+            tag: None,
         })
         .unwrap();
         m
@@ -1433,6 +1439,7 @@ mod tests {
         s.edit(kernel::MeshId::Definition(def), |m| {
             m.add_guide(Guide::Point {
                 position: p(3.0, 1.0),
+                tag: None,
             })
         })
         .unwrap();
@@ -1522,11 +1529,13 @@ mod tests {
         s.edit(def, |m| {
             let mut c = m.add_guide(Guide::Point {
                 position: DVec3::new(0.25, 0.25, 0.9),
+                tag: None,
             })?;
             c.ops.extend(
                 m.add_guide(Guide::Line {
                     point: DVec3::new(0.0, 0.5, 0.25),
                     direction: DVec3::X,
+                    tag: None,
                 })?
                 .ops,
             );
@@ -1594,6 +1603,7 @@ mod tests {
                 m.add_guide(Guide::Line {
                     point: DVec3::new(0.0, 0.0, 0.3),
                     direction: DVec3::new(1.0, 1.0, 0.0).normalize(),
+                    tag: None,
                 })?
                 .ops,
             );
@@ -2211,7 +2221,7 @@ mod tests {
             offer(DVec3::ZERO, SnapKind::Origin);
             let guides = placed_guides(scenery);
             for &(_, _, g) in &guides {
-                if let Guide::Point { position } = g {
+                if let Guide::Point { position, .. } = g {
                     offer(position, SnapKind::GuidePoint);
                 }
             }
@@ -2223,7 +2233,9 @@ mod tests {
             let guide_lines: Vec<(DVec3, DVec3)> = guides
                 .iter()
                 .filter_map(|&(_, _, g)| match g {
-                    Guide::Line { point, direction } => Some((point, direction)),
+                    Guide::Line {
+                        point, direction, ..
+                    } => Some((point, direction)),
                     Guide::Point { .. } => None,
                 })
                 .filter(|&(point, dir)| {
@@ -2311,10 +2323,10 @@ mod tests {
                     continue;
                 }
                 let p = match g {
-                    Guide::Point { position } => position,
-                    Guide::Line { point, direction } => {
-                        closest_on_line_to_ray(point, direction, &ray, false)
-                    }
+                    Guide::Point { position, .. } => position,
+                    Guide::Line {
+                        point, direction, ..
+                    } => closest_on_line_to_ray(point, direction, &ray, false),
                 };
                 let Some(d) = project(camera, p).map(|s| s.distance(cursor)) else {
                     continue;
@@ -2697,7 +2709,7 @@ mod tests {
             }
         }
         for &(_, _, g) in scenery.guides() {
-            if let Guide::Point { position } = g {
+            if let Guide::Point { position, .. } = g {
                 spots.push(position);
             }
         }

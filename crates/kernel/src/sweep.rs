@@ -7,7 +7,7 @@ use glam::{DQuat, DVec2, DVec3};
 use crate::geom::{
     ANGLE_TOL, LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment,
 };
-use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
+use crate::ids::{CurveId, EdgeId, EntityId, FaceId, MaterialId, TagId, VertexId};
 use crate::model::{ChangeSet, Model, Op};
 
 /// Why a sweep cannot be made.
@@ -201,6 +201,8 @@ pub struct FollowMe {
     turn: f64,
     /// The profile face's front and back materials, which the caps take.
     paint: [Option<MaterialId>; 2],
+    /// The profile face's tag, which the caps take.
+    tag: Option<TagId>,
 }
 
 impl Model {
@@ -336,6 +338,7 @@ impl Model {
             side_curves,
             turn,
             paint: f.paint(),
+            tag: f.tag,
         })
     }
 
@@ -478,6 +481,7 @@ impl Model {
                     Some((_, out)) if !loops[1..].iter().any(|h| point_in_polygon(q, h)) => {
                         self.orient(f, *out);
                         self.set_paint(f, plan.paint);
+                        self.set_tag(EntityId::Face(f), plan.tag);
                     }
                     // A hole of a cap, or a section inside the sweep, stays open.
                     _ => {

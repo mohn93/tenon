@@ -454,6 +454,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SoftenEdges { ids, .. }
         | Command::SoftenByAngle { ids, .. }
         | Command::PositionTexture { ids, .. }
+        | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
         Command::OpenPath { path } => f(Slot::List(path)),
         Command::FollowMe { face, path } => {
@@ -481,6 +482,9 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::RenameDefinition { .. }
         | Command::PurgeDefinitions {}
         | Command::AddMaterial { .. }
+        | Command::AddTag { .. }
+        | Command::ChangeTag { .. }
+        | Command::DeleteTag { .. }
         | Command::New { .. }
         | Command::Open { .. }
         | Command::Save { .. }

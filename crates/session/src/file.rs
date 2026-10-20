@@ -18,23 +18,25 @@ use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when a face has a texture
-/// position. Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up
-/// direction and projection, version 5 materials, version 6 material opacity, version 7
-/// textures, version 8 material emission and the lighting mode, and version 9 texture
-/// positions on faces; older files still open.
-pub const SCHEMA_VERSION: u32 = 9;
+/// The newest schema version this build reads, and the one it writes when the model has a tag.
+/// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
+/// and projection, version 5 materials, version 6 material opacity, version 7 textures,
+/// version 8 material emission and the lighting mode, version 9 texture positions on faces,
+/// and version 10 tags; older files still open (untagged before version 10).
+pub const SCHEMA_VERSION: u32 = 10;
+/// The version written when a face has a texture position but the model has no tag.
+pub const TEXTURE_POSITION_SCHEMA_VERSION: u32 = 9;
 /// The version written when a material glows or the view is lit by night but no face has a
-/// texture position.
+/// texture position and the model has no tag.
 pub const LIGHTS_SCHEMA_VERSION: u32 = 8;
 /// The version written when a material has a texture but none glows and the view is lit by
 /// day.
 pub const TEXTURED_SCHEMA_VERSION: u32 = 7;
 /// The version written when a material is see-through but none has a texture or glows.
 pub const TRANSLUCENT_SCHEMA_VERSION: u32 = 6;
-/// The version written when every material is opaque and none has a texture or glows, and no
-/// face has a texture position: such a model needs nothing versions 6 to 9 added, so its file
-/// is the same as before and older builds open it.
+/// The version written when every material is opaque and none has a texture or glows, no face
+/// has a texture position and the model has no tag: such a model needs nothing versions 6 to
+/// 10 added, so its file is the same as before and older builds open it.
 pub const OPAQUE_SCHEMA_VERSION: u32 = 5;
 /// The archive entry holding the document.
 const ENTRY: &str = "document.json";
@@ -104,6 +106,8 @@ pub(crate) fn write(
     let positioned = std::iter::once(&model.root)
         .chain(model.definitions.iter().map(|d| &d.mesh))
         .any(|m| m.faces.iter().any(|f| f.texture_position.is_some()));
+    // An entity on a tag needs the tag, so tags alone decide.
+    let tagged = !model.tags.is_empty();
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -120,8 +124,10 @@ pub(crate) fn write(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if positioned {
+        schema_version: if tagged {
             SCHEMA_VERSION
+        } else if positioned {
+            TEXTURE_POSITION_SCHEMA_VERSION
         } else if needs_lights_schema {
             LIGHTS_SCHEMA_VERSION
         } else if textured {

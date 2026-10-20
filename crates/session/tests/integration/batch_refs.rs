@@ -224,6 +224,7 @@ fn reference_keys_cover_every_id_field() {
     let schema = serde_json::to_value(schemars::schema_for!(Command)).unwrap();
     let variants = schema["oneOf"].as_array().expect("one schema per command");
     let mut checked = 0;
+    let mut tag_fields = 0;
     for variant in variants {
         let name = variant["properties"]["type"]["const"]
             .as_str()
@@ -234,12 +235,22 @@ fn reference_keys_cover_every_id_field() {
         for (key, property) in properties {
             let text = property.to_string();
             let has_ids = text.contains("#/$defs/EntityId") || text.contains("#/$defs/MaterialId");
+            let reference_key = matches!(key.as_str(), "ids" | "face" | "id" | "material")
+                || (key == "path" && matches!(name, "open_path" | "follow_me"));
+            // Tag ids are not references (a reference has no `t` kind), so a field holding
+            // them must not be a reference key: "$0:t0" there is refused as a tag id.
+            if !has_ids && text.contains("#/$defs/TagId") {
+                tag_fields += 1;
+                assert!(
+                    !reference_key,
+                    "{name}.{key} holds tag ids but is a reference key"
+                );
+                continue;
+            }
             if !has_ids {
                 continue;
             }
             checked += 1;
-            let reference_key = matches!(key.as_str(), "ids" | "face" | "id" | "material")
-                || (key == "path" && matches!(name, "open_path" | "follow_me"));
             assert!(
                 reference_key,
                 "{name}.{key} holds ids but is not a reference key"
@@ -247,6 +258,10 @@ fn reference_keys_cover_every_id_field() {
         }
     }
     assert!(checked > 10, "found only {checked} id fields");
+    assert_eq!(
+        tag_fields, 4,
+        "change_tag.tag, delete_tag.tag and .move_to, set_tag.tag"
+    );
 }
 
 #[test]

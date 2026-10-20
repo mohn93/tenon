@@ -15,9 +15,14 @@ impl Model {
     /// numbers and a zero direction are `NotFinite`.
     pub fn add_guide(&mut self, guide: Guide) -> Result<ChangeSet, KernelError> {
         let guide = match guide {
-            Guide::Line { point, direction } => Guide::Line {
+            Guide::Line {
+                point,
+                direction,
+                tag,
+            } => Guide::Line {
                 point,
                 direction: direction.try_normalize().ok_or(KernelError::NotFinite)?,
+                tag,
             },
             g => g,
         };

@@ -41,6 +41,11 @@ pub enum KernelError {
     MaterialEmission(String),
     /// A texture placement's offset, rotation or scale is out of range; the text says which.
     TexturePlacement(String),
+    /// A tag id names no tag in the scene.
+    TagNotFound,
+    /// A tag name is blank, too long, "Untagged" or taken, or a deleted tag's entities would
+    /// move to itself; the text says which.
+    TagName(String),
     /// An import makes nothing: nothing in the file makes a face, edge, guide or instance.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -77,11 +82,13 @@ impl fmt::Display for KernelError {
             KernelError::InstanceNotFound => write!(f, "no such instance"),
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
             KernelError::MaterialNotFound => write!(f, "no such material"),
+            KernelError::TagNotFound => write!(f, "no such tag"),
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
             | KernelError::MaterialEmission(why)
             | KernelError::TexturePlacement(why)
+            | KernelError::TagName(why)
             | KernelError::InvalidImport(why) => {
                 write!(f, "{why}")
             }
@@ -171,9 +178,9 @@ impl Model {
         let old = self.remove_edge(e);
         let [a, b] = old.v;
         let m = self.insert_vertex(p);
-        // Both pieces stay on the edge's curve and keep its soft and polygon flags.
-        let first = self.insert_edge_like(a, m, old.curve, old.soft, old.polygon);
-        let second = self.insert_edge_like(m, b, old.curve, old.soft, old.polygon);
+        // Both pieces stay on the edge's curve and tag and keep its soft and polygon flags.
+        let first = self.insert_edge_like(a, m, old.curve, old.soft, old.polygon, old.tag);
+        let second = self.insert_edge_like(m, b, old.curve, old.soft, old.polygon, old.tag);
         if fresh.remove(&e) {
             fresh.extend([first, second]);
         }

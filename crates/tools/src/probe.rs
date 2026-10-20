@@ -119,10 +119,10 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
     }
     for &(k, id, g) in scenery.guides() {
         let point = match g {
-            Guide::Point { position } => position,
-            Guide::Line { point, direction } => {
-                closest_on_line_to_ray(point, direction, ray, false)
-            }
+            Guide::Point { position, .. } => position,
+            Guide::Line {
+                point, direction, ..
+            } => closest_on_line_to_ray(point, direction, ray, false),
         };
         offer(EntityId::Guide(id), k, point);
     }
@@ -175,6 +175,7 @@ mod tests {
             c.ops.extend(
                 m.add_guide(Guide::Point {
                     position: p(0.25, 0.25, 5.0),
+                    tag: None,
                 })?
                 .ops,
             );

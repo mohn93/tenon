@@ -132,6 +132,7 @@ fn broken_data_is_rejected() {
                 definition: component,
                 transform: glam::DAffine3::IDENTITY.to_cols_array(),
                 material: None,
+                tag: None,
             });
         },
         "places itself",
@@ -188,6 +189,7 @@ fn loose_vertices(next_id: u64, vertices: &[(u64, [f64; 3])]) -> SceneData {
         },
         definitions: vec![],
         materials: vec![],
+        tags: Vec::new(),
     }
 }
 
@@ -281,6 +283,7 @@ fn scene_with_every_kind() -> Scene {
     s.edit(MeshId::Root, |m| {
         m.add_guide(kernel::Guide::Point {
             position: p(0.0, 0.0, 5.0),
+            tag: None,
         })
     })
     .unwrap();
@@ -335,6 +338,7 @@ fn no_number_is_the_id_of_two_things() {
                     id: root_vertex,
                     point: [0.0, 0.0, 9.0],
                     direction: None,
+                    tag: None,
                 })
             }),
             format!("v{root_vertex} and g{root_vertex} share an id"),
@@ -388,6 +392,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         definition,
         transform: glam::DAffine3::IDENTITY.to_cols_array(),
         material: None,
+        tag: None,
     };
     let definitions = (0..n)
         .map(|k| kernel::DefinitionData {
@@ -414,6 +419,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         },
         definitions,
         materials: vec![],
+        tags: Vec::new(),
     }
 }
 

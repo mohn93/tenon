@@ -8,7 +8,7 @@ use crate::edit::{KernelError, use_indexes};
 use crate::geom::{
     LENGTH_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d, vector_area,
 };
-use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
+use crate::ids::{CurveId, EdgeId, EntityId, FaceId, MaterialId, TagId, VertexId};
 use crate::index::{Index, Shape};
 use crate::model::{ChangeSet, Face, Model};
 use crate::texture::TexturePlacement;
@@ -246,9 +246,15 @@ impl Model {
             sides.insert((e.v[0].min(e.v[1]), e.v[0].max(e.v[1])));
         }
         let mark = |(a, b): &(VertexId, VertexId)| {
-            self.edge_between(*a, *b)
-                .and_then(|e| self.edge(e))
-                .map_or((None, false, false), |e| (e.curve, e.soft, e.polygon))
+            self.edge_between(*a, *b).and_then(|e| self.edge(e)).map_or(
+                SegmentMarks::default(),
+                |e| SegmentMarks {
+                    curve: e.curve,
+                    soft: e.soft,
+                    polygon: e.polygon,
+                    tag: e.tag,
+                },
+            )
         };
         let ring = |l: &[VertexId]| l.iter().map(|v| self.pos(*v)).collect::<Vec<DVec3>>();
         let mut s = Stencil::default();
@@ -264,6 +270,7 @@ impl Model {
                 normal: f.normal,
                 paint: f.paint(),
                 texture: f.texture,
+                tag: f.tag,
                 openings: Vec::new(),
                 filled: Vec::new(),
             };
@@ -399,8 +406,8 @@ impl Model {
                 })
             })
             .collect();
-        // Give each piece of a stencil face that face's orientation, materials and texture
-        // placement.
+        // Give each piece of a stencil face that face's orientation, materials, texture
+        // placement and tag.
         for (f, t) in placed.iter().zip(&placed_tests) {
             for id in candidates(&t.outer) {
                 let in_hole = t.openings.iter().chain(&t.filled).any(|h| within(id, h));
@@ -408,6 +415,7 @@ impl Model {
                     self.orient(id, f.normal);
                     self.set_paint(id, f.paint);
                     self.set_texture(id, f.texture);
+                    self.set_tag(EntityId::Face(id), f.tag);
                 }
             }
         }
@@ -470,15 +478,23 @@ impl Model {
             self.remove_face(id);
         }
         // Copied curve, polygon and soft edges stay so; each placement's curves get new ids.
+        // Copied edges keep their tags.
         for t in places {
             let mut renamed: BTreeMap<CurveId, CurveId> = BTreeMap::new();
-            for ((a, b), (curve, soft, polygon)) in stencil.segments.iter().zip(&stencil.marks) {
-                if curve.is_none() && !soft {
+            for ((a, b), marks) in stencil.segments.iter().zip(&stencil.marks) {
+                let (a, b) = (t.transform_point3(*a), t.transform_point3(*b));
+                if marks.tag.is_some() {
+                    for e in self.edges_along(a, b) {
+                        self.set_tag(EntityId::Edge(e), marks.tag);
+                    }
+                }
+                if marks.curve.is_none() && !marks.soft {
                     continue;
                 }
-                let curve = curve.map(|c| *renamed.entry(c).or_insert_with(|| self.new_curve()));
-                let (a, b) = (t.transform_point3(*a), t.transform_point3(*b));
-                self.tag_along(a, b, curve, *soft, *polygon);
+                let curve = marks
+                    .curve
+                    .map(|c| *renamed.entry(c).or_insert_with(|| self.new_curve()));
+                self.tag_along(a, b, curve, marks.soft, marks.polygon);
             }
         }
     }
@@ -507,9 +523,18 @@ impl Model {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Stencil {
     segments: Vec<(DVec3, DVec3)>,
-    /// Each segment's (curve, soft, polygon) marks.
-    marks: Vec<(Option<CurveId>, bool, bool)>,
+    /// Each segment's marks.
+    marks: Vec<SegmentMarks>,
     faces: Vec<StencilFace>,
+}
+
+/// What a stencil segment's edge carries besides its position.
+#[derive(Clone, Copy, Debug, Default)]
+struct SegmentMarks {
+    curve: Option<CurveId>,
+    soft: bool,
+    polygon: bool,
+    tag: Option<TagId>,
 }
 
 impl Stencil {
@@ -520,6 +545,18 @@ impl Stencil {
             for side in &mut f.paint {
                 *side = side.or(material);
             }
+        }
+        self
+    }
+
+    /// The stencil with `tag` on every edge and face that is Untagged (an exploded instance's
+    /// tag passing to its geometry).
+    pub(crate) fn tagged_over(mut self, tag: Option<TagId>) -> Stencil {
+        for m in &mut self.marks {
+            m.tag = m.tag.or(tag);
+        }
+        for f in &mut self.faces {
+            f.tag = f.tag.or(tag);
         }
         self
     }
@@ -546,6 +583,7 @@ struct StencilFace {
     paint: [Option<MaterialId>; 2],
     /// The texture placement, kept as it is wherever the face is drawn.
     texture: Option<TexturePlacement>,
+    tag: Option<TagId>,
     /// Holes no face fills.
     openings: Vec<Vec<DVec3>>,
     /// Holes another face fills.
@@ -560,6 +598,7 @@ impl StencilFace {
             normal: (t.matrix3.inverse().transpose() * self.normal).normalize(),
             paint: self.paint,
             texture: self.texture,
+            tag: self.tag,
             openings: self.openings.iter().map(ring).collect(),
             filled: self.filled.iter().map(ring).collect(),
         }

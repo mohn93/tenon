@@ -214,6 +214,58 @@ impl TryFrom<String> for MaterialId {
     }
 }
 
+/// A tag entities are put on to show or hide them together. Serialized as "t<n>". Tag ids
+/// come from the same counter as entity ids, so they never repeat one. An entity on no tag is
+/// "Untagged".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct TagId(pub u64);
+
+impl fmt::Display for TagId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "t{}", self.0)
+    }
+}
+
+impl FromStr for TagId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('t', n)) => Ok(TagId(n)),
+            _ => Err(format!("invalid tag id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for TagId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "TagId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^t(0|[1-9][0-9]*)$",
+            "description": "Tag id: t<n>"
+        })
+    }
+}
+
+impl From<TagId> for String {
+    fn from(id: TagId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for TagId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +293,11 @@ mod tests {
         assert_eq!(MaterialId(5).to_string(), "m5");
         for s in ["", "m", "d5", "m05", "m+5"] {
             assert!(s.parse::<MaterialId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("t5".parse::<TagId>(), Ok(TagId(5)));
+        assert_eq!(TagId(5).to_string(), "t5");
+        for s in ["", "t", "m5", "t05", "t+5"] {
+            assert!(s.parse::<TagId>().is_err(), "{s:?} parsed");
         }
     }
 

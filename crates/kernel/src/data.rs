@@ -7,11 +7,12 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
+    CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, TagId, VertexId,
 };
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::scene::{Definition, DefinitionKind, Scene};
+use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
 
 /// Ids in a file are below this, and its `next_id` is at most this, so every id is exact as a
@@ -33,6 +34,29 @@ pub struct SceneData {
     /// Absent in files written before materials existed (and when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub materials: Vec<MaterialData>,
+    /// Absent in files written before tags existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<TagData>,
+}
+
+/// A tag: `color` is sRGB red, green and blue.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TagData {
+    pub id: u64,
+    pub name: String,
+    pub color: [u8; 3],
+    /// Absent when the tag is shown.
+    #[serde(default = "shown", skip_serializing_if = "is_shown")]
+    pub visible: bool,
+}
+
+fn shown() -> bool {
+    true
+}
+
+fn is_shown(visible: &bool) -> bool {
+    *visible
 }
 
 /// A material: `color` is sRGB red, green and blue; `opacity` is from 0 (invisible) to 1
@@ -113,6 +137,9 @@ pub struct EdgeData {
     /// Absent (false) before polygons existed, and for edges that are not polygon sides.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub polygon: bool,
+    /// The tag it is on (absent: Untagged, as in files written before tags existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -130,6 +157,9 @@ pub struct FaceData {
     /// The texture placement (absent: none, as in files written before placements existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_position: Option<TexturePlacement>,
+    /// The tag it is on (absent: Untagged, as in files written before tags existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -142,6 +172,9 @@ pub struct InstanceData {
     /// Absent when the instance is not painted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<u64>,
+    /// The tag it is on (absent: Untagged, as in files written before tags existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<u64>,
 }
 
 /// A guide line through `point` along `direction` (a unit vector), or, without `direction`, a
@@ -153,6 +186,9 @@ pub struct GuideData {
     pub point: [f64; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f64; 3]>,
+    /// The tag it is on (absent: Untagged, as in files written before tags existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -195,6 +231,15 @@ impl Scene {
                     emission: m.emission,
                 })
                 .collect(),
+            tags: self
+                .tags()
+                .map(|(id, t)| TagData {
+                    id: id.0,
+                    name: t.name.clone(),
+                    color: t.color,
+                    visible: t.visible,
+                })
+                .collect(),
         }
     }
 
@@ -202,8 +247,8 @@ impl Scene {
     /// id is used twice (by things of any kind) or is not below [`MAX_ID`], `next_id` is over
     /// it, a number is not finite, an instance's transform
     /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]:
-    /// that includes painting with a missing material and blank, overlong or repeated
-    /// material names).
+    /// that includes painting with a missing material, an entity on a missing tag, and blank,
+    /// overlong or repeated material and tag names).
     pub fn from_data(data: &SceneData) -> Result<Scene, String> {
         if data.next_id > MAX_ID {
             return Err(format!(
@@ -249,7 +294,19 @@ impl Scene {
                 return Err(format!("material m{} appears twice", m.id));
             }
         }
-        let scene = Scene::from_meshes(root, definitions, materials, data.next_id);
+        let mut tags = BTreeMap::new();
+        for t in &data.tags {
+            check_id("tag t", t.id)?;
+            let tag = Tag {
+                name: t.name.clone(),
+                color: t.color,
+                visible: t.visible,
+            };
+            if tags.insert(TagId(t.id), tag).is_some() {
+                return Err(format!("tag t{} appears twice", t.id));
+            }
+        }
+        let scene = Scene::from_meshes(root, definitions, materials, tags, data.next_id);
         scene.validate()?;
         Ok(scene)
     }
@@ -272,6 +329,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 curve: e.curve.map(|c| c.0),
                 soft: e.soft,
                 polygon: e.polygon,
+                tag: e.tag.map(|t| t.0),
             })
             .collect(),
         faces: m
@@ -288,6 +346,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 front: f.front.map(|m| m.0),
                 back: f.back.map(|m| m.0),
                 texture_position: f.texture,
+                tag: f.tag.map(|t| t.0),
             })
             .collect(),
         instances: m
@@ -297,20 +356,27 @@ fn mesh_data(m: &Model) -> MeshData {
                 definition: i.definition.0,
                 transform: i.transform.to_cols_array(),
                 material: i.material.map(|m| m.0),
+                tag: i.tag.map(|t| t.0),
             })
             .collect(),
         guides: m
             .guides()
             .map(|(id, g)| match *g {
-                Guide::Line { point, direction } => GuideData {
+                Guide::Line {
+                    point,
+                    direction,
+                    tag,
+                } => GuideData {
                     id: id.0,
                     point: point.to_array(),
                     direction: Some(direction.to_array()),
+                    tag: tag.map(|t| t.0),
                 },
-                Guide::Point { position } => GuideData {
+                Guide::Point { position, tag } => GuideData {
                     id: id.0,
                     point: position.to_array(),
                     direction: None,
+                    tag: tag.map(|t| t.0),
                 },
             })
             .collect(),
@@ -356,6 +422,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             curve: e.curve.map(CurveId),
             soft: e.soft,
             polygon: e.polygon,
+            tag: e.tag.map(TagId),
         };
         if edges.insert(EdgeId(e.id), edge).is_some() {
             return Err(format!("edge e{} appears twice", e.id));
@@ -374,6 +441,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             back: f.back.map(MaterialId),
             // A default placement is the same as none.
             texture: f.texture_position.filter(|t| !t.is_default()),
+            tag: f.tag.map(TagId),
         };
         if faces.insert(FaceId(f.id), face).is_some() {
             return Err(format!("face f{} appears twice", f.id));
@@ -394,6 +462,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             definition: DefinitionId(i.definition),
             transform,
             material: i.material.map(MaterialId),
+            tag: i.tag.map(TagId),
         };
         if instances.insert(InstanceId(i.id), instance).is_some() {
             return Err(format!("instance i{} appears twice", i.id));
@@ -404,8 +473,12 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
         check_id("guide g", g.id)?;
         finite(&g.point, format!("guide g{}", g.id))?;
         let point = DVec3::from(g.point);
+        let tag = g.tag.map(TagId);
         let guide = match g.direction {
-            None => Guide::Point { position: point },
+            None => Guide::Point {
+                position: point,
+                tag,
+            },
             Some(d) => {
                 finite(&d, format!("guide g{}", g.id))?;
                 let direction = DVec3::from(d);
@@ -415,7 +488,11 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
                         g.id
                     ));
                 }
-                Guide::Line { point, direction }
+                Guide::Line {
+                    point,
+                    direction,
+                    tag,
+                }
             }
         };
         if guides.insert(GuideId(g.id), guide).is_some() {

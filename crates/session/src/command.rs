@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side, SoftenReport};
+use kernel::{ChangeSummary, DefinitionId, EntityId, MaterialId, Side, SoftenReport, TagId};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -269,6 +269,41 @@ pub enum Command {
         material: Option<MaterialId>,
         #[serde(default)]
         side: Side,
+    },
+    /// Add a tag, shown. Without `name` it is called "Tag" (or "Tag 2", ... if taken); names
+    /// must be distinct, not blank, not "Untagged" (which is having no tag) and at most 256
+    /// characters. Without `color` (sRGB, each 0 to 255) it takes the first of twelve palette
+    /// colors no tag has. The new id is in the outcome's `changes.tags`.
+    AddTag {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        color: Option<[u8; 3]>,
+    },
+    /// Rename, recolor, show (`visible`: true) or hide a tag; absent fields stay as they are.
+    /// One undo step, a visibility change included.
+    ChangeTag {
+        tag: TagId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        color: Option<[u8; 3]>,
+        #[serde(default)]
+        visible: Option<bool>,
+    },
+    /// Remove a tag. What is on it, anywhere in the model, moves to `move_to` (absent or null:
+    /// Untagged), in the same undo step.
+    DeleteTag {
+        tag: TagId,
+        #[serde(default)]
+        move_to: Option<TagId>,
+    },
+    /// Put edges, faces, instances and guides of the open context on `tag` (absent or null:
+    /// Untagged), as one undo step. Vertices cannot be tagged.
+    SetTag {
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        tag: Option<TagId>,
     },
     /// Make edges of the open context soft (`soft`: true) or hard again, as one undo step: the
     /// edges in `ids` and the edges around the faces in `ids`. A soft edge is hidden and the

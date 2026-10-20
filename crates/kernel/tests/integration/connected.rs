@@ -96,6 +96,7 @@ fn connected_spreads_through_shared_vertices_only() {
     m.add_edge(p(1.0, 1.0, 1.0), p(2.0, 2.0, 2.0)).unwrap();
     m.add_guide(Guide::Point {
         position: p(3.0, 3.0, 3.0),
+        tag: None,
     })
     .unwrap();
     m.validate().unwrap();

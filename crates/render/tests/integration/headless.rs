@@ -520,6 +520,7 @@ fn a_guide_line_is_drawn_dashed_across_the_view() {
     m.add_guide(kernel::Guide::Line {
         point: c.target,
         direction: c.right(),
+        tag: None,
     })
     .unwrap();
     let Some(pixels) = render_scene(&c, &m, &[]) else {
@@ -1154,6 +1155,7 @@ fn restyling_recolors_a_selected_guide() {
     m.add_guide(kernel::Guide::Line {
         point: c.target + c.up() * (0.5 * c.pixel_size(c.target)),
         direction: c.right(),
+        tag: None,
     })
     .unwrap();
     let guide = m.guides().next().unwrap().0;

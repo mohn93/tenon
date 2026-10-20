@@ -8,7 +8,11 @@ fn p(x: f64, y: f64, z: f64) -> DVec3 {
 }
 
 fn line(point: DVec3, direction: DVec3) -> Guide {
-    Guide::Line { point, direction }
+    Guide::Line {
+        point,
+        direction,
+        tag: None,
+    }
 }
 
 /// The id of the one guide a change created.
@@ -34,6 +38,7 @@ fn guides_are_added_erased_moved_and_copied_as_undoable_changes() {
     let point = created_guide(
         &m.add_guide(Guide::Point {
             position: p(2.0, 2.0, 0.0),
+            tag: None,
         })
         .unwrap()
         .summary()
@@ -75,7 +80,8 @@ fn guides_need_finite_numbers_and_a_direction() {
     assert!(m.add_guide(line(p(f64::NAN, 0.0, 0.0), DVec3::X)).is_err());
     assert!(
         m.add_guide(Guide::Point {
-            position: p(0.0, f64::INFINITY, 0.0)
+            position: p(0.0, f64::INFINITY, 0.0),
+            tag: None
         })
         .is_err()
     );
@@ -145,6 +151,7 @@ fn broken_guides_are_rejected() {
                 id: v,
                 point: [0.0; 3],
                 direction: None,
+                tag: None,
             });
         },
         "share an id",

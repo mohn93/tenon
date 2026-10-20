@@ -774,8 +774,10 @@ impl Walk<'_> {
         };
         for (gid, guide) in model.guides() {
             let (point, direction) = match guide.transformed(t) {
-                Guide::Line { point, direction } => (point, Some(direction)),
-                Guide::Point { position } => (position, None),
+                Guide::Line {
+                    point, direction, ..
+                } => (point, Some(direction)),
+                Guide::Point { position, .. } => (position, None),
             };
             if open {
                 base.spans.guides.push((gid, base.guides.len()));
@@ -1357,6 +1359,7 @@ mod tests {
             .edit(MeshId::Definition(d), |m| {
                 m.add_guide(Guide::Point {
                     position: DVec3::new(0.5, 0.5, 0.0),
+                    tag: None,
                 })
             })
             .unwrap()
@@ -1367,6 +1370,7 @@ mod tests {
                 m.add_guide(Guide::Line {
                     point: DVec3::ZERO,
                     direction: DVec3::Y,
+                    tag: None,
                 })
             })
             .unwrap()
@@ -1689,8 +1693,10 @@ mod tests {
                         FADED_GUIDE_COLOR
                     };
                     let (point, direction) = match guide.transformed(t) {
-                        Guide::Line { point, direction } => (point, Some(direction)),
-                        Guide::Point { position } => (position, None),
+                        Guide::Line {
+                            point, direction, ..
+                        } => (point, Some(direction)),
+                        Guide::Point { position, .. } => (position, None),
                     };
                     self.g.guides.push(GuideShape {
                         point,
@@ -1770,6 +1776,7 @@ mod tests {
         s.edit(leaf_def, |m| {
             m.add_guide(Guide::Point {
                 position: DVec3::new(0.5, 0.5, 0.5),
+                tag: None,
             })
         })
         .unwrap();
@@ -1817,6 +1824,7 @@ mod tests {
             m.add_guide(Guide::Line {
                 point: at(0.0, -1.0),
                 direction: DVec3::X,
+                tag: None,
             })
         })
         .unwrap();

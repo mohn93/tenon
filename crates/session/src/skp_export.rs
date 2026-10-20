@@ -302,11 +302,13 @@ impl Ctx<'_> {
         let guides: Vec<skpwrite::Guide> = m
             .guides()
             .map(|(_, g)| match *g {
-                Guide::Line { point, direction } => skpwrite::Guide::Line {
+                Guide::Line {
+                    point, direction, ..
+                } => skpwrite::Guide::Line {
                     point: inches(point),
                     direction: direction.to_array(),
                 },
-                Guide::Point { position } => skpwrite::Guide::Point {
+                Guide::Point { position, .. } => skpwrite::Guide::Point {
                     position: inches(position),
                 },
             })

@@ -260,8 +260,10 @@ pub fn select_box(
     }
     for (id, g) in m.guides() {
         let hit = match *g {
-            Guide::Point { position } => camera.project(position).is_some_and(inside),
-            Guide::Line { point, direction } => {
+            Guide::Point { position, .. } => camera.project(position).is_some_and(inside),
+            Guide::Line {
+                point, direction, ..
+            } => {
                 !window
                     && camera
                         .line_span(point, direction)
@@ -443,10 +445,10 @@ impl Tool for SelectTool {
 /// as wide as the pick radius on screen around a guide point.
 pub(crate) fn guide_outline(ctx: &ToolContext, g: &Guide) -> Vec<[DVec3; 2]> {
     match *g {
-        Guide::Line { point, direction } => {
-            ctx.camera.line_span(point, direction).into_iter().collect()
-        }
-        Guide::Point { position } => {
+        Guide::Line {
+            point, direction, ..
+        } => ctx.camera.line_span(point, direction).into_iter().collect(),
+        Guide::Point { position, .. } => {
             let c = ctx.camera;
             if !c.sees_depth(position) {
                 return Vec::new();
@@ -879,12 +881,14 @@ mod tests {
         r.model
             .add_guide(Guide::Point {
                 position: DVec3::new(3.0, 1.0, 0.0),
+                tag: None,
             })
             .unwrap();
         r.model
             .add_guide(Guide::Line {
                 point: DVec3::new(0.0, 3.0, 0.0),
                 direction: DVec3::X,
+                tag: None,
             })
             .unwrap();
         let point = r.click(DVec3::new(3.0, 1.0, 0.0));
@@ -896,6 +900,7 @@ mod tests {
             .add_guide(Guide::Line {
                 point: DVec3::ZERO,
                 direction: DVec3::X,
+                tag: None,
             })
             .unwrap();
         let edge = r.click(DVec3::new(1.0, 0.0, 0.0));
@@ -952,6 +957,7 @@ mod tests {
         s.edit(kernel::MeshId::Definition(def), |m| {
             m.add_guide(Guide::Point {
                 position: p(3.0, 1.0),
+                tag: None,
             })
         })
         .unwrap();

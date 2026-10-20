@@ -214,6 +214,10 @@ fn describe_lists_methods_and_schemas() {
         "change_material",
         "delete_material",
         "paint",
+        "add_tag",
+        "change_tag",
+        "delete_tag",
+        "set_tag",
         "position_texture",
         "soften_edges",
         "soften_by_angle",
@@ -235,6 +239,7 @@ fn describe_lists_methods_and_schemas() {
         "file",
         "curve",
         "materials",
+        "tags",
         "outliner",
     ] {
         assert!(

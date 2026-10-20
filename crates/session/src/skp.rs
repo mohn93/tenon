@@ -501,7 +501,7 @@ fn check_world_size(
     let own = |g: &DefGeometry| -> Option<Box3> {
         let anchors = g.guides.iter().filter_map(|r| match guide(r, unit)? {
             Guide::Line { point, .. } => Some(point),
-            Guide::Point { position } => Some(position),
+            Guide::Point { position, .. } => Some(position),
         });
         g.vertex_pos
             .as_chunks::<3>()
@@ -744,9 +744,11 @@ fn guide(r: &RawGuide, unit: f64) -> Option<Guide> {
         RawGuide::Line { point, direction } => Some(Guide::Line {
             point: at(point)?,
             direction: DVec3::from_array(direction).try_normalize()?,
+            tag: None,
         }),
         RawGuide::Point { position } => Some(Guide::Point {
             position: at(position)?,
+            tag: None,
         }),
     }
 }

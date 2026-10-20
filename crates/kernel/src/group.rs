@@ -62,7 +62,8 @@ impl Scene {
     /// Instances and guides inside it come out into `parent`, with new ids; a group inside a
     /// component gets a copy of its definition. A group's definition goes with its last
     /// instance; a component's stays. The instance's material passes to the face sides and
-    /// instances that come out without one. Painted faces' texture placements take up the
+    /// instances that come out without one, and its tag to the edges, faces, instances and
+    /// guides that come out Untagged. Painted faces' texture placements take up the
     /// instance's transform, so their textures stay where they were.
     pub fn explode(
         &mut self,
@@ -83,6 +84,7 @@ impl Scene {
             || self.instance_count(placed.definition) > 1;
         let stencil = whole(&definition.mesh)
             .painted_over(placed.material)
+            .tagged_over(placed.tag)
             .textures_carried(&placed.transform);
         let inner: Vec<Instance> = definition
             .mesh
@@ -92,7 +94,10 @@ impl Scene {
         let guides: Vec<Guide> = definition
             .mesh
             .guides()
-            .map(|(_, g)| g.transformed(placed.transform))
+            .map(|(_, g)| {
+                g.transformed(placed.transform)
+                    .with_tag(g.tag().or(placed.tag))
+            })
             .collect();
         let mut copied = SceneChange::default();
         let mut children = Vec::new();
@@ -109,6 +114,7 @@ impl Scene {
                 definition,
                 transform: placed.transform * i.transform,
                 material: i.material.or(placed.material),
+                tag: i.tag.or(placed.tag),
             });
         }
         let exploded = self.edit(parent, |m| {
@@ -182,6 +188,7 @@ impl Scene {
                     definition,
                     transform: *place * original.transform,
                     material: original.material,
+                    tag: original.tag,
                 });
             }
         }
@@ -217,6 +224,7 @@ impl Scene {
                 definition,
                 transform: child.transform,
                 material: child.material,
+                tag: child.tag,
             });
         }
         let (copy, added) = self.add_definition(&name, kind);

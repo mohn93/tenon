@@ -303,7 +303,10 @@ fn texture_positions_are_saved_as_version_9_and_older_files_open_without_them() 
     )
     .unwrap();
     let document = stored(&path);
-    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(
+        document["schema_version"],
+        session::file::TEXTURE_POSITION_SCHEMA_VERSION
+    );
     assert_eq!(document["schema_version"], 9);
     assert_eq!(
         document["model"]["root"]["faces"][0]["texture_position"],

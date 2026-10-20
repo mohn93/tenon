@@ -57,8 +57,8 @@ fn guides_are_added_listed_and_undone_one_step_each() {
     assert_eq!(
         guides(&d),
         vec![
-            json!({"id": "g0", "kind": "line", "point": [0.0, -1.0, 0.0], "direction": [1.0, 0.0, 0.0]}),
-            json!({"id": "g1", "kind": "point", "point": [1.0, 1.0, 0.0]}),
+            json!({"id": "g0", "kind": "line", "point": [0.0, -1.0, 0.0], "direction": [1.0, 0.0, 0.0], "tag": null}),
+            json!({"id": "g1", "kind": "point", "point": [1.0, 1.0, 0.0], "tag": null}),
         ]
     );
     let one = ask(&d, json!({"type": "entity", "id": "g1"}));

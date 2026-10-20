@@ -86,6 +86,7 @@ Queries:
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
+| `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances and guides in the whole model are on it; see Tags below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, `revision`, and `api_roots`: the folders `--api-root` limits files to, resolved (`null` without it) |
@@ -100,12 +101,12 @@ of silently doing nothing), and so are params given by position (an array).
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `scale`, `offset`, `follow_me`, `make_group`,
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
-`change_material`, `delete_material`, `paint`, `position_texture`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `position_texture`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`, tags `t7`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -207,7 +208,8 @@ References are read only in a command's top-level `ids`, `face`, `id` and `mater
 `path` of `open_path` and `follow_me`. Any other string, such as a name or a file path, stays as written even
 when it looks like a reference. `material` takes only `m` references, the other fields only
 entity references; whether the entity suits the command (a face for `push_pull`) is checked by
-the command, as for a written id.
+the command, as for a written id. Tag ids (`tag`, `move_to`) take no references: a `$` string
+there is not a tag id and fails the batch's parsing.
 
 Errors:
 
@@ -465,6 +467,34 @@ or JPEG image from a file dialog (as wide as the texture it replaces, or 1 m, an
 new image's proportions make it), Remove takes the
 texture off, and the Size fields set its width and height in meters (one change per drag or
 typed value).
+
+### Tags
+
+A tag is a named color that edges, faces, instances (groups and components) and guides can be
+put on, to show or hide them together; an entity is on at most one tag, and on none it is
+Untagged (which is not a tag). Vertices cannot be tagged. Tags are shared by the whole model.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_tag", "name": "Walls", "color": [200, 80, 60]}` | Adds a shown tag. Without `name` it is called `Tag` (`Tag 2`, ... when taken). A name must not be blank or `Untagged`, must have at most 256 characters and must differ from every other tag's (case counts, as for materials; `invalid_input`). Without `color` (sRGB, whole numbers 0 to 255) it takes the first of a fixed palette of twelve colors no tag has (once all are used, the next in turn). The new id is the outcome's `changes.tags`, e.g. `["t31"]`. |
+| `{"type": "change_tag", "tag": "t31", "name": "Old walls", "color": [9, 9, 9], "visible": false}` | Renames, recolors, hides (`visible`: false) or shows a tag; absent fields stay. Hiding and showing are undo steps like any other change and mark the model modified. |
+| `{"type": "delete_tag", "tag": "t31", "move_to": "t32"}` | Removes a tag. Everything on it, anywhere in the model, moves to `move_to` (absent or null: Untagged) in the same undo step, so undo restores the tag and every entity's tag. `move_to` naming the deleted tag is `invalid_input`. |
+| `{"type": "set_tag", "ids": ["e4", "f8", "i12", "g20"], "tag": "t31"}` | Puts edges, faces, instances and guides of the open context on a tag (absent or null `tag`: Untagged), as one undo step. Vertex ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. Entities already on it are left as they are. |
+
+A command that adds, removes, renames, recolors, shows or hides a tag lists it in its
+`changes.tags` (also in `changed` notifications and `events`); `set_tag` and `delete_tag`
+report the entities they moved as `modified`. Unknown tag ids (`tag`, `move_to`) are
+`not_found`.
+
+The `entity` result of an edge, face, instance or guide (and its entry in `entities`) has
+`tag`: the tag's id, or `null` when Untagged.
+
+Tags follow the geometry: the pieces of a split edge or face keep its tag, two edges joined or
+two faces merged by an erase keep one's, copies (of geometry, guides and instances) keep their
+tags, `make_group` and `make_component` keep the tags of what goes inside (the new instance is
+Untagged), and push/pull and follow_me put the faces they make from a face (cap and sides, end
+caps) on that face's tag. Exploding an instance keeps each piece's own tag; what came out
+Untagged (edges, faces, instances, guides) takes the instance's tag.
 
 ### Groups and components
 
@@ -883,18 +913,20 @@ there. `preview` no longer outlines the hovered target; agents read `editor.hove
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (10 when the model has a tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
-and dark is saved exactly as before opacity existed and older builds still open it; version 8
+and dark is saved exactly as before opacity existed and older builds still open it; version 9
+and older files open with no tags and everything Untagged; version 8
 and older files open without texture positions; version 7
 and older files open without glow; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 of view, up, projection, and `lighting` when it is `night`: a file without it opens lit by day,
 and `new` starts by day) and the model with every id, edges with their curve and soft flag,
-the materials and what is painted with them. Each texture's image is stored in the archive as
+the materials and what is painted with them, the tags (name, color, and `"visible": false` when
+hidden) and each entity's `tag` (absent when Untagged). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
 `document.json` names it with its `width` and `height`.
 
@@ -913,8 +945,9 @@ cannot be read or written gives the error kind `file`, with a message naming the
 reason (a missing file, not a sketchup-alt file, a missing or newer schema version, a document
 over 256 MiB, an id of 2^53 or more or one number used as the id of two things, a transform that cannot be inverted, a coordinate beyond the
 +/-1e6 m limit, a curve whose edges branch, fall apart or are straight, a soft edge bounding
-fewer than two faces, a face or instance painted with a material the file lacks, a material
-name that is blank, too long or used twice, a material opacity outside 0 to 1, a texture
+fewer than two faces, a face or instance painted with a material the file lacks, an entity on a
+tag the file lacks, a material or tag name that is blank, too long or used twice (or a tag named
+`Untagged`), a material opacity outside 0 to 1, a texture
 whose image is missing, broken or too large, or whose size is out of range, or a face texture
 position out of range); error messages never quote the file's contents (a JSON fault gives its
 line and column); the model is left as it was. `save` also fails

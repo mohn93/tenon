@@ -185,6 +185,7 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         curve: None,
         soft: false,
         polygon: false,
+        tag: None,
     };
     let face = |k, outer: &[u64], holes: Vec<Vec<u64>>| FaceData {
         id: id(k),
@@ -197,6 +198,7 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         front: None,
         back: None,
         texture_position: None,
+        tag: None,
     };
     MeshData {
         vertices: vec![
@@ -233,6 +235,7 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
         definition: 1,
         transform: glam::DAffine3::from_translation(p(x, 5.0, 0.0)).to_cols_array(),
         material: None,
+        tag: None,
     };
     root.instances = vec![place(0, 0.0), place(1, 3.0)];
     let data = kernel::SceneData {
@@ -245,6 +248,7 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
             mesh: mesh_with_an_empty_face(2, 0.0),
         }],
         materials: vec![],
+        tags: Vec::new(),
     };
     let s = Scene::from_data(&data).unwrap();
     let (tris, skipped) = s.triangles_and_skipped();

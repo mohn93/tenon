@@ -281,6 +281,7 @@ mod tests {
                 .add_guide(Guide::Line {
                     point: DVec3::new(6.0, 0.0, 0.0),
                     direction: DVec3::Y,
+                    tag: None,
                 })
                 .unwrap();
             Rig {

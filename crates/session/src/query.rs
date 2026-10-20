@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kernel::{
     ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, MaterialId,
-    TexturePlacement,
+    TagId, TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,8 @@ pub enum Query {
     Definitions {},
     /// Every material.
     Materials {},
+    /// Every tag, with how many entities are on it.
+    Tags {},
     /// The open context: the path of instances being edited, from the root.
     Context {},
     /// The tree of placed groups and components: the root's instances, each with the
@@ -106,6 +108,8 @@ pub struct EdgeInfo {
     /// false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub soft: bool,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
 }
 
 /// A curve: a chain of edges drawn as one circle or arc. Its shape is worked out from where
@@ -153,6 +157,8 @@ pub struct FaceInfo {
     /// it lies as projected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_position: Option<TexturePlacement>,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
 }
 
 /// A placed group or component.
@@ -171,6 +177,8 @@ pub struct InstanceInfo {
     /// The material shown on face sides inside it without one of their own; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
 }
 
 /// Whether a guide is a line or a point.
@@ -190,6 +198,8 @@ pub struct GuideInfo {
     pub point: [f64; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f64; 3]>,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -281,6 +291,20 @@ pub struct MaterialInfo {
     pub instances: usize,
 }
 
+/// A tag and how much of the model is on it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TagInfo {
+    pub id: TagId,
+    pub name: String,
+    /// sRGB red, green and blue, 0 to 255.
+    pub color: [u8; 3],
+    /// False when what is on it is hidden.
+    pub visible: bool,
+    /// Edges, faces, instances and guides on it, in the whole model (each definition counted
+    /// once).
+    pub count: usize,
+}
+
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextureInfo {
@@ -352,6 +376,10 @@ pub enum QueryResult {
     },
     Materials {
         materials: Vec<MaterialInfo>,
+        revision: u64,
+    },
+    Tags {
+        tags: Vec<TagInfo>,
         revision: u64,
     },
     /// `path` lists the open instances from the root; empty when the root is open.

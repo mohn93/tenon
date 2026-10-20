@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
-    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
+    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, TagId,
+    VertexId,
 };
 use crate::index::Index;
 use crate::texture::{TexturePlacement, is_level};
@@ -32,16 +33,20 @@ pub struct Edge {
     /// stay hard when pulled. Every edge of a curve has the same flag; a plain edge never has it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub polygon: bool,
+    /// The tag the edge is on; None is Untagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<TagId>,
 }
 
 impl Edge {
-    /// A plain edge: not part of a curve, not soft.
+    /// A plain edge: not part of a curve, not soft, Untagged.
     pub fn new(a: VertexId, b: VertexId) -> Edge {
         Edge {
             v: [a, b],
             curve: None,
             soft: false,
             polygon: false,
+            tag: None,
         }
     }
 }
@@ -63,10 +68,13 @@ pub struct Face {
     /// Never the default placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TexturePlacement>,
+    /// The tag the face is on; None is Untagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<TagId>,
 }
 
 impl Face {
-    /// An unpainted face.
+    /// An unpainted, Untagged face.
     pub fn new(outer: Vec<VertexId>, holes: Vec<Vec<VertexId>>, normal: DVec3) -> Face {
         Face {
             outer,
@@ -75,6 +83,7 @@ impl Face {
             front: None,
             back: None,
             texture: None,
+            tag: None,
         }
     }
 
@@ -89,6 +98,7 @@ impl Face {
             front: self.back,
             back: self.front,
             texture: self.texture.map(|t| t.turned_over(is_level(self.normal))),
+            tag: self.tag,
         }
     }
 
@@ -108,15 +118,19 @@ pub struct Instance {
     /// own, unless an instance nearer to them has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
+    /// The tag the instance is on; None is Untagged. Hiding it hides everything inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<TagId>,
 }
 
 impl Instance {
-    /// An unpainted instance.
+    /// An unpainted, Untagged instance.
     pub fn new(definition: DefinitionId, transform: DAffine3) -> Instance {
         Instance {
             definition,
             transform,
             material: None,
+            tag: None,
         }
     }
 }
@@ -126,21 +140,70 @@ impl Instance {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Guide {
     /// The infinite line through `point` along the unit vector `direction`.
-    Line { point: DVec3, direction: DVec3 },
+    Line {
+        point: DVec3,
+        direction: DVec3,
+        /// The tag the guide is on; None is Untagged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<TagId>,
+    },
     /// A single point.
-    Point { position: DVec3 },
+    Point {
+        position: DVec3,
+        /// The tag the guide is on; None is Untagged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<TagId>,
+    },
 }
 
 impl Guide {
-    /// The guide moved by a rigid motion `t`.
+    /// An Untagged guide line through `point` along `direction`.
+    pub fn line(point: DVec3, direction: DVec3) -> Guide {
+        Guide::Line {
+            point,
+            direction,
+            tag: None,
+        }
+    }
+
+    /// An Untagged guide point at `position`.
+    pub fn point(position: DVec3) -> Guide {
+        Guide::Point {
+            position,
+            tag: None,
+        }
+    }
+
+    /// The tag the guide is on; None is Untagged.
+    pub fn tag(&self) -> Option<TagId> {
+        match *self {
+            Guide::Line { tag, .. } | Guide::Point { tag, .. } => tag,
+        }
+    }
+
+    /// The same guide on `tag`.
+    pub fn with_tag(mut self, to: Option<TagId>) -> Guide {
+        match &mut self {
+            Guide::Line { tag, .. } | Guide::Point { tag, .. } => *tag = to,
+        }
+        self
+    }
+
+    /// The guide moved by a rigid motion `t`, on the same tag.
     pub fn transformed(&self, t: DAffine3) -> Guide {
         match *self {
-            Guide::Line { point, direction } => Guide::Line {
+            Guide::Line {
+                point,
+                direction,
+                tag,
+            } => Guide::Line {
                 point: t.transform_point3(point),
                 direction: t.transform_vector3(direction).normalize(),
+                tag,
             },
-            Guide::Point { position } => Guide::Point {
+            Guide::Point { position, tag } => Guide::Point {
                 position: t.transform_point3(position),
+                tag,
             },
         }
     }
@@ -149,7 +212,7 @@ impl Guide {
     pub fn anchor(&self) -> DVec3 {
         match *self {
             Guide::Line { point, .. } => point,
-            Guide::Point { position } => position,
+            Guide::Point { position, .. } => position,
         }
     }
 }
@@ -179,6 +242,8 @@ pub enum Op {
     PaintInstance(InstanceId, Option<MaterialId>, Option<MaterialId>),
     /// A face's texture placement changed from the first to the second.
     PlaceTexture(FaceId, Option<TexturePlacement>, Option<TexturePlacement>),
+    /// An edge's, face's, instance's or guide's tag changed from the first to the second.
+    SetTag(EntityId, Option<TagId>, Option<TagId>),
 }
 
 impl Op {
@@ -200,6 +265,7 @@ impl Op {
             Op::PaintFace(id, from, to) => Op::PaintFace(id, to, from),
             Op::PaintInstance(id, from, to) => Op::PaintInstance(id, to, from),
             Op::PlaceTexture(id, from, to) => Op::PlaceTexture(id, to, from),
+            Op::SetTag(id, from, to) => Op::SetTag(id, to, from),
         }
     }
 
@@ -222,6 +288,7 @@ impl Op {
             Op::PaintFace(id, _, _) => (EntityId::Face(*id), true, true),
             Op::PaintInstance(id, _, _) => (EntityId::Instance(*id), true, true),
             Op::PlaceTexture(id, _, _) => (EntityId::Face(*id), true, true),
+            Op::SetTag(id, _, _) => (*id, true, true),
         }
     }
 }
@@ -243,16 +310,21 @@ pub struct ChangeSummary {
     /// when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub materials: Vec<MaterialId>,
+    /// Tags added, removed, renamed, recolored, shown or hidden (see `SceneChange::summary`).
+    /// Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<TagId>,
 }
 
 impl ChangeSummary {
     /// The net change of `summaries` applied in order: made then changed is made, made then
-    /// erased is absent, changed then erased is erased. A material listed in any of them is
-    /// listed in the result.
+    /// erased is absent, changed then erased is erased. A material or tag listed in any of them
+    /// is listed in the result.
     pub fn join<'a>(summaries: impl IntoIterator<Item = &'a ChangeSummary>) -> ChangeSummary {
         // entity -> (existed before, exists after)
         let mut state: BTreeMap<EntityId, (bool, bool)> = BTreeMap::new();
         let mut materials = BTreeSet::new();
+        let mut tags = BTreeSet::new();
         for s in summaries {
             let listed = s
                 .created
@@ -264,6 +336,7 @@ impl ChangeSummary {
                 state.entry(*id).or_insert((before, after)).1 = after;
             }
             materials.extend(s.materials.iter().copied());
+            tags.extend(s.tags.iter().copied());
         }
         let mut net = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -275,6 +348,7 @@ impl ChangeSummary {
             }
         }
         net.materials = materials.into_iter().collect();
+        net.tags = tags.into_iter().collect();
         net
     }
 }
@@ -661,6 +735,29 @@ impl Model {
                     f.texture = to;
                 }
             }
+            Op::SetTag(id, _, to) => match id {
+                EntityId::Edge(e) => {
+                    if let Some(e) = self.edges.get_mut(&e) {
+                        e.tag = to;
+                    }
+                }
+                EntityId::Face(f) => {
+                    if let Some(f) = self.faces.get_mut(&f) {
+                        f.tag = to;
+                    }
+                }
+                EntityId::Instance(i) => {
+                    if let Some(i) = self.instances.get_mut(&i) {
+                        i.tag = to;
+                    }
+                }
+                EntityId::Guide(g) => {
+                    if let Some(g) = self.guides.get_mut(&g) {
+                        *g = g.with_tag(to);
+                    }
+                }
+                EntityId::Vertex(_) => {}
+            },
         }
     }
 
@@ -780,11 +877,11 @@ impl Model {
     }
 
     pub(crate) fn insert_edge(&mut self, a: VertexId, b: VertexId) -> EdgeId {
-        self.insert_edge_like(a, b, None, false, false)
+        self.insert_edge_like(a, b, None, false, false, None)
     }
 
-    /// Adds the edge a-b on `curve` and with `soft` and `polygon` (the attributes of an edge it
-    /// replaces). An edge on no curve is never a polygon side.
+    /// Adds the edge a-b on `curve`, with `soft` and `polygon`, and on `tag` (the attributes
+    /// of an edge it replaces). An edge on no curve is never a polygon side.
     pub(crate) fn insert_edge_like(
         &mut self,
         a: VertexId,
@@ -792,6 +889,7 @@ impl Model {
         curve: Option<CurveId>,
         soft: bool,
         polygon: bool,
+        tag: Option<TagId>,
     ) -> EdgeId {
         let id = EdgeId(self.alloc());
         let edge = Edge {
@@ -799,13 +897,15 @@ impl Model {
             curve,
             soft,
             polygon: polygon && curve.is_some(),
+            tag,
         };
         self.record(Op::AddEdge(id, edge));
         id
     }
 
     /// Puts an edge on `curve` (or none) and sets its soft and polygon flags, recording a change
-    /// only when something differs. An edge on no curve is never a polygon side.
+    /// only when something differs. The edge keeps its tag. An edge on no curve is never a
+    /// polygon side.
     pub(crate) fn set_edge(
         &mut self,
         id: EdgeId,
@@ -823,6 +923,7 @@ impl Model {
             curve,
             soft,
             polygon,
+            tag: from.tag,
         };
         self.record(Op::ChangeEdge(id, from, to));
     }
@@ -931,6 +1032,28 @@ impl Model {
         }
     }
 
+    /// The tag of an edge, face, instance or guide (None: Untagged); None for a vertex or an
+    /// unknown id.
+    pub fn tag_of(&self, id: EntityId) -> Option<Option<TagId>> {
+        match id {
+            EntityId::Edge(e) => self.edges.get(&e).map(|e| e.tag),
+            EntityId::Face(f) => self.faces.get(&f).map(|f| f.tag),
+            EntityId::Instance(i) => self.instances.get(&i).map(|i| i.tag),
+            EntityId::Guide(g) => self.guides.get(&g).map(Guide::tag),
+            EntityId::Vertex(_) => None,
+        }
+    }
+
+    /// Puts an edge, face, instance or guide on `tag` (None: Untagged), recording a change
+    /// only when it differs. Vertices and unknown ids are skipped.
+    pub(crate) fn set_tag(&mut self, id: EntityId, tag: Option<TagId>) {
+        if let Some(from) = self.tag_of(id)
+            && from != tag
+        {
+            self.record(Op::SetTag(id, from, tag));
+        }
+    }
+
     /// Replaces a face's data, keeping its id.
     pub(crate) fn replace_face(&mut self, id: FaceId, face: Face) {
         self.remove_face(id);
@@ -987,12 +1110,14 @@ impl Model {
         }
         for (id, g) in &self.guides {
             let ok = match g {
-                Guide::Line { point, direction } => {
+                Guide::Line {
+                    point, direction, ..
+                } => {
                     point.is_finite()
                         && direction.is_finite()
                         && (direction.length() - 1.0).abs() <= 1e-9
                 }
-                Guide::Point { position } => position.is_finite(),
+                Guide::Point { position, .. } => position.is_finite(),
             };
             if !ok {
                 return Err(format!(
@@ -1111,12 +1236,14 @@ mod tests {
             deleted: vec![v(9)],
             modified: vec![v(5)],
             materials: vec![],
+            tags: vec![],
         };
         let b = ChangeSummary {
             created: vec![v(3)],
             deleted: vec![v(2), v(5)],
             modified: vec![v(1)],
             materials: vec![],
+            tags: vec![],
         };
         let net = ChangeSummary::join([&a, &b]);
         // made then changed is made; made then erased is gone
@@ -1329,7 +1456,7 @@ mod tests {
         assert!(built(&m));
         m.set_paint(face, [Some(MaterialId(100)), None]);
         m.set_edge(edge, Some(CurveId(101)), false, false);
-        m.insert_guide(Guide::Point { position: DVec3::Z });
+        m.insert_guide(Guide::point(DVec3::Z));
         let i = m.insert_instance(Instance::new(DefinitionId(102), DAffine3::IDENTITY));
         m.transform_instances(&[i], DAffine3::from_translation(DVec3::X));
         m.set_instance_material(i, Some(MaterialId(100)));

@@ -536,10 +536,10 @@ fn whole_face(
 /// True when `add_guide` takes the guide: finite, and a line has a direction.
 fn guide_is_valid(g: &Guide) -> bool {
     match *g {
-        Guide::Line { point, direction } => {
-            point.is_finite() && direction.try_normalize().is_some()
-        }
-        Guide::Point { position } => position.is_finite(),
+        Guide::Line {
+            point, direction, ..
+        } => point.is_finite() && direction.try_normalize().is_some(),
+        Guide::Point { position, .. } => position.is_finite(),
     }
 }
 
@@ -597,6 +597,7 @@ impl Model {
                 definition: ours[i.definition].expect("a reached definition is made"),
                 transform: i.transform,
                 material: i.material,
+                tag: None,
             });
             report.instances += 1;
         }

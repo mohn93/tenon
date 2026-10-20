@@ -117,10 +117,12 @@ fn a_face_with_a_hole_and_soft_edges() {
         guides: vec![
             Guide::Point {
                 position: DVec3::ONE,
+                tag: None,
             },
             Guide::Line {
                 point: DVec3::ZERO,
                 direction: DVec3::ZERO,
+                tag: None,
             },
         ],
         instances: vec![],

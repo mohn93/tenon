@@ -27,6 +27,7 @@ mod selection;
 mod skp;
 mod skp_export;
 mod soften;
+mod tags;
 mod texture_position;
 mod textures;
 mod transform;

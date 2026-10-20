@@ -5,7 +5,8 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId, KernelError,
-    MaterialEdit, MeshId, Model, PlacementEdit, Scene, SceneChange, SoftenReport, VertexId,
+    MaterialEdit, MeshId, Model, PlacementEdit, Scene, SceneChange, SoftenReport, TagEdit,
+    VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
@@ -30,6 +31,7 @@ mod import;
 mod materials;
 mod placement;
 mod soften;
+mod tags;
 
 use import::ImportOptions;
 
@@ -383,6 +385,10 @@ impl Document {
             | Command::ChangeMaterial { .. }
             | Command::DeleteMaterial { .. }
             | Command::Paint { .. }
+            | Command::AddTag { .. }
+            | Command::ChangeTag { .. }
+            | Command::DeleteTag { .. }
+            | Command::SetTag { .. }
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::PositionTexture { .. }
@@ -450,6 +456,7 @@ impl Document {
             Command::AddGuidePoint { position } => check_coordinates(&[*position]).and_then(|()| {
                 self.add_guide(Guide::Point {
                     position: DVec3::from(*position),
+                    tag: None,
                 })
             }),
             Command::DeleteGuides {} => {
@@ -531,6 +538,22 @@ impl Document {
                 material,
                 side,
             } => self.paint_changes(ids, *material, *side),
+            Command::AddTag { name, color } => self.add_tag_changes(name.as_deref(), *color),
+            Command::ChangeTag {
+                tag,
+                name,
+                color,
+                visible,
+            } => self.change_tag_changes(
+                *tag,
+                TagEdit {
+                    name: name.as_deref(),
+                    color: *color,
+                    visible: *visible,
+                },
+            ),
+            Command::DeleteTag { tag, move_to } => self.delete_tag_changes(*tag, *move_to),
+            Command::SetTag { ids, tag } => self.set_tag_changes(ids, *tag),
             Command::SoftenEdges { ids, soft } => self.soften_changes(ids, *soft),
             Command::SoftenByAngle { ids, max_angle_deg } => {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
@@ -727,6 +750,7 @@ impl Document {
         self.add_guide(Guide::Line {
             point: DVec3::from(point),
             direction,
+            tag: None,
         })
     }
 
@@ -1564,6 +1588,10 @@ impl Document {
                 materials: self.material_infos(),
                 revision: self.revision,
             },
+            Query::Tags {} => QueryResult::Tags {
+                tags: self.tag_infos(),
+                revision: self.revision,
+            },
             Query::Context {} => QueryResult::Context {
                 path: self
                     .context
@@ -1611,7 +1639,7 @@ impl Document {
             }
             EntityId::Guide(g) => {
                 return match m.guide(g) {
-                    Some(Guide::Point { position }) => vec![position.to_array()],
+                    Some(Guide::Point { position, .. }) => vec![position.to_array()],
                     _ => Vec::new(),
                 };
             }
@@ -1649,6 +1677,7 @@ impl Document {
             end: self.model().position(b).unwrap().to_array(),
             curve: e.curve.map(|c| c.to_string()),
             soft: e.soft,
+            tag: e.tag,
         }
     }
 
@@ -1695,15 +1724,19 @@ impl Document {
     }
 
     fn guide_info(&self, id: GuideId) -> GuideInfo {
-        let (kind, point, direction) = match *self.model().guide(id).unwrap() {
-            Guide::Line { point, direction } => (GuideKind::Line, point, Some(direction)),
-            Guide::Point { position } => (GuideKind::Point, position, None),
+        let guide = *self.model().guide(id).unwrap();
+        let (kind, point, direction) = match guide {
+            Guide::Line {
+                point, direction, ..
+            } => (GuideKind::Line, point, Some(direction)),
+            Guide::Point { position, .. } => (GuideKind::Point, position, None),
         };
         GuideInfo {
             id: EntityId::Guide(id),
             kind,
             point: point.to_array(),
             direction: direction.map(|d| d.to_array()),
+            tag: guide.tag(),
         }
     }
 
@@ -1719,6 +1752,7 @@ impl Document {
             front_material: f.front,
             back_material: f.back,
             texture_position: f.texture,
+            tag: f.tag,
         }
     }
 }

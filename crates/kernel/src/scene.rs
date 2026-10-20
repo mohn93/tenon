@@ -6,9 +6,10 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId, MaterialId};
+use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId, MaterialId, TagId};
 use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
+use crate::tag::Tag;
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
 /// shared by all its instances: editing it changes them all.
@@ -48,6 +49,10 @@ pub enum Step {
     /// A material's name, color, opacity, texture or emission changed from the first to the
     /// second.
     ChangeMaterial(MaterialId, Material, Material),
+    AddTag(TagId, Tag),
+    RemoveTag(TagId, Tag),
+    /// A tag's name, color or visibility changed from the first to the second.
+    ChangeTag(TagId, Tag, Tag),
 }
 
 impl Step {
@@ -60,6 +65,9 @@ impl Step {
             Step::AddMaterial(id, m) => Step::RemoveMaterial(id, m),
             Step::RemoveMaterial(id, m) => Step::AddMaterial(id, m),
             Step::ChangeMaterial(id, from, to) => Step::ChangeMaterial(id, to, from),
+            Step::AddTag(id, t) => Step::RemoveTag(id, t),
+            Step::RemoveTag(id, t) => Step::AddTag(id, t),
+            Step::ChangeTag(id, from, to) => Step::ChangeTag(id, to, from),
         }
     }
 }
@@ -90,7 +98,7 @@ impl SceneChange {
 
     /// Net effect per entity across all meshes (ids are unique in a scene). Definitions are not
     /// listed; the instances that place them are. Materials added, removed or changed are
-    /// listed in `materials` (one added and removed again is not).
+    /// listed in `materials`, and tags so in `tags` (one added and removed again is not).
     pub fn summary(&self) -> ChangeSummary {
         let ops = self
             .steps
@@ -118,6 +126,22 @@ impl SceneChange {
             .filter(|(_, (before, after))| *before || *after)
             .map(|(id, _)| id)
             .collect();
+        // tag -> (existed before, exists after)
+        let mut tags: BTreeMap<TagId, (bool, bool)> = BTreeMap::new();
+        for step in &self.steps {
+            let (id, before, after) = match step {
+                Step::AddTag(id, _) => (*id, false, true),
+                Step::RemoveTag(id, _) => (*id, true, false),
+                Step::ChangeTag(id, _, _) => (*id, true, true),
+                _ => continue,
+            };
+            tags.entry(id).or_insert((before, after)).1 = after;
+        }
+        summary.tags = tags
+            .into_iter()
+            .filter(|(_, (before, after))| *before || *after)
+            .map(|(id, _)| id)
+            .collect();
         summary
     }
 }
@@ -135,17 +159,20 @@ pub struct Scene {
     definitions: BTreeMap<DefinitionId, Definition>,
     /// The materials faces and instances may be painted with, shared by every mesh.
     materials: BTreeMap<MaterialId, Material>,
+    /// The tags entities may be put on, shared by every mesh.
+    tags: BTreeMap<TagId, Tag>,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.
     next_id: u64,
 }
 
-/// Two scenes are equal when they hold the same entities, definitions and materials under the
-/// same ids.
+/// Two scenes are equal when they hold the same entities, definitions, materials and tags
+/// under the same ids.
 impl PartialEq for Scene {
     fn eq(&self, other: &Self) -> bool {
         self.root == other.root
             && self.definitions == other.definitions
             && self.materials == other.materials
+            && self.tags == other.tags
     }
 }
 
@@ -161,6 +188,7 @@ impl Scene {
             root: model,
             definitions: BTreeMap::new(),
             materials: BTreeMap::new(),
+            tags: BTreeMap::new(),
         }
     }
 
@@ -170,12 +198,14 @@ impl Scene {
         root: Model,
         definitions: BTreeMap<DefinitionId, Definition>,
         materials: BTreeMap<MaterialId, Material>,
+        tags: BTreeMap<TagId, Tag>,
         next_id: u64,
     ) -> Self {
         let used = definitions
             .iter()
             .map(|(id, d)| id.0.saturating_add(1).max(d.mesh.next_id()))
             .chain(materials.keys().map(|id| id.0.saturating_add(1)))
+            .chain(tags.keys().map(|id| id.0.saturating_add(1)))
             .chain([root.next_id(), next_id])
             .max()
             .unwrap_or(0);
@@ -183,6 +213,7 @@ impl Scene {
             root,
             definitions,
             materials,
+            tags,
             next_id: used,
         }
     }
@@ -215,6 +246,22 @@ impl Scene {
     /// A material id for a new material, taken from the entity id counter.
     pub(crate) fn alloc_material(&mut self) -> MaterialId {
         let id = MaterialId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    pub fn tag(&self, id: TagId) -> Option<&Tag> {
+        self.tags.get(&id)
+    }
+
+    /// Every tag, by id.
+    pub fn tags(&self) -> impl Iterator<Item = (TagId, &Tag)> {
+        self.tags.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// A tag id for a new tag, taken from the entity id counter.
+    pub(crate) fn alloc_tag(&mut self) -> TagId {
+        let id = TagId(self.next_id);
         self.next_id += 1;
         id
     }
@@ -445,13 +492,26 @@ impl Scene {
                     *m = to.clone();
                 }
             }
+            Step::AddTag(id, t) => {
+                self.next_id = self.next_id.max(id.0.saturating_add(1));
+                self.tags.insert(*id, t.clone());
+            }
+            Step::RemoveTag(id, _) => {
+                self.tags.remove(id);
+            }
+            Step::ChangeTag(id, _, to) => {
+                if let Some(t) = self.tags.get_mut(id) {
+                    *t = to.clone();
+                }
+            }
         }
     }
 
     /// Checks every mesh, that instances place existing definitions, that no definition places
     /// itself (directly or deeper), that no number is the id of two things (entities in any
-    /// mesh, curves, definitions and materials all take ids from one counter), that every
-    /// material painted exists, that material names are valid and distinct, that material
+    /// mesh, curves, definitions, materials and tags all take ids from one counter), that every
+    /// material painted and every tag used exists, that material and tag names are valid and
+    /// distinct, that material
     /// opacities are from 0 to 1 and emissions from 0 to `MAX_EMISSION`, that textures are
     /// valid and at most `MAX_TEXTURES`, and that face texture placements are in range.
     pub fn validate(&self) -> Result<(), String> {
@@ -474,8 +534,17 @@ impl Scene {
                 crate::texture::MAX_TEXTURES
             ));
         }
+        let mut tag_names = BTreeSet::new();
+        for (id, t) in &self.tags {
+            crate::tag::check_name(&t.name).map_err(|e| format!("tag {id}: {e}"))?;
+            if !tag_names.insert(t.name.as_str()) {
+                return Err(format!("tag {id}: two tags are named the same"));
+            }
+        }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
-        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "c", "d", "m").
+        let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
+        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "c", "d", "m",
+        // "t").
         let mut owner: BTreeMap<u64, char> = BTreeMap::new();
         let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
             None => Ok(()),
@@ -487,6 +556,9 @@ impl Scene {
         }
         for id in self.materials.keys() {
             claim(id.0, 'm')?;
+        }
+        for id in self.tags.keys() {
+            claim(id.0, 't')?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;
@@ -507,6 +579,9 @@ impl Scene {
                 if let Some(t) = &f.texture {
                     crate::texture::check_placement(t).map_err(|e| format!("face {id:?}: {e}"))?;
                 }
+            }
+            if let Some(id) = entity_ids(m).find(|id| missing_tag(m.tag_of(*id).flatten())) {
+                return Err(format!("{id} is on a missing tag"));
             }
             for id in entity_ids(m) {
                 let (prefix, n) = match id {

@@ -245,6 +245,7 @@ impl Document {
                 max: hi.to_array(),
             }),
             material: i.material,
+            tag: i.tag,
         }
     }
 }

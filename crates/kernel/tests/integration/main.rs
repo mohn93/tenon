@@ -19,6 +19,7 @@ mod push_pull;
 mod scale;
 mod smooth;
 mod soften;
+mod tags;
 mod texture_placement;
 mod textures;
 mod transform;

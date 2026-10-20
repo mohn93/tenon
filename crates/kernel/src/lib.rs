@@ -24,6 +24,7 @@ mod scene;
 mod smooth;
 mod soften;
 pub mod sweep;
+mod tag;
 mod texture;
 mod transform;
 mod triangles;
@@ -32,11 +33,12 @@ mod weld;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MIN_DETERMINANT,
-    MaterialData, MeshData, SceneData, TextureData, VertexData,
+    MaterialData, MeshData, SceneData, TagData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
-    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId,
+    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, TagId,
+    VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -50,6 +52,7 @@ pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op
 pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
+pub use tag::{MAX_TAG_NAME, TAG_COLORS, Tag, TagEdit, UNTAGGED};
 pub use texture::{
     ImageFormat, MAX_TEXTURE_OFFSET, MAX_TEXTURE_SCALE, MAX_TEXTURE_SIZE, MAX_TEXTURES,
     MIN_TEXTURE_SCALE, MIN_TEXTURE_SIZE, PlacementEdit, Texture, TextureImage, TexturePlacement,

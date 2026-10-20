@@ -466,13 +466,13 @@ fn a_drawn_model_round_trips() {
     let diagonal = DVec3::new(1.0, 1.0, 0.0).normalize();
     assert!(
         guides.iter().any(|g| matches!(g,
-            kernel::Guide::Line { point, direction }
+            kernel::Guide::Line { point, direction, .. }
                 if point.abs_diff_eq(DVec3::new(0.0, 0.0, 5.0), 1e-9)
                     && direction.abs_diff_eq(diagonal, 1e-9))),
         "{guides:?}"
     );
     assert!(guides.iter().any(|g| matches!(g,
-        kernel::Guide::Point { position } if position.abs_diff_eq(DVec3::new(1.0, 2.0, 3.0), 1e-9))));
+        kernel::Guide::Point { position, .. } if position.abs_diff_eq(DVec3::new(1.0, 2.0, 3.0), 1e-9))));
 
     // The mirrored crate stays mirrored.
     let dets: Vec<f64> = got

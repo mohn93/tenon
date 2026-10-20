@@ -8,7 +8,7 @@ use crate::edit::{KernelError, loop_has_side};
 use crate::geom::{
     LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment, segment_distance_2d,
 };
-use crate::ids::{CurveId, EdgeId, FaceId, VertexId};
+use crate::ids::{CurveId, EdgeId, EntityId, FaceId, VertexId};
 use crate::model::{ChangeSet, Face, Model};
 
 impl Model {
@@ -263,6 +263,8 @@ impl Model {
         } else {
             (face.paint(), face.texture)
         };
+        // The cap and sides go on the pushed face's tag.
+        let new_tag = face.tag;
         let created: Vec<FaceId> = self
             .faces()
             .map(|(f, _)| f)
@@ -285,6 +287,7 @@ impl Model {
                 self.orient(f, cap_normal);
                 self.set_paint(f, new_paint);
                 self.set_texture(f, cap_texture);
+                self.set_tag(EntityId::Face(f), new_tag);
                 continue;
             }
             // A side face lies inside a side's swept rectangle. Other new faces in a side's
@@ -310,6 +313,7 @@ impl Model {
             // (one made inside a coplanar old face inherited that face's).
             self.set_paint(f, new_paint);
             self.set_texture(f, None);
+            self.set_tag(EntityId::Face(f), new_tag);
         }
         if cut {
             self.remove_strays(&vertices_before, &sides, offset);
