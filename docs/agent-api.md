@@ -32,6 +32,10 @@ On Windows the API listens on a named pipe instead: `\\.\pipe\sketchup-alt-<pid>
 `\\.\pipe\main`. Only the current user can open the pipe (its access list names that user
 alone), clients on other machines are refused, and a name another program is already listening
 on is refused (`cannot listen on ...`) rather than shared. The pipe goes away when the app exits.
+Pipe names are shared by every user on the machine, so `app --mcp --live` checks that the
+process serving the pipe runs as the current user, and refuses to connect otherwise (`the pipe
+... belongs to another user; not connecting`): another user who created the name first does not
+receive what the agent sends.
 
 ## MCP
 

@@ -78,6 +78,11 @@ app.exe --socket sketchup-alt-main
 claude mcp add sketchup-alt-live -- C:\path\to\app.exe --mcp --live sketchup-alt-main
 ```
 
+Pipe names are visible to every user on the machine, and any of them could create a fixed name
+such as this one before the window starts. The MCP server therefore connects only when the
+process serving the pipe runs as you; otherwise it stops with exit code 1 and `the pipe ...
+belongs to another user; not connecting`. If that happens, pick another name.
+
 ## Notes
 
 - Undo steps an agent makes are tagged `agent` (`query` `{"type": "history"}` lists

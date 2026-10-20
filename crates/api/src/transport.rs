@@ -182,20 +182,29 @@ pub fn connect(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn
 /// this process's while it runs.
 #[cfg(windows)]
 fn listen_pipe(name: &str, inbox: Inbox) -> io::Result<()> {
-    use crate::windows::Pipe;
-    let first = Pipe::create(name, true)?;
+    use crate::windows::{OwnerOnly, Pipe};
+    let descriptor = OwnerOnly::new()?;
+    let first = Pipe::create(name, true, &descriptor)?;
     let name = name.to_string();
     thread::spawn(move || {
         let mut waiting = first;
         loop {
             let connected = waiting.accept().is_ok();
-            let next = Pipe::create(&name, false);
-            if connected && let Ok((reader, writer)) = waiting.split() {
-                serve_stream(inbox.clone(), reader, writer);
+            let next = Pipe::create(&name, false, &descriptor);
+            if connected {
+                if let Ok((reader, writer)) = waiting.split() {
+                    serve_stream(inbox.clone(), reader, writer);
+                }
+            } else {
+                // A failure that repeats does not spin.
+                thread::sleep(std::time::Duration::from_millis(50));
             }
             match next {
                 Ok(pipe) => waiting = pipe,
-                Err(_) => return,
+                Err(e) => {
+                    eprintln!("agent API: no longer accepting connections on {name}: {e}");
+                    return;
+                }
             }
         }
     });

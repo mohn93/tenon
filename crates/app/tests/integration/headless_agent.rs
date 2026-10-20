@@ -151,8 +151,17 @@ fn quitting_over_a_named_pipe_answers() {
         std::thread::sleep(Duration::from_millis(20));
     };
     writeln!(&pipe, "{}", request(1, "quit", Value::Null)).unwrap();
-    let mut line = String::new();
-    BufReader::new(&pipe).read_line(&mut line).unwrap();
+    // A pipe has no read timeout: read on another thread and bound the wait instead.
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        BufReader::new(&pipe).read_line(&mut line).unwrap();
+        let _ = sent.send(line);
+    });
+    let Ok(line) = received.recv_timeout(Duration::from_secs(30)) else {
+        let _ = child.kill();
+        panic!("no reply to quit within 30 seconds");
+    };
     let reply: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(reply["result"], json!({}), "{line}");
     assert!(exits(&mut child).success());

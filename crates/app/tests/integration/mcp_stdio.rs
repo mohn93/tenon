@@ -263,11 +263,20 @@ fn ask_socket(path: &str, request: &Value) -> Value {
     read_reply(BufReader::new(stream), request)
 }
 
+/// A pipe has no read timeout: the exchange runs on its own thread and the wait for it is
+/// bounded instead, so a server that never answers fails the test rather than hanging it.
 #[cfg(windows)]
 fn ask_socket(name: &str, request: &Value) -> Value {
-    let mut pipe = open_pipe(name).unwrap();
-    writeln!(pipe, "{request}").unwrap();
-    read_reply(BufReader::new(pipe), request)
+    let (name, request) = (name.to_string(), request.clone());
+    let (sent, reply) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut pipe = open_pipe(&name).unwrap();
+        writeln!(pipe, "{request}").unwrap();
+        let _ = sent.send(read_reply(BufReader::new(pipe), &request));
+    });
+    reply
+        .recv_timeout(TIMEOUT)
+        .expect("a reply over the pipe within the timeout")
 }
 
 /// Reads lines until the reply to `request`.
