@@ -752,3 +752,81 @@ fn the_outliner_marks_what_hidden_tags_hide() {
     hide(&mut d, &hidden);
     assert_eq!(ask(&d, json!({"type": "selection"}))["ids"], json!([outer]));
 }
+
+#[test]
+fn select_all_skips_what_hidden_tags_hide() {
+    let mut d = doc();
+    let (f, e) = square(&mut d);
+    let (g_face, g_edges) = rectangle(&mut d, [5.0, 0.0], [7.0, 2.0]);
+    let mut ids = g_edges;
+    ids.push(g_face);
+    let g = group(&mut d, ids);
+    let hidden = add(&mut d, json!({"name": "Hidden"}));
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [f, e[0], g], "tag": hidden}),
+    )
+    .unwrap();
+    let selected = |d: &mut Document| {
+        run(d, json!({"type": "select", "all": true})).unwrap();
+        let mut ids: Vec<String> = ask(d, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(
+        selected(&mut d).len(),
+        6,
+        "a face, four edges and the group"
+    );
+    hide(&mut d, &hidden);
+    let mut shown: Vec<String> = e[1..].to_vec();
+    shown.sort();
+    assert_eq!(selected(&mut d), shown);
+}
+
+#[test]
+fn zoom_extents_counts_the_open_instances_whatever_their_tags() {
+    let mut d = doc();
+    square(&mut d);
+    let (far, far_edges) = rectangle(&mut d, [100.0, 0.0], [102.0, 2.0]);
+    let mut ids = far_edges;
+    ids.push(far);
+    let g = group(&mut d, ids);
+    let away = add(&mut d, json!({"name": "Away"}));
+    run(&mut d, json!({"type": "set_tag", "ids": [g], "tag": away})).unwrap();
+    hide(&mut d, &away);
+    let target = |d: &Document| ask(d, json!({"type": "camera"}))["target"].clone();
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    assert_eq!(target(&d)[0], json!(1.0), "the hidden group is left out");
+    run(&mut d, json!({"type": "open_instance", "id": g})).unwrap();
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    assert_eq!(target(&d)[0], json!(51.0), "opened, it counts");
+}
+
+#[test]
+fn the_export_message_names_hidden_tags_only_when_they_hid_a_face() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+    let hidden = add(&mut d, json!({"name": "Hidden"}));
+    hide(&mut d, &hidden);
+    let e = export(&mut d, "edges-only.stl").unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("the model has no faces"), "{}", e.1);
+    let (f, _) = square(&mut d);
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [f], "tag": hidden}),
+    )
+    .unwrap();
+    let e = export(&mut d, "hidden-face.stl").unwrap_err();
+    assert!(e.1.contains("hidden tags hide the rest"), "{}", e.1);
+}

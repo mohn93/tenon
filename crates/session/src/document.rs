@@ -345,12 +345,27 @@ impl Document {
                             "select takes ids or all, not both",
                         ));
                     }
+                    // What hidden tags hide is left out, as in SketchUp.
                     let m = self.model();
+                    let shown = |tag| self.scene.tag_shown(tag);
                     m.edges()
+                        .filter(|(_, e)| shown(e.tag))
                         .map(|(id, _)| EntityId::Edge(id))
-                        .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
-                        .chain(m.instances().map(|(id, _)| EntityId::Instance(id)))
-                        .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
+                        .chain(
+                            m.faces()
+                                .filter(|(_, f)| shown(f.tag))
+                                .map(|(id, _)| EntityId::Face(id)),
+                        )
+                        .chain(
+                            m.instances()
+                                .filter(|(_, i)| shown(i.tag))
+                                .map(|(id, _)| EntityId::Instance(id)),
+                        )
+                        .chain(
+                            m.guides()
+                                .filter(|(_, g)| shown(g.tag()))
+                                .map(|(id, _)| EntityId::Guide(id)),
+                        )
                         .collect()
                 } else {
                     self.parts(&ids)?;

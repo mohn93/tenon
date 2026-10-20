@@ -360,3 +360,43 @@ fn hidden_faces_edges_and_guides_are_not_picked_or_snapped_to() {
     let (_, _, at) = face_under_in(&view, &c, px(&c, p(3.5, 0.5, 1.0))).unwrap();
     assert!(at.z < 1.0 - 1e-6, "the top is passed through: {at}");
 }
+
+#[test]
+fn faces_whose_edges_are_all_hidden_keep_their_corners_and_box() {
+    let (mut s, i) = scene();
+    let lines = add_tag(&mut s, "Lines");
+    let d = s.root().instance(i).unwrap().definition;
+    let edges: Vec<EntityId> = s
+        .definition(d)
+        .unwrap()
+        .mesh
+        .edges()
+        .map(|(e, _)| EntityId::Edge(e))
+        .collect();
+    s.set_tags(MeshId::Definition(d), &edges, Some(lines))
+        .unwrap();
+    hide(&mut s, lines);
+    let view = Scenery::of(&s, &[]).unwrap();
+    let c = camera(DVec3::ZERO);
+    let corner = p(4.0, 0.0, 1.0);
+    let hit = infer_in(
+        &view,
+        &c,
+        px(&c, corner) + DVec2::new(3.0, 2.0),
+        &Guides::default(),
+        R,
+    );
+    assert_eq!(
+        hit.kind,
+        SnapKind::Endpoint,
+        "the faces' corner still snaps"
+    );
+    assert!(hit.point.abs_diff_eq(corner, 1e-9), "{:?}", hit.point);
+    assert_eq!(
+        view.instance_box(i),
+        Some([p(3.0, 0.0, 0.0), p(4.0, 1.0, 1.0)])
+    );
+    assert!(boxed(&view, &c).contains(&EntityId::Instance(i)));
+    let window = select_box(&view, &c, DVec2::ZERO, DVec2::new(800.0, 600.0), false);
+    assert!(window.contains(&EntityId::Instance(i)));
+}

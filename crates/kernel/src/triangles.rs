@@ -26,7 +26,7 @@ pub struct Triangle {
 impl Scene {
     /// Every face the scene shows, as triangles in root coordinates: the root's faces and,
     /// placed by their transforms, the faces of every instance at any depth. Faces and
-    /// instances on hidden tags are left out (see `is_shown`), with all they place. A component
+    /// instances on hidden tags are left out (see `Scene::tag_shown`), with all they place. A component
     /// placed twice gives its faces twice. Edges without faces give nothing. The order is
     /// fixed: faces by id, then instances by id, depth first.
     pub fn triangles(&self) -> Vec<Triangle> {

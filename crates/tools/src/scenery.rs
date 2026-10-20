@@ -1,5 +1,5 @@
 //! What tools see: the open context's mesh plus every other placed mesh of the scene, all in
-//! the open context's coordinates. What hidden tags hide is not seen (see `kernel::is_shown`):
+//! the open context's coordinates. What hidden tags hide is not seen (see `kernel::tag_shown_among`):
 //! instances on hidden tags are left out with all they place (but for those the open context
 //! is in), guides on hidden tags too, and each part tells which of its faces, edges and
 //! vertices show.
@@ -11,7 +11,10 @@ use std::sync::OnceLock;
 
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
-use kernel::{EdgeId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, TagId, VertexId};
+use kernel::{
+    EdgeId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, TagId, VertexId,
+    tag_shown_among,
+};
 use session::Camera;
 
 /// Whose geometry a part is, seen from the open context.
@@ -159,7 +162,7 @@ pub struct Part<'s> {
 
 impl Part<'_> {
     fn shows(&self, tag: Option<TagId>) -> bool {
-        tag.is_none_or(|t| !self.hidden.contains(&t))
+        tag_shown_among(self.hidden, tag)
     }
 
     /// Whether the face shows: it is not on a hidden tag.
@@ -172,7 +175,7 @@ impl Part<'_> {
         self.hidden.is_empty() || self.model.edge(e).is_some_and(|e| self.shows(e.tag))
     }
 
-    /// Whether the vertex shows: some edge on it does (see `Model::vertex_shown`).
+    /// Whether the vertex shows: some edge or face using it does (see `Model::vertex_shown`).
     pub fn shows_vertex(&self, v: VertexId) -> bool {
         self.model.vertex_shown(v, self.hidden)
     }
@@ -275,7 +278,7 @@ impl Layout {
             .flat_map(|(k, part)| {
                 models[part.mesh]
                     .guides()
-                    .filter(|(_, g)| g.tag().is_none_or(|t| !hidden.contains(&t)))
+                    .filter(|(_, g)| tag_shown_among(&hidden, g.tag()))
                     .map(move |(id, g)| (k, id, g.transformed(part.place)))
             })
             .collect();
@@ -472,7 +475,7 @@ impl<'a> Scenery<'a> {
 
     /// Whether what is on `tag` (None: Untagged) shows.
     pub fn shows(&self, tag: Option<TagId>) -> bool {
-        tag.is_none_or(|t| !self.layout.hidden.contains(&t))
+        tag_shown_among(&self.layout.hidden, tag)
     }
 
     /// The open context's own mesh.
@@ -550,7 +553,7 @@ fn collect<'a>(
     });
     for (iid, instance) in model.instances() {
         path.push(iid);
-        let shown = instance.tag.is_none_or(|t| !hidden.contains(&t));
+        let shown = tag_shown_among(hidden, instance.tag);
         if !shown && !context.starts_with(path) {
             path.pop();
             continue;

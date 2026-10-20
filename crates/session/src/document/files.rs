@@ -96,7 +96,7 @@ impl Document {
         })?;
         let report = fresh.skp_report(&built);
         let mut camera = Camera::new(self.camera.viewport);
-        if let Some([lo, hi]) = fresh.scene.shown_bounds(MeshId::Root) {
+        if let Some([lo, hi]) = fresh.scene.shown_bounds(MeshId::Root, &[]) {
             camera.fit(lo, hi);
         }
         self.replace(fresh.scene, camera);
@@ -197,7 +197,7 @@ impl Document {
         if triangles.is_empty() {
             let message = if skipped_faces > 0 {
                 format!("nothing to export: {skipped_faces} faces could not be triangulated")
-            } else if !self.scene.hidden_tags().is_empty() {
+            } else if self.scene.hides_faces() {
                 "nothing to export: no face is shown (hidden tags hide the rest)".to_string()
             } else {
                 "nothing to export: the model has no faces".to_string()

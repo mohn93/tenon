@@ -559,7 +559,7 @@ pub fn edge_under_where(
 /// coordinates, in part and id order so that ties between equally near candidates always go
 /// the same way. Soft edges are hidden, so they are left out: nothing snaps to them or picks
 /// them (their ends are vertices of the edges around them and still snap). Edges on hidden
-/// tags are left out too, and vertices whose edges all are.
+/// tags are left out too, and vertices no shown edge or face uses.
 pub(crate) struct Near {
     pub(crate) points: Vec<(usize, VertexId, DVec3)>,
     pub(crate) segments: Vec<(usize, EdgeId, DVec3, DVec3)>,

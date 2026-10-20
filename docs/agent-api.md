@@ -140,7 +140,7 @@ selected with the `selection` query. Vertex ids are `invalid_input` and unknown 
 (Select None).
 
 `{"type": "select", "all": true, "mode": "replace"}` selects every edge, face, instance and guide
-of the open context, combined with the current selection by `mode` as `ids` are. `ids` must then
+of the open context that no hidden tag hides (see Tags), combined with the current selection by `mode` as `ids` are. `ids` must then
 be absent or empty: giving both is `invalid_input` ("select takes ids or all, not both").
 
 `{"type": "select", "box": {"from": [100, 80], "to": [300, 240]}, "mode": "add"}` selects by a box
@@ -500,13 +500,15 @@ them on the incoming edges' tag (when those have one), as drawn geometry takes t
 
 What a hidden tag is on is hidden: an edge, face or guide on a hidden tag, and a group or
 component on a hidden tag with everything inside it, whatever tags its contents are on (content
-inside a shown instance is hidden by its own tag). A vertex is hidden when every edge on it is.
-Hidden entities are not drawn (nor in `render_view`), not met by `pick`, not selected by a
-`select` box, not snapped to by `infer` or the tools, and do not hide what is behind them;
-`zoom_extents` leaves them out (with everything hidden it does nothing, as for an empty model),
-and so do OBJ, STL and glTF exports. They are still there for everything else: `entities`,
-`entity`, `stats` and the `outliner` (whose nodes say `"hidden": true`) list them, `select` with
-`all` takes them, and commands given their ids act on them. The instances the open context is in stay shown while open, whatever their tags.
+inside a shown instance is hidden by its own tag). A vertex is hidden when no shown edge or face
+uses it. Hidden entities are not drawn (nor in `render_view`), not met by `pick`, not selected
+by a `select` box or by `select` with `all` (as SketchUp's Select All), not snapped to by `infer`
+or the tools, and do not hide what is behind them; `zoom_extents` leaves them out (with
+everything hidden it does nothing, as for an empty model), and so do OBJ, STL and glTF exports.
+They are still there for everything else: `entities`, `entity`, `stats` and the `outliner`
+(whose nodes say `"hidden": true`) list them, and commands given their ids act on them. The
+instances the open context is in stay shown while open, whatever their tags (drawn, seen by the
+tools and counted by `zoom_extents`).
 Hiding a tag does not change the selection: selected entities it hides stay selected, just not
 drawn (as in SketchUp).
 

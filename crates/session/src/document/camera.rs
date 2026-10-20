@@ -55,7 +55,7 @@ impl Document {
                 }
             }
             Command::ZoomExtents {} => {
-                if let Some([lo, hi]) = self.scene.shown_bounds(MeshId::Root) {
+                if let Some([lo, hi]) = self.scene.shown_bounds(MeshId::Root, &self.context) {
                     camera.fit(lo, hi);
                 }
             }
