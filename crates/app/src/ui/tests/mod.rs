@@ -31,8 +31,8 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, RecoverRow, SceneRow, SettingsView, Sheet, StartCard,
-    TagRow, TexturePosition, TextureRow, UiAction, View, draw,
+    Agents, DockLayout, DockTab, MaterialRow, RecoverRow, RecoverView, SceneRow, SettingsView,
+    Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction, View, draw,
 };
 use crate::editor::{RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
@@ -102,6 +102,8 @@ pub(super) struct Fixture {
     pub settings: Option<SettingsView>,
     /// The Recover Models window's rows while it is open.
     pub recover: Option<Vec<RecoverRow>>,
+    /// How many older entries the Recover Models window left out.
+    pub recover_older: usize,
 }
 
 impl Default for Fixture {
@@ -162,6 +164,7 @@ impl Default for Fixture {
             rename: None,
             settings: None,
             recover: None,
+            recover_older: 0,
         }
     }
 }
@@ -212,7 +215,10 @@ impl Fixture {
             sheet: self.sheet.as_ref(),
             rename: self.rename.as_ref(),
             settings: self.settings,
-            recover: self.recover.as_deref(),
+            recover: self.recover.as_deref().map(|rows| RecoverView {
+                rows,
+                older: self.recover_older,
+            }),
         }
     }
 

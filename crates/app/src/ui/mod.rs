@@ -357,8 +357,17 @@ pub struct View<'a> {
     pub rename: Option<&'a RenameTarget>,
     /// What the Settings window shows; Some while it is open.
     pub settings: Option<SettingsView>,
-    /// The models the Recover Models window lists; Some while it is open.
-    pub recover: Option<&'a [RecoverRow]>,
+    /// What the Recover Models window lists; Some while it is open.
+    pub recover: Option<RecoverView<'a>>,
+}
+
+/// What the Recover Models window lists.
+#[derive(Clone, Copy, Debug)]
+pub struct RecoverView<'a> {
+    /// The newest models, newest first.
+    pub rows: &'a [RecoverRow],
+    /// How many older ones were left out.
+    pub older: usize,
 }
 
 /// A model the Recover Models window lists.
@@ -508,8 +517,8 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     if view.shortcuts {
         dialogs::shortcuts_window(ui, actions);
     }
-    if let Some(rows) = view.recover {
-        recover::recover_window(ui, rows, actions);
+    if let Some(recover) = view.recover {
+        recover::recover_window(ui, recover.rows, recover.older, actions);
     }
     let central = ui.available_rect_before_wrap();
     // In the root's own layer, under every window and menu.

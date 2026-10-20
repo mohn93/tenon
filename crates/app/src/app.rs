@@ -39,7 +39,7 @@ use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, RecoverRow, SceneRow, SettingsView, Sheet, StartCard, TagRow,
+    Agents, MaterialRow, RecoverRow, RecoverView, SceneRow, SettingsView, Sheet, StartCard, TagRow,
     TexturePosition, TextureRow, UiAction, View,
 };
 use crate::ui::{theme, viewport};
@@ -279,12 +279,36 @@ fn held_by_operation(busy: bool, now: Instant, since: Instant, interval: Duratio
     busy && now < since + interval * 2
 }
 
-/// Whether the window removes its autosave as it exits: when the exit was settled (the
-/// unsaved prompt answered, or an agent's `quit`), or there is nothing unsaved. An exit the
-/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down) keeps it, to
-/// be offered at the next start.
-fn clears_autosave_at_exit(settled: bool, modified: bool) -> bool {
-    settled || !modified
+/// What the window does with its autosave as it exits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtExit {
+    /// Remove it: the changes were saved or discarded.
+    Clear,
+    /// Write it first: the newest changes are not in it yet.
+    Write,
+    /// Leave it as it is.
+    Keep,
+}
+
+/// What happens to the autosave as the window exits: removed when the exit was settled (the
+/// unsaved prompt answered, or an agent's `quit`) or there is nothing unsaved. An exit the
+/// system asks for without the prompt (macOS: Dock > Quit, log out, shut down) keeps it, to be
+/// offered at the next start, written first when autosave is on (`minutes` not 0) and the
+/// model's `revision` is not the one last autosaved.
+fn at_exit(
+    settled: bool,
+    modified: bool,
+    revision: u64,
+    saved_revision: Option<u64>,
+    minutes: u32,
+) -> AtExit {
+    if settled || !modified {
+        AtExit::Clear
+    } else if minutes > 0 && saved_revision != Some(revision) {
+        AtExit::Write
+    } else {
+        AtExit::Keep
+    }
 }
 
 /// The deadline the event loop wakes at: the earlier of the pending repaint and the next
@@ -845,6 +869,21 @@ struct RecoverList {
     /// Whether it lists the work agents discarded too (File > Recover Models...).
     discarded: bool,
     entries: Vec<recovery::Entry>,
+    /// The window's rows for `entries`, made when they were listed.
+    rows: Vec<RecoverRow>,
+    /// How many older entries were left out.
+    older: usize,
+}
+
+impl RecoverList {
+    fn new(discarded: bool, listing: recovery::Listing) -> Self {
+        Self {
+            discarded,
+            rows: recover_rows(&listing.entries, SystemTime::now()),
+            entries: listing.entries,
+            older: listing.older,
+        }
+    }
 }
 
 impl State {
@@ -1092,6 +1131,34 @@ impl State {
         self.autosave.revision = None;
     }
 
+    /// Removes the autosave as the window exits, or writes it first when the exit was not
+    /// settled (see `at_exit`).
+    fn autosave_at_exit(&mut self) {
+        let doc = self.editor.doc();
+        let action = at_exit(
+            self.quit,
+            doc.is_modified(),
+            doc.revision(),
+            self.autosave.revision,
+            self.prefs.autosave_minutes,
+        );
+        match action {
+            AtExit::Clear => self.clear_autosave(),
+            AtExit::Write => {
+                let original = doc
+                    .path()
+                    .map(Path::to_path_buf)
+                    .or_else(|| self.recovered_doc().and_then(|r| r.original.clone()));
+                if let Some(session) = &self.session
+                    && let Err(why) = session.write_autosave(self.editor.doc(), original.as_deref())
+                {
+                    eprintln!("warning: autosave failed as the app ended: {why}");
+                }
+            }
+            AtExit::Keep => {}
+        }
+    }
+
     /// The model opened from the Recover Models window, while it is the open document.
     fn recovered_doc(&self) -> Option<&RecoveredDoc> {
         self.recovered_doc
@@ -1120,17 +1187,21 @@ impl State {
                 .show_error("Recovery is not available: the recovery folder cannot be used");
             return;
         };
-        self.recover = Some(RecoverList {
+        self.recover = Some(RecoverList::new(
             discarded,
-            entries: recovery::list(dir, session, discarded),
-        });
+            recovery::list_newest(dir, session, discarded, recovery::MAX_LISTED),
+        ));
     }
 
     /// Lists the Recover Models window's entries again, closing it once none is left.
     fn refresh_recovered(&mut self) {
         if let Some(discarded) = self.recover.as_ref().map(|r| r.discarded) {
             self.list_recovered(discarded);
-            if self.recover.as_ref().is_some_and(|r| r.entries.is_empty()) {
+            if self
+                .recover
+                .as_ref()
+                .is_some_and(|r| r.entries.is_empty() && r.older == 0)
+            {
                 self.recover = None;
             }
         }
@@ -1900,10 +1971,6 @@ impl State {
         });
         self.drop_outlived_sheet();
         let rename = self.editor.rename_target();
-        let recover_rows = self
-            .recover
-            .as_ref()
-            .map(|r| recover_rows(&r.entries, SystemTime::now()));
         let panels = View {
             undo: self.editor.doc().undo_label(),
             redo: self.editor.doc().redo_label(),
@@ -1971,7 +2038,10 @@ impl State {
                 trackpad: self.prefs.trackpad,
                 autosave_minutes: self.prefs.autosave_minutes,
             }),
-            recover: recover_rows.as_deref(),
+            recover: self.recover.as_ref().map(|r| RecoverView {
+                rows: &r.rows,
+                older: r.older,
+            }),
         };
         let mut gui_frame = self.gui.frame(&self.window, &panels);
         #[cfg(target_os = "macos")]
@@ -2640,12 +2710,9 @@ impl ApplicationHandler<AppEvent> for App {
         if let Some(endpoint) = self.socket.take() {
             endpoint.remove();
         }
-        // A normal exit: unsaved changes were saved or discarded, so the autosave goes. The
-        // session's lock goes with the window either way.
-        if let Some(s) = self.state.as_mut()
-            && clears_autosave_at_exit(s.quit, s.editor.doc().is_modified())
-        {
-            s.clear_autosave();
+        // The session's lock goes with the window either way.
+        if let Some(s) = self.state.as_mut() {
+            s.autosave_at_exit();
         }
     }
 
@@ -2718,12 +2785,9 @@ impl ApplicationHandler<AppEvent> for App {
         state.window.set_visible(true);
         // Autosaves of windows that ended without saving are offered back.
         if let (Some(dir), Some(session)) = (state.recovery.as_deref(), state.session.as_ref()) {
-            let crashed = recovery::list(dir, session, false);
-            if opens_recover_at_start(&crashed) {
-                state.recover = Some(RecoverList {
-                    discarded: false,
-                    entries: crashed,
-                });
+            let crashed = recovery::list_newest(dir, session, false, recovery::MAX_LISTED);
+            if opens_recover_at_start(&crashed.entries) {
+                state.recover = Some(RecoverList::new(false, crashed));
             }
         }
         if let Some(path) = self.file.take() {
@@ -3999,15 +4063,22 @@ mod tests {
 
     #[test]
     fn only_a_settled_exit_or_a_saved_model_removes_the_autosave() {
-        assert!(
-            clears_autosave_at_exit(true, true),
+        let at = |settled, modified, saved| at_exit(settled, modified, 7, saved, 5);
+        assert_eq!(
+            at(true, true, None),
+            AtExit::Clear,
             "prompt answered or agent quit"
         );
-        assert!(clears_autosave_at_exit(false, false), "nothing unsaved");
-        assert!(clears_autosave_at_exit(true, false));
-        assert!(
-            !clears_autosave_at_exit(false, true),
-            "the system ended the app"
+        assert_eq!(at(false, false, None), AtExit::Clear, "nothing unsaved");
+        assert_eq!(at(true, false, Some(7)), AtExit::Clear);
+        // The system ended the app: the newest changes are written first.
+        assert_eq!(at(false, true, None), AtExit::Write);
+        assert_eq!(at(false, true, Some(6)), AtExit::Write);
+        assert_eq!(at(false, true, Some(7)), AtExit::Keep, "already autosaved");
+        assert_eq!(
+            at_exit(false, true, 7, Some(6), 0),
+            AtExit::Keep,
+            "autosave off"
         );
     }
 

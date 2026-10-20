@@ -1,6 +1,7 @@
 //! The Recover Models window: the models a window that ended without saving (or an agent's
 //! discard) left in the recovery folder, each with Open and Discard, and Discard All. What it
-//! reports goes through `UiAction`; Discard and Discard All ask first, in a sheet.
+//! reports goes through `UiAction`; Discard and Discard All ask first, in a sheet. Only the
+//! newest are listed (`recovery::MAX_LISTED`); a note says how many older ones were not.
 
 use egui::{RichText, Ui};
 
@@ -10,7 +11,12 @@ use super::{RecoverRow, UiAction, widgets};
 pub const TITLE: &str = "Recover Models";
 
 /// The Recover Models window, centred over the window when it first opens.
-pub(super) fn recover_window(ui: &mut Ui, rows: &[RecoverRow], actions: &mut Vec<UiAction>) {
+pub(super) fn recover_window(
+    ui: &mut Ui,
+    rows: &[RecoverRow],
+    older: usize,
+    actions: &mut Vec<UiAction>,
+) {
     let mut open = true;
     let ctx = ui.ctx().clone();
     let room = (ctx.content_rect().height() - 160.0).max(120.0);
@@ -23,8 +29,16 @@ pub(super) fn recover_window(ui: &mut Ui, rows: &[RecoverRow], actions: &mut Vec
         .default_pos(ctx.content_rect().center())
         .constrain(true)
         .show(&ctx, |ui| {
+            let note = match older {
+                0 => None,
+                1 => Some("1 older entry not shown".to_string()),
+                n => Some(format!("{n} older entries not shown")),
+            };
             if rows.is_empty() {
                 ui.label(RichText::new("No models to recover").weak());
+                if let Some(note) = note {
+                    ui.label(RichText::new(note).weak());
+                }
                 return;
             }
             ui.label("These models were not saved. Open one to keep working on it.");
@@ -40,6 +54,9 @@ pub(super) fn recover_window(ui: &mut Ui, rows: &[RecoverRow], actions: &mut Vec
                     }
                 });
             widgets::name_scroll_bars(ui.ctx(), list.id, "Recovered models");
+            if let Some(note) = note {
+                ui.label(RichText::new(note).weak());
+            }
             ui.separator();
             if ui.button("Discard All").clicked() {
                 actions.push(UiAction::DiscardRecovered(None));

@@ -78,6 +78,30 @@ fn the_recover_window_lists_each_model_with_open_and_discard() {
 }
 
 #[test]
+fn the_recover_window_says_how_many_older_entries_it_left_out() {
+    let h = harness(Fixture {
+        recover_older: 3,
+        ..recover_fixture(rows())
+    });
+    assert!(
+        drawn_texts(&h)
+            .iter()
+            .any(|t| t == "3 older entries not shown")
+    );
+    let h = harness(recover_fixture(rows()));
+    assert!(!drawn_texts(&h).iter().any(|t| t.contains("older")));
+    let h = harness(Fixture {
+        recover_older: 1,
+        ..recover_fixture(Vec::new())
+    });
+    assert!(
+        drawn_texts(&h)
+            .iter()
+            .any(|t| t == "1 older entry not shown")
+    );
+}
+
+#[test]
 fn an_empty_recover_window_says_so() {
     let h = harness(recover_fixture(Vec::new()));
     assert!(drawn_texts(&h).iter().any(|t| t == "No models to recover"));

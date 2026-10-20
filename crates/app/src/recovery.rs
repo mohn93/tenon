@@ -458,16 +458,42 @@ fn is_live(dir: &Path, id: &str) -> bool {
     }
 }
 
-/// The entries in the recovery folder `dir` whose session has ended, newest first:
-/// autosaves, and with `include_discarded` the work agents discarded. `own`'s entries and
-/// those of sessions still running are left out. Sidecars that are links or open to other
-/// users are skipped; an entry whose sidecar cannot be read, or whose model is missing, a
-/// link or open to other users, is listed with an `error` (it can only be discarded). Lock
-/// files of ended sessions with no entries left are removed.
+/// The most entries a listing returns.
+pub const MAX_LISTED: usize = 200;
+
+/// How old a leftover temporary file (a write's `.partial`, a session's `.locking`) must be
+/// before a listing removes it.
+const STALE_TEMP: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// What `list_newest` found: the newest entries, and how many older candidates were left out.
+#[derive(Debug, Default)]
+pub struct Listing {
+    pub entries: Vec<Entry>,
+    /// Older recovery notes and copies not looked at or not returned (some may turn out to
+    /// belong to a running window).
+    pub older: usize,
+}
+
+/// `list_newest` with the default bound, the entries only (what the tests read).
+#[cfg(test)]
 pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
+    list_newest(dir, own, include_discarded, MAX_LISTED).entries
+}
+
+/// The entries in the recovery folder `dir` whose session has ended, newest first and at most
+/// `max`: autosaves, and with `include_discarded` the work agents discarded (without it, only
+/// notes named as an autosave's are read). `own`'s entries and those of sessions still
+/// running are left out. Notes are read newest first (by when they were written) until `max`
+/// entries are found. Sidecars that are links or open to other users are skipped; an entry
+/// whose sidecar cannot be read, or whose model is missing, a link or open to other users, is
+/// listed with an `error` (it can only be discarded), unless its name says it belongs to a
+/// running session. Lock files of ended sessions with no entries seen are removed, and so are
+/// temporary files (`.sketchup-alt-*.partial`, `.session-*.locking`) a day old.
+pub fn list_newest(dir: &Path, own: &Session, include_discarded: bool, max: usize) -> Listing {
     let Ok(read) = std::fs::read_dir(dir) else {
-        return Vec::new();
+        return Listing::default();
     };
+    let now = SystemTime::now();
     let mut locks = Vec::new();
     let mut sidecars = Vec::new();
     let mut autosaves = Vec::new();
@@ -482,11 +508,19 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
                 locks.push(id.to_string());
             }
         } else if name.ends_with(".skr.json") {
-            sidecars.push(item.path());
+            if include_discarded || name.ends_with(".autosave.skr.json") {
+                let written = std::fs::symlink_metadata(item.path())
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                sidecars.push((written, item.path()));
+            }
         } else if name.ends_with(AUTOSAVE_SUFFIX) {
             autosaves.push(item.path());
+        } else if is_temp_name(name) {
+            remove_if_stale(&item.path(), now);
         }
     }
+    sidecars.sort_by_key(|(written, _)| std::cmp::Reverse(*written));
     let mut live = std::collections::HashMap::new();
     let mut is_live = |id: &str| {
         *live
@@ -495,7 +529,13 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
     };
     let mut with_entries = std::collections::HashSet::new();
     let mut entries = Vec::new();
-    for side in sidecars {
+    let mut older = 0;
+    let mut sidecars = sidecars.into_iter();
+    for (_, side) in sidecars.by_ref() {
+        if entries.len() >= max {
+            older += 1;
+            continue;
+        }
         let Ok(meta) = private_file(&side) else {
             continue;
         };
@@ -525,6 +565,12 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
             }
             Err(e) => {
                 let file_name = model.file_name().map(|n| n.to_string_lossy().into_owned());
+                let ids = file_name.as_deref().map(ids_in_name).unwrap_or_default();
+                // A running session's autosave whose note is being replaced, say.
+                if ids.iter().any(|id| *id == own.id || is_live(id)) {
+                    continue;
+                }
+                with_entries.extend(ids);
                 let kind = if file_name
                     .as_deref()
                     .is_some_and(|n| n.ends_with(AUTOSAVE_SUFFIX))
@@ -573,13 +619,42 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
             error: Some("its description is missing".into()),
         });
     }
+    // Sessions whose notes were not read may have entries left; their lock files go anyway
+    // once ended, which is what a missing lock file means too.
     for id in locks {
         if id != own.id && !with_entries.contains(&id) && !is_live(&id) {
             let _ = std::fs::remove_file(dir.join(lock_name(&id)));
         }
     }
     entries.sort_by_key(|e| std::cmp::Reverse(e.saved));
-    entries
+    if entries.len() > max {
+        older += entries.len() - max;
+        entries.truncate(max);
+    }
+    Listing { entries, older }
+}
+
+/// Whether `name` is a temporary file's that the app writes in the recovery folder: a write's
+/// `.sketchup-alt-<pid>-<n>.partial` or a starting session's `.session-<id>.locking`.
+fn is_temp_name(name: &str) -> bool {
+    (name.starts_with(".sketchup-alt-") && name.ends_with(".partial"))
+        || (name.starts_with(".session-") && name.ends_with(".locking"))
+}
+
+/// Removes the temporary file at `path` when it is a regular file (never a link) last changed
+/// `STALE_TEMP` or more before `now`: what a write or a start that never finished left.
+fn remove_if_stale(path: &Path, now: SystemTime) {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    let stale = meta
+        .modified()
+        .ok()
+        .and_then(|t| now.duration_since(t).ok())
+        .is_some_and(|age| age >= STALE_TEMP);
+    if stale && meta.file_type().is_file() && !session::fspath::is_link(&meta) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Removes `entry`'s files (its sidecar, then its model; a link is removed, not followed).
@@ -1060,5 +1135,95 @@ mod tests {
         assert!(!due(60, 3, None, false, false, min), "not modified");
         assert!(!due(60, 3, None, true, true, min), "mid-operation");
         assert!(!due(600, 3, None, true, false, Duration::ZERO), "off");
+    }
+
+    /// Sets when the file at `path` was last changed to `secs` seconds before now.
+    fn age(path: &Path, secs: u64) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_listing_returns_the_newest_entries_and_counts_the_rest() {
+        let dir = folder("bounded");
+        let a = Session::start(&dir).unwrap();
+        for (k, name) in ["old", "middle", "new"].into_iter().enumerate() {
+            let kept = dir.join(format!("{name}-170000000{k}.skr"));
+            doc().write_copy(&kept).unwrap();
+            a.note_discarded(&kept, Some(Path::new(&format!("/x/{name}.skr"))));
+            age(&sidecar_path(&kept), 3000 - 1000 * k as u64);
+        }
+        crash(a);
+        let b = Session::start(&dir).unwrap();
+        let found = list_newest(&dir, &b, true, 2);
+        let names: Vec<&str> = found.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(
+            names.contains(&"new") && names.contains(&"middle"),
+            "{names:?}"
+        );
+        assert_eq!(found.older, 1);
+        let all = list_newest(&dir, &b, true, MAX_LISTED);
+        assert_eq!((all.entries.len(), all.older), (3, 0));
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn at_start_only_autosave_notes_are_read() {
+        let dir = folder("start-names");
+        let b = Session::start(&dir).unwrap();
+        // An unreadable note of a discarded file: listed only with the discarded work.
+        let kept = dir.join("house-1700000000.skr");
+        doc().write_copy(&kept).unwrap();
+        crate::prefs::create_private_file(&sidecar_path(&kept)).unwrap();
+        assert!(list(&dir, &b, false).is_empty());
+        assert_eq!(list(&dir, &b, true).len(), 1);
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_note_of_a_running_sessions_autosave_is_not_listed() {
+        let dir = folder("live-broken");
+        let a = Session::start(&dir).unwrap();
+        let b = Session::start(&dir).unwrap();
+        a.write_autosave(&doc(), Some(Path::new("/x/house.skr")))
+            .unwrap();
+        let model = dir.join(format!("house-{}.autosave.skr", a.id()));
+        std::fs::write(sidecar_path(&model), b"not json").unwrap();
+        assert!(list(&dir, &b, true).is_empty(), "a is running");
+        crash(a);
+        let found = list(&dir, &b, false);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].error.is_some());
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_listing_removes_temporary_files_a_day_old() {
+        let dir = folder("stale-temp");
+        let b = Session::start(&dir).unwrap();
+        let day = 24 * 60 * 60;
+        let stale_partial = dir.join(".sketchup-alt-9-1.partial");
+        let stale_locking = dir.join(".session-9-1.locking");
+        let fresh = dir.join(".sketchup-alt-9-2.partial");
+        let other = dir.join(".other-9.partial");
+        for path in [&stale_partial, &stale_locking, &fresh, &other] {
+            crate::prefs::create_private_file(path).unwrap();
+        }
+        for path in [&stale_partial, &stale_locking, &other] {
+            age(path, day + 60);
+        }
+        age(&fresh, day - 60);
+        list(&dir, &b, false);
+        assert!(!stale_partial.exists());
+        assert!(!stale_locking.exists());
+        assert!(fresh.exists(), "a write may still be going on");
+        assert!(other.exists(), "not the app's");
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

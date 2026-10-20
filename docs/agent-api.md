@@ -1067,14 +1067,21 @@ place; while a drag or a tool operation that has not changed the model yet is in
 waits, at most one interval more. The user's own file is never written by
 autosave. The copy and its sidecar are removed when the model is saved, when New or Open replaces
 it (the window's or an agent's `save`, `new` and `open`), and when the window quits after the unsaved
-prompt or an agent's `quit` (a quit the system asks for without the prompt, such as logging
-out on macOS, keeps it).
+prompt or an agent's `quit`. A quit the system asks for without the prompt, such as logging
+out on macOS, keeps it, writing the newest changes to it first.
 Each window holds a lock on `session-<session>.lock` in the folder while it runs, so copies of a
 window that is still open are never offered elsewhere. A window that ended without cleaning up
 (a crash) leaves its autosave behind: at the next start the Recover Models window opens and
 lists it, with Open (after the unsaved-changes prompt, the copy opens as an untitled model with
 unsaved changes, titled `<name> (recovered)`, and becomes the new window's autosave) and Discard
-(after asking). A copy that cannot be read is listed with why and can only be discarded. On
+(after asking), and Discard All. File > Recover Models... lists the same and the work agents
+discarded; opening a discarded copy also makes it this window's autosave, removed like any
+other (on save, or on Don't Save at quit). A copy whose note cannot be read, or whose file is
+missing or not private, is listed with why and can only be discarded; a copy whose contents
+cannot be opened is listed too, and Open says why in the status bar. The newest 200 entries are
+listed, with a note saying how many older ones were not; at start only autosave notes are read.
+Listing also removes temporary files (`.sketchup-alt-*.partial`, `.session-*.locking`) left a
+day or more by a write or a start that never finished. On
 macOS and Linux the listing skips links and any note or copy other users can read (each file
 must be 0600); on Windows it relies on the folder's owner-only access list and does not check
 each file. If the folder cannot be used the window starts with autosave off and says so in the
