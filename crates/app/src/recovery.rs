@@ -48,8 +48,9 @@ pub struct Session {
     dir: PathBuf,
     id: String,
     lock_path: PathBuf,
-    /// Locked for the session's life: other processes see the session live.
-    lock: File,
+    /// Locked for the session's life: other processes see the session live. Replaced when
+    /// the lock file was removed from under the session.
+    lock: RefCell<File>,
     /// This session's autosave model, once written or adopted.
     autosave: RefCell<Option<PathBuf>>,
 }
@@ -127,6 +128,22 @@ fn valid_id(id: &str) -> bool {
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// The session ids an autosave model named `name` (`<stem>-<id>.autosave.skr`) could have
+/// been written by: the stem may end in digits too, so both the last two and the last three
+/// `-` parts are tried.
+fn ids_in_name(name: &str) -> Vec<String> {
+    let Some(base) = name.strip_suffix(AUTOSAVE_SUFFIX) else {
+        return Vec::new();
+    };
+    let parts: Vec<&str> = base.split('-').collect();
+    [2, 3]
+        .into_iter()
+        .filter(|&n| parts.len() > n)
+        .map(|n| parts[parts.len() - n..].join("-"))
+        .filter(|id| valid_id(id))
+        .collect()
+}
+
 /// Writes the sidecar of `model`.
 fn write_sidecar(
     model: &Path,
@@ -143,6 +160,30 @@ fn write_sidecar(
     };
     let json = serde_json::to_vec_pretty(&sidecar).map_err(|e| e.to_string())?;
     session::file::replace_private(&sidecar_path(model), &json)
+}
+
+/// Creates the lock file of session `id` in `dir`, locked before it gets its name: it is made
+/// as `.session-<id>.locking` (which no lister looks at), locked, then renamed. Fails with
+/// `AlreadyExists` when the name is taken, unless `replace`.
+fn publish_lock(dir: &Path, id: &str, replace: bool) -> io::Result<File> {
+    let path = dir.join(lock_name(id));
+    if !replace && std::fs::symlink_metadata(&path).is_ok() {
+        return Err(io::ErrorKind::AlreadyExists.into());
+    }
+    let temp = dir.join(format!(".session-{id}.locking"));
+    let lock = crate::prefs::create_private_file(&temp)?;
+    let published = match lock.try_lock() {
+        Ok(()) => std::fs::rename(&temp, &path),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err(io::Error::other("the session lock is held elsewhere"))
+        }
+    };
+    if let Err(e) = published {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(lock)
 }
 
 /// Removes the entry whose model is `model`: its sidecar first, so no entry is left pointing
@@ -167,39 +208,58 @@ impl Session {
         // once their lock files are gone.
         static STARTED: AtomicU32 = AtomicU32::new(1);
         let base = format!("{}-{}", std::process::id(), unix_secs(SystemTime::now()));
-        let mut n = STARTED.fetch_add(1, Ordering::Relaxed);
         loop {
+            let n = STARTED.fetch_add(1, Ordering::Relaxed);
             let id = if n == 1 {
                 base.clone()
             } else {
                 format!("{base}-{n}")
             };
             let lock_path = dir.join(lock_name(&id));
-            match crate::prefs::create_private_file(&lock_path) {
+            match publish_lock(dir, &id, false) {
                 Ok(lock) => {
-                    if let Err(e) = lock.try_lock() {
-                        let _ = std::fs::remove_file(&lock_path);
-                        return Err(match e {
-                            std::fs::TryLockError::Error(e) => e,
-                            std::fs::TryLockError::WouldBlock => {
-                                io::Error::other("the session lock is held elsewhere")
-                            }
-                        });
-                    }
                     return Ok(Session {
                         dir: dir.to_path_buf(),
                         id,
                         lock_path,
-                        lock,
+                        lock: RefCell::new(lock),
                         autosave: RefCell::new(None),
                     });
                 }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                    n = STARTED.fetch_add(1, Ordering::Relaxed);
-                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
             }
         }
+    }
+
+    /// Makes sure the session's lock file is still the one it holds, making it again (locked
+    /// before it is named) when it was removed or replaced, so listers keep seeing the
+    /// session live.
+    fn keep_lock(&self) -> io::Result<()> {
+        if !self.holds_lock_file() {
+            let lock = publish_lock(&self.dir, &self.id, true)?;
+            // The old file closes, unlocked.
+            self.lock.replace(lock);
+        }
+        Ok(())
+    }
+
+    /// Whether the session's lock file is the file it holds locked.
+    fn holds_lock_file(&self) -> bool {
+        let Ok(named) = std::fs::symlink_metadata(&self.lock_path) else {
+            return false;
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let Ok(held) = self.lock.borrow().metadata() else {
+                return false;
+            };
+            named.file_type().is_file() && (named.dev(), named.ino()) == (held.dev(), held.ino())
+        }
+        // Windows: no other file can take the name while the one held has it.
+        #[cfg(not(unix))]
+        named.file_type().is_file()
     }
 
     /// This session's id.
@@ -221,6 +281,7 @@ impl Session {
     /// The folder is checked first.
     pub fn write_autosave(&self, doc: &Document, original: Option<&Path>) -> Result<(), String> {
         ensure_folder(&self.dir).map_err(|e| e.to_string())?;
+        self.keep_lock().map_err(|e| e.to_string())?;
         let path = self.autosave_path(original);
         doc.write_copy(&path).map_err(|e| e.message)?;
         let previous = self.autosave.replace(Some(path.clone()));
@@ -267,6 +328,12 @@ impl Session {
         if entry.model.parent() != Some(self.dir.as_path()) {
             return Err(io::Error::other("the entry is not in the recovery folder"));
         }
+        if let Some(e) = &entry.error {
+            return Err(io::Error::other(e.clone()));
+        }
+        private_file(&entry.model)
+            .map_err(|e| io::Error::other(format!("the model file cannot be used: {e}")))?;
+        self.keep_lock()?;
         let target = self.autosave_path(entry.original.as_deref());
         std::fs::rename(&entry.model, &target)?;
         if let Err(e) = write_sidecar(
@@ -276,7 +343,14 @@ impl Session {
             entry.original.as_deref(),
             entry.saved,
         ) {
-            let _ = std::fs::rename(&target, &entry.model);
+            if std::fs::rename(&target, &entry.model).is_err() {
+                // Ours now: the clean-up removes it.
+                if let Some(old) = self.autosave.replace(Some(target.clone()))
+                    && old != target
+                {
+                    let _ = remove_entry(&old);
+                }
+            }
             return Err(io::Error::other(e));
         }
         let _ = std::fs::remove_file(sidecar_path(&entry.model));
@@ -291,8 +365,10 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.lock_path);
-        let _ = self.lock.unlock();
+        if self.holds_lock_file() {
+            let _ = std::fs::remove_file(&self.lock_path);
+        }
+        let _ = self.lock.borrow().unlock();
     }
 }
 
@@ -376,8 +452,10 @@ fn is_live(dir: &Path, id: &str) -> bool {
         return true;
     };
     match file.try_lock() {
-        // Unlocked when `file` closes.
-        Ok(()) => false,
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
         Err(_) => true,
     }
 }
@@ -394,6 +472,7 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
     };
     let mut locks = Vec::new();
     let mut sidecars = Vec::new();
+    let mut autosaves = Vec::new();
     for item in read.flatten() {
         let name = item.file_name();
         let Some(name) = name.to_str() else { continue };
@@ -406,6 +485,8 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
             }
         } else if name.ends_with(".skr.json") {
             sidecars.push(item.path());
+        } else if name.ends_with(AUTOSAVE_SUFFIX) {
+            autosaves.push(item.path());
         }
     }
     let mut live = std::collections::HashMap::new();
@@ -468,6 +549,32 @@ pub fn list(dir: &Path, own: &Session, include_discarded: bool) -> Vec<Entry> {
             entries.push(entry);
         }
     }
+    // An autosave without its sidecar (a crash between the two on a first autosave): listed
+    // so it can be discarded once no session its name could be is running.
+    for model in autosaves {
+        if std::fs::symlink_metadata(sidecar_path(&model)).is_ok() {
+            continue;
+        }
+        let Some(name) = model.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let ids = ids_in_name(name);
+        if ids.is_empty() || ids.iter().any(|id| *id == own.id || is_live(id)) {
+            continue;
+        }
+        let Ok(meta) = private_file(&model) else {
+            continue;
+        };
+        with_entries.extend(ids);
+        entries.push(Entry {
+            kind: Kind::Autosave,
+            name: name.to_string(),
+            original: None,
+            saved: meta.modified().unwrap_or(UNIX_EPOCH),
+            model,
+            error: Some("its description is missing".into()),
+        });
+    }
     for id in locks {
         if id != own.id && !with_entries.contains(&id) && !is_live(&id) {
             let _ = std::fs::remove_file(dir.join(lock_name(&id)));
@@ -516,7 +623,7 @@ mod tests {
     /// A fresh private folder for one test.
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "sketchup-alt-recovery-{}-{name}",
+            "sketchup-alt-recovery-test-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -536,7 +643,7 @@ mod tests {
 
     /// Ends `session` as a crash would: the lock released, its file and entries left.
     fn crash(session: Session) {
-        session.lock.unlock().unwrap();
+        session.lock.borrow().unlock().unwrap();
         std::mem::forget(session);
     }
 
@@ -850,6 +957,86 @@ mod tests {
         assert!(e.contains("other users"), "{e}");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_session_whose_lock_file_was_removed_makes_it_again_when_it_autosaves() {
+        let dir = folder("relock");
+        let a = Session::start(&dir).unwrap();
+        let b = Session::start(&dir).unwrap();
+        let lock = dir.join(format!("session-{}.lock", a.id()));
+        a.write_autosave(&doc(), None).unwrap();
+        std::fs::remove_file(&lock).unwrap();
+        assert_eq!(list(&dir, &b, false).len(), 1, "looks ended");
+        a.write_autosave(&doc(), None).unwrap();
+        assert!(lock.is_file());
+        assert!(list(&dir, &b, false).is_empty(), "live again");
+        // Replaced by another file: made again too.
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&lock).unwrap();
+            std::fs::write(&lock, b"").unwrap();
+            a.write_autosave(&doc(), None).unwrap();
+            assert!(list(&dir, &b, false).is_empty());
+            let held = File::open(&lock).unwrap();
+            assert!(held.try_lock().is_err(), "the file named is the one held");
+        }
+        assert!(
+            !names(&dir).iter().any(|n| n.ends_with(".locking")),
+            "{:?}",
+            names(&dir)
+        );
+        drop(a);
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_autosave_without_its_sidecar_is_listed_as_broken_once_its_session_ended() {
+        let dir = folder("no-sidecar");
+        let a = Session::start(&dir).unwrap();
+        let b = Session::start(&dir).unwrap();
+        a.write_autosave(&doc(), Some(Path::new("/x/a-12.skr")))
+            .unwrap();
+        let model = dir.join(format!("a-12-{}.autosave.skr", a.id()));
+        std::fs::remove_file(sidecar_path(&model)).unwrap();
+        assert!(list(&dir, &b, true).is_empty(), "its session is live");
+        // A discarded file from before sidecars: never listed.
+        doc().write_copy(&dir.join("house-1700000000.skr")).unwrap();
+        crash(a);
+        let found = list(&dir, &b, true);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].model, model);
+        assert_eq!(found[0].kind, Kind::Autosave);
+        assert_eq!(
+            found[0].error.as_deref(),
+            Some("its description is missing")
+        );
+        assert!(b.adopt(&found[0]).is_err(), "only discarded");
+        assert!(model.exists());
+        discard(&found[0]).unwrap();
+        assert!(!model.exists());
+        assert!(list(&dir, &b, true).is_empty());
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopt_checks_the_model_again() {
+        let dir = folder("adopt-check");
+        let a = Session::start(&dir).unwrap();
+        a.write_autosave(&doc(), None).unwrap();
+        crash(a);
+        let b = Session::start(&dir).unwrap();
+        let entry = list(&dir, &b, false).remove(0);
+        assert_eq!(entry.error, None);
+        std::fs::set_permissions(&entry.model, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let e = b.adopt(&entry).unwrap_err();
+        assert!(e.to_string().contains("other users"), "{e}");
+        assert!(entry.model.exists(), "not moved");
+        drop(b);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
