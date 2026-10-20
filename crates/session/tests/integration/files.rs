@@ -529,6 +529,7 @@ fn a_model_that_has_used_up_its_ids_is_not_saved() {
     assert!(d.is_modified());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_link_at_the_partial_name_is_not_written_through() {
     let mut d = doc();

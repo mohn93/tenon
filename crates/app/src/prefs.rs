@@ -231,6 +231,7 @@ mod tests {
     use super::*;
     use crate::ui::{DockLayout, DockTab};
     use serde_json::json;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     /// A fresh folder standing in for HOME.
@@ -242,6 +243,7 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     #[test]
     fn old_prefs_are_read_once() {
         let home = home("legacy");
@@ -288,6 +290,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(home);
     }
 
+    #[cfg(unix)]
     #[test]
     fn prefs_round_trip_in_a_private_folder() {
         let home = home("round-trip");
@@ -426,6 +429,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn prefs_are_not_read_through_a_link_or_from_a_huge_file() {
         let home = home("odd-files");
@@ -454,6 +458,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn prefs_are_not_written_through_a_linked_folder() {
         let home = home("linked");
@@ -479,6 +484,7 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn prefs_are_not_written_into_an_open_folder() {
         let home = home("open");
@@ -509,17 +515,16 @@ mod tests {
         for p in ["/a/1.skr", "/a/2.skr", "/a/1.skr"] {
             remember_recent(&mut recent, Path::new(p));
         }
-        assert_eq!(
-            recent,
-            [PathBuf::from("/a/1.skr"), PathBuf::from("/a/2.skr")]
-        );
+        // `absolute` also gives a rooted path its drive on Windows.
+        let abs = |p: &str| std::path::absolute(p).unwrap();
+        assert_eq!(recent, [abs("/a/1.skr"), abs("/a/2.skr")]);
         let mut recent = Vec::new();
         for i in 1..=12 {
             remember_recent(&mut recent, Path::new(&format!("/a/{i}.skr")));
         }
         let want: Vec<PathBuf> = (3..=12)
             .rev()
-            .map(|i| PathBuf::from(format!("/a/{i}.skr")))
+            .map(|i| abs(&format!("/a/{i}.skr")))
             .collect();
         assert_eq!(recent, want, "the last ten, newest first");
         let home = home("recent");
@@ -538,15 +543,21 @@ mod tests {
         let home = home("recent-clean");
         let path = path_in(&home);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut list = vec!["rel.skr".to_string(), "/x/a.skr".into(), "/x/a.skr".into()];
-        list.extend((0..12).map(|i| format!("/y/{i}.skr")));
+        // A rooted path with no drive is not absolute on Windows.
+        let drive = if cfg!(windows) { "C:" } else { "" };
+        let mut list = vec![
+            "rel.skr".to_string(),
+            format!("{drive}/x/a.skr"),
+            format!("{drive}/x/a.skr"),
+        ];
+        list.extend((0..12).map(|i| format!("{drive}/y/{i}.skr")));
         std::fs::write(
             &path,
             serde_json::to_vec(&json!({ "recent": list })).unwrap(),
         )
         .unwrap();
-        let mut want = vec![PathBuf::from("/x/a.skr")];
-        want.extend((0..9).map(|i| PathBuf::from(format!("/y/{i}.skr"))));
+        let mut want = vec![PathBuf::from(format!("{drive}/x/a.skr"))];
+        want.extend((0..9).map(|i| PathBuf::from(format!("{drive}/y/{i}.skr"))));
         assert_eq!(load(&path).recent, want);
         std::fs::remove_dir_all(home).unwrap();
     }

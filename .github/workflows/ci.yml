@@ -78,3 +78,93 @@ jobs:
           path: target/tmp/**/*.png
           if-no-files-found: ignore
           retention-days: 7
+
+  windows:
+    name: windows
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal -c rustfmt -c clippy
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-windows-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-windows-${{ env.RUST_VERSION }}-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
+
+      # Renders tests write (golden diffs, debug images) under target/tmp; kept when tests fail.
+      - name: Upload test images
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-images-windows
+          path: target/tmp/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Unsigned zip of the release build, made on pushes to main only.
+  package-windows:
+    name: package windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: windows
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-windows-release-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-windows-release-${{ env.RUST_VERSION }}-
+
+      - name: Build
+        run: cargo build --release --locked -p app
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -DestinationPath sketchup-alt-windows-x86_64.zip -Path `
+            target/release/app.exe, THIRD_PARTY_NOTICES.md, docs/windows.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sketchup-alt-windows-x86_64
+          path: sketchup-alt-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: 30

@@ -263,6 +263,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn args(s: &str) -> Vec<String> {
@@ -483,6 +484,7 @@ mod tests {
         std::fs::remove_dir_all(&target).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn ensure_private_dir_creates_a_0700_dir() {
         let dir = scratch("create");
@@ -495,6 +497,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn ensure_private_dir_refuses_a_symlink() {
         let target = scratch("link-target");
@@ -508,6 +511,7 @@ mod tests {
         std::fs::remove_dir_all(&target).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn ensure_private_dir_refuses_a_group_readable_dir() {
         let dir = scratch("open");

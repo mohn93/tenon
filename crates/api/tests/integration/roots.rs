@@ -83,6 +83,7 @@ fn paths_outside_the_roots_are_refused() {
     assert!(!outside.join("a.skr").exists() && !outside.join("a.stl").exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn links_out_of_the_roots_are_followed_and_refused() {
     let (root, outside) = folders("links");
@@ -225,6 +226,7 @@ fn png_file(path: &std::path::Path) {
 }
 
 /// A rectangle painted with a textured material named "T".
+#[cfg(unix)]
 fn textured_face(h: &mut HeadlessHost) {
     call(
         h,
@@ -247,6 +249,7 @@ fn textured_face(h: &mut HeadlessHost) {
     assert!(r["result"].is_object(), "{r}");
 }
 
+#[cfg(unix)]
 #[test]
 fn obj_side_files_that_are_links_are_refused_and_their_targets_not_read() {
     let (root, outside) = folders("side-links");
@@ -295,6 +298,7 @@ fn obj_side_files_that_are_links_are_refused_and_their_targets_not_read() {
     assert!(root.join("exp.mtl").is_file() && root.join("exp_T.png").is_file());
 }
 
+#[cfg(unix)]
 #[test]
 fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     let (root, outside) = folders("oracle");
@@ -307,6 +311,7 @@ fn outside_paths_get_one_answer_whether_they_exist_or_not() {
     std::fs::create_dir(outside.join("made")).unwrap();
     std::os::unix::fs::symlink(outside.join("nodir"), root.join("dangling")).unwrap();
     std::os::unix::fs::symlink(outside.join("made"), root.join("dangling-made")).unwrap();
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(
         outside.join("locked"),

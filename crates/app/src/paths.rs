@@ -228,6 +228,7 @@ fn current_uid() -> Option<u32> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
@@ -239,6 +240,7 @@ mod tests {
     }
 
     /// A fresh 0700 folder under a short base, so a socket path in it fits the limit.
+    #[cfg(unix)]
     fn scratch(name: &str) -> PathBuf {
         let dir = PathBuf::from(format!("/tmp/sa-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -247,6 +249,7 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     fn my_uid(dir: &Path) -> u32 {
         std::fs::metadata(dir).unwrap().uid()
     }
@@ -350,6 +353,7 @@ mod tests {
         assert_eq!(p.recovery, Path::new("/st/sketchup-alt/recovery"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn relative_or_empty_xdg_values_are_ignored() {
         let run = scratch("relative-run");
@@ -382,6 +386,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(run);
     }
 
+    #[cfg(unix)]
     #[test]
     fn runtime_dir_must_be_private() {
         let run = scratch("runtime");
@@ -456,6 +461,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(run);
     }
 
+    #[cfg(unix)]
     #[test]
     fn runtime_dir_is_ignored_off_linux() {
         let run = scratch("runtime-macos");
@@ -474,6 +480,7 @@ mod tests {
         assert_eq!(at(Os::Linux, "/tmp"), Path::new("/tmp"));
     }
 
+    #[cfg(unix)]
     #[cfg(target_os = "linux")]
     #[test]
     fn current_uid_is_the_owner_of_a_new_file() {

@@ -372,6 +372,7 @@ mod tool_input_tests;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use api::{ToolName, handle};
@@ -666,6 +667,7 @@ mod tests {
         json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]})
     }
 
+    #[cfg(unix)]
     #[test]
     fn work_an_agent_discards_is_kept_in_a_recovery_file() {
         let dir = recovery_dir("new");
@@ -810,6 +812,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn quitting_with_discard_keeps_the_work_and_a_folder_open_to_others_is_refused() {
         let dir = recovery_dir("quit");
@@ -832,6 +835,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_sketchup_alt_folder_is_made_private_with_the_recovery_folder_in_it() {
         let base = recovery_dir("home");
@@ -870,6 +874,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_recovery_folder_that_is_a_link_is_refused_and_nothing_is_discarded() {
         let dir = recovery_dir("link");
