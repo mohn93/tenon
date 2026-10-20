@@ -260,6 +260,18 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             entries: theme,
         },
         Item::new("Agent Activity", UiAction::ShowAgentActivity(true)).entry(),
+        Entry::Separator,
+        Item::new("Add Scene", UiAction::AddScene).entry(),
+        bound_item(
+            "Previous Scene",
+            Bound::PreviousScene,
+            UiAction::PreviousScene,
+        )
+        .enabled(!view.scenes.is_empty())
+        .entry(),
+        bound_item("Next Scene", Bound::NextScene, UiAction::NextScene)
+            .enabled(!view.scenes.is_empty())
+            .entry(),
     ];
 
     let help = vec![Item::new("Keyboard Shortcuts", UiAction::ShowShortcuts(true)).entry()];

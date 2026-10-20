@@ -285,6 +285,8 @@ pub const RAIL_ICON: f32 = 18.0;
 pub const RAIL_GROUP_GAP: f32 = 8.0;
 /// The context bar's height, under the menus at the window's top.
 pub const CONTEXT_BAR_HEIGHT: f32 = 36.0;
+/// The scene tabs' strip over the 3D view.
+pub const SCENE_TABS_HEIGHT: f32 = 32.0;
 /// The status bar's height, and the measurements box's size in it.
 pub const STATUS_HEIGHT: f32 = 28.0;
 pub const MEASUREMENTS_WIDTH: f32 = 180.0;

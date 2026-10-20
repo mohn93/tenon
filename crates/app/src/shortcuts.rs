@@ -30,6 +30,8 @@ pub enum Bound {
     ToggleFly,
     RenameComponent,
     Settings,
+    PreviousScene,
+    NextScene,
 }
 
 /// The key of a shortcut.
@@ -44,6 +46,9 @@ pub enum Key {
     F2,
     /// ",", only with Cmd (Settings).
     Comma,
+    /// Page Up and Page Down: not characters either, so the window's key path acts on them.
+    PageUp,
+    PageDown,
 }
 
 /// A key and the modifiers held with it. `command` is Cmd on macOS and Ctrl elsewhere (the
@@ -85,7 +90,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 35] = [
+pub const TABLE: [Shortcut; 37] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -121,6 +126,8 @@ pub const TABLE: [Shortcut; 35] = [
     on(Bound::RenameComponent, false, false, Key::F2),
     on(Bound::ZoomExtents, false, true, Key::Letter('z')),
     on(Bound::ToggleFly, false, false, Key::Letter('f')),
+    on(Bound::PreviousScene, false, false, Key::PageUp),
+    on(Bound::NextScene, false, false, Key::PageDown),
 ];
 
 /// The chord bound to `bound`, if any.
@@ -208,6 +215,8 @@ impl Chord {
             Key::Escape => "Esc".into(),
             Key::F2 => "F2".into(),
             Key::Comma => ",".into(),
+            Key::PageUp => "Page Up".into(),
+            Key::PageDown => "Page Down".into(),
         };
         let (shift, command) = if mac {
             ("⇧", "⌘")
@@ -256,6 +265,8 @@ impl Bound {
             Bound::ToggleFly => "Fly Mode",
             Bound::RenameComponent => "Rename Component",
             Bound::Settings => "Settings",
+            Bound::PreviousScene => "Previous Scene",
+            Bound::NextScene => "Next Scene",
         }
     }
 
@@ -281,7 +292,9 @@ impl Bound {
             | Bound::MakeComponent
             | Bound::CloseInstance
             | Bound::RenameComponent => "Group",
-            Bound::ZoomExtents | Bound::ToggleFly => "Camera",
+            Bound::ZoomExtents | Bound::ToggleFly | Bound::PreviousScene | Bound::NextScene => {
+                "Camera"
+            }
         }
     }
 
@@ -309,6 +322,8 @@ impl Bound {
             Bound::ToggleFly => UiAction::ToggleFly,
             Bound::RenameComponent => UiAction::RenameComponent,
             Bound::Settings => UiAction::ShowSettings(true),
+            Bound::PreviousScene => UiAction::PreviousScene,
+            Bound::NextScene => UiAction::NextScene,
         })
     }
 
@@ -524,6 +539,46 @@ mod tests {
         // F2 is not a character: no typed character finds it.
         for c in (0u8..128).map(char::from) {
             assert_ne!(plain(c), Some(Bound::RenameComponent), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn page_up_and_page_down_cycle_scenes() {
+        for (bound, key, text, action) in [
+            (
+                Bound::PreviousScene,
+                Key::PageUp,
+                "Page Up",
+                UiAction::PreviousScene,
+            ),
+            (
+                Bound::NextScene,
+                Key::PageDown,
+                "Page Down",
+                UiAction::NextScene,
+            ),
+        ] {
+            let c = chord(bound).unwrap();
+            assert_eq!(
+                c,
+                Chord {
+                    command: false,
+                    shift: false,
+                    key
+                }
+            );
+            assert_eq!(c.text_for(true), text);
+            assert_eq!(c.text_for(false), text);
+            assert_eq!(lookup(c).map(|s| s.bound), Some(bound));
+            assert_eq!(bound.group(), "Camera");
+            assert_eq!(bound.action(), Some(action));
+        }
+        // Not characters: no typed character finds them.
+        for c in (0u8..128).map(char::from) {
+            assert!(
+                !matches!(plain(c), Some(Bound::PreviousScene | Bound::NextScene)),
+                "{c:?}"
+            );
         }
     }
 

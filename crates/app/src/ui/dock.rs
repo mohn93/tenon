@@ -1,4 +1,4 @@
-//! The dock on the right: Entity Info, Materials and Tags as tabs over the Outliner, split by a
+//! The dock on the right: Entity Info, Materials, Tags and Scenes as tabs over the Outliner, split by a
 //! divider. Its width, split and tab are kept in the preferences.
 
 use std::ops::RangeInclusive;
@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use egui::{Id, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 use serde::{Deserialize, Serialize};
 
-use super::{UiAction, View, materials, outliner, right, tags, theme, widgets};
+use super::{UiAction, View, materials, outliner, right, scenes, tags, theme, widgets};
 
 /// The tab shown in the dock's top area.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +16,7 @@ pub enum DockTab {
     EntityInfo,
     Materials,
     Tags,
+    Scenes,
 }
 
 impl DockTab {
@@ -24,6 +25,7 @@ impl DockTab {
             DockTab::EntityInfo => "Entity Info",
             DockTab::Materials => "Materials",
             DockTab::Tags => "Tags",
+            DockTab::Scenes => "Scenes",
         }
     }
 }
@@ -103,14 +105,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
     let mut layout = view.dock;
     // Fill the panel's width, so it keeps the width it was given.
     ui.set_min_width(ui.max_rect().width());
-    ui.horizontal(|ui| {
-        for tab in [DockTab::EntityInfo, DockTab::Materials, DockTab::Tags] {
-            let on = view.dock.tab == tab;
-            if ui.add(egui::Button::selectable(on, tab.name())).clicked() && !on {
-                layout.tab = tab;
-            }
-        }
-    });
+    tab_row(ui, view.dock.tab, &mut layout.tab);
     let width = ui.available_width();
     // The areas share what the divider and the spacing after the top area and after the
     // divider leave.
@@ -164,11 +159,54 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             DockTab::EntityInfo => right::entity_info(ui, view, actions),
             DockTab::Materials => materials::materials(ui, view, actions),
             DockTab::Tags => tags::tags(ui, view, actions),
+            DockTab::Scenes => scenes::scenes(ui, view, actions),
         });
     widgets::name_scroll_bars(ui.ctx(), top.id, view.dock.tab.name());
     divider(ui, divider_id, width);
     outliner::outliner(ui, view, actions);
     layout
+}
+
+/// The tabs, in order.
+const TABS: [DockTab; 4] = [
+    DockTab::EntityInfo,
+    DockTab::Materials,
+    DockTab::Tags,
+    DockTab::Scenes,
+];
+
+/// The gap between two tabs.
+const TAB_GAP: f32 = 4.0;
+
+/// The tabs across the dock's width: each its name's width and an equal share of what is left
+/// (at the narrowest dock little is). A tab other than `shown` clicked becomes `chosen`.
+fn tab_row(ui: &mut Ui, shown: DockTab, chosen: &mut DockTab) {
+    let names = TABS.map(|tab| {
+        egui::WidgetText::from(tab.name())
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            )
+            .size()
+            .x
+    });
+    let gaps = TAB_GAP * (TABS.len() - 1) as f32;
+    let share = (ui.available_width() - gaps - names.iter().sum::<f32>()) / TABS.len() as f32;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = TAB_GAP;
+        ui.spacing_mut().button_padding.x = (share / 2.0).clamp(0.0, 8.0);
+        for (tab, name) in TABS.into_iter().zip(names) {
+            let on = shown == tab;
+            let button = egui::Button::selectable(on, tab.name())
+                .truncate()
+                .min_size(Vec2::new((name + share.max(0.0)).floor(), 0.0));
+            if ui.add(button).clicked() && !on {
+                *chosen = tab;
+            }
+        }
+    });
 }
 
 /// The divider between the top area and the Outliner: a line across, in the accent while

@@ -148,6 +148,7 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
     let mut all = vec![
         ("the default", Fixture::default()),
         ("the tags tab", super::tags::tags_tab()),
+        ("the scenes tab and scene tabs", super::scenes::scenes_tab()),
         (
             "entity info's tag field",
             Fixture {
@@ -283,6 +284,13 @@ fn every_control_has_a_name() {
         click(&mut h, title);
         check(&format!("inside a group, the {title} menu open"), &h);
     }
+    // A scene tab's menu, and a tab and a row being renamed.
+    let mut h = harness(super::scenes::with_scenes());
+    super::scenes::right_click(&mut h, "Top");
+    check("a scene tab's menu", &h);
+    click(&mut h, "Rename");
+    h.run_ok();
+    check("a scene tab renamed", &h);
     let mut h = harness(inside());
     click(&mut h, "File");
     // egui names a submenu's button with its arrow.

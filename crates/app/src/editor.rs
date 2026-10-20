@@ -33,6 +33,7 @@ use crate::shortcuts::{self, Bound};
 mod agent;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
+mod scenes;
 mod soften;
 mod tags;
 mod texture_position;
@@ -4014,7 +4015,9 @@ mod tests {
             Key::Delete => EditorKey::Delete,
             Key::Escape => EditorKey::Escape,
             // The window's key path acts on F2 (Rename Component); the editor has no key for it.
-            Key::F2 => panic!("{bound:?} is the window's, not the editor's"),
+            Key::F2 | Key::PageUp | Key::PageDown => {
+                panic!("{bound:?} is the window's, not the editor's")
+            }
             Key::Comma => panic!("{bound:?} is a Cmd chord"),
         }
     }

@@ -26,6 +26,10 @@ pub const EYE_SLASH: &str = ph::EYE_SLASH;
 /// Adds and deletes a tag.
 pub const PLUS: &str = ph::PLUS;
 pub const MINUS: &str = ph::MINUS;
+/// Updates the selected scene and moves it up or down the Scenes list.
+pub const ARROWS_CLOCKWISE: &str = ph::ARROWS_CLOCKWISE;
+pub const ARROW_UP: &str = ph::ARROW_UP;
+pub const ARROW_DOWN: &str = ph::ARROW_DOWN;
 
 /// A tool's glyph on the rail.
 pub fn tool(kind: ToolKind) -> &'static str {
@@ -67,6 +71,9 @@ pub fn all() -> Vec<&'static str> {
         EYE_SLASH,
         PLUS,
         MINUS,
+        ARROWS_CLOCKWISE,
+        ARROW_UP,
+        ARROW_DOWN,
     ];
     all.extend(ToolKind::ALL.map(tool));
     all

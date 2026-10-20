@@ -9,6 +9,7 @@ mod layout;
 mod materials;
 mod menus;
 mod outliner;
+mod scenes;
 mod settings;
 mod sheets;
 mod start;
@@ -29,7 +30,7 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, SettingsView, Sheet, StartCard, TagRow,
+    Agents, DockLayout, DockTab, MaterialRow, SceneRow, SettingsView, Sheet, StartCard, TagRow,
     TexturePosition, TextureRow, UiAction, View, draw,
 };
 use crate::editor::{RenameTarget, SelectionTag, Status};
@@ -53,6 +54,7 @@ pub(super) struct Fixture {
     pub material: Option<MaterialId>,
     pub tags: Vec<TagRow>,
     pub color_by_tag: bool,
+    pub scenes: Vec<SceneRow>,
     /// How many times the document was replaced.
     pub documents: u64,
     pub selection_tag: Option<SelectionTag>,
@@ -123,6 +125,7 @@ impl Default for Fixture {
             material: None,
             tags: Vec::new(),
             color_by_tag: false,
+            scenes: Vec::new(),
             documents: 0,
             selection_tag: None,
             outliner: OutlinerTable {
@@ -180,6 +183,7 @@ impl Fixture {
             material: self.material,
             tags: &self.tags,
             color_by_tag: self.color_by_tag,
+            scenes: &self.scenes,
             documents: self.documents,
             selection_tag: self.selection_tag,
             outliner: &self.outliner,

@@ -177,7 +177,7 @@ fn the_panels_draw_every_icon_in_the_icon_family() {
     use crate::ui::{fonts, icons};
     // The rail, Undo and Redo, the three group buttons, the breadcrumb's carets, the night
     // toggle, the agents indicator, the Outliner's Clear filter and the start card's Dismiss;
-    // the Tags tab's eyes, Add and Delete.
+    // the Tags tab's eyes, Add and Delete; the Scenes tab's Update, up and down.
     let mut h = harness(Fixture {
         has_selection: true,
         has_instance_selected: true,
@@ -220,6 +220,10 @@ fn the_panels_draw_every_icon_in_the_icon_family() {
     // The Tags tab, with a shown and a hidden tag, draws the rest.
     let tags = harness(super::tags::tags_tab());
     for clipped in &tags.output().shapes {
+        collect(&clipped.shape, &glyphs, &mut drawn);
+    }
+    let scenes = harness(super::scenes::scenes_tab());
+    for clipped in &scenes.output().shapes {
         collect(&clipped.shape, &glyphs, &mut drawn);
     }
     let wrong: Vec<_> = drawn.iter().filter(|(_, f)| *f != fonts::icons()).collect();

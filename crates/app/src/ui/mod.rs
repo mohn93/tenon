@@ -1,13 +1,13 @@
 //! The window's panels: the context bar, the tool rail, the status bar with the measurements
-//! box, and on the right the dock: Entity Info, Materials and Tags as tabs over the Outliner. Over
-//! the 3D view, the tools' snap marker, preview lines and chip, the tool's cursor and the
-//! orientation gizmo.
+//! box, on the right the dock: Entity Info, Materials, Tags and Scenes as tabs over the
+//! Outliner, and the scene tabs above the 3D view. Over the 3D view, the tools' snap marker,
+//! preview lines and chip, the tool's cursor and the orientation gizmo.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use egui::{Panel, Ui};
-use kernel::{DefinitionId, EntityId, TagId, TexturePlacement};
+use kernel::{DefinitionId, EntityId, PageId, TagId, TexturePlacement};
 use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
@@ -26,6 +26,8 @@ mod menu_bar;
 mod outliner;
 mod rail;
 mod right;
+mod scene_tabs;
+mod scenes;
 mod settings;
 mod sheets;
 mod start;
@@ -121,6 +123,25 @@ pub enum UiAction {
     SetTagVisible(TagId, bool),
     /// Put the selection on a tag (None: Untagged); Entity Info's Tag field.
     SetSelectionTag(Option<TagId>),
+    /// Save the current view and tag visibility as a new scene, after the last one.
+    AddScene,
+    /// Store the current view and tag visibility in a scene again (the parts it stores).
+    UpdateScene(PageId),
+    /// Start (true) or stop storing the camera in a scene; the scene's other part is stored
+    /// again too (`update_scene`).
+    StoreSceneCamera(PageId, bool),
+    /// Start (true) or stop storing tag visibility in a scene, as `StoreSceneCamera` does.
+    StoreSceneTags(PageId, bool),
+    RenameScene(PageId, String),
+    /// Move a scene to this place in the order (0: first).
+    MoveScene(PageId, usize),
+    /// Delete a scene, at once (it is undoable).
+    DeleteScene(PageId),
+    GoToScene(PageId),
+    /// Go to the scene before the selected one, wrapping around (Page Up).
+    PreviousScene,
+    /// Go to the scene after the selected one, wrapping around (Page Down).
+    NextScene,
     /// Select the outliner node at `path` (instances from the root down to it); `toggle`
     /// (Shift, Cmd or Ctrl held) adds or removes it instead of replacing the selection.
     OutlinerSelect {
@@ -201,6 +222,19 @@ pub struct TagRow {
     pub count: usize,
 }
 
+/// A scene as the scene tabs and the Scenes tab list it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneRow {
+    pub id: PageId,
+    pub name: String,
+    /// Whether it stores the view (camera, projection, lighting, color by tag).
+    pub camera: bool,
+    /// Whether it stores which tags are hidden.
+    pub tags: bool,
+    /// Whether it is the scene last added or gone to.
+    pub selected: bool,
+}
+
 /// A material's texture as the Materials list shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureRow {
@@ -254,6 +288,8 @@ pub struct View<'a> {
     pub tags: &'a [TagRow],
     /// Whether faces are drawn in their tags' colors.
     pub color_by_tag: bool,
+    /// Every scene, in order: the scene tabs show while there is one.
+    pub scenes: &'a [SceneRow],
     /// How many times the document was replaced (`Editor::documents`): what a panel holds by
     /// id from before names other things after.
     pub documents: u64,
@@ -382,6 +418,20 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
                 .inner_margin(egui::Margin::same(dock::DOCK_MARGIN)),
         )
         .show(ui, |ui| dock::dock(ui, view, actions));
+    // Between the rail and the dock, right over the 3D view.
+    if view.scenes.is_empty() {
+        scene_tabs::forget(ui, view);
+    } else {
+        Panel::top("scene-tabs")
+            .resizable(false)
+            .exact_size(theme::SCENE_TABS_HEIGHT)
+            .frame(
+                egui::Frame::new()
+                    .fill(t.bg_panel)
+                    .inner_margin(egui::Margin::symmetric(8, 0)),
+            )
+            .show(ui, |ui| scene_tabs::scene_tabs(ui, view, actions));
+    }
     widgets::name_egui_widget(
         ui.ctx(),
         dock_resize_id(),

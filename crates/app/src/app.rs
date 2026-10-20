@@ -37,8 +37,8 @@ use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow,
-    UiAction, View,
+    Agents, MaterialRow, SceneRow, SettingsView, Sheet, StartCard, TagRow, TexturePosition,
+    TextureRow, UiAction, View,
 };
 use crate::ui::{theme, viewport};
 
@@ -1237,6 +1237,36 @@ impl State {
             UiAction::SetSelectionTag(tag) => {
                 self.editor.set_selection_tag(tag);
             }
+            UiAction::AddScene => {
+                self.editor.add_scene();
+            }
+            UiAction::UpdateScene(scene) => {
+                self.editor.update_scene(scene, None, None);
+            }
+            UiAction::StoreSceneCamera(scene, on) => {
+                self.editor.update_scene(scene, Some(on), None);
+            }
+            UiAction::StoreSceneTags(scene, on) => {
+                self.editor.update_scene(scene, None, Some(on));
+            }
+            UiAction::RenameScene(scene, name) => {
+                self.editor.rename_scene(scene, name);
+            }
+            UiAction::MoveScene(scene, index) => {
+                self.editor.move_scene(scene, index);
+            }
+            UiAction::DeleteScene(scene) => {
+                self.editor.delete_scene(scene);
+            }
+            UiAction::GoToScene(scene) => {
+                self.editor.go_to_scene(scene);
+            }
+            UiAction::PreviousScene => {
+                self.editor.cycle_scene(false);
+            }
+            UiAction::NextScene => {
+                self.editor.cycle_scene(true);
+            }
             UiAction::OutlinerSelect { path, toggle } => {
                 self.editor.outliner_select(&path, toggle);
             }
@@ -1457,6 +1487,9 @@ impl State {
             self.outliner = Some((revision, self.editor.doc().outliner_rows()));
         }
         refresh_tag_rows(&mut self.tag_rows, &self.editor);
+        // Built every frame: going to a scene selects it without a new revision, and there are
+        // few of them.
+        let scenes = scene_rows(self.editor.doc());
         let context: Vec<EntityId> = self
             .editor
             .doc()
@@ -1525,6 +1558,7 @@ impl State {
             material: self.editor.current_material(),
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
+            scenes: &scenes,
             documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
@@ -1859,6 +1893,21 @@ fn tag_rows(doc: &session::Document) -> Vec<TagRow> {
         .collect()
 }
 
+/// The scene tabs' and the Scenes tab's rows: every scene, in order.
+fn scene_rows(doc: &session::Document) -> Vec<SceneRow> {
+    let selected = doc.selected_scene();
+    doc.scene()
+        .pages()
+        .map(|(id, p)| SceneRow {
+            id,
+            name: p.name.clone(),
+            camera: p.view.is_some(),
+            tags: p.tags.is_some(),
+            selected: selected == Some(id),
+        })
+        .collect()
+}
+
 /// The Delete Tag sheet for `tag`, when something is on it (otherwise it is deleted at once).
 fn delete_tag_sheet(doc: &session::Document, tag: TagId) -> Option<Sheet> {
     let scene = doc.scene();
@@ -1894,6 +1943,16 @@ fn is_quit_chord(letter: Option<char>, command_key: bool, shift: bool, cmd: bool
         && letter
             .and_then(|l| shortcuts::window_command(l, shift, false, cmd, shortcuts::NATIVE_MENUS))
             == Some(Bound::Quit)
+}
+
+/// The table's keys that are not characters, which the window's key path acts on itself.
+fn window_key(logical: &Key) -> Option<shortcuts::Key> {
+    match logical {
+        Key::Named(NamedKey::F2) => Some(shortcuts::Key::F2),
+        Key::Named(NamedKey::PageUp) => Some(shortcuts::Key::PageUp),
+        Key::Named(NamedKey::PageDown) => Some(shortcuts::Key::PageDown),
+        _ => None,
+    }
 }
 
 /// Whether a key press goes on to the editor and the shortcut table: not while a text field
@@ -2472,13 +2531,14 @@ impl ApplicationHandler<AppEvent> for App {
                     // Alt/Option is the orbit modifier; Option+letter must not type or switch
                     // tools through its physical-key fallback.
                     false
-                } else if event.logical_key == Key::Named(NamedKey::F2) {
-                    // The table's Rename Component; not a native accelerator, so it acts only
-                    // here. Not with Shift, not held, not while flying.
+                } else if let Some(key) = window_key(&event.logical_key) {
+                    // The table's Rename Component (F2), Previous and Next Scene (Page Up and
+                    // Page Down): not native accelerators, so they act only here. Not with
+                    // Shift, not held, not while flying.
                     let chord = shortcuts::Chord {
                         command: false,
                         shift: false,
-                        key: shortcuts::Key::F2,
+                        key,
                     };
                     let action = (!s.modifiers.shift_key() && !event.repeat && !s.editor.flying())
                         .then(|| shortcuts::lookup(chord).and_then(|b| b.bound.action()))
@@ -3154,6 +3214,35 @@ mod tests {
         assert_eq!(shortcut_letter(&ch("ه"), code(KeyCode::KeyI)), Some('i'));
         assert_eq!(shortcut_letter(&ch("Q"), code(KeyCode::KeyQ)), Some('q'));
         assert_eq!(shortcut_letter(&ch("ث"), code(KeyCode::KeyE)), Some('e'));
+    }
+
+    #[test]
+    fn f2_and_the_page_keys_are_the_window_keys() {
+        use crate::shortcuts::{Bound, Chord, Key as ShortcutKey, lookup};
+        for (named, bound) in [
+            (NamedKey::F2, Bound::RenameComponent),
+            (NamedKey::PageUp, Bound::PreviousScene),
+            (NamedKey::PageDown, Bound::NextScene),
+        ] {
+            let key = window_key(&Key::Named(named)).expect("a window key");
+            let chord = Chord {
+                command: false,
+                shift: false,
+                key,
+            };
+            assert_eq!(lookup(chord).map(|s| s.bound), Some(bound));
+        }
+        assert_eq!(window_key(&Key::Named(NamedKey::Home)), None);
+        assert_eq!(window_key(&Key::Character(SmolStr::new("l"))), None);
+        // They are plain keys in the table: the key path acts on them without Cmd or Shift.
+        for s in crate::shortcuts::TABLE {
+            if matches!(
+                s.chord.key,
+                ShortcutKey::F2 | ShortcutKey::PageUp | ShortcutKey::PageDown
+            ) {
+                assert!(!s.chord.command && !s.chord.shift, "{:?}", s.bound);
+            }
+        }
     }
 
     #[test]
