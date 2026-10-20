@@ -67,7 +67,7 @@ fn view_top(width: f32) -> f32 {
 
 #[test]
 fn the_rail_holds_every_tool_in_one_column_by_group() {
-    for size in [SCREEN, Vec2::new(960.0, 600.0)] {
+    for size in [SCREEN, Vec2::new(960.0, 640.0)] {
         every_toolbar_button_works(size);
         let h = harness_sized(toolbar_fixture(), size);
         let order: Vec<ToolKind> = crate::ui::rail::GROUPS
@@ -105,7 +105,7 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
         for (a, b) in [
             (ToolKind::Paint, ToolKind::Line),
             (ToolKind::Arc, ToolKind::PushPull),
-            (ToolKind::Offset, ToolKind::TapeMeasure),
+            (ToolKind::FollowMe, ToolKind::TapeMeasure),
         ] {
             let between = gap(a, b);
             assert!(

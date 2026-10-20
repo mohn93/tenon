@@ -24,6 +24,7 @@ pub const GROUPS: [&[ToolKind]; 4] = [
         ToolKind::Rotate,
         ToolKind::Scale,
         ToolKind::Offset,
+        ToolKind::FollowMe,
     ],
     &[ToolKind::TapeMeasure],
 ];

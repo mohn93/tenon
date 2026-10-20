@@ -468,6 +468,7 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
         ToolKind::Rotate,
         ToolKind::Scale,
         ToolKind::Offset,
+        ToolKind::FollowMe,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
         ToolKind::Paint,

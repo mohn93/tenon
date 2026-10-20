@@ -11,6 +11,7 @@ use session::{
 use crate::arc::ArcTool;
 use crate::circle::CircleTool;
 use crate::erase::EraseTool;
+use crate::follow_me::FollowMeTool;
 use crate::inference::{Axis, Inference};
 use crate::line::LineTool;
 use crate::move_tool::MoveTool;
@@ -220,6 +221,7 @@ pub enum ToolKind {
     Rotate,
     Scale,
     Offset,
+    FollowMe,
     TapeMeasure,
     Erase,
     Paint,
@@ -227,7 +229,7 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 14] = [
+    pub const ALL: [ToolKind; 15] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -239,6 +241,7 @@ impl ToolKind {
         ToolKind::Rotate,
         ToolKind::Scale,
         ToolKind::Offset,
+        ToolKind::FollowMe,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
         ToolKind::Paint,
@@ -266,6 +269,7 @@ impl ToolKind {
             ToolKind::Rotate => Box::new(RotateTool::new()),
             ToolKind::Scale => Box::new(ScaleTool::new()),
             ToolKind::Offset => Box::new(OffsetTool::with_distance(r.offset_distance)),
+            ToolKind::FollowMe => Box::new(FollowMeTool::new()),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
             ToolKind::Paint => Box::new(PaintTool::new()),
@@ -286,6 +290,7 @@ impl ToolKind {
             ToolKind::Rotate => "Rotate",
             ToolKind::Scale => "Scale",
             ToolKind::Offset => "Offset",
+            ToolKind::FollowMe => "Follow Me",
             ToolKind::TapeMeasure => "Tape Measure",
             ToolKind::Erase => "Erase",
             ToolKind::Paint => "Paint",
@@ -306,6 +311,7 @@ impl ToolKind {
             ToolKind::Rotate => 'q',
             ToolKind::Scale => 's',
             ToolKind::Offset => 'o',
+            ToolKind::FollowMe => 'j',
             ToolKind::TapeMeasure => 't',
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',

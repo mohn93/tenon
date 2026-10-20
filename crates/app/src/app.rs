@@ -43,7 +43,7 @@ use crate::ui::{
 use crate::ui::{theme, viewport};
 
 /// The window's least size, in points: the panels and a usable 3D view.
-const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 600.0);
+const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 640.0);
 
 /// The smallest window: 960 x 600 points at `scale`, in logical pixels, so the panels always
 /// get at least `MIN_WINDOW` points.
@@ -2479,12 +2479,12 @@ mod tests {
     use winit::keyboard::SmolStr;
 
     #[test]
-    fn the_window_cannot_shrink_below_960_by_600() {
+    fn the_window_cannot_shrink_below_960_by_640() {
         use winit::dpi::Size;
         let attrs = window_attributes();
         assert_eq!(
             attrs.min_inner_size,
-            Some(Size::Logical(LogicalSize::new(960.0, 600.0)))
+            Some(Size::Logical(LogicalSize::new(960.0, 640.0)))
         );
         assert_eq!(
             attrs.inner_size,
@@ -2496,16 +2496,16 @@ mod tests {
     fn the_minimum_window_grows_with_the_ui_scale() {
         assert_eq!(
             min_window_size(UiScale::P100),
-            LogicalSize::new(960.0, 600.0)
+            LogicalSize::new(960.0, 640.0)
         );
         assert_eq!(min_window_size(UiScale::P100), MIN_WINDOW);
         assert_eq!(
             min_window_size(UiScale::P125),
-            LogicalSize::new(1200.0, 750.0)
+            LogicalSize::new(1200.0, 800.0)
         );
         assert_eq!(
             min_window_size(UiScale::P90),
-            LogicalSize::new(864.0, 540.0)
+            LogicalSize::new(864.0, 576.0)
         );
     }
 

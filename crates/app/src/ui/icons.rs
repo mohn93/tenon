@@ -37,6 +37,7 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Rotate => ph::ARROW_CLOCKWISE,
         ToolKind::Scale => ph::ARROWS_OUT,
         ToolKind::Offset => ph::FRAME_CORNERS,
+        ToolKind::FollowMe => ph::PATH,
         ToolKind::TapeMeasure => ph::RULER,
     }
 }

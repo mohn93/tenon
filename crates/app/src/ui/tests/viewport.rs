@@ -214,6 +214,7 @@ fn each_tool_has_its_cursor() {
         (ToolKind::Rotate, C::Crosshair),
         (ToolKind::Scale, C::Crosshair),
         (ToolKind::Offset, C::Crosshair),
+        (ToolKind::FollowMe, C::Crosshair),
         (ToolKind::Move, C::Move),
         (ToolKind::PushPull, C::ResizeVertical),
         (ToolKind::Paint, C::Default),

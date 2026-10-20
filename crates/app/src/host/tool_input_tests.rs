@@ -505,6 +505,70 @@ fn offset_retypes_and_repeats_on_another_face() {
 }
 
 #[test]
+fn follow_me_sweeps_the_clicked_face_along_the_selected_edges() {
+    let mut e = editor();
+    let mut path = Vec::new();
+    for (a, b) in [([0, 0, 0], [2, 0, 0]), ([2, 0, 0], [2, 2, 0])] {
+        let r = exec(&mut e, json!({"type": "add_edge", "start": a, "end": b}));
+        path.push(created(&r, 'e')[0].clone());
+    }
+    exec(
+        &mut e,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [0, 1, 1],
+               "normal": [1, 0, 0]}),
+    );
+    exec(&mut e, json!({"type": "select", "ids": path}));
+    tool(&mut e, "follow_me");
+    let r = input(&mut e, json!([{"type": "click", "point": [0, 0.5, 0.5]}]));
+    assert_eq!(ran(&r), ["follow_me"], "{r}");
+    // Four sides on each of two segments and two caps: a closed solid (Euler's formula).
+    let stats = ask(&mut e, json!({"type": "stats"}));
+    let (v, ed, f) = (
+        stats["vertices"].as_i64().unwrap(),
+        stats["edges"].as_i64().unwrap(),
+        stats["faces"].as_i64().unwrap(),
+    );
+    assert_eq!(f, 10, "{stats}");
+    assert_eq!(v - ed + f, 2, "{stats}");
+}
+
+#[test]
+fn follow_me_lathes_a_face_around_the_selected_face() {
+    let mut e = editor();
+    let r = exec(
+        &mut e,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "segments": 24}),
+    );
+    let disk = created(&r, 'f')[0].clone();
+    exec(
+        &mut e,
+        json!({"type": "add_rectangle", "corner": [1.5, 0, 0.5], "opposite": [2, 0, 1],
+               "normal": [0, 1, 0]}),
+    );
+    exec(&mut e, json!({"type": "select", "ids": [disk]}));
+    tool(&mut e, "follow_me");
+    let r = input(&mut e, json!([{"type": "click", "point": [1.75, 0, 0.75]}]));
+    assert_eq!(ran(&r), ["follow_me"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert_eq!(c["path"].as_array().unwrap().len(), 24, "{c}");
+    // The disk, and four sides on each of 24 segments.
+    assert_eq!(count(&mut e, "faces"), 97);
+}
+
+#[test]
+fn follow_me_without_a_path_says_what_to_select() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "follow_me");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 0]}]));
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(
+        r["editor"]["message"], "Select the path edges, then click the profile face",
+        "{r}"
+    );
+}
+
+#[test]
 fn the_tape_measure_adds_guides_and_ctrl_only_measures() {
     let mut e = editor();
     exec(

@@ -4,6 +4,7 @@
 pub mod arc;
 pub mod circle;
 pub mod erase;
+pub mod follow_me;
 pub mod inference;
 pub mod line;
 pub mod move_tool;
@@ -25,6 +26,7 @@ pub mod vcb;
 pub use arc::ArcTool;
 pub use circle::CircleTool;
 pub use erase::EraseTool;
+pub use follow_me::FollowMeTool;
 pub use inference::{
     Axis, Guides, Inference, Involved, Lock, SnapKind, edge_under, edge_under_in, face_under,
     face_under_in, guide_under_where, infer, infer_detail, infer_in, infer_with,

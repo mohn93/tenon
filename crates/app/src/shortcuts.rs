@@ -85,7 +85,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 34] = [
+pub const TABLE: [Shortcut; 35] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -97,6 +97,7 @@ pub const TABLE: [Shortcut; 34] = [
     tool(ToolKind::Rotate, 'q'),
     tool(ToolKind::Scale, 's'),
     tool(ToolKind::Offset, 'o'),
+    tool(ToolKind::FollowMe, 'j'),
     tool(ToolKind::TapeMeasure, 't'),
     tool(ToolKind::Erase, 'e'),
     tool(ToolKind::Paint, 'b'),
@@ -383,6 +384,7 @@ mod tests {
         // Cmd chords are not plain keys.
         assert_eq!(plain('i'), None);
         assert_eq!(plain('o'), Some(Bound::Tool(ToolKind::Offset)));
+        assert_eq!(plain('j'), Some(Bound::Tool(ToolKind::FollowMe)));
         assert_eq!(plain('s'), Some(Bound::Tool(ToolKind::Scale)));
     }
 

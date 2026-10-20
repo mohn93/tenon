@@ -709,14 +709,14 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `polygon`, `arc`, `push_pull`, `move`,
-  `rotate`, `scale`, `offset`, `tape_measure`, `erase` or `paint`. The editor starts in the Select tool.
+  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `erase` or `paint`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
   Polygon, the center; Arc, the start, then the end; Push/Pull, where the face was clicked; Move,
   the base point; Rotate, the center, then where the angle starts; Scale, the point that stays
-  put, then the grip clicked; Offset, where the face (or chain) was pressed; Tape Measure, where the measurement starts. The Select tool is `active` with no points while its button is held (a
-  click or a box, both on screen); Erase and Paint are always `idle`.
+  put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts. The Select tool is `active` with no points while its button is held (a
+  click or a box, both on screen); Erase, Paint and Follow Me are always `idle`.
 - `paint_material` is the material the Paint tool paints with (`null`: the default material);
   `import_units` is what one unit of an imported OBJ or STL file is in the window's import options
   sheet (`meters`, `centimeters`, `millimeters`, `inches` or `feet`; the `import` command takes its own
@@ -831,6 +831,12 @@ Events, run in order:
   command; typed again right after, it is redone (`undo`, then `offset`, keeping the
   direction), and a `double_click` on a face offsets it by the last distance (kept across
   tools).
+- **Follow Me** (key `j`): `click` the profile face. With edges (and nothing else) selected,
+  the selected edges are the path; with exactly one other face selected, that face's outer
+  loop is the path (a lathe: select the circle's disk, click a face beside it). With anything
+  else selected, or nothing, the message is "Select the path edges, then click the profile
+  face" and nothing runs. It makes one `follow_me` command; a refusal (a profile too big for a
+  turn, a bad path) shows the command's message and changes nothing. It takes no typed value.
 - **Modifiers** a `modifiers` event holds stay held after the call, until a later `modifiers`
   event lets them go or `cancel` (so a Shift lock can be set in one call and used in the
   next); arrow-key locks last until the operation ends. A `key` event's own modifiers are
@@ -1237,7 +1243,7 @@ under a pixel and where a click would snap.
 | Drawing by dragging (Line, Rectangle, Circle, Polygon, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
-| Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
+| Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Follow Me (select the path, click the face), Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `follow_me` (`face`, `path`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Inference snapping, Shift and arrow-key locks, the marker and the snap label by the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock); `editor.snap_label` |
 | Hover highlight (Select, Push/Pull, Paint, Erase) | `editor.hovered`; `pick` for any pixel |
 | The orientation gizmo: an axis end, the centre | `standard_view`, `set_projection` |
@@ -1251,7 +1257,7 @@ under a pixel and where a click would snap.
 | The 3D view's size | `editor.viewport` (the default view of `pick` and `infer`); `render_view` takes any size |
 
 Window chrome, which changes nothing in the model, its view or the editor, has no command: the
-window's size and position (at least 960 x 600 points), the panels' sizes and scroll positions,
+window's size and position (at least 960 x 640 points), the panels' sizes and scroll positions,
 which menus are open, tooltips, which Outliner rows are expanded, the Outliner's filter text (an
 agent filters the `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export
 dialog's suggested format, keyboard focus, and the window's preferences: the theme (Settings or

@@ -162,6 +162,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::Rotate,
         ToolKind::Scale,
         ToolKind::Offset,
+        ToolKind::FollowMe,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
         ToolKind::Paint,
