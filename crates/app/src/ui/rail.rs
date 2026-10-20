@@ -23,6 +23,7 @@ pub const GROUPS: [&[ToolKind]; 4] = [
         ToolKind::Move,
         ToolKind::Rotate,
         ToolKind::Scale,
+        ToolKind::Offset,
     ],
     &[ToolKind::TapeMeasure],
 ];

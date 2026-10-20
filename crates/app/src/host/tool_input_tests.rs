@@ -441,6 +441,70 @@ fn scale_about_center_with_ctrl() {
 }
 
 #[test]
+fn offset_a_face_by_a_typed_distance() {
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "offset");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0.4, 1, 0]},
+            {"type": "move", "point": [1, 1, 0]},
+            {"type": "type", "text": "0.5"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["offset"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!((c["distance"].as_f64().unwrap() - 0.5).abs() < 1e-9, "{c}");
+    // The ring between the squares and the square inside it.
+    assert_eq!(count(&mut e, "faces"), 2);
+}
+
+#[test]
+fn offset_retypes_and_repeats_on_another_face() {
+    let mut e = editor();
+    square(&mut e);
+    exec(
+        &mut e,
+        json!({"type": "add_rectangle", "corner": [5, 0, 0], "opposite": [7, 2, 0]}),
+    );
+    tool(&mut e, "offset");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0.4, 1, 0]},
+            {"type": "move", "point": [1, 1, 0]},
+            {"type": "type", "text": "0.5"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["offset"], "{r}");
+    // Typed again right after: the offset is redone at the new distance.
+    let r = input(&mut e, json!([{"type": "type", "text": "0.25"}]));
+    assert_eq!(ran(&r), ["undo", "offset"], "{r}");
+    let c = &r["commands"][1]["command"];
+    assert!((c["distance"].as_f64().unwrap() - 0.25).abs() < 1e-9, "{c}");
+    assert_eq!(count(&mut e, "faces"), 3);
+    // A double-click on the other face repeats that distance.
+    let r = input(
+        &mut e,
+        json!([{"type": "double_click", "point": [6, 1, 0]}]),
+    );
+    assert_eq!(ran(&r), ["offset"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!((c["distance"].as_f64().unwrap() - 0.25).abs() < 1e-9, "{c}");
+    assert_eq!(count(&mut e, "faces"), 4);
+    // Too far for the shape: refused, nothing run.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [6, 1, 0]},
+            {"type": "type", "text": "5"}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+}
+
+#[test]
 fn the_tape_measure_adds_guides_and_ctrl_only_measures() {
     let mut e = editor();
     exec(

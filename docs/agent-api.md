@@ -708,13 +708,13 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `polygon`, `arc`, `push_pull`, `move`,
-  `rotate`, `scale`, `tape_measure`, `erase` or `paint`. The editor starts in the Select tool.
+  `rotate`, `scale`, `offset`, `tape_measure`, `erase` or `paint`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
   Polygon, the center; Arc, the start, then the end; Push/Pull, where the face was clicked; Move,
   the base point; Rotate, the center, then where the angle starts; Scale, the point that stays
-  put, then the grip clicked; Tape Measure, where the measurement starts. The Select tool is `active` with no points while its button is held (a
+  put, then the grip clicked; Offset, where the face (or chain) was pressed; Tape Measure, where the measurement starts. The Select tool is `active` with no points while its button is held (a
   click or a box, both on screen); Erase and Paint are always `idle`.
 - `paint_material` is the material the Paint tool paints with (`null`: the default material);
   `import_units` is what one unit of an imported OBJ or STL file is in the window's import options
@@ -791,7 +791,7 @@ Events, run in order:
 | `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. With Line, Rectangle, Circle, Polygon, Arc, Push/Pull or Scale (pressed on a grip), a drag acts as two clicks when the release is at least the drag threshold (4 px) from the press, inside the view. While a navigation drag turns the view, the hover waits, as in the window. |
 | `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making, Polygon inscribed and circumscribed, Scale scaling about the center). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none) and `d` (duplicate, as the `duplicate` command; not with `shift`) are taken; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
 | `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go, so `{"type": "modifiers"}` lets go of all): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Shift switches the Scale tool between uniform and per-axis scaling, Cmd or Ctrl makes a Paint click sample the material. They stay held across calls (see Modifiers below). |
-| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as Rotate retypes its last angle and Scale its last scale; Move only replaces a copy with an array (`5x`, `/5`). A retyped pull is refused ("Click a face first") if another step has come in between. |
+| `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as Rotate retypes its last angle, Scale its last scale and Offset its last distance; Move only replaces a copy with an array (`5x`, `/5`). A retyped pull is refused ("Click a face first") if another step has come in between. |
 
 - **Where**: a `pixel` is in a view of `width` x `height` (both or neither; default the 3D view,
   `editor.viewport`, 1280 x 800 headless), scaled to the 3D view, which must have the same
@@ -817,6 +817,18 @@ Events, run in order:
   scales uniformly, an edge or face grip along its axes; holding Shift (`modifiers`) switches
   that. With nothing selected, a click selects what the Select tool's would. It makes one
   `scale` command; typed again right after, the scale is redone (`undo`, then `scale`).
+- **Offset** (key `o`): `click` a face (the point pressed), `move`, then `click` again, or
+  `type` instead. The distance is the cursor's, in the face's plane, from the nearest side:
+  inside the face it offsets inward, outside it outward (the outer loop only); a typed
+  length takes the side the cursor is on (negative reverses it; without a `move` the side of
+  the click). With edges forming one chain in one plane selected, a `click` near them
+  starts a chain offset instead, to the side of the cursor (a typed length must be positive);
+  a straight chain is offset in its face's plane, else in a plane parallel to the ground
+  (a vertical one in a plane facing the view). A distance the shape cannot take (it would
+  collapse or cross itself) is refused with a message and nothing runs. It makes one `offset`
+  command; typed again right after, it is redone (`undo`, then `offset`, keeping the
+  direction), and a `double_click` on a face offsets it by the last distance (kept across
+  tools).
 - **Modifiers** a `modifiers` event holds stay held after the call, until a later `modifiers`
   event lets them go or `cancel` (so a Shift lock can be set in one call and used in the
   next); arrow-key locks last until the operation ends. A `key` event's own modifiers are
@@ -1223,7 +1235,7 @@ under a pixel and where a click would snap.
 | Drawing by dragging (Line, Rectangle, Circle, Polygon, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
 | Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
-| Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
+| Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Tape Measure, Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `add_guide_line` / `add_guide_point`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Inference snapping, Shift and arrow-key locks, the marker and the snap label by the cursor | `tool_input` (`modifiers`, arrow `key`s; `inference` in its result); `infer` (with `from`; `axis` is what Shift would lock); `editor.snap_label` |
 | Hover highlight (Select, Push/Pull, Paint, Erase) | `editor.hovered`; `pick` for any pixel |
 | The orientation gizmo: an axis end, the centre | `standard_view`, `set_projection` |

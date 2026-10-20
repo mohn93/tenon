@@ -7,6 +7,7 @@ pub mod erase;
 pub mod inference;
 pub mod line;
 pub mod move_tool;
+pub mod offset;
 pub mod overlay;
 pub mod paint;
 pub mod polygon;
@@ -30,6 +31,7 @@ pub use inference::{
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;
+pub use offset::OffsetTool;
 pub use overlay::{Rgba, ScreenLine, Shape, Within};
 pub use paint::PaintTool;
 pub use polygon::PolygonTool;

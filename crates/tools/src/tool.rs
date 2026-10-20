@@ -14,6 +14,7 @@ use crate::erase::EraseTool;
 use crate::inference::{Axis, Inference};
 use crate::line::LineTool;
 use crate::move_tool::MoveTool;
+use crate::offset::OffsetTool;
 use crate::paint::PaintTool;
 use crate::polygon::PolygonTool;
 use crate::push_pull::PushPullTool;
@@ -189,6 +190,8 @@ pub struct Remembered {
     pub arc_segments: u32,
     /// The last Push/Pull distance, which a double-click on a face repeats.
     pub pull_distance: Option<f64>,
+    /// The last Offset distance, which a double-click on a face repeats.
+    pub offset_distance: Option<f64>,
 }
 
 impl Default for Remembered {
@@ -199,6 +202,7 @@ impl Default for Remembered {
             polygon_circumscribed: false,
             arc_segments: DEFAULT_ARC_SEGMENTS,
             pull_distance: None,
+            offset_distance: None,
         }
     }
 }
@@ -215,6 +219,7 @@ pub enum ToolKind {
     Move,
     Rotate,
     Scale,
+    Offset,
     TapeMeasure,
     Erase,
     Paint,
@@ -222,7 +227,7 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 13] = [
+    pub const ALL: [ToolKind; 14] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -233,6 +238,7 @@ impl ToolKind {
         ToolKind::Move,
         ToolKind::Rotate,
         ToolKind::Scale,
+        ToolKind::Offset,
         ToolKind::TapeMeasure,
         ToolKind::Erase,
         ToolKind::Paint,
@@ -259,6 +265,7 @@ impl ToolKind {
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),
             ToolKind::Scale => Box::new(ScaleTool::new()),
+            ToolKind::Offset => Box::new(OffsetTool::with_distance(r.offset_distance)),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
             ToolKind::Paint => Box::new(PaintTool::new()),
@@ -278,6 +285,7 @@ impl ToolKind {
             ToolKind::Move => "Move",
             ToolKind::Rotate => "Rotate",
             ToolKind::Scale => "Scale",
+            ToolKind::Offset => "Offset",
             ToolKind::TapeMeasure => "Tape Measure",
             ToolKind::Erase => "Erase",
             ToolKind::Paint => "Paint",
@@ -297,6 +305,7 @@ impl ToolKind {
             ToolKind::Move => 'm',
             ToolKind::Rotate => 'q',
             ToolKind::Scale => 's',
+            ToolKind::Offset => 'o',
             ToolKind::TapeMeasure => 't',
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',

@@ -163,7 +163,7 @@ fn an_edit_ended_in_a_discarded_pass_is_reported_once() {
         three.clone(),
         TexturePlacement::default(),
     ));
-    let field = h.get_all_by_label("Offset").next().unwrap().rect();
+    let field = field(&h, "Offset", 0).rect();
     let start = field.center();
     h.event(egui::Event::PointerMoved(start));
     h.event(egui::Event::PointerButton {
