@@ -135,9 +135,28 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
             "the Field of View sheet",
             Sheet::FieldOfView { degrees: 35.0 },
         ),
+        (
+            "the Delete Tag sheet",
+            Sheet::DeleteTag {
+                tag: kernel::TagId(1),
+                name: "Walls".into(),
+                count: 5,
+                others: vec![(kernel::TagId(2), "Roof".into())],
+            },
+        ),
     ];
     let mut all = vec![
         ("the default", Fixture::default()),
+        ("the tags tab", super::tags::tags_tab()),
+        (
+            "entity info's tag field",
+            Fixture {
+                tags: super::tags::two_tags(),
+                has_selection: true,
+                selection_tag: Some(crate::editor::SelectionTag::Mixed),
+                ..Default::default()
+            },
+        ),
         (
             "the house with a selected component",
             Fixture {

@@ -1,5 +1,5 @@
 //! The window's panels: the context bar, the tool rail, the status bar with the measurements
-//! box, and on the right the dock: Entity Info and Materials as tabs over the Outliner. Over
+//! box, and on the right the dock: Entity Info, Materials and Tags as tabs over the Outliner. Over
 //! the 3D view, the tools' snap marker, preview lines and chip, the tool's cursor and the
 //! orientation gizmo.
 
@@ -7,11 +7,11 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use egui::{Panel, Ui};
-use kernel::{DefinitionId, EntityId, TexturePlacement};
+use kernel::{DefinitionId, EntityId, TagId, TexturePlacement};
 use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView};
 use tools::ToolKind;
 
-use crate::editor::{ImportOptions, RenameTarget, Status};
+use crate::editor::{ImportOptions, RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
 use crate::navigation::TrackpadScroll;
 use theme::{ThemeChoice, UiScale};
@@ -30,6 +30,7 @@ mod settings;
 mod sheets;
 mod start;
 mod status;
+mod tags;
 #[cfg(test)]
 mod tests;
 pub mod theme;
@@ -106,6 +107,20 @@ pub enum UiAction {
     RemoveTexture(MaterialId),
     /// Set the width and height a material's texture covers, in millimeters.
     SetTextureSize(MaterialId, [u32; 2]),
+    /// Draw faces in their tags' colors, or by their materials.
+    SetColorByTag(bool),
+    AddTag,
+    /// Delete a tag: at once when nothing is on it, otherwise after asking where what is on it
+    /// goes (the Delete Tag sheet).
+    DeleteTag(TagId),
+    /// The Delete Tag sheet's destination for what is on the tag (None: Untagged).
+    ConfirmDeleteTag(Option<TagId>),
+    RenameTag(TagId, String),
+    RecolorTag(TagId, [u8; 3]),
+    /// Show (true) or hide what is on a tag.
+    SetTagVisible(TagId, bool),
+    /// Put the selection on a tag (None: Untagged); Entity Info's Tag field.
+    SetSelectionTag(Option<TagId>),
     /// Select the outliner node at `path` (instances from the root down to it); `toggle`
     /// (Shift, Cmd or Ctrl held) adds or removes it instead of replacing the selection.
     OutlinerSelect {
@@ -175,6 +190,17 @@ pub struct MaterialRow {
     pub texture: Option<TextureRow>,
 }
 
+/// A tag as the Tags tab lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TagRow {
+    pub id: TagId,
+    pub name: String,
+    pub color: [u8; 3],
+    pub visible: bool,
+    /// How many edges, faces, instances and guides in the whole model are on it.
+    pub count: usize,
+}
+
 /// A material's texture as the Materials list shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureRow {
@@ -224,6 +250,12 @@ pub struct View<'a> {
     pub materials: &'a [MaterialRow],
     /// The material the Paint tool paints with (None: the default material).
     pub material: Option<MaterialId>,
+    /// Every tag, in id order.
+    pub tags: &'a [TagRow],
+    /// Whether faces are drawn in their tags' colors.
+    pub color_by_tag: bool,
+    /// The selection's tag, when everything selected can be tagged (Entity Info's Tag field).
+    pub selection_tag: Option<SelectionTag>,
     /// The placed groups and components (`Document::outliner_rows`).
     pub outliner: &'a OutlinerTable,
     /// The open context's instances, from the root down.

@@ -176,7 +176,8 @@ fn an_icon_button_is_named_and_can_be_disabled() {
 fn the_panels_draw_every_icon_in_the_icon_family() {
     use crate::ui::{fonts, icons};
     // The rail, Undo and Redo, the three group buttons, the breadcrumb's carets, the night
-    // toggle, the agents indicator, the Outliner's Clear filter and the start card's Dismiss.
+    // toggle, the agents indicator, the Outliner's Clear filter and the start card's Dismiss;
+    // the Tags tab's eyes, Add and Delete.
     let mut h = harness(Fixture {
         has_selection: true,
         has_instance_selected: true,
@@ -214,6 +215,11 @@ fn the_panels_draw_every_icon_in_the_icon_family() {
     }
     let mut drawn = Vec::new();
     for clipped in &h.output().shapes {
+        collect(&clipped.shape, &glyphs, &mut drawn);
+    }
+    // The Tags tab, with a shown and a hidden tag, draws the rest.
+    let tags = harness(super::tags::tags_tab());
+    for clipped in &tags.output().shapes {
         collect(&clipped.shape, &glyphs, &mut drawn);
     }
     let wrong: Vec<_> = drawn.iter().filter(|(_, f)| *f != fonts::icons()).collect();

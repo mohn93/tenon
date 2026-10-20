@@ -34,9 +34,11 @@ mod agent;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
 mod soften;
+mod tags;
 mod texture_position;
 
 use soften::SoftenWindow;
+pub use tags::SelectionTag;
 
 /// How the window imports OBJ and STL files: the `import` command's `scale`, `up`, `as` and
 /// `merge_coplanar`. Kept in the window's preferences, so missing keys are their defaults.

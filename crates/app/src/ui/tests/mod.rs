@@ -13,6 +13,7 @@ mod settings;
 mod sheets;
 mod start;
 mod status;
+mod tags;
 mod viewport;
 mod widgets;
 
@@ -28,10 +29,10 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, SettingsView, Sheet, StartCard, TexturePosition,
-    TextureRow, UiAction, View, draw,
+    Agents, DockLayout, DockTab, MaterialRow, SettingsView, Sheet, StartCard, TagRow,
+    TexturePosition, TextureRow, UiAction, View, draw,
 };
-use crate::editor::{RenameTarget, Status};
+use crate::editor::{RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
 
 /// Everything a test's `View` borrows, owned, and what the panels reported.
@@ -50,6 +51,9 @@ pub(super) struct Fixture {
     pub flying: bool,
     pub materials: Vec<MaterialRow>,
     pub material: Option<MaterialId>,
+    pub tags: Vec<TagRow>,
+    pub color_by_tag: bool,
+    pub selection_tag: Option<SelectionTag>,
     pub outliner: OutlinerTable,
     pub context: Vec<EntityId>,
     pub selection: BTreeSet<EntityId>,
@@ -115,6 +119,9 @@ impl Default for Fixture {
             flying: false,
             materials: Vec::new(),
             material: None,
+            tags: Vec::new(),
+            color_by_tag: false,
+            selection_tag: None,
             outliner: OutlinerTable {
                 roots: Vec::new(),
                 by_definition: BTreeMap::new(),
@@ -168,6 +175,9 @@ impl Fixture {
             flying: self.flying,
             materials: &self.materials,
             material: self.material,
+            tags: &self.tags,
+            color_by_tag: self.color_by_tag,
+            selection_tag: self.selection_tag,
             outliner: &self.outliner,
             context: &self.context,
             selection: &self.selection,

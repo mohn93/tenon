@@ -1,11 +1,11 @@
-//! Entity Info: what is selected, the Soft checkbox for edges and the texture position for
-//! faces.
+//! Entity Info: what is selected, its tag, the Soft checkbox for edges and the texture
+//! position for faces.
 
 use egui::Ui;
 use kernel::{DefinitionId, EntityId};
 
 use super::widgets::{self, take_row};
-use super::{TexturePosition, UiAction, View};
+use super::{TexturePosition, UiAction, View, tags};
 use crate::editor::RenameTarget;
 
 /// Entity Info, the dock's first tab (the tab is its title).
@@ -32,6 +32,9 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
                 ui.label(line);
             }
         }
+    }
+    if let Some(current) = view.selection_tag {
+        tags::selection_tag(ui, view, current, actions);
     }
     if let Some(soft) = view.edges_soft {
         let mut checked = soft;

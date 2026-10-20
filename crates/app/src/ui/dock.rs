@@ -1,4 +1,4 @@
-//! The dock on the right: Entity Info and Materials as tabs over the Outliner, split by a
+//! The dock on the right: Entity Info, Materials and Tags as tabs over the Outliner, split by a
 //! divider. Its width, split and tab are kept in the preferences.
 
 use std::ops::RangeInclusive;
@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use egui::{Id, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 use serde::{Deserialize, Serialize};
 
-use super::{UiAction, View, materials, outliner, right, theme, widgets};
+use super::{UiAction, View, materials, outliner, right, tags, theme, widgets};
 
 /// The tab shown in the dock's top area.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +15,7 @@ pub enum DockTab {
     #[default]
     EntityInfo,
     Materials,
+    Tags,
 }
 
 impl DockTab {
@@ -22,6 +23,7 @@ impl DockTab {
         match self {
             DockTab::EntityInfo => "Entity Info",
             DockTab::Materials => "Materials",
+            DockTab::Tags => "Tags",
         }
     }
 }
@@ -102,7 +104,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
     // Fill the panel's width, so it keeps the width it was given.
     ui.set_min_width(ui.max_rect().width());
     ui.horizontal(|ui| {
-        for tab in [DockTab::EntityInfo, DockTab::Materials] {
+        for tab in [DockTab::EntityInfo, DockTab::Materials, DockTab::Tags] {
             let on = view.dock.tab == tab;
             if ui.add(egui::Button::selectable(on, tab.name())).clicked() && !on {
                 layout.tab = tab;
@@ -161,6 +163,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
         .show(ui, |ui| match view.dock.tab {
             DockTab::EntityInfo => right::entity_info(ui, view, actions),
             DockTab::Materials => materials::materials(ui, view, actions),
+            DockTab::Tags => tags::tags(ui, view, actions),
         });
     widgets::name_scroll_bars(ui.ctx(), top.id, view.dock.tab.name());
     divider(ui, divider_id, width);

@@ -20,6 +20,12 @@ pub const CARET_RIGHT: &str = ph::CARET_RIGHT;
 pub const X_CIRCLE: &str = ph::X_CIRCLE;
 /// Dismisses the start card.
 pub const X: &str = ph::X;
+/// A shown and a hidden tag's visibility button.
+pub const EYE: &str = ph::EYE;
+pub const EYE_SLASH: &str = ph::EYE_SLASH;
+/// Adds and deletes a tag.
+pub const PLUS: &str = ph::PLUS;
+pub const MINUS: &str = ph::MINUS;
 
 /// A tool's glyph on the rail.
 pub fn tool(kind: ToolKind) -> &'static str {
@@ -57,6 +63,10 @@ pub fn all() -> Vec<&'static str> {
         CARET_RIGHT,
         X_CIRCLE,
         X,
+        EYE,
+        EYE_SLASH,
+        PLUS,
+        MINUS,
     ];
     all.extend(ToolKind::ALL.map(tool));
     all

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use egui::{Id, Modal, RichText, Ui};
 
 use egui::text::{CCursor, CCursorRange};
-use kernel::DefinitionKind;
+use kernel::{DefinitionKind, TagId};
 
 use super::{UiAction, theme, widgets};
 use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis, is_sketchup_path};
@@ -26,6 +26,14 @@ pub enum Sheet {
     Rename { target: RenameTarget },
     /// Field of View, with the camera's value (rounded when shown).
     FieldOfView { degrees: f64 },
+    /// Delete Tag, for a tag something is on: where it goes, Untagged or one of `others`
+    /// (each tag's id and name).
+    DeleteTag {
+        tag: TagId,
+        name: String,
+        count: usize,
+        others: Vec<(TagId, String)>,
+    },
 }
 
 /// A sheet's width, in points.
@@ -49,6 +57,8 @@ enum Values {
     Import(ImportOptions),
     Name(String),
     Degrees(f64),
+    /// Where what is on a deleted tag goes (None: Untagged).
+    Destination(Option<TagId>),
 }
 
 impl Values {
@@ -59,6 +69,7 @@ impl Values {
             Sheet::NameComponent { suggested } => Values::Name(suggested.clone()),
             Sheet::Rename { target } => Values::Name(target.name.clone()),
             Sheet::FieldOfView { degrees } => Values::Degrees(degrees.round()),
+            Sheet::DeleteTag { .. } => Values::Destination(None),
         }
     }
 }
@@ -93,6 +104,17 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                 }
                 (Sheet::FieldOfView { .. }, Values::Degrees(degrees)) => {
                     field_of_view_sheet(ui, degrees, actions);
+                }
+                (
+                    Sheet::DeleteTag {
+                        name,
+                        count,
+                        others,
+                        ..
+                    },
+                    Values::Destination(to),
+                ) => {
+                    delete_tag_sheet(ui, name, *count, others, to, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -259,6 +281,45 @@ fn field_of_view_sheet(ui: &mut Ui, degrees: &mut f64, actions: &mut Vec<UiActio
     });
     if buttons(ui, "Apply", true, actions) {
         actions.push(UiAction::ConfirmFieldOfView(degrees.round()));
+    }
+}
+
+/// The Delete Tag sheet: how many entities are on the tag, where they go (Untagged or another
+/// tag) and Delete, which reports the destination.
+fn delete_tag_sheet(
+    ui: &mut Ui,
+    name: &str,
+    count: usize,
+    others: &[(TagId, String)],
+    to: &mut Option<TagId>,
+    actions: &mut Vec<UiAction>,
+) {
+    widgets::section_header(ui, "Delete Tag");
+    ui.add_space(theme::GRID);
+    let what = match count {
+        1 => "1 entity is".to_string(),
+        n => format!("{n} entities are"),
+    };
+    ui.label(format!("{what} on {name}."));
+    let name_of = |to: Option<TagId>| {
+        to.and_then(|t| others.iter().find(|(o, _)| *o == t))
+            .map_or("Untagged", |(_, n)| n.as_str())
+    };
+    ui.horizontal(|ui| {
+        let label = ui.label("Move to");
+        egui::ComboBox::from_id_salt("delete-tag-destination")
+            .selected_text(name_of(*to))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(to, None, "Untagged");
+                for (t, n) in others {
+                    ui.selectable_value(to, Some(*t), n);
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    if buttons(ui, "Delete", true, actions) {
+        actions.push(UiAction::ConfirmDeleteTag(*to));
     }
 }
 

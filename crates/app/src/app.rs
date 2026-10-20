@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use api::{ApiRoots, EditorState, Endpoint, Hub, listen};
 use glam::DVec2;
-use kernel::{EntityId, InstanceId, MaterialId, TextureImage};
+use kernel::{EntityId, InstanceId, MaterialId, TagId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
 use session::{Camera, Command, Lighting, OutlinerTable};
 use tools::Axis;
@@ -37,8 +37,8 @@ use crate::prefs::{self, Prefs};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, SettingsView, Sheet, StartCard, TexturePosition, TextureRow, UiAction,
-    View,
+    Agents, MaterialRow, SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow,
+    UiAction, View,
 };
 use crate::ui::{theme, viewport};
 
@@ -610,6 +610,9 @@ struct State {
     drawn: Option<Drawn>,
     /// The Outliner's rows and the revision they were built at.
     outliner: Option<(u64, OutlinerTable)>,
+    /// The Tags tab's rows, and the document (`Editor::documents`) and revision they were
+    /// built at (counting entities on each tag walks the whole model).
+    tag_rows: Option<((u64, u64), Vec<TagRow>)>,
     /// Each textured material's swatch in the Materials list, with the image it shows.
     swatches: HashMap<MaterialId, (Arc<TextureImage>, egui::TextureHandle)>,
     modifiers: ModifiersState,
@@ -733,6 +736,7 @@ impl State {
             gui,
             drawn: None,
             outliner: None,
+            tag_rows: None,
             swatches: HashMap::new(),
             modifiers: ModifiersState::empty(),
             ctrl_tap: CtrlTap::default(),
@@ -1201,6 +1205,38 @@ impl State {
             UiAction::SetTextureSize(material, millimeters) => {
                 self.editor.set_texture_size(material, millimeters);
             }
+            UiAction::SetColorByTag(on) => {
+                self.editor.set_color_by_tag(on);
+            }
+            UiAction::AddTag => {
+                self.editor.add_tag();
+            }
+            // A tag something is on asks where that goes first.
+            UiAction::DeleteTag(tag) => match delete_tag_sheet(self.editor.doc(), tag) {
+                Some(sheet) => self.open_sheet(sheet),
+                None => {
+                    self.editor.delete_tag(tag, None);
+                }
+            },
+            UiAction::ConfirmDeleteTag(move_to) => {
+                if let Some(Sheet::DeleteTag { tag, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::DeleteTag { .. }))
+                {
+                    self.editor.delete_tag(tag, move_to);
+                }
+            }
+            UiAction::RenameTag(tag, name) => {
+                self.editor.rename_tag(tag, name);
+            }
+            UiAction::RecolorTag(tag, color) => {
+                self.editor.recolor_tag(tag, color);
+            }
+            UiAction::SetTagVisible(tag, visible) => {
+                self.editor.set_tag_visible(tag, visible);
+            }
+            UiAction::SetSelectionTag(tag) => {
+                self.editor.set_selection_tag(tag);
+            }
             UiAction::OutlinerSelect { path, toggle } => {
                 self.editor.outliner_select(&path, toggle);
             }
@@ -1420,6 +1456,10 @@ impl State {
         if self.outliner.as_ref().map(|(r, _)| *r) != Some(revision) {
             self.outliner = Some((revision, self.editor.doc().outliner_rows()));
         }
+        let built = (self.editor.documents(), revision);
+        if self.tag_rows.as_ref().map(|(b, _)| *b) != Some(built) {
+            self.tag_rows = Some((built, tag_rows(self.editor.doc())));
+        }
         let context: Vec<EntityId> = self
             .editor
             .doc()
@@ -1486,6 +1526,9 @@ impl State {
             flying: self.editor.flying(),
             materials: &materials,
             material: self.editor.current_material(),
+            tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
+            color_by_tag: self.editor.doc().color_by_tag,
+            selection_tag: self.editor.selection_tag(),
             outliner: self.outliner.as_ref().map(|(_, t)| t).expect("built above"),
             context: &context,
             selection: self.editor.doc().selection(),
@@ -1787,7 +1830,43 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
             Err("The field of view applies only to a perspective view")
         }
         Sheet::FieldOfView { .. } => Ok(()),
+        Sheet::DeleteTag { tag, .. } if editor.doc().scene().tag(*tag).is_none() => {
+            Err("The tag was already deleted")
+        }
+        Sheet::DeleteTag { .. } => Ok(()),
     }
+}
+
+/// The Tags tab's rows: every tag, in id order, with how many entities are on it.
+fn tag_rows(doc: &session::Document) -> Vec<TagRow> {
+    let scene = doc.scene();
+    scene
+        .tags()
+        .map(|(id, t)| TagRow {
+            id,
+            name: t.name.clone(),
+            color: t.color,
+            visible: t.visible,
+            count: scene.tag_count(id),
+        })
+        .collect()
+}
+
+/// The Delete Tag sheet for `tag`, when something is on it (otherwise it is deleted at once).
+fn delete_tag_sheet(doc: &session::Document, tag: TagId) -> Option<Sheet> {
+    let scene = doc.scene();
+    let name = scene.tag(tag)?.name.clone();
+    let count = scene.tag_count(tag);
+    (count > 0).then(|| Sheet::DeleteTag {
+        tag,
+        name,
+        count,
+        others: scene
+            .tags()
+            .filter(|(id, _)| *id != tag)
+            .map(|(id, t)| (id, t.name.clone()))
+            .collect(),
+    })
 }
 
 /// Ends fly mode before a sheet opens. Leaving stops the eye and lets every held key go, so a
@@ -1827,6 +1906,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmImport(_)
             | UiAction::ConfirmName(_)
             | UiAction::ConfirmFieldOfView(_)
+            | UiAction::ConfirmDeleteTag(_)
             | UiAction::Quit
     )
 }
@@ -2883,6 +2963,37 @@ mod tests {
         let origin = SheetOrigin::of(&e);
         e.select_none();
         assert!(sheet_applies(&Sheet::Rename { target }, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn deleting_a_used_tag_asks_and_the_sheet_needs_the_tag() {
+        let mut e = editor_with_selection();
+        e.add_tag();
+        e.add_tag();
+        let ids: Vec<TagId> = e.doc().scene().tags().map(|(id, _)| id).collect();
+        let (walls, other) = (ids[0], ids[1]);
+        assert_eq!(delete_tag_sheet(e.doc(), walls), None, "nothing on it");
+        e.set_selection_tag(Some(walls));
+        let sheet = delete_tag_sheet(e.doc(), walls).expect("five entities on it");
+        assert_eq!(
+            sheet,
+            Sheet::DeleteTag {
+                tag: walls,
+                name: "Tag".into(),
+                count: 5,
+                others: vec![(other, "Tag 2".into())],
+            }
+        );
+        let rows = tag_rows(e.doc());
+        assert_eq!(
+            rows.iter().map(|r| (r.id, r.count)).collect::<Vec<_>>(),
+            [(walls, 5), (other, 0)]
+        );
+        let origin = SheetOrigin::of(&e);
+        assert_eq!(sheet_applies(&sheet, &origin, &e), Ok(()));
+        // An agent deletes the tag meanwhile.
+        e.delete_tag(walls, None);
+        assert!(sheet_applies(&sheet, &origin, &e).is_err());
     }
 
     #[test]
