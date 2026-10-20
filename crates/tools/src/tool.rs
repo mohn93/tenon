@@ -22,7 +22,7 @@ use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
 use crate::scale::ScaleTool;
-use crate::scenery::Scenery;
+use crate::scenery::{Label, Scenery};
 use crate::select::SelectTool;
 use crate::tape::TapeMeasureTool;
 
@@ -53,6 +53,9 @@ pub struct ToolContext<'a> {
     /// Whether the sampling modifier is held (Cmd on macOS, Ctrl elsewhere): the Paint tool
     /// then picks up the material clicked instead of painting.
     pub sample: bool,
+    /// The annotations' labels as the window last drew them, for picking; empty where no
+    /// window draws them (headless, the API).
+    pub labels: &'a [Label],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -378,6 +381,7 @@ mod tests {
                 selection: &selection,
                 material: None,
                 sample: false,
+                labels: &[],
             };
             let hit = Inference {
                 point,
@@ -423,6 +427,7 @@ mod tests {
                 selection: &selection,
                 material: None,
                 sample: false,
+                labels: &[],
             };
             let on_square = point.z.abs() < 1e-9
                 && (0.0..=2.0).contains(&point.x)
@@ -572,6 +577,7 @@ mod tests {
                 selection: &selection,
                 material: None,
                 sample: false,
+                labels: &[],
             };
             let press = Inference {
                 point: a,
@@ -617,6 +623,7 @@ mod tests {
             selection: &BTreeSet::new(),
             material: None,
             sample: false,
+            labels: &[],
         };
         let hit = Inference {
             point,

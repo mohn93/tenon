@@ -129,6 +129,7 @@ mod tests {
             selection: &selection,
             material: None,
             sample: false,
+            labels: &[],
         };
         tool.handle(event, &ctx)
     }

@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod grid;
 pub mod guides;
 pub mod lights;

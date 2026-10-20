@@ -167,6 +167,7 @@ mod tests {
             selection,
             material: None,
             sample: false,
+            labels: &[],
         };
         FollowMeTool::new().handle(ToolEvent::Click(hit()), &ctx)
     }

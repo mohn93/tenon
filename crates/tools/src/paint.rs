@@ -215,6 +215,7 @@ mod tests {
             selection,
             material: Some(MaterialId(77)),
             sample,
+            labels: &[],
         };
         tool.handle(event, &ctx)
     }

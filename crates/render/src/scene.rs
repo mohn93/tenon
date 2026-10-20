@@ -15,10 +15,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene, TagId,
-    VertexId, back_texture_position,
+    DimensionId, EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model,
+    NoteId, Scene, TagId, VertexId, back_texture_position,
 };
+use session::AnnotationShape;
 
+use crate::annotations::{ANNOTATION_COLOR, AnnotationLook, FADED_ANNOTATION_COLOR};
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
@@ -196,13 +198,14 @@ pub const FADED_EDGE_COLOR: [f32; 4] = [0.62, 0.62, 0.62, 1.0];
 /// The box around the open instance.
 pub const CONTEXT_BOX_COLOR: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
 
-/// Triangles for every face, line pairs for every edge, and the guides (drawn per frame, see
-/// `guides::guide_lines`).
+/// Triangles for every face, line pairs for every edge, and the guides and annotations (drawn
+/// per frame, see `guides::guide_lines` and `annotations::annotation_lines`).
 #[derive(Debug, Default, PartialEq)]
 pub struct ModelGeometry {
     pub faces: Vec<FaceVertex>,
     pub edges: Vec<LineVertex>,
     pub guides: Vec<GuideShape>,
+    pub annotations: Vec<AnnotationLook>,
 }
 
 /// Geometry for the whole scene in root coordinates, every instance placed by its transform.
@@ -233,6 +236,9 @@ pub struct SceneBase {
     /// open instance's box.
     pub edges: Vec<LineVertex>,
     pub guides: Vec<GuideShape>,
+    /// Dimensions and leader notes (screen notes have no lines), in ANNOTATION_COLOR inside
+    /// the open instance and FADED_ANNOTATION_COLOR outside it.
+    pub annotations: Vec<AnnotationLook>,
     /// Where the open context's entities lie in the lists above.
     pub spans: Spans,
     /// A light for each placement of a mesh whose own faces glow, in root coordinates. They do
@@ -313,8 +319,30 @@ impl SceneBase {
             faces,
             edges,
             guides: shown_guides(&self.guides, &flags.guides, SELECTED_EDGE_COLOR),
+            annotations: shown_annotations(
+                &self.annotations,
+                &flags.annotations,
+                SELECTED_EDGE_COLOR,
+            ),
         }
     }
+}
+
+/// The annotations of a `SceneBase` with the selected ones (`lit`, one per annotation) in
+/// `color`.
+pub fn shown_annotations(
+    annotations: &[AnnotationLook],
+    lit: &[bool],
+    color: [f32; 4],
+) -> Vec<AnnotationLook> {
+    annotations
+        .iter()
+        .zip(lit)
+        .map(|(a, &lit)| AnnotationLook {
+            color: if lit { color } else { a.color },
+            ..*a
+        })
+        .collect()
 }
 
 /// The guides of a `SceneBase` with the selected ones (`lit`, one per guide) in `color`.
@@ -336,21 +364,26 @@ pub struct Spans {
     face_vertices: usize,
     edge_vertices: usize,
     guide_count: usize,
+    annotation_count: usize,
     faces: Vec<(FaceId, Range<usize>)>,
     edges: Vec<(EdgeId, Range<usize>)>,
     /// Each guide's index.
     guides: Vec<(GuideId, usize)>,
+    /// Each dimension's and leader note's index among the annotations.
+    dimensions: Vec<(DimensionId, usize)>,
+    notes: Vec<(NoteId, usize)>,
     /// Everything an instance places, at any depth.
     instances: Vec<(InstanceId, Ranges)>,
 }
 
 /// What a selection lights up in a `SceneBase`: a flag per face vertex and per edge vertex (1
-/// selected, 0 not), as the renderer uploads them, and one per guide.
+/// selected, 0 not), as the renderer uploads them, and one per guide and per annotation.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Flags {
     pub faces: Vec<f32>,
     pub edges: Vec<f32>,
     pub guides: Vec<bool>,
+    pub annotations: Vec<bool>,
 }
 
 /// Where one entity of the open context lies in a `SceneBase`'s lists (a group: all it places).
@@ -359,6 +392,7 @@ pub struct Ranges {
     pub faces: Range<usize>,
     pub edges: Range<usize>,
     pub guides: Range<usize>,
+    pub annotations: Range<usize>,
 }
 
 impl Spans {
@@ -378,13 +412,16 @@ impl Spans {
                 guides: k..k + 1,
                 ..Ranges::default()
             }),
-            EntityId::Instance(id) => find(&self.instances, id).map(|p| Ranges {
-                faces: p.faces.clone(),
-                edges: p.edges.clone(),
-                guides: p.guides.clone(),
+            EntityId::Dimension(id) => find(&self.dimensions, id).map(|&k| Ranges {
+                annotations: k..k + 1,
+                ..Ranges::default()
             }),
-            // Annotations are not drawn from these lists.
-            EntityId::Vertex(_) | EntityId::Dimension(_) | EntityId::Note(_) => None,
+            EntityId::Note(id) => find(&self.notes, id).map(|&k| Ranges {
+                annotations: k..k + 1,
+                ..Ranges::default()
+            }),
+            EntityId::Instance(id) => find(&self.instances, id).cloned(),
+            EntityId::Vertex(_) => None,
         }
     }
 
@@ -395,11 +432,13 @@ impl Spans {
             faces: vec![0.0; self.face_vertices],
             edges: vec![0.0; self.edge_vertices],
             guides: vec![false; self.guide_count],
+            annotations: vec![false; self.annotation_count],
         };
         for r in selection.iter().filter_map(|&id| self.ranges(id)) {
             f.faces[r.faces].fill(1.0);
             f.edges[r.edges].fill(1.0);
             f.guides[r.guides].fill(true);
+            f.annotations[r.annotations].fill(true);
         }
         f
     }
@@ -468,10 +507,13 @@ pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool
     spans.face_vertices = base.faces.len();
     spans.edge_vertices = base.edges.len();
     spans.guide_count = base.guides.len();
+    spans.annotation_count = base.annotations.len();
     // `Spans::flags` finds ids by binary search; meshes list their entities in id order.
     debug_assert!(spans.faces.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.edges.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.guides.is_sorted_by_key(|(id, _)| *id));
+    debug_assert!(spans.dimensions.is_sorted_by_key(|(id, _)| *id));
+    debug_assert!(spans.notes.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.instances.is_sorted_by_key(|(id, _)| *id));
     base
 }
@@ -848,6 +890,42 @@ impl Walk<'_> {
                 color,
             });
         }
+        let color = if inside {
+            ANNOTATION_COLOR
+        } else {
+            FADED_ANNOTATION_COLOR
+        };
+        for (did, d) in model.dimensions() {
+            if !scene.tag_shown(d.tag()) {
+                continue;
+            }
+            let Some(shape) = AnnotationShape::of(model, EntityId::Dimension(did)) else {
+                continue;
+            };
+            if open {
+                base.spans.dimensions.push((did, base.annotations.len()));
+            }
+            base.annotations.push(AnnotationLook {
+                shape: shape.transformed(t),
+                color,
+            });
+        }
+        for (nid, n) in model.notes() {
+            // Screen notes are the window's alone.
+            if !scene.tag_shown(n.tag()) || matches!(n, kernel::Note::Screen { .. }) {
+                continue;
+            }
+            let Some(shape) = AnnotationShape::of(model, EntityId::Note(nid)) else {
+                continue;
+            };
+            if open {
+                base.spans.notes.push((nid, base.annotations.len()));
+            }
+            base.annotations.push(AnnotationLook {
+                shape: shape.transformed(t),
+                color,
+            });
+        }
         for (iid, instance) in model.instances() {
             // A hidden instance hides all it places, but for the one being edited (or holding
             // it), which stays drawn.
@@ -858,6 +936,7 @@ impl Walk<'_> {
                 self.base.faces.len(),
                 self.base.edges.len(),
                 self.base.guides.len(),
+                self.base.annotations.len(),
             );
             self.path.push(iid);
             self.mesh(
@@ -872,6 +951,7 @@ impl Walk<'_> {
                     faces: start.0..self.base.faces.len(),
                     edges: start.1..self.base.edges.len(),
                     guides: start.2..self.base.guides.len(),
+                    annotations: start.3..self.base.annotations.len(),
                 };
                 self.base.spans.instances.push((iid, placed));
             }
@@ -1472,6 +1552,86 @@ mod tests {
             "the root's line and the other square's point"
         );
         assert!(open.guides.iter().any(|s| s.color == SELECTED_EDGE_COLOR));
+    }
+
+    #[test]
+    fn annotations_are_placed_lit_when_selected_faded_outside_and_hidden_by_tags() {
+        use kernel::{Anchor, Dimension, Note};
+        let (mut s, first, _) = two_squares();
+        let d = MeshId::Definition(s.root().instance(first).unwrap().definition);
+        let inner = s
+            .edit(d, |m| {
+                m.add_dimension(Dimension::Linear {
+                    a: Anchor::Point(DVec3::ZERO),
+                    b: Anchor::Point(DVec3::X),
+                    offset: DVec3::new(0.0, -0.5, 0.0),
+                    tag: None,
+                })
+            })
+            .unwrap()
+            .summary()
+            .created[0];
+        let leader = Note::Leader {
+            anchor: Anchor::Point(DVec3::ZERO),
+            position: DVec3::new(0.0, 0.0, 2.0),
+            text: Some("Here".into()),
+            tag: None,
+        };
+        let note = s.add_note(MeshId::Root, leader).unwrap().summary().created[0];
+        let screen = Note::Screen {
+            at: [0.1, 0.1],
+            text: "Title".into(),
+            tag: None,
+        };
+        s.add_note(MeshId::Root, screen).unwrap();
+        let g = scene_geometry(&s, &[], &BTreeSet::from([note]));
+        // The component's dimension twice (placed twice), the leader once, the screen note
+        // not at all.
+        assert_eq!(g.annotations.len(), 3);
+        let lines: Vec<f64> = g
+            .annotations
+            .iter()
+            .filter_map(|a| match a.shape {
+                AnnotationShape::Linear { line, .. } => Some(line[0].x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, vec![0.0, 3.0], "placed by each instance");
+        let lit: Vec<_> = g
+            .annotations
+            .iter()
+            .filter(|a| a.color == SELECTED_EDGE_COLOR)
+            .collect();
+        assert_eq!(lit.len(), 1);
+        assert!(matches!(lit[0].shape, AnnotationShape::Leader { .. }));
+        // Inside the first square: its dimension can be selected; the rest is faded.
+        let open = scene_geometry(&s, &[first], &BTreeSet::from([inner]));
+        let colors: Vec<[f32; 4]> = open.annotations.iter().map(|a| a.color).collect();
+        assert_eq!(
+            colors
+                .iter()
+                .filter(|c| **c == FADED_ANNOTATION_COLOR)
+                .count(),
+            2
+        );
+        assert!(colors.contains(&SELECTED_EDGE_COLOR));
+        // Selecting the instance lights what it places, its dimension too.
+        let base = scene_base(&s, &[]);
+        let r = base.spans.ranges(EntityId::Instance(first)).unwrap();
+        assert_eq!(r.annotations.len(), 1);
+        // On a hidden tag, the leader is not drawn.
+        let (hidden, _) = s
+            .add_tag(kernel::Tag {
+                name: "Hidden".into(),
+                color: [0, 0, 0],
+                visible: false,
+            })
+            .unwrap();
+        s.set_tags(MeshId::Root, &[note], Some(hidden)).unwrap();
+        assert_eq!(
+            scene_geometry(&s, &[], &BTreeSet::new()).annotations.len(),
+            2
+        );
     }
 
     #[test]

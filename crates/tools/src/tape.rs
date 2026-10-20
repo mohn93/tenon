@@ -306,6 +306,7 @@ mod tests {
                 selection: &Default::default(),
                 material: None,
                 sample: false,
+                labels: &[],
             };
             self.tool.handle(event, &ctx)
         }

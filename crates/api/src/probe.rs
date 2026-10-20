@@ -198,7 +198,7 @@ pub fn box_ids(doc: &Document, b: &ScreenBox) -> Result<Vec<EntityId>, CommandEr
     let from = pixel_in(&camera, b.from)?;
     let to = pixel_in(&camera, b.to)?;
     let (scenery, local) = (scenery(doc), local(doc, &camera));
-    Ok(select_box(&scenery, &local, from, to, b.crossing))
+    Ok(select_box(&scenery, &local, from, to, b.crossing, &[]))
 }
 
 /// What the tools' inference snapped to.

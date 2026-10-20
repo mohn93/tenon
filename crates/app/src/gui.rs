@@ -34,6 +34,9 @@ pub struct GuiFrame {
     /// Fly mode holds the pointer: egui keeps the cursor hidden rather than showing the icon
     /// of what it last saw under it.
     pub hide_cursor: bool,
+    /// The dimension and note labels drawn over the view, with their rectangles in view
+    /// pixels, for the tools to pick.
+    pub labels: Vec<tools::Label>,
     output: egui::FullOutput,
 }
 
@@ -170,6 +173,7 @@ impl Gui {
             viewport: physical_viewport(central, output.pixels_per_point),
             pixels_per_point: output.pixels_per_point,
             hide_cursor: false,
+            labels: crate::ui::viewport::laid_out_labels(&self.ctx),
             output,
         }
     }

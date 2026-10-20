@@ -2052,6 +2052,9 @@ impl State {
                 .sync(&bar, self.gui.wants_keyboard(), self.sheet.is_some());
         }
         gui_frame.hide_cursor = self.capture == Capture::Grabbed;
+        // The tools pick dimensions and notes by the labels this frame drew.
+        self.editor
+            .set_labels(std::mem::take(&mut gui_frame.labels));
         // Applied once the frame is presented: some open modal dialogs, which must not run
         // while this frame's surface texture is held.
         let actions = std::mem::take(&mut gui_frame.actions);

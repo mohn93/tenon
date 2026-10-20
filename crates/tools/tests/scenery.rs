@@ -7,8 +7,8 @@ use kernel::{
 };
 use session::{Camera, Ray};
 use tools::{
-    Guides, Owner, Reach, Scenery, SnapKind, edge_under_in, face_under_in, guide_under_where,
-    infer_in, pick, select_box,
+    Guides, Label, Owner, Reach, Scenery, SnapKind, annotation_under_where, edge_under_in,
+    face_under_in, guide_under_where, infer_in, label_under, pick, select_box,
 };
 
 const R: f64 = 10.0;
@@ -231,7 +231,7 @@ fn hide(s: &mut Scene, tag: TagId) {
 
 /// Every edge, face and instance a crossing box over the whole view selects.
 fn boxed(view: &Scenery, c: &Camera) -> Vec<EntityId> {
-    select_box(view, c, DVec2::ZERO, DVec2::new(800.0, 600.0), true)
+    select_box(view, c, DVec2::ZERO, DVec2::new(800.0, 600.0), true, &[])
 }
 
 #[test]
@@ -397,6 +397,110 @@ fn faces_whose_edges_are_all_hidden_keep_their_corners_and_box() {
         Some([p(3.0, 0.0, 0.0), p(4.0, 1.0, 1.0)])
     );
     assert!(boxed(&view, &c).contains(&EntityId::Instance(i)));
-    let window = select_box(&view, &c, DVec2::ZERO, DVec2::new(800.0, 600.0), false);
+    let window = select_box(&view, &c, DVec2::ZERO, DVec2::new(800.0, 600.0), false, &[]);
     assert!(window.contains(&EntityId::Instance(i)));
+}
+
+/// The scene with a dimension inside the group, along the box's front bottom edge (its
+/// vertices, so it follows them), offset by -0.5 in y.
+fn dimensioned() -> (Scene, InstanceId, EntityId) {
+    let (mut s, i) = scene();
+    let d = MeshId::Definition(s.root().instance(i).unwrap().definition);
+    let dimension = s
+        .edit(d, |m| {
+            let at = |q: DVec3| m.vertices().find(|(_, v)| v.pos == q).unwrap().0;
+            let (a, b) = (at(p(0.0, 0.0, 0.0)), at(p(1.0, 0.0, 0.0)));
+            m.add_dimension(kernel::Dimension::Linear {
+                a: kernel::Anchor::Vertex(a),
+                b: kernel::Anchor::Vertex(b),
+                offset: p(0.0, -0.5, 0.0),
+                tag: None,
+            })
+        })
+        .unwrap()
+        .summary()
+        .created[0];
+    (s, i, dimension)
+}
+
+#[test]
+fn annotations_are_seen_where_their_group_places_them_and_pick_the_group() {
+    let (mut s, i, dimension) = dimensioned();
+    let view = Scenery::of(&s, &[]).unwrap();
+    let [(part, id, shape)] = view.annotations() else {
+        panic!("{:?}", view.annotations());
+    };
+    assert_eq!(
+        (view.part(*part).owner, *id),
+        (Owner::Instance(i), dimension)
+    );
+    let session::AnnotationShape::Linear { line, .. } = shape else {
+        panic!("{shape:?}");
+    };
+    assert_eq!(*line, [p(3.0, -0.5, 0.0), p(4.0, -0.5, 0.0)]);
+    let c = camera(DVec3::ZERO);
+    let on_line = px(&c, p(3.5, -0.5, 0.0));
+    let any = |_: Owner| true;
+    assert_eq!(
+        annotation_under_where(&view, &c, on_line, R, any),
+        Some((Owner::Instance(i), dimension))
+    );
+    assert_eq!(
+        annotation_under_where(&view, &c, on_line, R, |o| o == Owner::Open),
+        None
+    );
+    // The probe meets it once, at its line.
+    let ray = c.ray(on_line);
+    let reach = Reach::Screen {
+        camera: &c,
+        cursor: on_line,
+        radius_px: R,
+    };
+    let hits: Vec<_> = pick(&view, &ray, reach)
+        .into_iter()
+        .filter(|h| h.id == dimension)
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].point.abs_diff_eq(p(3.5, -0.5, 0.0), 1e-6));
+    // Opened, it is the open context's, in the group's coordinates.
+    let inside = Scenery::of(&s, &[i]).unwrap();
+    let c = camera(p(3.0, 0.0, 0.0));
+    let on_line = px(&c, p(0.5, -0.5, 0.0));
+    assert_eq!(
+        annotation_under_where(&inside, &c, on_line, R, any),
+        Some((Owner::Open, dimension))
+    );
+    // On a hidden tag it is not seen.
+    let tag = add_tag(&mut s, "Notes");
+    let d = MeshId::Definition(s.root().instance(i).unwrap().definition);
+    s.set_tags(d, &[dimension], Some(tag)).unwrap();
+    hide(&mut s, tag);
+    assert!(Scenery::of(&s, &[]).unwrap().annotations().is_empty());
+}
+
+#[test]
+fn the_topmost_label_under_the_cursor_is_picked() {
+    let label = |owner, id: &str, min: (f64, f64), max: (f64, f64)| Label {
+        owner,
+        id: id.parse().unwrap(),
+        min: DVec2::new(min.0, min.1),
+        max: DVec2::new(max.0, max.1),
+    };
+    let labels = [
+        label(Owner::Open, "r1", (0.0, 0.0), (50.0, 20.0)),
+        label(Owner::Open, "n2", (40.0, 10.0), (90.0, 30.0)),
+        label(Owner::Outside, "n3", (100.0, 0.0), (150.0, 20.0)),
+    ];
+    let at = |x, y| DVec2::new(x, y);
+    let open = |o: Owner| o == Owner::Open;
+    assert_eq!(
+        label_under(&labels, at(45.0, 15.0), open).map(|l| l.1.to_string()),
+        Some("n2".into())
+    );
+    assert_eq!(
+        label_under(&labels, at(10.0, 5.0), open).map(|l| l.1.to_string()),
+        Some("r1".into())
+    );
+    assert_eq!(label_under(&labels, at(120.0, 5.0), open), None);
+    assert_eq!(label_under(&labels, at(95.0, 5.0), |_| true), None);
 }

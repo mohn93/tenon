@@ -29,8 +29,9 @@ pub use circle::CircleTool;
 pub use erase::EraseTool;
 pub use follow_me::FollowMeTool;
 pub use inference::{
-    Axis, Guides, Inference, Involved, Lock, SnapKind, edge_under, edge_under_in, face_under,
-    face_under_in, guide_under_where, infer, infer_detail, infer_in, infer_with,
+    Axis, Guides, Inference, Involved, Lock, SnapKind, annotation_under_where, edge_under,
+    edge_under_in, face_under, face_under_in, guide_under_where, infer, infer_detail, infer_in,
+    infer_with, label_under,
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;
@@ -44,7 +45,7 @@ pub use push_pull::PushPullTool;
 pub use rectangle::RectangleTool;
 pub use rotate::RotateTool;
 pub use scale::ScaleTool;
-pub use scenery::{Layout, Owner, Part, Placed, Scenery, Slab};
+pub use scenery::{Label, Layout, Owner, Part, Placed, Scenery, Slab};
 pub use select::{SelectTool, select_box};
 pub use tape::TapeMeasureTool;
 pub use tool::{Phase, Remembered, Solid, Tool, ToolContext, ToolEvent, ToolKind, ToolOutput};

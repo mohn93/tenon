@@ -1,11 +1,14 @@
 //! What the window draws over the 3D view for the tools (the snap marker, the preview lines,
-//! the snap chip and the flash of a refused value), and when it changes by itself: the chip
+//! the snap chip and the flash of a refused value) and for the model (the labels of its
+//! dimensions and notes), and when it changes by itself: the chip
 //! waits for the cursor to rest, the flash lasts a while. Those two times are repaint deadlines,
 //! so a still window draws nothing more once they pass.
 
 use std::time::{Duration, Instant};
 
 use glam::DVec2;
+use kernel::EntityId;
+use tools::Owner;
 use tools::overlay::{Rgba, ScreenLine, Shape};
 
 /// How long the cursor rests before the chip shows.
@@ -24,11 +27,43 @@ pub struct Hud {
     pub cursor: Option<DVec2>,
     /// The canvas is dark (night lighting, or the dark theme by day): halos are black.
     pub dark_canvas: bool,
+    /// The labels of the dimensions and notes in view, in drawing order.
+    pub labels: Vec<HudLabel>,
+}
+
+/// A dimension's or note's label as the window draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HudLabel {
+    pub text: String,
+    /// Where it goes, in view pixels: its center, or for a screen note its top left corner.
+    pub at: DVec2,
+    pub anchor: LabelAnchor,
+    pub look: LabelLook,
+    /// Whose it is and the dimension or note (an id in its own mesh), for picking.
+    pub owner: Owner,
+    pub id: EntityId,
+}
+
+/// Which point of a label `HudLabel::at` is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelAnchor {
+    Center,
+    TopLeft,
+}
+
+/// How a label is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelLook {
+    Normal,
+    /// Outside the open instance.
+    Faded,
+    Selected,
+    Hovered,
 }
 
 impl Hud {
     /// The HUD with the pointer over a window, menu or the gizmo, where a press never reaches
-    /// the tools: no marker and no chip. The preview lines and the flash stay.
+    /// the tools: no marker and no chip. The preview lines, the flash and the labels stay.
     pub fn covered(self) -> Hud {
         Hud {
             marker: None,
@@ -172,8 +207,17 @@ mod tests {
             flash: Some("Not a length: 2,x".into()),
             cursor: Some(DVec2::ONE),
             dark_canvas: true,
+            labels: vec![HudLabel {
+                text: "1 m".into(),
+                at: DVec2::ONE,
+                anchor: LabelAnchor::Center,
+                look: LabelLook::Normal,
+                owner: Owner::Open,
+                id: "r1".parse().unwrap(),
+            }],
         };
         let covered = hud.clone().covered();
+        assert_eq!(covered.labels, hud.labels);
         assert_eq!((covered.marker, covered.chip), (None, None));
         assert_eq!(covered.lines, hud.lines);
         assert_eq!(covered.flash, hud.flash);

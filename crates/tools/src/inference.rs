@@ -7,7 +7,7 @@ use kernel::geom::LENGTH_TOL;
 use kernel::{EdgeId, EntityId, FaceId, Guide, GuideId, Model, Shape, VertexId};
 use session::{Camera, Ray};
 
-use crate::scenery::{Owner, Part, Scenery, Stretch};
+use crate::scenery::{Label, Owner, Part, Scenery, Stretch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Axis {
@@ -413,6 +413,53 @@ pub fn guide_under_where(
     let sight = Sight::new(scenery, camera);
     nearest_visible(candidates, |&(.., p)| sight.sees(p))
         .map(|(_, (owner, id, g, _))| (owner, id, g))
+}
+
+/// The topmost label under `cursor` whose owner passes `keep` (labels drawn later lie on
+/// top): whose it is and the dimension or note.
+pub fn label_under(
+    labels: &[Label],
+    cursor: DVec2,
+    keep: impl Fn(Owner) -> bool,
+) -> Option<(Owner, EntityId)> {
+    labels
+        .iter()
+        .rev()
+        .find(|l| keep(l.owner) && l.contains(cursor))
+        .map(|l| (l.owner, l.id))
+}
+
+/// The visible dimension or leader note whose lines pass nearest the cursor on screen, within
+/// `radius_px`, among those whose owner passes `keep`: whose it is and the annotation (an id
+/// in its own mesh). Screen notes have no lines; their labels pick them (`label_under`).
+pub fn annotation_under_where(
+    scenery: &Scenery,
+    camera: &Camera,
+    cursor: DVec2,
+    radius_px: f64,
+    keep: impl Fn(Owner) -> bool,
+) -> Option<(Owner, EntityId)> {
+    let ray = camera.ray(cursor);
+    let projector = camera.projector();
+    // Annotations are few, so they are scanned, not indexed.
+    let candidates = scenery
+        .annotations()
+        .iter()
+        .filter(|(part, ..)| keep(scenery.part(*part).owner))
+        .flat_map(|(part, id, shape)| {
+            let owner = scenery.part(*part).owner;
+            shape
+                .segments()
+                .into_iter()
+                .map(move |[a, b]| (closest_on_line_to_ray(a, b - a, &ray, true), owner, *id))
+        })
+        .filter_map(|(p, owner, id)| {
+            let d = projector.project(p)?.distance(cursor);
+            (d <= radius_px).then_some((d, (owner, id, p)))
+        })
+        .collect();
+    let sight = Sight::new(scenery, camera);
+    nearest_visible(candidates, |&(.., p)| sight.sees(p)).map(|(_, (owner, id, _))| (owner, id))
 }
 
 /// A segment, where its ends are on screen, and the edge or guide line it is (with its part).

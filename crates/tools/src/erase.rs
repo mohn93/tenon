@@ -1,5 +1,5 @@
-//! The Erase tool: click an edge, face, guide or group to erase it. What is under the cursor is
-//! reported as hovered.
+//! The Erase tool: click an edge, face, guide, dimension, note or group to erase it (what the
+//! Select tool would pick there). What is under the cursor is reported as hovered.
 
 use glam::DVec3;
 use kernel::EntityId;
@@ -115,6 +115,7 @@ mod tests {
             selection: &Default::default(),
             material: None,
             sample: false,
+            labels: &[],
         };
         tool.handle(event, &ctx)
     }

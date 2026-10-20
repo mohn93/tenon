@@ -152,8 +152,10 @@ be absent or empty: giving both is `invalid_input` ("select takes ids or all, no
 
 `{"type": "select", "box": {"from": [100, 80], "to": [300, 240]}, "mode": "add"}` selects by a box
 on screen instead of `ids`, as the Select tool's box does: of the open context, the edges, faces,
-instances (by their bounding boxes) and guide points lying entirely inside it, or with
-`"crossing": true` everything it touches (the window's box dragged left), guide lines too.
+instances (by their bounding boxes), guide points, and dimensions and leader notes (their lines
+and label points) lying entirely inside it, or with `"crossing": true` everything it touches (the
+window's box dragged left), guide lines too. Screen notes go by their labels, which only the
+window lays out, so a box given here never selects them.
 Corners are pixels of a view seen by the document camera (`width` and `height`, both or neither,
 default the 3D view's size); a corner outside the view is `invalid_input`. Only `execute` takes a
 box (not `batch`).
@@ -349,7 +351,7 @@ exploded and copied to the clipboard like a guide.
 | `{"type": "add_note", "anchor": "v3", "position": [3, 2, 1], "text": "Door"}` | A leader note: `text` at `position` with a line to `anchor` (a vertex id or a point, as for dimensions). Without `text` it shows the anchored point's coordinates in root coordinates and the display units, "(2 m, 1 m, 0 m)". Text has 1 to 1,024 characters, is not blank and has at most 64 lines (`invalid_input`). |
 | `{"type": "add_screen_note", "at": [0.1, 0.9], "text": "Plan A"}` | A note fixed to the view: `at` is fractions (0 to 1) of the view's width and height from its top left corner. Only the root holds screen notes: one added while an instance is open is `invalid_input`, and grouping leaves them in the root. |
 | `{"type": "change_note", "note": "n6", "text": "Exit"}` | Changes a note's text; absent or null `text` gives a leader note its automatic text again, and is `invalid_input` for a screen note. The same text changes nothing (no undo step). |
-| `{"type": "set_units", "length": "feet_inches", "precision": 4}` | Sets the model's display units, which dimension and note labels are written in; absent fields stay (one of them is needed). `length` is `meters` (the default), `centimeters`, `millimeters`, `inches` or `feet_inches`; `precision` (default 3) is the decimals kept, 0 to 6, or for `feet_inches` the finest fraction of an inch, 1/2^precision (0: whole inches, 4: 1/16, 6: 1/64). Labels round to it and drop trailing zeros: "1.5 m", "12.35 cm", `12.5"`, `5' 3 1/2"` (a value that rounds up to 12 inches carries to a foot: `1'`). Saved with the model; the same units again change nothing. The outcome, and the `changed` notification and `events` entry of the step (and of its undo or redo), carry `units`, the display units now, since `changes` lists no entity for them. The Measurements box and Entity Info keep meters. |
+| `{"type": "set_units", "length": "feet_inches", "precision": 4}` | Sets the model's display units, which dimension and note labels are written in; absent fields stay (one of them is needed). `length` is `meters` (the default), `centimeters`, `millimeters`, `inches` or `feet_inches`; `precision` (default 3) is the decimals kept, 0 to 6, or for `feet_inches` the finest fraction of an inch, 1/2^precision (0: whole inches, 4: 1/16, 6: 1/64). Labels round to it and drop trailing zeros: "1.5 m", "12.35 cm", `12.5"`, `5' 3 1/2"` (a value that rounds up to 12 inches carries to a foot: `1'`). Saved with the model; the same units again change nothing. The outcome, and the `changed` notification and `events` entry of the step (and of its undo or redo), carry `units`, the display units now, since `changes` lists no entity for them. The Measurements box and Entity Info's lengths keep meters (Entity Info shows a dimension's or note's label text as drawn). |
 
 Each is one undo step. A dimension's `entity` result (and its entry in `annotations`) is
 `{"type": "dimension", "id": "r5", "kind": "linear", "a": {"point": [0,0,0], "vertex": "v3"},
@@ -369,6 +371,16 @@ brings together is removed in that step. Annotations inside a group anchor to th
 vertices and are in its coordinates, like everything else there: queries give anchor points,
 positions and circles in the open context's coordinates, while a leader note's automatic text
 writes its point in root coordinates.
+
+How they are drawn: a linear dimension has extension lines from its ends to the dimension line,
+running 4 pixels past it, and arrows 10 pixels long at the line's ends; a radial dimension a
+line from the center (for a diameter, from the far side of the circle) through the circle to its
+label, with an arrow where it meets the circle; a leader note a line from its anchor to its
+text, with an arrow at the anchor. Their labels (the dimension's length at the middle of its
+line, a note's text) are written by the window over the view, and hidden when their point is
+behind the eye; a screen note is only a label. `render_view` draws the lines but no labels. In
+the window, clicking a dimension's or note's lines or label selects it (or the group holding
+it), and `editor.hovered` names it under the cursor.
 
 Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
 For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
@@ -804,8 +816,9 @@ coordinates, like commands; only the camera is in root coordinates.
 `{"type": "pick", "pixel": [x, y], ...}` or `{"type": "pick", "ray": {"origin": [...],
 "direction": [...]}}` returns every face the pixel's ray (or the given ray, any non-zero
 direction) meets in front of its origin, whatever lies in front of it, and every edge (soft
-edges are hidden and left out) and guide passing within `radius` of it, nearest first; what
-hidden tags hide is left out (see Tags):
+edges are hidden and left out), guide, and dimension or leader note (by its lines, once each)
+passing within `radius` of it, nearest first; what hidden tags hide is left out (see Tags).
+Labels are not picked here (they are the window's):
 
 ```
 {"type": "pick", "hits": [
@@ -816,7 +829,8 @@ hidden tags hide is left out (see Tags):
 - `path` lists the instances from the root down to the one whose group or component holds the
   entity (`[]` for the root's own), whatever instance is open; `open_path` with it opens that
   group, after which the id is the open context's.
-- `point` is where the ray meets a face, or the point of an edge or guide nearest the ray;
+- `point` is where the ray meets a face, or the point of an edge, guide or annotation line
+  nearest the ray;
   `distance` is how far along the ray it is, from its origin (the eye in perspective, the near
   end of the view in parallel). Faces have `normal` (the direction their front faces) and `side`
   (`front` or `back`: which side the ray meets). Vertices are not picked (`infer` finds them).

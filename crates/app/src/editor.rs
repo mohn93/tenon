@@ -35,6 +35,7 @@ mod agent;
 mod clip;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
+mod labels;
 mod scenes;
 mod soften;
 mod tags;
@@ -276,6 +277,8 @@ pub struct Editor {
     clip_ready: bool,
     /// While the Paste tool is out: the tool to go back to when it pastes or is cancelled.
     paste_return: Option<ToolKind>,
+    /// The dimension and note labels the window last drew (see `set_labels`).
+    labels: labels::DrawnLabels,
 }
 
 /// The formats File > Export offers, as (filter name, extension).
@@ -352,6 +355,7 @@ impl Editor {
             clipboard: Box::new(MemoryClipboard::default()),
             clip_ready: false,
             paste_return: None,
+            labels: None,
         }
     }
 
@@ -1844,13 +1848,14 @@ impl Editor {
     }
 
     /// The marker, preview lines and chip contents as of the last `refresh_hover`, in view
-    /// pixels (the chip shown regardless of the rest; `Timing::dress` decides). Preview lines
-    /// and halos take the colors of a dark canvas when `dark_canvas`. Empty while flying; no
-    /// marker or chip in Select or with the cursor outside the view. The flash is the window's
-    /// (`take_flash`).
+    /// pixels (the chip shown regardless of the rest; `Timing::dress` decides), and the labels
+    /// of the dimensions and notes in view. Preview lines and halos take the colors of a dark
+    /// canvas when `dark_canvas`. Only the labels while flying; no marker or chip in Select or
+    /// with the cursor outside the view. The flash is the window's (`take_flash`).
     pub fn hud(&self, dark_canvas: bool) -> Hud {
         let mut hud = Hud {
             dark_canvas,
+            labels: self.hud_labels(),
             ..Hud::default()
         };
         if self.flying {
@@ -2010,6 +2015,7 @@ impl Editor {
             selection: self.doc.selection(),
             material: self.current_material(),
             sample: self.sample,
+            labels: labels::current(&self.labels, self.documents, &self.doc),
         };
         self.tool.handle(event, &ctx)
     }
@@ -2243,6 +2249,7 @@ impl Editor {
             selection: self.doc.selection(),
             material: self.current_material(),
             sample: self.sample,
+            labels: labels::current(&self.labels, self.documents, &self.doc),
         };
         let out = self.tool.handle(ToolEvent::Move(hit), &ctx);
         let hit = (!self.hover_hidden).then_some(hit);

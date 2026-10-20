@@ -1,15 +1,16 @@
 //! Text for the Entity Info panel: what is selected and its measurements.
 
 use glam::{DAffine3, DMat3, DQuat};
-use kernel::{CurveKind, DefinitionKind, EdgeId, EntityId, Guide, Model};
-use session::Document;
+use kernel::{CurveKind, DefinitionKind, Dimension, EdgeId, EntityId, Guide, Model, Note};
+use session::{Document, dimension_label, note_label};
 use tools::vcb::format_length;
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
 /// the radius, segments, angle and length of a whole curve (a circle or arc), the direction
-/// or position of a single guide, or the kind, name and rotation of a single instance; a single
-/// face's front and back materials and a painted instance's material. While a group or
-/// component is open, a first line says which.
+/// or position of a single guide, the kind and text of a single dimension or note, or the
+/// kind, name and rotation of a single instance; a single face's front and back materials and
+/// a painted instance's material. While a group or component is open, a first line says
+/// which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
     lines.extend(selection_info(doc));
@@ -33,17 +34,42 @@ fn selection_info(doc: &Document) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     let mut guides = Vec::new();
+    let (mut dimensions, mut notes) = (0, 0);
+    let mut annotation = None;
     for id in doc.selection() {
         match id {
             EntityId::Edge(e) => edges.push(*e),
             EntityId::Face(f) => faces.push(*f),
             EntityId::Instance(i) => instances.push(*i),
             EntityId::Guide(g) => guides.push(*g),
-            // Entity Info does not describe annotations yet.
-            EntityId::Vertex(_) | EntityId::Dimension(_) | EntityId::Note(_) => {}
+            EntityId::Dimension(_) => {
+                dimensions += 1;
+                annotation = Some(*id);
+            }
+            EntityId::Note(_) => {
+                notes += 1;
+                annotation = Some(*id);
+            }
+            EntityId::Vertex(_) => {}
         }
     }
-    if let ([], [], [], [g]) = (&edges[..], &faces[..], &instances[..], &guides[..]) {
+    let annotations = dimensions + notes;
+    if annotations == 1
+        && edges.is_empty()
+        && faces.is_empty()
+        && instances.is_empty()
+        && guides.is_empty()
+        && let Some(id) = annotation
+    {
+        return annotation_info(doc, id);
+    }
+    if let ([], [], [], [g], 0) = (
+        &edges[..],
+        &faces[..],
+        &instances[..],
+        &guides[..],
+        annotations,
+    ) {
         let xyz = |v: glam::DVec3| v.to_array().map(number).join(", ");
         let place = |v: glam::DVec3| v.to_array().map(format_length).join(", ");
         return match m.guide(*g) {
@@ -65,15 +91,17 @@ fn selection_info(doc: &Document) -> Vec<String> {
             None => Vec::new(),
         };
     }
+    // Guides and annotations: neither is described with other entities.
     let guides = guides.len();
+    let others = guides + annotations;
     if instances.is_empty()
         && faces.is_empty()
-        && guides == 0
+        && others == 0
         && let Some(lines) = curve_info(m, &edges)
     {
         return lines;
     }
-    if let ([], [], [i], 0) = (&edges[..], &faces[..], &instances[..], guides) {
+    if let ([], [], [i], 0) = (&edges[..], &faces[..], &instances[..], others) {
         let instance = m.instance(*i);
         let d = instance.and_then(|i| doc.scene().definition(i.definition));
         let mut lines = match d {
@@ -90,12 +118,12 @@ fn selection_info(doc: &Document) -> Vec<String> {
         return lines;
     }
     match (&edges[..], &faces[..]) {
-        ([], []) if instances.is_empty() && guides == 0 => vec!["Nothing selected".into()],
-        ([e], []) if instances.is_empty() && guides == 0 => vec![
+        ([], []) if instances.is_empty() && others == 0 => vec!["Nothing selected".into()],
+        ([e], []) if instances.is_empty() && others == 0 => vec![
             "1 edge".into(),
             format!("Length: {}", format_length(edge_length(m, *e))),
         ],
-        ([], [f]) if instances.is_empty() && guides == 0 => {
+        ([], [f]) if instances.is_empty() && others == 0 => {
             let face = m.face(*f).unwrap();
             let n = face.normal.to_array().map(number);
             vec![
@@ -120,9 +148,58 @@ fn selection_info(doc: &Document) -> Vec<String> {
             if guides > 0 {
                 parts.push(count(guides, "guide"));
             }
+            if dimensions > 0 {
+                parts.push(count(dimensions, "dimension"));
+            }
+            if notes > 0 {
+                parts.push(count(notes, "note"));
+            }
             vec![parts.join(", ")]
         }
     }
+}
+
+/// The kind and label text of the dimension or note `id` of the open context: "1 linear
+/// dimension", "1 radial dimension" or "1 diameter dimension", or "1 leader note" or "1
+/// screen note", then its text as the view writes it (in the display units). A note's text is
+/// given by its first line, with an ellipsis when it has more.
+fn annotation_info(doc: &Document, id: EntityId) -> Vec<String> {
+    let m = doc.model();
+    let units = doc.units();
+    let (kind, text) = match id {
+        EntityId::Dimension(d) => {
+            let kind = match m.dimension(d) {
+                Some(Dimension::Linear { .. }) => "1 linear dimension",
+                Some(Dimension::Radial {
+                    diameter: false, ..
+                }) => "1 radial dimension",
+                Some(Dimension::Radial { diameter: true, .. }) => "1 diameter dimension",
+                None => return Vec::new(),
+            };
+            (kind, dimension_label(m, d, &units))
+        }
+        EntityId::Note(n) => {
+            let kind = match m.note(n) {
+                Some(Note::Leader { .. }) => "1 leader note",
+                Some(Note::Screen { .. }) => "1 screen note",
+                None => return Vec::new(),
+            };
+            (kind, note_label(m, n, &units, doc.context_transform()))
+        }
+        EntityId::Vertex(_)
+        | EntityId::Edge(_)
+        | EntityId::Face(_)
+        | EntityId::Instance(_)
+        | EntityId::Guide(_) => return Vec::new(),
+    };
+    let mut lines = vec![kind.to_string()];
+    if let Some(text) = text {
+        let mut rows = text.lines();
+        let first = rows.next().unwrap_or_default();
+        let more = if rows.next().is_some() { "…" } else { "" };
+        lines.push(format!("Text: {first}{more}"));
+    }
+    lines
 }
 
 /// A material's name, or "Default" for none.
@@ -547,5 +624,77 @@ mod tests {
         let group = *d.selection().first().unwrap();
         d.execute(Command::OpenInstance { id: group }).unwrap();
         assert_eq!(entity_info(&d), ["Editing group", "Nothing selected"]);
+    }
+
+    /// Runs `command` and returns the one id it created.
+    fn create(d: &mut Document, command: Command) -> EntityId {
+        let out = d.execute(command).unwrap();
+        let [id] = out.changes.created[..] else {
+            panic!("{:?}", out.changes.created);
+        };
+        id
+    }
+
+    #[test]
+    fn describes_a_dimension_and_a_note_with_their_text() {
+        let mut d = doc_with_square();
+        let point = |p: [f64; 3]| session::AnchorInput::Point(p);
+        let dimension = create(
+            &mut d,
+            Command::AddDimension {
+                a: point([0.0, 0.0, 0.0]),
+                b: point([2.0, 0.0, 0.0]),
+                offset: [0.0, -1.0, 0.0],
+            },
+        );
+        let leader = create(
+            &mut d,
+            Command::AddNote {
+                anchor: point([2.0, 3.0, 0.0]),
+                position: [3.0, 4.0, 1.0],
+                text: None,
+            },
+        );
+        let screen = create(
+            &mut d,
+            Command::AddScreenNote {
+                at: [0.1, 0.1],
+                text: "Ground floor\nScale 1:50".into(),
+            },
+        );
+        let show = |d: &mut Document, id: EntityId| {
+            select(d, &[&id.to_string()]);
+            entity_info(d)
+        };
+        assert_eq!(show(&mut d, dimension), ["1 linear dimension", "Text: 2 m"]);
+        assert_eq!(
+            show(&mut d, leader),
+            ["1 leader note", "Text: (2 m, 3 m, 0 m)"]
+        );
+        assert_eq!(
+            show(&mut d, screen),
+            ["1 screen note", "Text: Ground floor…"]
+        );
+        // The text follows the display units.
+        d.execute(Command::SetUnits {
+            length: Some(session::LengthUnit::Centimeters),
+            precision: None,
+        })
+        .unwrap();
+        assert_eq!(
+            show(&mut d, dimension),
+            ["1 linear dimension", "Text: 200 cm"]
+        );
+        // With other entities, counted.
+        select(
+            &mut d,
+            &[
+                &dimension.to_string(),
+                &leader.to_string(),
+                &screen.to_string(),
+                "f8",
+            ],
+        );
+        assert_eq!(entity_info(&d), ["1 face, 1 dimension, 2 notes"]);
     }
 }

@@ -4,12 +4,15 @@ use kernel::{EntityId, InstanceId, Scene};
 use session::{Camera, Lighting};
 use wgpu::util::DeviceExt;
 
+use crate::annotations::{AnnotationLook, annotation_lines};
 use crate::grid::{
     LineVertex, NIGHT_BACKGROUND, flat_axis_lines_in, flat_ground_lines_in, vertical_axis_lines_in,
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
-use crate::scene::{BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base_with, shown_guides};
+use crate::scene::{
+    BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base_with, shown_annotations, shown_guides,
+};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
 use crate::style::ViewStyle;
@@ -469,6 +472,11 @@ pub struct Renderer {
     guides: Vec<GuideShape>,
     /// Which of `base_guides` are selected, as of the last `set_selection`.
     guide_flags: Vec<bool>,
+    /// Dimensions and leader notes in root coordinates with nothing selected, with the
+    /// selection and hover shown, and which are selected: as the guides.
+    base_annotations: Vec<AnnotationLook>,
+    annotations: Vec<AnnotationLook>,
+    annotation_flags: Vec<bool>,
     targets: Option<Targets>,
 }
 
@@ -938,6 +946,9 @@ impl Renderer {
             base_guides: Vec::new(),
             guides: Vec::new(),
             guide_flags: Vec::new(),
+            base_annotations: Vec::new(),
+            annotations: Vec::new(),
+            annotation_flags: Vec::new(),
             targets: None,
         }
     }
@@ -973,6 +984,9 @@ impl Renderer {
         self.hover = None;
         self.hover_ranges = Ranges::default();
         self.base_guides = base.guides;
+        self.annotations = base.annotations.clone();
+        self.annotation_flags = vec![false; base.annotations.len()];
+        self.base_annotations = base.annotations;
         self.lights = base.lights;
         // Shadow maps are drawn again only when the casters move, not when, say, a group is
         // opened or a color changes.
@@ -1084,6 +1098,7 @@ impl Renderer {
         }
         self.edges_selected = flags.edges.iter().any(|&f| f > 0.5);
         self.guide_flags = flags.guides;
+        self.annotation_flags = flags.annotations;
         self.refresh_guides();
     }
 
@@ -1117,16 +1132,24 @@ impl Renderer {
         }
     }
 
-    /// The guides with the selection and the hover shown.
+    /// The guides and annotations with the selection and the hover shown.
     fn refresh_guides(&mut self) {
         self.guides = shown_guides(
             &self.base_guides,
             &self.guide_flags,
             self.style.selected_edge,
         );
+        self.annotations = shown_annotations(
+            &self.base_annotations,
+            &self.annotation_flags,
+            self.style.selected_edge,
+        );
         if let Some((_, look)) = self.hover {
             for g in &mut self.guides[self.hover_ranges.guides.clone()] {
                 g.color = look.edge;
+            }
+            for a in &mut self.annotations[self.hover_ranges.annotations.clone()] {
+                a.color = look.edge;
             }
         }
     }
@@ -1244,7 +1267,10 @@ impl Renderer {
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         let targets = self.targets.as_ref().expect("targets just created");
         let overlay = mesh(&self.device, "overlay", overlay);
-        let guides = mesh(&self.device, "guides", &guide_lines(&self.guides, camera));
+        // Guides and annotations: both drawn anew for the camera, in the same pipeline.
+        let mut guide_vertices = guide_lines(&self.guides, camera);
+        guide_vertices.extend(annotation_lines(&self.annotations, camera));
+        let guides = mesh(&self.device, "guides", &guide_vertices);
         if let Some(glass) = &mut self.glass {
             glass.sort(&self.queue, camera);
         }

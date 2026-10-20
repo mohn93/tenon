@@ -708,6 +708,7 @@ mod tests {
                 selection: &self.selection,
                 material: None,
                 sample: false,
+                labels: &[],
             };
             self.tool.handle(event, &ctx)
         }
@@ -781,6 +782,7 @@ mod tests {
             selection: &r.selection,
             material: None,
             sample: false,
+            labels: &[],
         };
         let b = Bounds::of(&ctx).unwrap();
         assert!(close(b.center, v(1.0, 1.0, 1.0)) && close(b.half, v(1.0, 1.0, 1.0)));
@@ -804,6 +806,7 @@ mod tests {
             selection: &r.selection,
             material: None,
             sample: false,
+            labels: &[],
         };
         let b = Bounds::of(&ctx).unwrap();
         let grips = b.grips();

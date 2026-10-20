@@ -1,6 +1,7 @@
-//! What egui draws over the 3D view for the tools: the preview lines, the snap marker with its
-//! halo, the snap chip by the cursor and the flash of a refused value; the view's cursor; and
-//! the orientation gizmo in the view's top right.
+//! What egui draws over the 3D view: the labels of the model's dimensions and notes; for the
+//! tools, the preview lines, the snap marker with its halo, the snap chip by the cursor and the
+//! flash of a refused value; the view's cursor; and the orientation gizmo in the view's top
+//! right.
 
 use std::f32::consts::SQRT_2;
 use std::sync::Arc;
@@ -11,25 +12,58 @@ use egui::{
 use egui::{Vec2, vec2};
 use glam::{DVec2, DVec3};
 use session::{Camera, Projection, StandardView};
-use tools::ToolKind;
 use tools::overlay::{HALO_PT, MARKER_PT, Rgba, Shape};
+use tools::{Label, ToolKind};
 
 use super::{UiAction, fonts, theme};
-use crate::feedback::Hud;
+use crate::feedback::{Hud, HudLabel, LabelAnchor, LabelLook};
+
+/// Space around a label's text, in points.
+const LABEL_PADDING: Vec2 = Vec2::new(4.0, 2.0);
+
+/// Where `hud` keeps the labels it laid out, in egui's frame data (see `laid_out_labels`).
+fn labels_id() -> egui::Id {
+    egui::Id::new("annotation labels")
+}
+
+/// The labels the last `hud` laid out: each with its rectangle in view pixels, in drawing
+/// order (the last on top). Empty before the first.
+pub fn laid_out_labels(ctx: &egui::Context) -> Vec<Label> {
+    ctx.data(|d| d.get_temp(labels_id())).unwrap_or_default()
+}
 
 /// The stroke of an X or + marker, and of a square's outline, in points.
 const CROSS_STROKE: f32 = 2.5;
 const SQUARE_STROKE: f32 = 2.0;
 
 /// Paints `hud` over the 3D view, whose rectangle is `view_rect` (points); the HUD's positions
-/// are view pixels. Lines go first, then the marker (its halo, then its shape), then the chip
-/// and the flash. The chip is left out while the pointer is over a window, a menu or the
-/// gizmo; there, and with no cursor in the view, the flash shows centred above the status bar.
+/// are view pixels. The labels go first (keeping their rectangles for `laid_out_labels`), then
+/// the lines, then the marker (its halo, then its shape), then the chip and the flash. The
+/// chip is left out while the pointer is over a window, a menu or the gizmo; there, and with
+/// no cursor in the view, the flash shows centred above the status bar.
 pub fn hud(ui: &Ui, view_rect: Rect, hud: &Hud) {
     let ctx = ui.ctx();
     let ppp = ctx.pixels_per_point();
     let at = |p: DVec2| view_rect.min + vec2(p.x as f32 / ppp, p.y as f32 / ppp);
     let painter = ui.painter_at(view_rect);
+    let to_view = |p: Pos2| {
+        let v = (p - view_rect.min) * ppp;
+        DVec2::new(f64::from(v.x), f64::from(v.y))
+    };
+    let laid_out: Vec<Label> = hud
+        .labels
+        .iter()
+        .map(|l| {
+            let rect = label(&painter, at(l.at), l);
+            Label {
+                owner: l.owner,
+                id: l.id,
+                min: to_view(rect.min),
+                max: to_view(rect.max),
+            }
+        })
+        .collect();
+    ctx.data_mut(|d| d.insert_temp(labels_id(), laid_out));
     for line in &hud.lines {
         painter.line_segment(
             [at(line.a), at(line.b)],
@@ -309,6 +343,38 @@ pub fn chip_rect(cursor: Pos2, size: Vec2, view_rect: Rect) -> Rect {
     min.x = min.x.min(view_rect.max.x - size.x).max(view_rect.min.x);
     min.y = min.y.min(view_rect.max.y - size.y).max(view_rect.min.y);
     Rect::from_min_size(min, size)
+}
+
+/// Paints a dimension's or note's label at `at` (points; its center, or a screen note's top
+/// left corner): its text on a small card in the theme's colors, the accent's when selected or
+/// hovered. Returns the card's rectangle.
+fn label(painter: &Painter, at: Pos2, l: &HudLabel) -> Rect {
+    let t = theme::tokens(painter.ctx().theme());
+    let (text, stroke) = match l.look {
+        LabelLook::Normal => (t.text_primary, Stroke::new(1.0, t.border)),
+        LabelLook::Faded => (t.text_disabled, Stroke::new(1.0, t.border)),
+        LabelLook::Selected => (t.accent, Stroke::new(1.5, t.accent)),
+        LabelLook::Hovered => (t.text_primary, Stroke::new(1.5, t.accent)),
+    };
+    let galley = painter.layout_no_wrap(
+        l.text.clone(),
+        FontId::proportional(theme::SMALL_SIZE),
+        text,
+    );
+    let size = galley.size() + 2.0 * LABEL_PADDING;
+    let rect = match l.anchor {
+        LabelAnchor::Center => Rect::from_center_size(at, size),
+        LabelAnchor::TopLeft => Rect::from_min_size(at, size),
+    };
+    painter.rect(
+        rect,
+        CornerRadius::same(theme::CHIP_RADIUS),
+        t.bg_raised,
+        stroke,
+        StrokeKind::Inside,
+    );
+    painter.galley(rect.min + LABEL_PADDING, galley, Color32::PLACEHOLDER);
+    rect
 }
 
 /// Lines of text in a padded, rounded box.

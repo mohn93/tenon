@@ -685,6 +685,7 @@ mod tests {
                 selection: &self.selection,
                 material: None,
                 sample: false,
+                labels: &[],
             };
             self.tool.handle(event, &ctx)
         }

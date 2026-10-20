@@ -1518,3 +1518,47 @@ fn the_hover_wins_over_the_selection_on_a_face() {
         "a selected face hovered looks as an unselected one hovered"
     );
 }
+
+#[test]
+fn a_dimension_is_drawn_and_lit_when_selected_or_hovered() {
+    let c = camera();
+    let mut m = Model::new();
+    // A dimension across the view through the target, offset toward the camera's up.
+    let (a, b) = (c.target - c.right() * 2.0, c.target + c.right() * 2.0);
+    m.add_dimension(kernel::Dimension::Linear {
+        a: kernel::Anchor::Point(a),
+        b: kernel::Anchor::Point(b),
+        offset: c.up() * 0.5,
+        tag: None,
+    })
+    .unwrap();
+    let dimension = EntityId::Dimension(m.dimensions().next().unwrap().0);
+    let Some(screen) = Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut r = screen.renderer();
+    r.set_scene(&Scene::from_root(m.clone()), &[], &BTreeSet::new());
+    r.set_style(MAGENTA);
+    let frame = |r: &mut Renderer| screen.draw(r, &c, Viewport::full((W, H)), &[]);
+    let plain = frame(&mut r);
+    // Drawn: the dimension line is dark where the empty view is not.
+    let empty = render(&c).unwrap();
+    let dark = |px: &[u8]| count(px, |p| p[0] < 100 && p[1] < 100 && p[2] < 100);
+    assert!(dark(&plain) > dark(&empty) + 40, "the dimension's lines");
+    let base = count(&plain, magenta_dominant);
+    r.set_selection(&BTreeSet::from([dimension]));
+    assert!(
+        count(&frame(&mut r), magenta_dominant) > base + 40,
+        "selected"
+    );
+    r.set_selection(&BTreeSet::new());
+    assert_eq!(count(&frame(&mut r), magenta_dominant), base);
+    r.set_hover(Some((dimension, HOVER)));
+    assert!(
+        count(&frame(&mut r), magenta_dominant) > base + 40,
+        "hovered"
+    );
+    r.set_hover(None);
+    assert_eq!(count(&frame(&mut r), magenta_dominant), base);
+}

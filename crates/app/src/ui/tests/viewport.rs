@@ -7,7 +7,7 @@ use session::{Camera, StandardView};
 use tools::overlay::{ENDPOINT, HALO_PT, INTERSECTION, LINE_PT, MARKER_PT, ScreenLine, Shape};
 
 use super::*;
-use crate::feedback::{Chip, Hud};
+use crate::feedback::{Chip, Hud, HudLabel, LabelAnchor, LabelLook};
 use crate::ui::theme::GIZMO_AXIS;
 use crate::ui::viewport::{chip_rect, cursor_icon, gizmo_ends};
 
@@ -466,4 +466,76 @@ fn the_gizmo_takes_the_pointer_from_the_tools() {
         ..Default::default()
     });
     assert!(flying.query_by_label("Switch Projection").is_none());
+}
+
+fn hud_label(text: &str, at: DVec2, anchor: LabelAnchor, look: LabelLook, id: &str) -> HudLabel {
+    HudLabel {
+        text: text.into(),
+        at,
+        anchor,
+        look,
+        owner: tools::Owner::Open,
+        id: id.parse().unwrap(),
+    }
+}
+
+#[test]
+fn labels_are_written_where_the_hud_puts_them_and_their_rectangles_kept() {
+    let f = with_hud(Hud {
+        labels: vec![
+            hud_label(
+                "1.5 m",
+                DVec2::new(300.0, 200.0),
+                LabelAnchor::Center,
+                LabelLook::Normal,
+                "r1",
+            ),
+            hud_label(
+                "Plan",
+                DVec2::new(20.0, 10.0),
+                LabelAnchor::TopLeft,
+                LabelLook::Selected,
+                "n2",
+            ),
+        ],
+        ..Hud::default()
+    });
+    let h = harness_scaled(f, 2.0);
+    let t = theme::tokens(egui::Theme::Dark);
+    let [dimension] = <[_; 1]>::try_from(texts_named(&h, "1.5 m"))
+        .ok()
+        .unwrap_or_else(|| {
+            panic!("one dimension label");
+        });
+    assert_eq!(
+        dimension.galley.job.sections[0].format.color,
+        t.text_primary
+    );
+    let [plan] = <[_; 1]>::try_from(texts_named(&h, "Plan"))
+        .ok()
+        .unwrap_or_else(|| panic!("one note label"));
+    assert_eq!(
+        plan.galley.job.sections[0].format.color, t.accent,
+        "selected"
+    );
+    let laid = crate::ui::viewport::laid_out_labels(&h.ctx);
+    assert_eq!(laid.len(), 2);
+    assert_eq!(laid[0].id.to_string(), "r1");
+    // In view pixels (two a point): the dimension's centered on its point, the note's from
+    // its corner, each around its text.
+    let center = (laid[0].min + laid[0].max) / 2.0;
+    assert!(center.distance(DVec2::new(300.0, 200.0)) < 1.0, "{center}");
+    assert!(
+        laid[1].min.distance(DVec2::new(20.0, 10.0)) < 1.0,
+        "{:?}",
+        laid[1]
+    );
+    let central = h.state().central.min;
+    let text_at = |s: &egui::epaint::TextShape| {
+        let p = (s.pos - central) * 2.0;
+        DVec2::new(f64::from(p.x), f64::from(p.y))
+    };
+    for (shape, label) in [(dimension, laid[0]), (plan, laid[1])] {
+        assert!(label.contains(text_at(&shape)), "{label:?}");
+    }
 }

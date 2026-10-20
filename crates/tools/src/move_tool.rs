@@ -81,7 +81,8 @@ impl MoveTool {
     }
 }
 
-/// Segments outlining edges, faces, instances (their bounding boxes) and guides.
+/// Segments outlining edges, faces, instances (their bounding boxes), guides, dimensions and
+/// leader notes.
 pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
     let m = ctx.model;
     let mut out = Vec::new();
@@ -105,14 +106,9 @@ pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
                     out.extend(guide_outline(ctx, g));
                 }
             }
-            EntityId::Dimension(d) => out.extend(m.dimension_line(d).map(|(a, b)| [a, b])),
-            EntityId::Note(n) => {
-                if let Some(kernel::Note::Leader { position, .. }) = m.note(n)
-                    && let Some(at) = m.note_point(n)
-                {
-                    out.push([at, *position]);
-                }
-            }
+            // A screen note has no lines.
+            EntityId::Dimension(_) | EntityId::Note(_) => out
+                .extend(session::AnnotationShape::of(m, *id).map_or(Vec::new(), |s| s.segments())),
             EntityId::Vertex(_) => {}
         }
     }
@@ -289,6 +285,7 @@ mod tests {
                 selection: &self.selection,
                 material: None,
                 sample: false,
+                labels: &[],
             };
             self.tool.handle(event, &ctx)
         }
@@ -518,5 +515,47 @@ mod tests {
         let circle = circle_of(&d, ids);
         assert!(circle.center.distance(DVec3::new(0.0, 0.0, 3.0)) < 1e-9);
         assert!((circle.radius - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_dimension_is_outlined_by_its_lines() {
+        let mut r = Rig::new(&[]);
+        let mut scene = kernel::Scene::from_root(r.model.clone());
+        let d = scene
+            .edit(kernel::MeshId::Root, |m| {
+                m.add_dimension(kernel::Dimension::Linear {
+                    a: kernel::Anchor::Point(DVec3::ZERO),
+                    b: kernel::Anchor::Point(DVec3::new(2.0, 0.0, 0.0)),
+                    offset: DVec3::new(0.0, -1.0, 0.0),
+                    tag: None,
+                })
+            })
+            .unwrap()
+            .summary()
+            .created[0];
+        r.model = scene.root().clone();
+        let ctx = ToolContext {
+            model: &r.model,
+            scenery: &crate::scenery::Scenery::single(&r.model),
+            camera: &r.camera,
+            cursor: r.cursor,
+            pick_radius: 10.0,
+            drag_threshold: 4.0,
+            quick_press: false,
+            shift: false,
+            selection: &r.selection,
+            material: None,
+            sample: false,
+            labels: &[],
+        };
+        let y = DVec3::new(0.0, -1.0, 0.0);
+        assert_eq!(
+            outline(&ctx, &[d]),
+            vec![
+                [DVec3::ZERO, y],
+                [DVec3::new(2.0, 0.0, 0.0), DVec3::new(2.0, -1.0, 0.0)],
+                [y, DVec3::new(2.0, -1.0, 0.0)],
+            ]
+        );
     }
 }

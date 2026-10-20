@@ -1,5 +1,6 @@
 //! The editable document and the command/query layer every client (UI, API, tests) goes through.
 
+mod annotation_shape;
 mod arc;
 mod batch;
 pub mod camera;
@@ -24,6 +25,7 @@ pub mod units;
 #[cfg(windows)]
 pub mod windows;
 
+pub use annotation_shape::AnnotationShape;
 pub use arc::{DEFAULT_ARC_SEGMENTS, arc_from_bulge, arc_points, arc_through};
 pub use batch::{BatchCommand, BatchRef, RefKind, STAND_IN_BASE, check_references};
 pub use camera::{Camera, Lighting, Projection, Projector, Ray, StandardView};

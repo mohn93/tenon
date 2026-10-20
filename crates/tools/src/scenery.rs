@@ -1,21 +1,21 @@
 //! What tools see: the open context's mesh plus every other placed mesh of the scene, all in
 //! the open context's coordinates. What hidden tags hide is not seen (see `kernel::tag_shown_among`):
 //! instances on hidden tags are left out with all they place (but for those the open context
-//! is in), guides on hidden tags too, and each part tells which of its faces, edges and
-//! vertices show.
+//! is in), guides and annotations on hidden tags too, and each part tells which of its faces,
+//! edges and vertices show.
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::OnceLock;
 
-use glam::{DAffine3, DMat3, DVec3};
+use glam::{DAffine3, DMat3, DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{
-    EdgeId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, TagId, VertexId,
+    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, TagId, VertexId,
     tag_shown_among,
 };
-use session::Camera;
+use session::{AnnotationShape, Camera};
 
 /// Whose geometry a part is, seen from the open context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +27,23 @@ pub enum Owner {
     Instance(InstanceId),
     /// Geometry outside the open context: seen and snapped to, never picked.
     Outside,
+}
+
+/// An annotation's label as the window last laid it out: whose it is, the dimension or note
+/// (an id in its own mesh), and its rectangle in physical view pixels (as the cursor).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Label {
+    pub owner: Owner,
+    pub id: EntityId,
+    pub min: DVec2,
+    pub max: DVec2,
+}
+
+impl Label {
+    /// Whether `p` lies on the label.
+    pub fn contains(&self, p: DVec2) -> bool {
+        p.cmpge(self.min).all() && p.cmple(self.max).all()
+    }
 }
 
 /// Where one mesh is placed, seen from the open context.
@@ -205,6 +222,10 @@ pub struct Layout {
     /// Every guide of every part, placed in the open context's coordinates, with the index of
     /// the part it comes from, in part and id order.
     guides: Vec<(usize, GuideId, Guide)>,
+    /// Every dimension and note of every part not on a hidden tag, placed in the open
+    /// context's coordinates (a screen note as it is), with the index of the part it comes
+    /// from, in part order, dimensions before notes, each in id order.
+    annotations: Vec<(usize, EntityId, AnnotationShape)>,
     /// The instances of the open context, by id, each with its box once asked for.
     boxes: Vec<(InstanceId, OnceLock<Option<[DVec3; 2]>>)>,
     /// The tags hidden: what is on them is not seen.
@@ -282,6 +303,25 @@ impl Layout {
                     .map(move |(id, g)| (k, id, g.transformed(part.place)))
             })
             .collect();
+        let annotations = parts
+            .iter()
+            .enumerate()
+            .flat_map(|(k, part)| {
+                let m = models[part.mesh];
+                let dimensions = m
+                    .dimensions()
+                    .filter(|(_, d)| tag_shown_among(&hidden, d.tag()))
+                    .map(|(id, _)| EntityId::Dimension(id));
+                let notes = m
+                    .notes()
+                    .filter(|(_, n)| tag_shown_among(&hidden, n.tag()))
+                    .map(|(id, _)| EntityId::Note(id));
+                dimensions.chain(notes).filter_map(move |id| {
+                    let shape = AnnotationShape::of(m, id)?;
+                    Some((k, id, shape.transformed(part.place)))
+                })
+            })
+            .collect();
         let mut instances: Vec<InstanceId> = parts
             .iter()
             .filter_map(|p| match p.owner {
@@ -296,6 +336,7 @@ impl Layout {
             parts,
             paths,
             guides,
+            annotations,
             boxes: instances
                 .into_iter()
                 .map(|i| (i, OnceLock::new()))
@@ -471,6 +512,13 @@ impl<'a> Scenery<'a> {
     /// the part it comes from, in part and id order.
     pub fn guides(&self) -> &[(usize, GuideId, Guide)] {
         &self.layout.guides
+    }
+
+    /// Every dimension and note of every part, placed in the open context's coordinates (a
+    /// screen note as it is), with the index of the part it comes from. Those on hidden tags
+    /// are left out.
+    pub fn annotations(&self) -> &[(usize, EntityId, AnnotationShape)] {
+        &self.layout.annotations
     }
 
     /// Whether what is on `tag` (None: Untagged) shows.

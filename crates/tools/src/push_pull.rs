@@ -438,6 +438,7 @@ mod tests {
                 selection: &Default::default(),
                 material: None,
                 sample: false,
+                labels: &[],
             };
             self.tool.handle(event, &ctx)
         }
@@ -622,6 +623,7 @@ mod tests {
             selection: &Default::default(),
             material: None,
             sample: false,
+            labels: &[],
         };
         let mut tool = PushPullTool::new();
         let out = tool.handle(ToolEvent::Click(r.hit(DVec3::new(1.0, 1.0, 0.0))), &ctx);
@@ -681,6 +683,7 @@ mod tests {
             selection: &Default::default(),
             material: None,
             sample: false,
+            labels: &[],
         };
         let mut tool = PushPullTool::new();
         let out = tool.handle(ToolEvent::Click(r.hit(DVec3::new(1.0, 1.0, 0.0))), &ctx);

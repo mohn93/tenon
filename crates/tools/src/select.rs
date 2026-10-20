@@ -1,4 +1,5 @@
-//! The Select tool: click an edge, face, guide or group to select it, or drag a box. Clicking
+//! The Select tool: click an edge, face, guide, dimension, note or group to select it (a
+//! dimension or note also by its label), or drag a box. Clicking
 //! an edge of a curve (a circle or arc) selects the whole curve. Dragging right selects what
 //! lies entirely inside the box; dragging left also selects what the box touches.
 //! With Shift held, clicked or boxed entities are toggled instead of replacing the selection.
@@ -9,10 +10,12 @@
 use glam::{DVec2, DVec3};
 use kernel::geom::point_in_polygon;
 use kernel::{EntityId, Face, Guide, Model};
-use session::{Camera, Command, SelectMode};
+use session::{AnnotationShape, Camera, Command, SelectMode};
 
-use crate::inference::{edge_under_where, face_under_in, guide_under_where};
-use crate::scenery::{Owner, Scenery};
+use crate::inference::{
+    annotation_under_where, edge_under_where, face_under_in, guide_under_where, label_under,
+};
+use crate::scenery::{Label, Owner, Scenery};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 
 #[derive(Clone, Debug, Default)]
@@ -33,25 +36,41 @@ impl SelectTool {
     }
 }
 
-/// What a click picks: the open context's edge under the cursor, else its guide, else an
-/// instance's edge (which picks the instance), else the face under it (the open context's
-/// face, or the instance). Geometry outside the open instance hides what is behind it but is
-/// not picked, and its edges do not outrank the open context's even when they lie on top of
-/// them.
+/// What a click picks: the label under the cursor (its dimension or note, or the instance
+/// placing it), else the open context's edge, else its dimension or note by their lines, else
+/// its guide, else an instance's edge or annotation line (which picks the instance), else the
+/// face under it (the open context's face, or the instance). Geometry outside the open
+/// instance hides what is behind it but is not picked, and its edges do not outrank the open
+/// context's even when they lie on top of them.
 pub(crate) fn pick(ctx: &ToolContext) -> Option<EntityId> {
+    let open = |o: Owner| o == Owner::Open;
+    let in_instance = |o: Owner| matches!(o, Owner::Instance(_));
+    match label_under(ctx.labels, ctx.cursor, |o| open(o) || in_instance(o)) {
+        Some((Owner::Instance(i), _)) => return Some(EntityId::Instance(i)),
+        Some((_, id)) => return Some(id),
+        None => {}
+    }
     let edge_of = |keep: fn(Owner) -> bool| {
         edge_under_where(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius, keep)
     };
-    if let Some((_, e, _, _)) = edge_of(|o| o == Owner::Open) {
+    let annotation_of = |keep: fn(Owner) -> bool| {
+        annotation_under_where(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius, keep)
+    };
+    if let Some((_, e, _, _)) = edge_of(open) {
         return Some(EntityId::Edge(e));
     }
-    let open = |o: Owner| o == Owner::Open;
+    if let Some((_, id)) = annotation_of(open) {
+        return Some(id);
+    }
     if let Some((_, g, _)) =
         guide_under_where(ctx.scenery, ctx.camera, ctx.cursor, ctx.pick_radius, open)
     {
         return Some(EntityId::Guide(g));
     }
-    if let Some((Owner::Instance(i), ..)) = edge_of(|o| matches!(o, Owner::Instance(_))) {
+    if let Some((Owner::Instance(i), ..)) = edge_of(in_instance) {
+        return Some(EntityId::Instance(i));
+    }
+    if let Some((Owner::Instance(i), _)) = annotation_of(in_instance) {
         return Some(EntityId::Instance(i));
     }
     match face_under_in(ctx.scenery, ctx.camera, ctx.cursor)? {
@@ -73,7 +92,8 @@ pub(crate) fn whole_curve(model: &Model, id: EntityId) -> Vec<EntityId> {
 }
 
 /// What a double-click on `id` selects: a face with its edges, an edge with its whole curve
-/// and the faces along each of its edges, a guide alone; sorted. Empty for anything else.
+/// and the faces along each of its edges, a guide, dimension or note alone; sorted. Empty for
+/// anything else.
 fn bounded(model: &Model, id: EntityId) -> Vec<EntityId> {
     let mut ids = std::collections::BTreeSet::from([id]);
     match id {
@@ -86,7 +106,7 @@ fn bounded(model: &Model, id: EntityId) -> Vec<EntityId> {
                 }
             }
         }
-        EntityId::Guide(_) => {}
+        EntityId::Guide(_) | EntityId::Dimension(_) | EntityId::Note(_) => {}
         _ => return Vec::new(),
     }
     ids.into_iter().collect()
@@ -131,8 +151,9 @@ fn box_corners(scenery: &Scenery, id: EntityId) -> Option<[DVec3; 8]> {
 }
 
 /// The model-axis bounds (lowest and highest corner) of `ids`: the vertices of its edges, faces
-/// (outer and hole loops) and vertices, its instances' boxes and its guides' anchors. None
-/// when none of them exists.
+/// (outer and hole loops) and vertices, its instances' boxes, its guides' anchors and the
+/// points of its dimensions' and leader notes' lines and labels (see
+/// `AnnotationShape::points`). None when none of them exists.
 pub(crate) fn selection_bounds(
     ctx: &ToolContext,
     ids: &std::collections::BTreeSet<EntityId>,
@@ -156,11 +177,9 @@ pub(crate) fn selection_bounds(
                 points.extend(ctx.scenery.instance_box(i).into_iter().flatten())
             }
             EntityId::Guide(g) => points.extend(m.guide(g).map(Guide::anchor)),
-            EntityId::Dimension(d) => match m.dimension_points(d) {
-                Some((a, b)) => points.extend([a, b]),
-                None => points.extend(m.radial_circle(d).map(|c| c.center)),
-            },
-            EntityId::Note(n) => points.extend(m.note_point(n)),
+            EntityId::Dimension(_) | EntityId::Note(_) => {
+                points.extend(AnnotationShape::of(m, *id).map_or(Vec::new(), |s| s.points()))
+            }
         }
     }
     let first = *points.first()?;
@@ -183,17 +202,20 @@ pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
         .collect()
 }
 
-/// The open context's edges, faces, instances and guides a screen box with corners `a` and
-/// `b` selects, as `camera` (in the open context's coordinates) sees `scenery`: those inside it
-/// entirely, or with `crossing` those touching it (the Select tool's box dragged right, or
-/// left). Entities with a point behind the camera are skipped, and so are those on hidden
-/// tags. Guide lines are never inside a box; a crossing box selects those crossing it.
+/// The open context's edges, faces, instances, guides, dimensions and notes a screen box with
+/// corners `a` and `b` selects, as `camera` (in the open context's coordinates) sees
+/// `scenery`: those inside it entirely, or with `crossing` those touching it (the Select
+/// tool's box dragged right, or left). Entities with a point behind the camera are skipped,
+/// and so are those on hidden tags. Guide lines are never inside a box; a crossing box selects
+/// those crossing it. Screen notes go by their rectangles among `labels` (the window's last
+/// layout): inside the box, or with `crossing` overlapping it.
 pub fn select_box(
     scenery: &Scenery,
     camera: &Camera,
     a: DVec2,
     b: DVec2,
     crossing: bool,
+    labels: &[Label],
 ) -> Vec<EntityId> {
     let (lo, hi) = (a.min(b), a.max(b));
     let window = !crossing;
@@ -278,6 +300,36 @@ pub fn select_box(
         };
         if hit {
             ids.push(EntityId::Guide(id));
+        }
+    }
+    for (part, id, shape) in scenery.annotations() {
+        if scenery.part(*part).owner != Owner::Open {
+            continue;
+        }
+        let hit = match shape {
+            AnnotationShape::Screen { .. } => labels
+                .iter()
+                .filter(|l| l.owner == Owner::Open && l.id == *id)
+                .any(|l| {
+                    if window {
+                        inside(l.min) && inside(l.max)
+                    } else {
+                        l.min.cmple(hi).all() && l.max.cmpge(lo).all()
+                    }
+                }),
+            _ if window => shape
+                .points()
+                .iter()
+                .all(|p| camera.project(*p).is_some_and(inside)),
+            _ => shape.segments().iter().any(|[p, q]| {
+                camera
+                    .project(*p)
+                    .zip(camera.project(*q))
+                    .is_some_and(|(p, q)| touches(p, q))
+            }),
+        };
+        if hit {
+            ids.push(*id);
         }
     }
     for (id, f) in m.faces().filter(|(_, f)| scenery.shows(f.tag)) {
@@ -372,7 +424,14 @@ impl Tool for SelectTool {
                     } else {
                         // Dragged left: what the box touches.
                         let crossing = ctx.cursor.x < start.x;
-                        select_box(ctx.scenery, ctx.camera, start, ctx.cursor, crossing)
+                        select_box(
+                            ctx.scenery,
+                            ctx.camera,
+                            start,
+                            ctx.cursor,
+                            crossing,
+                            ctx.labels,
+                        )
                     };
                     let mode = if !ctx.shift {
                         SelectMode::Replace
@@ -495,6 +554,7 @@ mod tests {
         drag_threshold: f64,
         shift: bool,
         selection: std::collections::BTreeSet<EntityId>,
+        labels: Vec<Label>,
     }
 
     impl Rig {
@@ -515,6 +575,7 @@ mod tests {
                 shift: false,
                 drag_threshold: 4.0,
                 selection: Default::default(),
+                labels: Vec::new(),
             }
         }
 
@@ -578,6 +639,7 @@ mod tests {
                 selection: &self.selection,
                 material: None,
                 sample: false,
+                labels: &self.labels,
             };
             self.tool.handle(event, &ctx)
         }
@@ -713,6 +775,7 @@ mod tests {
                 selection: &Default::default(),
                 material: None,
                 sample: false,
+                labels: &[],
             };
             tool.handle(event, &ctx)
         };
@@ -987,6 +1050,7 @@ mod tests {
                 selection: &Default::default(),
                 material: None,
                 sample: false,
+                labels: &[],
             };
             pick(&ctx)
         };
@@ -1041,6 +1105,137 @@ mod tests {
             (ids.len(), *mode),
             (8, SelectMode::Toggle),
             "removes all of it"
+        );
+    }
+
+    /// The Rig's square with a dimension below it (from (0, 0) to (2, 0), its line at y = -1)
+    /// and a screen note; returns the rig and the two ids.
+    fn annotated() -> (Rig, EntityId, EntityId) {
+        let mut r = Rig::new();
+        let mut scene = kernel::Scene::from_root(r.model.clone());
+        let dimension = scene
+            .edit(kernel::MeshId::Root, |m| {
+                m.add_dimension(kernel::Dimension::Linear {
+                    a: kernel::Anchor::Point(DVec3::ZERO),
+                    b: kernel::Anchor::Point(DVec3::new(2.0, 0.0, 0.0)),
+                    offset: DVec3::new(0.0, -1.0, 0.0),
+                    tag: None,
+                })
+            })
+            .unwrap()
+            .summary()
+            .created[0];
+        let note = kernel::Note::Screen {
+            at: [0.05, 0.05],
+            text: "Plan".into(),
+            tag: None,
+        };
+        let note = scene
+            .add_note(kernel::MeshId::Root, note)
+            .unwrap()
+            .summary()
+            .created[0];
+        r.model = scene.root().clone();
+        (r, dimension, note)
+    }
+
+    #[test]
+    fn dimensions_are_picked_and_hovered_by_their_lines_and_labels() {
+        let (mut r, dimension, note) = annotated();
+        let on_line = DVec3::new(1.5, -1.0, 0.0);
+        let (ids, _) = selected(&r.click(on_line));
+        assert_eq!(ids, vec![dimension]);
+        r.cursor = r.px(on_line);
+        r.send(ToolEvent::Move(Rig::hit()));
+        assert_eq!(r.tool.hovered(), Some(dimension));
+        // The label lies over the square's face: the label wins.
+        let over = r.px(DVec3::new(1.0, 1.0, 0.0));
+        let (ids, _) = selected(&r.click(DVec3::new(1.0, 1.0, 0.0)));
+        assert_eq!(ids.len(), 1);
+        assert!(matches!(ids[0], EntityId::Face(_)));
+        r.labels = vec![Label {
+            owner: Owner::Open,
+            id: dimension,
+            min: over - DVec2::splat(20.0),
+            max: over + DVec2::splat(20.0),
+        }];
+        let (ids, _) = selected(&r.click(DVec3::new(1.0, 1.0, 0.0)));
+        assert_eq!(ids, vec![dimension]);
+        // A screen note is picked by its label alone.
+        r.labels.push(Label {
+            owner: Owner::Open,
+            id: note,
+            min: DVec2::new(40.0, 30.0),
+            max: DVec2::new(90.0, 50.0),
+        });
+        let out = r.drag(DVec2::new(60.0, 40.0), DVec2::new(60.0, 40.0));
+        assert_eq!(selected(&out).0, vec![note]);
+        // Labels outside the open context are not picked.
+        r.labels = vec![Label {
+            owner: Owner::Outside,
+            ..r.labels[1]
+        }];
+        let out = r.drag(DVec2::new(60.0, 40.0), DVec2::new(60.0, 40.0));
+        assert_eq!(selected(&out).0, vec![]);
+    }
+
+    #[test]
+    fn a_box_selects_dimensions_by_their_lines_and_screen_notes_by_their_labels() {
+        let (mut r, dimension, note) = annotated();
+        let scenery = crate::scenery::Scenery::single(&r.model);
+        let corners = [
+            DVec3::new(-0.2, -1.2, 0.0),
+            DVec3::new(2.2, 0.2, 0.0),
+            DVec3::new(-0.2, 0.2, 0.0),
+            DVec3::new(2.2, -1.2, 0.0),
+        ]
+        .map(|p| r.px(p));
+        let lo = corners.iter().fold(corners[0], |a, b| a.min(*b));
+        let hi = corners.iter().fold(corners[0], |a, b| a.max(*b));
+        let label = Label {
+            owner: Owner::Open,
+            id: note,
+            min: DVec2::new(40.0, 30.0),
+            max: DVec2::new(90.0, 50.0),
+        };
+        let window = select_box(&scenery, &r.camera, lo, hi, false, &[label]);
+        assert!(window.contains(&dimension), "{window:?}");
+        assert!(!window.contains(&note));
+        // Half the dimension: not inside, but touching.
+        let mid = r.px(DVec3::new(1.0, -1.0, 0.0));
+        let half = (DVec2::new(mid.x, lo.y), hi);
+        assert!(!select_box(&scenery, &r.camera, half.0, half.1, false, &[]).contains(&dimension));
+        assert!(select_box(&scenery, &r.camera, half.0, half.1, true, &[]).contains(&dimension));
+        // The screen note's rectangle inside the box, or touched by a crossing box.
+        let around = select_box(
+            &scenery,
+            &r.camera,
+            DVec2::new(30.0, 20.0),
+            DVec2::new(100.0, 60.0),
+            false,
+            &[label],
+        );
+        assert_eq!(around, vec![note]);
+        let touching = (DVec2::new(80.0, 45.0), DVec2::new(120.0, 80.0));
+        assert!(
+            select_box(&scenery, &r.camera, touching.0, touching.1, false, &[label]).is_empty()
+        );
+        assert_eq!(
+            select_box(&scenery, &r.camera, touching.0, touching.1, true, &[label]),
+            vec![note]
+        );
+        // Without its label (no window drew it), a screen note is never boxed.
+        r.labels.clear();
+        assert!(
+            !select_box(
+                &scenery,
+                &r.camera,
+                DVec2::ZERO,
+                DVec2::new(800.0, 600.0),
+                true,
+                &[]
+            )
+            .contains(&note)
         );
     }
 }

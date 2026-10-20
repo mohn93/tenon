@@ -1,5 +1,5 @@
-//! What lies along a ray: every face it meets, and the edges and guides passing near it, for
-//! agents asking what is under a pixel.
+//! What lies along a ray: every face it meets, and the edges, guides and annotation lines
+//! passing near it, for agents asking what is under a pixel.
 
 use glam::{DVec2, DVec3};
 use kernel::{EntityId, Guide};
@@ -8,7 +8,7 @@ use session::{Camera, Ray};
 use crate::inference::{Cone, Near, closest_on_line_to_ray};
 use crate::scenery::Scenery;
 
-/// A face, edge or guide a pick met.
+/// A face, edge, guide, dimension or note a pick met.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hit {
     /// The entity, an id in the mesh of its part.
@@ -41,8 +41,8 @@ pub enum Reach<'a> {
 
 /// Everything `ray` (unit direction, in the open context's coordinates) meets in front of its
 /// origin, nearest first: every face it crosses, whatever lies in front, and every edge (not
-/// soft: soft edges are hidden) and guide passing within `reach`. What hidden tags hide is not
-/// met (see `Scenery`).
+/// soft: soft edges are hidden), guide, and dimension or leader note (by its lines) passing
+/// within `reach`. What hidden tags hide is not met (see `Scenery`).
 pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
     let mut hits = Vec::new();
     for (k, part) in scenery.parts().enumerate() {
@@ -126,6 +126,21 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
             } => closest_on_line_to_ray(point, direction, ray, false),
         };
         offer(EntityId::Guide(id), k, point);
+    }
+    // An annotation is met once, at the point of its lines nearest the ray.
+    for (k, id, shape) in scenery.annotations() {
+        let off_ray = |p: &DVec3| {
+            let t = (*p - ray.origin).dot(ray.dir);
+            (*p - ray.origin - ray.dir * t).length()
+        };
+        let nearest = shape
+            .segments()
+            .into_iter()
+            .map(|[a, b]| closest_on_line_to_ray(a, b - a, ray, true))
+            .min_by(|p, q| off_ray(p).total_cmp(&off_ray(q)));
+        if let Some(point) = nearest {
+            offer(*id, *k, point);
+        }
     }
     hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
     hits
