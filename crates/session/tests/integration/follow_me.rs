@@ -254,8 +254,9 @@ fn a_path_that_is_another_face_s_loop_may_share_the_profile_s_edge() {
     .unwrap();
     d.scene().validate().unwrap();
     assert!(!exists(&d, &face));
-    // Three sides on each of five segments, and the ground.
-    assert_eq!(d.model().faces().count(), 16);
+    // Three sides on each of four segments (the triangle's corner splits a straight side of
+    // the ground, which stays one segment), and the ground.
+    assert_eq!(d.model().faces().count(), 13);
 }
 
 #[test]
@@ -460,5 +461,201 @@ fn an_edge_the_profile_shares_with_a_neighbouring_face_survives() {
     assert!(m.edge(shared).is_some(), "the shared edge survives");
     // The ground, four sides and two caps.
     assert_eq!(m.faces().count(), 7);
+    assert!(volume(m, &[]) > 0.0);
+}
+
+#[test]
+fn a_straight_run_split_by_a_vertex_sweeps_as_one_segment() {
+    let mut d = doc();
+    let path = [
+        edge(&mut d, [0.0, 0.0, 0.0], [1.5, 0.0, 0.0]),
+        edge(&mut d, [1.5, 0.0, 0.0], [2.0, 0.0, 0.0]),
+        edge(&mut d, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]),
+    ];
+    let face = rectangle(&mut d, [0.0, 0.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": path}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let m = d.model();
+    // The same L as without the vertex: four sides on each of two runs, and two caps.
+    assert_eq!(m.faces().count(), 10);
+    assert!(closed_solid(m));
+    assert!((volume(m, &[]) - 3.0).abs() < 1e-9, "{}", volume(m, &[]));
+    assert!(has_vertex(m, DVec3::new(1.0, 1.0, 1.0)));
+}
+
+/// The id of the face whose vertices all satisfy `inside`, with area `area`.
+fn face_where(m: &Model, area: f64, inside: impl Fn(DVec3) -> bool) -> kernel::FaceId {
+    m.faces()
+        .find(|(id, f)| {
+            (m.area(*id).unwrap() - area).abs() < 1e-9
+                && f.outer.iter().all(|v| inside(m.position(*v).unwrap()))
+        })
+        .unwrap()
+        .0
+}
+
+#[test]
+fn a_profile_at_any_top_corner_of_a_box_sweeps_around_its_top() {
+    for (cx, cy) in [(0.0, 0.0), (0.0, 2.0), (2.0, 0.0), (2.0, 2.0)] {
+        let mut d = doc();
+        let ground = rectangle(&mut d, [0.0, 0.0, 0.0], [2.0, 2.0, 0.0], [0.0, 0.0, 1.0]);
+        run(
+            &mut d,
+            json!({"type": "push_pull", "face": ground, "distance": 1}),
+        )
+        .unwrap();
+        let top = |p: DVec3| (p.z - 1.0).abs() < 1e-9;
+        face_where(d.model(), 4.0, top);
+        // A 0.2 square on the end face at the corner, splitting the top edge there.
+        let dy = if cy == 0.0 { 0.2 } else { -0.2 };
+        rectangle(&mut d, [cx, cy, 1.0], [cx, cy + dy, 0.8], [1.0, 0.0, 0.0]);
+        let m = d.model();
+        let profile = face_where(m, 0.04, |p| (p.x - cx).abs() < 1e-9);
+        let lid = m.face(face_where(m, 4.0, top)).unwrap().clone();
+        assert_eq!(lid.outer.len(), 5, "the profile splits the top edge");
+        let path: Vec<Value> = (0..5)
+            .map(|i| {
+                let (a, b) = (lid.outer[i], lid.outer[(i + 1) % 5]);
+                json!(kernel::EntityId::Edge(m.edge_between(a, b).unwrap()))
+            })
+            .collect();
+        let before = depth(&d);
+        run(
+            &mut d,
+            json!({"type": "follow_me", "face": kernel::EntityId::Face(profile), "path": path}),
+        )
+        .unwrap_or_else(|e| panic!("corner ({cx}, {cy}): {e:?}"));
+        d.scene().validate().unwrap();
+        assert_eq!(depth(&d), before + 1);
+        let m = d.model();
+        // The sweep runs along all four top edges, mitred at every corner.
+        for (x, y) in [(0.2, 0.2), (1.8, 0.2), (1.8, 1.8), (0.2, 1.8)] {
+            assert!(
+                has_vertex(m, DVec3::new(x, y, 0.8)),
+                "({cx}, {cy}): {x} {y}"
+            );
+            assert!(
+                has_vertex(m, DVec3::new(x, y, 1.0)),
+                "({cx}, {cy}): {x} {y}"
+            );
+        }
+        // Its underside: four faces at z = 0.8.
+        let under = m
+            .faces()
+            .filter(|(_, f)| {
+                f.normal.z.abs() > 0.99
+                    && f.outer
+                        .iter()
+                        .all(|v| (m.position(*v).unwrap().z - 0.8).abs() < 1e-9)
+            })
+            .count();
+        assert_eq!(under, 4, "({cx}, {cy})");
+        // The profile's inner side, inside the strip it swept on the end face, is gone, and
+        // so are its corners on the strip's edges.
+        assert!(!has_vertex(m, DVec3::new(cx, cy + dy, 1.0)), "({cx}, {cy})");
+        assert!(!has_vertex(m, DVec3::new(cx, cy + dy, 0.8)), "({cx}, {cy})");
+        let inner = (DVec3::new(cx, cy + dy, 0.8), DVec3::new(cx, cy + dy, 1.0));
+        assert!(
+            !m.edges().any(|(_, e)| {
+                let [p, q] = e.v.map(|v| m.position(v).unwrap());
+                (p.distance(inner.0) < 1e-9 && q.distance(inner.1) < 1e-9)
+                    || (p.distance(inner.1) < 1e-9 && q.distance(inner.0) < 1e-9)
+            }),
+            "({cx}, {cy})"
+        );
+        run(&mut d, json!({"type": "undo"})).unwrap();
+        d.scene().validate().unwrap();
+        assert!(exists(&d, &json!(kernel::EntityId::Face(profile))));
+    }
+}
+
+#[test]
+fn a_profile_between_circle_vertices_leaves_no_seams_in_the_ring() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1.0, "segments": 24}),
+    )
+    .unwrap();
+    let path = created(&out, 'e');
+    let disk = created(&out, 'f')[0].clone();
+    // The rectangle of the lathe test, turned 7.5 degrees about the axis: between two of
+    // the circle's vertices.
+    let (c, s) = (7.5f64.to_radians().cos(), 7.5f64.to_radians().sin());
+    let corners = [(1.5, 0.5), (2.0, 0.5), (2.0, 1.0), (1.5, 1.0)];
+    let mut face = Value::Null;
+    for i in 0..4 {
+        let at = |(r, z): (f64, f64)| [r * c, r * s, z];
+        let out = run(
+            &mut d,
+            json!({"type": "add_edge", "start": at(corners[i]), "end": at(corners[(i + 1) % 4])}),
+        )
+        .unwrap();
+        if let Some(f) = created(&out, 'f').first() {
+            face = f.clone();
+        }
+    }
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": path}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    assert!(!exists(&d, &face));
+    let m = d.model();
+    // As for a profile square to the path: four sides on each of 24 segments, and the disk.
+    assert_eq!(m.faces().count(), 97);
+    assert_eq!(soft_edges(m), 96);
+    for (e, edge) in m.edges() {
+        if edge.soft {
+            assert!(m.faces_beside(e).is_some());
+        }
+    }
+    let disk_id = match serde_json::from_value::<kernel::EntityId>(disk).unwrap() {
+        kernel::EntityId::Face(f) => f,
+        _ => unreachable!(),
+    };
+    assert!(volume(m, &[disk_id]) > 0.0);
+}
+
+#[test]
+fn a_circle_square_to_an_arc_s_tangent_leaves_no_seams() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [2, 0, 0], "angle": 90}),
+    )
+    .unwrap();
+    let path = created(&out, 'e');
+    assert_eq!(path.len(), 12);
+    // Square to the tangent at the arc's start (+y), not to its first chord.
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [2, 0, 0], "radius": 0.3, "segments": 12,
+               "normal": [0, 1, 0]}),
+    )
+    .unwrap();
+    let face = created(&out, 'f')[0].clone();
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": path}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    assert!(!exists(&d, &face));
+    let m = d.model();
+    // Twelve sides on each of twelve segments, and two caps.
+    assert_eq!(m.faces().count(), 146);
+    // Soft along the sides (12 per segment) and around the eleven joints (12 each).
+    assert_eq!(soft_edges(m), 144 + 132);
+    // Closed but for the arc itself, which runs through the middle.
+    assert!(
+        m.edges()
+            .all(|(e, edge)| edge.curve.is_some() || m.faces_beside(e).is_some())
+    );
     assert!(volume(m, &[]) > 0.0);
 }

@@ -14,6 +14,12 @@ impl Model {
     /// without edges are removed, and a vertex left between two collinear edges is healed so
     /// the two edges become one.
     pub fn erase(&mut self, edges: &[EdgeId], faces: &[FaceId]) -> ChangeSet {
+        self.erase_pending(edges, faces);
+        self.take_changes()
+    }
+
+    /// `erase` without taking the changes.
+    pub(crate) fn erase_pending(&mut self, edges: &[EdgeId], faces: &[FaceId]) {
         for &f in faces {
             if self.face(f).is_some() {
                 self.remove_face(f);
@@ -51,7 +57,6 @@ impl Model {
                 self.heal(v);
             }
         }
-        self.take_changes()
     }
 
     /// The plane of faces `f` and `g` if they lie in the same plane.

@@ -1,10 +1,12 @@
 //! Sweeping a face's loops along a path (the Follow Me tool).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DQuat, DVec2, DVec3};
 
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment};
+use crate::geom::{
+    ANGLE_TOL, LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment,
+};
 use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{ChangeSet, Model, Op};
 
@@ -203,12 +205,14 @@ pub struct FollowMe {
 
 impl Model {
     /// Works out the sweep of face `face` along the path through vertices `path` (in chain
-    /// order; closed: the last joins the first), without changing the model. The sweep starts at
-    /// the path end nearest the face's plane (closed: the nearest path vertex) and walks the
-    /// path from there; ties go to the one nearer the centre of the face's outer loop, then to
-    /// the first in chain order. A closed path is walked toward the neighbour that leaves the
-    /// face's plane more steeply (forward in chain order on a tie). `Degenerate` also when the
-    /// face or a vertex does not exist.
+    /// order; closed: the last joins the first), without changing the model. A vertex in the
+    /// middle of a straight run of the path is passed over: the run is one segment. The sweep
+    /// starts at the path end nearest the face's plane (closed: the nearest path vertex, other
+    /// than one where the path turns within that plane) and walks the path from there; ties go
+    /// to the one nearer the centre of the face's outer loop, then to the first in chain order.
+    /// A closed path is walked toward the neighbour that leaves the face's plane more steeply
+    /// (forward in chain order on a tie). `Degenerate` also when the face or a vertex does not
+    /// exist.
     pub fn plan_follow_me(
         &self,
         face: FaceId,
@@ -216,15 +220,45 @@ impl Model {
         closed: bool,
     ) -> Result<FollowMe, SweepError> {
         let f = self.face(face).ok_or(SweepError::Degenerate)?;
-        let points: Vec<DVec3> = path
+        let all: Vec<DVec3> = path
             .iter()
             .map(|v| self.position(*v))
             .collect::<Option<_>>()
             .ok_or(SweepError::Degenerate)?;
-        let n = points.len();
-        if n < 2 {
+        if all.len() < 2 {
             return Err(SweepError::Degenerate);
         }
+        let curve_between = |a: VertexId, b: VertexId| {
+            self.edge_between(a, b)
+                .and_then(|e| self.edge(e))
+                .and_then(|e| Some((e.curve?, e.polygon)))
+        };
+        // A straight run of the path is one segment; it keeps its edges' curve if they share
+        // one.
+        let keep = corners(&all, closed);
+        if keep.len() < if closed { 3 } else { 2 } {
+            return Err(SweepError::Degenerate);
+        }
+        let mut runs: BTreeMap<(VertexId, VertexId), Option<(CurveId, bool)>> = BTreeMap::new();
+        for r in 0..if closed { keep.len() } else { keep.len() - 1 } {
+            let (from, to) = (keep[r], keep[(r + 1) % keep.len()]);
+            let mut i = from;
+            let mut curve = None;
+            loop {
+                let j = (i + 1) % all.len();
+                let c = curve_between(path[i], path[j]);
+                curve = if i == from || curve == c { c } else { None };
+                if j == to || curve.is_none() {
+                    break;
+                }
+                i = j;
+            }
+            runs.insert((path[from], path[to]), curve);
+            runs.insert((path[to], path[from]), curve);
+        }
+        let path: Vec<VertexId> = keep.iter().map(|i| path[*i]).collect();
+        let points: Vec<DVec3> = keep.iter().map(|i| all[*i]).collect();
+        let n = points.len();
         let loops: Vec<&Vec<VertexId>> = std::iter::once(&f.outer).chain(&f.holes).collect();
         let profile: Vec<Vec<DVec3>> = loops
             .iter()
@@ -233,11 +267,23 @@ impl Model {
         let origin = profile[0][0];
         let centre = profile[0].iter().sum::<DVec3>() / profile[0].len() as f64;
         let off_plane = |i: usize| (points[i] - origin).dot(f.normal).abs();
-        let candidates: Vec<usize> = if closed {
+        let mut candidates: Vec<usize> = if closed {
             (0..n).collect()
         } else {
             vec![0, n - 1]
         };
+        if closed {
+            // A vertex where the path turns within the face's plane cannot start the sweep.
+            let in_plane = |i: usize| off_plane(i % n) < LENGTH_TOL;
+            let leaving: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|&i| !(in_plane(i) && in_plane(i + 1) && in_plane(i + n - 1)))
+                .collect();
+            if !leaving.is_empty() {
+                candidates = leaving;
+            }
+        }
         let start = candidates
             .into_iter()
             .reduce(|a, b| {
@@ -263,14 +309,9 @@ impl Model {
             order.reverse();
         }
         let points: Vec<DVec3> = order.iter().map(|v| self.pos(*v)).collect();
-        let curve_between = |a: VertexId, b: VertexId| {
-            self.edge_between(a, b)
-                .and_then(|e| self.edge(e))
-                .and_then(|e| Some((e.curve?, e.polygon)))
-        };
         let segs = if closed { n } else { n - 1 };
         let path_curves = (0..segs)
-            .map(|k| curve_between(order[k], order[(k + 1) % n]))
+            .map(|k| runs[&(order[k], order[(k + 1) % n])])
             .collect();
         let side_curves = loops
             .iter()
@@ -303,7 +344,9 @@ impl Model {
     /// diagonal where a closed path's twist bends it), and for an open path the two end caps
     /// (with the profile's holes, and its front and back materials). Everything is drawn with
     /// the rules of `add_edge`, so it merges with what it touches; a region the sweep closes off
-    /// by itself (the hole of a ring) gets no face. The profile face is removed; its edges stay only where they bound faces.
+    /// by itself (the hole of a ring) gets no face. The profile face is removed; its edges stay
+    /// only where they bound faces, and not where they cross a side face (a profile not square to
+    /// the path), whose pieces merge.
     /// New faces point out of the swept solid. An edge between the faces of two profile sides on
     /// one curve that is not a polygon is soft, and so is an edge between the faces of two path
     /// segments on one such curve.
@@ -378,6 +421,23 @@ impl Model {
                 .collect();
             self.rebuild_plane(flat[i].0, &edges);
         }
+        // So is a side face lying where the profile face was (a profile drawn on a face the
+        // sweep runs along).
+        let normal = crate::geom::vector_area(&plan.profile[0]).normalize();
+        let plane = Plane::through(plan.profile[0][0], normal);
+        let covers = pieces.iter().any(|(poly, _)| {
+            let n = crate::geom::vector_area(poly).normalize_or_zero();
+            n.cross(normal).length() < PLANE_ANGLE_TOL && plane.contains(poly[0])
+        });
+        if covers {
+            let edges: Vec<EdgeId> = plan
+                .profile
+                .iter()
+                .flat_map(|l| sides(l))
+                .flat_map(|(a, b)| self.edges_along(a, b))
+                .collect();
+            self.rebuild_plane(plane, &edges);
+        }
 
         let made: Vec<FaceId> = self
             .faces()
@@ -443,6 +503,7 @@ impl Model {
             }
         }
         self.clear_profile(&plan.profile);
+        self.merge_across_profile(&plan.profile, &pieces);
 
         // Soft edges.
         let mut soft: BTreeSet<EdgeId> = BTreeSet::new();
@@ -480,15 +541,34 @@ impl Model {
         self.take_changes()
     }
 
+    /// Erases the edges along the profile's loop sides that cross a side face (`pieces`), between
+    /// two of its pieces in one plane, so the pieces merge back into one face. A profile not
+    /// square to the path's first segment lies across that segment's side faces.
+    fn merge_across_profile(&mut self, profile: &[Vec<DVec3>], pieces: &[(Vec<DVec3>, DVec3)]) {
+        let segments: Vec<(DVec3, DVec3)> = profile.iter().flat_map(|l| sides(l)).collect();
+        let across: Vec<EdgeId> = self
+            .edges()
+            .filter(|(_, e)| {
+                let [a, b] = e.v;
+                let (pa, pb) = (self.pos(a), self.pos(b));
+                let mid = (pa + pb) / 2.0;
+                segments
+                    .iter()
+                    .any(|s| on_segment(pa, *s) && on_segment(pb, *s))
+                    && pieces.iter().any(|(poly, _)| inside_piece(poly, mid))
+                    && matches!(self.faces_on_side(a, b)[..],
+                        [f, g] if self.shared_plane(f, g).is_some())
+            })
+            .map(|(e, _)| e)
+            .collect();
+        self.erase_pending(&across, &[]);
+    }
+
     /// Removes the edges along the profile's loop sides that bound no face, then the vertices
     /// they leave without edges.
     fn clear_profile(&mut self, profile: &[Vec<DVec3>]) {
         let segments: Vec<(DVec3, DVec3)> = profile.iter().flat_map(|l| sides(l)).collect();
-        let on = |p: DVec3, (a, b): (DVec3, DVec3)| {
-            let (t, d) = project_on_segment(p, a, b);
-            let tol = LENGTH_TOL / (b - a).length();
-            d < LENGTH_TOL && t > -tol && t < 1.0 + tol
-        };
+        let on = on_segment;
         let strays: Vec<EdgeId> = self
             .edges()
             .filter(|(_, e)| {
@@ -509,6 +589,37 @@ impl Model {
             }
         }
     }
+}
+
+/// The indices of the path's corners: its points less those in the middle of a straight run
+/// (turning by less than `ANGLE_TOL`). An open path keeps its ends.
+fn corners(path: &[DVec3], closed: bool) -> Vec<usize> {
+    let n = path.len();
+    let straight = |a: DVec3, b: DVec3, c: DVec3| {
+        let (u, v) = (b - a, c - b);
+        u.cross(v).length() <= ANGLE_TOL * u.length() * v.length() && u.dot(v) > 0.0
+    };
+    let first = if closed {
+        match (0..n).find(|&i| !straight(path[(i + n - 1) % n], path[i], path[(i + 1) % n])) {
+            Some(i) => i,
+            None => return (0..n).collect(),
+        }
+    } else {
+        0
+    };
+    let mut keep = vec![first];
+    let last = if closed { n } else { n - 1 };
+    for s in 1..last {
+        let i = (first + s) % n;
+        if !straight(path[*keep.last().unwrap()], path[i], path[(i + 1) % n]) {
+            keep.push(i);
+        }
+    }
+    if !closed {
+        keep.push(n - 1);
+    }
+    keep.sort_unstable();
+    keep
 }
 
 /// The loop's smallest width in its plane, measured square to each of its sides (0 when the
@@ -541,6 +652,18 @@ fn planar(points: &[DVec3]) -> bool {
     points
         .iter()
         .all(|p| (*p - centre).dot(normal).abs() < 0.1 * LENGTH_TOL)
+}
+
+/// True when `p` lies on the segment from `a` to `b` (within `LENGTH_TOL`).
+fn on_segment(p: DVec3, (a, b): (DVec3, DVec3)) -> bool {
+    let (t, d) = project_on_segment(p, a, b);
+    let tol = LENGTH_TOL / (b - a).length();
+    d < LENGTH_TOL && t > -tol && t < 1.0 + tol
+}
+
+/// True when `p` lies on the planar polygon `poly` and not on its boundary.
+fn inside_piece(poly: &[DVec3], p: DVec3) -> bool {
+    in_piece(poly, p) && !sides(poly).any(|s| on_segment(p, s))
 }
 
 /// True when `p` lies on the planar polygon `poly` (within `LENGTH_TOL` of its plane).
@@ -680,6 +803,54 @@ mod tests {
             sweep(&tilted, normal, &path, false),
             Err(SweepError::Degenerate)
         );
+    }
+
+    #[test]
+    fn a_vertex_in_a_straight_run_is_passed_over() {
+        let path = [
+            p(0.0, 0.0, 0.0),
+            p(1.5, 0.0, 0.0),
+            p(2.0, 0.0, 0.0),
+            p(2.0, 2.0, 0.0),
+        ];
+        assert_eq!(corners(&path, false), vec![0, 2, 3]);
+        let ring = [
+            p(1.0, 0.0, 0.0),
+            p(2.0, 0.0, 0.0),
+            p(2.0, 2.0, 0.0),
+            p(0.0, 2.0, 0.0),
+            p(0.0, 0.0, 0.0),
+        ];
+        assert_eq!(corners(&ring, true), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_closed_path_does_not_start_where_it_turns_in_the_profile_s_plane() {
+        // The profile in the plane x = 0 at the corner s, where the path turns within that
+        // plane: from there the path would set off along the profile.
+        let mut m = Model::new();
+        let s = p(0.0, 0.0, 0.0);
+        let ring = [
+            s,
+            p(0.0, 0.0, 0.5),
+            p(10.0, 0.0, 0.5),
+            p(10.0, 10.0, 0.0),
+            p(0.0, 10.0, 0.0),
+        ];
+        for i in 0..5 {
+            m.add_edge(ring[i], ring[(i + 1) % 5]).unwrap();
+        }
+        m.add_polygon(&[
+            p(0.0, 0.02, 0.02),
+            p(0.0, 0.1, 0.02),
+            p(0.0, 0.1, 0.1),
+            p(0.0, 0.02, 0.1),
+        ])
+        .unwrap();
+        let face = m.faces().next().unwrap().0;
+        let path: Vec<VertexId> = ring.iter().map(|q| m.find_vertex(*q).unwrap()).collect();
+        let plan = m.plan_follow_me(face, &path, true).unwrap();
+        assert!(!close(plan.path[0], s), "{:?}", plan.path);
     }
 
     #[test]

@@ -45,7 +45,7 @@ use crate::ui::{theme, viewport};
 /// The window's least size, in points: the panels and a usable 3D view.
 const MIN_WINDOW: LogicalSize<f64> = LogicalSize::new(960.0, 640.0);
 
-/// The smallest window: 960 x 600 points at `scale`, in logical pixels, so the panels always
+/// The smallest window: 960 x 640 points at `scale`, in logical pixels, so the panels always
 /// get at least `MIN_WINDOW` points.
 fn min_window_size(scale: UiScale) -> LogicalSize<f64> {
     let factor = f64::from(scale.percent()) / 100.0;
