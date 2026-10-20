@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use glam::{DQuat, DVec2, DVec3};
 
 use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment};
-use crate::ids::{CurveId, EdgeId, FaceId, VertexId};
+use crate::ids::{CurveId, EdgeId, FaceId, MaterialId, VertexId};
 use crate::model::{ChangeSet, Model, Op};
 
 /// Why a sweep cannot be made.
@@ -41,6 +41,9 @@ pub struct Sweep {
     pub caps: bool,
 }
 
+/// The least length a swept side, or a section's side or width, may have.
+pub const MIN_LENGTH: f64 = 10.0 * LENGTH_TOL;
+
 /// Two path directions summing to less than this turn straight back.
 const U_TURN: f64 = 1e-6;
 
@@ -54,9 +57,11 @@ const U_TURN: f64 = 1e-6;
 /// square to the first and last segments. A closed path's frame that does not come back to
 /// itself is twisted back evenly over the segments.
 ///
-/// `Folds` when a profile point would not move at least `LENGTH_TOL` forward along a segment
+/// `Folds` when a profile point would not move at least `MIN_LENGTH` forward along a segment
 /// between its two sections; `Degenerate` when the path turns straight back, has too few
-/// points or a zero-length segment, or a section collapses (the profile lies along the path).
+/// points or a zero-length segment, or a section collapses: two neighbouring points closer than
+/// `MIN_LENGTH`, or a loop narrower than that across (the profile lies along the path, or
+/// nearly).
 pub fn sweep(
     profile: &[Vec<DVec3>],
     profile_normal: DVec3,
@@ -154,8 +159,10 @@ pub fn sweep(
             .chain(std::iter::once(section(n - 1, n - 2, dirs[n - 2])))
             .collect()
     };
-    let collapsed =
-        |l: &Vec<DVec3>| (0..l.len()).any(|j| l[j].distance(l[(j + 1) % l.len()]) < LENGTH_TOL);
+    let collapsed = |l: &Vec<DVec3>| {
+        (0..l.len()).any(|j| l[j].distance(l[(j + 1) % l.len()]) < MIN_LENGTH)
+            || narrowest(l) < MIN_LENGTH
+    };
     if sections.iter().flatten().any(collapsed) {
         return Err(SweepError::Degenerate);
     }
@@ -163,7 +170,7 @@ pub fn sweep(
         for (a, b) in sections[k].iter().zip(&sections[k + 1]) {
             if a.iter()
                 .zip(b)
-                .any(|(p, q)| (*q - *p).dot(dirs[k]) < LENGTH_TOL)
+                .any(|(p, q)| (*q - *p).dot(dirs[k]) < MIN_LENGTH)
             {
                 return Err(SweepError::Folds);
             }
@@ -190,6 +197,8 @@ pub struct FollowMe {
     side_curves: Vec<Vec<Option<(CurveId, bool)>>>,
     /// 1 when the profile's normal points along the path's first segment, -1 against it.
     turn: f64,
+    /// The profile face's front and back materials, which the caps take.
+    paint: [Option<MaterialId>; 2],
 }
 
 impl Model {
@@ -285,15 +294,16 @@ impl Model {
             profile,
             side_curves,
             turn,
+            paint: f.paint(),
         })
     }
 
     /// Draws a sweep worked out by `plan_follow_me`, as one ChangeSet: for every profile side
     /// and path segment the face between the side's two sections (two triangles with a soft
     /// diagonal where a closed path's twist bends it), and for an open path the two end caps
-    /// (with the profile's holes). Everything is drawn with the rules of `add_edge`, so it
-    /// merges with what it touches; a region the sweep closes off by itself (the hole of a ring)
-    /// gets no face. The profile face is removed; its edges stay only where they bound faces.
+    /// (with the profile's holes, and its front and back materials). Everything is drawn with
+    /// the rules of `add_edge`, so it merges with what it touches; a region the sweep closes off
+    /// by itself (the hole of a ring) gets no face. The profile face is removed; its edges stay only where they bound faces.
     /// New faces point out of the swept solid. An edge between the faces of two profile sides on
     /// one curve that is not a polygon is soft, and so is an edge between the faces of two path
     /// segments on one such curve.
@@ -407,6 +417,7 @@ impl Model {
                 match caps.iter().find(|(c, _)| *c == i) {
                     Some((_, out)) if !loops[1..].iter().any(|h| point_in_polygon(q, h)) => {
                         self.orient(f, *out);
+                        self.set_paint(f, plan.paint);
                     }
                     // A hole of a cap, or a section inside the sweep, stays open.
                     _ => {
@@ -498,6 +509,24 @@ impl Model {
             }
         }
     }
+}
+
+/// The loop's smallest width in its plane, measured square to each of its sides (0 when the
+/// loop has no area).
+fn narrowest(l: &[DVec3]) -> f64 {
+    let Some(normal) = crate::geom::vector_area(l).try_normalize() else {
+        return 0.0;
+    };
+    sides(l)
+        .filter_map(|(a, b)| normal.cross(b - a).try_normalize())
+        .map(|across| {
+            let (lo, hi) = l.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+                let t = p.dot(across);
+                (lo.min(t), hi.max(t))
+            });
+            hi - lo
+        })
+        .fold(f64::MAX, f64::min)
 }
 
 /// The sides of the closed loop through `l`.
@@ -630,6 +659,26 @@ mod tests {
         assert_eq!(
             sweep(&square(), DVec3::X, &path, false),
             Err(SweepError::Folds)
+        );
+    }
+
+    #[test]
+    fn a_profile_tilted_a_hair_off_the_path_is_degenerate_not_a_sliver() {
+        // A diamond standing 2e-6 radians off the plane holding the path: its section square
+        // to the path has corners half a metre apart but is only 2e-6 m wide.
+        let w = p(1.0, 2e-6, 0.0);
+        let tilted = vec![
+            [(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)]
+                .iter()
+                .map(|(a, b)| w * *a + DVec3::Z * *b)
+                .collect::<Vec<_>>(),
+        ];
+        let normal = crate::geom::vector_area(&tilted[0]).normalize();
+        assert!(normal.dot(DVec3::X).abs() > 1e-9);
+        let path = [p(0.0, 0.0, 0.0), p(2.0, 0.0, 0.0)];
+        assert_eq!(
+            sweep(&tilted, normal, &path, false),
+            Err(SweepError::Degenerate)
         );
     }
 

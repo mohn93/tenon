@@ -68,7 +68,7 @@ impl Document {
             )
             .with_ids(shared));
         }
-        let least = 10.0 * kernel::geom::LENGTH_TOL;
+        let least = kernel::sweep::MIN_LENGTH;
         let short: Vec<EntityId> = edges
             .iter()
             .filter(|e| {
@@ -117,13 +117,5 @@ impl Document {
 
 /// The refusal of a sweep the kernel cannot make.
 fn sweep_error(e: SweepError) -> CommandError {
-    let why = match e {
-        SweepError::Folds => {
-            "the profile is too big for a turn of the path: its sides would fold over there"
-        }
-        SweepError::Degenerate => {
-            "the path turns straight back, or the profile lies along the path"
-        }
-    };
-    CommandError::new(ErrorKind::InvalidInput, why)
+    CommandError::new(ErrorKind::InvalidInput, e.to_string())
 }

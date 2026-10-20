@@ -353,3 +353,112 @@ fn a_batch_can_refer_to_the_face_and_the_path_it_drew() {
     assert_eq!(d.model().faces().count(), 10);
     assert!(closed_solid(d.model()));
 }
+
+fn material(d: &mut Document, color: [u8; 3]) -> String {
+    let out = run(d, json!({"type": "add_material", "color": color})).unwrap();
+    out["changes"]["materials"][0].as_str().unwrap().to_string()
+}
+
+#[test]
+fn the_caps_keep_the_profile_s_paint() {
+    let mut d = doc();
+    let path = [
+        edge(&mut d, [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]),
+        edge(&mut d, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]),
+    ];
+    let face = rectangle(&mut d, [0.0, 0.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 0.0]);
+    let (red, blue) = (material(&mut d, [200, 0, 0]), material(&mut d, [0, 0, 200]));
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": [face], "material": red, "side": "front"}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "paint", "ids": [face], "material": blue, "side": "back"}),
+    )
+    .unwrap();
+    let id = |m: &str| serde_json::from_value::<kernel::MaterialId>(json!(m)).unwrap();
+    let (red, blue) = (id(&red), id(&blue));
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": path}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let m = d.model();
+    let painted: Vec<_> = m.faces().filter(|(_, f)| f.front.is_some()).collect();
+    // The two caps, each square to its end of the path, the sides unpainted.
+    assert_eq!(painted.len(), 2);
+    for (_, f) in painted {
+        assert_eq!((f.front, f.back), (Some(red), Some(blue)));
+        assert!(f.normal.x.abs() > 0.99 || f.normal.y.abs() > 0.99);
+    }
+}
+
+#[test]
+fn a_profile_with_a_hole_gives_a_hollow_solid_with_open_caps() {
+    let mut d = doc();
+    let path = [
+        edge(&mut d, [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]),
+        edge(&mut d, [2.0, 0.0, 0.0], [2.0, 2.0, 0.0]),
+    ];
+    let face = rectangle(&mut d, [0.0, 0.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 0.0]);
+    let inner = rectangle(
+        &mut d,
+        [0.0, 0.25, 0.25],
+        [0.0, 0.75, 0.75],
+        [1.0, 0.0, 0.0],
+    );
+    run(&mut d, json!({"type": "erase", "ids": [inner]})).unwrap();
+    assert!(exists(&d, &face));
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": path}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    let m = d.model();
+    // Four outer and four inner sides on each of two segments, and two caps.
+    assert_eq!(m.faces().count(), 18);
+    let holed: Vec<_> = m.faces().filter(|(_, f)| f.holes.len() == 1).collect();
+    assert_eq!(holed.len(), 2, "both caps keep the hole");
+    assert!(closed_solid(m));
+    // The L of the outer square (width 1 along a centre line of 3) less that of the hole
+    // (width 0.5 along 3), each as high as it is wide.
+    let v = volume(m, &[]);
+    assert!((v - (3.0 - 0.75)).abs() < 1e-9, "{v}");
+}
+
+#[test]
+fn an_edge_the_profile_shares_with_a_neighbouring_face_survives() {
+    let mut d = doc();
+    // Ground behind the profile, its side along the profile's bottom edge.
+    let ground = rectangle(&mut d, [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+    let path = [edge(&mut d, [0.0, 0.0, 0.0], [2.0, 0.0, 0.0])];
+    let face = rectangle(&mut d, [0.0, 0.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 0.0]);
+    let at = |d: &Document, p: DVec3| {
+        d.model()
+            .vertices()
+            .find(|(_, v)| v.pos.distance(p) < 1e-9)
+            .unwrap()
+            .0
+    };
+    let shared = d
+        .model()
+        .edge_between(at(&d, DVec3::ZERO), at(&d, DVec3::Y))
+        .unwrap();
+    run(
+        &mut d,
+        json!({"type": "follow_me", "face": face, "path": path}),
+    )
+    .unwrap();
+    d.scene().validate().unwrap();
+    assert!(!exists(&d, &face));
+    assert!(exists(&d, &ground));
+    let m = d.model();
+    assert!(m.edge(shared).is_some(), "the shared edge survives");
+    // The ground, four sides and two caps.
+    assert_eq!(m.faces().count(), 7);
+    assert!(volume(m, &[]) > 0.0);
+}
