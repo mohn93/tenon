@@ -338,3 +338,59 @@ fn bad_offsets_are_refused_and_change_nothing() {
     .unwrap_err();
     assert_eq!(kind, ErrorKind::NotFound);
 }
+
+#[test]
+fn an_arc_offsets_into_an_arc_around_the_same_center() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_arc", "center": [0, 0, 0], "start": [1, 0, 0], "angle": 90, "segments": 12}),
+    )
+    .unwrap();
+    let arc = created(&out, 'e');
+    assert_eq!(arc.len(), 12);
+    let out = run(
+        &mut d,
+        json!({"type": "offset", "ids": arc, "distance": 0.1, "toward": [0.2, 0.2, 0]}),
+    )
+    .unwrap();
+    let edges = created(&out, 'e');
+    assert_eq!(edges.len(), 12, "{out}");
+    let c = ask(&d, json!({"type": "curve", "id": edges[0]}));
+    assert_eq!(c["kind"], "arc", "{c}");
+    assert_eq!(c["segments"], 12, "{c}");
+    // Corners and ends move radially by 0.1 / cos(half of a 7.5 degree step).
+    let r = 1.0 - 0.1 / (std::f64::consts::PI / 48.0).cos();
+    assert!((c["radius"].as_f64().unwrap() - r).abs() < 1e-9, "{c}");
+    let center: [f64; 3] = serde_json::from_value(c["center"].clone()).unwrap();
+    assert!(center.iter().all(|x| x.abs() < 1e-9), "{c}");
+    assert!((c["angle"].as_f64().unwrap() - 90.0).abs() < 1e-6, "{c}");
+}
+
+#[test]
+fn a_face_offset_outward_keeps_its_holes() {
+    let mut d = doc();
+    rectangle(&mut d, [0.0, 0.0, 0.0], [4.0, 4.0, 0.0]);
+    rectangle(&mut d, [1.5, 1.5, 0.0], [2.5, 2.5, 0.0]);
+    // Open the hole.
+    let inner = faces(&d)
+        .into_iter()
+        .find(|f| f["holes"].as_array().unwrap().is_empty())
+        .unwrap();
+    run(&mut d, json!({"type": "erase", "ids": [inner["id"]]})).unwrap();
+    let holed = faces(&d)[0].clone();
+    let out = run(
+        &mut d,
+        json!({"type": "offset", "ids": [holed["id"]], "distance": -0.25}),
+    )
+    .unwrap();
+    assert_eq!(created(&out, 'e').len(), 4, "{out}");
+    // The band 4.5^2 - 4^2 and the face as it was, its hole still open.
+    assert!(close_all(&areas(&d), &[4.25, 15.0]), "{:?}", areas(&d));
+    let after = faces(&d)
+        .into_iter()
+        .find(|f| (f["area"].as_f64().unwrap() - 15.0).abs() < 1e-9)
+        .unwrap();
+    assert_eq!(after["id"], holed["id"]);
+    assert_eq!(after["holes"], holed["holes"]);
+}

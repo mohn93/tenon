@@ -1099,6 +1099,7 @@ impl Document {
             .iter()
             .map(|l| l.iter().map(|v| m.position(*v).unwrap()).collect())
             .collect();
+        // Outward only the outer loop is offset; the holes stay as they are.
         let new = offset::offset_face(&rings, f.normal, distance).map_err(|_| too_far())?;
         Ok(loops
             .iter()
@@ -1152,16 +1153,21 @@ impl Document {
         let Some(side) = offset::side_of(&points, closed, normal, toward) else {
             return Err(invalid("toward must lie to one side of the edges"));
         };
-        let new = if closed {
-            offset::offset_loop(&points, normal, side * distance)
-        } else {
-            offset::offset_chain(&points, normal, side * distance)
+        let curve = one_curve(m, edges);
+        // An arc's ends move along its radii, so its offset is an arc too.
+        let center = curve
+            .and_then(|_| m.curve_of(edges[0])?.circle)
+            .map(|c| c.center);
+        let new = match (closed, center) {
+            (true, _) => offset::offset_loop(&points, normal, side * distance),
+            (false, Some(c)) => offset::offset_arc(&points, normal, side * distance, c),
+            (false, None) => offset::offset_chain(&points, normal, side * distance),
         }
         .map_err(|_| too_far())?;
         Ok(vec![Polyline {
             points: new,
             closed,
-            curve: one_curve(m, edges),
+            curve,
         }])
     }
 

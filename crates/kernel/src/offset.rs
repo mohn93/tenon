@@ -139,7 +139,7 @@ pub fn offset_loop(
     normal: DVec3,
     distance: f64,
 ) -> Result<Vec<DVec3>, OffsetError> {
-    offset_line(points, normal, distance, true)
+    offset_line(points, normal, distance, true, None)
 }
 
 /// Offsets the open chain through `points` by `distance` in its plane, to the left of the
@@ -150,21 +150,35 @@ pub fn offset_chain(
     normal: DVec3,
     distance: f64,
 ) -> Result<Vec<DVec3>, OffsetError> {
-    offset_line(points, normal, distance, false)
+    offset_line(points, normal, distance, false, None)
 }
 
-/// Offsets every loop of a face (`rings[0]` its outer loop, counter-clockwise around `normal`,
-/// the rest its holes, clockwise) by `distance`: positive shrinks the outer loop and grows the
-/// holes. The new loops must not touch one another or the face's own loops, and must nest as
-/// the face's do: inward, every new loop lies inside the face (inside its outer loop, outside
-/// its holes); outward, the face lies inside the new outer loop and each new hole inside its
-/// hole. Else `Collapsed`.
+/// Offsets an open chain whose corners lie on a circle around `center` (an arc) as
+/// `offset_chain` does, except that each end moves along the line from `center` through it, to
+/// where its side's offset line meets that line, so the result lies on a circle around `center`
+/// too.
+pub fn offset_arc(
+    points: &[DVec3],
+    normal: DVec3,
+    distance: f64,
+    center: DVec3,
+) -> Result<Vec<DVec3>, OffsetError> {
+    offset_line(points, normal, distance, false, Some(center))
+}
+
+/// Offsets a face's loops (`rings[0]` its outer loop, counter-clockwise around `normal`, the
+/// rest its holes, clockwise) by `distance`. Inward (positive) every loop is offset: the outer
+/// loop shrinks and the holes grow, and every new loop must lie inside the face (inside its
+/// outer loop, outside its holes) without touching another loop. Outward (negative) only the
+/// outer loop is offset (the holes stay as they are) and the face must lie inside it. Else
+/// `Collapsed`. Returns the new loops: all of them inward, the outer one only outward.
 pub fn offset_face(
     rings: &[Vec<DVec3>],
     normal: DVec3,
     distance: f64,
 ) -> Result<Vec<Vec<DVec3>>, OffsetError> {
-    let new: Vec<Vec<DVec3>> = rings
+    let offset: &[Vec<DVec3>] = if distance > 0.0 { rings } else { &rings[..1] };
+    let new: Vec<Vec<DVec3>> = offset
         .iter()
         .map(|r| offset_loop(r, normal, distance))
         .collect::<Result<_, _>>()?;
@@ -183,26 +197,22 @@ pub fn offset_face(
     }
     // Loops that do not meet nest as one point of theirs does.
     let inside = |a: &[DVec2], b: &[DVec2]| point_in_polygon(a[0], b);
-    let (small, big) = if distance > 0.0 {
-        (&made[0], &old[0])
-    } else {
-        (&old[0], &made[0])
-    };
-    if !inside(small, big) {
+    if distance < 0.0 {
+        return if inside(&old[0], &made[0]) {
+            Ok(new)
+        } else {
+            Err(OffsetError::Collapsed)
+        };
+    }
+    if !inside(&made[0], &old[0]) {
         return Err(OffsetError::Collapsed);
     }
     let holes = old.len() - 1;
     for k in 1..=holes {
-        let (small, big) = if distance > 0.0 {
-            (&old[k], &made[k])
-        } else {
-            (&made[k], &old[k])
-        };
-        if !inside(small, big) || !inside(big, &made[0]) || !inside(big, &old[0]) {
+        if !inside(&old[k], &made[k]) || !inside(&made[k], &made[0]) {
             return Err(OffsetError::Collapsed);
         }
-        let grown = if distance > 0.0 { &made } else { &old };
-        if (1..=holes).any(|j| j != k && inside(&grown[k], &grown[j])) {
+        if (1..=holes).any(|j| j != k && inside(&made[k], &made[j])) {
             return Err(OffsetError::Collapsed);
         }
     }
@@ -214,6 +224,7 @@ fn offset_line(
     normal: DVec3,
     distance: f64,
     closed: bool,
+    center: Option<DVec3>,
 ) -> Result<Vec<DVec3>, OffsetError> {
     let normal = normal.normalize();
     let pts = merged(points.iter().copied(), closed);
@@ -226,13 +237,23 @@ fn offset_line(
         .map(|i| (pts[(i + 1) % n] - pts[i]).normalize())
         .collect();
     let left = |d: DVec3| normal.cross(d);
+    // An open end: square to its side, or along the radius through it for an arc (when the
+    // radius is not along the side).
+    let end = |p: DVec3, d: DVec3| {
+        let l = left(d);
+        let radial = center.and_then(|c| (p - c).try_normalize());
+        match radial {
+            Some(u) if u.dot(l).abs() > 1e-6 => p + u * (distance / u.dot(l)),
+            _ => p + l * distance,
+        }
+    };
     // The new point or points at each corner, in order.
     let corners: Vec<Vec<DVec3>> = (0..n)
         .map(|i| {
             if !closed && i == 0 {
-                vec![pts[0] + left(dirs[0]) * distance]
+                vec![end(pts[0], dirs[0])]
             } else if !closed && i == n - 1 {
-                vec![pts[i] + left(dirs[i - 1]) * distance]
+                vec![end(pts[i], dirs[i - 1])]
             } else {
                 corner(
                     pts[i],
@@ -506,19 +527,25 @@ mod tests {
             &rings[1],
             &[p(1.0, 1.0), p(1.0, 3.0), p(3.0, 3.0), p(3.0, 1.0)],
         );
-        // Outward the hole shrinks.
+        // Outward only the outline moves.
         let rings = offset_face(&[outer.clone(), hole.clone()], DVec3::Z, -0.25).unwrap();
+        assert_eq!(rings.len(), 1);
         same(
-            &rings[1],
-            &[p(1.75, 1.75), p(1.75, 2.25), p(2.25, 2.25), p(2.25, 1.75)],
+            &rings[0],
+            &[
+                p(-0.25, -0.25),
+                p(4.25, -0.25),
+                p(4.25, 4.25),
+                p(-0.25, 4.25),
+            ],
         );
         // The grown hole meets the shrunk outline.
         assert_eq!(
             offset_face(&[outer.clone(), hole.clone()], DVec3::Z, 1.0),
             Err(OffsetError::Collapsed)
         );
-        // The hole shrinks away.
-        assert!(offset_face(&[outer, hole], DVec3::Z, -0.6).is_err());
+        // Outward far is fine: the hole is left alone.
+        assert!(offset_face(&[outer, hole], DVec3::Z, -0.6).is_ok());
     }
 
     #[test]
@@ -543,5 +570,24 @@ mod tests {
         let n = plane_normal(&s).unwrap();
         assert!((n.z.abs() - 1.0).abs() < 1e-12, "{n:?}");
         assert_eq!(plane_normal(&[p(0.0, 0.0), p(1.0, 0.0), p(3.0, 0.0)]), None);
+    }
+
+    #[test]
+    fn an_arc_offsets_onto_a_circle_also_at_its_ends() {
+        let arc: Vec<DVec3> = (0..=12)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::FRAC_PI_2 / 12.0;
+                p(a.cos(), a.sin())
+            })
+            .collect();
+        let r = 1.0 - 0.1 / (std::f64::consts::PI / 48.0).cos();
+        let out = offset_arc(&arc, DVec3::Z, 0.1, DVec3::ZERO).unwrap();
+        assert_eq!(out.len(), 13);
+        for q in &out {
+            assert!((q.length() - r).abs() < 1e-12, "{q:?}");
+        }
+        // Square ends miss the circle.
+        let plain = offset_chain(&arc, DVec3::Z, 0.1).unwrap();
+        assert!((plain[0].length() - r).abs() > 1e-6);
     }
 }
