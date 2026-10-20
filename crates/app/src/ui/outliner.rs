@@ -123,7 +123,7 @@ pub(super) fn outliner(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
             }
             let mut path = Vec::new();
             for row in &view.outliner.roots {
-                outliner_node(ui, view, row, &mut path, &mut filtering, actions);
+                outliner_node(ui, view, row, &mut path, false, &mut filtering, actions);
             }
             if let Some(f) = &filtering {
                 if f.drawn == 0 {
@@ -237,12 +237,14 @@ fn expand_open_path(ctx: &egui::Context, context: &[EntityId]) {
 /// One node and, when expanded, its children. `path` leads to the node's parent. With a
 /// filter, a node that does not show is skipped, one holding rows that show is drawn expanded
 /// (under its own state, leaving the one kept without a filter), and nothing is drawn past
-/// `MAX_FILTERED_ROWS` rows (the count goes one past it to say so).
+/// `MAX_FILTERED_ROWS` rows (the count goes one past it to say so). A node a hidden tag hides
+/// (its own, or `hidden` for one above it) is greyed.
 fn outliner_node(
     ui: &mut Ui,
     view: &View,
     row: &OutlinerRow,
     path: &mut Vec<EntityId>,
+    hidden: bool,
     filtering: &mut Option<Filtering>,
     actions: &mut Vec<UiAction>,
 ) {
@@ -258,6 +260,7 @@ fn outliner_node(
         opens = f.filter.opens(row);
     }
     let selected = path.as_slice() == view.context && view.selection.contains(&row.id);
+    let hidden = hidden || row.hidden;
     path.push(row.id);
     let open = view.context.starts_with(path);
     let children = view.outliner.children(row.definition);
@@ -268,7 +271,7 @@ fn outliner_node(
             .horizontal(|ui| {
                 // Lined up with the names of nodes that have an expand button.
                 ui.add_space(ui.spacing().indent);
-                outliner_row(ui, row, path, selected, open)
+                outliner_row(ui, row, path, selected, open, hidden)
             })
             .inner;
         actions.extend(clicked);
@@ -282,10 +285,10 @@ fn outliner_node(
         };
         let expanded = state.is_open();
         let (toggle, header, _) = state
-            .show_header(ui, |ui| outliner_row(ui, row, path, selected, open))
+            .show_header(ui, |ui| outliner_row(ui, row, path, selected, open, hidden))
             .body(|ui| {
                 for child in children {
-                    outliner_node(ui, view, child, path, filtering, actions);
+                    outliner_node(ui, view, child, path, hidden, filtering, actions);
                 }
             });
         let verb = if expanded { "Collapse" } else { "Expand" };
@@ -307,10 +310,14 @@ fn outliner_row(
     path: &[EntityId],
     selected: bool,
     open: bool,
+    hidden: bool,
 ) -> Option<UiAction> {
     let mut text = RichText::new(outliner_label(row));
     if open {
         text = text.strong();
+    }
+    if hidden {
+        text = text.weak();
     }
     let response = row_button(ui, selected, text);
     #[cfg(test)]

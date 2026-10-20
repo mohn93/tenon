@@ -4,10 +4,12 @@
 
 use std::collections::BTreeSet;
 
+use glam::DVec3;
+
 use crate::edit::KernelError;
-use crate::ids::{EntityId, TagId};
+use crate::ids::{EntityId, InstanceId, TagId, VertexId};
 use crate::model::{ChangeSet, Model};
-use crate::scene::{MeshId, Scene, SceneChange, Step};
+use crate::scene::{MeshId, Scene, SceneChange, Step, enclose, placed_box};
 
 /// The longest tag name, in characters.
 pub const MAX_TAG_NAME: usize = 256;
@@ -66,7 +68,29 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether an entity on `tag` (None: Untagged), placed through the instances `path` from the
+/// root (empty for the root's own entities), is shown: hidden when its tag is hidden or when
+/// any instance on the path is on a hidden tag, whatever the entity's own tag. A path that
+/// does not resolve shows nothing.
+pub fn is_shown(scene: &Scene, path: &[InstanceId], tag: Option<TagId>) -> bool {
+    scene.tag_shown(tag) && scene.path_shown(path)
+}
+
 impl Model {
+    /// Whether a vertex shows when the tags `hidden` are hidden: when some edge on it is on
+    /// a shown tag (a vertex has no tag of its own; one without edges shows).
+    pub fn vertex_shown(&self, v: VertexId, hidden: &BTreeSet<TagId>) -> bool {
+        if hidden.is_empty() {
+            return true;
+        }
+        let edges = self.edges_at(v);
+        edges.is_empty()
+            || edges
+                .iter()
+                .filter_map(|e| self.edge(*e))
+                .any(|e| e.tag.is_none_or(|t| !hidden.contains(&t)))
+    }
+
     /// Puts edges, faces, instances and guides on `tag` (None: Untagged) as one ChangeSet.
     /// Vertices, unknown ids and entities already on it are skipped.
     pub(crate) fn set_tags(&mut self, ids: &[EntityId], tag: Option<TagId>) -> ChangeSet {
@@ -213,6 +237,59 @@ impl Scene {
             .copied()
             .find(|c| !used.contains(c))
             .unwrap_or(TAG_COLORS[self.tags().count() % TAG_COLORS.len()])
+    }
+
+    /// Whether entities on `tag` (None: Untagged) are shown: Untagged always is, a tag when
+    /// it is visible. An unknown tag shows.
+    pub fn tag_shown(&self, tag: Option<TagId>) -> bool {
+        tag.and_then(|t| self.tag(t)).is_none_or(|t| t.visible)
+    }
+
+    /// The tags that are hidden.
+    pub fn hidden_tags(&self) -> BTreeSet<TagId> {
+        self.tags()
+            .filter(|(_, t)| !t.visible)
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Whether every instance on `path` (from the root, each in the mesh of the one before)
+    /// is on a shown tag. False when the path does not resolve.
+    pub fn path_shown(&self, path: &[InstanceId]) -> bool {
+        let mut mesh = MeshId::Root;
+        for id in path {
+            let Some(i) = self.mesh(mesh).and_then(|m| m.instance(*id)) else {
+                return false;
+            };
+            if !self.tag_shown(i.tag) {
+                return false;
+            }
+            mesh = MeshId::Definition(i.definition);
+        }
+        true
+    }
+
+    /// The box around what a mesh shows (see [`is_shown`]), in the mesh's coordinates: the
+    /// ends of its shown edges, the corners of its shown faces and the shown parts of its
+    /// shown instances. None when it shows nothing. With no tag hidden, `bounds`.
+    pub fn shown_bounds(&self, mesh: MeshId) -> Option<[DVec3; 2]> {
+        if self.tags().all(|(_, t)| t.visible) {
+            return self.bounds(mesh);
+        }
+        let m = self.mesh(mesh)?;
+        let mut points: Vec<DVec3> = Vec::new();
+        for (_, e) in m.edges().filter(|(_, e)| self.tag_shown(e.tag)) {
+            points.extend(e.v.iter().filter_map(|v| m.position(*v)));
+        }
+        for (_, f) in m.faces().filter(|(_, f)| self.tag_shown(f.tag)) {
+            points.extend(f.outer.iter().filter_map(|v| m.position(*v)));
+        }
+        for (_, i) in m.instances().filter(|(_, i)| self.tag_shown(i.tag)) {
+            if let Some(b) = self.shown_bounds(MeshId::Definition(i.definition)) {
+                points.extend(placed_box(i.transform, b));
+            }
+        }
+        enclose(&points)
     }
 
     fn check_free_tag_name(&self, name: &str, except: Option<TagId>) -> Result<(), KernelError> {

@@ -181,8 +181,8 @@ pub(crate) fn box_outline(ctx: &ToolContext, id: EntityId) -> Vec<[DVec3; 2]> {
 /// The open context's edges, faces, instances and guides a screen box with corners `a` and
 /// `b` selects, as `camera` (in the open context's coordinates) sees `scenery`: those inside it
 /// entirely, or with `crossing` those touching it (the Select tool's box dragged right, or
-/// left). Entities with a point behind the camera are skipped. Guide lines are never inside a
-/// box; a crossing box selects those crossing it.
+/// left). Entities with a point behind the camera are skipped, and so are those on hidden
+/// tags. Guide lines are never inside a box; a crossing box selects those crossing it.
 pub fn select_box(
     scenery: &Scenery,
     camera: &Camera,
@@ -216,7 +216,7 @@ pub fn select_box(
         }
     };
     let mut ids = Vec::new();
-    for (id, e) in m.edges() {
+    for (id, e) in m.edges().filter(|(_, e)| scenery.shows(e.tag)) {
         if screen(&e.v).is_some_and(|pts| chosen(false, &pts)) {
             ids.push(EntityId::Edge(id));
         }
@@ -234,7 +234,7 @@ pub fn select_box(
     };
     // Instances by their bounding boxes: inside when every corner is, touching when the box's
     // screen rectangle overlaps the selection box.
-    for (id, _) in m.instances() {
+    for (id, _) in m.instances().filter(|(_, i)| scenery.shows(i.tag)) {
         let id = EntityId::Instance(id);
         let Some(corners) = box_corners(scenery, id) else {
             continue;
@@ -258,7 +258,7 @@ pub fn select_box(
             ids.push(id);
         }
     }
-    for (id, g) in m.guides() {
+    for (id, g) in m.guides().filter(|(_, g)| scenery.shows(g.tag())) {
         let hit = match *g {
             Guide::Point { position, .. } => camera.project(position).is_some_and(inside),
             Guide::Line {
@@ -275,7 +275,7 @@ pub fn select_box(
             ids.push(EntityId::Guide(id));
         }
     }
-    for (id, f) in m.faces() {
+    for (id, f) in m.faces().filter(|(_, f)| scenery.shows(f.tag)) {
         let all = face_loops(f).all(|l| screen(l).is_some_and(|pts| !pts.is_empty()));
         let hit = if window {
             all && face_loops(f).all(|l| screen(l).is_some_and(|pts| chosen(true, &pts)))

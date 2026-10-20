@@ -494,8 +494,8 @@ pub enum Command {
         about: Option<[f64; 3]>,
     },
     /// Keep the view direction and fit the whole model (every vertex and placed instance, in
-    /// root coordinates, whatever instance is open) in the view. Guides do not count. With
-    /// nothing to fit, the camera stays.
+    /// root coordinates, whatever instance is open) in the view. Guides do not count, nor does
+    /// what hidden tags hide. With nothing to fit, the camera stays.
     ZoomExtents {},
     /// Look at the target from a standard direction, from the same distance.
     StandardView { view: StandardView },
@@ -507,6 +507,10 @@ pub enum Command {
     /// setting like the camera's: saved with the model, but not an undo step and not a change
     /// to the revision.
     SetLighting { mode: Lighting },
+    /// Draw faces in their tags' colors (`on`), or by their materials. A face on no tag keeps
+    /// its material's color (textures are not shown while on); one inside a tagged group or
+    /// component takes the nearest such instance's tag. A view setting like `set_lighting`.
+    SetColorByTag { on: bool },
 }
 
 impl Command {
@@ -529,7 +533,8 @@ impl Command {
             ))
     }
 
-    /// True for commands that only change the view: move the camera or set the lighting.
+    /// True for commands that only change the view: move the camera, set the lighting or
+    /// color by tag.
     pub fn is_camera(&self) -> bool {
         matches!(
             self,
@@ -541,6 +546,7 @@ impl Command {
                 | Command::StandardView { .. }
                 | Command::SetProjection { .. }
                 | Command::SetLighting { .. }
+                | Command::SetColorByTag { .. }
         )
     }
 }

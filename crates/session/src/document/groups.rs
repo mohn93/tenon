@@ -200,7 +200,7 @@ impl Document {
     /// many levels below the root's instances it goes (None: all).
     pub fn outliner(&self, depth: Option<u32>) -> Vec<OutlinerNode> {
         let table = self.outliner_rows();
-        outliner_nodes(&table, &table.roots, &mut Vec::new(), depth, self)
+        outliner_nodes(&table, &table.roots, &mut Vec::new(), false, depth, self)
     }
 
     /// The outliner tree stored flat: the root's instances and the instances each definition
@@ -217,6 +217,7 @@ impl Document {
                         kind: d.kind,
                         name: d.name.clone(),
                         material: i.material,
+                        hidden: !self.scene.tag_shown(i.tag),
                     }
                 })
                 .collect()
@@ -254,12 +255,14 @@ fn invalid(e: KernelError, ids: &[EntityId]) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, e.to_string()).with_ids(ids.to_vec())
 }
 
-/// The nodes for `rows`, placed along `path` (instance ids from the root), with their marks.
-/// `depth` is how many levels below these nodes to include (None: all).
+/// The nodes for `rows`, placed along `path` (instance ids from the root), with their marks;
+/// `hidden` when a hidden tag hides the instances above them. `depth` is how many levels below
+/// these nodes to include (None: all).
 fn outliner_nodes(
     table: &OutlinerTable,
     rows: &[OutlinerRow],
     path: &mut Vec<InstanceId>,
+    hidden: bool,
     depth: Option<u32>,
     doc: &Document,
 ) -> Vec<OutlinerNode> {
@@ -272,11 +275,15 @@ fn outliner_nodes(
             path.push(id);
             let open = doc.context.starts_with(path);
             let below = table.children(row.definition);
+            let hidden = hidden || row.hidden;
             let (children, truncated) = match depth {
                 Some(0) => (Vec::new(), !below.is_empty()),
                 _ => {
                     let depth = depth.map(|d| d - 1);
-                    (outliner_nodes(table, below, path, depth, doc), false)
+                    (
+                        outliner_nodes(table, below, path, hidden, depth, doc),
+                        false,
+                    )
                 }
             };
             path.pop();
@@ -288,6 +295,7 @@ fn outliner_nodes(
                 material: row.material,
                 open,
                 selected: in_context && doc.selection.contains(&row.id),
+                hidden,
                 children,
                 truncated,
             }

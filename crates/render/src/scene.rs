@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene,
+    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model, Scene, TagId,
     VertexId, back_texture_position,
 };
 
@@ -125,6 +125,23 @@ fn side_look(
     }
 }
 
+/// How a side looks when faces are colored by tag (see `scene_base_with`): opaque in the
+/// tag's color for a face on a tag, else as `material` without its texture.
+fn tag_colored(scene: &Scene, tag: Option<TagId>, material: Look) -> Look {
+    match tag.and_then(|t| scene.tag(t)) {
+        Some(t) => Look {
+            color: t.color.map(|c| f32::from(c) / 255.0),
+            alpha: 1.0,
+            texture: None,
+            emission: 0.0,
+        },
+        None => Look {
+            texture: None,
+            ..material
+        },
+    }
+}
+
 impl Look {
     /// The texture array layer, or -1 without a texture.
     fn layer(&self) -> f32 {
@@ -194,6 +211,8 @@ pub struct ModelGeometry {
 /// instance highlights everything it places. While an instance is open, edges and guides
 /// outside it are faded and its bounding box is outlined. Each face side gets its material's
 /// color, or else that of the nearest painted instance placing it, or else the default.
+/// Faces, edges and guides on hidden tags are left out, and instances on hidden tags with all
+/// they place (see `kernel::is_shown`), but for the instances the open context is in.
 ///
 /// This is `scene_base` with `Spans::flags` applied; the renderer keeps the two apart.
 pub fn scene_geometry(
@@ -395,6 +414,14 @@ fn find<K: Ord + Copy, V>(list: &[(K, V)], id: K) -> Option<&V> {
 /// The scene in root coordinates with the open instance `context` (see `scene_geometry`), with
 /// nothing selected. Each mesh is triangulated once, however often it is placed.
 pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
+    scene_base_with(scene, context, false)
+}
+
+/// `scene_base`, with faces colored by tag when `color_by_tag`: a face on a tag, or else
+/// placed by an instance on one (the nearest), is drawn opaque in that tag's color on both
+/// sides; other faces keep their material's color, without textures. Edges keep their colors,
+/// and lights and shadows stay as the materials make them.
+pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool) -> SceneBase {
     let layers = layers(scene);
     let parts = placed_parts(scene, &layers);
     let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
@@ -404,6 +431,7 @@ pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
         layers: &layers,
         parts: &parts,
         glowing: scene.materials().any(|(_, m)| m.glows()),
+        color_by_tag,
         glows: HashMap::new(),
         path: Vec::new(),
         base: SceneBase {
@@ -412,7 +440,7 @@ pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
             ..SceneBase::default()
         },
     };
-    walk.mesh(MeshId::Root, DAffine3::IDENTITY, None);
+    walk.mesh(MeshId::Root, DAffine3::IDENTITY, None, None);
     let mut base = walk.base;
     if !context.is_empty()
         && let Some((mesh, t)) = scene.resolve(context)
@@ -476,7 +504,7 @@ struct MeshParts {
     faces: Vec<FacePart>,
     /// The ends of the hard edges (soft edges are not drawn).
     ends: Vec<DVec3>,
-    edges: Vec<(EdgeId, Range<usize>)>,
+    edges: Vec<(EdgeId, Option<TagId>, Range<usize>)>,
 }
 
 struct FacePart {
@@ -487,6 +515,7 @@ struct FacePart {
     /// the nearest painted instance placing them.
     front: Option<Look>,
     back: Option<Look>,
+    tag: Option<TagId>,
 }
 
 impl MeshParts {
@@ -519,6 +548,7 @@ impl MeshParts {
                 back: face
                     .back
                     .map(|m| side_look(scene, layers, Some(m), DEFAULT_BACK)),
+                tag: face.tag,
             });
         }
         let hard = model.edges().filter(|(_, e)| !e.soft).count();
@@ -528,7 +558,7 @@ impl MeshParts {
         for (id, edge) in model.edges().filter(|(_, e)| !e.soft) {
             let start = ends.len();
             ends.extend(edge.v.iter().filter_map(|v| model.position(*v)));
-            edges.push((id, start..ends.len()));
+            edges.push((id, edge.tag, start..ends.len()));
         }
         MeshParts {
             corners,
@@ -634,6 +664,8 @@ struct Walk<'a> {
     parts: &'a HashMap<MeshId, MeshParts>,
     /// Whether any material glows; when none does, lights are not looked for.
     glowing: bool,
+    /// Faces are drawn in their tags' colors (see `scene_base_with`).
+    color_by_tag: bool,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
     /// glow for an instance's mesh, one per connected group of glowing faces for the root's.
     glows: HashMap<(MeshId, Option<MaterialId>), Vec<Glow>>,
@@ -644,8 +676,14 @@ struct Walk<'a> {
 
 impl Walk<'_> {
     /// Adds a mesh placed by `t`; `inherited` is the material of the nearest painted instance
-    /// placing it.
-    fn mesh(&mut self, id: MeshId, t: DAffine3, inherited: Option<MaterialId>) {
+    /// placing it and `inherited_tag` the tag of the nearest tagged one.
+    fn mesh(
+        &mut self,
+        id: MeshId,
+        t: DAffine3,
+        inherited: Option<MaterialId>,
+        inherited_tag: Option<TagId>,
+    ) {
         let (Some(model), Some(parts)) = (self.scene.mesh(id), self.parts.get(&id)) else {
             return;
         };
@@ -666,21 +704,36 @@ impl Walk<'_> {
         // Each glowing face's glow, with the face.
         let mut glow: Option<Vec<(Glow, FaceId)>> =
             (self.glowing && !self.glows.contains_key(&glow_key)).then(Vec::new);
+        let scene = self.scene;
+        let color_by_tag = self.color_by_tag;
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
+            if !scene.tag_shown(face.tag) {
+                continue;
+            }
             let start = base.faces.len();
+            // Lights and shadows go by the materials; what is drawn may go by the tag.
             let front = face.front.unwrap_or(front);
             let back = face.back.unwrap_or(back);
+            let (drawn_front, drawn_back) = if color_by_tag {
+                let tag = face.tag.or(inherited_tag);
+                (
+                    tag_colored(scene, tag, front),
+                    tag_colored(scene, tag, back),
+                )
+            } else {
+                (front, back)
+            };
             let corner = |(p, n, uv): (DVec3, DVec3, [f32; 4])| BaseFaceVertex {
                 pos: t.transform_point3(p).as_vec3().to_array(),
                 normal: (normal_map * n).normalize().as_vec3().to_array(),
-                front: front.color,
-                back: back.color,
-                alpha: [front.alpha, back.alpha],
+                front: drawn_front.color,
+                back: drawn_back.color,
+                alpha: [drawn_front.alpha, drawn_back.alpha],
                 uv,
-                layer: [front.layer(), back.layer()],
-                glow: [front.glow(), back.glow()],
+                layer: [drawn_front.layer(), drawn_back.layer()],
+                glow: [drawn_front.glow(), drawn_back.glow()],
             };
             let range = face.corners.clone();
             let (tris, _) = parts.corners[range.clone()].as_chunks::<3>();
@@ -694,7 +747,7 @@ impl Walk<'_> {
                 if glow.is_some() {
                     face_glow.add_triangle([a, b, c], emission, glow_color);
                 }
-                let [ua, ub, uc] = both_uv(&front, &back, uvs);
+                let [ua, ub, uc] = both_uv(&drawn_front, &drawn_back, uvs);
                 let tri = if mirrored {
                     [(a, na, ua), (c, nc, uc), (b, nb, ub)]
                 } else {
@@ -756,7 +809,10 @@ impl Walk<'_> {
             base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
-        for (eid, ends) in &parts.edges {
+        for (eid, tag, ends) in &parts.edges {
+            if !scene.tag_shown(*tag) {
+                continue;
+            }
             let start = base.edges.len();
             base.edges
                 .extend(parts.ends[ends.clone()].iter().map(|p| LineVertex {
@@ -773,6 +829,9 @@ impl Walk<'_> {
             FADED_GUIDE_COLOR
         };
         for (gid, guide) in model.guides() {
+            if !scene.tag_shown(guide.tag()) {
+                continue;
+            }
             let (point, direction) = match guide.transformed(t) {
                 Guide::Line {
                     point, direction, ..
@@ -789,6 +848,11 @@ impl Walk<'_> {
             });
         }
         for (iid, instance) in model.instances() {
+            // A hidden instance hides all it places, but for the one being edited (or holding
+            // it), which stays drawn.
+            if !self.scene.tag_shown(instance.tag) && !self.on_context_path(iid) {
+                continue;
+            }
             let start = (
                 self.base.faces.len(),
                 self.base.edges.len(),
@@ -799,6 +863,7 @@ impl Walk<'_> {
                 MeshId::Definition(instance.definition),
                 t * instance.transform,
                 instance.material.or(inherited),
+                instance.tag.or(inherited_tag),
             );
             self.path.pop();
             if open {
@@ -810,6 +875,14 @@ impl Walk<'_> {
                 self.base.spans.instances.push((iid, placed));
             }
         }
+    }
+
+    /// Whether instance `iid`, placed in the mesh being walked, is on the open context's path.
+    fn on_context_path(&self, iid: InstanceId) -> bool {
+        let depth = self.path.len();
+        self.context.len() > depth
+            && self.context.starts_with(&self.path)
+            && self.context[depth] == iid
     }
 }
 

@@ -41,7 +41,8 @@ pub enum Reach<'a> {
 
 /// Everything `ray` (unit direction, in the open context's coordinates) meets in front of its
 /// origin, nearest first: every face it crosses, whatever lies in front, and every edge (not
-/// soft: soft edges are hidden) and guide passing within `reach`.
+/// soft: soft edges are hidden) and guide passing within `reach`. What hidden tags hide is not
+/// met (see `Scenery`).
 pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
     let mut hits = Vec::new();
     for (k, part) in scenery.parts().enumerate() {
@@ -56,7 +57,7 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
         );
         // Normals go into the open context's coordinates by the inverse transpose.
         let normals = part.back.matrix3.transpose();
-        for (f, t) in faces {
+        for (f, t) in faces.into_iter().filter(|(f, _)| part.shows_face(*f)) {
             let normal = part
                 .model
                 .face(f)

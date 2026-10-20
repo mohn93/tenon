@@ -529,6 +529,7 @@ pub(super) fn table_row(
         kind,
         name: name.into(),
         material: None,
+        hidden: false,
     }
 }
 

@@ -8,7 +8,7 @@ use super::Document;
 use crate::camera::{Camera, Lighting};
 use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
-use crate::file::{self, Access};
+use crate::file::{self, Access, ViewLook};
 use crate::import::{ImportReport, MAX_IMPORT_BYTES};
 use crate::skp_export;
 use crate::sniff::{self, Kind};
@@ -22,10 +22,18 @@ impl Document {
             path,
             &self.scene,
             &self.camera,
-            self.lighting,
+            self.view_look(),
             Access::Private,
         )
         .map_err(|e| file_error(&path.display().to_string(), e))
+    }
+
+    /// The lighting and coloring a file saves with the camera.
+    fn view_look(&self) -> ViewLook {
+        ViewLook {
+            lighting: self.lighting,
+            color_by_tag: self.color_by_tag,
+        }
     }
 
     /// Refuses with `unsaved_changes` when the model changed since it was opened, saved or
@@ -45,6 +53,7 @@ impl Document {
         let camera = Camera::new(self.camera.viewport);
         self.replace(Scene::new(), camera);
         self.lighting = Lighting::Day;
+        self.color_by_tag = false;
         self.path = None;
     }
 
@@ -67,6 +76,7 @@ impl Document {
             .unwrap_or_else(|_| Camera::new(self.camera.viewport));
         self.replace(scene, camera);
         self.lighting = c.lighting;
+        self.color_by_tag = c.color_by_tag;
         self.path = Some(PathBuf::from(path));
         Ok(None)
     }
@@ -86,11 +96,12 @@ impl Document {
         })?;
         let report = fresh.skp_report(&built);
         let mut camera = Camera::new(self.camera.viewport);
-        if let Some([lo, hi]) = fresh.scene.bounds(MeshId::Root) {
+        if let Some([lo, hi]) = fresh.scene.shown_bounds(MeshId::Root) {
             camera.fit(lo, hi);
         }
         self.replace(fresh.scene, camera);
         self.lighting = Lighting::Day;
+        self.color_by_tag = false;
         self.path = None;
         self.imported_from = Some(PathBuf::from(path));
         Ok(report)
@@ -119,7 +130,7 @@ impl Document {
             &target,
             &self.scene,
             &self.camera,
-            self.lighting,
+            self.view_look(),
             Access::Default,
         )
         .map_err(|e| file_error(&target.display().to_string(), e))?;
@@ -186,6 +197,8 @@ impl Document {
         if triangles.is_empty() {
             let message = if skipped_faces > 0 {
                 format!("nothing to export: {skipped_faces} faces could not be triangulated")
+            } else if !self.scene.hidden_tags().is_empty() {
+                "nothing to export: no face is shown (hidden tags hide the rest)".to_string()
             } else {
                 "nothing to export: the model has no faces".to_string()
             };

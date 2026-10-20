@@ -565,3 +565,190 @@ fn follow_me_makes_untagged_geometry_from_a_tagged_profile() {
         assert_eq!(e["tag"], expected, "{e}");
     }
 }
+
+/// Hides a tag.
+fn hide(d: &mut Document, tag: &str) {
+    run(
+        d,
+        json!({"type": "change_tag", "tag": tag, "visible": false}),
+    )
+    .unwrap();
+}
+
+/// Groups `ids` and returns the instance.
+fn group(d: &mut Document, ids: Vec<String>) -> String {
+    let out = run(d, json!({"type": "make_group", "ids": ids})).unwrap();
+    out["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .find(|id| id.starts_with('i'))
+        .unwrap()
+}
+
+fn export(d: &mut Document, name: &str) -> Result<Value, (ErrorKind, String, Vec<String>)> {
+    let path = scratch(name);
+    run(d, json!({"type": "export", "path": path.to_str().unwrap()}))
+}
+
+#[test]
+fn exports_leave_out_what_hidden_tags_hide() {
+    let mut d = doc();
+    // A loose square, and a square grouped inside a group whose inner face is on a shown tag.
+    let (loose, _) = square(&mut d);
+    let (inner, inner_edges) = rectangle(&mut d, [5.0, 0.0], [7.0, 2.0]);
+    let shown = add(&mut d, json!({"name": "Shown"}));
+    let hidden = add(&mut d, json!({"name": "Hidden"}));
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [inner], "tag": shown}),
+    )
+    .unwrap();
+    let mut ids = inner_edges.clone();
+    ids.push(inner);
+    let g = group(&mut d, ids);
+    let triangles = |out: Value| out["export"]["triangles"].as_u64().unwrap();
+    assert_eq!(triangles(export(&mut d, "all.stl").unwrap()), 4);
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [g], "tag": hidden}),
+    )
+    .unwrap();
+    hide(&mut d, &hidden);
+    for name in ["shown.obj", "shown.stl", "shown.glb", "shown.gltf"] {
+        assert_eq!(triangles(export(&mut d, name).unwrap()), 2, "{name}");
+    }
+    let path = scratch("shown-again.obj");
+    run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let obj = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 2);
+    // A face on a hidden tag goes too; with nothing shown there is nothing to export.
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [loose], "tag": hidden}),
+    )
+    .unwrap();
+    let e = export(&mut d, "none.stl").unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("hidden"), "{}", e.1);
+}
+
+#[test]
+fn zoom_extents_fits_only_what_is_shown() {
+    let mut d = doc();
+    square(&mut d);
+    let (far, far_edges) = rectangle(&mut d, [100.0, 0.0], [102.0, 2.0]);
+    let away = add(&mut d, json!({"name": "Away"}));
+    let mut ids = far_edges;
+    ids.push(far);
+    run(&mut d, json!({"type": "set_tag", "ids": ids, "tag": away})).unwrap();
+    let target = |d: &Document| ask(d, json!({"type": "camera"}))["target"].clone();
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    assert_eq!(target(&d)[0], json!(51.0), "both squares");
+    hide(&mut d, &away);
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    assert_eq!(target(&d)[0], json!(1.0), "the shown square only");
+    // Everything hidden: as for an empty model, the camera stays.
+    let rest: Vec<String> = ask(&d, json!({"type": "entities", "kinds": ["edge", "face"]}))
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(Value::as_array)
+        .flatten()
+        .map(|e| e["id"].as_str().unwrap().to_string())
+        .collect();
+    run(&mut d, json!({"type": "set_tag", "ids": rest, "tag": away})).unwrap();
+    let before = ask(&d, json!({"type": "camera"}));
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"})), before);
+}
+
+#[test]
+fn color_by_tag_is_a_view_setting_saved_with_the_camera() {
+    let mut d = doc();
+    square(&mut d);
+    let camera = |d: &Document| ask(d, json!({"type": "camera"}));
+    assert_eq!(camera(&d)["color_by_tag"], false);
+    let revision = d.revision();
+    run(&mut d, json!({"type": "set_color_by_tag", "on": true})).unwrap();
+    assert_eq!(camera(&d)["color_by_tag"], true);
+    assert_eq!(d.revision(), revision, "not an edit");
+    assert_eq!(history(&d)["undo"].as_array().unwrap().len(), 1);
+    // A failed atomic batch puts it back.
+    let batch: Vec<Command> = vec![
+        serde_json::from_value(json!({"type": "set_color_by_tag", "on": false})).unwrap(),
+        serde_json::from_value(json!({"type": "delete_tag", "tag": "t999"})).unwrap(),
+    ];
+    assert!(d.execute_batch(batch, true).is_err());
+    assert_eq!(camera(&d)["color_by_tag"], true);
+
+    // Saved with the camera, at the tags' schema even without a tag; opened back.
+    let path = scratch("color-by-tag.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let document = stored(&path);
+    assert_eq!(document["schema_version"], 10);
+    assert_eq!(document["camera"]["color_by_tag"], true);
+    let mut opened = doc();
+    run(
+        &mut opened,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(camera(&opened)["color_by_tag"], true);
+    run(&mut opened, json!({"type": "new", "discard": true})).unwrap();
+    assert_eq!(camera(&opened)["color_by_tag"], false);
+
+    // Off, nothing is written.
+    run(&mut d, json!({"type": "set_color_by_tag", "on": false})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap(), "overwrite": true}),
+    )
+    .unwrap();
+    assert!(!stored(&path).to_string().contains("color_by_tag"));
+}
+
+#[test]
+fn the_outliner_marks_what_hidden_tags_hide() {
+    let mut d = doc();
+    let (f, e) = square(&mut d);
+    let mut ids = e;
+    ids.push(f);
+    let inner = group(&mut d, ids);
+    let outer = group(&mut d, vec![inner.clone()]);
+    let hidden = add(&mut d, json!({"name": "Hidden"}));
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [outer], "tag": hidden}),
+    )
+    .unwrap();
+    let tree = |d: &Document| ask(d, json!({"type": "outliner"}))["instances"].clone();
+    assert!(tree(&d)[0].get("hidden").is_none());
+    hide(&mut d, &hidden);
+    let t = tree(&d);
+    assert_eq!(t[0]["id"], json!(outer));
+    assert_eq!(t[0]["hidden"], true);
+    assert_eq!(t[0]["children"][0]["id"], json!(inner));
+    assert_eq!(
+        t[0]["children"][0]["hidden"], true,
+        "hidden by the group above"
+    );
+    // Hiding does not change the selection.
+    run(&mut d, json!({"type": "select", "ids": [outer]})).unwrap();
+    run(
+        &mut d,
+        json!({"type": "change_tag", "tag": hidden, "visible": true}),
+    )
+    .unwrap();
+    hide(&mut d, &hidden);
+    assert_eq!(ask(&d, json!({"type": "selection"}))["ids"], json!([outer]));
+}

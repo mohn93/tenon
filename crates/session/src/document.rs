@@ -60,6 +60,8 @@ pub struct Document {
     pub camera: Camera,
     /// How the view is lit; saved with the camera.
     pub lighting: Lighting,
+    /// Faces are drawn in their tags' colors; saved with the camera.
+    pub color_by_tag: bool,
     selection: BTreeSet<EntityId>,
     undo: Vec<Step>,
     redo: Vec<Step>,
@@ -92,6 +94,7 @@ impl Document {
             context: Vec::new(),
             camera: Camera::new(viewport),
             lighting: Lighting::Day,
+            color_by_tag: false,
             selection: BTreeSet::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -287,6 +290,10 @@ impl Document {
             }
             Command::SetLighting { mode } => {
                 self.lighting = mode;
+                Ok(Outcome::default())
+            }
+            Command::SetColorByTag { on } => {
+                self.color_by_tag = on;
                 Ok(Outcome::default())
             }
             Command::OpenInstance { id } => {
@@ -608,6 +615,7 @@ impl Document {
             | Command::StandardView { .. }
             | Command::SetProjection { .. }
             | Command::SetLighting { .. }
+            | Command::SetColorByTag { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
             | Command::CloseInstance {}
@@ -657,6 +665,7 @@ impl Document {
 
         let camera_before = self.camera.clone();
         let lighting_before = self.lighting;
+        let color_by_tag_before = self.color_by_tag;
         let selection_before = self.selection.clone();
         let context_before = self.context.clone();
         let mut applied: Vec<SceneChange> = Vec::new();
@@ -705,6 +714,7 @@ impl Document {
                     }
                     self.camera = camera_before;
                     self.lighting = lighting_before;
+                    self.color_by_tag = color_by_tag_before;
                     self.selection = selection_before;
                     self.context = context_before;
                     return Err(BatchError {
@@ -1547,6 +1557,7 @@ impl Document {
                 projection: self.camera.projection,
                 view_height: self.camera.view_height(),
                 lighting: self.lighting,
+                color_by_tag: self.color_by_tag,
             },
             Query::Stats {} => QueryResult::Stats {
                 vertices: m.vertices().count(),

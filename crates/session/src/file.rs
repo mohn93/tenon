@@ -18,11 +18,13 @@ use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when the model has a tag.
+/// The newest schema version this build reads, and the one it writes when the model has a tag
+/// or the view colors faces by tag.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
-/// and version 10 tags; older files still open (untagged before version 10).
+/// and version 10 tags and coloring by tag; older files still open (untagged before version
+/// 10).
 pub const SCHEMA_VERSION: u32 = 10;
 /// The version written when a face has a texture position but the model has no tag.
 pub const TEXTURE_POSITION_SCHEMA_VERSION: u32 = 9;
@@ -54,7 +56,8 @@ struct Stored {
 
 /// The saved view. Files before version 4 have no `up` or `projection`: their views are
 /// never vertical, and they are perspective. `lighting` is written only at night; files before
-/// version 8 are lit by day.
+/// version 8 are lit by day. `color_by_tag` is written only when on; files before version 10
+/// color by material.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoredCamera {
@@ -67,21 +70,35 @@ pub(crate) struct StoredCamera {
     pub projection: Projection,
     #[serde(default, skip_serializing_if = "is_day")]
     pub lighting: Lighting,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub color_by_tag: bool,
 }
 
 fn is_day(lighting: &Lighting) -> bool {
     *lighting == Lighting::Day
 }
 
-/// Writes the model, camera and lighting to `path`, replacing it only once the whole file is
-/// written. Fails when the model has given out ids past [`MAX_ID`], which no file can hold.
+/// How the view looks, saved with the camera.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ViewLook {
+    pub lighting: Lighting,
+    pub color_by_tag: bool,
+}
+
+/// Writes the model, camera, lighting and coloring to `path`, replacing it only once the whole
+/// file is written. Fails when the model has given out ids past [`MAX_ID`], which no file can
+/// hold.
 pub(crate) fn write(
     path: &Path,
     scene: &Scene,
     camera: &Camera,
-    lighting: Lighting,
+    look: ViewLook,
     access: Access,
 ) -> Result<(), String> {
+    let ViewLook {
+        lighting,
+        color_by_tag,
+    } = look;
     let mut model = scene.to_data();
     // Materials sharing an image share its entry, so the file reads back within the texture
     // pixel budget, which counts each entry once.
@@ -107,7 +124,7 @@ pub(crate) fn write(
         .chain(model.definitions.iter().map(|d| &d.mesh))
         .any(|m| m.faces.iter().any(|f| f.texture_position.is_some()));
     // An entity on a tag needs the tag, so tags alone decide.
-    let tagged = !model.tags.is_empty();
+    let tagged = !model.tags.is_empty() || color_by_tag;
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -144,6 +161,7 @@ pub(crate) fn write(
             up: Some(camera.up.to_array()),
             projection: camera.projection,
             lighting,
+            color_by_tag,
         },
         model,
     };

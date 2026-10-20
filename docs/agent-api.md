@@ -82,7 +82,7 @@ Queries:
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
 | `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
-| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`; see Camera below |
+| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance and guide ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
@@ -103,7 +103,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_material`,
 `change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `position_texture`, `soften_edges`, `soften_by_angle`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
-`set_lighting`, `new`, `open`, `save`, `export`, `import`.
+`set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component), `g9` (guide line or guide point). Definitions are `d5`, materials `m6`, tags `t7`. Ids are unique across the whole model, including inside
@@ -498,6 +498,27 @@ edges push/pull and follow_me make (cap, sides, end caps) are Untagged whatever 
 is on, which keeps its own tag. A copy or explode drawn over coincident existing edges puts
 them on the incoming edges' tag (when those have one), as drawn geometry takes the copy's paint.
 
+What a hidden tag is on is hidden: an edge, face or guide on a hidden tag, and a group or
+component on a hidden tag with everything inside it, whatever tags its contents are on (content
+inside a shown instance is hidden by its own tag). A vertex is hidden when every edge on it is.
+Hidden entities are not drawn (nor in `render_view`), not met by `pick`, not selected by a
+`select` box, not snapped to by `infer` or the tools, and do not hide what is behind them;
+`zoom_extents` leaves them out (with everything hidden it does nothing, as for an empty model),
+and so do OBJ, STL and glTF exports. They are still there for everything else: `entities`,
+`entity`, `stats` and the `outliner` (whose nodes say `"hidden": true`) list them, `select` with
+`all` takes them, and commands given their ids act on them. The instances the open context is in stay shown while open, whatever their tags.
+Hiding a tag does not change the selection: selected entities it hides stay selected, just not
+drawn (as in SketchUp).
+
+`{"type": "set_color_by_tag", "on": true}` draws faces in their tags' colors (both sides,
+opaque, without textures): a face on a tag takes that tag's color, and a face on none placed by
+a tagged group or component takes the nearest such instance's tag's; other faces keep their
+material's color (without its texture). Edges keep their colors, and glowing materials still
+light the scene. `"on": false` goes back to materials. Like `set_lighting` it is a view
+setting: not an undo step, no change to the revision, saved with the camera, put back by a
+failed atomic batch, and reported as the `camera` query's `color_by_tag`. `new` and opening a
+SketchUp file start with it off.
+
 ### Groups and components
 
 Commands and queries work on the open context: the root at first. `{"type": "open_instance",
@@ -546,6 +567,8 @@ open:
   (`["i55", "i27"]` above, with `i55` open and `i27` selected in it), which is what `open_path` takes.
 - `name` is the definition's name (empty for an unnamed group; the window shows it as `Group`);
   `material` is the instance's own (absent for none).
+- `hidden` (absent when false) marks the nodes a hidden tag hides: their own tag, or that of an
+  instance above them (see Tags). Hidden nodes are still listed.
 - `open` (absent when false) marks the nodes on the open context's path: the open instance and
   the ones it is inside of. `selected` (absent when false) marks selected instances of the open
   context; the same ids under another placement are not marked.
@@ -566,7 +589,7 @@ open:
 
 In the window, the Outliner, in the dock under the Entity Info and Materials tabs, shows this
 tree (components as `<Name>`, groups by name or as `Group`, selected rows highlighted, open ones
-bold, nodes on the open path expanded whenever the open context changes) and sends these same
+bold, hidden ones greyed, nodes on the open path expanded whenever the open context changes) and sends these same
 commands: a click selects the node, with `open_path` first when it is in another context;
 Shift-click, or Cmd-click on macOS (Ctrl-click on Windows and Linux), adds it to or removes it
 from the selection when it is in the open context (`select` with mode `toggle`); a double-click
@@ -593,7 +616,7 @@ fails with `invalid_input` and leaves the camera as it was.
 
 ```
 {"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
- "projection": "perspective", "view_height": 10.11, "lighting": "day"}
+ "projection": "perspective", "view_height": 10.11, "lighting": "day", "color_by_tag": false}
 ```
 
 - `up` is the direction pointing up the screen: always `[0,0,1]`, except in a view straight down
@@ -605,6 +628,7 @@ fails with `invalid_input` and leaves the camera as it was.
   the eye is from the target, and zooming moves the eye. A parallel view sees 100 eye-to-target
   distances in front of and behind the target, including geometry behind the eye.
 - `lighting` is `day` or `night` (see Lights).
+- `color_by_tag` is whether faces are drawn in their tags' colors (`set_color_by_tag`; see Tags).
 
 | Command | Effect |
 |---|---|
@@ -612,10 +636,11 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "orbit", "yaw": 30, "pitch": 10}` | Turns the eye about the target, or about `about` (a root point, as a middle-button drag turns the view about the point under the cursor): `yaw` degrees about the vertical (counter-clockwise seen from above), then `pitch` degrees raising the eye (negative lowers it); both default to 0. The view stops 0.01 rad (0.57 degrees) short of straight down or up. From a Top or Bottom view, `yaw` spins the view about the vertical and only a pitch that moves the eye toward the horizon moves it (from Top a negative pitch, from Bottom a positive one). |
 | `{"type": "pan", "right": 2, "up": 0.5}` | Moves the eye and target together, meters along the screen's right and up directions (each defaults to 0). |
 | `{"type": "zoom", "factor": 2}` | Moves the eye toward the target to `1/factor` of its distance (above 1 zooms in, below 1 out), never nearer than 0.01 m. `factor` must be positive. In a parallel view `view_height` shrinks the same way. With `"about": [x, y, z]` (a root point) it zooms toward that point as the scroll wheel zooms toward the point under the cursor: the point stays on the same pixel and, in perspective with the point ahead of the eye and above the 0.01 m floor, the eye comes to `1/factor` of its distance from it (in a parallel view `view_height` shrinks by the factor instead; at the floor or with the point behind the eye the eye moves on past the point, as the wheel does); in perspective the target moves to the point's depth, so later orbits and zooms work there. |
-| `{"type": "zoom_extents"}` | Keeps the view direction and fits the whole model in the view: every vertex and placed instance of the root, in root coordinates, whatever instance is open (guides do not count). Perspective fits the sphere around the model's bounding box; parallel fits the box itself with 5% to spare. With nothing to fit, the camera stays (no error). |
+| `{"type": "zoom_extents"}` | Keeps the view direction and fits the whole model in the view: every vertex and placed instance of the root, in root coordinates, whatever instance is open (guides do not count, nor does what hidden tags hide). Perspective fits the sphere around the model's bounding box; parallel fits the box itself with 5% to spare. With nothing to fit, the camera stays (no error). |
 | `{"type": "standard_view", "view": "top"}` | Looks at the target from a standard direction, from the same distance: `top` (from +Z, `up` +Y), `bottom` (from -Z, `up` +Y), `front` (from -Y, looking along +Y), `back` (from +Y), `left` (from -X), `right` (from +X), `iso` (from the front left above, along (1,1,-1)). The projection does not change. |
 | `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
 | `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day` or by `night` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
+| `{"type": "set_color_by_tag", "on": true}` | Draws faces in their tags' colors, or (`false`) by their materials (see Tags). A view setting like `set_lighting`. |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
 standard views, the two projections and Night Lighting (checked at night; `set_lighting`); it
@@ -677,7 +702,8 @@ coordinates, like commands; only the camera is in root coordinates.
 `{"type": "pick", "pixel": [x, y], ...}` or `{"type": "pick", "ray": {"origin": [...],
 "direction": [...]}}` returns every face the pixel's ray (or the given ray, any non-zero
 direction) meets in front of its origin, whatever lies in front of it, and every edge (soft
-edges are hidden and left out) and guide passing within `radius` of it, nearest first:
+edges are hidden and left out) and guide passing within `radius` of it, nearest first; what
+hidden tags hide is left out (see Tags):
 
 ```
 {"type": "pick", "hits": [
@@ -915,7 +941,7 @@ there. `preview` no longer outlines the hovered target; agents read `editor.hove
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (10 when the model has a tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
@@ -925,8 +951,8 @@ and older files open without texture positions; version 7
 and older files open without glow; version 6 and older files open without textures; version 5 files open with
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
-of view, up, projection, and `lighting` when it is `night`: a file without it opens lit by day,
-and `new` starts by day) and the model with every id, edges with their curve and soft flag,
+of view, up, projection, `lighting` when it is `night`: a file without it opens lit by day,
+and `new` starts by day, and `"color_by_tag": true` when faces are colored by tag) and the model with every id, edges with their curve and soft flag,
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
 hidden) and each entity's `tag` (absent when Untagged). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
@@ -969,7 +995,8 @@ atomic batch.
 
 `{"type": "export", "path": "/abs/house.glb"}` writes every face of the whole model as
 triangles: the root's faces and every instance's, placed in root coordinates (a component placed
-twice is written twice), whatever instance is open. Edges without faces are not written.
+twice is written twice), whatever instance is open. Edges without faces are not written, nor
+is what hidden tags hide (see Tags; a model whose faces are all hidden is "nothing to export").
 `format` (`obj`, `stl`, `glb`, `gltf`, `skp`) defaults to the one the path's extension names, in
 any case; any other extension without `format` is `invalid_input`, and so is a model with no
 faces (for `skp`: with nothing at all, or only empty groups and components, "nothing to export"). A SketchUp file holds the whole

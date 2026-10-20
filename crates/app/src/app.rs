@@ -137,13 +137,14 @@ const HOVER_SETTLE: Duration = Duration::from_millis(50);
 type Drawn = (u64, BTreeSet<EntityId>, Vec<InstanceId>);
 
 /// What the window shows that a request can change: the model (its revision), the selection,
-/// the open context, the camera, the lighting and the editor's state.
+/// the open context, the camera, the lighting, coloring by tag and the editor's state.
 type Shown = (
     u64,
     BTreeSet<EntityId>,
     Vec<InstanceId>,
     Camera,
     Lighting,
+    bool,
     EditorState,
 );
 
@@ -156,6 +157,7 @@ fn shown(editor: &Editor) -> Shown {
         doc.context().to_vec(),
         doc.camera.clone(),
         doc.lighting,
+        doc.color_by_tag,
         editor_state(editor),
     )
 }
@@ -1546,10 +1548,12 @@ impl State {
             doc.selection(),
             doc.context(),
         );
-        if update == SceneUpdate::Model {
+        // Coloring by tag changes how faces are colored, not the revision.
+        let recolored = self.renderer.set_color_by_tag(doc.color_by_tag);
+        if update == SceneUpdate::Model || recolored {
             self.renderer.set_model(doc.scene(), doc.context());
         }
-        if update != SceneUpdate::Keep {
+        if update != SceneUpdate::Keep || recolored {
             self.renderer.set_selection(doc.selection());
             self.drawn = Some((
                 doc.revision(),

@@ -1,14 +1,17 @@
 //! What tools see: the open context's mesh plus every other placed mesh of the scene, all in
-//! the open context's coordinates.
+//! the open context's coordinates. What hidden tags hide is not seen (see `kernel::is_shown`):
+//! instances on hidden tags are left out with all they place (but for those the open context
+//! is in), guides on hidden tags too, and each part tells which of its faces, edges and
+//! vertices show.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::OnceLock;
 
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
-use kernel::{Guide, GuideId, InstanceId, MeshId, Model, Scene};
+use kernel::{EdgeId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, TagId, VertexId};
 use session::Camera;
 
 /// Whose geometry a part is, seen from the open context.
@@ -150,6 +153,29 @@ fn placed_box(place: DAffine3, [lo, hi]: [DVec3; 2]) -> [DVec3; 2] {
 pub struct Part<'s> {
     pub model: &'s Model,
     placed: &'s Placed,
+    /// The tags hidden.
+    hidden: &'s BTreeSet<TagId>,
+}
+
+impl Part<'_> {
+    fn shows(&self, tag: Option<TagId>) -> bool {
+        tag.is_none_or(|t| !self.hidden.contains(&t))
+    }
+
+    /// Whether the face shows: it is not on a hidden tag.
+    pub fn shows_face(&self, f: FaceId) -> bool {
+        self.hidden.is_empty() || self.model.face(f).is_some_and(|f| self.shows(f.tag))
+    }
+
+    /// Whether the edge shows: it is not on a hidden tag.
+    pub fn shows_edge(&self, e: EdgeId) -> bool {
+        self.hidden.is_empty() || self.model.edge(e).is_some_and(|e| self.shows(e.tag))
+    }
+
+    /// Whether the vertex shows: some edge on it does (see `Model::vertex_shown`).
+    pub fn shows_vertex(&self, v: VertexId) -> bool {
+        self.model.vertex_shown(v, self.hidden)
+    }
 }
 
 impl Deref for Part<'_> {
@@ -178,6 +204,8 @@ pub struct Layout {
     guides: Vec<(usize, GuideId, Guide)>,
     /// The instances of the open context, by id, each with its box once asked for.
     boxes: Vec<(InstanceId, OnceLock<Option<[DVec3; 2]>>)>,
+    /// The tags hidden: what is on them is not seen.
+    hidden: BTreeSet<TagId>,
 }
 
 impl Layout {
@@ -185,9 +213,11 @@ impl Layout {
     /// root; see `session::Document::context`). None if the path does not resolve.
     pub fn of(scene: &Scene, context: &[InstanceId]) -> Option<Layout> {
         let (_, to_root) = scene.resolve(context)?;
+        let hidden = scene.hidden_tags();
         let mut found = Vec::new();
         collect(
             scene,
+            &hidden,
             MeshId::Root,
             to_root.inverse(),
             context,
@@ -212,16 +242,17 @@ impl Layout {
                 (mesh, f.place, f.owner)
             })
             .collect();
-        Some(Layout::new(meshes, &models, parts, paths))
+        Some(Layout::new(meshes, &models, parts, paths, hidden))
     }
 
     /// A layout of `parts` (each the index of its mesh in `meshes`, its placement and its
-    /// owner) reached by `paths`; `models` are the meshes themselves.
+    /// owner) reached by `paths`, with the tags `hidden`; `models` are the meshes themselves.
     fn new(
         meshes: Vec<MeshId>,
         models: &[&Model],
         parts: Vec<(usize, DAffine3, Owner)>,
         paths: Vec<Vec<InstanceId>>,
+        hidden: BTreeSet<TagId>,
     ) -> Layout {
         let boxes: Vec<Option<[DVec3; 2]>> = models.iter().map(|m| mesh_box(m)).collect();
         let parts: Vec<Placed> = parts
@@ -244,6 +275,7 @@ impl Layout {
             .flat_map(|(k, part)| {
                 models[part.mesh]
                     .guides()
+                    .filter(|(_, g)| g.tag().is_none_or(|t| !hidden.contains(&t)))
                     .map(move |(id, g)| (k, id, g.transformed(part.place)))
             })
             .collect();
@@ -265,6 +297,7 @@ impl Layout {
                 .into_iter()
                 .map(|i| (i, OnceLock::new()))
                 .collect(),
+            hidden,
         }
     }
 
@@ -358,6 +391,7 @@ impl<'a> Scenery<'a> {
                 &[model],
                 parts,
                 vec![Vec::new()],
+                BTreeSet::new(),
             )),
         }
     }
@@ -411,6 +445,7 @@ impl<'a> Scenery<'a> {
         Part {
             model: self.models[placed.mesh],
             placed,
+            hidden: &self.layout.hidden,
         }
     }
 
@@ -419,6 +454,7 @@ impl<'a> Scenery<'a> {
         self.layout.parts.iter().map(|placed| Part {
             model: self.models[placed.mesh],
             placed,
+            hidden: &self.layout.hidden,
         })
     }
 
@@ -432,6 +468,11 @@ impl<'a> Scenery<'a> {
     /// the part it comes from, in part and id order.
     pub fn guides(&self) -> &[(usize, GuideId, Guide)] {
         &self.layout.guides
+    }
+
+    /// Whether what is on `tag` (None: Untagged) shows.
+    pub fn shows(&self, tag: Option<TagId>) -> bool {
+        tag.is_none_or(|t| !self.layout.hidden.contains(&t))
     }
 
     /// The open context's own mesh.
@@ -460,6 +501,7 @@ impl<'a> Scenery<'a> {
                 .flat_map(|p| {
                     p.model
                         .vertices()
+                        .filter(move |(v, _)| p.shows_vertex(*v))
                         .map(move |(_, v)| p.place.transform_point3(v.pos))
                 });
             let first = points.next()?;
@@ -480,9 +522,11 @@ struct Found<'a> {
 }
 
 /// Adds the mesh `id`, placed by `place` (into the open context's coordinates) and reached by
-/// `path`, and everything it places, each with its owner.
+/// `path`, and everything it places, each with its owner. Instances on the tags `hidden` are
+/// left out with all they place, unless the open context is in them.
 fn collect<'a>(
     scene: &'a Scene,
+    hidden: &BTreeSet<TagId>,
     id: MeshId,
     place: DAffine3,
     context: &[InstanceId],
@@ -506,8 +550,14 @@ fn collect<'a>(
     });
     for (iid, instance) in model.instances() {
         path.push(iid);
+        let shown = instance.tag.is_none_or(|t| !hidden.contains(&t));
+        if !shown && !context.starts_with(path) {
+            path.pop();
+            continue;
+        }
         collect(
             scene,
+            hidden,
             MeshId::Definition(instance.definition),
             place * instance.transform,
             context,

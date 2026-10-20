@@ -9,7 +9,7 @@ use crate::grid::{
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
-use crate::scene::{BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base, shown_guides};
+use crate::scene::{BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base_with, shown_guides};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
 use crate::style::ViewStyle;
@@ -433,6 +433,9 @@ pub struct Renderer {
     caster_generation: u64,
     /// Day or night, as of the last `set_lighting`.
     lighting: Lighting,
+    /// Faces drawn in their tags' colors, as of the last `set_color_by_tag` (see
+    /// `scene::scene_base_with`).
+    color_by_tag: bool,
     /// How the frames look, as of the last `set_style`.
     style: ViewStyle,
     /// The scene's lights, as of the last `set_model`.
@@ -916,6 +919,7 @@ impl Renderer {
             caster_chunks: Vec::new(),
             caster_generation: 0,
             lighting: Lighting::Day,
+            color_by_tag: false,
             style: ViewStyle::CLASSIC,
             lights: Vec::new(),
             flat_ground,
@@ -957,7 +961,7 @@ impl Renderer {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
             self.rebind();
         }
-        let base = scene_base(scene, context);
+        let base = scene_base_with(scene, context, self.color_by_tag);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
@@ -1053,6 +1057,14 @@ impl Renderer {
                 Some(assignment.slots[k])
             })
             .collect()
+    }
+
+    /// Colors faces by tag (or by material) from the next `set_model` on. True when that
+    /// changes how faces are colored, so the model must be set again.
+    pub fn set_color_by_tag(&mut self, on: bool) -> bool {
+        let changed = self.color_by_tag != on;
+        self.color_by_tag = on;
+        changed
     }
 
     /// Lights the frames drawn from now on by day or by night.

@@ -499,7 +499,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::ZoomExtents {}
         | Command::StandardView { .. }
         | Command::SetProjection { .. }
-        | Command::SetLighting { .. } => {}
+        | Command::SetLighting { .. }
+        | Command::SetColorByTag { .. } => {}
     }
 }
 

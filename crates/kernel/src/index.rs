@@ -210,6 +210,18 @@ impl Index {
         min_t: f64,
         max_t: f64,
     ) -> Option<(FaceId, f64)> {
+        self.ray_hit_where(origin, dir, min_t, max_t, |_| true)
+    }
+
+    /// `ray_hit` among the faces `keep` passes (one hidden by its tag, say, is passed by).
+    pub fn ray_hit_where(
+        &self,
+        origin: DVec3,
+        dir: DVec3,
+        min_t: f64,
+        max_t: f64,
+        keep: impl Fn(FaceId) -> bool,
+    ) -> Option<(FaceId, f64)> {
         let mut best: Option<(FaceId, f64)> = None;
         let mut walk = Walk::new();
         while let Some(i) = walk.pop() {
@@ -229,6 +241,7 @@ impl Index {
                             && t > min_t
                             && t <= best.map_or(max_t, |(_, bt)| bt)
                             && best.is_none_or(|(_, bt)| t < bt)
+                            && keep(f)
                         {
                             best = Some((f, t));
                         }

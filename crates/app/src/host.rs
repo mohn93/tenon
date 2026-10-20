@@ -217,7 +217,9 @@ impl Host for AppHost<'_> {
         height: u32,
     ) -> Option<Vec<u8>> {
         let doc = self.editor.doc();
-        self.offscreen.get()?.capture(
+        let snapshotter = self.offscreen.get()?;
+        snapshotter.set_color_by_tag(doc.color_by_tag);
+        snapshotter.capture(
             doc.scene(),
             doc.context(),
             doc.selection(),

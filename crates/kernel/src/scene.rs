@@ -374,18 +374,8 @@ impl Scene {
     /// The box around an instance's geometry, in the coordinates of the mesh holding it. None
     /// when its definition is empty or missing.
     pub fn instance_bounds(&self, instance: &Instance) -> Option<[DVec3; 2]> {
-        let [lo, hi] = self.bounds(MeshId::Definition(instance.definition))?;
-        let corners: Vec<DVec3> = (0..8)
-            .map(|k| {
-                let corner = DVec3::new(
-                    if k & 1 == 0 { lo.x } else { hi.x },
-                    if k & 2 == 0 { lo.y } else { hi.y },
-                    if k & 4 == 0 { lo.z } else { hi.z },
-                );
-                instance.transform.transform_point3(corner)
-            })
-            .collect();
-        enclose(&corners)
+        let b = self.bounds(MeshId::Definition(instance.definition))?;
+        enclose(&placed_box(instance.transform, b))
     }
 
     /// The anchors of the guides inside an instance's definition, nested definitions
@@ -650,8 +640,20 @@ impl Scene {
     }
 }
 
+/// The eight corners of the box `lo..hi` placed by `transform`.
+pub(crate) fn placed_box(transform: DAffine3, [lo, hi]: [DVec3; 2]) -> [DVec3; 8] {
+    std::array::from_fn(|k| {
+        let corner = DVec3::new(
+            if k & 1 == 0 { lo.x } else { hi.x },
+            if k & 2 == 0 { lo.y } else { hi.y },
+            if k & 4 == 0 { lo.z } else { hi.z },
+        );
+        transform.transform_point3(corner)
+    })
+}
+
 /// The smallest box holding the points; None when there are none.
-fn enclose(points: &[DVec3]) -> Option<[DVec3; 2]> {
+pub(crate) fn enclose(points: &[DVec3]) -> Option<[DVec3; 2]> {
     let first = *points.first()?;
     Some(
         points

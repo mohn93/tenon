@@ -50,6 +50,11 @@ impl Snapshotter {
         }
     }
 
+    /// Colors faces by tag (or by material, the default) in the captures from now on.
+    pub fn set_color_by_tag(&mut self, on: bool) {
+        self.renderer.set_color_by_tag(on);
+    }
+
     /// Renders `scene` as seen by `camera` (its viewport is replaced by the image size) and lit
     /// by `lighting` into tightly packed RGBA8 pixels, top row first, with the open context and
     /// `selection` shown. None if the GPU readback fails.

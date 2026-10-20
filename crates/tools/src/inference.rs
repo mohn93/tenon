@@ -558,7 +558,8 @@ pub fn edge_under_where(
 /// cone), with the index of the part each comes from and positions in the open context's
 /// coordinates, in part and id order so that ties between equally near candidates always go
 /// the same way. Soft edges are hidden, so they are left out: nothing snaps to them or picks
-/// them (their ends are vertices of the edges around them and still snap).
+/// them (their ends are vertices of the edges around them and still snap). Edges on hidden
+/// tags are left out too, and vertices whose edges all are.
 pub(crate) struct Near {
     pub(crate) points: Vec<(usize, VertexId, DVec3)>,
     pub(crate) segments: Vec<(usize, EdgeId, DVec3, DVec3)>,
@@ -588,9 +589,13 @@ impl Near {
                 local.r0,
                 local.slope,
                 |s| match *s {
-                    Shape::Point(v, p) => near.points.push((k, v, at(p))),
+                    Shape::Point(v, p) => {
+                        if part.shows_vertex(v) {
+                            near.points.push((k, v, at(p)));
+                        }
+                    }
                     Shape::Segment(e, a, b) => {
-                        if part.model.edge(e).is_some_and(|edge| !edge.soft) {
+                        if part.model.edge(e).is_some_and(|edge| !edge.soft) && part.shows_edge(e) {
                             near.segments.push((k, e, at(a), at(b)));
                         }
                     }
@@ -756,11 +761,12 @@ impl<'s> Sight<'s> {
                 && part
                     .model
                     .index()
-                    .ray_hit(
+                    .ray_hit_where(
                         part.back.transform_point3(eye),
                         part.back.transform_vector3(dir),
                         from,
                         reach,
+                        |f| part.shows_face(f),
                     )
                     .is_some()
         };
@@ -801,6 +807,7 @@ pub(crate) fn closest_on_line_to_ray(origin: DVec3, dir: DVec3, ray: &Ray, segme
 }
 
 /// The nearest face the ray meets in front of its origin: whose it is, the face, and where.
+/// Faces on hidden tags are passed through.
 fn nearest_face_hit(scenery: &Scenery, ray: &Ray) -> Option<(Owner, FaceId, DVec3)> {
     nearest_face_part(scenery, ray).map(|(k, f, p)| (scenery.part(k).owner, f, p))
 }
@@ -818,11 +825,12 @@ fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVe
         if !part.may_meet_ray(ray.origin, ray.dir, reach) {
             continue;
         }
-        if let Some((f, t)) = part.model.index().ray_hit(
+        if let Some((f, t)) = part.model.index().ray_hit_where(
             part.back.transform_point3(ray.origin),
             part.back.transform_vector3(ray.dir),
             from,
             reach,
+            |f| part.shows_face(f),
         ) && best.is_none_or(|(bt, _, _)| t < bt)
         {
             best = Some((t, k, f));

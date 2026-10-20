@@ -233,6 +233,10 @@ pub struct OutlinerNode {
     /// false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub selected: bool,
+    /// True when a hidden tag hides the node: its own, or that of an instance above it.
+    /// Hidden nodes are still listed. Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     /// The instances its definition places, in id order.
     pub children: Vec<OutlinerNode>,
     /// True when the query's `depth` left out this node's children (it has some). Absent
@@ -251,6 +255,8 @@ pub struct OutlinerRow {
     /// The definition's name; empty for an unnamed group.
     pub name: String,
     pub material: Option<MaterialId>,
+    /// True when the instance is on a hidden tag (instances above it may hide it too).
+    pub hidden: bool,
 }
 
 /// The outliner tree stored flat (`Document::outliner_rows`): the root's instances and, for
@@ -334,7 +340,8 @@ pub enum QueryResult {
     Curve(CurveInfo),
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
-    /// whole view's height); `lighting` is `day` or `night`.
+    /// whole view's height); `lighting` is `day` or `night`; `color_by_tag` is whether faces
+    /// are drawn in their tags' colors.
     Camera {
         eye: [f64; 3],
         target: [f64; 3],
@@ -343,6 +350,7 @@ pub enum QueryResult {
         projection: Projection,
         view_height: f64,
         lighting: Lighting,
+        color_by_tag: bool,
     },
     /// Counts for the open context, plus the number of definitions.
     Stats {
