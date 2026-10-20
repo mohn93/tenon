@@ -10,7 +10,7 @@ fn view(x: f64) -> PageView {
         eye: [x, -10.0, 5.0],
         target: [0.0, 0.0, 0.0],
         up: [0.0, 0.0, 1.0],
-        fov_y: 35.0,
+        fov_y: 35f64.to_radians(),
         parallel: false,
         night: false,
         color_by_tag: false,
@@ -116,7 +116,7 @@ fn a_page_must_hide_existing_tags_and_have_a_usable_view() {
     let mut on_target = view(0.0);
     on_target.eye = on_target.target;
     let mut wide = view(1.0);
-    wide.fov_y = 171.0;
+    wide.fov_y = 171f64.to_radians();
     let mut no_up = view(1.0);
     no_up.up = [0.0; 3];
     let mut nan = view(1.0);
@@ -233,7 +233,7 @@ fn files_with_broken_pages_are_refused() {
     refused(&|d| d.pages[1].id = d.pages[0].id, "appears twice");
     refused(&|d| d.pages[1].id = walls.0, "share an id");
     refused(
-        &|d| d.pages[0].view.as_mut().unwrap().fov_y = 0.5,
+        &|d| d.pages[0].view.as_mut().unwrap().fov_y = 0.5f64.to_radians(),
         "field of view",
     );
     refused(&|d| d.pages[0].id = kernel::MAX_ID, "p");

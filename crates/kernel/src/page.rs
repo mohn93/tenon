@@ -23,7 +23,8 @@ pub struct PageView {
     pub target: [f64; 3],
     /// Which way is up the screen.
     pub up: [f64; 3],
-    /// The vertical field of view, in degrees (1 to 170).
+    /// The vertical field of view, in radians (1 to 170 degrees). Radians, as the camera holds
+    /// it, so storing and going back to a view changes no bit of it.
     pub fov_y: f64,
     /// Parallel (orthographic) projection rather than perspective.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -60,13 +61,13 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
 }
 
 /// Fails, saying why, when a view has a number that is not finite, a field of view outside 1
-/// to 170 degrees, its eye on its target or no up direction.
+/// to 170 degrees (checked in degrees), its eye on its target or no up direction.
 pub(crate) fn check_view(v: &PageView) -> Result<(), String> {
     let numbers = v.eye.iter().chain(&v.target).chain(&v.up).chain([&v.fov_y]);
     if !numbers.into_iter().all(|x| x.is_finite()) {
         return Err("a scene's view has a number that is not finite".into());
     }
-    if !(1.0..=170.0).contains(&v.fov_y) {
+    if !(1.0..=170.0).contains(&v.fov_y.to_degrees()) {
         return Err("a scene's field of view must be from 1 to 170 degrees".into());
     }
     let apart = v

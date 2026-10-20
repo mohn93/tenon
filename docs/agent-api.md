@@ -537,7 +537,7 @@ A scene may store the view, the tag visibility, both or neither. The scenes are 
 | `{"type": "change_scene", "scene": "p40", "name": "Back"}` | Renames a scene (name rules as for `add_scene`), as one undo step. |
 | `{"type": "move_scene", "scene": "p40", "index": 0}` | Moves a scene to `index` in the order (0: first), as one undo step. An index past the last scene is `invalid_input`. |
 | `{"type": "delete_scene", "scene": "p40"}` | Removes a scene, as one undo step; undo puts it back at its place with what it stored. |
-| `{"type": "go_to_scene", "scene": "p40"}` | Goes to a scene, straight (no transition). A stored view sets the camera, projection, lighting and color by tag, a view change like `set_camera` (not an undo step, no change to the revision, put back by a failed atomic batch). Stored tag visibility shows and hides tags to match (tags the scene does not hide are shown), as one undo step labeled `go_to_scene`, and only when that changes a tag; the outcome's `changes.tags` lists them. A part the scene does not store is left as it is. It becomes the selected scene. |
+| `{"type": "go_to_scene", "scene": "p40"}` | Goes to a scene, straight (no transition). A stored view sets the camera, projection, lighting and color by tag, a view change like `set_camera` (not an undo step, no change to the revision, put back by a failed atomic batch); the camera comes back exactly as stored, so an `update_scene` right after stores no change. Stored tag visibility shows and hides tags to match (tags the scene does not hide are shown), as one undo step labeled `go_to_scene`, and only when that changes a tag; the outcome's `changes.tags` lists them. A part the scene does not store is left as it is. It becomes the selected scene. |
 
 Every scene command but `go_to_scene` is an undo step (when it changes something), changes the
 revision, marks the model modified and lists the scene in its `changes.scenes` (also in
@@ -546,7 +546,12 @@ it from every scene that hides it, in the same undo step (those scenes are liste
 `changes.scenes`), so undo puts it back in each.
 
 The selected scene is the one last added or gone to (the `scenes` query's `selected`); it is
-not saved, and `new` and `open` clear it, as does undoing its `add_scene`.
+not saved, and `new` and `open` clear it. A selected scene that stops existing (its `add_scene`
+undone, or it deleted) is not selected while it does not exist, and is selected again if it
+comes back (by redo or undo).
+
+A view a scene stores is the camera in model (root) coordinates, as `set_camera` takes it,
+whatever instance is open; `go_to_scene` leaves the open instance open.
 
 `{"type": "scenes"}` gives, for example,
 `{"scenes": [{"id": "p40", "name": "Front", "camera": true, "tags": true, "selected": true}], "revision": 12}`.
@@ -991,8 +996,9 @@ of view, up, projection, `lighting` when it is `night`: a file without it opens 
 and `new` starts by day, and `"color_by_tag": true` when faces are colored by tag) and the model with every id, edges with their curve and soft flag,
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
 hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
-one's id, name, `view` when it stores one, and `tags`, the tag ids it hides, when it stores tag
-visibility). Each texture's image is stored in the archive as
+one's id, name, `view` when it stores one (`eye`, `target`, `up`, `fov_y` in radians, and
+`parallel`, `night` and `color_by_tag` when true), and `tags`, the tag ids it hides, when it
+stores tag visibility). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
 `document.json` names it with its `width` and `height`.
 

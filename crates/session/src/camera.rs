@@ -188,14 +188,14 @@ impl Camera {
         self.projection == Projection::Parallel
     }
 
-    /// The view a scene stores: this camera (its `up` field, the field of view in degrees and
-    /// the projection), lit by `lighting`, its faces colored by tag or not.
+    /// The view a scene stores: this camera (its `up` field, the field of view and the
+    /// projection), lit by `lighting`, its faces colored by tag or not.
     pub fn page_view(&self, lighting: Lighting, color_by_tag: bool) -> PageView {
         PageView {
             eye: self.eye.to_array(),
             target: self.target.to_array(),
             up: self.up.to_array(),
-            fov_y: self.fov_y.to_degrees(),
+            fov_y: self.fov_y,
             parallel: self.is_parallel(),
             night: lighting == Lighting::Night,
             color_by_tag,

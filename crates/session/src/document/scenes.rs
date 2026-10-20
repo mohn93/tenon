@@ -2,7 +2,9 @@
 
 use kernel::{KernelError, Page, PageId, PageView, SceneChange, TagEdit};
 
-use super::Document;
+use glam::DVec3;
+
+use super::{Document, unit_vector};
 use crate::camera::{Lighting, Projection};
 use crate::command::{CommandError, ErrorKind};
 use crate::query::{QueryResult, SceneInfo, SceneView};
@@ -104,14 +106,29 @@ impl Document {
                 } else {
                     Projection::Perspective
                 };
-                let camera = self
-                    .camera_for(v.eye, v.target, Some(v.fov_y), Some(v.up), Some(projection))
+                let degrees = v.fov_y.to_degrees();
+                let mut camera = self
+                    .camera_for(v.eye, v.target, Some(degrees), Some(v.up), Some(projection))
                     .map_err(|e| {
                         CommandError::new(
                             ErrorKind::InvalidInput,
                             format!("scene {id}'s view cannot be used: {}", e.message),
                         )
                     })?;
+                // The stored values as they are: through degrees the field of view could drift
+                // by a bit, and an update would then store a change. A vertical view's up is
+                // the stored one (horizontal, checked by `camera_for`); any other view's is
+                // straight up.
+                camera.fov_y = v.fov_y;
+                let up = DVec3::from(v.up);
+                if camera.is_vertical() && up.z == 0.0 {
+                    // A unit up (as stored from a camera) is kept bit for bit.
+                    camera.up = if (up.length() - 1.0).abs() < 1e-12 {
+                        up
+                    } else {
+                        unit_vector(up).unwrap_or(camera.up)
+                    };
+                }
                 Some((camera, v.night, v.color_by_tag))
             }
             None => None,
@@ -174,7 +191,7 @@ impl Document {
                 eye: v.eye,
                 target: v.target,
                 up: v.up,
-                fov_y_deg: v.fov_y,
+                fov_y_deg: v.fov_y.to_degrees(),
                 projection: if v.parallel {
                     Projection::Parallel
                 } else {

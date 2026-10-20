@@ -568,3 +568,84 @@ fn a_model_without_scenes_keeps_its_schema_and_older_files_open_without_scenes()
     run(&mut d, json!({"type": "save"})).unwrap();
     assert_eq!(stored(&path)["schema_version"], 10);
 }
+
+#[test]
+fn going_to_a_scene_and_updating_it_changes_nothing_for_any_view() {
+    // A field of view whose trip through degrees is not exact.
+    let inexact = (1..1700)
+        .map(|k| f64::from(k) / 10.0 + 1.0)
+        .find(|d| d.to_radians().to_degrees().to_radians() != d.to_radians())
+        .expect("a field of view that drifts through degrees");
+    let mut d = doc();
+    let views = [
+        json!({"type": "set_camera", "eye": [3, -9, 4], "target": [0, 0, 0], "fov_y_deg": inexact}),
+        // Straight down, the screen's up a horizontal direction that is not an axis.
+        json!({"type": "set_camera", "eye": [0, 0, 10], "target": [0, 0, 0], "up": [1, 1, 0], "fov_y_deg": inexact}),
+    ];
+    for (k, view) in views.into_iter().enumerate() {
+        run(&mut d, view).unwrap();
+        let saved = camera(&d);
+        let s = add_scene(&mut d, json!({"name": format!("View {k}")}));
+        run(
+            &mut d,
+            json!({"type": "set_camera", "eye": [5, 5, 5], "target": [0, 0, 0], "fov_y_deg": 60}),
+        )
+        .unwrap();
+        run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap();
+        assert_eq!(camera(&d), saved, "{k}");
+        let depth = ask(&d, json!({"type": "history"}))["undo_depth"].clone();
+        run(&mut d, json!({"type": "update_scene", "scene": s})).unwrap();
+        assert_eq!(
+            ask(&d, json!({"type": "history"}))["undo_depth"],
+            depth,
+            "{k}: update after go_to_scene stored a change"
+        );
+    }
+    let up = camera(&d)["up"].clone();
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    assert!((up[0].as_f64().unwrap() - half).abs() < 1e-12, "{up}");
+    assert!((up[1].as_f64().unwrap() - half).abs() < 1e-12, "{up}");
+    assert_eq!(up[2], 0.0);
+}
+
+#[test]
+fn go_to_scene_in_an_open_group_places_the_camera_in_model_coordinates() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    )
+    .unwrap();
+    let ids: Vec<Value> = ask(&d, json!({"type": "entities", "kinds": ["face"]}))["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].clone())
+        .collect();
+    run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let group = ask(&d, json!({"type": "selection"}))["ids"][0].clone();
+    run(
+        &mut d,
+        json!({"type": "move", "ids": [group], "offset": [10, 0, 0]}),
+    )
+    .unwrap();
+    set_camera(&mut d, [3.0, -9.0, 4.0]);
+    let saved = camera(&d);
+    let s = add_scene(&mut d, json!({}));
+    run(&mut d, json!({"type": "open_instance", "id": group})).unwrap();
+    set_camera(&mut d, [6.0, -9.0, 4.0]);
+    // Inside the group the scene's view is where it was in the model, as set_camera's is.
+    run(&mut d, json!({"type": "go_to_scene", "scene": s})).unwrap();
+    assert_eq!(camera(&d), saved);
+    assert_eq!(
+        ask(&d, json!({"type": "context"}))["path"],
+        json!([group]),
+        "the group stays open"
+    );
+    // A scene added inside the group stores the same model coordinates.
+    let inside = add_scene(&mut d, json!({}));
+    assert_eq!(
+        ask(&d, json!({"type": "scene", "scene": inside}))["view"]["eye"],
+        json!([3.0, -9.0, 4.0])
+    );
+}
