@@ -1,4 +1,5 @@
-//! Agent API: JSON-RPC 2.0 over newline-delimited JSON, served on a Unix socket or stdio.
+//! Agent API: JSON-RPC 2.0 over newline-delimited JSON, served on a Unix socket (a named pipe
+//! on Windows) or stdio.
 //! Every request runs through `session` commands and queries, the same path the UI uses.
 
 mod dispatch;
@@ -12,6 +13,8 @@ mod protocol;
 mod roots;
 pub mod schema;
 mod transport;
+#[cfg(windows)]
+mod windows;
 
 pub use dispatch::{BatchResult, EditorQuery, ExecuteResult, Host, call, describe, handle};
 pub use editor::{Dialog, EditorCommand, EditorState, MessageKind, PhaseName, ToolName};
@@ -27,4 +30,4 @@ pub use probe::{
 };
 pub use protocol::{MAX_LINE_BYTES, RpcError, codes};
 pub use roots::ApiRoots;
-pub use transport::{listen_unix, serve_stdio, serve_stream};
+pub use transport::{Endpoint, connect, listen, serve_stdio, serve_stream};

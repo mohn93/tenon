@@ -2,8 +2,8 @@
 
 `app --mcp` serves the [agent API](agent-api.md) as a Model Context Protocol server on stdin and
 stdout, so MCP clients such as Claude Code and Claude Desktop can model with it. It runs either
-headless, with its own model, or with `--live SOCKET`, forwarding every call to a running app (a
-window or a headless instance) so you watch the agent work. Only MCP messages are written to
+headless, with its own model, or with `--live SOCKET` (a named pipe on Windows), forwarding every
+call to a running app (a window or a headless instance) so you watch the agent work. Only MCP messages are written to
 stdout; diagnostics go to stderr. The server exits when stdin closes.
 
 ## Tools
@@ -70,6 +70,13 @@ claude mcp add sketchup-alt-live -- /path/to/app --mcp --live ~/.sketchup-alt/ma
 starts the server: a socket that cannot be reached stops it with exit code 1. If the window quits
 later, every call fails with code `-32003` (connection lost) until the client restarts the server.
 `--live` takes no FILE or `--api-root`; open files and set `--api-root` on the window.
+
+On Windows, use a pipe name instead of a socket path (a bare name gets the `\\.\pipe\` prefix):
+
+```powershell
+app.exe --socket sketchup-alt-main
+claude mcp add sketchup-alt-live -- C:\path\to\app.exe --mcp --live sketchup-alt-main
+```
 
 ## Notes
 

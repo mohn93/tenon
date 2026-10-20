@@ -4,28 +4,32 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use api::Endpoint;
+
+#[cfg(unix)]
 use crate::paths;
 
 pub const USAGE: &str =
-    "usage: app [--socket PATH] [--api-root DIR]... [FILE]            window, agent API on a Unix socket
+    "usage: app [--socket NAME] [--api-root DIR]... [FILE]            window, agent API on a local socket
        app --headless --stdio [--api-root DIR]... [FILE]          no window, agent API on stdin/stdout
-       app --headless [--socket PATH] [--api-root DIR]... [FILE]  no window, agent API on a Unix socket
+       app --headless [--socket NAME] [--api-root DIR]... [FILE]  no window, agent API on a local socket
        app --mcp [--api-root DIR]... [FILE]                MCP server on stdin/stdout with its own model
-       app --mcp --live SOCKET                             MCP server driving the app listening on SOCKET
+       app --mcp --live NAME                               MCP server driving the app listening on NAME
 FILE is a .skr model to open at start, or a SketchUp .skp file to open as a new model.
+NAME is a Unix socket path, or on Windows a named pipe (\\\\.\\pipe\\ is added to a bare name).
 --api-root DIR (repeatable) keeps every file the API reads or writes inside DIR.";
 
 #[derive(Debug, PartialEq)]
 pub enum Transport {
     Stdio,
-    Socket(PathBuf),
+    Socket(Endpoint),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Mode {
     Help,
     Window {
-        socket: PathBuf,
+        socket: Endpoint,
         file: Option<PathBuf>,
         api_roots: Vec<PathBuf>,
     },
@@ -35,9 +39,9 @@ pub enum Mode {
         api_roots: Vec<PathBuf>,
     },
     /// An MCP server on stdin/stdout, over its own model or, with `live`, the app listening
-    /// on that socket.
+    /// on that endpoint.
     Mcp {
-        live: Option<PathBuf>,
+        live: Option<Endpoint>,
         file: Option<PathBuf>,
         api_roots: Vec<PathBuf>,
     },
@@ -49,18 +53,38 @@ pub const FALLBACK_DIR: &str = ".sketchup-alt";
 
 /// Default socket path: per-process, in the platform's private folder (see `paths`). Never in
 /// a shared directory such as /tmp.
-pub fn default_socket() -> PathBuf {
-    paths::default_socket(
+#[cfg(unix)]
+pub fn default_endpoint() -> Endpoint {
+    Endpoint::Socket(paths::default_socket(
         &|k| std::env::var_os(k),
         &std::env::temp_dir(),
         std::process::id(),
-    )
+    ))
+}
+
+/// Default pipe: per-process.
+#[cfg(windows)]
+pub fn default_endpoint() -> Endpoint {
+    Endpoint::from_arg(&format!("sketchup-alt-{}", std::process::id()))
 }
 
 /// Returns the private directory when `socket` lives in the `~/.sketchup-alt` fallback.
 pub fn private_dir_for(socket: &Path) -> Option<&Path> {
     let parent = socket.parent()?;
     (parent.file_name()? == FALLBACK_DIR).then_some(parent)
+}
+
+/// `private_dir_for` an endpoint's socket.
+#[cfg(unix)]
+pub fn private_dir_for_endpoint(endpoint: &Endpoint) -> Option<&Path> {
+    let Endpoint::Socket(socket) = endpoint;
+    private_dir_for(socket)
+}
+
+/// A pipe needs no folder.
+#[cfg(windows)]
+pub fn private_dir_for_endpoint(_: &Endpoint) -> Option<&Path> {
+    None
 }
 
 /// Makes sure `dir` exists, is a real directory (not a symlink) and is closed to group and
@@ -119,19 +143,19 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
             "--stdio" => stdio = true,
             "--mcp" => mcp = true,
             "--live" => {
-                let path = args
+                let name = args
                     .next()
                     .filter(|p| !p.starts_with("--"))
-                    .ok_or("--live needs a socket path")?;
-                live = Some(PathBuf::from(path));
+                    .ok_or("--live needs a socket path (a pipe name on Windows)")?;
+                live = Some(Endpoint::from_arg(&name));
             }
             "-h" | "--help" => return Ok(Mode::Help),
             "--socket" => {
-                let path = args
+                let name = args
                     .next()
                     .filter(|p| !p.starts_with("--"))
-                    .ok_or("--socket needs a path")?;
-                socket = Some(PathBuf::from(path));
+                    .ok_or("--socket needs a path (a pipe name on Windows)")?;
+                socket = Some(Endpoint::from_arg(&name));
             }
             "--api-root" => {
                 let dir = args
@@ -170,7 +194,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Mode, String> {
     if stdio && !headless {
         return Err("--stdio needs --headless (the window keeps stdout for logs)".into());
     }
-    let socket = socket.unwrap_or_else(default_socket);
+    let socket = socket.unwrap_or_else(default_endpoint);
     Ok(if !headless {
         Mode::Window {
             socket,
@@ -210,7 +234,7 @@ mod tests {
         assert_eq!(
             parse(args("")).unwrap(),
             Mode::Window {
-                socket: default_socket(),
+                socket: default_endpoint(),
                 file: None,
                 api_roots: vec![]
             }
@@ -226,7 +250,7 @@ mod tests {
         assert_eq!(
             parse(args("--headless --socket /tmp/a.sock")).unwrap(),
             Mode::Headless {
-                transport: Transport::Socket("/tmp/a.sock".into()),
+                transport: Transport::Socket(Endpoint::from_arg("/tmp/a.sock")),
                 file: None,
                 api_roots: vec![]
             }
@@ -234,7 +258,7 @@ mod tests {
         assert_eq!(
             parse(args("--socket /tmp/b.sock")).unwrap(),
             Mode::Window {
-                socket: "/tmp/b.sock".into(),
+                socket: Endpoint::from_arg("/tmp/b.sock"),
                 file: None,
                 api_roots: vec![]
             }
@@ -254,7 +278,7 @@ mod tests {
         assert_eq!(
             parse(args("house.skr --socket /tmp/c.sock")).unwrap(),
             Mode::Window {
-                socket: "/tmp/c.sock".into(),
+                socket: Endpoint::from_arg("/tmp/c.sock"),
                 file: Some("house.skr".into()),
                 api_roots: vec![]
             }
@@ -300,7 +324,7 @@ mod tests {
         assert_eq!(
             parse(args("--mcp --live /tmp/w.sock")).unwrap(),
             Mode::Mcp {
-                live: Some("/tmp/w.sock".into()),
+                live: Some(Endpoint::from_arg("/tmp/w.sock")),
                 file: None,
                 api_roots: vec![]
             }
@@ -322,9 +346,26 @@ mod tests {
         assert_eq!(parse(args("--headless --help")).unwrap(), Mode::Help);
     }
 
+    #[cfg(unix)]
     #[test]
     fn default_socket_path_fits_the_os_limit() {
-        assert!(default_socket().as_os_str().len() <= paths::MAX_SOCKET_PATH);
+        let Endpoint::Socket(path) = default_endpoint();
+        assert!(path.as_os_str().len() <= paths::MAX_SOCKET_PATH);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_default_endpoint_is_a_pipe_per_process() {
+        let name = format!(r"\\.\pipe\sketchup-alt-{}", std::process::id());
+        assert_eq!(default_endpoint(), Endpoint::Pipe(name));
+        assert_eq!(
+            parse(args(r"--headless --socket main")).unwrap(),
+            Mode::Headless {
+                transport: Transport::Socket(Endpoint::Pipe(r"\\.\pipe\main".into())),
+                file: None,
+                api_roots: vec![]
+            }
+        );
     }
 
     #[test]

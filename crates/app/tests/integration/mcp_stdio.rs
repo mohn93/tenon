@@ -2,8 +2,9 @@
 //! forwarding to a running headless instance with `--live`.
 
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -211,21 +212,66 @@ fn mcp_opens_a_file_given() {
     std::fs::remove_file(&path).unwrap();
 }
 
-/// Waits up to the timeout for `path` to exist.
-fn wait_for(path: &Path) {
+/// The agent API endpoint named `name` for this test: a socket in `dir`, or a pipe on Windows.
+#[cfg(unix)]
+fn endpoint(dir: &std::path::Path, name: &str) -> String {
+    dir.join(format!("{name}.sock"))
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[cfg(windows)]
+fn endpoint(_: &std::path::Path, name: &str) -> String {
+    format!(r"\\.\pipe\skmcp-{}-{name}", std::process::id())
+}
+
+/// Waits up to the timeout for the socket at `path` to exist.
+#[cfg(unix)]
+fn wait_for(path: &str) {
     let deadline = Instant::now() + TIMEOUT;
-    while !path.exists() {
-        assert!(Instant::now() < deadline, "no socket at {}", path.display());
+    while !std::path::Path::new(path).exists() {
+        assert!(Instant::now() < deadline, "no socket at {path}");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-/// Sends one request over the agent API socket and returns its reply.
-fn ask_socket(path: &Path, request: &Value) -> Value {
+/// Waits up to the timeout for the pipe `name` to accept a client.
+#[cfg(windows)]
+fn wait_for(name: &str) {
+    let deadline = Instant::now() + TIMEOUT;
+    while open_pipe(name).is_err() {
+        assert!(Instant::now() < deadline, "no pipe at {name}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(windows)]
+fn open_pipe(name: &str) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(name)
+}
+
+/// Sends one request over the agent API endpoint and returns its reply.
+#[cfg(unix)]
+fn ask_socket(path: &str, request: &Value) -> Value {
     let mut stream = UnixStream::connect(path).unwrap();
     stream.set_read_timeout(Some(TIMEOUT)).unwrap();
     writeln!(stream, "{request}").unwrap();
-    let mut reader = BufReader::new(stream);
+    read_reply(BufReader::new(stream), request)
+}
+
+#[cfg(windows)]
+fn ask_socket(name: &str, request: &Value) -> Value {
+    let mut pipe = open_pipe(name).unwrap();
+    writeln!(pipe, "{request}").unwrap();
+    read_reply(BufReader::new(pipe), request)
+}
+
+/// Reads lines until the reply to `request`.
+fn read_reply(mut reader: impl BufRead, request: &Value) -> Value {
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
@@ -249,10 +295,10 @@ impl Drop for KillOnDrop {
 #[test]
 fn mcp_live_forwards_to_a_running_instance() {
     let dir = scratch("live");
-    let socket = dir.join("w.sock");
+    let socket = endpoint(&dir, "w");
     let mut instance = KillOnDrop(
         Command::new(env!("CARGO_BIN_EXE_app"))
-            .args(["--headless", "--socket", socket.to_str().unwrap()])
+            .args(["--headless", "--socket", &socket])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -261,7 +307,7 @@ fn mcp_live_forwards_to_a_running_instance() {
     );
     wait_for(&socket);
 
-    let mut mcp = Mcp::start(&["--live", socket.to_str().unwrap()]);
+    let mut mcp = Mcp::start(&["--live", &socket]);
     let [init, initialized] = handshake();
     mcp.ask(&init);
     mcp.send(&initialized);
@@ -295,9 +341,9 @@ fn mcp_live_forwards_to_a_running_instance() {
 #[test]
 fn mcp_live_to_a_missing_socket_fails_at_start() {
     let dir = scratch("missing");
-    let socket = dir.join("none.sock");
+    let socket = endpoint(&dir, "none");
     let output = Command::new(env!("CARGO_BIN_EXE_app"))
-        .args(["--mcp", "--live", socket.to_str().unwrap()])
+        .args(["--mcp", "--live", &socket])
         .stdin(Stdio::null())
         .output()
         .expect("run app --mcp --live");

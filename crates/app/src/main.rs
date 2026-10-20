@@ -58,8 +58,8 @@ fn main() {
             api_roots,
         } => {
             let roots = roots(&api_roots);
-            if let Transport::Socket(path) = &transport
-                && let Some(dir) = cli::private_dir_for(path)
+            if let Transport::Socket(endpoint) = &transport
+                && let Some(dir) = cli::private_dir_for_endpoint(endpoint)
                 && let Err(e) = cli::ensure_private_dir(dir)
             {
                 eprintln!("cannot use {}: {e}", dir.display());
@@ -82,9 +82,9 @@ fn main() {
         } => {
             let roots = roots(&api_roots);
             // A socket in the fallback directory is only safe if that directory is private.
-            let socket = match cli::private_dir_for(&socket).map(cli::ensure_private_dir) {
+            let socket = match cli::private_dir_for_endpoint(&socket).map(cli::ensure_private_dir) {
                 Some(Err(e)) => {
-                    eprintln!("agent API disabled: cannot use {}: {e}", socket.display());
+                    eprintln!("agent API disabled: cannot use {socket}: {e}");
                     None
                 }
                 _ => Some(socket),

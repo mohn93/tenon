@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use api::{ApiRoots, EditorState, Hub, listen_unix};
+use api::{ApiRoots, EditorState, Endpoint, Hub, listen};
 use glam::DVec2;
 use kernel::{EntityId, InstanceId, MaterialId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
@@ -1994,8 +1994,8 @@ pub struct App {
     hub: Hub,
     /// Held while agents are connected, so macOS does not nap the window they drive.
     awake: Awake,
-    /// Socket the agent API listens on, removed on exit (None if listening failed).
-    socket: Option<PathBuf>,
+    /// Where the agent API listens; a socket file is removed on exit (None if listening failed).
+    socket: Option<Endpoint>,
     /// A model to open once the window exists.
     file: Option<PathBuf>,
     /// The folders the API's file paths must lie within.
@@ -2013,7 +2013,7 @@ impl App {
     /// open at start.
     pub fn new(
         event_loop: &EventLoop<AppEvent>,
-        socket: Option<PathBuf>,
+        socket: Option<Endpoint>,
         file: Option<PathBuf>,
         roots: ApiRoots,
         recovery: Option<PathBuf>,
@@ -2024,16 +2024,13 @@ impl App {
         let hub = Hub::new(move || {
             let _ = api_proxy.send_event(AppEvent::Api);
         });
-        let socket = socket.and_then(|socket| match listen_unix(&socket, hub.inbox()) {
+        let socket = socket.and_then(|socket| match listen(&socket, hub.inbox()) {
             Ok(()) => {
-                eprintln!("agent API listening on {}", socket.display());
+                eprintln!("agent API listening on {socket}");
                 Some(socket)
             }
             Err(e) => {
-                eprintln!(
-                    "agent API disabled: cannot listen on {}: {e}",
-                    socket.display()
-                );
+                eprintln!("agent API disabled: cannot listen on {socket}: {e}");
                 None
             }
         });
@@ -2095,8 +2092,8 @@ impl ApplicationHandler<AppEvent> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The last replies (a `quit`'s) reach their agents before the app ends.
         self.hub.close(CLOSE_WAIT);
-        if let Some(path) = self.socket.take() {
-            let _ = std::fs::remove_file(path);
+        if let Some(endpoint) = self.socket.take() {
+            endpoint.remove();
         }
     }
 

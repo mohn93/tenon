@@ -200,6 +200,7 @@ fn selection_and_camera_changes_are_notified_once_per_round() {
     assert_eq!(messages[0]["params"]["ids"], json!([]));
 }
 
+#[cfg(unix)]
 #[test]
 fn closing_waits_for_the_last_replies_to_be_written() {
     use std::io::{BufRead, BufReader, Write};

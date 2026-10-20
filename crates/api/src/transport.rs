@@ -1,9 +1,14 @@
-//! Byte-stream transports: newline-delimited JSON over a Unix socket or stdin/stdout.
+//! Byte-stream transports: newline-delimited JSON over an endpoint (a Unix socket, or a named
+//! pipe on Windows) or stdin/stdout.
 
+use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 
 use serde_json::Value;
@@ -86,9 +91,121 @@ pub fn serve_stdio(inbox: Inbox) -> JoinHandle<()> {
     serve_stream(inbox, io::stdin(), io::stdout()).1
 }
 
+/// Where the agent API listens and agents connect: a Unix socket, or a named pipe on Windows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    /// A socket file readable only by the current user.
+    #[cfg(unix)]
+    Socket(PathBuf),
+    /// A pipe name, `\\.\pipe\...`, open only to the current user on this machine.
+    #[cfg(windows)]
+    Pipe(String),
+}
+
+/// The prefix of every named pipe's name.
+#[cfg(windows)]
+const PIPE_PREFIX: &str = r"\\.\pipe\";
+
+impl Endpoint {
+    /// The endpoint a command-line value names: a socket path.
+    #[cfg(unix)]
+    pub fn from_arg(arg: &str) -> Endpoint {
+        Endpoint::Socket(PathBuf::from(arg))
+    }
+
+    /// The endpoint a command-line value names: a pipe name, `\\.\pipe\` added unless the
+    /// value starts with it (in any case).
+    #[cfg(windows)]
+    pub fn from_arg(arg: &str) -> Endpoint {
+        let prefixed = arg
+            .get(..PIPE_PREFIX.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(PIPE_PREFIX));
+        if prefixed {
+            Endpoint::Pipe(arg.to_string())
+        } else {
+            Endpoint::Pipe(format!("{PIPE_PREFIX}{arg}"))
+        }
+    }
+
+    /// Removes what listening left behind once the API stops: the socket file on Unix. A pipe
+    /// goes away with its last handle.
+    pub fn remove(&self) {
+        #[cfg(unix)]
+        {
+            let Endpoint::Socket(path) = self;
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+impl fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            #[cfg(unix)]
+            Endpoint::Socket(path) => path.display().fmt(f),
+            #[cfg(windows)]
+            Endpoint::Pipe(name) => name.fmt(f),
+        }
+    }
+}
+
+/// Listens on `endpoint` for agents, each connection served on its own threads. Only the
+/// current user can connect. An endpoint another instance is listening on fails with
+/// `AddrInUse`.
+pub fn listen(endpoint: &Endpoint, inbox: Inbox) -> io::Result<()> {
+    match endpoint {
+        #[cfg(unix)]
+        Endpoint::Socket(path) => listen_unix(path, inbox),
+        #[cfg(windows)]
+        Endpoint::Pipe(name) => listen_pipe(name, inbox),
+    }
+}
+
+/// A connection to the API listening on `endpoint`: its read and write halves.
+pub fn connect(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
+    match endpoint {
+        #[cfg(unix)]
+        Endpoint::Socket(path) => {
+            let stream = UnixStream::connect(path)?;
+            Ok((Box::new(stream.try_clone()?), Box::new(stream)))
+        }
+        #[cfg(windows)]
+        Endpoint::Pipe(name) => {
+            let (reader, writer) = crate::windows::connect(name)?.split()?;
+            Ok((Box::new(reader), Box::new(writer)))
+        }
+    }
+}
+
+/// Serves the pipe `name`: one instance waits for a client while the others serve theirs.
+/// The next instance is created before a connected one is served or dropped, so the name stays
+/// this process's while it runs.
+#[cfg(windows)]
+fn listen_pipe(name: &str, inbox: Inbox) -> io::Result<()> {
+    use crate::windows::Pipe;
+    let first = Pipe::create(name, true)?;
+    let name = name.to_string();
+    thread::spawn(move || {
+        let mut waiting = first;
+        loop {
+            let connected = waiting.accept().is_ok();
+            let next = Pipe::create(&name, false);
+            if connected && let Ok((reader, writer)) = waiting.split() {
+                serve_stream(inbox.clone(), reader, writer);
+            }
+            match next {
+                Ok(pipe) => waiting = pipe,
+                Err(_) => return,
+            }
+        }
+    });
+    Ok(())
+}
+
 /// Binds a socket at `path` that is never reachable at a mode the umask chose: it is bound in
 /// a fresh folder only this user can enter, made 0600 there, then linked to `path` (failing,
 /// not replacing, when something appeared there meanwhile).
+#[cfg(unix)]
 fn bind_private(path: &Path) -> io::Result<UnixListener> {
     use std::os::unix::fs::DirBuilderExt;
     let parent = match path.parent() {
@@ -118,7 +235,8 @@ fn bind_private(path: &Path) -> io::Result<UnixListener> {
 
 /// Listens on a Unix socket readable only by the current user. A stale socket file (nobody
 /// listening) at `path` is replaced; a live socket or any other existing file is an error.
-pub fn listen_unix(path: &Path, inbox: Inbox) -> io::Result<()> {
+#[cfg(unix)]
+fn listen_unix(path: &Path, inbox: Inbox) -> io::Result<()> {
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if meta.file_type().is_socket() {
             if UnixStream::connect(path).is_ok() {

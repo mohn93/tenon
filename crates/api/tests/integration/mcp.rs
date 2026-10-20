@@ -651,8 +651,10 @@ fn a_lost_connection_is_a_tool_error() {
     assert_eq!(out[2]["result"], json!({}));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_socket_backend_maps_replies_and_stays_lost() {
+    use api::Endpoint;
     use api::mcp::{Backend, SocketBackend};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
@@ -685,7 +687,7 @@ fn a_socket_backend_maps_replies_and_stays_lost() {
             writeln!(writer, "{reply}").unwrap();
         }
     });
-    let mut backend = SocketBackend::connect(&path).unwrap();
+    let mut backend = SocketBackend::connect(&Endpoint::Socket(path.clone())).unwrap();
     assert_eq!(
         backend.call("query", json!({"type": "stats"})).unwrap(),
         json!({"ok": true})

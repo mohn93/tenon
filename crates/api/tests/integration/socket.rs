@@ -1,15 +1,27 @@
 use std::io::{self, BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use api::{HeadlessHost, Hub, codes, listen_unix};
+use api::{Endpoint, HeadlessHost, Hub, listen};
+#[cfg(unix)]
+use api::{Inbox, codes};
 use serde_json::{Value, json};
 
 /// Mirrors `api::MAX_LINE_BYTES` (16 MiB) so the test checks behavior at the limit.
+#[cfg(unix)]
 const MAX_LINE: usize = 16 * 1024 * 1024;
 
+#[cfg(unix)]
+fn listen_unix(path: &Path, inbox: Inbox) -> io::Result<()> {
+    listen(&Endpoint::Socket(path.to_path_buf()), inbox)
+}
+
+#[cfg(unix)]
 fn test_dir(suffix: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("skapi-{}-{suffix}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -17,6 +29,7 @@ fn test_dir(suffix: &str) -> PathBuf {
 }
 
 /// Processes the hub until `want` reply lines have arrived on `reader` (or 5 s pass).
+#[cfg(unix)]
 fn collect_replies(
     hub: &mut Hub,
     host: &mut HeadlessHost,
@@ -37,6 +50,7 @@ fn collect_replies(
     replies
 }
 
+#[cfg(unix)]
 #[test]
 fn unix_socket_serves_requests_and_is_private() {
     let dir = std::env::temp_dir().join(format!("sketchup-alt-api-test-{}", std::process::id()));
@@ -75,6 +89,7 @@ fn unix_socket_serves_requests_and_is_private() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn live_socket_is_not_taken_over() {
     let dir = test_dir("live");
@@ -91,6 +106,7 @@ fn live_socket_is_not_taken_over() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn stale_socket_is_replaced() {
     let dir = test_dir("stale");
@@ -104,6 +120,7 @@ fn stale_socket_is_replaced() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn symlink_is_refused() {
     let dir = test_dir("link");
@@ -121,6 +138,7 @@ fn symlink_is_refused() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn oversized_and_invalid_lines_get_errors_and_the_connection_survives() {
     let dir = test_dir("lines");
@@ -156,6 +174,7 @@ fn oversized_and_invalid_lines_get_errors_and_the_connection_survives() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn the_socket_is_private_from_the_start_and_leaves_no_folder() {
     let dir = test_dir("private-bind");
@@ -175,4 +194,82 @@ fn the_socket_is_private_from_the_start_and_leaves_no_folder() {
     );
     UnixStream::connect(&path).expect("connects at the final path");
     std::fs::remove_file(&path).unwrap();
+}
+
+/// A pipe name no other test uses.
+#[cfg(windows)]
+fn pipe(name: &str) -> Endpoint {
+    Endpoint::from_arg(&format!("sketchup-alt-test-{}-{name}", std::process::id()))
+}
+
+#[cfg(windows)]
+#[test]
+fn a_bare_pipe_name_gets_the_prefix() {
+    assert_eq!(
+        Endpoint::from_arg("main"),
+        Endpoint::Pipe(r"\\.\pipe\main".into())
+    );
+    assert_eq!(
+        Endpoint::from_arg(r"\\.\PIPE\main"),
+        Endpoint::Pipe(r"\\.\PIPE\main".into())
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_named_pipe_serves_requests() {
+    let endpoint = pipe("describe");
+    let mut host = HeadlessHost::new();
+    let mut hub = Hub::new(|| {});
+    listen(&endpoint, hub.inbox()).unwrap();
+
+    // The client runs on its own thread while this one serves the hub. Two requests on one
+    // connection: the server reads the second while the first reply is written.
+    let (sent, replies) = std::sync::mpsc::channel();
+    let client = endpoint.clone();
+    std::thread::spawn(move || {
+        let (reader, mut writer) = api::connect(&client).unwrap();
+        let mut reader = BufReader::new(reader);
+        for id in [1, 2] {
+            let request = json!({"jsonrpc": "2.0", "id": id, "method": "describe"});
+            writeln!(writer, "{request}").unwrap();
+            writer.flush().unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            sent.send(line).unwrap();
+        }
+    });
+    let mut got = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while got.len() < 2 && Instant::now() < deadline {
+        hub.process(&mut host);
+        if let Ok(line) = replies.recv_timeout(Duration::from_millis(20)) {
+            got.push(serde_json::from_str::<Value>(&line).expect("a JSON reply"));
+        }
+    }
+    assert_eq!(got.len(), 2, "{got:?}");
+    for (reply, id) in got.iter().zip([1, 2]) {
+        assert_eq!(reply["id"], id, "{reply}");
+        assert!(reply["result"]["methods"].is_object(), "{reply}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_live_pipe_is_not_taken_over() {
+    let endpoint = pipe("live");
+    let hub = Hub::new(|| {});
+    listen(&endpoint, hub.inbox()).unwrap();
+    let err = listen(&endpoint, Hub::new(|| {}).inbox()).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AddrInUse, "{err}");
+    assert!(
+        api::connect(&endpoint).is_ok(),
+        "the first listener still works"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn connecting_to_a_missing_pipe_fails() {
+    assert!(api::connect(&pipe("missing")).is_err());
 }

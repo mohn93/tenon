@@ -7,8 +7,8 @@ JSON object per line (UTF-8, `\n`-terminated).
 
 | Command | Where the API is |
 |---|---|
-| `cargo run -p app` | Window, plus a Unix socket (path printed on stderr: `agent API listening on ...`) |
-| `cargo run -p app -- --socket PATH` | Window, socket at `PATH` |
+| `cargo run -p app` | Window, plus a Unix socket, or a named pipe on Windows (printed on stderr: `agent API listening on ...`) |
+| `cargo run -p app -- --socket PATH` | Window, socket at `PATH` (on Windows, a pipe name; see below) |
 | `cargo run -p app -- --headless --stdio` | No window; requests on stdin, replies on stdout; exits when stdin closes |
 | `cargo run -p app -- --headless` | No window; socket at the default path (printed on stderr) |
 | `cargo run -p app -- --headless --socket PATH` | No window; socket at `PATH` |
@@ -27,10 +27,16 @@ with `nc -U PATH`. The window removes the socket file on a normal quit. The defa
 by a killed app is never reused; agents that start the app should pass `--socket PATH` (a fixed
 path is replaced on the next start).
 
+On Windows the API listens on a named pipe instead: `\\.\pipe\sketchup-alt-<pid>` by default.
+`--socket NAME` and `--live NAME` take a pipe name; a bare name such as `main` becomes
+`\\.\pipe\main`. Only the current user can open the pipe (its access list names that user
+alone), clients on other machines are refused, and a name another program is already listening
+on is refused (`cannot listen on ...`) rather than shared. The pipe goes away when the app exits.
+
 ## MCP
 
 `app --mcp` serves this API as an MCP server on stdin/stdout, headless or forwarding to a running
-app with `--live SOCKET`. Setup for Claude Code and Claude Desktop is in [mcp.md](mcp.md).
+app with `--live SOCKET` (a pipe name on Windows). Setup for Claude Code and Claude Desktop is in [mcp.md](mcp.md).
 
 ## Methods
 
@@ -1259,4 +1265,4 @@ Standard JSON-RPC codes (-32700 parse, -32600 invalid request, -32601 unknown me
 params) plus `-32000` command failed (`data` is `{kind, message, ids?}`; `kind` is `invalid_input`,
 `not_found`, `nothing_to_undo`, `nothing_to_redo`, `unexpected_step`, `file` or `unsaved_changes`), `-32001` batch failed
 (`data` is `{index, error, completed, rolled_back}`), `-32002` rendering unavailable and `-32003`
-connection lost (MCP `--live` only: the app's socket closed).
+connection lost (MCP `--live` only: the app's socket or pipe closed).

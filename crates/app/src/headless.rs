@@ -1,8 +1,9 @@
-//! Running without a window: the window's editor and the agent API on stdio or a Unix socket.
+//! Running without a window: the window's editor and the agent API on stdio or an endpoint (a
+//! Unix socket, or a named pipe on Windows).
 
 use std::path::PathBuf;
 
-use api::{ApiRoots, Hub, listen_unix, serve_stdio};
+use api::{ApiRoots, Hub, listen, serve_stdio};
 use glam::DVec2;
 use session::Command;
 
@@ -36,15 +37,15 @@ pub fn run(transport: Transport, file: Option<PathBuf>, roots: ApiRoots) -> i32 
             let _ = writer.join();
             0
         }
-        Transport::Socket(path) => {
-            if let Err(e) = listen_unix(&path, hub.inbox()) {
-                eprintln!("cannot listen on {}: {e}", path.display());
+        Transport::Socket(endpoint) => {
+            if let Err(e) = listen(&endpoint, hub.inbox()) {
+                eprintln!("cannot listen on {endpoint}: {e}");
                 return 1;
             }
-            eprintln!("agent API listening on {}", path.display());
+            eprintln!("agent API listening on {endpoint}");
             serve(&mut hub, &mut editor, &mut offscreen, &roots, |_| true);
             hub.close(CLOSE_WAIT);
-            let _ = std::fs::remove_file(&path);
+            endpoint.remove();
             0
         }
     }

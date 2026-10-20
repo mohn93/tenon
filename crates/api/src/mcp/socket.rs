@@ -1,30 +1,32 @@
-//! A [`Backend`] that forwards the API's methods to a running app over its Unix socket.
+//! A [`Backend`] that forwards the API's methods to a running app over its endpoint (a Unix
+//! socket, or a named pipe on Windows).
 
-use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::io::{self, BufRead, BufReader, Read, Write};
 
 use serde_json::{Value, json};
 
 use super::Backend;
 use crate::protocol::{RpcError, codes};
+use crate::transport::{Endpoint, connect};
 
-/// The app listening on a Unix socket. Once the connection fails, every call fails with
+/// The read half of a connection, buffered.
+type Reader = BufReader<Box<dyn Read + Send>>;
+
+/// The app listening on an endpoint. Once the connection fails, every call fails with
 /// [`codes::CONNECTION_LOST`].
 pub struct SocketBackend {
-    path: PathBuf,
+    endpoint: Endpoint,
     /// The connection's write half and buffered read half; None once it was lost.
-    connection: Option<(UnixStream, BufReader<UnixStream>)>,
+    connection: Option<(Box<dyn Write + Send>, Reader)>,
     next_id: u64,
 }
 
 impl SocketBackend {
-    pub fn connect(path: &Path) -> io::Result<SocketBackend> {
-        let stream = UnixStream::connect(path)?;
-        let reader = BufReader::new(stream.try_clone()?);
+    pub fn connect(endpoint: &Endpoint) -> io::Result<SocketBackend> {
+        let (reader, writer) = connect(endpoint)?;
         Ok(SocketBackend {
-            path: path.to_path_buf(),
-            connection: Some((stream, reader)),
+            endpoint: endpoint.clone(),
+            connection: Some((writer, BufReader::new(reader))),
             next_id: 1,
         })
     }
@@ -32,7 +34,7 @@ impl SocketBackend {
     fn lost(&self) -> RpcError {
         RpcError::new(
             codes::CONNECTION_LOST,
-            format!("the connection to {} closed", self.path.display()),
+            format!("the connection to {} closed", self.endpoint),
         )
     }
 }
@@ -58,8 +60,8 @@ impl Backend for SocketBackend {
 /// Sends one request and reads lines until its reply, skipping notifications and anything
 /// that is not a reply to it. None when the connection ends first.
 fn exchange(
-    writer: &mut UnixStream,
-    reader: &mut BufReader<UnixStream>,
+    writer: &mut dyn Write,
+    reader: &mut Reader,
     id: u64,
     method: &str,
     params: Value,

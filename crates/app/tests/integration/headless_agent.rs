@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -87,6 +88,7 @@ fn an_agent_sets_the_editor_and_quits_over_stdio() {
     assert_eq!(tools, vec!["rectangle"], "{messages:?}");
 }
 
+#[cfg(unix)]
 #[test]
 fn quitting_over_a_socket_answers_and_removes_the_socket() {
     let dir = std::env::temp_dir().join(format!("skq-{}", std::process::id()));
@@ -118,6 +120,42 @@ fn quitting_over_a_socket_answers_and_removes_the_socket() {
     assert!(exits(&mut child).success());
     assert!(!path.exists(), "the socket file is removed");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn quitting_over_a_named_pipe_answers() {
+    // A bare name: the app adds the `\\.\pipe\` prefix.
+    let name = format!("skq-{}", std::process::id());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_app"))
+        .args(["--headless", "--socket", &name])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start app");
+    let path = format!(r"\\.\pipe\{name}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let pipe = loop {
+        if let Ok(p) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
+            break p;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("the app never listened");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    writeln!(&pipe, "{}", request(1, "quit", Value::Null)).unwrap();
+    let mut line = String::new();
+    BufReader::new(&pipe).read_line(&mut line).unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["result"], json!({}), "{line}");
+    assert!(exits(&mut child).success());
 }
 
 #[test]
