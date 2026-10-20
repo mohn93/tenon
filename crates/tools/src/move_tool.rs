@@ -105,6 +105,14 @@ pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
                     out.extend(guide_outline(ctx, g));
                 }
             }
+            EntityId::Dimension(d) => out.extend(m.dimension_line(d).map(|(a, b)| [a, b])),
+            EntityId::Note(n) => {
+                if let Some(kernel::Note::Leader { position, .. }) = m.note(n)
+                    && let Some(at) = m.note_point(n)
+                {
+                    out.push([at, *position]);
+                }
+            }
             EntityId::Vertex(_) => {}
         }
     }

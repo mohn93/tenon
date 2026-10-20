@@ -287,7 +287,9 @@ impl Model {
     /// Brings the curves and soft edges the pending edit touched back in line: a curve whose
     /// edges fell apart into several chains keeps its id on the oldest chain and the others
     /// become curves of their own; a chain that branches or is straight (a lone edge) stops
-    /// being a curve; a soft edge left bounding fewer than two faces stops being soft.
+    /// being a curve; a soft edge left bounding fewer than two faces stops being soft. Last,
+    /// annotations whose vertex or curve the edit took away are frozen in place (see
+    /// `freeze_annotations`).
     pub(crate) fn upkeep(&mut self) {
         let mut curves: BTreeSet<CurveId> = BTreeSet::new();
         let mut soft: BTreeSet<EdgeId> = BTreeSet::new();
@@ -345,6 +347,7 @@ impl Model {
                 self.set_edge(e, curve, false, polygon);
             }
         }
+        self.freeze_annotations();
     }
 
     fn mend_curves(&mut self, curves: &BTreeSet<CurveId>) {

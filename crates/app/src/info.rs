@@ -39,7 +39,8 @@ fn selection_info(doc: &Document) -> Vec<String> {
             EntityId::Face(f) => faces.push(*f),
             EntityId::Instance(i) => instances.push(*i),
             EntityId::Guide(g) => guides.push(*g),
-            EntityId::Vertex(_) => {}
+            // Entity Info does not describe annotations yet.
+            EntityId::Vertex(_) | EntityId::Dimension(_) | EntityId::Note(_) => {}
         }
     }
     if let ([], [], [], [g]) = (&edges[..], &faces[..], &instances[..], &guides[..]) {

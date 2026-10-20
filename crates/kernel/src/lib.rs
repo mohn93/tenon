@@ -1,6 +1,7 @@
 //! Geometry kernel: vertices, edges and faces with SketchUp-style sticky geometry.
 //! No GPU or UI dependencies.
 
+mod annotation;
 mod clip;
 mod connected;
 mod curves;
@@ -32,16 +33,20 @@ mod transform;
 mod triangles;
 mod weld;
 
+pub use annotation::{
+    Anchor, Circle, Dimension, MAX_NOTE_CHARS, MAX_NOTE_LINES, Note, RadialAnchor, check_note_text,
+};
 pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
-    DefinitionData, EdgeData, FaceData, GuideData, InstanceData, MAX_ID, MIN_DETERMINANT,
-    MaterialData, MeshData, PageData, SceneData, TagData, TextureData, VertexData,
+    AnchorData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
+    InstanceData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData,
+    RadialAnchorData, SceneData, TagData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
-    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, PageId,
-    TagId, VertexId,
+    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
+    NoteId, PageId, TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -53,7 +58,7 @@ pub use index::{Index, Shape};
 pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView};
-pub use scene::{Definition, DefinitionKind, MeshId, Scene, SceneChange, Step};
+pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
 pub use tag::{MAX_TAG_NAME, TAG_COLORS, Tag, TagEdit, UNTAGGED, tag_shown_among};

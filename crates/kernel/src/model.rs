@@ -5,10 +5,11 @@ use std::sync::OnceLock;
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
+use crate::annotation::{Dimension, Note};
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
-    CurveId, DefinitionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, PageId,
-    TagId, VertexId,
+    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
+    NoteId, PageId, TagId, VertexId,
 };
 use crate::index::Index;
 use crate::texture::{TexturePlacement, is_level};
@@ -242,12 +243,17 @@ pub enum Op {
     PaintInstance(InstanceId, Option<MaterialId>, Option<MaterialId>),
     /// A face's texture placement changed from the first to the second.
     PlaceTexture(FaceId, Option<TexturePlacement>, Option<TexturePlacement>),
-    /// An edge's, face's, instance's or guide's tag changed from the first to the second.
+    /// An edge's, face's, instance's, guide's or annotation's tag changed from the first to
+    /// the second.
     SetTag(EntityId, Option<TagId>, Option<TagId>),
+    AddDimension(DimensionId, Dimension),
+    RemoveDimension(DimensionId, Dimension),
+    AddNote(NoteId, Note),
+    RemoveNote(NoteId, Note),
 }
 
 impl Op {
-    fn inverse(&self) -> Op {
+    pub(crate) fn inverse(&self) -> Op {
         match self.clone() {
             Op::AddVertex(id, v) => Op::RemoveVertex(id, v),
             Op::RemoveVertex(id, v) => Op::AddVertex(id, v),
@@ -266,6 +272,10 @@ impl Op {
             Op::PaintInstance(id, from, to) => Op::PaintInstance(id, to, from),
             Op::PlaceTexture(id, from, to) => Op::PlaceTexture(id, to, from),
             Op::SetTag(id, from, to) => Op::SetTag(id, to, from),
+            Op::AddDimension(id, d) => Op::RemoveDimension(id, d),
+            Op::RemoveDimension(id, d) => Op::AddDimension(id, d),
+            Op::AddNote(id, n) => Op::RemoveNote(id, n),
+            Op::RemoveNote(id, n) => Op::AddNote(id, n),
         }
     }
 
@@ -289,6 +299,10 @@ impl Op {
             Op::PaintInstance(id, _, _) => (EntityId::Instance(*id), true, true),
             Op::PlaceTexture(id, _, _) => (EntityId::Face(*id), true, true),
             Op::SetTag(id, _, _) => (*id, true, true),
+            Op::AddDimension(id, _) => (EntityId::Dimension(*id), false, true),
+            Op::RemoveDimension(id, _) => (EntityId::Dimension(*id), true, false),
+            Op::AddNote(id, _) => (EntityId::Note(*id), false, true),
+            Op::RemoveNote(id, _) => (EntityId::Note(*id), true, false),
         }
     }
 }
@@ -391,7 +405,7 @@ impl ChangeSet {
     }
 }
 
-/// The geometry of one mesh, plus the instances and guides placed in it. Every mutation is
+/// The geometry of one mesh, plus the instances, guides and annotations placed in it. Every mutation is
 /// recorded as an `Op` until `take_changes`.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
@@ -400,6 +414,8 @@ pub struct Model {
     faces: BTreeMap<FaceId, Face>,
     instances: BTreeMap<InstanceId, Instance>,
     guides: BTreeMap<GuideId, Guide>,
+    pub(crate) dimensions: BTreeMap<DimensionId, Dimension>,
+    pub(crate) notes: BTreeMap<NoteId, Note>,
     next_id: u64,
     pending: Vec<Op>,
     /// Built on first use after a change to vertices, edges or faces; see `Model::index`.
@@ -431,6 +447,8 @@ impl PartialEq for Model {
             && self.faces == other.faces
             && self.instances == other.instances
             && self.guides == other.guides
+            && self.dimensions == other.dimensions
+            && self.notes == other.notes
     }
 }
 
@@ -447,6 +465,8 @@ impl Model {
         faces: BTreeMap<FaceId, Face>,
         instances: BTreeMap<InstanceId, Instance>,
         guides: BTreeMap<GuideId, Guide>,
+        dimensions: BTreeMap<DimensionId, Dimension>,
+        notes: BTreeMap<NoteId, Note>,
     ) -> Model {
         let next_id = vertices
             .keys()
@@ -456,6 +476,8 @@ impl Model {
             .chain(faces.keys().map(|k| k.0))
             .chain(instances.keys().map(|k| k.0))
             .chain(guides.keys().map(|k| k.0))
+            .chain(dimensions.keys().map(|k| k.0))
+            .chain(notes.keys().map(|k| k.0))
             .max()
             .map_or(0, |m| m.saturating_add(1));
         let mut m = Model {
@@ -464,6 +486,8 @@ impl Model {
             faces: BTreeMap::new(),
             instances,
             guides,
+            dimensions,
+            notes,
             next_id,
             ..Model::default()
         };
@@ -631,9 +655,9 @@ impl Model {
         }
     }
 
-    fn apply_op(&mut self, op: Op) {
-        // The index holds vertex, edge and face positions only: tags, paint, instances and
-        // guides leave it valid.
+    pub(crate) fn apply_op(&mut self, op: Op) {
+        // The index holds vertex, edge and face positions only: tags, paint, instances,
+        // guides and annotations leave it valid.
         if matches!(
             op,
             Op::AddVertex(..)
@@ -763,8 +787,32 @@ impl Model {
                         *g = g.with_tag(to);
                     }
                 }
+                EntityId::Dimension(d) => {
+                    if let Some(d) = self.dimensions.get_mut(&d) {
+                        *d = d.with_tag(to);
+                    }
+                }
+                EntityId::Note(n) => {
+                    if let Some(n) = self.notes.get_mut(&n) {
+                        *n = n.clone().with_tag(to);
+                    }
+                }
                 EntityId::Vertex(_) => {}
             },
+            Op::AddDimension(id, d) => {
+                self.bump(id.0);
+                self.dimensions.insert(id, d);
+            }
+            Op::RemoveDimension(id, _) => {
+                self.dimensions.remove(&id);
+            }
+            Op::AddNote(id, n) => {
+                self.bump(id.0);
+                self.notes.insert(id, n);
+            }
+            Op::RemoveNote(id, _) => {
+                self.notes.remove(&id);
+            }
         }
     }
 
@@ -993,6 +1041,42 @@ impl Model {
         g
     }
 
+    pub(crate) fn insert_dimension(&mut self, dimension: Dimension) -> DimensionId {
+        let id = DimensionId(self.alloc());
+        self.record(Op::AddDimension(id, dimension));
+        id
+    }
+
+    /// Adds a dimension under an id it had elsewhere (moved between meshes) or before (changed
+    /// in place).
+    pub(crate) fn insert_dimension_as(&mut self, id: DimensionId, dimension: Dimension) {
+        self.record(Op::AddDimension(id, dimension));
+    }
+
+    pub(crate) fn remove_dimension(&mut self, id: DimensionId) -> Dimension {
+        let d = self.dimensions[&id];
+        self.record(Op::RemoveDimension(id, d));
+        d
+    }
+
+    pub(crate) fn insert_note(&mut self, note: Note) -> NoteId {
+        let id = NoteId(self.alloc());
+        self.record(Op::AddNote(id, note));
+        id
+    }
+
+    /// Adds a note under an id it had elsewhere (moved between meshes) or before (changed in
+    /// place).
+    pub(crate) fn insert_note_as(&mut self, id: NoteId, note: Note) {
+        self.record(Op::AddNote(id, note));
+    }
+
+    pub(crate) fn remove_note(&mut self, id: NoteId) -> Note {
+        let n = self.notes[&id].clone();
+        self.record(Op::RemoveNote(id, n.clone()));
+        n
+    }
+
     /// Moves instances by `offset` as one ChangeSet. Each listed instance moves once; unknown
     /// ids are skipped.
     pub fn move_instances(&mut self, ids: &[InstanceId], offset: DVec3) -> ChangeSet {
@@ -1039,20 +1123,22 @@ impl Model {
         }
     }
 
-    /// The tag of an edge, face, instance or guide (None: Untagged); None for a vertex or an
-    /// unknown id.
+    /// The tag of an edge, face, instance, guide, dimension or note (None: Untagged); None for
+    /// a vertex or an unknown id.
     pub fn tag_of(&self, id: EntityId) -> Option<Option<TagId>> {
         match id {
             EntityId::Edge(e) => self.edges.get(&e).map(|e| e.tag),
             EntityId::Face(f) => self.faces.get(&f).map(|f| f.tag),
             EntityId::Instance(i) => self.instances.get(&i).map(|i| i.tag),
             EntityId::Guide(g) => self.guides.get(&g).map(Guide::tag),
+            EntityId::Dimension(d) => self.dimensions.get(&d).map(Dimension::tag),
+            EntityId::Note(n) => self.notes.get(&n).map(Note::tag),
             EntityId::Vertex(_) => None,
         }
     }
 
-    /// Puts an edge, face, instance or guide on `tag` (None: Untagged), recording a change
-    /// only when it differs. Vertices and unknown ids are skipped.
+    /// Puts an edge, face, instance, guide or annotation on `tag` (None: Untagged), recording a
+    /// change only when it differs. Vertices and unknown ids are skipped.
     pub(crate) fn set_tag(&mut self, id: EntityId, tag: Option<TagId>) {
         if let Some(from) = self.tag_of(id)
             && from != tag
@@ -1171,7 +1257,8 @@ impl Model {
                 }
             }
         }
-        self.validate_curves()
+        self.validate_curves()?;
+        self.validate_annotations()
     }
 
     /// Checks that the vertex grid and the vertex-to-edge and vertex-to-face maps match the

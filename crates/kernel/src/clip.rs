@@ -5,13 +5,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DAffine3;
 
+use crate::annotation::Lifted;
 use crate::data::MIN_DETERMINANT;
 use crate::edit::KernelError;
 use crate::group::whole;
-use crate::ids::{DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, TagId};
+use crate::ids::{
+    DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
+    TagId,
+};
 use crate::import_tree::MAX_IMPORT_DEPTH;
 use crate::model::{Guide, Instance, Model};
-use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
+use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange};
 
 /// What an insert made in the mesh it inserted into (its top level only).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -24,6 +28,8 @@ pub struct Inserted {
     pub faces: Vec<FaceId>,
     pub instances: Vec<InstanceId>,
     pub guides: Vec<GuideId>,
+    pub dimensions: Vec<DimensionId>,
+    pub notes: Vec<NoteId>,
     /// The target definition each clip definition the insert placed maps to (an existing
     /// component reused, or the new copy), by the clip definition's id.
     pub definitions: BTreeMap<DefinitionId, DefinitionId>,
@@ -47,6 +53,28 @@ impl Scene {
         guides: &[GuideId],
         to_world: DAffine3,
     ) -> Result<Scene, KernelError> {
+        let parts = Parts {
+            edges: edges.to_vec(),
+            faces: faces.to_vec(),
+            instances: instances.to_vec(),
+            guides: guides.to_vec(),
+            ..Parts::default()
+        };
+        self.extract_with(mesh, &parts, to_world)
+    }
+
+    /// `extract` of `parts`, dimensions and notes included. An annotation anchored to a
+    /// vertex of the extracted geometry stays anchored to it in the clip; one anchored to
+    /// another vertex is anchored to where that vertex is, and a curve not extracted is
+    /// measured as a fixed circle. Missing dimensions and notes are skipped.
+    pub fn extract_with(
+        &self,
+        mesh: MeshId,
+        parts: &Parts,
+        to_world: DAffine3,
+    ) -> Result<Scene, KernelError> {
+        let (edges, faces, instances, guides) =
+            (&parts.edges, &parts.faces, &parts.instances, &parts.guides);
         if !to_world.is_finite() {
             return Err(KernelError::NotFinite);
         }
@@ -68,6 +96,12 @@ impl Scene {
             .filter_map(|id| source.guide(*id).copied())
             .collect();
         let stencil = source.stencil(edges, faces).textures_carried(&to_world);
+        let annotations = source.lift(
+            &parts.dimensions,
+            &parts.notes,
+            to_world,
+            &source.vertices_of(edges, faces),
+        );
 
         let mut reached = BTreeMap::new();
         let mut stack: Vec<DefinitionId> = placed.iter().map(|i| i.definition).collect();
@@ -99,6 +133,7 @@ impl Scene {
             for g in lines {
                 m.insert_guide(g.transformed(to_world));
             }
+            m.land(annotations, false);
             Ok(m.take_changes())
         })?;
 
@@ -169,6 +204,12 @@ impl Scene {
             }
             for (_, g) in m.guides() {
                 tags.extend(g.tag());
+            }
+            for (_, d) in m.dimensions() {
+                tags.extend(d.tag());
+            }
+            for (_, n) in m.notes() {
+                tags.extend(n.tag());
             }
         }
         (materials, tags)
@@ -244,6 +285,11 @@ impl Paste<'_> {
         let stencil = self.stencil_of(root).textures_carried(&placement);
         let children = self.instances_of(scene, root, placement)?;
         let guides = self.guides_of(root, placement);
+        let annotations: Vec<Lifted> = self
+            .annotations_of(root, placement)
+            .into_iter()
+            .filter(|a| self.parent == MeshId::Root || !a.is_screen_note())
+            .collect();
         let mut inserted = Inserted::default();
         let change = scene.edit(self.parent, |m| {
             let faces = m.draw_stencil(&stencil, &[placement]);
@@ -259,6 +305,13 @@ impl Paste<'_> {
             inserted.faces = faces.into_iter().collect();
             inserted.instances = children.into_iter().map(|i| m.insert_instance(i)).collect();
             inserted.guides = guides.into_iter().map(|g| m.insert_guide(g)).collect();
+            for id in m.land(annotations, false) {
+                match id {
+                    EntityId::Dimension(d) => inserted.dimensions.push(d),
+                    EntityId::Note(n) => inserted.notes.push(n),
+                    _ => {}
+                }
+            }
             Ok(m.take_changes())
         })?;
         self.done.push(change);
@@ -304,6 +357,7 @@ impl Paste<'_> {
         let stencil = self.stencil_of(&original.mesh);
         let children = self.instances_of(scene, &original.mesh, DAffine3::IDENTITY)?;
         let guides = self.guides_of(&original.mesh, DAffine3::IDENTITY);
+        let annotations = self.annotations_of(&original.mesh, DAffine3::IDENTITY);
         let (copy, added) = scene.add_definition(&original.name, original.kind);
         self.done.push(added.into());
         let filled = scene.edit(MeshId::Definition(copy), |m| {
@@ -314,6 +368,7 @@ impl Paste<'_> {
             for g in guides {
                 m.insert_guide(g);
             }
+            m.land(annotations, false);
             Ok(m.take_changes())
         })?;
         self.done.push(filled);
@@ -357,6 +412,18 @@ impl Paste<'_> {
                 g.transformed(placement)
                     .with_tag(g.tag().and_then(|id| self.tags.get(&id).copied()))
             })
+            .collect()
+    }
+}
+
+impl Paste<'_> {
+    /// A clip mesh's dimensions and notes placed by `placement`, on the target's tags, still
+    /// anchored to the mesh's vertices once its geometry is drawn.
+    fn annotations_of(&self, m: &Model, placement: DAffine3) -> Vec<Lifted> {
+        let (dimensions, notes) = m.all_annotations();
+        m.lift(&dimensions, &notes, placement, &m.all_vertices())
+            .into_iter()
+            .map(|a| a.retagged(|t| t.and_then(|id| self.tags.get(&id).copied())))
             .collect()
     }
 }

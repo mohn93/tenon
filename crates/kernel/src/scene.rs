@@ -5,8 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
+use crate::annotation::Note;
 use crate::edit::KernelError;
-use crate::ids::{CurveId, DefinitionId, EntityId, InstanceId, MaterialId, PageId, TagId};
+use crate::ids::{
+    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
+    NoteId, PageId, TagId,
+};
 use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
 use crate::page::Page;
@@ -34,6 +38,36 @@ pub struct Definition {
 pub enum MeshId {
     Root,
     Definition(DefinitionId),
+}
+
+/// Entities of one mesh named by an edit, split by kind (see `Parts::of`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Parts {
+    pub edges: Vec<EdgeId>,
+    pub faces: Vec<FaceId>,
+    pub instances: Vec<InstanceId>,
+    pub guides: Vec<GuideId>,
+    pub dimensions: Vec<DimensionId>,
+    pub notes: Vec<NoteId>,
+}
+
+impl Parts {
+    /// `ids` split by kind, each once, in id order; vertices are left out.
+    pub fn of(ids: &[EntityId]) -> Parts {
+        let mut parts = Parts::default();
+        for id in ids.iter().collect::<BTreeSet<_>>() {
+            match *id {
+                EntityId::Vertex(_) => {}
+                EntityId::Edge(e) => parts.edges.push(e),
+                EntityId::Face(f) => parts.faces.push(f),
+                EntityId::Instance(i) => parts.instances.push(i),
+                EntityId::Guide(g) => parts.guides.push(g),
+                EntityId::Dimension(d) => parts.dimensions.push(d),
+                EntityId::Note(n) => parts.notes.push(n),
+            }
+        }
+        parts
+    }
 }
 
 /// One invertible change to a scene.
@@ -624,28 +658,36 @@ impl Scene {
         }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
-        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "c", "d", "m",
-        // "t", "p").
-        let mut owner: BTreeMap<u64, char> = BTreeMap::new();
-        let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
+        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "d", "n", "c",
+        // "d", "m", "t", "p") and the kind (dimensions and definitions share "d").
+        let mut owner: BTreeMap<u64, (char, Kind)> = BTreeMap::new();
+        let mut claim = |id: u64, prefix: char, kind: Kind| match owner.insert(id, (prefix, kind)) {
             None => Ok(()),
-            Some(p) if p == prefix => Err(format!("{prefix}{id} is used in two meshes")),
-            Some(p) => Err(format!("{p}{id} and {prefix}{id} share an id")),
+            Some((_, k)) if k == kind => Err(format!("{prefix}{id} is used in two meshes")),
+            Some((p, _)) => Err(format!("{p}{id} and {prefix}{id} share an id")),
         };
         for id in self.definitions.keys() {
-            claim(id.0, 'd')?;
+            claim(id.0, 'd', Kind::Definition)?;
         }
         for id in self.materials.keys() {
-            claim(id.0, 'm')?;
+            claim(id.0, 'm', Kind::Material)?;
         }
         for id in self.tags.keys() {
-            claim(id.0, 't')?;
+            claim(id.0, 't', Kind::Tag)?;
         }
         for (id, _) in &self.pages {
-            claim(id.0, 'p')?;
+            claim(id.0, 'p', Kind::Page)?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;
+            if mesh != MeshId::Root
+                && let Some((id, _)) = m.notes().find(|(_, n)| matches!(n, Note::Screen { .. }))
+            {
+                return Err(format!(
+                    "{} is a screen note inside {mesh:?}; only the root holds them",
+                    EntityId::Note(id)
+                ));
+            }
             for (id, i) in m.instances() {
                 if !self.definitions.contains_key(&i.definition) {
                     return Err(format!("instance {id:?} places a missing definition"));
@@ -668,18 +710,20 @@ impl Scene {
                 return Err(format!("{id} is on a missing tag"));
             }
             for id in entity_ids(m) {
-                let (prefix, n) = match id {
-                    EntityId::Vertex(v) => ('v', v.0),
-                    EntityId::Edge(e) => ('e', e.0),
-                    EntityId::Face(f) => ('f', f.0),
-                    EntityId::Instance(i) => ('i', i.0),
-                    EntityId::Guide(g) => ('g', g.0),
+                let (prefix, n, kind) = match id {
+                    EntityId::Vertex(v) => ('v', v.0, Kind::Vertex),
+                    EntityId::Edge(e) => ('e', e.0, Kind::Edge),
+                    EntityId::Face(f) => ('f', f.0, Kind::Face),
+                    EntityId::Instance(i) => ('i', i.0, Kind::Instance),
+                    EntityId::Guide(g) => ('g', g.0, Kind::Guide),
+                    EntityId::Dimension(d) => ('d', d.0, Kind::Dimension),
+                    EntityId::Note(n) => ('n', n.0, Kind::Note),
                 };
-                claim(n, prefix)?;
+                claim(n, prefix, kind)?;
             }
             let curves: BTreeSet<CurveId> = m.edges().filter_map(|(_, e)| e.curve).collect();
             for c in curves {
-                claim(c.0, 'c')?;
+                claim(c.0, 'c', Kind::Curve)?;
             }
         }
         if let Some(id) = self.cycle() {
@@ -734,6 +778,23 @@ impl Scene {
     }
 }
 
+/// What an id names, for `Scene::validate`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Vertex,
+    Edge,
+    Face,
+    Instance,
+    Guide,
+    Dimension,
+    Note,
+    Curve,
+    Definition,
+    Material,
+    Tag,
+    Page,
+}
+
 /// The eight corners of the box `lo..hi` placed by `transform`.
 pub(crate) fn placed_box(transform: DAffine3, [lo, hi]: [DVec3; 2]) -> [DVec3; 8] {
     std::array::from_fn(|k| {
@@ -763,4 +824,6 @@ fn entity_ids(m: &Model) -> impl Iterator<Item = EntityId> + '_ {
         .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
         .chain(m.instances().map(|(id, _)| EntityId::Instance(id)))
         .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
+        .chain(m.dimensions().map(|(id, _)| EntityId::Dimension(id)))
+        .chain(m.notes().map(|(id, _)| EntityId::Note(id)))
 }

@@ -1,6 +1,6 @@
-//! Tags: named, colored groupings of edges, faces, instances and guides, shown or hidden
-//! together. An entity is on at most one tag; on none it is "Untagged". Tags are shared by
-//! every mesh of a scene.
+//! Tags: named, colored groupings of edges, faces, instances, guides and annotations, shown
+//! or hidden together. An entity is on at most one tag; on none it is "Untagged". Tags are
+//! shared by every mesh of a scene.
 
 use std::collections::BTreeSet;
 
@@ -94,7 +94,8 @@ impl Model {
             || faces.filter_map(|f| self.face(f)).any(|f| shown(f.tag))
     }
 
-    /// Puts edges, faces, instances and guides on `tag` (None: Untagged) as one ChangeSet.
+    /// Puts edges, faces, instances, guides and annotations on `tag` (None: Untagged) as one
+    /// ChangeSet.
     /// Vertices, unknown ids and entities already on it are skipped.
     pub(crate) fn set_tags(&mut self, ids: &[EntityId], tag: Option<TagId>) -> ChangeSet {
         for &id in ids.iter().collect::<BTreeSet<_>>() {
@@ -112,7 +113,8 @@ impl Model {
         self.take_changes()
     }
 
-    /// The edges, faces, instances and guides on `tag`, in kind then id order.
+    /// The edges, faces, instances, guides, dimensions and notes on `tag`, in kind then id
+    /// order.
     pub fn tagged(&self, tag: TagId) -> impl Iterator<Item = EntityId> + '_ {
         let on = move |t: Option<TagId>| t == Some(tag);
         self.edges()
@@ -132,6 +134,16 @@ impl Model {
                 self.guides()
                     .filter(move |(_, g)| on(g.tag()))
                     .map(|(id, _)| EntityId::Guide(id)),
+            )
+            .chain(
+                self.dimensions()
+                    .filter(move |(_, d)| on(d.tag()))
+                    .map(|(id, _)| EntityId::Dimension(id)),
+            )
+            .chain(
+                self.notes()
+                    .filter(move |(_, n)| on(n.tag()))
+                    .map(|(id, _)| EntityId::Note(id)),
             )
     }
 }
@@ -199,7 +211,8 @@ impl Scene {
         Ok(SceneChange::join(changes))
     }
 
-    /// Puts edges, faces, instances and guides of mesh `mesh` on `tag` (None: Untagged).
+    /// Puts edges, faces, instances, guides and annotations of mesh `mesh` on `tag` (None:
+    /// Untagged).
     /// Vertices and unknown ids are skipped.
     pub fn set_tags(
         &mut self,
@@ -213,8 +226,8 @@ impl Scene {
         self.edit(mesh, |m| Ok(m.set_tags(ids, tag)))
     }
 
-    /// How many edges, faces, instances and guides carry `tag`, in the whole model (each
-    /// definition counted once).
+    /// How many edges, faces, instances, guides and annotations carry `tag`, in the whole
+    /// model (each definition counted once).
     pub fn tag_count(&self, tag: TagId) -> usize {
         self.meshes().map(|(_, m)| m.tagged(tag).count()).sum()
     }

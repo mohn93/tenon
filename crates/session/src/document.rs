@@ -1406,7 +1406,11 @@ impl Document {
                 EntityId::Vertex(v) => {
                     out.insert(v);
                 }
-                EntityId::Instance(_) | EntityId::Guide(_) => {}
+                // Annotations are anchored to vertices but are not made of them.
+                EntityId::Instance(_)
+                | EntityId::Guide(_)
+                | EntityId::Dimension(_)
+                | EntityId::Note(_) => {}
                 EntityId::Edge(e) => out.extend(m.edge(e).map(|e| e.v).into_iter().flatten()),
                 EntityId::Face(f) => {
                     if let Some(f) = m.face(f) {
@@ -1477,7 +1481,8 @@ impl Document {
                 EntityId::Face(f) => parts.faces.push(f),
                 EntityId::Instance(i) => parts.instances.push(i),
                 EntityId::Guide(g) => parts.guides.push(g),
-                EntityId::Vertex(_) => {}
+                // Commands do not take annotations yet.
+                EntityId::Vertex(_) | EntityId::Dimension(_) | EntityId::Note(_) => {}
             }
         }
         Ok(parts)
@@ -1492,6 +1497,8 @@ impl Document {
             EntityId::Face(f) => m.face(f).is_some(),
             EntityId::Instance(i) => m.instance(i).is_some(),
             EntityId::Guide(g) => m.guide(g).is_some(),
+            EntityId::Dimension(d) => m.dimension(d).is_some(),
+            EntityId::Note(n) => m.note(n).is_some(),
         }
     }
 
@@ -1613,6 +1620,13 @@ impl Document {
                     EntityId::Guide(g) => QueryResult::Guide(
                         m.guide(g).map(|_| self.guide_info(g)).ok_or_else(missing)?,
                     ),
+                    EntityId::Dimension(_) | EntityId::Note(_) => {
+                        return Err(CommandError::new(
+                            ErrorKind::InvalidInput,
+                            format!("no entity info for {id} yet"),
+                        )
+                        .with_ids(vec![*id]));
+                    }
                 }
             }
             Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
@@ -1725,6 +1739,16 @@ impl Document {
                     Some(Guide::Point { position, .. }) => vec![position.to_array()],
                     _ => Vec::new(),
                 };
+            }
+            EntityId::Dimension(d) => {
+                let points = match m.dimension_points(d) {
+                    Some((a, b)) => vec![a, b],
+                    None => m.radial_circle(d).map(|c| c.center).into_iter().collect(),
+                };
+                return points.into_iter().map(|p| p.to_array()).collect();
+            }
+            EntityId::Note(n) => {
+                return m.note_point(n).into_iter().map(|p| p.to_array()).collect();
             }
             EntityId::Edge(e) => m.edge(e).map(|e| e.v.to_vec()).unwrap_or_default(),
             EntityId::Face(f) => m

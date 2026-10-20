@@ -11,7 +11,9 @@
 
 use std::fmt;
 
-use kernel::{EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, VertexId};
+use kernel::{
+    DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId, VertexId,
+};
 use serde_json::Value;
 
 use crate::command::{Command, CommandError, ErrorKind, Outcome};
@@ -421,7 +423,9 @@ fn number(id: &EntityId) -> u64 {
         | EntityId::Edge(EdgeId(n))
         | EntityId::Face(FaceId(n))
         | EntityId::Instance(InstanceId(n))
-        | EntityId::Guide(GuideId(n)) => *n,
+        | EntityId::Guide(GuideId(n))
+        | EntityId::Dimension(DimensionId(n))
+        | EntityId::Note(NoteId(n)) => *n,
     }
 }
 

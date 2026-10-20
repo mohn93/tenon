@@ -4,11 +4,12 @@ use std::collections::BTreeSet;
 
 use glam::{DAffine3, DVec3};
 
+use crate::annotation::Note;
 use crate::edit::KernelError;
 use crate::geom::LENGTH_TOL;
-use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, VertexId};
+use crate::ids::{DefinitionId, EdgeId, FaceId, InstanceId, NoteId, VertexId};
 use crate::model::{Guide, Instance, Model};
-use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
+use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange};
 use crate::transform::Stencil;
 
 impl Scene {
@@ -25,14 +26,52 @@ impl Scene {
         kind: DefinitionKind,
         name: &str,
     ) -> Result<(InstanceId, SceneChange), KernelError> {
+        let parts = Parts {
+            edges: edges.to_vec(),
+            faces: faces.to_vec(),
+            instances: instances.to_vec(),
+            ..Parts::default()
+        };
+        self.make_group_with(parent, &parts, kind, name)
+    }
+
+    /// `make_group` of `parts`' edges, faces and instances that also moves its guides,
+    /// dimensions and notes into the new definition, keeping their ids. An annotation
+    /// anchored to a vertex of the grouped geometry stays anchored to it there; one anchored
+    /// to another vertex is anchored to where that vertex is, and a curve not grouped is
+    /// measured as a fixed circle. Screen notes stay in the root.
+    pub fn make_group_with(
+        &mut self,
+        parent: MeshId,
+        parts: &Parts,
+        kind: DefinitionKind,
+        name: &str,
+    ) -> Result<(InstanceId, SceneChange), KernelError> {
+        let (edges, faces) = (&parts.edges[..], &parts.faces[..]);
         let source = self.mesh(parent).expect("group in a missing mesh");
         let stencil = source.stencil(edges, faces);
-        let moved: Vec<(InstanceId, Instance)> = instances
+        let moved: Vec<(InstanceId, Instance)> = parts
+            .instances
             .iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter_map(|id| source.instance(*id).map(|i| (*id, i.clone())))
             .collect();
+        let guides: Vec<(crate::ids::GuideId, Guide)> = parts
+            .guides
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|id| source.guide(*id).map(|g| (*id, *g)))
+            .collect();
+        let notes: Vec<NoteId> = parts
+            .notes
+            .iter()
+            .copied()
+            .filter(|n| !matches!(source.note(*n), Some(Note::Screen { .. })))
+            .collect();
+        let copied = source.vertices_of(edges, faces);
+        let annotations = source.lift(&parts.dimensions, &notes, DAffine3::IDENTITY, &copied);
 
         let (definition, added) = self.add_definition(name, kind);
         let mut placed = None;
@@ -40,6 +79,11 @@ impl Scene {
             for (id, _) in &moved {
                 m.remove_instance(*id);
             }
+            for (id, _) in &guides {
+                m.remove_guide(*id);
+            }
+            // The annotations go before the geometry, so they are not frozen on the way out.
+            m.erase_annotations_pending(&parts.dimensions, &notes);
             m.detach(edges, faces);
             placed = Some(m.insert_instance(Instance::new(definition, DAffine3::IDENTITY)));
             Ok(m.take_changes())
@@ -49,6 +93,10 @@ impl Scene {
             for (id, i) in moved {
                 m.insert_instance_as(id, i);
             }
+            for (id, g) in guides {
+                m.insert_guide_as(id, g);
+            }
+            m.land(annotations, true);
             Ok(m.take_changes())
         })?;
         let change = SceneChange::join([SceneChange::from(added), left, filled]);
@@ -59,7 +107,8 @@ impl Scene {
 impl Scene {
     /// Replaces an instance in mesh `parent` by its definition's geometry, placed by the
     /// instance's transform and drawn like new edges, so it merges with what it touches.
-    /// Instances and guides inside it come out into `parent`, with new ids; a group inside a
+    /// Instances, guides and annotations inside it come out into `parent`, with new ids (an
+    /// annotation anchored to a vertex stays anchored to it); a group inside a
     /// component gets a copy of its definition. A group's definition goes with its last
     /// instance; a component's stays. The instance's material passes to the face sides and
     /// instances that come out without one, and its tag to the edges, faces, instances and
@@ -99,6 +148,18 @@ impl Scene {
                     .with_tag(g.tag().or(placed.tag))
             })
             .collect();
+        let (dimensions, notes) = definition.mesh.all_annotations();
+        let annotations: Vec<_> = definition
+            .mesh
+            .lift(
+                &dimensions,
+                &notes,
+                placed.transform,
+                &definition.mesh.all_vertices(),
+            )
+            .into_iter()
+            .map(|a| a.retagged(|t| t.or(placed.tag)))
+            .collect();
         let mut copied = SceneChange::default();
         let mut children = Vec::new();
         for i in inner {
@@ -126,6 +187,7 @@ impl Scene {
             for g in guides {
                 m.insert_guide(g);
             }
+            m.land(annotations, false);
             Ok(m.take_changes())
         })?;
         Ok(SceneChange::join([copied, exploded, self.prune()]))
@@ -201,14 +263,21 @@ impl Scene {
         Ok(SceneChange::join([steps, placed]))
     }
 
-    /// A new group definition holding a copy of `id`'s geometry and guides, with new ids;
-    /// groups inside it are copied too, components inside are placed again.
+    /// A new group definition holding a copy of `id`'s geometry, guides and annotations, with
+    /// new ids; groups inside it are copied too, components inside are placed again.
     fn duplicate(&mut self, id: DefinitionId) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
         let (name, kind) = (original.name.clone(), original.kind);
         let stencil = whole(&original.mesh);
         let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
         let guides: Vec<Guide> = original.mesh.guides().map(|(_, g)| *g).collect();
+        let (dimensions, notes) = original.mesh.all_annotations();
+        let annotations = original.mesh.lift(
+            &dimensions,
+            &notes,
+            DAffine3::IDENTITY,
+            &original.mesh.all_vertices(),
+        );
         let mut change = SceneChange::default();
         let mut placed = Vec::new();
         for child in children {
@@ -237,6 +306,7 @@ impl Scene {
                 for g in guides {
                     m.insert_guide(g);
                 }
+                m.land(annotations, false);
                 Ok(m.take_changes())
             })
             .expect("drawing a copy cannot fail");

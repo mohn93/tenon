@@ -156,6 +156,11 @@ pub(crate) fn selection_bounds(
                 points.extend(ctx.scenery.instance_box(i).into_iter().flatten())
             }
             EntityId::Guide(g) => points.extend(m.guide(g).map(Guide::anchor)),
+            EntityId::Dimension(d) => match m.dimension_points(d) {
+                Some((a, b)) => points.extend([a, b]),
+                None => points.extend(m.radial_circle(d).map(|c| c.center)),
+            },
+            EntityId::Note(n) => points.extend(m.note_point(n)),
         }
     }
     let first = *points.first()?;

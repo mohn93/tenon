@@ -59,6 +59,10 @@ pub enum KernelError {
     /// many definitions or instances, or a singular transform), or the mesh it should go
     /// straight into is not empty; the text says which.
     InvalidImport(String),
+    /// A dimension or note is invalid: a missing vertex or note, a curve that is not a
+    /// circle or an arc, text that is blank or too long, a screen note off the view or
+    /// outside the root; the text says which.
+    Annotation(String),
 }
 
 impl fmt::Display for KernelError {
@@ -96,7 +100,8 @@ impl fmt::Display for KernelError {
             | KernelError::TexturePlacement(why)
             | KernelError::TagName(why)
             | KernelError::Page(why)
-            | KernelError::InvalidImport(why) => {
+            | KernelError::InvalidImport(why)
+            | KernelError::Annotation(why) => {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {

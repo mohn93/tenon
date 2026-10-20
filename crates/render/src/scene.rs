@@ -383,7 +383,8 @@ impl Spans {
                 edges: p.edges.clone(),
                 guides: p.guides.clone(),
             }),
-            EntityId::Vertex(_) => None,
+            // Annotations are not drawn from these lists.
+            EntityId::Vertex(_) | EntityId::Dimension(_) | EntityId::Note(_) => None,
         }
     }
 

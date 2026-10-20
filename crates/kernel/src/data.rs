@@ -6,8 +6,10 @@ use std::sync::Arc;
 use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
+use crate::annotation::{Anchor, Dimension, Note, RadialAnchor};
 use crate::ids::{
-    CurveId, DefinitionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, PageId, TagId, VertexId,
+    CurveId, DefinitionId, DimensionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
+    PageId, TagId, VertexId,
 };
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
@@ -132,6 +134,12 @@ pub struct MeshData {
     /// Absent in files written before guides existed (and when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guides: Vec<GuideData>,
+    /// Absent in files written before dimensions existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimensions: Vec<DimensionData>,
+    /// Absent in files written before notes existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<NoteData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -207,6 +215,82 @@ pub struct GuideData {
     /// The tag it is on (absent: Untagged, as in files written before tags existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<u64>,
+}
+
+/// A dimension end or a note's anchor: a vertex id, or a point.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AnchorData {
+    Vertex(u64),
+    Point([f64; 3]),
+}
+
+/// The circle a radial dimension measures: a curve id, or a fixed circle.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RadialAnchorData {
+    Curve(u64),
+    Fixed(CircleData),
+}
+
+/// A fixed circle: `normal` is a unit vector.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CircleData {
+    pub center: [f64; 3],
+    pub normal: [f64; 3],
+    pub radius: f64,
+}
+
+/// A dimension (see `Dimension`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DimensionData {
+    Linear {
+        id: u64,
+        a: AnchorData,
+        b: AnchorData,
+        offset: [f64; 3],
+        /// The tag it is on (absent: Untagged).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<u64>,
+    },
+    Radial {
+        id: u64,
+        curve: RadialAnchorData,
+        /// Absent (false) for a radius.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        diameter: bool,
+        leader: [f64; 3],
+        /// The tag it is on (absent: Untagged).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<u64>,
+    },
+}
+
+/// A note (see `Note`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NoteData {
+    Leader {
+        id: u64,
+        anchor: AnchorData,
+        position: [f64; 3],
+        /// Absent for the anchored point's coordinates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        /// The tag it is on (absent: Untagged).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<u64>,
+    },
+    Screen {
+        id: u64,
+        at: [f64; 2],
+        text: String,
+        /// The tag it is on (absent: Untagged).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<u64>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -424,6 +508,76 @@ fn mesh_data(m: &Model) -> MeshData {
                 },
             })
             .collect(),
+        dimensions: m
+            .dimensions()
+            .map(|(id, d)| dimension_data(id, d))
+            .collect(),
+        notes: m.notes().map(|(id, n)| note_data(id, n)).collect(),
+    }
+}
+
+fn anchor_data(a: &Anchor) -> AnchorData {
+    match a {
+        Anchor::Vertex(v) => AnchorData::Vertex(v.0),
+        Anchor::Point(p) => AnchorData::Point(p.to_array()),
+    }
+}
+
+fn dimension_data(id: DimensionId, d: &Dimension) -> DimensionData {
+    match *d {
+        Dimension::Linear { a, b, offset, tag } => DimensionData::Linear {
+            id: id.0,
+            a: anchor_data(&a),
+            b: anchor_data(&b),
+            offset: offset.to_array(),
+            tag: tag.map(|t| t.0),
+        },
+        Dimension::Radial {
+            curve,
+            diameter,
+            leader,
+            tag,
+        } => DimensionData::Radial {
+            id: id.0,
+            curve: match curve {
+                RadialAnchor::Curve(c) => RadialAnchorData::Curve(c.0),
+                RadialAnchor::Fixed {
+                    center,
+                    normal,
+                    radius,
+                } => RadialAnchorData::Fixed(CircleData {
+                    center: center.to_array(),
+                    normal: normal.to_array(),
+                    radius,
+                }),
+            },
+            diameter,
+            leader: leader.to_array(),
+            tag: tag.map(|t| t.0),
+        },
+    }
+}
+
+fn note_data(id: NoteId, n: &Note) -> NoteData {
+    match n {
+        Note::Leader {
+            anchor,
+            position,
+            text,
+            tag,
+        } => NoteData::Leader {
+            id: id.0,
+            anchor: anchor_data(anchor),
+            position: position.to_array(),
+            text: text.clone(),
+            tag: tag.map(|t| t.0),
+        },
+        Note::Screen { at, text, tag } => NoteData::Screen {
+            id: id.0,
+            at: *at,
+            text: text.clone(),
+            tag: tag.map(|t| t.0),
+        },
     }
 }
 
@@ -543,7 +697,125 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             return Err(format!("guide g{} appears twice", g.id));
         }
     }
-    let ids = vertices.len() + edges.len() + faces.len() + instances.len() + guides.len();
+    let anchor = |a: &AnchorData, what: &str| -> Result<Anchor, String> {
+        Ok(match *a {
+            AnchorData::Vertex(v) => {
+                if !vertices.contains_key(&VertexId(v)) {
+                    return Err(format!(
+                        "{what} is anchored to vertex v{v}, which the mesh does not have"
+                    ));
+                }
+                Anchor::Vertex(VertexId(v))
+            }
+            AnchorData::Point(p) => {
+                finite(&p, what.to_string())?;
+                Anchor::Point(DVec3::from(p))
+            }
+        })
+    };
+    let mut dimensions = BTreeMap::new();
+    for d in &data.dimensions {
+        let (id, dimension) = match d {
+            DimensionData::Linear {
+                id,
+                a,
+                b,
+                offset,
+                tag,
+            } => {
+                let what = format!("dimension d{id}");
+                check_id("dimension d", *id)?;
+                finite(offset, what.clone())?;
+                let dimension = Dimension::Linear {
+                    a: anchor(a, &what)?,
+                    b: anchor(b, &what)?,
+                    offset: DVec3::from(*offset),
+                    tag: tag.map(TagId),
+                };
+                (*id, dimension)
+            }
+            DimensionData::Radial {
+                id,
+                curve,
+                diameter,
+                leader,
+                tag,
+            } => {
+                let what = format!("dimension d{id}");
+                check_id("dimension d", *id)?;
+                finite(leader, what.clone())?;
+                let curve = match curve {
+                    RadialAnchorData::Curve(c) => {
+                        check_id("curve c", *c)?;
+                        RadialAnchor::Curve(CurveId(*c))
+                    }
+                    RadialAnchorData::Fixed(c) => {
+                        finite(&c.center, what.clone())?;
+                        finite(&c.normal, what.clone())?;
+                        finite(&[c.radius], what.clone())?;
+                        RadialAnchor::Fixed {
+                            center: DVec3::from(c.center),
+                            normal: DVec3::from(c.normal),
+                            radius: c.radius,
+                        }
+                    }
+                };
+                let dimension = Dimension::Radial {
+                    curve,
+                    diameter: *diameter,
+                    leader: DVec3::from(*leader),
+                    tag: tag.map(TagId),
+                };
+                (*id, dimension)
+            }
+        };
+        if dimensions.insert(DimensionId(id), dimension).is_some() {
+            return Err(format!("dimension d{id} appears twice"));
+        }
+    }
+    let mut notes = BTreeMap::new();
+    for n in &data.notes {
+        let (id, note) = match n {
+            NoteData::Leader {
+                id,
+                anchor: a,
+                position,
+                text,
+                tag,
+            } => {
+                let what = format!("note n{id}");
+                check_id("note n", *id)?;
+                finite(position, what.clone())?;
+                let note = Note::Leader {
+                    anchor: anchor(a, &what)?,
+                    position: DVec3::from(*position),
+                    text: text.clone(),
+                    tag: tag.map(TagId),
+                };
+                (*id, note)
+            }
+            NoteData::Screen { id, at, text, tag } => {
+                check_id("note n", *id)?;
+                finite(at, format!("note n{id}"))?;
+                let note = Note::Screen {
+                    at: *at,
+                    text: text.clone(),
+                    tag: tag.map(TagId),
+                };
+                (*id, note)
+            }
+        };
+        if notes.insert(NoteId(id), note).is_some() {
+            return Err(format!("note n{id} appears twice"));
+        }
+    }
+    let ids = vertices.len()
+        + edges.len()
+        + faces.len()
+        + instances.len()
+        + guides.len()
+        + dimensions.len()
+        + notes.len();
     let distinct: std::collections::BTreeSet<u64> = vertices
         .keys()
         .map(|k| k.0)
@@ -551,9 +823,13 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
         .chain(faces.keys().map(|k| k.0))
         .chain(instances.keys().map(|k| k.0))
         .chain(guides.keys().map(|k| k.0))
+        .chain(dimensions.keys().map(|k| k.0))
+        .chain(notes.keys().map(|k| k.0))
         .collect();
     if distinct.len() != ids {
         return Err("two entities of different kinds share an id".into());
     }
-    Ok(Model::from_parts(vertices, edges, faces, instances, guides))
+    Ok(Model::from_parts(
+        vertices, edges, faces, instances, guides, dimensions, notes,
+    ))
 }
