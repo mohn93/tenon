@@ -5,7 +5,7 @@
 //! ones. Neither panics on degenerate input: a triangle that is not finite, lies in the plane or
 //! is a sliver contributes nothing or what little there is.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use glam::{DVec2, DVec3};
 
@@ -22,7 +22,7 @@ pub struct SectionLoops {
     pub open: Vec<Vec<DVec3>>,
 }
 
-/// How far off the plane, to the cut-away side, the inside test samples.
+/// How far off the plane, to the kept side, the inside test samples.
 const SAMPLE_OFFSET: f64 = 1e-7;
 
 /// What the plane through `point` with normal `normal` (any length but not zero) cuts out of
@@ -31,7 +31,7 @@ const SAMPLE_OFFSET: f64 = 1e-7;
 /// corner strictly on the other side are cut: a triangle in the plane is not, and neither is
 /// one touching it from the kept side. The pieces are noded (split where a corner lies on
 /// another piece) into a planar arrangement; each bounded region of it is a closed loop with
-/// its holes when it lies inside a solid (judged on the cut-away side of the plane, by the
+/// its holes when it lies inside a solid (judged just on the kept side of the plane, by the
 /// parity of the crossings of a ray with `triangles`). Pieces bounding no such region, and
 /// dangling ones, are returned as open chains. Collinear points are dropped, so a loop's
 /// points are its corners. Nothing is cut when a number is not finite or `normal` has no
@@ -44,12 +44,17 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
         return SectionLoops::default();
     }
     let mut welder = Welder::default();
-    let mut ends: BTreeSet<(usize, usize)> = BTreeSet::new();
+    // The cuts with the plane counting as the kept side (cut edges), and as the cut-away side
+    // (which finds the outline of material that starts on the plane and goes to the kept
+    // side; these pieces only outline fills and are not returned as chains).
+    let mut ends: BTreeMap<(usize, usize), bool> = BTreeMap::new();
     for t in triangles {
-        if let Some([a, b]) = cut_triangle(t, point, normal) {
-            let (a, b) = (welder.id(a), welder.id(b));
-            if a != b {
-                ends.insert((a.min(b), a.max(b)));
+        for on_plane_kept in [true, false] {
+            if let Some([a, b]) = cut_triangle(t, point, normal, on_plane_kept) {
+                let (a, b) = (welder.id(a), welder.id(b));
+                if a != b {
+                    *ends.entry((a.min(b), a.max(b))).or_default() |= on_plane_kept;
+                }
             }
         }
     }
@@ -59,9 +64,9 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
         .iter()
         .map(|p| DVec2::new((*p - point).dot(u), (*p - point).dot(v)))
         .collect();
-    let edges = node_edges(&ends, &flat);
+    let (edges, cut) = node_edges(&ends, &flat);
     let solid = |s: DVec2| {
-        let at = point + u * s.x + v * s.y - normal * SAMPLE_OFFSET;
+        let at = point + u * s.x + v * s.y + normal * SAMPLE_OFFSET;
         inside(triangles, at)
     };
     let found = Arrangement::new(&edges, &flat).solid_faces(&solid);
@@ -79,12 +84,14 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
     // The pieces bounding no solid region, as chains.
     let mut adjacent: Vec<Vec<usize>> = vec![Vec::new(); welder.points.len()];
     for (k, (a, b)) in edges.iter().enumerate() {
-        if !found.bounds_solid[k] {
+        if cut[k] && !found.bounds_solid[k] {
             adjacent[*a].push(k);
             adjacent[*b].push(k);
         }
     }
-    let mut used: Vec<bool> = found.bounds_solid.clone();
+    let mut used: Vec<bool> = (0..edges.len())
+        .map(|k| !cut[k] || found.bounds_solid[k])
+        .collect();
     let mut open: Vec<Vec<DVec3>> = Vec::new();
     let mut chains: Vec<Vec<usize>> = Vec::new();
     for node in 0..adjacent.len() {
@@ -113,13 +120,24 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
 
 /// The cut of one triangle: the two ends of the piece of the plane inside it. None unless a
 /// corner is strictly on the cut-away side and another on the kept side or on the plane.
-fn cut_triangle(t: &[DVec3; 3], point: DVec3, normal: DVec3) -> Option<[DVec3; 2]> {
+fn cut_triangle(
+    t: &[DVec3; 3],
+    point: DVec3,
+    normal: DVec3,
+    on_plane_kept: bool,
+) -> Option<[DVec3; 2]> {
     if !t.iter().all(|p| p.is_finite()) {
         return None;
     }
     let d = t.map(|p| (p - point).dot(normal));
-    // As `SectionPlane::keeps`: on the plane counts as the kept side.
-    let kept = d.map(|x| x >= -KEEP_TOL);
+    // As `SectionPlane::keeps`: on the plane counts as the kept side (or not).
+    let kept = d.map(|x| {
+        if on_plane_kept {
+            x >= -KEEP_TOL
+        } else {
+            x > KEEP_TOL
+        }
+    });
     if kept == [true; 3] || kept == [false; 3] {
         return None;
     }
@@ -170,12 +188,16 @@ fn ray_hits(t: &[DVec3; 3], origin: DVec3, dir: DVec3) -> bool {
 }
 
 /// `edges` split at the nodes lying on them (a corner on another piece), without duplicates:
-/// pieces that overlap end up as the same pieces.
-fn node_edges(edges: &BTreeSet<(usize, usize)>, flat: &[DVec2]) -> Vec<(usize, usize)> {
+/// pieces that overlap end up as the same pieces. With each piece, whether any edge it comes
+/// from was flagged.
+fn node_edges(
+    edges: &BTreeMap<(usize, usize), bool>,
+    flat: &[DVec2],
+) -> (Vec<(usize, usize)>, Vec<bool>) {
     let mut order: Vec<usize> = (0..flat.len()).collect();
     order.sort_by(|a, b| flat[*a].x.total_cmp(&flat[*b].x));
-    let mut out = BTreeSet::new();
-    for &(a, b) in edges {
+    let mut out: BTreeMap<(usize, usize), bool> = BTreeMap::new();
+    for (&(a, b), &flag) in edges {
         let (pa, pb) = (flat[a], flat[b]);
         let (lo, hi) = (pa.x.min(pb.x) - LENGTH_TOL, pa.x.max(pb.x) + LENGTH_TOL);
         let first = order.partition_point(|n| flat[*n].x < lo);
@@ -190,11 +212,11 @@ fn node_edges(edges: &BTreeSet<(usize, usize)>, flat: &[DVec2]) -> Vec<(usize, u
         for w in on.windows(2) {
             let (x, y) = (w[0].1, w[1].1);
             if x != y {
-                out.insert((x.min(y), x.max(y)));
+                *out.entry((x.min(y), x.max(y))).or_default() |= flag;
             }
         }
     }
-    out.into_iter().collect()
+    out.into_iter().unzip()
 }
 
 /// The regions a set of pieces (edges between nodes) cuts the plane into.

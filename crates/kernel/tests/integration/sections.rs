@@ -684,12 +684,16 @@ fn a_cut_through_an_open_surface_is_an_open_chain() {
 }
 
 #[test]
-fn a_plane_through_the_top_face_keeps_the_outline_of_the_face() {
+fn a_plane_through_the_top_face_fills_only_when_the_box_is_kept() {
     let tris = box_tris(DVec3::ZERO, p(2.0, 3.0, 1.0));
+    // Keeping what is above, no material is kept: the outline stays as cut edges.
     let r = section_loops(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
-    assert_eq!(r.closed.len(), 1, "{:?}", r);
-    assert!(r.open.is_empty());
-    assert!((area(&r.closed[0][0], DVec3::Z).abs() - 6.0).abs() < 1e-9);
+    assert!(r.closed.is_empty(), "{r:?}");
+    assert_eq!(r.open.len(), 1);
+    // Keeping the box: its top is the cap.
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), -DVec3::Z);
+    assert_eq!((r.closed.len(), r.open.len()), (1, 0), "{r:?}");
+    assert!((area - 6.0).abs() < 1e-9, "{area}");
 }
 
 #[test]
@@ -765,37 +769,29 @@ fn fill_of(tris: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> (kernel::Section
 }
 
 #[test]
-fn a_plane_on_the_joint_of_stacked_boxes_fills_the_part_it_cuts_away() {
-    // The plane keeps what is on it and above (+Z), so the lower box is the part cut away.
+fn a_plane_on_the_joint_of_stacked_boxes_fills_the_material_it_keeps() {
     let mut tris = box_tris(DVec3::ZERO, p(4.0, 4.0, 1.0));
     tris.extend(box_tris(p(1.0, 1.0, 1.0), p(3.0, 3.0, 2.0)));
+    // Keeping the upper box: its 2 x 2 foot.
     let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
-    assert_eq!((r.closed.len(), r.open.len()), (1, 0), "{r:?}");
-    assert_eq!(r.closed[0].len(), 1);
-    assert!(
-        (area - 16.0).abs() < 1e-9,
-        "the lower box's 4 x 4 cap: {area}"
-    );
-    // Keeping what is below instead, the upper box is cut away.
+    assert_eq!(r.closed.len(), 1, "{r:?}");
+    assert!((area - 4.0).abs() < 1e-9, "{area}");
+    // Keeping the lower box: its 4 x 4 top.
     let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), -DVec3::Z);
-    assert_eq!((r.closed.len(), r.open.len()), (1, 0), "{r:?}");
-    assert!(
-        (area - 4.0).abs() < 1e-9,
-        "the upper box's 2 x 2 cap: {area}"
-    );
+    assert!(r.open.is_empty(), "{r:?}");
+    assert!((area - 16.0).abs() < 1e-9, "{area}");
 }
 
 #[test]
-fn a_plane_through_the_step_of_an_l_shape_fills_the_cut_away_part() {
+fn a_plane_through_the_step_of_an_l_shape_fills_the_material_it_keeps() {
     // A 4 x 4 slab with a 2 x 4 block on half of it.
     let mut tris = box_tris(DVec3::ZERO, p(4.0, 4.0, 1.0));
     tris.extend(box_tris(p(0.0, 0.0, 1.0), p(2.0, 4.0, 2.0)));
-    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
-    assert!(r.open.is_empty(), "{r:?}");
-    assert!((area - 16.0).abs() < 1e-9, "{area}");
+    let (_, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
+    assert!((area - 8.0).abs() < 1e-9, "{area}");
     let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), -DVec3::Z);
     assert!(r.open.is_empty(), "{r:?}");
-    assert!((area - 8.0).abs() < 1e-9, "{area}");
+    assert!((area - 16.0).abs() < 1e-9, "{area}");
 }
 
 #[test]
