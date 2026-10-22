@@ -201,8 +201,25 @@ pub fn pick_with_input(accept: &str, done: impl FnOnce(Chosen) + 'static) -> Res
             }
         })
     };
+    // Browsers without a `cancel` event say nothing when the chooser is dismissed: the page
+    // gaining focus again with no `change` within a second means nothing was chosen.
+    let on_focus = {
+        let input = input.clone();
+        let done = done.clone();
+        Closure::once(move |_: Event| {
+            let late = Closure::once_into_js(move || {
+                if let Some(done) = done.borrow_mut().take() {
+                    input.remove();
+                    done(Ok(None));
+                }
+            });
+            let _ = window()
+                .set_timeout_with_callback_and_timeout_and_arguments_0(late.unchecked_ref(), 1000);
+        })
+    };
     let on_cancel = {
         let input = input.clone();
+        let done = done.clone();
         Closure::once(move |_: Event| {
             input.remove();
             if let Some(done) = done.borrow_mut().take() {
@@ -217,6 +234,10 @@ pub fn pick_with_input(accept: &str, done: impl FnOnce(Chosen) + 'static) -> Res
     target
         .add_event_listener_with_callback("cancel", on_cancel.as_ref().unchecked_ref())
         .map_err(|e| describe(&e))?;
+    window()
+        .add_event_listener_with_callback("focus", on_focus.as_ref().unchecked_ref())
+        .map_err(|e| describe(&e))?;
+    on_focus.forget();
     // The listeners live until the input is removed and dropped with the page.
     on_change.forget();
     on_cancel.forget();

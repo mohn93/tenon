@@ -64,7 +64,7 @@ pub fn writes_back(name: &str) -> bool {
 /// Whether the page keeps the browser from acting on this key press on the canvas. The app
 /// handles plain keys (tools, arrows, Space, Tab, Backspace, Delete) and the command chords of
 /// `app::shortcuts`; the browser must not also scroll, search, go back or save the page.
-/// Left to the browser: Cut, Copy and Paste (the page needs their events), the function keys
+/// Left to the browser: Quit, Cut, Copy and Paste (the page needs their events), the function keys
 /// (reload, full screen, developer tools), Alt chords, and every other Ctrl or Cmd chord
 /// (Ctrl+R, Ctrl+L, Ctrl+W, Ctrl+T, ...).
 pub fn should_prevent_default(key: &str, ctrl: bool, meta: bool, alt: bool, shift: bool) -> bool {
@@ -80,7 +80,8 @@ pub fn should_prevent_default(key: &str, ctrl: bool, meta: bool, alt: bool, shif
         let Some(letter) = single.map(|c| c.to_ascii_lowercase()) else {
             return false;
         };
-        if matches!(letter, 'c' | 'x' | 'v') {
+        // Quit is not on the web, so the browser keeps Ctrl+Q.
+        if matches!(letter, 'c' | 'x' | 'v' | 'q') {
             return false;
         }
         return app::shortcuts::command(letter, shift, false).is_some();
@@ -185,7 +186,7 @@ mod tests {
         );
         assert!(should_prevent_default("z", true, false, false, false));
         // Clipboard chords fire the page's copy, cut and paste events.
-        for letter in ["c", "x", "v"] {
+        for letter in ["c", "x", "v", "q"] {
             assert!(!should_prevent_default(letter, true, false, false, false));
             assert!(!should_prevent_default(letter, false, true, false, false));
         }

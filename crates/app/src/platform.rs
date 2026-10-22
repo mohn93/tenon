@@ -51,6 +51,11 @@ pub struct Features {
     /// The window draws its own dialogs (the unsaved-changes question, About) where the system
     /// has no native ones to show; `Platform::confirm_unsaved` is not called then.
     pub in_app_dialogs: bool,
+    /// The app can be quit (File > Quit, Ctrl+Q); a browser tab is closed by the page's user.
+    pub quit: bool,
+    /// Paste arrives as an event from the system (`AppEvent::Paste`) after the key press,
+    /// rather than the key press reading the clipboard.
+    pub paste_by_event: bool,
 }
 
 impl Features {
@@ -62,6 +67,8 @@ impl Features {
         print: true,
         recent: true,
         in_app_dialogs: false,
+        quit: true,
+        paste_by_event: false,
     };
 
     /// Only what a browser tab offers: files as bytes, nothing that needs folders or processes.
@@ -72,6 +79,8 @@ impl Features {
         print: false,
         recent: false,
         in_app_dialogs: true,
+        quit: false,
+        paste_by_event: true,
     };
 }
 
@@ -198,6 +207,10 @@ pub trait Platform {
 
     /// The clipboard Cut, Copy and Paste use.
     fn clipboard(&self) -> Box<dyn Clipboard>;
+
+    /// Whether the open model has unsaved changes, told whenever a frame is drawn; a browser
+    /// asks before the tab closes while it does.
+    fn set_modified(&self, _modified: bool) {}
 
     /// Opens a link or a file in the system's own program or tab.
     fn open_url(&self, url: &str) -> Result<(), String>;

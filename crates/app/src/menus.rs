@@ -131,7 +131,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         file.push(Entry::Separator);
         file.push(Item::new("Print...", UiAction::Print).entry());
     }
-    if !native {
+    if !native && features.quit {
         file.push(Entry::Separator);
         file.push(bound_item("Quit", Bound::Quit, UiAction::Quit).entry());
     }

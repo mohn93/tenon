@@ -149,7 +149,7 @@ async fn run() -> Result<(), String> {
     let event_loop = EventLoop::<AppEvent>::with_user_event()
         .build()
         .map_err(|e| format!("cannot start the event loop: {e}"))?;
-    let mut config = AppConfig::new(Box::new(WebPlatform::new()));
+    let mut config = AppConfig::new(Box::new(WebPlatform::new(event_loop.create_proxy())));
     config.gpu = Some(context);
     config.window = Some(
         Window::default_attributes()

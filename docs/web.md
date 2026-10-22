@@ -13,7 +13,8 @@ cargo install wasm-bindgen-cli --version 0.2.129
 scripts/build-web.sh
 ```
 
-The script builds `web` in release mode for `wasm32-unknown-unknown`, runs `wasm-bindgen
+The script builds `web` for `wasm32-unknown-unknown` with the size-optimised `web` profile
+(`[profile.web]` in the root `Cargo.toml`: opt-level s, LTO, one codegen unit), runs `wasm-bindgen
 --target web --no-typescript --out-dir web/dist` and copies `web/index.html`. `web/dist`
 (git-ignored) then holds `index.html`, `web.js` and `web_bg.wasm`. `.cargo/config.toml` sets the
 `getrandom` backend the wasm build needs.
@@ -44,11 +45,17 @@ tested by hand (open, draw, save, reopen).
 - Preferences live in `localStorage` under `sketchup-alt-prefs` (the JSON of `prefs.json`).
 - The unsaved-changes question is an in-app dialog. Help > About says what is off.
 - Cut, Copy and Paste of components between tabs go through text on the clipboard.
+- The canvas fills the tab and follows its size.
 - Ctrl (Cmd on macOS) chords the app uses are kept from the browser on the canvas; Ctrl+C, X and
-  V, the function keys and other browser shortcuts are left alone.
+  V, the function keys and other browser shortcuts are left alone. Browsers do not let a page
+  block Ctrl/Cmd+N, W and T (new window, close tab, new tab), so those keep their browser
+  meaning. Closing or reloading the tab with unsaved changes asks for confirmation.
+- Paste (Ctrl/Cmd+V) acts on the browser's paste event, so it always pastes what is on the
+  clipboard now, into a focused text field or as a clip into the model.
 
 ## What is off
 
+- Quit (File > Quit, Ctrl+Q): the tab is closed by the browser.
 - Library tab and Save to Library, autosave and Recover Models, Open Recent, Print and Export
   PDF, the agent socket and MCP, `render_view` (no readback on the web).
 - Light shadows when the browser falls back to WebGL2 (no cube-array textures): the status line
@@ -59,7 +66,7 @@ tested by hand (open, draw, save, reopen).
 
 ## Clipboard note
 
-A page cannot read the clipboard whenever it likes. Paste uses the text last copied in the app
-or pasted into the page (paste events), refreshed when the tab regains focus where the browser
-lets it read the clipboard. Copying elsewhere and pressing Ctrl+V may therefore need a second
-press the first time.
+A page cannot read the clipboard whenever it likes. Paste is driven by the paste event, which
+carries the text; the Edit > Paste menu item (no event) uses the text last copied in the app or
+pasted into the page, refreshed when the tab regains focus where the browser lets it read the
+clipboard. Copy and Cut write the system clipboard where the browser allows it.

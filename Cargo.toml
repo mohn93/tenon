@@ -48,3 +48,11 @@ egui-winit = { path = "vendor/egui-winit" }
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
+
+# The browser build (scripts/build-web.sh): small and linked as one unit, since the page
+# downloads it.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

@@ -2,10 +2,11 @@
 //! API), preferences in `localStorage`, the clipboard through the page's clipboard events.
 //! Dialogs are the window's own (`Features::WEB`), so there is no native question to ask.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use app::app::AppEvent;
 use app::clipboard::Clipboard;
 use app::platform::{
     Answer, Download, Features, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved, Source,
@@ -16,6 +17,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::Event;
+use winit::event_loop::EventLoopProxy;
 
 use crate::files;
 use crate::names::{self, Storage};
@@ -31,17 +33,46 @@ type KeptFile = Rc<RefCell<Option<Kept>>>;
 pub struct WebPlatform {
     kept: KeptFile,
     clip: Rc<RefCell<Option<String>>>,
+    /// Whether the open model has unsaved changes (`Platform::set_modified`).
+    modified: Rc<Cell<bool>>,
+    /// Reaches the window: late errors for its status line.
+    proxy: EventLoopProxy<AppEvent>,
 }
 
 impl WebPlatform {
-    pub fn new() -> Self {
+    pub fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
         let clip = Rc::new(RefCell::new(None));
-        watch_clipboard(&clip);
+        watch_clipboard(&clip, &proxy);
+        let modified = Rc::new(Cell::new(false));
+        guard_unload(&modified);
         Self {
             kept: Rc::default(),
             clip,
+            modified,
+            proxy,
         }
     }
+}
+
+fn report(proxy: &EventLoopProxy<AppEvent>, text: &str) {
+    log(text);
+    let _ = proxy.send_event(AppEvent::Error(text.to_string()));
+}
+
+/// Asks the browser to confirm before the tab closes or reloads while the model has unsaved
+/// changes.
+fn guard_unload(modified: &Rc<Cell<bool>>) {
+    let modified = modified.clone();
+    let on_unload = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        if modified.get() {
+            event.prevent_default();
+            // Older browsers want a returnValue.
+            let _ = Reflect::set(&event, &"returnValue".into(), &"".into());
+        }
+    });
+    let _ = files::window()
+        .add_event_listener_with_callback("beforeunload", on_unload.as_ref().unchecked_ref());
+    on_unload.forget();
 }
 
 /// `localStorage`, where the browser allows it.
@@ -79,6 +110,7 @@ impl Platform for WebPlatform {
         reply: Reply<Option<Picked>>,
     ) -> Answer<Option<Picked>> {
         let kept = self.kept.clone();
+        let proxy = self.proxy.clone();
         if files::has_function("showOpenFilePicker") {
             let filters = request.filters.clone();
             spawn_local(async move {
@@ -96,7 +128,7 @@ impl Platform for WebPlatform {
                     }
                     Ok(None) => reply(None),
                     Err(why) => {
-                        log(&format!("cannot open the file: {why}"));
+                        report(&proxy, &format!("Cannot open the file: {why}"));
                         reply(None);
                     }
                 }
@@ -105,6 +137,7 @@ impl Platform for WebPlatform {
             let accept = names::accept_attribute(&request.filters);
             let failed = Rc::new(RefCell::new(Some(reply)));
             let on_done = failed.clone();
+            let on_error = proxy.clone();
             let started = files::pick_with_input(&accept, move |chosen| {
                 let Some(reply) = on_done.borrow_mut().take() else {
                     return;
@@ -119,13 +152,13 @@ impl Platform for WebPlatform {
                     }
                     Ok(None) => reply(None),
                     Err(why) => {
-                        log(&format!("cannot open the file: {why}"));
+                        report(&on_error, &format!("Cannot open the file: {why}"));
                         reply(None);
                     }
                 }
             });
             if let Err(why) = started {
-                log(&format!("cannot ask for a file: {why}"));
+                report(&proxy, &format!("Cannot ask for a file: {why}"));
                 if let Some(reply) = failed.borrow_mut().take() {
                     reply(None);
                 }
@@ -181,6 +214,10 @@ impl Platform for WebPlatform {
         Box::new(WebClipboard {
             text: self.clip.clone(),
         })
+    }
+
+    fn set_modified(&self, modified: bool) {
+        self.modified.set(modified);
     }
 
     fn open_url(&self, url: &str) -> Result<(), String> {
@@ -277,13 +314,14 @@ fn call(target: &JsValue, method: &str, arg: &JsValue) -> Result<JsValue, JsValu
     function.call1(target, arg)
 }
 
-/// Keeps `clip` current: the text of every paste event (Ctrl+V or Cmd+V pastes into the page
-/// after the keypress, so a paste of what was copied elsewhere reaches the app by the next
-/// one), and the system clipboard's text when the page gains focus, where the browser allows
+/// Keeps `clip` current and pastes: every paste event (Ctrl+V or Cmd+V) stores its text and
+/// sends it to the window, which pastes it (the key press itself pastes nothing on the web, so
+/// text copied outside the app is never stale). Also reads the system clipboard's text when the page gains focus, where the browser allows
 /// reading it.
-fn watch_clipboard(clip: &Rc<RefCell<Option<String>>>) {
+fn watch_clipboard(clip: &Rc<RefCell<Option<String>>>, proxy: &EventLoopProxy<AppEvent>) {
     let on_paste = {
         let clip = clip.clone();
+        let proxy = proxy.clone();
         Closure::<dyn FnMut(Event)>::new(move |event: Event| {
             let data = Reflect::get(&event, &"clipboardData".into()).unwrap_or(JsValue::NULL);
             if data.is_null() || data.is_undefined() {
@@ -293,7 +331,9 @@ fn watch_clipboard(clip: &Rc<RefCell<Option<String>>>) {
                 && let Some(text) = text.as_string()
                 && !text.is_empty()
             {
-                *clip.borrow_mut() = Some(text);
+                *clip.borrow_mut() = Some(text.clone());
+                // The window pastes now: the key press itself does nothing on the web.
+                let _ = proxy.send_event(AppEvent::Paste(text));
             }
         })
     };

@@ -59,6 +59,7 @@ fn the_file_menu_leaves_out_what_the_system_does_not_offer() {
         "Export PDF...",
         "Save Model to Library...",
         "Print...",
+        "Quit",
     ] {
         assert!(all.iter().any(|l| l == gone), "{gone} is in the desktop's");
     }
@@ -71,8 +72,7 @@ fn the_file_menu_leaves_out_what_the_system_does_not_offer() {
             "Save",
             "Save As...",
             "Import...",
-            "Export...",
-            "Quit"
+            "Export..."
         ]
     );
 }

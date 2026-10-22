@@ -91,6 +91,11 @@ fn fit_to_monitor(min: LogicalSize<f64>, monitor: Option<LogicalSize<f64>>) -> L
 /// Holds `window` to the least size for `scale` (fitted to its monitor), growing it now if it
 /// is smaller (a minimum alone may not resize a window that is already open).
 fn set_min_window(window: &Window, scale: UiScale) {
+    // A browser's window is its canvas: the page's layout sizes it (a minimum or a size set
+    // here would pin the canvas's style).
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     let monitor = window
         .current_monitor()
         .map(|m| m.size().to_logical(m.scale_factor()));
@@ -100,6 +105,18 @@ fn set_min_window(window: &Window, scale: UiScale) {
     if let Some(grown) = grown_to_min(size, min) {
         let _ = window.request_inner_size(grown);
     }
+}
+
+/// The largest surface at most `max` pixels on a side that keeps the aspect ratio of
+/// `width` by `height` (a window larger than the GPU's textures must not fail to configure).
+fn fit_surface(width: u32, height: u32, max: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= max || max == 0 {
+        return (width, height);
+    }
+    let scale = f64::from(max) / f64::from(longest);
+    let fit = |side: u32| ((f64::from(side) * scale).floor() as u32).clamp(1, max);
+    (fit(width), fit(height))
 }
 
 /// The window as it opens: title, default size and least size (at 100%; `State::new` sets the
@@ -130,6 +147,11 @@ pub enum AppEvent {
     /// The platform answered a request it had left pending (a file picked, a question
     /// answered).
     Platform(PlatformReply),
+    /// The page's paste event: `text` goes to the focused text field, else the model pastes
+    /// its clip (the platform's clipboard already holds `text`).
+    Paste(String),
+    /// Something a late platform request could not do, for the status line.
+    Error(String),
 }
 
 impl From<egui_winit::accesskit_winit::Event> for AppEvent {
@@ -1045,7 +1067,11 @@ impl State {
             editor.show_info(crate::ui::SHADOWS_OFF);
         }
         let session = session
-            .inspect_err(|why| editor.show_error(&format!("Autosave is off: {why}")))
+            .inspect_err(|why| {
+                if features.autosave {
+                    editor.show_error(&format!("Autosave is off: {why}"));
+                }
+            })
             .ok();
         Self {
             window,
@@ -1215,6 +1241,15 @@ impl State {
                 Effect::Pdf(options, path) => self.start_print(&options, Some(path)),
                 Effect::AskUnsaved(prompt) => self.open_sheet(Sheet::Unsaved { prompt }),
             }
+        }
+    }
+
+    /// The system's paste: into a focused text field, else the model's clip (not under a sheet).
+    fn paste_event(&mut self, text: String) {
+        if self.gui.wants_keyboard() {
+            self.gui.paste_text(text);
+        } else if self.sheet.is_none() {
+            self.apply(UiAction::Paste);
         }
     }
 
@@ -2060,6 +2095,8 @@ impl State {
         if width == 0 || height == 0 {
             return;
         }
+        let (width, height) =
+            fit_surface(width, height, self.device.limits().max_texture_dimension_2d);
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
@@ -2178,6 +2215,7 @@ impl State {
         self.editor.refresh_hover();
         let doc = self.editor.doc();
         let modified = doc.is_modified();
+        self.platform.set_modified(modified);
         // Where files have no path, the name the model was opened from or saved under.
         let kept = self.flows.kept_name().map(Path::new);
         let title = window_title(
@@ -2369,6 +2407,16 @@ impl State {
         // while this frame's surface texture is held.
         let actions = std::mem::take(&mut gui_frame.actions);
         let mut acted = false;
+        // The editor's view never reaches past the surface (a surface fitted to the GPU's
+        // largest texture may be smaller than the window).
+        gui_frame.viewport.width = gui_frame
+            .viewport
+            .width
+            .min(self.config.width.saturating_sub(gui_frame.viewport.x));
+        gui_frame.viewport.height = gui_frame
+            .viewport
+            .height
+            .min(self.config.height.saturating_sub(gui_frame.viewport.y));
         if gui_frame.viewport != self.view {
             self.view = gui_frame.viewport;
             let v = self.view;
@@ -3145,6 +3193,19 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Api => self.serve_api(event_loop),
             #[cfg(target_os = "macos")]
             AppEvent::Menu { id, repeat } => self.menu_event(event_loop, &id, repeat),
+            AppEvent::Error(text) => {
+                if let Some(s) = self.state.as_mut() {
+                    s.editor.show_error(&text);
+                    s.window.request_redraw();
+                }
+            }
+            AppEvent::Paste(text) => {
+                if let Some(s) = self.state.as_mut() {
+                    s.paste_event(text);
+                    s.notify_api(&mut self.hub);
+                    s.window.request_redraw();
+                }
+            }
             AppEvent::Platform(reply) => {
                 if let Some(s) = self.state.as_mut() {
                     s.platform_reply(reply);
@@ -3438,6 +3499,9 @@ impl ApplicationHandler<AppEvent> for App {
                         )
                     });
                     match bound {
+                        // A browser tab cannot be quit; Paste comes with the page's paste event.
+                        Some(Bound::Quit) if !s.features.quit => false,
+                        Some(Bound::Paste) if s.features.paste_by_event => false,
                         Some(Bound::Quit) => {
                             s.settle_and(Then::Quit);
                             if s.quit {
@@ -3682,6 +3746,15 @@ mod tests {
         );
         assert!(is_modifier_key(&Key::Named(NamedKey::Control)));
         assert!(!is_modifier_key(&Key::Character("z".into())));
+    }
+
+    #[test]
+    fn a_surface_larger_than_the_gpu_allows_is_fitted_keeping_its_shape() {
+        assert_eq!(fit_surface(800, 600, 2048), (800, 600));
+        assert_eq!(fit_surface(4096, 2048, 2048), (2048, 1024));
+        assert_eq!(fit_surface(1000, 5000, 2500), (500, 2500));
+        assert_eq!(fit_surface(10000, 1, 100), (100, 1));
+        assert_eq!(fit_surface(10, 10, 0), (10, 10));
     }
 
     #[test]

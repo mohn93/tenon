@@ -121,6 +121,14 @@ impl Gui {
         }
     }
 
+    /// Pastes `text` into the focused text field on the next frame.
+    pub fn paste_text(&mut self, text: String) {
+        self.state
+            .egui_input_mut()
+            .events
+            .push(egui::Event::Paste(text));
+    }
+
     /// Draws the panels in `choice` from the next frame on.
     pub fn set_theme(&self, choice: ThemeChoice) {
         theme::set_choice(&self.ctx, choice);
