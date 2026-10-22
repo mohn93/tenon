@@ -610,10 +610,10 @@ mod tests {
         }
         let mut c = save(Path::new("lib/new.skr"));
         roots.apply(&mut c, None, false).unwrap();
-        assert_eq!(c, save(&root.join("lib/new.skr")));
+        assert_eq!(c, save(&root.join("lib").join("new.skr")));
         let mut c = insert(Path::new("lib/a.skr"));
         roots.apply(&mut c, None, false).unwrap();
-        assert_eq!(c, insert(&root.join("lib/a.skr")));
+        assert_eq!(c, insert(&root.join("lib").join("a.skr")));
 
         let query = |folder: String| Query::Library { folder };
         // Folders within a root, the root itself and a relative name pass; others do not.
