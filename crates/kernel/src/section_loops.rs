@@ -160,18 +160,20 @@ const KEEP_TOL: f64 = 1e-9;
 
 /// The directions `Triangles::inside` casts rays in: the six axes, each tilted a little so
 /// that no ray runs along the edges of axis-aligned solids. A face shared by two solids
-/// misleads the rays that meet it first; being near an axis each, only one of the six does.
+/// makes the rays that cross it count an even number; the other rays still count odd. The
+/// tilt is slight so that a ray stays within a thin layer over its whole length.
 const RAYS: [[f64; 3]; 6] = [
-    [1.0, 0.123, 0.071],
-    [-1.0, 0.087, -0.131],
-    [0.097, 1.0, -0.113],
-    [-0.059, -1.0, 0.127],
-    [0.083, 0.141, 1.0],
-    [-0.109, 0.067, -1.0],
+    [1.0, 0.0031, 0.0017],
+    [-1.0, 0.0023, -0.0033],
+    [0.0027, 1.0, -0.0029],
+    [-0.0015, -1.0, 0.0034],
+    [0.0021, 0.0035, 1.0],
+    [-0.0028, 0.0019, -1.0],
 ];
 
-/// Rays that must cross an odd number of triangles for a point to be inside.
-const INSIDE_VOTES: usize = 4;
+/// Rays that must cross an odd number of triangles for a point to be inside. Regions enclosed
+/// by surfaces (a courtyard, a cavity) give an even count on every ray.
+const INSIDE_VOTES: usize = 2;
 
 /// Triangles with a bounding volume hierarchy, for the nearest triangle along a ray.
 struct Triangles<'a> {

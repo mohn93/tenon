@@ -929,3 +929,23 @@ fn at_most_a_thousand_plane_outlines_are_drawn_and_picked() {
     let view = Scenery::of(&s, &[]).unwrap();
     assert_eq!(view.sections().len(), session::MAX_SECTION_OUTLINES);
 }
+
+#[test]
+fn with_the_fill_off_the_cut_hides_nothing() {
+    let (s, _, _) = cut_scene();
+    let mut c = camera(DVec3::ZERO);
+    c.eye = p(9.0, 0.5, 0.5);
+    c.target = p(3.5, 0.5, 0.5);
+    let at = px(&c, p(3.5, 0.5, 0.5));
+    let display = |fill| session::SectionDisplay {
+        planes: true,
+        cuts: true,
+        fill,
+    };
+    let on = Scenery::of(&s, &[]).unwrap().section_display(display(true));
+    let off = Scenery::of(&s, &[])
+        .unwrap()
+        .section_display(display(false));
+    assert!(face_under_in(&on, &c, at).is_none());
+    assert!(face_under_in(&off, &c, at).is_some());
+}

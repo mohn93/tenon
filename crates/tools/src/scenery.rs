@@ -511,6 +511,8 @@ pub struct Scenery<'a> {
     cuts: bool,
     /// Whether section planes are seen (picked, hovered, box-selected).
     planes: bool,
+    /// Whether the section cuts are filled (the fill hides what lies behind it).
+    fill: bool,
 }
 
 /// The depths around a model point the cursor stands for: what lies in front of the point or
@@ -590,6 +592,7 @@ impl<'a> Scenery<'a> {
         Scenery {
             cuts: true,
             planes: true,
+            fill: true,
             slab: None,
             models: vec![model],
             layout: Cow::Owned(Layout::new(
@@ -613,6 +616,7 @@ impl<'a> Scenery<'a> {
             slab: None,
             cuts: true,
             planes: true,
+            fill: true,
         })
     }
 
@@ -626,6 +630,7 @@ impl<'a> Scenery<'a> {
             slab: None,
             cuts: true,
             planes: true,
+            fill: true,
         })
     }
 
@@ -647,16 +652,17 @@ impl<'a> Scenery<'a> {
     pub fn section_display(mut self, display: session::SectionDisplay) -> Self {
         self.cuts = display.cuts;
         self.planes = display.planes;
+        self.fill = display.fill;
         self
     }
 
     /// The nearest distance `t` in `from..=to` along the ray (unit `dir`) at which it meets
     /// the fill of a section cut: where a plane cutting a part crosses a region of the cut
     /// that the part's other planes keep. What lies beyond is behind the fill and hidden by
-    /// it. None when no cut is filled there, or cuts are off. The fills are worked out for
+    /// it. None when no cut is filled there, or cuts or the fill are off. The fills are worked out for
     /// all of a part's planes the first time, and kept with the layout.
     pub fn fill_hit(&self, origin: DVec3, dir: DVec3, from: f64, to: f64) -> Option<f64> {
-        if !self.cuts || !self.layout.cutting {
+        if !self.cuts || !self.fill || !self.layout.cutting {
             return None;
         }
         let mut best: Option<f64> = None;

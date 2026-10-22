@@ -901,3 +901,51 @@ fn cut_timings_on_large_meshes() {
         );
     }
 }
+
+/// Layers of the given heights stacked from z = 0, each `w` square, sharing the faces between
+/// them once.
+fn layers(w: f64, heights: &[f64]) -> Vec<[DVec3; 3]> {
+    let mut tris = Vec::new();
+    let mut z = 0.0;
+    for (k, h) in heights.iter().enumerate() {
+        let layer = box_tris(p(0.0, 0.0, z), p(w, w, z + h));
+        let bottom_shared = k > 0;
+        tris.extend(
+            layer
+                .into_iter()
+                .filter(|t| !(bottom_shared && t.iter().all(|q| q.z == z))),
+        );
+        z += h;
+    }
+    tris
+}
+
+fn stack_area(w: f64, heights: &[f64]) -> f64 {
+    let (r, area) = fill_of(&layers(w, heights), p(w / 2.0 + 0.123, 0.0, 0.0), DVec3::X);
+    assert!(r.open.is_empty(), "{r:?}");
+    area
+}
+
+#[test]
+fn thin_layers_sharing_faces_are_filled_whole() {
+    for (w, heights, expected) in [
+        (10.0, vec![1.0, 0.2, 1.0], 22.0),
+        (3.0, vec![1.0, 0.2, 1.0], 6.6),
+        (10.0, vec![5.0, 0.2], 52.0),
+        (3.0, vec![5.0, 0.2], 15.6),
+        (8.0, vec![0.3, 3.0, 0.3, 3.0, 0.3, 2.7], 76.8),
+    ] {
+        let area = stack_area(w, &heights);
+        assert!((area - expected).abs() < 1e-9, "{w} {heights:?}: {area}");
+    }
+}
+
+#[test]
+fn a_courtyard_enclosed_by_four_walls_stays_empty() {
+    let mut tris = box_tris(p(0.0, 0.0, 0.0), p(10.0, 1.0, 3.0));
+    tris.extend(box_tris(p(0.0, 9.0, 0.0), p(10.0, 10.0, 3.0)));
+    tris.extend(box_tris(p(0.0, 1.0, 0.0), p(1.0, 9.0, 3.0)));
+    tris.extend(box_tris(p(9.0, 1.0, 0.0), p(10.0, 9.0, 3.0)));
+    let (_, area) = fill_of(&tris, p(0.0, 0.0, 1.5), DVec3::Z);
+    assert!((area - 36.0).abs() < 1e-9, "{area}");
+}
