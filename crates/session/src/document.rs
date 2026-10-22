@@ -5,8 +5,8 @@ use glam::{DAffine3, DVec2, DVec3};
 use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, DefinitionId, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId,
-    KernelError, MaterialEdit, MeshId, Model, PageId, Parts, PlacementEdit, Scene, SceneChange,
-    SoftenReport, TagEdit, VertexId,
+    KernelError, MaterialEdit, MaterialId, MeshId, Model, PageId, Parts, PlacementEdit, Scene,
+    SceneChange, SoftenReport, TagEdit, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
@@ -32,6 +32,7 @@ mod files;
 mod follow_me;
 mod groups;
 mod import;
+mod library;
 mod materials;
 mod placement;
 mod scenes;
@@ -104,6 +105,8 @@ pub struct Document {
     purged: Option<usize>,
     /// What the last `add_3d_text` made, until its outcome takes it.
     text_report: Option<Text3dReport>,
+    /// The material an `insert_library_item` of a material added or reused, for its outcome.
+    library_material: Option<MaterialId>,
     /// Names this document since it was created, opened or imported as a new model (see
     /// `token`); not saved.
     token: String,
@@ -138,6 +141,7 @@ impl Document {
             positioned: None,
             purged: None,
             text_report: None,
+            library_material: None,
             token: clip::new_token(),
             pasted: BTreeMap::new(),
         }
@@ -244,7 +248,11 @@ impl Document {
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
     pub fn execute(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        let label = command.name();
+        // The undo step of a library insert reads "insert" wherever it came from.
+        let label = match command {
+            Command::InsertLibraryItem { .. } => "insert".to_string(),
+            _ => command.name(),
+        };
         self.execute_as(command, label)
     }
 
@@ -265,6 +273,7 @@ impl Document {
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.text_3d = self.text_report.take();
+            outcome.material = self.library_material.take();
             return Ok(outcome);
         }
         match command {
@@ -387,6 +396,16 @@ impl Document {
             }
             Command::Save { path, overwrite } => {
                 self.save_file(path.as_deref(), overwrite)?;
+                Ok(Outcome::default())
+            }
+            Command::SaveToLibrary {
+                path,
+                kind,
+                item,
+                name,
+                overwrite,
+            } => {
+                self.save_to_library(&path, kind, item, name.as_deref(), overwrite)?;
                 Ok(Outcome::default())
             }
             Command::Export {
@@ -514,7 +533,8 @@ impl Document {
             | Command::SoftenByAngle { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
-            | Command::Paste { .. } => {
+            | Command::Paste { .. }
+            | Command::InsertLibraryItem { .. } => {
                 unreachable!("edits are handled by Document::edit")
             }
         }
@@ -767,9 +787,11 @@ impl Document {
                 },
             ),
             Command::Paste { clip, at } => self.paste_changes(clip, *at),
+            Command::InsertLibraryItem { path, at } => self.insert_library_changes(path, *at),
             Command::New { .. }
             | Command::Open { .. }
             | Command::Save { .. }
+            | Command::SaveToLibrary { .. }
             | Command::Export { .. } => return None,
             Command::Undo { .. }
             | Command::Redo { .. }
@@ -858,6 +880,7 @@ impl Document {
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
                             text_3d: self.text_report.take(),
+                            material: self.library_material.take(),
                             units: (self.units != units_then).then_some(self.units),
                         }
                     }),
@@ -868,6 +891,7 @@ impl Document {
                             | Command::New { .. }
                             | Command::Open { .. }
                             | Command::Save { .. }
+                            | Command::SaveToLibrary { .. }
                             | Command::Export { .. }
                     ) =>
                     {
@@ -1899,6 +1923,9 @@ impl Document {
                 revision: self.revision,
             },
             Query::Units {} => QueryResult::Units(self.units),
+            Query::Library { folder } => {
+                QueryResult::Library(crate::library::list(std::path::Path::new(folder))?)
+            }
             Query::SectionPlanes {} => QueryResult::SectionPlanes {
                 planes: m
                     .sections()

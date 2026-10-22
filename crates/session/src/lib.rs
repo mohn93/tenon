@@ -13,6 +13,7 @@ pub mod export;
 pub mod file;
 pub mod fspath;
 mod import;
+pub mod library;
 pub mod pdf;
 mod polygon;
 pub mod print;
@@ -52,6 +53,7 @@ pub use import::{
     MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,
 };
 pub use kernel::{CurveKind, ImageFormat, MaterialId, PageId, Side, TagId, TexturePlacement};
+pub use library::{LibraryContent, LibraryItem, LibraryKind, LibraryListing, LibraryRef};
 pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
     AnchorInfo, Bounds, ChangeEvent, CurveInfo, DefinitionInfo, DimensionInfo, DimensionKind,

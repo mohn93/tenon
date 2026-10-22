@@ -137,25 +137,10 @@ pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
             "its base point is not finite or beyond +/-{MAX_COORDINATE} m"
         )));
     }
-    let tally = tally(&scene)
-        .ok_or_else(|| damaged("its definitions do not form a tree of placements".into()))?;
-    if tally.depth > MAX_CLIP_DEPTH {
-        return Err(invalid(format!(
-            "the clip's instances are nested more than {MAX_CLIP_DEPTH} deep"
-        )));
-    }
-    if tally.instances > MAX_CLIP_INSTANCES {
-        return Err(invalid(format!(
-            "the clip places more than {MAX_CLIP_INSTANCES} instances, nested ones counted \
-             once per placement"
-        )));
-    }
-    if tally.faces > MAX_CLIP_PLACED_FACES {
-        return Err(invalid(format!(
-            "the clip shows more than {MAX_CLIP_PLACED_FACES} faces, nested ones counted once \
-             per placement"
-        )));
-    }
+    check_caps(&scene).map_err(|e| match e {
+        Refused::Damaged(m) => damaged(m),
+        Refused::Invalid(m) => invalid(m),
+    })?;
     if info.source.len() > MAX_TOKEN_LEN {
         return Err(damaged("its source token is too long".into()));
     }
@@ -163,6 +148,65 @@ pub(crate) fn decode(text: &str) -> Result<Clip, CommandError> {
         scene,
         base,
         source: info.source,
+    })
+}
+
+/// Why a scene cannot be a clip.
+enum Refused {
+    Damaged(String),
+    Invalid(String),
+}
+
+/// The checks every clip passes before it is pasted: its definitions form a tree of
+/// placements, and it nests, places and shows no more than the caps allow.
+fn check_caps(scene: &Scene) -> Result<(), Refused> {
+    let tally = tally(scene).ok_or_else(|| {
+        Refused::Damaged("its definitions do not form a tree of placements".into())
+    })?;
+    if tally.depth > MAX_CLIP_DEPTH {
+        return Err(Refused::Invalid(format!(
+            "the clip's instances are nested more than {MAX_CLIP_DEPTH} deep"
+        )));
+    }
+    if tally.instances > MAX_CLIP_INSTANCES {
+        return Err(Refused::Invalid(format!(
+            "the clip places more than {MAX_CLIP_INSTANCES} instances, nested ones counted \
+             once per placement"
+        )));
+    }
+    if tally.faces > MAX_CLIP_PLACED_FACES {
+        return Err(Refused::Invalid(format!(
+            "the clip shows more than {MAX_CLIP_PLACED_FACES} faces, nested ones counted once \
+             per placement"
+        )));
+    }
+    Ok(())
+}
+
+/// A clip of `scene` (in world coordinates) taken as from the document `source`, with the
+/// caps clip text meets; the base point is the minimum corner of its box. A library item's
+/// scene is made a clip this way, with a token no document has, so pasting it always makes
+/// new definitions.
+pub(crate) fn from_scene(scene: Scene, source: String) -> Result<Clip, CommandError> {
+    check_caps(&scene).map_err(|e| match e {
+        Refused::Damaged(m) => {
+            CommandError::new(ErrorKind::InvalidInput, format!("the item is damaged: {m}"))
+        }
+        Refused::Invalid(m) => {
+            CommandError::new(ErrorKind::InvalidInput, m.replace("the clip", "the item"))
+        }
+    })?;
+    let base = base_point(&scene);
+    if !base.is_finite() || base.abs().max_element() > MAX_COORDINATE {
+        return Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            format!("the item is beyond +/-{MAX_COORDINATE} m"),
+        ));
+    }
+    Ok(Clip {
+        scene,
+        base,
+        source,
     })
 }
 

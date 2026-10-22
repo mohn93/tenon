@@ -372,7 +372,10 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
         }
         "query" => {
             let file = type_of(&params) == Some("file");
-            let query: Query = params_as(params)?;
+            let mut query: Query = params_as(params)?;
+            if let Some(roots) = host.roots() {
+                roots.apply_query(&mut query).map_err(command_failed)?;
+            }
             let mut result = json!(host.document().query(&query).map_err(command_failed)?);
             if file {
                 result["api_roots"] = json!(host.roots().map(ApiRoots::dirs));
@@ -493,7 +496,7 @@ pub fn describe() -> Value {
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, pdf?: {sheets, warnings} (export_pdf only), revision})",
-                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, text_3d?: Text3dReport, units?: Units, revision}: the Outcome plus revision",
+                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, text_3d?: Text3dReport, material?: MaterialId (insert_library_item of a material), units?: Units, revision}: the Outcome plus revision",
                 "params_schema": any_of_root(vec![
                     schema::<Command>(),
                     schema::<ScreenCommand>(),

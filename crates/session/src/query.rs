@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::{Lighting, Projection};
 use crate::command::Origin;
+use crate::library::LibraryListing;
 use crate::units::Units;
 
 /// Read-only questions about the document. Entities and coordinates are those of the open
@@ -76,6 +77,13 @@ pub enum Query {
     SectionPlanes {},
     /// How section planes are shown (see `set_section_display`).
     SectionDisplay {},
+    /// The library items in `folder`: the `.skr` files directly in it (no links, no
+    /// subfolders; at most 1000, sorted by name ignoring case), each with its name, what it
+    /// holds (`component`, `material` or `model`), when it was written and, for a file that
+    /// is no usable model, an `error`. `more` is true when the folder holds more.
+    Library {
+        folder: String,
+    },
 }
 
 /// An axis-aligned box, bounds included.
@@ -585,6 +593,8 @@ pub enum QueryResult {
         cuts: bool,
         fill: bool,
     },
+    /// The items of a library folder.
+    Library(LibraryListing),
 }
 
 /// One model change: the revision it produced and what it changed.

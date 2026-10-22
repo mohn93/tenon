@@ -423,3 +423,79 @@ fn a_referenced_material_keeps_the_texture_path_rewritten_under_roots() {
         .unwrap_or_else(|| panic!("{m}"));
     assert!(made["texture"].is_object(), "{m}");
 }
+
+#[test]
+fn library_save_list_and_insert_stay_inside_the_roots() {
+    let (root, outside) = folders("library");
+    let mut h = host(&root);
+    edge(&mut h);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "save_to_library", "path": "lib/chair.skr", "kind": "model"}),
+    );
+    // The folder must exist: writing never creates it.
+    assert_eq!(r["error"]["data"]["kind"], "file", "{r}");
+    std::fs::create_dir(root.join("lib")).unwrap();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "save_to_library", "path": "lib/chair.skr", "kind": "model",
+               "name": "Chair"}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+    let listed = call(&mut h, "query", json!({"type": "library", "folder": "lib"}));
+    assert_eq!(listed["result"]["items"][0]["name"], "Chair", "{listed}");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "insert_library_item", "path": "lib/chair.skr", "at": [5, 0, 0]}),
+    );
+    assert!(r["result"].is_object(), "{r}");
+
+    std::fs::write(outside.join("far.skr"), "").unwrap();
+    let outside_text = outside.display().to_string();
+    let refused = [
+        (
+            "execute",
+            json!({"type": "save_to_library", "kind": "model",
+                           "path": outside.join("a.skr")}),
+        ),
+        (
+            "execute",
+            json!({"type": "insert_library_item", "path": outside.join("far.skr")}),
+        ),
+        ("query", json!({"type": "library", "folder": outside_text})),
+        ("query", json!({"type": "library", "folder": "../outside"})),
+    ];
+    for (method, params) in refused {
+        let r = call(&mut h, method, params.clone());
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{params}: {r}");
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--api-root"),
+            "{r}"
+        );
+    }
+    assert!(!outside.join("a.skr").exists());
+    // A link in the folder to a file elsewhere is not listed.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside.join("far.skr"), root.join("lib/far.skr")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("door")).unwrap();
+        let listed = call(&mut h, "query", json!({"type": "library", "folder": "lib"}));
+        assert_eq!(
+            listed["result"]["items"].as_array().unwrap().len(),
+            1,
+            "{listed}"
+        );
+        let r = call(
+            &mut h,
+            "query",
+            json!({"type": "library", "folder": "door"}),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    }
+}

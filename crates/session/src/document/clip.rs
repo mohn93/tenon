@@ -55,6 +55,17 @@ impl Document {
             Some(at) => DAffine3::from_translation(DVec3::from(at) - clip.base),
             None => self.context_transform().inverse(),
         };
+        self.paste_clip(clip, placement, true)
+    }
+
+    /// Inserts `clip`, placed by `placement`, into the open context and selects what it
+    /// made. `remember`: later pastes of the clip's source reuse the definitions made.
+    pub(super) fn paste_clip(
+        &mut self,
+        clip: clip::Clip,
+        placement: DAffine3,
+        remember: bool,
+    ) -> Result<SceneChange, CommandError> {
         // What lands in the open context must keep to the limit commands keep to. Each
         // definition's box is worked out once, so a nested clip costs no more than its size.
         let root = clip.scene.mesh(MeshId::Root).expect("a scene has a root");
@@ -97,7 +108,7 @@ impl Document {
             .insert(parent, &clip.scene, placement, &reuse)
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))?;
         for (from, to) in &inserted.definitions {
-            if !(same_document && from == to) {
+            if remember && !(same_document && from == to) {
                 self.pasted.insert((clip.source.clone(), *from), *to);
             }
         }

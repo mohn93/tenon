@@ -18,6 +18,7 @@ use kernel::{
 use serde_json::Value;
 
 use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
+use crate::library::LibraryRef;
 
 /// The first stand-in id number. The ids a document makes come from one counter that never gets
 /// near it, but ids a client names or a document holds (a crafted file) may in principle be that
@@ -248,7 +249,8 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
         || matches!(
             (key, command_type),
-            ("path", Some("open_path" | "follow_me"))
+            ("item", Some("save_to_library"))
+                | ("path", Some("open_path" | "follow_me"))
                 | ("a" | "b", Some("add_dimension"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
@@ -275,7 +277,13 @@ impl BatchCommand {
                 if !is_reference_key(key, command_type.as_deref()) {
                     continue;
                 }
-                let material = key == "material";
+                let material = if key == "material" {
+                    Want::Material
+                } else if key == "item" {
+                    Want::Either
+                } else {
+                    Want::Entity
+                };
                 match field {
                     Value::String(text) => {
                         replace(
@@ -322,6 +330,7 @@ impl BatchCommand {
                 Slot::List(ids) => ids.iter().filter(|id| is_stand_in(id)).count(),
                 Slot::One(id) => usize::from(is_stand_in(id)),
                 Slot::Material(m) => usize::from(m.0 >= STAND_IN_BASE),
+                Slot::Item(r) => usize::from(is_stand_in_ref(r)),
             }
         });
         if stand_ins != refs.len() {
@@ -360,6 +369,7 @@ impl BatchCommand {
                 Slot::List(ids) => self.resolve_list(ids, done),
                 Slot::One(id) => self.resolve_one(id, done),
                 Slot::Material(m) => self.resolve_material(m, done),
+                Slot::Item(r) => self.resolve_item(r, done),
             };
             if let Err(e) = result {
                 error = Some(e);
@@ -396,6 +406,13 @@ impl BatchCommand {
         Ok(())
     }
 
+    fn resolve_item(&self, r: &mut LibraryRef, done: &[Outcome]) -> Result<(), CommandError> {
+        match r {
+            LibraryRef::Entity(id) => self.resolve_one(id, done),
+            LibraryRef::Material(m) => self.resolve_material(m, done),
+        }
+    }
+
     fn resolve_material(&self, m: &mut MaterialId, done: &[Outcome]) -> Result<(), CommandError> {
         if m.0 >= STAND_IN_BASE {
             *m = self.reference(m.0).material(done)?;
@@ -404,21 +421,32 @@ impl BatchCommand {
     }
 }
 
+/// What a reference field holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Want {
+    Entity,
+    Material,
+    Either,
+}
+
 /// Replaces a reference in a reference field's string by a stand-in id, recording it in
 /// `refs`. Other strings stay as they are.
 fn replace(
     text: &mut String,
     in_list: bool,
-    material: bool,
+    want: Want,
     index: usize,
     refs: &mut Vec<BatchRef>,
     literal_stand_in: &mut bool,
 ) -> Result<(), String> {
     if !text.starts_with('$') {
-        let literal = if material {
-            text.parse::<MaterialId>().map(|m| m.0).ok()
-        } else {
-            text.parse::<EntityId>().map(|id| number(&id)).ok()
+        let literal = match want {
+            Want::Material => text.parse::<MaterialId>().map(|m| m.0).ok(),
+            Want::Entity => text.parse::<EntityId>().map(|id| number(&id)).ok(),
+            Want::Either => text.parse::<LibraryRef>().ok().map(|r| match r {
+                LibraryRef::Entity(id) => number(&id),
+                LibraryRef::Material(m) => m.0,
+            }),
         };
         if literal.is_some_and(|n| n >= STAND_IN_BASE) {
             *literal_stand_in = true;
@@ -430,10 +458,10 @@ fn replace(
         return Err(format!("{text:?} must refer to an earlier command"));
     }
     let is_material = r.kind == Some(RefKind::Material);
-    if material && !is_material {
+    if want == Want::Material && !is_material {
         return Err(format!("{text:?} is not a material"));
     }
-    if !material && is_material {
+    if want == Want::Entity && is_material {
         return Err(format!("{text:?} is a material, not an entity"));
     }
     if r.index.is_none() && is_material {
@@ -464,11 +492,20 @@ fn is_stand_in(id: &EntityId) -> bool {
     number(id) >= STAND_IN_BASE
 }
 
+fn is_stand_in_ref(r: &LibraryRef) -> bool {
+    match r {
+        LibraryRef::Entity(id) => is_stand_in(id),
+        LibraryRef::Material(m) => m.0 >= STAND_IN_BASE,
+    }
+}
+
 /// An id field of a command.
 enum Slot<'a> {
     List(&'a mut Vec<EntityId>),
     One(&'a mut EntityId),
     Material(&'a mut MaterialId),
+    /// An instance or a material (`save_to_library`'s `item`).
+    Item(&'a mut LibraryRef),
 }
 
 /// Calls `f` on every id field of `command`. Every command is listed, so a new one must say
@@ -492,6 +529,11 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
         Command::OpenPath { path } => f(Slot::List(path)),
+        Command::SaveToLibrary { item, .. } => {
+            if let Some(item) = item {
+                f(Slot::Item(item));
+            }
+        }
         Command::AddDimension { a, b, .. } => {
             for anchor in [a, b] {
                 if let AnchorInput::Vertex(id) = anchor {
@@ -555,6 +597,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::Open { .. }
         | Command::Save { .. }
         | Command::Export { .. }
+        | Command::InsertLibraryItem { .. }
         | Command::Import { .. }
         | Command::Paste { .. }
         | Command::Undo { .. }

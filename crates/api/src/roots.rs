@@ -3,7 +3,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use session::fspath::{self, canonical, is_link, same};
-use session::{Command, CommandError, ErrorKind, TextureSource};
+use session::{Command, CommandError, ErrorKind, Query, TextureSource};
 
 /// Folders every path the API reads or writes must lie within, resolved after symlinks.
 /// Empty: no limit (the default).
@@ -138,6 +138,22 @@ impl ApiRoots {
         Ok(real)
     }
 
+    /// The folder at `path`, resolved after symlinks, when it is a root or lies within one.
+    pub fn read_folder(&self, path: &str) -> Result<PathBuf, CommandError> {
+        let real = self.resolve(path, &self.absolute(path)?)?;
+        let is_root = self.roots.iter().any(|r| same(r, &real));
+        if !is_root && !self.inside(&real) {
+            return Err(outside(path));
+        }
+        if !real.is_dir() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("{path} is not a folder"),
+            ));
+        }
+        Ok(real)
+    }
+
     /// The file to write at `path`: its folder, resolved after symlinks, must lie within a
     /// root, and the file must not be a symbolic link.
     pub fn write(&self, path: &str) -> Result<PathBuf, CommandError> {
@@ -168,6 +184,16 @@ impl ApiRoots {
             ));
         }
         Ok(real)
+    }
+
+    /// Points the folder of a `library` query at the folder it resolves to, or refuses it.
+    pub fn apply_query(&self, query: &mut Query) -> Result<(), CommandError> {
+        if let Query::Library { folder } = query
+            && !self.is_empty()
+        {
+            *folder = text(self.read_folder(folder)?)?;
+        }
+        Ok(())
     }
 
     /// Points every path in `command` at the file it resolves to, or refuses the command.
@@ -219,6 +245,8 @@ impl ApiRoots {
                 };
                 *path = Some(text(self.write(&given)?)?);
             }
+            Command::SaveToLibrary { path, .. } => *path = text(self.write(path)?)?,
+            Command::InsertLibraryItem { path, .. } => *path = text(self.read(path)?)?,
             Command::AddMaterial {
                 texture: Some(TextureSource { path: Some(p), .. }),
                 ..
@@ -553,6 +581,63 @@ mod tests {
                 expect: None
             }
         );
+    }
+
+    #[test]
+    fn library_commands_and_queries_are_judged_by_the_roots() {
+        let base = scratch("library");
+        let (root, other) = (base.join("root"), base.join("other"));
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(root.join("lib/a.skr"), "").unwrap();
+        std::fs::write(other.join("b.skr"), "").unwrap();
+        let roots = ApiRoots::new(std::slice::from_ref(&root)).unwrap();
+        let save = |path: &std::path::Path| Command::SaveToLibrary {
+            path: path.display().to_string(),
+            kind: session::LibraryKind::Model,
+            item: None,
+            name: None,
+            overwrite: false,
+        };
+        let insert = |path: &std::path::Path| Command::InsertLibraryItem {
+            path: path.display().to_string(),
+            at: None,
+        };
+        for mut c in [save(&other.join("b.skr")), insert(&other.join("b.skr"))] {
+            let e = roots.apply(&mut c, None, false).unwrap_err();
+            assert_eq!(e.kind, ErrorKind::InvalidInput);
+            assert!(e.message.contains("--api-root"), "{}", e.message);
+        }
+        let mut c = save(Path::new("lib/new.skr"));
+        roots.apply(&mut c, None, false).unwrap();
+        assert_eq!(c, save(&root.join("lib/new.skr")));
+        let mut c = insert(Path::new("lib/a.skr"));
+        roots.apply(&mut c, None, false).unwrap();
+        assert_eq!(c, insert(&root.join("lib/a.skr")));
+
+        let query = |folder: String| Query::Library { folder };
+        // Folders within a root, the root itself and a relative name pass; others do not.
+        for (given, want) in [
+            ("lib", root.join("lib")),
+            (root.to_str().unwrap(), root.clone()),
+            (".", root.clone()),
+        ] {
+            let mut q = query(given.to_string());
+            roots.apply_query(&mut q).unwrap();
+            assert_eq!(q, query(want.display().to_string()), "{given}");
+        }
+        for given in [
+            other.display().to_string(),
+            "../other".to_string(),
+            root.join("lib/a.skr").display().to_string(),
+        ] {
+            let mut q = query(given.clone());
+            assert!(roots.apply_query(&mut q).is_err(), "{given}");
+        }
+        // Without roots nothing is checked.
+        let mut q = query("anywhere".into());
+        ApiRoots::default().apply_query(&mut q).unwrap();
+        assert_eq!(q, query("anywhere".into()));
     }
 
     #[test]

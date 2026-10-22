@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::camera::{Lighting, Projection, StandardView};
 use crate::export::{ExportFormat, ExportReport};
 use crate::import::{ImportAs, ImportFormat, ImportReport, UpAxis};
+use crate::library::{LibraryKind, LibraryRef};
 use crate::schema::ModelPoint;
 use crate::text3d::Text3dReport;
 use crate::units::{LengthUnit, Units};
@@ -533,6 +534,37 @@ pub enum Command {
         #[serde(default)]
         overwrite: bool,
     },
+    /// Save a library item to the `.skr` file `path` (named `<name>.skr`): `kind` `component`
+    /// saves the component instance `item` (a group is refused: make it a component first)
+    /// at the origin with its rotation and scale kept, with the materials and tags it uses;
+    /// `material` saves the material `item` alone, texture included; `model` saves the whole
+    /// model (no `item`). `name` is what a library lists it by (default: the component's or
+    /// material's name, or the file's). An existing file is replaced only with `overwrite`; the
+    /// open model's own file is never written. Not an undo step, and the model is unchanged.
+    SaveToLibrary {
+        path: String,
+        kind: LibraryKind,
+        #[serde(default)]
+        item: Option<LibraryRef>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// Insert the library item at `path` (see `save_to_library`; any `.skr` file is a model
+    /// item) into the open context, as one undo step. A component or model: new definitions
+    /// are always made, materials and tags are matched by name (missing ones are added),
+    /// the minimum corner of its bounding box lands at `at`, or at the open context's origin
+    /// without it, and what it made becomes the selection. A material: added to the model;
+    /// one with the same name and the same color, opacity, emission and texture is reused,
+    /// otherwise the new one is named "<name> 2", "<name> 3"... (the lowest free). The
+    /// outcome's `material` is the material's id.
+    InsertLibraryItem {
+        path: String,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        at: Option<[f64; 3]>,
+    },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
     /// `.stl`, `.glb`, `.gltf`, `.skp`, `.svg`). Not an undo step. The outcome's `export` counts the
@@ -723,7 +755,10 @@ impl Command {
         !(self.is_camera()
             || matches!(
                 self,
-                Command::Select { .. } | Command::Save { .. } | Command::Export { .. }
+                Command::Select { .. }
+                    | Command::Save { .. }
+                    | Command::SaveToLibrary { .. }
+                    | Command::Export { .. }
             ))
     }
 
@@ -824,6 +859,10 @@ pub struct Outcome {
     /// What an `add_3d_text` made and left out; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_3d: Option<Text3dReport>,
+    /// The material an `insert_library_item` of a material added or reused; absent for other
+    /// commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<MaterialId>,
     /// The display units, after a command that changed them (`set_units`, or an undo or redo
     /// of such a step); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]

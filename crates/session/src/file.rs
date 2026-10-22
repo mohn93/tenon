@@ -58,7 +58,7 @@ pub const TRANSLUCENT_SCHEMA_VERSION: u32 = 6;
 /// 10 added, so its file is the same as before and older builds open it.
 pub const OPAQUE_SCHEMA_VERSION: u32 = 5;
 /// The archive entry holding the document.
-const ENTRY: &str = "document.json";
+pub(crate) const ENTRY: &str = "document.json";
 /// The largest `document.json` this build reads, uncompressed.
 const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -135,6 +135,21 @@ pub(crate) fn write(
 ) -> Result<(), String> {
     let bytes = write_bytes(scene, camera, look, ENTRY, &[])?;
     replace_file(path, &bytes, access)
+}
+
+/// The entry `name` of the `.skr` file at `path` (at most `limit` bytes), or None when the
+/// archive has no such entry. Reads the archive's directory and that entry only; fails when
+/// the file is not an archive holding a document.
+pub(crate) fn read_entry(path: &Path, name: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a sketchup-alt file".to_string())?;
+    if zip.by_name(ENTRY).is_err() {
+        return Err("not a sketchup-alt file".into());
+    }
+    match zip.by_name(name) {
+        Ok(entry) => read_limited(entry, limit, name).map(Some),
+        Err(_) => Ok(None),
+    }
 }
 
 /// The archive [`write`] writes, with the document under the name `entry` and the `extra`
