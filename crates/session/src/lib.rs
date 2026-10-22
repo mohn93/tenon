@@ -18,6 +18,7 @@ mod query;
 mod rectangle;
 mod rotate;
 mod schema;
+pub mod section_clip;
 mod section_shape;
 mod skp;
 mod skp_export;

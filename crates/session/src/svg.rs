@@ -57,11 +57,11 @@ pub(crate) fn to_svg(drawing: &Drawing, mm_per_px: Option<f64>) -> String {
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     let (w, h) = match mm_per_px {
         Some(_) => (format!("{}mm", num(size.x)), format!("{}mm", num(size.y))),
-        None => (format!("{}", size.x), format!("{}", size.y)),
+        None => (num(size.x), num(size.y)),
     };
     let (vw, vh) = match mm_per_px {
         Some(_) => (num(size.x), num(size.y)),
-        None => (format!("{}", size.x), format!("{}", size.y)),
+        None => (num(size.x), num(size.y)),
     };
     let _ = writeln!(
         out,

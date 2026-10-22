@@ -56,7 +56,7 @@ pub use import_tree::{
     MAX_IMPORT_DEFINITIONS, MAX_IMPORT_DEPTH, MAX_IMPORT_INSTANCES, MAX_IMPORT_PLACED_FACES,
     MAX_IMPORT_PLACEMENTS, TreeReport,
 };
-pub use index::{Index, Shape};
+pub use index::{Index, Shape, ray_hits_triangle};
 pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView};

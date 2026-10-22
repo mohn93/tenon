@@ -8,14 +8,13 @@
 //! outlines; dimensions and notes add their lines and label text.
 
 use glam::{DAffine3, DVec2, DVec3};
-use kernel::{
-    EntityId, MeshId, Model, Scene, SectionPlane, TagId, section_loops, triangulate_section,
-};
+use kernel::{EntityId, MeshId, Model, Scene, SectionPlane, TagId, ray_hits_triangle};
 
 use crate::annotation_shape::AnnotationShape;
 use crate::camera::Camera;
 use crate::command::{CommandError, ErrorKind};
 use crate::document::{Document, note_label};
+use crate::section_clip::{clip_segment, cut_surface};
 
 /// Most pieces a drawing tests for visibility, over all its edges.
 pub const MAX_PIECES: usize = 2_000_000;
@@ -84,6 +83,8 @@ struct Placement<'a> {
     /// Root coordinates to the mesh's own; None for a placement that flattens space.
     back: Option<DAffine3>,
     planes: Vec<SectionPlane>,
+    /// The box of the mesh's vertices as placed, when it holds faces.
+    bounds: Option<[DVec3; 2]>,
 }
 
 impl Placement<'_> {
@@ -108,12 +109,23 @@ fn placements(scene: &Scene, cuts: bool) -> Vec<Placement<'_>> {
             planes.push(plane.transformed(place));
         }
         let back = (place.matrix3.determinant().abs() > 1e-18).then(|| place.inverse());
+        let bounds = model.faces().next().and_then(|_| {
+            let (mut lo, mut hi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+            for (_, v) in model.vertices() {
+                let p = place.transform_point3(v.pos);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            let pad = DVec3::splat(1e-6);
+            (lo.is_finite() && hi.is_finite()).then_some([lo - pad, hi + pad])
+        });
         out.push(Placement {
             mesh,
             model,
             place,
             back,
             planes: planes.clone(),
+            bounds,
         });
         for (_, instance) in model.instances().filter(|(_, i)| scene.tag_shown(i.tag)) {
             walk(
@@ -138,186 +150,238 @@ fn placements(scene: &Scene, cuts: bool) -> Vec<Placement<'_>> {
     out
 }
 
-/// The part of the segment a-b that every plane keeps (the renderer's rule: a piece that only
-/// touches a plane from the cut-away side is dropped).
-fn clip_segment(a: DVec3, b: DVec3, planes: &[SectionPlane]) -> Option<[DVec3; 2]> {
-    const TOL: f64 = 1e-9;
-    let dist = |plane: &SectionPlane, p: DVec3| (p - plane.point).dot(plane.normal);
-    let (mut p, mut q) = (a, b);
-    let mut clipped = false;
-    for plane in planes {
-        let (dp, dq) = (dist(plane, p), dist(plane, q));
-        match (dp >= -TOL, dq >= -TOL) {
-            (true, true) => {}
-            (false, false) => return None,
-            (true, false) => {
-                if dp <= TOL {
-                    return None;
-                }
-                q = p.lerp(q, dp / (dp - dq));
-                clipped = true;
-            }
-            (false, true) => {
-                if dq <= TOL {
-                    return None;
-                }
-                p = p.lerp(q, dp / (dp - dq));
-                clipped = true;
-            }
-        }
-    }
-    (!clipped || p.distance(q) > 1e-9).then_some([p, q])
-}
-
-/// The triangles that remain of `tri` after every plane cut it.
-fn clip_triangle(tri: [DVec3; 3], planes: &[SectionPlane]) -> Vec<[DVec3; 3]> {
-    const TOL: f64 = 1e-9;
-    let dist = |plane: &SectionPlane, p: DVec3| (p - plane.point).dot(plane.normal);
-    let mut poly = tri.to_vec();
-    for plane in planes {
-        if poly.iter().all(|p| dist(plane, *p) >= -TOL) {
-            continue;
-        }
-        let mut out = Vec::with_capacity(poly.len() + 1);
-        for (k, &p) in poly.iter().enumerate() {
-            let q = poly[(k + 1) % poly.len()];
-            let (dp, dq) = (dist(plane, p), dist(plane, q));
-            if dp >= -TOL {
-                out.push(p);
-            }
-            if (dp > TOL && dq < -TOL) || (dp < -TOL && dq > TOL) {
-                out.push(p.lerp(q, dp / (dp - dq)));
-            }
-        }
-        poly = out;
-        if poly.len() < 3 {
-            return Vec::new();
-        }
-    }
-    let clipped = poly.len() != 3 || poly.iter().zip(&tri).any(|(a, b)| a != b);
-    (1..poly.len() - 1)
-        .map(|k| [poly[0], poly[k], poly[k + 1]])
-        .filter(|t| !clipped || (t[1] - t[0]).cross(t[2] - t[0]).length() > 1e-12)
-        .collect()
-}
-
-/// What the planes of a placement cut out of its surface (world coordinates).
-#[derive(Default)]
-struct Cut {
-    fill: Vec<[DVec3; 3]>,
-    edges: Vec<[DVec3; 2]>,
-}
-
-/// The fill (when `fill`) and the outlines where each of `planes` cuts `triangles`, each
-/// plane's cut clipped by the others (as the renderer's `cut_surface`).
-fn cut_surface(triangles: &[[DVec3; 3]], planes: &[SectionPlane], fill: bool) -> Cut {
-    let mut cut = Cut::default();
-    for (k, plane) in planes.iter().enumerate() {
-        let others: Vec<SectionPlane> = planes
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| *j != k)
-            .map(|(_, p)| *p)
-            .collect();
-        // A plane that cuts nothing away leaves nothing to outline.
-        if triangles
-            .iter()
-            .flatten()
-            .all(|p| (*p - plane.point).dot(plane.normal) >= -1e-9)
-        {
-            continue;
-        }
-        let loops = section_loops(triangles, plane.point, plane.normal);
-        if fill {
-            for t in triangulate_section(&loops.closed, plane.normal) {
-                cut.fill.extend(clip_triangle(t, &others));
-            }
-        }
-        let mut outline = |points: &[DVec3], closed: bool| {
-            let n = if closed {
-                points.len()
-            } else {
-                points.len() - 1
-            };
-            for j in 0..n {
-                let (a, b) = (points[j], points[(j + 1) % points.len()]);
-                if let Some(s) = clip_segment(a, b, &others) {
-                    cut.edges.push(s);
-                }
-            }
-        };
-        for region in &loops.closed {
-            for ring in region {
-                outline(ring, true);
-            }
-        }
-        for chain in &loops.open {
-            outline(chain, false);
-        }
-    }
-    cut
-}
-
-/// A fill triangle with its footprint on screen, for the sight tests.
+/// A fill triangle: its corners in the root.
 struct FillTriangle {
     world: [DVec3; 3],
-    lo: DVec2,
-    hi: DVec2,
+}
+
+/// Cells across and down the view the fill triangles are bucketed in.
+const GRID: usize = 32;
+
+/// The fill triangles, bucketed by the screen cells they cover so a sight test visits only
+/// those near its point. A triangle that could not be projected (a corner outside the depths
+/// the camera sees) is in `always`: it can hide anything.
+struct FillGrid {
+    triangles: Vec<FillTriangle>,
+    cells: Vec<Vec<u32>>,
+    always: Vec<u32>,
+    size: DVec2,
+}
+
+impl FillGrid {
+    fn new(size: DVec2) -> FillGrid {
+        FillGrid {
+            triangles: Vec::new(),
+            cells: vec![Vec::new(); GRID * GRID],
+            always: Vec::new(),
+            size,
+        }
+    }
+
+    /// The cell column and row of a screen point, clamped to the grid (a point beyond the
+    /// view shares the border cells with the triangles beyond it).
+    fn cell(&self, p: DVec2) -> (usize, usize) {
+        let at = |v: f64, size: f64| {
+            ((v / size.max(1e-9) * GRID as f64).floor().max(0.0) as usize).min(GRID - 1)
+        };
+        (at(p.x, self.size.x), at(p.y, self.size.y))
+    }
+
+    /// Adds a triangle with its footprint on screen, or without one.
+    fn add(&mut self, world: [DVec3; 3], screen: Option<[DVec2; 3]>) {
+        let k = self.triangles.len() as u32;
+        self.triangles.push(FillTriangle { world });
+        let Some([a, b, c]) = screen else {
+            self.always.push(k);
+            return;
+        };
+        let ((x0, y0), (x1, y1)) = (
+            self.cell(a.min(b).min(c) - 1.0),
+            self.cell(a.max(b).max(c) + 1.0),
+        );
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                self.cells[y * GRID + x].push(k);
+            }
+        }
+    }
+
+    /// True when a fill triangle meets `from + t * dir` for some `0 < t <= reach`; `screen`
+    /// is where the far end is.
+    fn hides(&self, from: DVec3, dir: DVec3, reach: f64, screen: DVec2) -> bool {
+        let (x, y) = self.cell(screen);
+        self.always
+            .iter()
+            .chain(&self.cells[y * GRID + x])
+            .any(|&k| {
+                ray_hits_triangle(from, dir, self.triangles[k as usize].world)
+                    .is_some_and(|t| t > 0.0 && t <= reach)
+            })
+    }
+}
+
+/// Whether the segment `from + t * dir`, `0 <= t <= reach`, meets the box.
+fn segment_meets_box(from: DVec3, dir: DVec3, reach: f64, lo: DVec3, hi: DVec3) -> bool {
+    let (mut t0, mut t1) = (0.0f64, reach);
+    for k in 0..3 {
+        if dir[k].abs() < 1e-300 {
+            if from[k] < lo[k] || from[k] > hi[k] {
+                return false;
+            }
+            continue;
+        }
+        let inv = 1.0 / dir[k];
+        let (mut a, mut b) = ((lo[k] - from[k]) * inv, (hi[k] - from[k]) * inv);
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        t0 = t0.max(a);
+        t1 = t1.min(b);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// A tree over the boxes of the placements that hold faces, so a sight test walks only the
+/// placements its line passes through.
+struct PlacementTree {
+    nodes: Vec<TreeNode>,
+}
+
+struct TreeNode {
+    lo: DVec3,
+    hi: DVec3,
+    kids: TreeKids,
+}
+
+enum TreeKids {
+    Leaf(Vec<usize>),
+    Inner(usize, usize),
+}
+
+/// Most placements in a leaf.
+const TREE_LEAF: usize = 4;
+
+impl PlacementTree {
+    fn new(parts: &[Placement<'_>]) -> PlacementTree {
+        let mut tree = PlacementTree { nodes: Vec::new() };
+        let mut items: Vec<usize> = (0..parts.len())
+            .filter(|&i| parts[i].bounds.is_some() && parts[i].back.is_some())
+            .collect();
+        if !items.is_empty() {
+            tree.build(parts, &mut items);
+        }
+        tree
+    }
+
+    fn build(&mut self, parts: &[Placement<'_>], items: &mut [usize]) -> usize {
+        let (mut lo, mut hi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for &i in items.iter() {
+            let [l, h] = parts[i].bounds.expect("only placements with bounds");
+            lo = lo.min(l);
+            hi = hi.max(h);
+        }
+        let at = self.nodes.len();
+        self.nodes.push(TreeNode {
+            lo,
+            hi,
+            kids: TreeKids::Leaf(Vec::new()),
+        });
+        if items.len() <= TREE_LEAF {
+            self.nodes[at].kids = TreeKids::Leaf(items.to_vec());
+            return at;
+        }
+        let extent = hi - lo;
+        let axis = if extent.x >= extent.y && extent.x >= extent.z {
+            0
+        } else if extent.y >= extent.z {
+            1
+        } else {
+            2
+        };
+        let centre = |i: &usize| {
+            let [l, h] = parts[*i].bounds.expect("only placements with bounds");
+            (l[axis] + h[axis]) * 0.5
+        };
+        items.sort_by(|a, b| centre(a).total_cmp(&centre(b)).then(a.cmp(b)));
+        let (left, right) = items.split_at_mut(items.len() / 2);
+        let l = self.build(parts, left);
+        let r = self.build(parts, right);
+        self.nodes[at].kids = TreeKids::Inner(l, r);
+        at
+    }
+
+    /// True when `hit` holds for some placement whose box the segment meets.
+    fn any(
+        &self,
+        from: DVec3,
+        dir: DVec3,
+        reach: f64,
+        hit: &mut impl FnMut(usize) -> bool,
+    ) -> bool {
+        if self.nodes.is_empty() {
+            return false;
+        }
+        let mut stack = vec![0usize];
+        while let Some(n) = stack.pop() {
+            let node = &self.nodes[n];
+            if !segment_meets_box(from, dir, reach, node.lo, node.hi) {
+                continue;
+            }
+            match &node.kids {
+                TreeKids::Leaf(items) => {
+                    if items.iter().any(|&i| hit(i)) {
+                        return true;
+                    }
+                }
+                TreeKids::Inner(l, r) => stack.extend([*l, *r]),
+            }
+        }
+        false
+    }
 }
 
 /// What can hide a point: the faces of every placement and the section fill.
+///
+/// The cost of one test is a walk of the placement tree (about log P boxes) plus, for each
+/// placement whose box the line of sight meets, a walk of that mesh's own index, plus the fill
+/// triangles in the point's screen cell. A drawing tests at most `MAX_PIECES` pieces.
 struct Occluders<'a> {
     scene: &'a Scene,
     placements: &'a [Placement<'a>],
-    fills: Vec<FillTriangle>,
+    tree: PlacementTree,
+    fills: FillGrid,
 }
 
 impl Occluders<'_> {
-    /// True when something lies between `from` and `to` (nearer than `to` by `SIGHT_TOL` of
-    /// the distance); `screen` is where `to` is on screen.
-    fn hides(&self, from: DVec3, to: DVec3, screen: DVec2) -> bool {
+    /// True when something lies between `from` and `to`, nearer to `to` than `tol` (meters)
+    /// excepted; `screen` is where `to` is on screen.
+    fn hides(&self, from: DVec3, to: DVec3, screen: DVec2, tol: f64) -> bool {
         let dir = to - from;
-        let reach = 1.0 - SIGHT_TOL;
-        for part in self.placements {
-            let Some(back) = part.back else { continue };
-            let hit = part.model.index().ray_hit_at(
-                back.transform_point3(from),
-                back.transform_vector3(dir),
-                0.0,
-                reach,
-                |f, t| {
-                    part.model
-                        .face(f)
-                        .is_some_and(|f| self.scene.tag_shown(f.tag))
-                        && part.kept(from + dir * t)
-                },
-            );
-            if hit.is_some() {
-                return true;
-            }
-        }
-        self.fills.iter().any(|f| {
-            screen.cmpge(f.lo - 1.0).all()
-                && screen.cmple(f.hi + 1.0).all()
-                && ray_triangle(from, dir, f.world).is_some_and(|t| t > 0.0 && t <= reach)
-        })
+        let reach = (1.0 - tol / dir.length().max(1e-300)).max(0.0);
+        let mut hit = |i: usize| {
+            let part = &self.placements[i];
+            let Some(back) = part.back else { return false };
+            part.model
+                .index()
+                .ray_hit_at(
+                    back.transform_point3(from),
+                    back.transform_vector3(dir),
+                    0.0,
+                    reach,
+                    |f, t| {
+                        part.model
+                            .face(f)
+                            .is_some_and(|f| self.scene.tag_shown(f.tag))
+                            && part.kept(from + dir * t)
+                    },
+                )
+                .is_some()
+        };
+        self.tree.any(from, dir, reach, &mut hit) || self.fills.hides(from, dir, reach, screen)
     }
-}
-
-/// The parameter at which `from + t * dir` meets the triangle (Moller-Trumbore).
-fn ray_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
-    let (e1, e2) = (b - a, c - a);
-    let h = dir.cross(e2);
-    let det = e1.dot(h);
-    if det.abs() < 1e-12 {
-        return None;
-    }
-    let s = from - a;
-    let u = s.dot(h) / det;
-    let q = s.cross(e1);
-    let v = dir.dot(q) / det;
-    let eps = 1e-12;
-    (u >= -eps && v >= -eps && u + v <= 1.0 + eps).then(|| e2.dot(q) / det)
 }
 
 /// The part of the segment in front of the camera's near depth (or inside a parallel view's
@@ -366,10 +430,26 @@ pub fn line_drawing(
     };
     let projector = camera.projector();
 
-    // The edges and the cuts, in root coordinates.
-    let mut edges: Vec<[DVec3; 2]> = Vec::new();
-    let mut cut_edges: Vec<[DVec3; 2]> = Vec::new();
-    let mut fills: Vec<FillTriangle> = Vec::new();
+    // Count the pieces before the costly work (cutting surfaces, testing sight lines), so a
+    // model too large is refused at once.
+    let too_large = || {
+        CommandError::new(
+            ErrorKind::InvalidInput,
+            "the model is too large for a line drawing at this size",
+        )
+    };
+    let mut jobs: Vec<(Segment, bool)> = Vec::new();
+    let mut tested = 0usize;
+    let mut add_job = |camera: &Camera, a: DVec3, b: DVec3, cut: bool| {
+        if let Some(job) = Segment::of(camera, a, b) {
+            tested += job.pieces;
+            if tested > MAX_PIECES {
+                return Err(too_large());
+            }
+            jobs.push((job, cut));
+        }
+        Ok(())
+    };
     for part in &parts {
         for (_, edge) in part.model.edges() {
             if edge.soft || !scene.tag_shown(edge.tag) {
@@ -383,13 +463,13 @@ pub fn line_drawing(
                 part.place.transform_point3(a.pos),
                 part.place.transform_point3(b.pos),
             );
-            if let Some(kept) = clip_segment(a, b, &part.planes) {
-                edges.push(kept);
+            if let Some([a, b]) = clip_segment(a, b, &part.planes) {
+                add_job(&camera, a, b, false)?;
             }
         }
-        if part.planes.is_empty() {
-            continue;
-        }
+    }
+    let mut fills = FillGrid::new(size_px);
+    for part in parts.iter().filter(|p| !p.planes.is_empty()) {
         // A mirroring placement turns triangles inside out; swapping two corners restores
         // the winding.
         let mirrored = part.place.matrix3.determinant() < 0.0;
@@ -407,42 +487,25 @@ pub fn line_drawing(
             continue;
         }
         let cut = cut_surface(&surface, &part.planes, display.fill);
-        cut_edges.extend(cut.edges);
+        for [a, b] in cut.edges {
+            add_job(&camera, a, b, true)?;
+        }
         for tri in cut.fill {
             let screen = tri.map(|p| projector.project(p));
             if let [Some(a), Some(b), Some(c)] = screen {
                 drawing.fills.push([a, b, c]);
-                fills.push(FillTriangle {
-                    world: tri,
-                    lo: a.min(b).min(c),
-                    hi: a.max(b).max(c),
-                });
+                fills.add(tri, Some([a, b, c]));
+            } else {
+                fills.add(tri, None);
             }
         }
     }
-
     let occluders = Occluders {
         scene,
         placements: &parts,
+        tree: PlacementTree::new(&parts),
         fills,
     };
-    // Count the pieces before testing any, so a model too large is refused at once.
-    let mut jobs: Vec<(Segment, bool)> = Vec::new();
-    let mut tested = 0usize;
-    for (segments, cut) in [(&edges, false), (&cut_edges, true)] {
-        for &[a, b] in segments {
-            if let Some(job) = Segment::of(&camera, a, b) {
-                tested += job.pieces;
-                if tested > MAX_PIECES {
-                    return Err(CommandError::new(
-                        ErrorKind::InvalidInput,
-                        "the model is too large for a line drawing at this size",
-                    ));
-                }
-                jobs.push((job, cut));
-            }
-        }
-    }
     for (job, cut) in jobs {
         let runs = job.visible_runs(&camera, &occluders);
         if cut {
@@ -493,9 +556,19 @@ impl Segment {
         };
         for i in 0..pieces {
             let mid = a.lerp(b, (i as f64 + 0.5) / pieces as f64);
-            let visible = projector
-                .project(mid)
-                .is_some_and(|screen| !occluders.hides(camera.sight_origin(mid), mid, screen));
+            let visible = projector.project(mid).is_some_and(|screen| {
+                let from = camera.sight_origin(mid);
+                // Meters a face may lie in front of the point and not hide it: a share of
+                // the distance to the eye, in a parallel view to the target (not to the
+                // far-back point the sight line starts from).
+                let tol = SIGHT_TOL
+                    * if camera.is_parallel() {
+                        camera.distance()
+                    } else {
+                        from.distance(mid)
+                    };
+                !occluders.hides(from, mid, screen, tol)
+            });
             match (visible, start) {
                 (true, None) => start = Some(i),
                 (false, Some(s)) => {

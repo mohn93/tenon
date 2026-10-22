@@ -1338,7 +1338,7 @@ written, each definition counted once: `definitions`, `instances`, `faces`, `edg
 cannot hold: "N materials glow; SketchUp files cannot store that", "N curves were written as
 separate edges", "N empty groups or components were left out", "N textured faces kept the
 default texture placement; their corners are too close to a line", and what it does not write:
-"N scenes were not written" (scenes are not exported). Every format, `skp` included, leaves out
+"N scenes were not written" (scenes are not exported). Every format but SVG (which draws dimensions and notes and applies section cuts, see below), `skp` included, leaves out
 dimensions, notes and section planes; `warnings` then says "N dimensions were not written", "N notes were
 not written" and "N section planes were not written" ("1 section plane was not written"; the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
 triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused

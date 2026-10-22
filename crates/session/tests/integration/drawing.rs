@@ -111,7 +111,10 @@ fn an_iso_box_has_its_nine_visible_edges_and_not_the_three_behind() {
     let svg = export(&mut d, "iso.svg", None);
     assert_eq!(polylines(&svg, "lines").len(), 9);
     assert!(svg.starts_with("<?xml"), "{svg}");
-    assert!(svg.contains("width=\"800\" height=\"600\""), "{svg}");
+    assert!(
+        svg.contains("width=\"800.000\" height=\"600.000\""),
+        "{svg}"
+    );
 }
 
 #[test]
@@ -415,4 +418,197 @@ fn a_drawing_of_too_many_pieces_is_refused() {
     );
     // At the window's size the same model draws.
     assert!(line_drawing(&d, &d.camera, d.camera.viewport).is_ok());
+}
+
+fn ids_of(d: &Document, kinds: Value) -> Vec<Value> {
+    let q: session::Query =
+        serde_json::from_value(json!({"type": "entities", "kinds": kinds})).unwrap();
+    let all = serde_json::to_value(d.query(&q).unwrap()).unwrap();
+    ["edges", "faces"]
+        .iter()
+        .flat_map(|k| all[k].as_array().cloned().unwrap_or_default())
+        .map(|e| e["id"].clone())
+        .collect()
+}
+
+/// Makes everything drawn so far a component; returns the instance's id.
+fn componentize(d: &mut Document) -> Value {
+    let ids = ids_of(d, json!(["edge", "face"]));
+    run(
+        d,
+        json!({"type": "make_component", "ids": ids, "name": "Part"}),
+    )
+    .unwrap();
+    let q: session::Query = serde_json::from_value(json!({"type": "selection"})).unwrap();
+    serde_json::to_value(d.query(&q).unwrap()).unwrap()["ids"][0].clone()
+}
+
+#[test]
+fn a_face_a_centimetre_in_front_hides_an_edge_100_m_away_in_a_parallel_view() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [-1, 0, 0.5], "end": [1, 0, 0.5]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [-0.5, -0.01, 0], "opposite": [0.5, -0.01, 1]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [0, -100, 0.5], "target": [0, 0, 0.5],
+               "fov_y_deg": 5, "projection": "parallel"}),
+    )
+    .unwrap();
+    let drawing = draw(&d);
+    let p = |x: f64| d.camera.project(DVec3::new(x, 0.0, 0.5)).unwrap();
+    let row = p(0.0).y;
+    let pieces: Vec<&Vec<DVec2>> = drawing
+        .lines
+        .iter()
+        .filter(|l| l.iter().all(|q| (q.y - row).abs() < 0.5))
+        .filter(|l| l[0].distance(l[1]) > 5.0)
+        .collect();
+    assert_eq!(pieces.len(), 2, "{pieces:?}");
+    for l in pieces {
+        assert!(!point_on(p(0.0), l[0], l[1]), "{l:?}");
+    }
+}
+
+#[test]
+fn a_mirrored_and_scaled_instance_draws_like_a_box() {
+    let mut d = doc();
+    box_(&mut d);
+    let part = componentize(&mut d);
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [part], "origin": [0, 0, 0], "factors": [-2, 1, 1]}),
+    )
+    .unwrap();
+    iso(&mut d);
+    let drawing = draw(&d);
+    assert_eq!(drawing.lines.len(), 9, "{:?}", drawing.lines);
+    // The box is 4 m long along x now, from -4 to 0: its far corner is (0, 2, 0).
+    let hidden = d.camera.project(DVec3::new(0.0, 2.0, 0.0)).unwrap();
+    assert!(
+        drawing
+            .lines
+            .iter()
+            .flatten()
+            .all(|p| p.distance(hidden) > 1.0)
+    );
+}
+
+#[test]
+fn a_perspective_view_draws_the_visible_edges_too() {
+    let mut d = doc();
+    box_(&mut d);
+    camera(&mut d, [-8.0, -12.0, 7.0], [1.0, 1.0, 0.5], false);
+    assert_eq!(draw(&d).lines.len(), 9);
+}
+
+#[test]
+fn an_instance_on_a_hidden_tag_neither_draws_nor_hides() {
+    let mut d = doc();
+    box_(&mut d);
+    let part = componentize(&mut d);
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [-2, 5, 0.5], "end": [4, 5, 0.5]}),
+    )
+    .unwrap();
+    front(&mut d);
+    // The box covers the middle of the edge behind it: the edge is in two pieces.
+    let behind = |d: &Document| {
+        let drawing = draw(d);
+        let row = d.camera.project(DVec3::new(0.0, 5.0, 0.5)).unwrap().y;
+        drawing
+            .lines
+            .iter()
+            .filter(|l| l.iter().all(|q| (q.y - row).abs() < 0.5) && l[0].distance(l[1]) > 5.0)
+            .count()
+    };
+    assert_eq!(behind(&d), 2);
+    let out = run(&mut d, json!({"type": "add_tag", "name": "Hide"})).unwrap();
+    let tag = out["changes"]["tags"][0].clone();
+    run(
+        &mut d,
+        json!({"type": "set_tag", "ids": [part], "tag": tag}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "change_tag", "tag": tag, "visible": false}),
+    )
+    .unwrap();
+    let drawing = draw(&d);
+    assert_eq!(drawing.lines.len(), 1, "{:?}", drawing.lines);
+    let p = |x: f64| d.camera.project(DVec3::new(x, 5.0, 0.5)).unwrap();
+    assert!(point_on(p(1.0), drawing.lines[0][0], drawing.lines[0][1]));
+}
+
+#[test]
+fn coplanar_faces_of_two_placements_do_not_hide_each_others_edges() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    )
+    .unwrap();
+    let part = componentize(&mut d);
+    run(
+        &mut d,
+        json!({"type": "copy", "ids": [part], "offset": [1, 0, 0]}),
+    )
+    .unwrap();
+    camera(&mut d, [1.0, 1.0, 10.0], [1.0, 1.0, 0.0], true);
+    let drawing = draw(&d);
+    // The second square's left edge lies on the first one's face; the first's right edge on
+    // the second's.
+    for x in [1.0, 2.0] {
+        let mid = d.camera.project(DVec3::new(x, 1.0, 0.0)).unwrap();
+        assert!(
+            drawing
+                .lines
+                .iter()
+                .any(|l| l.windows(2).any(|w| point_on(mid, w[0], w[1]))),
+            "no line at x = {x}: {:?}",
+            drawing.lines
+        );
+    }
+}
+
+#[test]
+fn two_thousand_placed_instances_draw_quickly() {
+    let mut d = doc();
+    box_(&mut d);
+    let part = componentize(&mut d);
+    let out = run(
+        &mut d,
+        json!({"type": "copy", "ids": [part], "offset": [0.5, 0, 0], "count": 999}),
+    )
+    .unwrap();
+    let mut ids: Vec<Value> = out["changes"]["created"].as_array().unwrap().clone();
+    ids.push(part);
+    run(
+        &mut d,
+        json!({"type": "copy", "ids": ids, "offset": [0, 3, 0], "count": 1}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [250, 1.5, 400], "target": [250, 1.5, 0],
+               "fov_y_deg": 60, "projection": "parallel"}),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let drawing = draw(&d);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(drawing.lines.len() > 1000, "{}", drawing.lines.len());
 }

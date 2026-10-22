@@ -441,7 +441,8 @@ fn ray_meets_box(origin: DVec3, dir: DVec3, min: DVec3, max: DVec3, reach: f64) 
 }
 
 /// Distance along unit `dir` from `from` to triangle `t`, if the ray meets it.
-fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
+/// The `t` at which `from + t * dir` meets the triangle, if it does (any `t`, negative too).
+pub fn ray_hits_triangle(from: DVec3, dir: DVec3, [a, b, c]: [DVec3; 3]) -> Option<f64> {
     let (e1, e2) = (b - a, c - a);
     let h = dir.cross(e2);
     let det = e1.dot(h);
