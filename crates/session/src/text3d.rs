@@ -8,6 +8,8 @@
 //! contour just around it. Characters the font has no glyph for, and letters whose contours
 //! cross or touch, are left out and listed in `skipped`; spaces only move the next letter on.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use glam::{DVec2, DVec3};
 use kernel::{DefinitionId, EntityId};
 use schemars::JsonSchema;
@@ -68,6 +70,10 @@ pub struct Text3dReport {
 /// clockwise.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextFace {
+    /// The character the face belongs to (its position in the text, as `SkippedCharacter`).
+    pub index: usize,
+    /// That character.
+    pub character: char,
     pub outer: Vec<DVec2>,
     pub holes: Vec<Vec<DVec2>>,
 }
@@ -76,6 +82,9 @@ pub struct TextFace {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextShape {
     pub faces: Vec<TextFace>,
+    /// The characters whose outlines touch or come within `MIN_GAP` of another character's:
+    /// built apart, since their points would be welded into one.
+    pub touching: BTreeSet<usize>,
     pub skipped: Vec<SkippedCharacter>,
 }
 
@@ -162,6 +171,8 @@ pub fn shape(text: &str, height: f64) -> TextShape {
                             .collect()
                     };
                     out.faces.extend(faces.iter().map(|f| TextFace {
+                        index,
+                        character: c,
                         outer: place(&f.outer),
                         holes: f.holes.iter().map(place).collect(),
                     }));
@@ -170,6 +181,47 @@ pub fn shape(text: &str, height: f64) -> TextShape {
             }
         }
         x += f64::from(advances.advance_width(glyph).unwrap_or(0.0));
+    }
+    out.touching = touching(&out.faces, MIN_GAP);
+    out
+}
+
+/// The characters of `faces` with a side within `gap` of a side of another character.
+/// Characters are compared by bounding box first; a pair whose boxes meet costs its sides
+/// squared.
+fn touching(faces: &[TextFace], gap: f64) -> BTreeSet<usize> {
+    let mut glyphs: BTreeMap<usize, Vec<[DVec2; 2]>> = BTreeMap::new();
+    for f in faces {
+        let sides = glyphs.entry(f.index).or_default();
+        for ring in std::iter::once(&f.outer).chain(&f.holes) {
+            sides.extend((0..ring.len()).map(|i| [ring[i], ring[(i + 1) % ring.len()]]));
+        }
+    }
+    let boxes: Vec<(usize, DVec2, DVec2)> = glyphs
+        .iter()
+        .map(|(&i, sides)| {
+            let (lo, hi) = sides.iter().flatten().fold(
+                (DVec2::splat(f64::MAX), DVec2::splat(f64::MIN)),
+                |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+            );
+            (i, lo - gap, hi + gap)
+        })
+        .collect();
+    let mut out = BTreeSet::new();
+    for (k, &(i, lo1, hi1)) in boxes.iter().enumerate() {
+        for &(j, lo2, hi2) in &boxes[k + 1..] {
+            if lo2.x > hi1.x || hi2.x < lo1.x || lo2.y > hi1.y || hi2.y < lo1.y {
+                continue;
+            }
+            let close = glyphs[&i].iter().any(|&[a, b]| {
+                glyphs[&j]
+                    .iter()
+                    .any(|&[p, q]| segment_distance(a, b, p, q) < gap)
+            });
+            if close {
+                out.extend([i, j]);
+            }
+        }
     }
     out
 }
@@ -324,6 +376,9 @@ fn nest(contours: &[Vec<DVec2>], gap: f64) -> Option<Vec<TextFace>> {
         faces.push((
             i,
             TextFace {
+                // The caller sets the character.
+                index: 0,
+                character: ' ',
                 outer,
                 holes: Vec::new(),
             },
@@ -351,7 +406,8 @@ fn nest(contours: &[Vec<DVec2>], gap: f64) -> Option<Vec<TextFace>> {
 }
 
 /// True when two sides of the contours that are not neighbours on one contour cross or come
-/// closer than `gap`.
+/// closer than `gap`. Quadratic in the number of sides of one glyph (a bounding-box check
+/// skips most pairs), which is fine for the few dozen to few hundred sides of a letter.
 fn crosses(contours: &[Vec<DVec2>], gap: f64) -> bool {
     let sides: Vec<(usize, usize, DVec2, DVec2)> = contours
         .iter()

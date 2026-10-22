@@ -78,16 +78,7 @@ impl Editor {
             Ok(outline) => outline,
             Err(e) => return Err(self.refuse(e)),
         };
-        // Read before `hover_now`, which shows the hover again.
-        let in_view = !self.flying && !self.hover_hidden && !self.covered;
-        let back = self.paste_return.unwrap_or(self.kind);
-        self.select_tool(back);
-        self.paste_return = Some(back);
-        self.tool = Box::new(PasteTool::new(text, &outline));
-        self.sync_operation();
-        if in_view {
-            self.hover_now();
-        }
+        self.start_paste_tool(PasteTool::new(text, &outline));
         Ok(())
     }
 
@@ -103,15 +94,7 @@ impl Editor {
                 "The text has no letters to draw",
             )));
         }
-        let in_view = !self.flying && !self.hover_hidden && !self.covered;
-        let back = self.paste_return.unwrap_or(self.kind);
-        self.select_tool(back);
-        self.paste_return = Some(back);
-        self.tool = Box::new(PasteTool::text(spec, shape.segments()));
-        self.sync_operation();
-        if in_view {
-            self.hover_now();
-        }
+        self.start_paste_tool(PasteTool::text(spec, shape.segments()));
         Ok(())
     }
 
@@ -181,6 +164,21 @@ impl Editor {
                 self.clip_ready = false;
                 Err(self.refuse(CommandError::new(ErrorKind::InvalidInput, NOT_A_CLIP)))
             }
+        }
+    }
+
+    /// Brings out `tool` (a Paste tool) over the current one, which Escape or the placing
+    /// click goes back to.
+    fn start_paste_tool(&mut self, tool: PasteTool) {
+        // Read before `hover_now`, which shows the hover again.
+        let in_view = !self.flying && !self.hover_hidden && !self.covered;
+        let back = self.paste_return.unwrap_or(self.kind);
+        self.select_tool(back);
+        self.paste_return = Some(back);
+        self.tool = Box::new(tool);
+        self.sync_operation();
+        if in_view {
+            self.hover_now();
         }
     }
 

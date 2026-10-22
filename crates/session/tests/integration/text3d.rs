@@ -288,3 +288,63 @@ fn text_is_drawn_in_the_open_context_and_in_atomic_batches() {
     let outcomes = d.execute_batch(commands, true).unwrap();
     assert!(outcomes[0].text_3d.is_some());
 }
+
+/// The meshes of the group's own definition and of the groups nested in it.
+fn glyph_meshes(d: &Document, r: &Text3dReport) -> Vec<Model> {
+    let main = mesh(d, r);
+    let mut out = vec![main.clone()];
+    for (_, i) in main.instances() {
+        out.push(d.scene().definition(i.definition).unwrap().mesh.clone());
+    }
+    out
+}
+
+#[test]
+fn glyphs_that_touch_are_separate_closed_solids() {
+    for text_in in ["__", "\u{2014}\u{2014}"] {
+        let mut d = doc();
+        let r = text(
+            &mut d,
+            json!({"text": text_in, "position": [0.0, 0.0, 0.0], "height": 1.0, "depth": 0.2}),
+        );
+        assert!(r.skipped.is_empty(), "{text_in}: {:?}", r.skipped);
+        d.scene().validate().unwrap();
+        let meshes = glyph_meshes(&d, &r);
+        let solids: Vec<&Model> = meshes.iter().filter(|m| m.faces().count() > 0).collect();
+        assert_eq!(solids.len(), 2, "{text_in}: one solid per glyph");
+        for m in solids {
+            assert_eq!(m.faces().count(), 6, "{text_in}");
+            assert!(side_uses(m).values().all(|&n| n == 2), "{text_in}");
+        }
+        assert_eq!(r.faces, 12, "{text_in}");
+    }
+}
+
+#[test]
+fn flat_touching_glyphs_share_no_edge() {
+    let mut d = doc();
+    let r = text(
+        &mut d,
+        json!({"text": "__", "position": [0.0, 0.0, 0.0], "height": 1.0}),
+    );
+    let meshes = glyph_meshes(&d, &r);
+    let solids: Vec<&Model> = meshes.iter().filter(|m| m.faces().count() > 0).collect();
+    assert_eq!(solids.len(), 2);
+    for m in &solids {
+        assert_eq!(m.faces().count(), 1);
+        assert!(side_uses(m).values().all(|&n| n == 1));
+    }
+}
+
+#[test]
+fn glyphs_that_touch_nothing_stay_in_the_main_group() {
+    let mut d = doc();
+    let r = text(
+        &mut d,
+        json!({"text": "Hi", "position": [0.0, 0.0, 0.0], "height": 1.0}),
+    );
+    let m = mesh(&d, &r);
+    assert!(m.instances().next().is_none());
+    // H, i and the dot of the i.
+    assert_eq!(m.faces().count(), 3);
+}
