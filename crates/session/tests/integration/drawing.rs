@@ -612,3 +612,44 @@ fn two_thousand_placed_instances_draw_quickly() {
     );
     assert!(drawing.lines.len() > 1000, "{}", drawing.lines.len());
 }
+
+#[test]
+fn a_multi_line_note_is_centred_as_a_block_on_its_anchor() {
+    let mut d = doc();
+    box_(&mut d);
+    front(&mut d);
+    run(
+        &mut d,
+        json!({"type": "add_note", "anchor": [1.0, 0.0, 0.5], "position": [1.0, -1.0, 0.5], "text": "a\nb\nc"}),
+    )
+    .unwrap();
+    let drawing = draw(&d);
+    let at = drawing
+        .labels
+        .iter()
+        .find(|l| l.text == "a\nb\nc")
+        .unwrap()
+        .at;
+    let svg = export(&mut d, "block.svg", None);
+    // 11 px text, 13.2 px lines: the first baseline is 0.8 - 3/2 lines above the anchor.
+    let first = at.y + 13.2 * (0.8 - 1.5);
+    assert!(
+        svg.contains(&format!("<text x=\"{:.3}\" y=\"{first:.3}\"", at.x)),
+        "{svg}"
+    );
+    assert!(svg.contains("dy=\"13.200\""), "{svg}");
+}
+
+#[test]
+fn an_svg_export_refuses_before_drawing_when_it_may_not_overwrite() {
+    let mut d = doc();
+    let path = scratch("taken.svg");
+    std::fs::write(&path, "not an svg").unwrap();
+    let (_, message) = run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert!(message.contains("overwrite"), "{message}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "not an svg");
+}

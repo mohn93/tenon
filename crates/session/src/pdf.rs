@@ -138,6 +138,8 @@ fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
 
 /// A number with at most 3 decimals, no trailing zeros and no "-0".
 fn num(v: f64) -> String {
+    debug_assert!(v.is_finite(), "PDF numbers are finite");
+    let v = if v.is_finite() { v } else { 0.0 };
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" || s.is_empty() {
@@ -182,6 +184,18 @@ impl PageBuilder<'_> {
         let (x, y) = self.pt([rect_mm[0], rect_mm[1] + rect_mm[3]]);
         let (w, h) = (num(rect_mm[2] * PT_PER_MM), num(rect_mm[3] * PT_PER_MM));
         self.op(&format!("q {w} 0 0 {h} {x} {y} cm /Im{index} Do Q"));
+    }
+
+    /// Starts clipping what is drawn to `rect_mm` = [x, y, width, height]; `end_clip` ends it.
+    pub fn begin_clip(&mut self, rect_mm: [f64; 4]) {
+        let (x, y) = self.pt([rect_mm[0], rect_mm[1] + rect_mm[3]]);
+        let (w, h) = (num(rect_mm[2] * PT_PER_MM), num(rect_mm[3] * PT_PER_MM));
+        self.op(&format!("q {x} {y} {w} {h} re W n"));
+    }
+
+    /// Ends the clip `begin_clip` started.
+    pub fn end_clip(&mut self) {
+        self.op("Q");
     }
 
     /// A black line `width_mm` wide.
@@ -276,6 +290,22 @@ fn pdf_string(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clip_wraps_what_is_drawn_inside_it() {
+        let mut pdf = Pdf::new();
+        let mut page = pdf.page([100.0, 100.0]);
+        page.begin_clip([10.0, 10.0, 50.0, 50.0]);
+        page.text([20.0, 20.0], 8.0, "x");
+        page.end_clip();
+        let text = String::from_utf8_lossy(&pdf.finish()).into_owned();
+        let (clip, inside, end) = (
+            text.find(" re W n").expect("clip"),
+            text.find("(x) Tj").expect("text"),
+            text.find("\nQ\n").expect("end"),
+        );
+        assert!(clip < inside && inside < end);
+    }
 
     fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         hay[from..]

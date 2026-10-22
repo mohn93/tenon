@@ -408,6 +408,12 @@ impl Document {
         refuse_links: bool,
         scale: Option<f64>,
     ) -> Result<ExportReport, CommandError> {
+        if refuse_links {
+            check_links(std::iter::once(target))?;
+        }
+        if !overwrite && !sniff::replaceable(target, Kind::Svg) {
+            return Err(sniff::refusal(target, Kind::Svg));
+        }
         let camera = &self.camera;
         let drawing = crate::drawing::line_drawing(self, camera, camera.viewport)?;
         if drawing.is_empty() {
@@ -420,12 +426,6 @@ impl Document {
         // model in a parallel view.
         let mm_per_px = scale.map(|n| camera.pixel_size(camera.target) * 1000.0 / n);
         let bytes = crate::svg::to_svg(&drawing, mm_per_px);
-        if refuse_links {
-            check_links(std::iter::once(target))?;
-        }
-        if !overwrite && !sniff::replaceable(target, Kind::Svg) {
-            return Err(sniff::refusal(target, Kind::Svg));
-        }
         file::replace_file(target, bytes.as_bytes(), Access::Default)
             .map_err(|e| file_error(&target.display().to_string(), e))?;
         Ok(ExportReport {

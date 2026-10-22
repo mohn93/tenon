@@ -520,6 +520,88 @@ pub fn line_drawing(
     Ok(drawing)
 }
 
+/// The dimensions and notes of `doc` as `camera` sees them, `size_px` pixels across: their
+/// lines and label text only. Nothing is tested for visibility (annotations are never hidden),
+/// so this costs no hidden-line pass and cannot be refused for size.
+pub fn annotation_labels(doc: &Document, camera: &Camera, size_px: DVec2) -> Drawing {
+    let mut camera = camera.clone();
+    camera.viewport = size_px;
+    let parts = placements(doc.scene(), doc.section_display.cuts);
+    let mut drawing = Drawing {
+        size: size_px,
+        ..Drawing::default()
+    };
+    annotations(doc, &camera, &parts, &mut drawing);
+    drawing
+}
+
+/// The points a print of `doc` must cover, in root coordinates: the shown geometry that the
+/// section cuts keep (kept vertices, the kept parts of edges, the outlines of the cuts) and
+/// the points of the shown dimensions and notes. A print at scale sizes its sheets from these.
+pub fn extent_points(doc: &Document) -> Vec<DVec3> {
+    let scene = doc.scene();
+    let display = doc.section_display;
+    let parts = placements(scene, display.cuts);
+    let mut out = Vec::new();
+    for part in &parts {
+        let model = part.model;
+        for (_, edge) in model.edges().filter(|(_, e)| scene.tag_shown(e.tag)) {
+            let (Some(a), Some(b)) = (model.position(edge.v[0]), model.position(edge.v[1])) else {
+                continue;
+            };
+            let (a, b) = (
+                part.place.transform_point3(a),
+                part.place.transform_point3(b),
+            );
+            if let Some([a, b]) = clip_segment(a, b, &part.planes) {
+                out.extend([a, b]);
+            }
+        }
+        for (_, face) in model.faces().filter(|(_, f)| scene.tag_shown(f.tag)) {
+            out.extend(
+                face.outer
+                    .iter()
+                    .filter_map(|v| model.position(*v))
+                    .map(|p| part.place.transform_point3(p))
+                    .filter(|p| part.kept(*p)),
+            );
+        }
+        if !part.planes.is_empty() {
+            let mirrored = part.place.matrix3.determinant() < 0.0;
+            let surface: Vec<[DVec3; 3]> = model
+                .faces()
+                .filter(|(_, f)| scene.tag_shown(f.tag))
+                .flat_map(|(id, _)| model.triangulate(id).unwrap_or_default())
+                .map(|t| {
+                    let [a, b, c] = t.map(|p| part.place.transform_point3(p));
+                    if mirrored { [a, c, b] } else { [a, b, c] }
+                })
+                .collect();
+            if !surface.is_empty() {
+                let cut = cut_surface(&surface, &part.planes, false);
+                out.extend(cut.edges.into_iter().flatten());
+            }
+        }
+        let shown = |tag: Option<TagId>| scene.tag_shown(tag);
+        let shapes = model
+            .dimensions()
+            .filter(|(_, d)| shown(d.tag()))
+            .map(|(id, _)| EntityId::Dimension(id))
+            .chain(
+                model
+                    .notes()
+                    .filter(|(_, n)| shown(n.tag()))
+                    .map(|(id, _)| EntityId::Note(id)),
+            );
+        for id in shapes {
+            if let Some(shape) = AnnotationShape::of(model, id) {
+                out.extend(shape.transformed(part.place).points());
+            }
+        }
+    }
+    out
+}
+
 /// A segment in front of the camera and in view, cut into the pieces tested for visibility.
 struct Segment {
     a: DVec3,

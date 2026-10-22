@@ -2,15 +2,14 @@
 //! scale bar, the footer and the label positions. The GPU renders each sheet's tile from its
 //! camera and `crate::pdf` assembles the pages; this module only decides what goes where.
 
-use glam::{DVec2, DVec3};
-use kernel::MeshId;
+use glam::DVec2;
 
-use crate::camera::{Camera, Projection};
+use crate::camera::{Camera, PARALLEL_DEPTH, Projection};
 use crate::command::{CommandError, ErrorKind};
 use crate::document::Document;
-use crate::drawing::{LabelAnchor, line_drawing};
+use crate::drawing::{LabelAnchor, annotation_labels, extent_points};
 use crate::pdf::{PageBuilder, text_width_mm};
-use crate::units::format_length_in;
+use crate::units::{LengthUnit, Units, format_length_in};
 
 /// Blank border of every sheet, in millimetres.
 pub const MARGIN_MM: f64 = 10.0;
@@ -34,6 +33,11 @@ const LINE_MM: f64 = 0.15;
 const LABEL_PX_PER_MM: f64 = 2.0;
 const LABEL_MAX_PX: f64 = 8192.0;
 const PT_MM: f64 = 25.4 / 72.0;
+/// Metres in a foot and in an inch.
+const FOOT_M: f64 = 0.3048;
+const INCH_M: f64 = 0.0254;
+/// How much of the depth range the model may take, so none of it touches the planes.
+const DEPTH_FILL: f64 = 0.9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Paper {
@@ -253,6 +257,8 @@ pub fn decorate(page: &mut PageBuilder, sheet: &Sheet, labels: &[SheetLabel]) {
         );
     }
     let step = TEXT_PT * 1.2 * PT_MM;
+    // Label text near the area's edge is cut there, not drawn over the trim marks or footer.
+    page.begin_clip(sheet.area_mm);
     for label in labels {
         let lines: Vec<&str> = label.text.split('\n').collect();
         let width = lines
@@ -270,20 +276,27 @@ pub fn decorate(page: &mut PageBuilder, sheet: &Sheet, labels: &[SheetLabel]) {
             page.text([x, top + step * (i as f64 + 0.8)], TEXT_PT, line);
         }
     }
+    page.end_clip();
 }
 
 fn invalid(message: impl Into<String>) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, message)
 }
 
-/// The nice bar length (1, 2 or 5 times a power of ten metres) for 1:`n`: the largest whose
-/// length on paper is within 20 to 60 mm, else the one closest to that range. Returns the
-/// length in metres and on paper in millimetres.
-fn bar_length(n: f64) -> (f64, f64) {
+/// The nice bar length for 1:`n`: 1, 2 or 5 times a power of ten of the display unit's
+/// length (feet for feet and inches, inches, else metres), the largest whose length on paper
+/// is within 20 to 60 mm, else the one closest to that range. Returns the length in metres
+/// and on paper in millimetres.
+fn bar_length(n: f64, units: &Units) -> (f64, f64) {
+    let unit = match units.length {
+        LengthUnit::FeetInches => FOOT_M,
+        LengthUnit::Inches => INCH_M,
+        _ => 1.0,
+    };
     let mut best: Option<(f64, f64, f64)> = None;
     for k in -12..=12 {
         for m in [1.0, 2.0, 5.0] {
-            let metres = m * 10f64.powi(k);
+            let metres = m * 10f64.powi(k) * unit;
             let mm = metres * 1000.0 / n;
             let miss = if mm < BAR_MIN_MM {
                 BAR_MIN_MM - mm
@@ -364,7 +377,7 @@ pub fn layout(doc: &Document, camera: &Camera, spec: &PrintSpec) -> Result<Layou
         Some(n) => exact(doc, camera, n, page_mm, ppm)?,
     };
 
-    let labels = place_labels(doc, &sheets, rows, cols, &whole, &mut warnings);
+    let labels = place_labels(doc, &sheets, rows, cols, &whole);
     Ok(Layout {
         sheets,
         rows,
@@ -386,18 +399,16 @@ fn exact(
     if camera.projection != Projection::Parallel {
         return Err(invalid("Switch to parallel projection to print at scale"));
     }
-    let Some([lo, hi]) = doc.scene().shown_bounds(MeshId::Root, doc.context()) else {
+    // The extent is of the print as drawn: no open context, section cuts applied, and the
+    // shown dimensions and notes included.
+    let points = extent_points(doc);
+    if points.is_empty() {
         return Err(invalid("nothing to print: the model shows no geometry"));
-    };
+    }
     let (right, up, forward) = (camera.right(), camera.up(), camera.forward());
     let (mut x0, mut x1, mut y0, mut y1, mut z0, mut z1) =
         (f64::MAX, f64::MIN, f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-    for k in 0..8 {
-        let p = DVec3::new(
-            if k & 1 == 0 { lo.x } else { hi.x },
-            if k & 2 == 0 { lo.y } else { hi.y },
-            if k & 4 == 0 { lo.z } else { hi.z },
-        );
+    for p in &points {
         (x0, x1) = (x0.min(p.dot(right)), x1.max(p.dot(right)));
         (y0, y1) = (y0.min(p.dot(up)), y1.max(p.dot(up)));
         (z0, z1) = (z0.min(p.dot(forward)), z1.max(p.dot(forward)));
@@ -427,7 +438,11 @@ fn exact(
         let mut c = camera.clone();
         c.target = right * x + up * y + depth;
         c.viewport = viewport;
-        let d = height / (2.0 * (camera.fov_y * 0.5).tan());
+        // Far enough back that the whole depth of the model lies inside the depth range,
+        // with the field of view set so the view keeps exactly `height`.
+        let d = (height / (2.0 * (camera.fov_y * 0.5).tan()))
+            .max((z1 - z0) / 2.0 / (PARALLEL_DEPTH * DEPTH_FILL));
+        c.fov_y = 2.0 * (height / (2.0 * d)).atan();
         c.eye = c.target - forward * d;
         c
     };
@@ -435,8 +450,8 @@ fn exact(
     let left = cx - cols as f64 * tile_w / 2.0;
     let top = cy + rows as f64 * tile_h / 2.0;
     let tiled = rows * cols > 1;
-    let (bar_m, bar_mm) = bar_length(n);
     let units = doc.units();
+    let (bar_m, bar_mm) = bar_length(n, &units);
     let scale_label = format!("1:{n}");
     let mut sheets = Vec::with_capacity(rows * cols);
     for r in 0..rows {
@@ -450,7 +465,12 @@ fn exact(
                 tile_px: [px[0] as u32, px[1] as u32],
                 trim: tiled,
                 scale_bar: Some(ScaleBar {
-                    x_mm: MARGIN_MM,
+                    // Clear of the trim mark at the area's bottom left corner.
+                    x_mm: if tiled {
+                        MARGIN_MM + TRIM_MM + 1.0
+                    } else {
+                        MARGIN_MM
+                    },
                     y_mm: ph - MARGIN_MM + 0.5,
                     length_m: bar_m,
                     length_mm: bar_mm,
@@ -474,15 +494,14 @@ fn exact(
     Ok((sheets, rows, cols, whole))
 }
 
-/// Dimension and note text per sheet: one drawing of the whole print, low resolution, its
-/// label positions cut into the sheets they fall on. A label lies on the sheet of its anchor.
+/// Dimension and note text per sheet: the annotations of the whole print at low resolution,
+/// their label positions cut into the sheets they fall on. A label lies on the sheet of its anchor.
 fn place_labels(
     doc: &Document,
     sheets: &[Sheet],
     rows: usize,
     cols: usize,
     whole: &Camera,
-    warnings: &mut Vec<String>,
 ) -> Vec<Vec<SheetLabel>> {
     let mut out = vec![Vec::new(); sheets.len()];
     // Fit mode's camera is the tile's: scale it to the label drawing's size.
@@ -497,13 +516,8 @@ fn place_labels(
         (cols as f64 * area[2] * s).max(1.0),
         (rows as f64 * area[3] * s).max(1.0),
     );
-    let drawing = match line_drawing(doc, &camera, camera.viewport) {
-        Ok(d) => d,
-        Err(e) => {
-            warnings.push(format!("labels not placed: {}", e.message));
-            return out;
-        }
-    };
+    // Only the annotations pass: no hidden-line work, so labels are never refused for size.
+    let drawing = annotation_labels(doc, &camera, camera.viewport);
     let (tw, th) = (area[2] * s, area[3] * s);
     for label in &drawing.labels {
         let (c, r) = ((label.at.x / tw).floor(), (label.at.y / th).floor());
@@ -536,7 +550,7 @@ mod tests {
             (500.0, 20.0),
             (3.0, 0.1),
         ] {
-            let (metres, mm) = bar_length(n);
+            let (metres, mm) = bar_length(n, &Units::default());
             assert!((metres - m).abs() < 1e-12, "1:{n}: {metres}");
             assert!((mm - metres * 1000.0 / n).abs() < 1e-9);
         }
@@ -547,7 +561,7 @@ mod tests {
     fn bar_with_nothing_in_range_takes_the_closest() {
         // Candidates are 1/2/5: 20..60 mm always holds one for a ratio of 3, so exercise the
         // fallback with an absurd scale where the candidate grid ends.
-        let (_, mm) = bar_length(1e30);
+        let (_, mm) = bar_length(1e30, &Units::default());
         assert!(mm < 20.0);
     }
 

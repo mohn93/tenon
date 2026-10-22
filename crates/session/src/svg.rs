@@ -59,10 +59,7 @@ pub(crate) fn to_svg(drawing: &Drawing, mm_per_px: Option<f64>) -> String {
         Some(_) => (format!("{}mm", num(size.x)), format!("{}mm", num(size.y))),
         None => (num(size.x), num(size.y)),
     };
-    let (vw, vh) = match mm_per_px {
-        Some(_) => (num(size.x), num(size.y)),
-        None => (num(size.x), num(size.y)),
-    };
+    let (vw, vh) = (num(size.x), num(size.y));
     let _ = writeln!(
         out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {vw} {vh}\">"
@@ -110,23 +107,29 @@ pub(crate) fn to_svg(drawing: &Drawing, mm_per_px: Option<f64>) -> String {
         num(text_size)
     );
     for label in &drawing.labels {
-        let (anchor, down) = match label.anchor {
-            LabelAnchor::Center => ("middle", 0.35),
-            LabelAnchor::TopLeft => ("start", 0.8),
+        let anchor = match label.anchor {
+            LabelAnchor::Center => "middle",
+            LabelAnchor::TopLeft => "start",
         };
-        let (x, y) = (label.at.x * k, label.at.y * k + text_size * down);
+        let lines: Vec<&str> = label.text.split('\n').collect();
+        let step = text_size * 1.2;
+        let (x, mut y) = (label.at.x * k, label.at.y * k);
+        // A centred block is centred as a whole on its anchor, as in the PDF.
+        y += match label.anchor {
+            LabelAnchor::Center => step * (0.8 - lines.len() as f64 / 2.0),
+            LabelAnchor::TopLeft => text_size * 0.8,
+        };
         let _ = write!(
             out,
             "<text x=\"{}\" y=\"{}\" text-anchor=\"{anchor}\">",
             num(x),
             num(y)
         );
-        let lines: Vec<&str> = label.text.split('\n').collect();
         if let [only] = lines[..] {
             out.push_str(&escape(only));
         } else {
             for (i, l) in lines.iter().enumerate() {
-                let dy = if i == 0 { 0.0 } else { text_size * 1.2 };
+                let dy = if i == 0 { 0.0 } else { step };
                 let _ = write!(
                     out,
                     "<tspan x=\"{}\" dy=\"{}\">{}</tspan>",

@@ -69,7 +69,7 @@ fn fit_is_one_sheet_with_the_view_aspect() {
     assert!(((x - 10.0) - (200.0 - (x + w))).abs() < 0.2);
     assert_eq!(s.tile_camera.eye, d.camera.eye);
     assert_eq!(s.tile_camera.viewport.x as u32, s.tile_px[0]);
-    assert_eq!(s.tile_px[0] as f64, (w * 150.0 / 25.4).round());
+    assert_eq!(s.tile_px[0] as f64, (w * 150.0 / 25.4).floor());
 }
 
 #[test]
@@ -310,4 +310,96 @@ fn a_laid_out_sheet_makes_a_valid_pdf() {
     let a = pdf.finish();
     assert!(a.starts_with(b"%PDF-1.4"));
     assert!(String::from_utf8_lossy(&a).contains("Sheet 1,2 of 1 x 3"));
+}
+
+#[test]
+fn a_dimension_outside_the_geometry_widens_the_print() {
+    let mut d = building(10.0);
+    // Fit at 1:100 (19 m across): the building alone is one sheet.
+    let l = layout(&d, &d.camera, &spec(Some(100.0))).unwrap();
+    assert_eq!(l.sheets.len(), 1);
+    run(
+        &mut d,
+        json!({"type": "add_dimension", "a": [10, 0, 0], "b": [10, 0, 5], "offset": [12, 0, 0]}),
+    );
+    let l = layout(&d, &d.camera, &spec(Some(100.0))).unwrap();
+    assert_eq!(l.sheets.len(), 2);
+    let on: Vec<usize> = l
+        .labels
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.iter().any(|t| t.text == "5 m"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(on, vec![1], "{:?}", l.labels);
+}
+
+#[test]
+fn a_section_cut_shrinks_the_extent() {
+    let mut d = building(50.0);
+    let l = layout(&d, &d.camera, &spec(Some(100.0))).unwrap();
+    assert_eq!(l.sheets.len(), 3);
+    run(
+        &mut d,
+        json!({"type": "add_section_plane", "point": [25, 0, 0], "normal": [1, 0, 0]}),
+    );
+    let l = layout(&d, &d.camera, &spec(Some(100.0))).unwrap();
+    assert_eq!(l.sheets.len(), 2);
+}
+
+#[test]
+fn the_scale_bar_uses_the_display_unit() {
+    let mut d = building(10.0);
+    run(
+        &mut d,
+        json!({"type": "set_units", "length": "feet_inches", "precision": 2}),
+    );
+    let l = layout(&d, &d.camera, &spec(Some(100.0))).unwrap();
+    let bar = l.sheets[0].scale_bar.as_ref().unwrap();
+    // 10 ft = 30.48 mm at 1:100.
+    assert!((bar.length_m - 3.048).abs() < 1e-9, "{}", bar.length_m);
+    assert!((bar.length_mm - 30.48).abs() < 1e-9);
+    assert_eq!(bar.end_label, "10'");
+}
+
+#[test]
+fn the_scale_bar_clears_the_trim_mark_when_tiled() {
+    let d = building(50.0);
+    let l = layout(&d, &d.camera, &spec(Some(100.0))).unwrap();
+    assert!(l.sheets[0].trim);
+    assert!(l.sheets[0].scale_bar.as_ref().unwrap().x_mm >= 10.0 + 5.0 + 1.0);
+    let l = layout(&d, &d.camera, &spec(Some(1000.0))).unwrap();
+    assert!(!l.sheets[0].trim);
+    assert_eq!(l.sheets[0].scale_bar.as_ref().unwrap().x_mm, 10.0);
+}
+
+#[test]
+fn a_deep_model_lies_inside_every_tile_cameras_depth_range() {
+    let mut d = Document::new(DVec2::new(800.0, 600.0));
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [10, 1000, 0]}),
+    );
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": "f8", "distance": 5.0}),
+    );
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [5.0, -100.0, 2.5], "target": [5.0, 500.0, 2.5],
+               "projection": "parallel"}),
+    );
+    let l = layout(&d, &d.camera, &spec(Some(10.0))).unwrap();
+    assert!(l.sheets.len() > 1);
+    for s in &l.sheets {
+        // The visible height is unchanged.
+        let h = s.tile_camera.view_height();
+        assert!((h - s.area_mm[3] / 1000.0 * 10.0).abs() < 1e-9, "{h}");
+        for y in [0.0, 1000.0] {
+            for z in [0.0, 5.0] {
+                let p = DVec3::new(5.0, y, z);
+                assert!(s.tile_camera.sees_depth(p), "{p:?}");
+            }
+        }
+    }
 }

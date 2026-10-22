@@ -143,10 +143,7 @@ pub fn open_command(platform: Platform, path: &Path) -> (OsString, Vec<OsString>
     match platform {
         Platform::Mac => ("open".into(), vec![path]),
         Platform::Linux => ("xdg-open".into(), vec![path]),
-        Platform::Windows => (
-            "cmd".into(),
-            vec!["/C".into(), "start".into(), "".into(), path],
-        ),
+        Platform::Windows => ("explorer.exe".into(), vec![path]),
     }
 }
 
@@ -397,16 +394,8 @@ mod tests {
         assert_eq!(program, "xdg-open");
         assert_eq!(args, [path.as_os_str()]);
         let (program, args) = open_command(Platform::Windows, path);
-        assert_eq!(program, "cmd");
-        assert_eq!(
-            args,
-            [
-                OsString::from("/C"),
-                "start".into(),
-                "".into(),
-                path.as_os_str().to_owned()
-            ]
-        );
+        assert_eq!(program, "explorer.exe");
+        assert_eq!(args, [path.as_os_str()]);
     }
 
     #[test]
