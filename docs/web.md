@@ -38,10 +38,16 @@ tested by hand (open, draw, save, reopen).
 - Open: File > Open takes a `.skr`, or a `.skp` (opened as a new, unsaved model). Where the
   browser has the File System Access API (Chrome, Edge) the file is picked with its picker and
   Save writes back to the same `.skr`; elsewhere an `<input type=file>` is shown.
-- Save downloads `<name>.skr` (or writes to the kept file). Save As asks with the browser's
-  picker when it has one, else downloads. A `.skp` opened or imported is saved as `<name>.skr`.
-- Import (OBJ, STL, SketchUp) and Export (the format last used; an OBJ with materials downloads
-  its `.mtl` and textures beside it).
+- Save writes back to the file the model was opened from or last saved to, when the browser
+  gave a handle for it (File System Access API) and the model is still that file: New, opening
+  a `.skp`, Import, texture picks and Export never change which file Save writes to, and after
+  New Save asks again. With no such file, Save and Save As ask with the browser's save picker
+  when it has one (and keep the handle), else download `<name>.skr`. A `.skp` opened or
+  imported is saved as `<name>.skr`.
+- Import (OBJ, STL, SketchUp). Export opens a sheet to choose the format (OBJ, STL, glTF
+  binary, glTF, SketchUp 2017, SVG; the one used last is first), then the save picker or a
+  download offers only that format. An OBJ with materials downloads its `.mtl` and textures
+  beside it.
 - Preferences live in `localStorage` under `sketchup-alt-prefs` (the JSON of `prefs.json`).
 - The unsaved-changes question is an in-app dialog. Help > About says what is off.
 - Cut, Copy and Paste of components between tabs go through text on the clipboard.
@@ -51,7 +57,10 @@ tested by hand (open, draw, save, reopen).
   block Ctrl/Cmd+N, W and T (new window, close tab, new tab), so those keep their browser
   meaning. Closing or reloading the tab with unsaved changes asks for confirmation.
 - Paste (Ctrl/Cmd+V) acts on the browser's paste event, so it always pastes what is on the
-  clipboard now, into a focused text field or as a clip into the model.
+  clipboard now, once, into a focused text field or as a clip into the model. Cmd chords in
+  text fields (Cmd+A, Z, C, X, V) act as commands. Text copied from a field is also written
+  to the system clipboard. Safari may not fire `paste` on a canvas that is not editable; there
+  Ctrl/Cmd+V does nothing (use the Edit menu, which pastes the text last copied in the app).
 
 ## What is off
 
@@ -61,7 +70,6 @@ tested by hand (open, draw, save, reopen).
 - Light shadows when the browser falls back to WebGL2 (no cube-array textures): the status line
   and Help > About say so.
 - Textures from a file (Paint, Edit Texture > Open) say they cannot be loaded from files here.
-- Export has no format chooser: it uses the last format.
 - A lost GPU device needs a page reload.
 
 ## Clipboard note

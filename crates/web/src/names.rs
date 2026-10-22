@@ -61,6 +61,50 @@ pub fn writes_back(name: &str) -> bool {
         .is_some_and(|(stem, e)| !stem.is_empty() && e.eq_ignore_ascii_case("skr"))
 }
 
+/// The file handle Save may write to, and how it comes and goes. A handle is picked with a
+/// model's Open (`picked`), kept once the model opened (`opened`: a file that fails to parse
+/// never replaces the kept one), and replaced by every save of a model (`saved`). Import,
+/// textures and Export never touch it. `for_save` hands it out only when the window says the
+/// open model is that file (`SaveRequest::write_back`: false after New).
+pub struct Handles<H> {
+    candidate: Option<(String, Option<H>)>,
+    kept: Option<H>,
+}
+
+impl<H> Default for Handles<H> {
+    fn default() -> Self {
+        Self {
+            candidate: None,
+            kept: None,
+        }
+    }
+}
+
+impl<H: Clone> Handles<H> {
+    /// A model file was picked (with its handle, where the browser gives one).
+    pub fn picked(&mut self, name: &str, handle: Option<H>) {
+        self.candidate = Some((name.to_string(), handle));
+    }
+
+    /// The file picked last opened as the model `name`: its handle is kept when it is a `.skr`.
+    pub fn opened(&mut self, name: &str) {
+        let picked = self.candidate.take();
+        self.kept = picked
+            .filter(|(picked, _)| picked == name && writes_back(name))
+            .and_then(|(_, handle)| handle);
+    }
+
+    /// The model was saved as `name` (to `handle`; None: downloaded).
+    pub fn saved(&mut self, name: &str, handle: Option<H>) {
+        self.kept = handle.filter(|_| writes_back(name));
+    }
+
+    /// The handle a Save may write to.
+    pub fn for_save(&self, write_back: bool) -> Option<H> {
+        self.kept.clone().filter(|_| write_back)
+    }
+}
+
 /// Whether the page keeps the browser from acting on this key press on the canvas. The app
 /// handles plain keys (tools, arrows, Space, Tab, Backspace, Delete) and the command chords of
 /// `app::shortcuts`; the browser must not also scroll, search, go back or save the page.
@@ -173,6 +217,47 @@ mod tests {
         assert!(!writes_back("house.obj"));
         assert!(!writes_back(".skr"));
         assert!(!writes_back("skr"));
+    }
+
+    #[test]
+    fn a_kept_handle_belongs_to_the_model_opened_from_it() {
+        let mut h: Handles<u32> = Handles::default();
+        assert_eq!(h.for_save(true), None);
+        // Open a.skr: kept once it opened.
+        h.picked("a.skr", Some(1));
+        assert_eq!(h.for_save(true), None, "not before it opened");
+        h.opened("a.skr");
+        assert_eq!(h.for_save(true), Some(1));
+        // The window says it is not that file's model (after New).
+        assert_eq!(h.for_save(false), None);
+        // A file that fails to open leaves the kept one: it is never `opened`.
+        h.picked("bad.skr", Some(2));
+        assert_eq!(h.for_save(true), Some(1));
+        // The next pick replaces the failed one; a SketchUp file keeps no handle.
+        h.picked("b.skp", Some(3));
+        h.opened("b.skp");
+        assert_eq!(h.for_save(true), None);
+        // A pick that is not the one opened keeps nothing.
+        h.picked("c.skr", Some(4));
+        h.opened("other.skr");
+        assert_eq!(h.for_save(true), None);
+    }
+
+    #[test]
+    fn saving_a_model_replaces_the_handle_and_downloads_clear_it() {
+        let mut h: Handles<u32> = Handles::default();
+        h.saved("x.skr", Some(5));
+        assert_eq!(h.for_save(true), Some(5));
+        h.saved("y.skr", None);
+        assert_eq!(
+            h.for_save(true),
+            None,
+            "a download is not the handle's file"
+        );
+        h.saved("z.skr", Some(6));
+        // An export's file is never the model's.
+        h.saved("z.obj", Some(7));
+        assert_eq!(h.for_save(true), None);
     }
 
     #[test]

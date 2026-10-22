@@ -13,6 +13,14 @@ Only `src/dropped_file.rs`: the `egui::DroppedFile` impl for `NativeFile` now ha
 those two trait methods on wasm32, so the unpatched crate does not compile for the web.
 Dropped files are not used on the web (the app opens files through its `Platform`).
 
+`src/lib.rs`, three changes for the web, native behaviour unchanged:
+- `ModifiersChanged` sets `mac_cmd` and `command` through `command_flags`: on wasm32 Cmd (Super)
+  is `mac_cmd` and, with Ctrl, the `command` key. Upstream only does that on macOS, so Cmd chords
+  in a browser typed their letter into text fields. (`web_tests` covers `command_flags`.)
+- The paste shortcut (Ctrl/Cmd+V or the Paste key) pushes no `Event::Paste` on wasm32: the
+  in-memory clipboard would paste a second time beside the page's own paste event, which the app
+  forwards as `egui::Event::Paste`.
+
 ## When to drop it
 
 When a released egui-winit compiles for wasm32 and the workspace may move to it, delete this

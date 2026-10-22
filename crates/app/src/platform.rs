@@ -105,6 +105,19 @@ impl Filter {
 pub struct OpenRequest {
     /// The kinds of file offered, the first one chosen at first.
     pub filters: Vec<Filter>,
+    /// What the file is for.
+    pub kind: OpenKind,
+}
+
+/// What a picked file is for. Only a model's file may be kept for Save to write back to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenKind {
+    /// File > Open: the model replaces the open one.
+    Model,
+    /// File > Import.
+    Import,
+    /// An image for a material.
+    Texture,
 }
 
 /// Asks where to save a file.
@@ -115,6 +128,9 @@ pub struct SaveRequest {
     pub name: String,
     /// Ask where to save even if the system could reuse the file's last place (Save As, Export).
     pub ask: bool,
+    /// The model was opened from, or last saved to, the file the system kept (Save only): the
+    /// system may write to it. False after New, and for Export, whatever the system kept.
+    pub write_back: bool,
 }
 
 /// What a picked file is made of.
@@ -207,6 +223,14 @@ pub trait Platform {
 
     /// The clipboard Cut, Copy and Paste use.
     fn clipboard(&self) -> Box<dyn Clipboard>;
+
+    /// The file the last `pick_open` of kind `Model` returned was opened as a model (`name`):
+    /// the system may keep its handle for Save. Not called when the file failed to open.
+    fn file_opened(&self, _name: &str) {}
+
+    /// Text copied in a text field of the window (a platform whose clipboard the window does
+    /// not reach by itself puts it there).
+    fn copied(&self, _text: &str) {}
 
     /// The modifier keys held as the key event being delivered says it (a browser's events
     /// carry them; winit reports the change only after the key). None: winit's own state

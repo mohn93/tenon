@@ -492,12 +492,12 @@ impl State {
                 self.modifiers.alt = alt;
                 self.modifiers.ctrl = ctrl;
                 self.modifiers.shift = shift;
-                self.modifiers.mac_cmd = cfg!(target_os = "macos") && super_;
-                self.modifiers.command = if cfg!(target_os = "macos") {
-                    super_
-                } else {
-                    ctrl
-                };
+                (self.modifiers.mac_cmd, self.modifiers.command) = command_flags(
+                    cfg!(target_os = "macos"),
+                    cfg!(target_arch = "wasm32"),
+                    ctrl,
+                    super_,
+                );
 
                 self.egui_input
                     .events
@@ -1025,6 +1025,10 @@ impl State {
                     self.egui_input.events.push(egui::Event::Copy);
                     return;
                 } else if is_paste_command(self.modifiers, active_key) {
+                    // On the web the page's paste event inserts the text (the app sends it as
+                    // `egui::Event::Paste`); the in-memory clipboard here would paste a second
+                    // time. Changed from upstream: see VENDORED.md.
+                    #[cfg(not(target_arch = "wasm32"))]
                     if let Some(contents) = self.clipboard.get() {
                         let contents = contents.replace("\r\n", "\n");
                         if !contents.is_empty() {
@@ -1413,6 +1417,18 @@ fn is_printable_char(chr: char) -> bool {
         || '\u{100000}' <= chr && chr <= '\u{10fffd}';
 
     !is_in_private_use_area && !chr.is_ascii_control()
+}
+
+/// egui's `(mac_cmd, command)` for the held keys. A browser (`web`) cannot tell Apple's computers
+/// from others, so there Cmd counts as the command key beside Ctrl (and is `mac_cmd`, so the
+/// letter a Cmd chord types is not inserted into a text field).
+/// Changed from upstream for the web: see VENDORED.md.
+fn command_flags(macos: bool, web: bool, ctrl: bool, super_: bool) -> (bool, bool) {
+    if web {
+        (super_, ctrl || super_)
+    } else {
+        (macos && super_, if macos { super_ } else { ctrl })
+    }
 }
 
 fn is_cut_command(modifiers: egui::Modifiers, keycode: egui::Key) -> bool {
@@ -2331,5 +2347,23 @@ pub fn short_window_event_description(event: &winit::event::WindowEvent) -> &'st
         WindowEvent::ThemeChanged { .. } => "WindowEvent::ThemeChanged",
         WindowEvent::Occluded { .. } => "WindowEvent::Occluded",
         WindowEvent::PanGesture { .. } => "WindowEvent::PanGesture",
+    }
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::command_flags;
+
+    #[test]
+    fn command_keys_by_platform() {
+        // (mac_cmd, command)
+        assert_eq!(command_flags(true, false, false, true), (true, true));
+        assert_eq!(command_flags(true, false, true, false), (false, false));
+        assert_eq!(command_flags(false, false, true, true), (false, true));
+        assert_eq!(command_flags(false, false, false, true), (false, false));
+        // A browser: Cmd and Ctrl both are the command key; Cmd is also mac_cmd.
+        assert_eq!(command_flags(false, true, false, true), (true, true));
+        assert_eq!(command_flags(false, true, true, false), (false, true));
+        assert_eq!(command_flags(false, true, false, false), (false, false));
     }
 }

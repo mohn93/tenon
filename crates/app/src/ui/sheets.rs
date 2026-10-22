@@ -71,6 +71,11 @@ pub enum Sheet {
     },
     /// Delete from Library, asking before the item's file is removed.
     DeleteLibraryItem { path: PathBuf, name: String },
+    /// Export, where files have no path: the formats (name and extension, the one used last
+    /// first) to choose from before the file is saved.
+    Export {
+        formats: Vec<(&'static str, &'static str)>,
+    },
     /// The unsaved-changes question, where the window asks it itself.
     Unsaved { prompt: UnsavedPrompt },
     /// Help > About; `shadows_off` adds that light shadows are off in this browser.
@@ -115,6 +120,8 @@ enum Values {
     Text3d(TextSpec),
     /// The print options being edited.
     Print(PrintOptions),
+    /// The index of the format chosen in the Export sheet.
+    Choice(usize),
     /// A sheet with nothing to edit.
     Nothing,
 }
@@ -136,6 +143,7 @@ impl Values {
             Sheet::SaveToLibrary { suggested, .. } => Values::Name(suggested.clone()),
             Sheet::OverwriteLibrary { .. } | Sheet::DeleteLibraryItem { .. } => Values::Nothing,
             Sheet::Print { spec, .. } => Values::Print(*spec),
+            Sheet::Export { .. } => Values::Choice(0),
         }
     }
 }
@@ -221,6 +229,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                         NameUse::new(false, fresh, UiAction::ConfirmSaveToLibrary),
                         actions,
                     );
+                }
+                (Sheet::Export { formats }, Values::Choice(chosen)) => {
+                    export_sheet(ui, formats, chosen, actions);
                 }
                 (Sheet::Unsaved { prompt }, Values::Nothing) => {
                     unsaved_sheet(ui, prompt, actions);
@@ -509,6 +520,26 @@ fn discard_recovered_sheet(ui: &mut Ui, names: &[String], actions: &mut Vec<UiAc
     ));
     if buttons(ui, "Discard", true, actions) {
         actions.push(UiAction::ConfirmDiscardRecovered);
+    }
+}
+
+/// The Export sheet: the formats as radio buttons, then Cancel and Export, which reports
+/// `ConfirmExport` with the chosen format's extension.
+fn export_sheet(
+    ui: &mut Ui,
+    formats: &[(&'static str, &'static str)],
+    chosen: &mut usize,
+    actions: &mut Vec<UiAction>,
+) {
+    widgets::section_header(ui, "Export Model");
+    ui.add_space(theme::GRID);
+    for (i, (name, _)) in formats.iter().enumerate() {
+        ui.radio_value(chosen, i, *name);
+    }
+    if buttons(ui, "Export...", !formats.is_empty(), actions)
+        && let Some((_, ext)) = formats.get(*chosen)
+    {
+        actions.push(UiAction::ConfirmExport((*ext).to_string()));
     }
 }
 

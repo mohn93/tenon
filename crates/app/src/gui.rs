@@ -274,6 +274,20 @@ fn screen_reader_after(event: &accesskit_winit::WindowEvent) -> Option<bool> {
     }
 }
 
+impl GuiFrame {
+    /// The text a widget copied this frame (a text field's Copy or Cut).
+    pub fn copied_texts(&self) -> impl Iterator<Item = &str> {
+        self.output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+    }
+}
+
 /// The 3D view's rectangle in physical pixels, from its rectangle in points.
 fn physical_viewport(central: egui::Rect, pixels_per_point: f32) -> Viewport {
     let px = |v: f32| (v * pixels_per_point).round().max(0.0) as u32;

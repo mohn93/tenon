@@ -12,7 +12,8 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
-    Blob, BlobPropertyBag, Document, Event, File, HtmlAnchorElement, HtmlInputElement, Url, Window,
+    AddEventListenerOptions, Blob, BlobPropertyBag, Document, Event, File, HtmlAnchorElement,
+    HtmlInputElement, Url, Window,
 };
 
 use crate::names;
@@ -234,8 +235,15 @@ pub fn pick_with_input(accept: &str, done: impl FnOnce(Chosen) + 'static) -> Res
     target
         .add_event_listener_with_callback("cancel", on_cancel.as_ref().unchecked_ref())
         .map_err(|e| describe(&e))?;
+    // Once: a later focus must not call a closure that has run.
+    let once = AddEventListenerOptions::new();
+    once.set_once(true);
     window()
-        .add_event_listener_with_callback("focus", on_focus.as_ref().unchecked_ref())
+        .add_event_listener_with_callback_and_add_event_listener_options(
+            "focus",
+            on_focus.as_ref().unchecked_ref(),
+            &once,
+        )
         .map_err(|e| describe(&e))?;
     on_focus.forget();
     // The listeners live until the input is removed and dropped with the page.

@@ -103,6 +103,8 @@ pub enum UiAction {
     Print,
     /// Print as the Print sheet's values say (kept in the preferences).
     ConfirmPrint(PrintOptions),
+    /// Export with the format (an extension) chosen in the Export sheet.
+    ConfirmExport(String),
     DeleteGuides,
     ZoomExtents,
     StandardView(StandardView),

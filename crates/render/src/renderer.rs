@@ -49,7 +49,8 @@ pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         // The adapter's own texture size, so canvases past 2048 px work.
         wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
     } else {
-        wgpu::Limits::default()
+        // The adapter's own texture size, so the largest canvases work.
+        wgpu::Limits::default().using_resolution(adapter.limits())
     };
     #[cfg(not(target_arch = "wasm32"))]
     let defaults = wgpu::Limits::default();

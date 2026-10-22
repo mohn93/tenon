@@ -12,8 +12,8 @@ use winit::window::Window;
 
 use crate::editor::{Editor, PrintOptions};
 use crate::platform::{
-    Answer, Download, Filter, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved, Source,
-    UnsavedChoice, UnsavedPrompt,
+    Answer, Download, Filter, OpenKind, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved,
+    Source, UnsavedChoice, UnsavedPrompt,
 };
 
 /// What happens once unsaved changes are settled (saved, or given up).
@@ -68,6 +68,9 @@ pub enum Effect {
     LibraryFolder(PathBuf),
     /// Print the view to this PDF.
     Pdf(PrintOptions, PathBuf),
+    /// The window asks which format to export (where files have no path): each format's name
+    /// and extension, the one exported last first. It answers with `Flows::export_as`.
+    ExportSheet(Vec<(&'static str, &'static str)>),
     /// The window asks the unsaved-changes question itself (`Features::in_app_dialogs`) and
     /// answers with `PlatformReply::Unsaved`.
     AskUnsaved(UnsavedPrompt),
@@ -93,6 +96,9 @@ pub struct Flows {
     kept_name: Option<String>,
     /// The file picked for the open Import Options sheet, where files have no path.
     import: Option<(String, Vec<u8>)>,
+    /// The model was opened from, or last saved to, a file the platform may have kept (where
+    /// files have no path): Save may write back to it. Cleared by New and by opening a path.
+    bound: bool,
 }
 
 /// The effect that remembers the open model's file.
@@ -171,6 +177,7 @@ impl Flows {
             notify,
             kept_name: None,
             import: None,
+            bound: false,
         }
     }
 
@@ -231,6 +238,7 @@ impl Flows {
             Then::NewModel => {
                 env.editor.new_model();
                 self.kept_name = None;
+                self.bound = false;
                 vec![Effect::ClearAutosave]
             }
             Then::Open => self.pick_open(env),
@@ -245,6 +253,7 @@ impl Flows {
     fn open_path(&mut self, env: &mut Env, path: &Path) -> Vec<Effect> {
         if env.editor.open_file(path) {
             self.kept_name = None;
+            self.bound = false;
             vec![Effect::ClearAutosave, remember(env)]
         } else {
             Vec::new()
@@ -254,6 +263,7 @@ impl Flows {
     fn pick_open(&mut self, env: &mut Env) -> Vec<Effect> {
         let request = OpenRequest {
             filters: open_filters(),
+            kind: OpenKind::Model,
         };
         match env
             .platform
@@ -279,6 +289,8 @@ impl Flows {
                 source: Source::Bytes(bytes),
             }) => {
                 if env.editor.open_bytes(&name, &bytes) {
+                    env.platform.file_opened(&name);
+                    self.bound = true;
                     self.kept_name = Some(skr_name(&name));
                     vec![Effect::ClearAutosave, remember(env)]
                 } else {
@@ -318,6 +330,7 @@ impl Flows {
                 filters: skr_filters(),
                 name,
                 ask: true,
+                write_back: false,
             };
             return match env
                 .platform
@@ -338,6 +351,7 @@ impl Flows {
             filters: skr_filters(),
             name: name.clone(),
             ask: choose,
+            write_back: !choose && self.bound,
         };
         let files = vec![Download { name, bytes }];
         match env
@@ -374,6 +388,7 @@ impl Flows {
             Ok(Some(name)) => {
                 env.editor.saved_as(&name);
                 self.kept_name = Some(name);
+                self.bound = true;
                 let mut effects = vec![Effect::ClearAutosave];
                 if let Some(then) = then {
                     effects.extend(self.run_then(env, then));
@@ -397,6 +412,7 @@ impl Flows {
         }
         let request = OpenRequest {
             filters: import_filters(),
+            kind: OpenKind::Import,
         };
         match env
             .platform
@@ -438,19 +454,29 @@ impl Flows {
         }
     }
 
-    /// File > Export: asks where to export, the format by the name's extension (where files
-    /// have no path: the format exported last, as bytes to save).
+    /// The name the exported files start with: the model's file name or kept name, without
+    /// its extension.
+    fn export_stem(&self, env: &Env) -> String {
+        let stem = file_name(env.editor.doc().path());
+        let stem = stem.strip_suffix(".skr").unwrap_or(&stem).to_string();
+        match (&self.kept_name, env.editor.doc().path()) {
+            (Some(kept), None) => kept.strip_suffix(".skr").unwrap_or(kept).to_string(),
+            _ => stem,
+        }
+    }
+
+    /// File > Export: asks where to export, the format by the name's extension. Where files
+    /// have no path the window asks for the format first (`Effect::ExportSheet`, answered by
+    /// `export_as`).
     pub fn export(&mut self, env: &mut Env) -> Vec<Effect> {
         if self.waiting.is_some() {
             return Vec::new();
         }
-        let stem = file_name(env.editor.doc().path());
-        let stem = stem.strip_suffix(".skr").unwrap_or(&stem).to_string();
-        let stem = match (&self.kept_name, env.editor.doc().path()) {
-            (Some(kept), None) => kept.strip_suffix(".skr").unwrap_or(kept).to_string(),
-            _ => stem,
-        };
+        let stem = self.export_stem(env);
         let formats = env.editor.export_formats();
+        if !env.platform.features().file_paths {
+            return vec![Effect::ExportSheet(formats)];
+        }
         let request = SaveRequest {
             filters: formats
                 .iter()
@@ -458,25 +484,47 @@ impl Flows {
                 .collect(),
             name: format!("{stem}.{}", formats[0].1),
             ask: true,
+            write_back: false,
         };
-        if env.platform.features().file_paths {
-            return match env
-                .platform
-                .pick_save_path(&request, self.reply(PlatformReply::Path))
-            {
-                Answer::Ready(path) => {
-                    if let Some(path) = path {
-                        env.editor.export_file(&path);
-                    }
-                    Vec::new()
+        match env
+            .platform
+            .pick_save_path(&request, self.reply(PlatformReply::Path))
+        {
+            Answer::Ready(path) => {
+                if let Some(path) = path {
+                    env.editor.export_file(&path);
                 }
-                Answer::Pending => {
-                    self.waiting = Some(Waiting::ExportPath);
-                    Vec::new()
-                }
-            };
+                Vec::new()
+            }
+            Answer::Pending => {
+                self.waiting = Some(Waiting::ExportPath);
+                Vec::new()
+            }
         }
-        let Some(files) = env.editor.export_model(formats[0].1, &stem) else {
+    }
+
+    /// The export format `ext` was chosen (where files have no path): exports the model as
+    /// bytes and has the platform save them, offering only that format.
+    pub fn export_as(&mut self, env: &mut Env, ext: &str) -> Vec<Effect> {
+        if self.waiting.is_some() {
+            return Vec::new();
+        }
+        let Some((name, ext)) = env
+            .editor
+            .export_formats()
+            .into_iter()
+            .find(|(_, x)| *x == ext)
+        else {
+            return Vec::new();
+        };
+        let stem = self.export_stem(env);
+        let request = SaveRequest {
+            filters: vec![Filter::new(name, &[ext])],
+            name: format!("{stem}.{ext}"),
+            ask: true,
+            write_back: false,
+        };
+        let Some(files) = env.editor.export_model(ext, &stem) else {
             return Vec::new();
         };
         let files = files
@@ -506,6 +554,7 @@ impl Flows {
             filters: vec![Filter::new("PDF", &["pdf"])],
             name: format!("{stem}.pdf"),
             ask: true,
+            write_back: false,
         };
         match env
             .platform
@@ -527,6 +576,7 @@ impl Flows {
         }
         let request = OpenRequest {
             filters: vec![Filter::new("PNG or JPEG image", &["png", "jpg", "jpeg"])],
+            kind: OpenKind::Texture,
         };
         match env
             .platform
@@ -640,6 +690,8 @@ mod tests {
         path_requests: RefCell<Vec<SaveRequest>>,
         prefs: RefCell<Option<String>>,
         asks: Cell<usize>,
+        kinds: RefCell<Vec<OpenKind>>,
+        opened: RefCell<Vec<String>>,
     }
 
     impl Fake {
@@ -655,6 +707,8 @@ mod tests {
                 path_requests: RefCell::default(),
                 prefs: RefCell::default(),
                 asks: Cell::new(0),
+                kinds: RefCell::default(),
+                opened: RefCell::default(),
             }
         }
     }
@@ -666,10 +720,15 @@ mod tests {
 
         fn pick_open(
             &self,
-            _request: &OpenRequest,
+            request: &OpenRequest,
             _reply: Reply<Option<Picked>>,
         ) -> Answer<Option<Picked>> {
+            self.kinds.borrow_mut().push(request.kind);
             self.opens.borrow_mut().pop_front().expect("an open answer")
+        }
+
+        fn file_opened(&self, name: &str) {
+            self.opened.borrow_mut().push(name.to_string());
         }
 
         fn pick_save_path(
@@ -1080,13 +1139,7 @@ mod tests {
         assert!(editor.doc().is_modified());
     }
 
-    #[test]
-    fn exporting_where_files_have_no_path_downloads_the_first_format() {
-        let platform = web();
-        platform
-            .saves
-            .borrow_mut()
-            .push_back(Answer::Ready(Ok(Some("model.obj".into()))));
+    fn with_rectangle() -> Editor {
         let mut editor = editor();
         editor
             .execute(Command::AddRectangle {
@@ -1095,14 +1148,168 @@ mod tests {
                 normal: None,
             })
             .unwrap();
+        editor
+    }
+
+    #[test]
+    fn exporting_where_files_have_no_path_asks_for_the_format_then_offers_only_it() {
+        let platform = web();
+        let mut editor = with_rectangle();
         let mut f = flows();
-        run(&mut f, &mut editor, &platform, |f, env| f.export(env));
-        let saved = platform.saved.borrow();
-        let (request, files) = &saved[0];
-        assert_eq!(request.name, "Untitled.obj");
-        assert_eq!(files[0].name, "Untitled.obj");
-        assert!(files[0].bytes.starts_with(b"#") || !files[0].bytes.is_empty());
-        assert!(request.filters.len() > 1);
+        let fx = run(&mut f, &mut editor, &platform, |f, env| f.export(env));
+        let [Effect::ExportSheet(formats)] = &fx[..] else {
+            panic!("expected the format sheet, got {fx:?}");
+        };
+        assert_eq!(formats[0].1, "obj", "OBJ before any export");
+        assert!(formats.iter().any(|(_, x)| *x == "stl"));
+        assert!(platform.saved.borrow().is_empty(), "nothing saved yet");
+
+        platform
+            .saves
+            .borrow_mut()
+            .push_back(Answer::Ready(Ok(Some("Untitled.stl".into()))));
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.export_as(env, "stl")
+        });
+        {
+            let saved = platform.saved.borrow();
+            let (request, files) = &saved[0];
+            assert_eq!(request.name, "Untitled.stl");
+            assert_eq!(request.filters.len(), 1, "only the chosen format");
+            assert_eq!(request.filters[0].extensions, ["stl"]);
+            assert!(request.ask && !request.write_back);
+            assert_eq!(files[0].name, "Untitled.stl");
+            // The bytes are an STL (ASCII "solid" or binary 80-byte header and a count).
+            assert!(files[0].bytes.len() > 84);
+        }
+        // The format used last comes first next time.
+        let fx = run(&mut f, &mut editor, &platform, |f, env| f.export(env));
+        let [Effect::ExportSheet(formats)] = &fx[..] else {
+            panic!("expected the format sheet");
+        };
+        assert_eq!(formats[0].1, "stl");
+        // An unknown format does nothing.
+        let fx = run(&mut f, &mut editor, &platform, |f, env| {
+            f.export_as(env, "xyz")
+        });
+        assert!(fx.is_empty());
+        assert_eq!(platform.saved.borrow().len(), 1);
+    }
+
+    fn opened_skr(name: &str) -> Answer<Option<Picked>> {
+        Answer::Ready(Some(Picked {
+            name: name.into(),
+            source: Source::Bytes(skr_bytes()),
+        }))
+    }
+
+    #[test]
+    fn a_save_may_write_back_only_while_the_model_is_the_kept_file() {
+        let platform = web();
+        platform.opens.borrow_mut().push_back(opened_skr("a.skr"));
+        let mut editor = editor();
+        let mut f = flows();
+        run(&mut f, &mut editor, &platform, |f, env| f.open(env));
+        assert_eq!(*platform.opened.borrow(), ["a.skr"]);
+        assert_eq!(*platform.kinds.borrow(), [OpenKind::Model]);
+
+        let save = |f: &mut Flows, editor: &mut Editor, choose: bool| {
+            platform
+                .saves
+                .borrow_mut()
+                .push_back(Answer::Ready(Ok(Some("x.skr".into()))));
+            run(f, editor, &platform, |f, env| f.save(env, choose, None));
+            platform.saved.borrow().last().unwrap().0.clone()
+        };
+        // Opened from the kept file: Save writes back; Save As never.
+        assert!(save(&mut f, &mut editor, false).write_back);
+        assert!(!save(&mut f, &mut editor, true).write_back);
+
+        // New: the kept file is not this model's.
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.settle_and(env, Then::NewModel)
+        });
+        editor
+            .execute(Command::AddEdge {
+                start: [0.0, 0.0, 0.0],
+                end: [2.0, 0.0, 0.0],
+            })
+            .unwrap();
+        assert!(!save(&mut f, &mut editor, false).write_back);
+        // Saved to a file: the next Save is to that one.
+        assert!(save(&mut f, &mut editor, false).write_back);
+    }
+
+    #[test]
+    fn a_file_that_fails_to_open_is_not_kept() {
+        let platform = web();
+        platform
+            .opens
+            .borrow_mut()
+            .push_back(Answer::Ready(Some(Picked {
+                name: "bad.skr".into(),
+                source: Source::Bytes(b"not a model".to_vec()),
+            })));
+        let mut editor = editor();
+        let mut f = flows();
+        run(&mut f, &mut editor, &platform, |f, env| f.open(env));
+        assert!(platform.opened.borrow().is_empty());
+        assert_eq!(f.kept_name(), None);
+    }
+
+    #[test]
+    fn import_texture_and_export_leave_the_kept_file_alone() {
+        let platform = web();
+        platform.opens.borrow_mut().push_back(opened_skr("a.skr"));
+        let mut editor = editor();
+        let mut f = flows();
+        run(&mut f, &mut editor, &platform, |f, env| f.open(env));
+        assert_eq!(platform.opened.borrow().len(), 1);
+
+        platform
+            .opens
+            .borrow_mut()
+            .push_back(Answer::Ready(Some(Picked {
+                name: "tri.obj".into(),
+                source: Source::Bytes(b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".to_vec()),
+            })));
+        run(&mut f, &mut editor, &platform, |f, env| f.import(env));
+        platform.opens.borrow_mut().push_back(Answer::Ready(None));
+        let material = MaterialId(1);
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.load_texture(env, material);
+            Vec::new()
+        });
+        assert_eq!(
+            *platform.kinds.borrow(),
+            [OpenKind::Model, OpenKind::Import, OpenKind::Texture]
+        );
+        assert_eq!(platform.opened.borrow().len(), 1, "only the open was kept");
+
+        editor
+            .execute(Command::AddRectangle {
+                corner: [0.0, 0.0, 0.0],
+                opposite: [1.0, 1.0, 0.0],
+                normal: None,
+            })
+            .unwrap();
+        platform
+            .saves
+            .borrow_mut()
+            .push_back(Answer::Ready(Ok(Some("a.obj".into()))));
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.export_as(env, "obj")
+        });
+        assert!(!platform.saved.borrow()[0].0.write_back);
+        // The model is still the kept file's: Save writes back.
+        platform
+            .saves
+            .borrow_mut()
+            .push_back(Answer::Ready(Ok(Some("a.skr".into()))));
+        run(&mut f, &mut editor, &platform, |f, env| {
+            f.save(env, false, None)
+        });
+        assert!(platform.saved.borrow()[1].0.write_back);
     }
 
     #[test]

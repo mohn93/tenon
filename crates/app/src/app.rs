@@ -1241,6 +1241,7 @@ impl State {
                 }
                 Effect::Pdf(options, path) => self.start_print(&options, Some(path)),
                 Effect::AskUnsaved(prompt) => self.open_sheet(Sheet::Unsaved { prompt }),
+                Effect::ExportSheet(formats) => self.open_sheet(Sheet::Export { formats }),
             }
         }
     }
@@ -1718,6 +1719,14 @@ impl State {
                 purpose: PrintPurpose::Print,
                 spec: self.prefs.print,
             }),
+            UiAction::ConfirmExport(ext) => {
+                if self
+                    .confirm_sheet(|s| matches!(s, Sheet::Export { .. }))
+                    .is_some()
+                {
+                    self.flow(|flows, env| flows.export_as(env, &ext));
+                }
+            }
             UiAction::ConfirmPrint(spec) => {
                 if let Some(Sheet::Print { purpose, .. }) =
                     self.confirm_sheet(|s| matches!(s, Sheet::Print { .. }))
@@ -2468,6 +2477,12 @@ impl State {
         // The tools' marker and lines are egui's (the HUD); the renderer draws no overlay.
         self.renderer
             .render_in(&target, size, self.view, &self.editor.doc().camera, &[]);
+        // Text copied in a text field reaches a clipboard the window does not otherwise reach.
+        if self.features.paste_by_event {
+            for text in gui_frame.copied_texts() {
+                self.platform.copied(text);
+            }
+        }
         let again = self.gui.paint(
             &self.window,
             &self.device,
@@ -2679,7 +2694,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         return Err("The model was replaced; nothing was done");
     }
     match sheet {
-        Sheet::Import { .. } | Sheet::Print { .. } => Ok(()),
+        Sheet::Import { .. } | Sheet::Print { .. } | Sheet::Export { .. } => Ok(()),
         Sheet::NameComponent { .. } if *editor.doc().selection() != origin.selection => {
             Err("The selection changed; no component was made")
         }
@@ -2880,6 +2895,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
         UiAction::CloseSheet
             | UiAction::ConfirmImport(_)
             | UiAction::ConfirmPrint(_)
+            | UiAction::ConfirmExport(_)
             | UiAction::ConfirmName(_)
             | UiAction::ConfirmFieldOfView(_)
             | UiAction::ConfirmDeleteTag(_)

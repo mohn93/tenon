@@ -9,8 +9,8 @@ use std::rc::Rc;
 use app::app::AppEvent;
 use app::clipboard::Clipboard;
 use app::platform::{
-    Answer, Download, Features, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved, Source,
-    UnsavedChoice, UnsavedPrompt,
+    Answer, Download, Features, OpenKind, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved,
+    Source, UnsavedChoice, UnsavedPrompt,
 };
 use js_sys::Reflect;
 use wasm_bindgen::JsCast;
@@ -21,15 +21,10 @@ use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
 
 use crate::files;
-use crate::names::{self, Storage};
+use crate::names::{self, Handles, Storage};
 
-/// The file the model was opened from, kept so Save writes to it (File System Access API).
-struct Kept {
-    handle: JsValue,
-    name: String,
-}
-
-type KeptFile = Rc<RefCell<Option<Kept>>>;
+/// The file handle Save writes to (File System Access API), see `names::Handles`.
+type KeptFile = Rc<RefCell<Handles<JsValue>>>;
 
 pub struct WebPlatform {
     kept: KeptFile,
@@ -144,16 +139,16 @@ impl Platform for WebPlatform {
     ) -> Answer<Option<Picked>> {
         let kept = self.kept.clone();
         let proxy = self.proxy.clone();
+        let is_model = request.kind == OpenKind::Model;
         if files::has_function("showOpenFilePicker") {
             let filters = request.filters.clone();
             spawn_local(async move {
                 match files::open_with_picker(&filters).await {
                     Ok(Some(file)) => {
-                        // Only a model's own file is written back by Save.
-                        *kept.borrow_mut() = names::writes_back(&file.name).then(|| Kept {
-                            handle: file.handle,
-                            name: file.name.clone(),
-                        });
+                        // Kept once the model opened (`file_opened`), and only a model's.
+                        if is_model {
+                            kept.borrow_mut().picked(&file.name, Some(file.handle));
+                        }
                         reply(Some(Picked {
                             name: file.name,
                             source: Source::Bytes(file.bytes),
@@ -177,7 +172,9 @@ impl Platform for WebPlatform {
                 };
                 match chosen {
                     Ok(Some((name, bytes))) => {
-                        *kept.borrow_mut() = None;
+                        if is_model {
+                            kept.borrow_mut().picked(&name, None);
+                        }
                         reply(Some(Picked {
                             name,
                             source: Source::Bytes(bytes),
@@ -253,6 +250,15 @@ impl Platform for WebPlatform {
         Some(self.held.get())
     }
 
+    fn copied(&self, text: &str) {
+        *self.clip.borrow_mut() = Some(text.to_string());
+        write_system_clipboard(text);
+    }
+
+    fn file_opened(&self, name: &str) {
+        self.kept.borrow_mut().opened(name);
+    }
+
     fn set_modified(&self, modified: bool) {
         self.modified.set(modified);
     }
@@ -265,38 +271,37 @@ impl Platform for WebPlatform {
     }
 }
 
-/// Saves `files`: the first is the one the user named. A single file Save may write to the file
-/// the model was opened from; Save As and Export ask where when the browser can; everything
-/// else is downloaded (an OBJ's `.mtl` and textures are downloads beside it).
+/// Saves `files`: the first is the one the user named. A single file Save writes to the file
+/// the model is bound to (`SaveRequest::write_back`); otherwise, and for Save As and Export,
+/// the browser's save picker asks where when it has one; everything else is downloaded (an
+/// OBJ's `.mtl` and textures are downloads beside it). Saving a model replaces the kept handle
+/// (none after a download); exports leave it alone.
 async fn save(kept: KeptFile, request: SaveRequest, files: Vec<Download>) -> Saved {
     let Some(main) = files.first() else {
         return Ok(None);
     };
     let name = names::download_name(&main.name, "model.skr");
     let single = files.len() == 1;
+    // A model's save (`.skr`); exports have their own formats.
+    let model = names::writes_back(&main.name);
     if single && !request.ask {
-        let handle = kept
-            .borrow()
-            .as_ref()
-            .filter(|k| k.name == main.name)
-            .map(|k| k.handle.clone());
+        let handle = kept.borrow().for_save(request.write_back);
         if let Some(handle) = handle {
             match files::write_handle(&handle, &main.bytes).await {
                 Ok(()) => return Ok(Some(name)),
-                // The permission was refused or the file is gone: download instead.
-                Err(why) => log(&format!("cannot write to the file, downloading: {why}")),
+                // The permission was refused or the file is gone: ask where instead.
+                Err(why) => log(&format!("cannot write to the file: {why}")),
             }
         }
     }
-    if single && request.ask && files::has_function("showSaveFilePicker") {
+    if single && files::has_function("showSaveFilePicker") {
         match files::save_picker(&request.filters, &name).await {
             Ok(Some(handle)) => {
                 let saved_as = files::handle_name(&handle);
                 files::write_handle(&handle, &main.bytes).await?;
-                *kept.borrow_mut() = names::writes_back(&saved_as).then(|| Kept {
-                    handle,
-                    name: saved_as.clone(),
-                });
+                if model {
+                    kept.borrow_mut().saved(&saved_as, Some(handle));
+                }
                 return Ok(Some(saved_as));
             }
             Ok(None) => return Ok(None),
@@ -305,6 +310,9 @@ async fn save(kept: KeptFile, request: SaveRequest, files: Vec<Download>) -> Sav
     }
     for file in &files {
         files::download(&names::download_name(&file.name, "model.skr"), &file.bytes)?;
+    }
+    if model {
+        kept.borrow_mut().saved(&name, None);
     }
     Ok(Some(name))
 }
@@ -326,16 +334,21 @@ impl Clipboard for WebClipboard {
     }
 
     fn set_text(&mut self, text: String) -> Result<(), String> {
-        *self.text.borrow_mut() = Some(text.clone());
-        if let Some(clipboard) = system_clipboard() {
-            if let Ok(promise) = call(&clipboard, "writeText", &text.into()) {
-                spawn_local(async move {
-                    // Refused without permission: the page's own copy still works.
-                    let _ = JsFuture::from(js_sys::Promise::resolve(&promise)).await;
-                });
-            }
-        }
+        write_system_clipboard(&text);
+        *self.text.borrow_mut() = Some(text);
         Ok(())
+    }
+}
+
+/// Puts `text` on the system clipboard where the browser allows it.
+fn write_system_clipboard(text: &str) {
+    if let Some(clipboard) = system_clipboard()
+        && let Ok(promise) = call(&clipboard, "writeText", &text.into())
+    {
+        spawn_local(async move {
+            // Refused without permission: the page's own copy still works.
+            let _ = JsFuture::from(js_sys::Promise::resolve(&promise)).await;
+        });
     }
 }
 
