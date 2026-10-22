@@ -1,33 +1,10 @@
-mod app;
-mod awake;
-mod cli;
-mod clipboard;
-mod editor;
-mod feedback;
-mod fly;
-mod gui;
-mod headless;
-mod host;
-mod info;
-mod library;
-mod mcp;
-mod menus;
-#[cfg(target_os = "macos")]
-mod native_menu;
-mod navigation;
-mod paths;
-mod prefs;
-mod recovery;
-mod shortcuts;
-mod ui;
-#[cfg(windows)]
-mod windows;
-
 use std::path::PathBuf;
 
+use app::app::{App, AppConfig, AppEvent};
+use app::cli::{self, Mode, Transport};
+use app::platform::NativePlatform;
+use app::{headless, mcp, paths, prefs, recovery};
 use winit::event_loop::{ControlFlow, EventLoop};
-
-use crate::cli::{Mode, Transport};
 
 /// The folders given with `--api-root`, resolved; a bad one stops the app.
 fn roots(dirs: &[PathBuf]) -> api::ApiRoots {
@@ -93,7 +70,7 @@ fn main() {
             // Started from Explorer: no console window beside the app's. Only once the
             // arguments are known good, so a message about a bad one stays readable.
             #[cfg(windows)]
-            windows::hide_own_console();
+            app::windows::hide_own_console();
             // A socket in the fallback directory is only safe if that directory is private.
             let socket = match cli::private_dir_for_endpoint(&socket).map(cli::ensure_private_dir) {
                 Some(Err(e)) => {
@@ -102,7 +79,7 @@ fn main() {
                 }
                 _ => Some(socket),
             };
-            let mut builder = EventLoop::<app::AppEvent>::with_user_event();
+            let mut builder = EventLoop::<AppEvent>::with_user_event();
             // The app builds its own macOS menu bar (`native_menu`), whose Quit asks about
             // unsaved changes; winit's default one would exit without asking.
             #[cfg(target_os = "macos")]
@@ -145,7 +122,13 @@ fn main() {
                 path: p.prefs,
                 legacy: p.legacy_prefs,
             });
-            let mut app = app::App::new(&event_loop, socket, file, roots, recovery, session, prefs);
+            let mut config = AppConfig::new(Box::new(NativePlatform::new(prefs)));
+            config.socket = socket;
+            config.file = file;
+            config.roots = roots;
+            config.recovery = recovery;
+            config.session = session;
+            let mut app = App::new(event_loop.create_proxy(), config);
             event_loop.run_app(&mut app).expect("run app");
         }
     }

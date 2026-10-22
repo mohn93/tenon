@@ -101,6 +101,7 @@ pub(super) struct Fixture {
     pub start: Option<Vec<PathBuf>>,
     /// The recent files File > Open Recent lists, newest first.
     pub recent: Vec<PathBuf>,
+    pub features: crate::platform::Features,
     /// The sheet open over the window.
     pub sheet: Option<Sheet>,
     /// The one selected group or component, which Rename Component and the Name field rename.
@@ -180,6 +181,7 @@ impl Default for Fixture {
             camera: Camera::new(glam::DVec2::new(1280.0, 800.0)),
             start: None,
             recent: Vec::new(),
+            features: crate::platform::Features::ALL,
             sheet: None,
             rename: None,
             settings: None,
@@ -239,6 +241,7 @@ impl Fixture {
             cursor: self.cursor,
             camera: &self.camera,
             start: self.start.as_deref().map(|recent| StartCard { recent }),
+            features: self.features,
             recent: &self.recent,
             sheet: self.sheet.as_ref(),
             rename: self.rename.as_ref(),

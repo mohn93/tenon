@@ -38,6 +38,7 @@ impl LibraryState {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// The thumbnails belonged to the old panels' context.
     pub(super) fn forget_thumbnails(&mut self) {
         self.thumbs.clear();
@@ -195,10 +196,7 @@ impl State {
 
     /// Chooses the library folder in a dialog.
     pub(super) fn choose_library_folder(&mut self) {
-        let Some(folder) = rfd::FileDialog::new().pick_folder() else {
-            return;
-        };
-        self.set_library_folder(Some(std::path::absolute(&folder).unwrap_or(folder)));
+        self.flow(|flows, env| flows.choose_folder(env));
     }
 
     pub(super) fn set_library_folder(&mut self, folder: Option<PathBuf>) {
@@ -240,9 +238,7 @@ impl State {
             self.editor.show_error(&e.message);
             return;
         }
-        if self.settle_changes() {
-            self.open_file(path);
-        }
+        self.settle_and(Then::OpenFile(path.to_path_buf()));
     }
 
     pub(super) fn library_ask_delete(&mut self, path: PathBuf) {

@@ -92,30 +92,45 @@ fn tool_item(kind: ToolKind) -> Entry {
 /// and Edit then have neither); otherwise Settings... ends Edit and Quit ends File.
 /// The same items exist in every state of `view`; only labels, checks and enabled flags change.
 pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
+    let features = view.features;
     let mut file = vec![
         bound_item("New", Bound::NewModel, UiAction::NewModel).entry(),
         bound_item("Open...", Bound::OpenFile, UiAction::OpenFile).entry(),
-        Entry::Submenu {
+    ];
+    if features.recent {
+        file.push(Entry::Submenu {
             label: OPEN_RECENT,
             entries: recent_entries(view.recent),
-        },
-        Item::new("Recover Models...", UiAction::ShowRecover(true)).entry(),
+        });
+    }
+    if features.autosave {
+        file.push(Item::new("Recover Models...", UiAction::ShowRecover(true)).entry());
+    }
+    file.extend([
         bound_item("Save", Bound::SaveFile, UiAction::SaveFile).entry(),
         bound_item("Save As...", Bound::SaveFileAs, UiAction::SaveFileAs).entry(),
         Entry::Separator,
         bound_item("Import...", Bound::ImportFile, UiAction::ImportFile).entry(),
         bound_item("Export...", Bound::ExportFile, UiAction::ExportFile).entry(),
-        Item::new("Export PDF...", UiAction::ExportPdf).entry(),
-        Item::new(
-            "Save Model to Library...",
-            UiAction::SaveToLibrary(LibrarySave::Model),
-        )
-        .enabled(view.library.folder.is_some())
-        .tooltip("Needs a library folder: Settings > Files")
-        .entry(),
-        Entry::Separator,
-        Item::new("Print...", UiAction::Print).entry(),
-    ];
+    ]);
+    if features.print {
+        file.push(Item::new("Export PDF...", UiAction::ExportPdf).entry());
+    }
+    if features.library {
+        file.push(
+            Item::new(
+                "Save Model to Library...",
+                UiAction::SaveToLibrary(LibrarySave::Model),
+            )
+            .enabled(view.library.folder.is_some())
+            .tooltip("Needs a library folder: Settings > Files")
+            .entry(),
+        );
+    }
+    if features.print {
+        file.push(Entry::Separator);
+        file.push(Item::new("Print...", UiAction::Print).entry());
+    }
     if !native {
         file.push(Entry::Separator);
         file.push(bound_item("Quit", Bound::Quit, UiAction::Quit).entry());

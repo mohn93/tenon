@@ -40,6 +40,7 @@ impl Offscreen {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// One made on its own GPU device when first needed.
     pub fn headless() -> Self {
         Offscreen {

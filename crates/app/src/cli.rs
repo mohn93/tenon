@@ -47,9 +47,7 @@ pub enum Mode {
     },
 }
 
-/// Base folder under HOME for the files that live there on macOS, and for the socket when the
-/// preferred folder is unusable.
-pub const FALLBACK_DIR: &str = ".sketchup-alt";
+pub use crate::paths::FALLBACK_DIR;
 
 /// Default socket path: per-process, in the platform's private folder (see `paths`). Never in
 /// a shared directory such as /tmp.

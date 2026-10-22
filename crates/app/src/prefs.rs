@@ -1,8 +1,12 @@
 //! Window preferences kept between sessions in `~/.sketchup-alt/prefs.json`. They are window
 //! chrome: never part of a model, never read or written by the API or in headless mode.
 
-use std::io::{self, Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
+use std::io;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -102,6 +106,7 @@ fn cleaned(recent: Vec<PathBuf>) -> Vec<PathBuf> {
     kept
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The largest prefs file read; anything larger is not one this app wrote.
 const MAX_BYTES: u64 = 64 * 1024;
 
@@ -113,6 +118,7 @@ pub fn path_in(home: &Path) -> PathBuf {
 
 /// Where the window's preferences live: `path`, and an earlier location read once when `path`
 /// does not exist yet.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrefsFile {
     pub path: PathBuf,
@@ -122,37 +128,91 @@ pub struct PrefsFile {
 /// The prefs of `file`: those at `file.path`, or, when nothing is there yet, those at the
 /// legacy path. The legacy file is only read; the next save writes `file.path`, after which
 /// it is no longer looked at.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load_file(file: &PrefsFile) -> Prefs {
+    let source = source_of(file);
+    match read(source) {
+        Ok(Some(bytes)) => parse(&bytes, &source.display().to_string()),
+        Ok(None) => Prefs::default(),
+        Err(e) => unreadable(source, &e),
+    }
+}
+
+/// The file `file`'s prefs are read from: the legacy one while there is none at `path`.
+#[cfg(not(target_arch = "wasm32"))]
+fn source_of(file: &PrefsFile) -> &Path {
     let missing = matches!(
         std::fs::symlink_metadata(&file.path),
         Err(e) if e.kind() == io::ErrorKind::NotFound
     );
     match &file.legacy {
-        Some(legacy) if missing => load(legacy),
-        _ => load(&file.path),
+        Some(legacy) if missing => legacy,
+        _ => &file.path,
     }
+}
+
+/// The text of the prefs file `file` names (see `load_file`), for a platform to hand to
+/// `from_text`. None when there is none or it cannot be read (a warning goes to stderr then).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_text(file: &PrefsFile) -> Option<String> {
+    let source = source_of(file);
+    match read(source) {
+        Ok(Some(bytes)) => match String::from_utf8(bytes) {
+            Ok(text) => Some(text),
+            Err(_) => {
+                eprintln!(
+                    "warning: {} is not valid preferences; using the defaults",
+                    source.display()
+                );
+                None
+            }
+        },
+        Ok(None) => None,
+        Err(e) => {
+            unreadable(source, &e);
+            None
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn unreadable(path: &Path, e: &io::Error) -> Prefs {
+    eprintln!(
+        "warning: cannot read {}: {e}; using the default preferences",
+        path.display()
+    );
+    Prefs::default()
 }
 
 /// The prefs at `path`: the defaults when there is no file, and the defaults with a warning
 /// on stderr when it cannot be read or is not valid (it is replaced at the next change). The
 /// warning never quotes the file. Dock values and the autosave interval out of range are
 /// brought into it, and the recent files are cleaned (see `cleaned`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load(path: &Path) -> Prefs {
-    let bytes = match read(path) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return Prefs::default(),
-        Err(e) => {
-            eprintln!(
-                "warning: cannot read {}: {e}; using the default preferences",
-                path.display()
-            );
-            return Prefs::default();
-        }
-    };
-    let prefs: Prefs = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+    match read(path) {
+        Ok(Some(bytes)) => parse(&bytes, &path.display().to_string()),
+        Ok(None) => Prefs::default(),
+        Err(e) => unreadable(path, &e),
+    }
+}
+
+/// The prefs in `text` (what `to_text` wrote), checked as `load` checks a file's.
+pub fn from_text(text: &str) -> Prefs {
+    parse(text.as_bytes(), "the stored preferences")
+}
+
+/// The text the prefs are kept as.
+pub fn to_text(prefs: &Prefs) -> String {
+    serde_json::to_string_pretty(prefs).expect("preferences are serializable")
+}
+
+/// The prefs in `bytes`, which came from `what`: the defaults with a warning when they are
+/// not valid, else normalized.
+fn parse(bytes: &[u8], what: &str) -> Prefs {
+    let prefs: Prefs = serde_json::from_slice(bytes).unwrap_or_else(|e| {
         eprintln!(
-            "warning: {} is not valid preferences (line {}, column {}); using the defaults",
-            path.display(),
+            "warning: {what} is not valid preferences (line {}, column {}); using the defaults",
             e.line(),
             e.column()
         );
@@ -170,6 +230,7 @@ pub fn load(path: &Path) -> Prefs {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The bytes of the regular file at `path`, or None when there is nothing there. A link, a
 /// folder, a pipe or a file over `MAX_BYTES` is an error, so reading never blocks or runs long.
 fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
@@ -202,14 +263,20 @@ fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
 /// first to a new hidden file beside it (`.prefs-<pid>-<n>.partial`), created only where nothing
 /// is, so they never go through a link; it is renamed over `path` once written, or removed if
 /// the write fails.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
+    save_text(path, &to_text(prefs))
+}
+
+/// `save` for prefs already written as text (`to_text`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_text(path: &Path, json: &str) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = path
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .ok_or_else(|| io::Error::other("the preferences path has no folder"))?;
     crate::cli::ensure_private_xdg_dir(crate::paths::Os::current(), dir)?;
-    let json = serde_json::to_vec_pretty(prefs).map_err(io::Error::other)?;
     let (partial, mut file) = loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let partial = dir.join(format!(".prefs-{}-{n}.partial", std::process::id()));
@@ -221,7 +288,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
         }
     };
     let written = file
-        .write_all(&json)
+        .write_all(json.as_bytes())
         // On disk before the rename makes it the file.
         .and_then(|()| file.sync_all())
         .and_then(|()| {
@@ -246,6 +313,7 @@ pub fn save(path: &Path, prefs: &Prefs) -> io::Result<()> {
 
 /// Creates the file `path` for writing, failing when anything is there: mode 0600 on Unix, and
 /// on Windows a DACL for the current user only.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
     #[cfg(unix)]
     {

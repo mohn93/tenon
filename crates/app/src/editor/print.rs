@@ -1,8 +1,10 @@
 //! File > Export PDF... and File > Print...: the Print sheet's values, rendering the view to a
 //! PDF with the window's GPU, and handing a printed temp file to the system's viewer.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use render::Snapshotter;
@@ -116,42 +118,47 @@ pub enum PrintPurpose {
     Print,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// An operating system, as far as opening a file goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Platform {
+pub enum ViewerOs {
     Mac,
     Linux,
     Windows,
 }
 
-impl Platform {
-    pub fn current() -> Platform {
+#[cfg(not(target_arch = "wasm32"))]
+impl ViewerOs {
+    pub fn current() -> ViewerOs {
         if cfg!(target_os = "macos") {
-            Platform::Mac
+            ViewerOs::Mac
         } else if cfg!(windows) {
-            Platform::Windows
+            ViewerOs::Windows
         } else {
-            Platform::Linux
+            ViewerOs::Linux
         }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The program and arguments that open `path` in the default viewer. No shell string is
 /// built: the path is an argument of its own.
-pub fn open_command(platform: Platform, path: &Path) -> (OsString, Vec<OsString>) {
+pub fn open_command(platform: ViewerOs, path: &Path) -> (OsString, Vec<OsString>) {
     let path = path.as_os_str().to_owned();
     match platform {
-        Platform::Mac => ("open".into(), vec![path]),
-        Platform::Linux => ("xdg-open".into(), vec![path]),
-        Platform::Windows => ("explorer.exe".into(), vec![path]),
+        ViewerOs::Mac => ("open".into(), vec![path]),
+        ViewerOs::Linux => ("xdg-open".into(), vec![path]),
+        ViewerOs::Windows => ("explorer.exe".into(), vec![path]),
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The temp file number `n` of process `pid` is printed to.
 pub fn print_file_name(pid: u32, n: u64) -> String {
     format!("sketchup-alt-print-{pid}-{n}.pdf")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// A free path for a printed file in the system's temp folder.
 fn temp_print_path() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -165,9 +172,11 @@ fn temp_print_path() -> PathBuf {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// How long a printed temp file is kept.
 const STALE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Removes the files of `dir` named like a printed temp file that are regular files (not
 /// links), older than 24 hours at `now`, and, where `owner` is given (Unix), owned by that user.
 /// Returns how many were removed. Failures are ignored: it is housekeeping.
@@ -207,11 +216,12 @@ fn owned_by(meta: &std::fs::Metadata, owner: Option<u32>) -> bool {
     owner.is_none_or(|uid| meta.uid() == uid)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_arch = "wasm32")))]
 fn owned_by(_: &std::fs::Metadata, _: Option<u32>) -> bool {
     true
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The user id of the file at `path` (the current user's, for a file just created), where the
 /// system has user ids.
 fn file_owner(path: &Path) -> Option<u32> {
@@ -317,6 +327,7 @@ impl Editor {
         true
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// File > Print...: prints to a private temp file and opens it with the system's viewer.
     /// The status reports the failure of either step.
     pub fn print_and_open(
@@ -363,10 +374,11 @@ impl Editor {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Opens `path` with the system's default viewer. The program is reaped on a thread, so it
 /// does not linger as a zombie.
-fn open_file(path: &Path) -> Result<(), String> {
-    let (program, args) = open_command(Platform::current(), path);
+pub(crate) fn open_file(path: &Path) -> Result<(), String> {
+    let (program, args) = open_command(ViewerOs::current(), path);
     let mut child = std::process::Command::new(&program)
         .args(&args)
         .stdin(std::process::Stdio::null())
@@ -387,13 +399,13 @@ mod tests {
     #[test]
     fn the_viewer_is_opened_per_os_without_a_shell_string() {
         let path = Path::new("/tmp/a b/sketchup-alt-print-1-0.pdf");
-        let (program, args) = open_command(Platform::Mac, path);
+        let (program, args) = open_command(ViewerOs::Mac, path);
         assert_eq!(program, "open");
         assert_eq!(args, [path.as_os_str()]);
-        let (program, args) = open_command(Platform::Linux, path);
+        let (program, args) = open_command(ViewerOs::Linux, path);
         assert_eq!(program, "xdg-open");
         assert_eq!(args, [path.as_os_str()]);
-        let (program, args) = open_command(Platform::Windows, path);
+        let (program, args) = open_command(ViewerOs::Windows, path);
         assert_eq!(program, "explorer.exe");
         assert_eq!(args, [path.as_os_str()]);
     }

@@ -4,7 +4,8 @@
 //! waits for the cursor to rest, the flash lasts a while. Those two times are repaint deadlines,
 //! so a still window draws nothing more once they pass.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use glam::DVec2;
 use kernel::EntityId;

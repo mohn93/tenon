@@ -7,7 +7,7 @@
 //! where the flyer is and which way it looks.
 
 use std::f64::consts::FRAC_PI_2;
-use std::time::Instant;
+use web_time::Instant;
 
 use glam::{DVec2, DVec3};
 use session::Camera;

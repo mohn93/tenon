@@ -35,6 +35,48 @@ fn the_file_menu_reports_its_items() {
     );
 }
 
+#[test]
+fn the_file_menu_leaves_out_what_the_system_does_not_offer() {
+    let labels = |features| {
+        let f = Fixture {
+            features,
+            ..Fixture::default()
+        };
+        let bar = crate::menus::menu_bar(&f.view(), false);
+        let file = &bar.iter().find(|m| m.title == "File").unwrap().entries;
+        file.iter()
+            .filter_map(|entry| match entry {
+                crate::menus::Entry::Item(i) => Some(i.label.clone()),
+                crate::menus::Entry::Submenu { label, .. } => Some((*label).to_string()),
+                crate::menus::Entry::Separator => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let all = labels(crate::platform::Features::ALL);
+    for gone in [
+        "Open Recent",
+        "Recover Models...",
+        "Export PDF...",
+        "Save Model to Library...",
+        "Print...",
+    ] {
+        assert!(all.iter().any(|l| l == gone), "{gone} is in the desktop's");
+    }
+    let web = labels(crate::platform::Features::WEB);
+    assert_eq!(
+        web,
+        [
+            "New",
+            "Open...",
+            "Save",
+            "Save As...",
+            "Import...",
+            "Export...",
+            "Quit"
+        ]
+    );
+}
+
 // egui names a submenu's button with its arrow.
 const OPEN_RECENT: &str = "Open Recent \u{23F5}";
 

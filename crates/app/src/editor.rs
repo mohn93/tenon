@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use api::{MessageKind, Mods};
 use glam::{DAffine3, DVec2, DVec3};
@@ -32,6 +32,7 @@ use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll, Tr
 use crate::shortcuts::{self, Bound};
 
 mod agent;
+mod bytes;
 mod clip;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
@@ -39,6 +40,8 @@ mod labels;
 mod library;
 mod notes;
 mod print;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use print::open_file as open_with_viewer;
 pub use print::{PaperChoice, PrintJob, PrintOptions, PrintPurpose, PrintQueue};
 mod scenes;
 mod sections;
@@ -1637,13 +1640,20 @@ impl Editor {
         let Some(report) = outcome.and_then(|o| o.import) else {
             return false;
         };
-        let name = display_name(path);
+        self.say_imported(&display_name(path), sketchup, &report);
+        true
+    }
+
+    /// The status after an import of the file `name` (`sketchup`: a SketchUp file) that made
+    /// `report`.
+    fn say_imported(&mut self, name: &str, sketchup: bool, report: &ImportReport) {
+        let options = self.import;
         if sketchup {
             self.message = Some(Message::info(format!(
                 "Imported {name}{}",
-                sketchup_summary(&report)
+                sketchup_summary(report)
             )));
-            return true;
+            return;
         }
         let faces = match report.faces {
             1 => "1 face".to_string(),
@@ -1658,7 +1668,6 @@ impl Editor {
             1 => format!("Imported {name}{units}: {faces}; 1 polygon skipped"),
             n => format!("Imported {name}{units}: {faces}; {n} polygons skipped"),
         }));
-        true
     }
 
     pub fn undo(&mut self) -> bool {

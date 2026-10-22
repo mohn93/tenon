@@ -107,7 +107,18 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
     let mut layout = view.dock;
     // Fill the panel's width, so it keeps the width it was given.
     ui.set_min_width(ui.max_rect().width());
-    tab_row(ui, view.dock.tab, &mut layout.tab);
+    let tabs: &[DockTab] = if view.features.library {
+        &TABS
+    } else {
+        &TABS[..TABS.len() - 1]
+    };
+    // A Library tab kept in the preferences, where there is no library.
+    let tab = if tabs.contains(&view.dock.tab) {
+        view.dock.tab
+    } else {
+        DockTab::EntityInfo
+    };
+    tab_row(ui, tab, tabs, &mut layout.tab);
     let width = ui.available_width();
     // The areas share what the divider and the spacing after the top area and after the
     // divider leave.
@@ -157,14 +168,14 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
         .id_salt("dock-top")
         .auto_shrink([false, false])
         .max_height(top_height(split, height))
-        .show(ui, |ui| match view.dock.tab {
+        .show(ui, |ui| match tab {
             DockTab::EntityInfo => right::entity_info(ui, view, actions),
             DockTab::Materials => materials::materials(ui, view, actions),
             DockTab::Tags => tags::tags(ui, view, actions),
             DockTab::Scenes => scenes::scenes(ui, view, actions),
             DockTab::Library => library::library(ui, view, actions),
         });
-    widgets::name_scroll_bars(ui.ctx(), top.id, view.dock.tab.name());
+    widgets::name_scroll_bars(ui.ctx(), top.id, tab.name());
     divider(ui, divider_id, width);
     outliner::outliner(ui, view, actions);
     layout
@@ -184,24 +195,27 @@ const TAB_GAP: f32 = 4.0;
 
 /// The tabs across the dock's width: each its name's width and an equal share of what is left
 /// (at the narrowest dock little is). A tab other than `shown` clicked becomes `chosen`.
-fn tab_row(ui: &mut Ui, shown: DockTab, chosen: &mut DockTab) {
-    let names = TABS.map(|tab| {
-        egui::WidgetText::from(tab.name())
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                egui::TextStyle::Button,
-            )
-            .size()
-            .x
-    });
-    let gaps = TAB_GAP * (TABS.len() - 1) as f32;
-    let share = (ui.available_width() - gaps - names.iter().sum::<f32>()) / TABS.len() as f32;
+fn tab_row(ui: &mut Ui, shown: DockTab, tabs: &[DockTab], chosen: &mut DockTab) {
+    let names: Vec<f32> = tabs
+        .iter()
+        .map(|tab| {
+            egui::WidgetText::from(tab.name())
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Button,
+                )
+                .size()
+                .x
+        })
+        .collect();
+    let gaps = TAB_GAP * (tabs.len() - 1) as f32;
+    let share = (ui.available_width() - gaps - names.iter().sum::<f32>()) / tabs.len() as f32;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = TAB_GAP;
         ui.spacing_mut().button_padding.x = (share / 2.0).clamp(0.0, 8.0);
-        for (tab, name) in TABS.into_iter().zip(names) {
+        for (&tab, name) in tabs.iter().zip(names) {
             let on = shown == tab;
             let button = egui::Button::selectable(on, tab.name())
                 .truncate()

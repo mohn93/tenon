@@ -15,6 +15,12 @@ which made one binary per file slow). Run one file's tests by module path:
 `tests/integration/` with a `mod` line in `main.rs`; tests in different files now run in parallel
 in one process, so they must not share fixed temp paths or global state.
 
+The `app` crate is a library with a thin binary: its unit tests are in the library, so run them
+with `cargo test -p app --lib <filter>`; the binary's integration tests (the headless and MCP
+modes) are `cargo test -p app --test integration`. The shared crates and the app library also
+build for the browser: `cargo check --target wasm32-unknown-unknown -p kernel -p session -p tools
+-p render -p api -p app --lib` (needs `rustup target add wasm32-unknown-unknown`).
+
 ## Golden images
 
 `crates/render/tests/integration/golden.rs` renders a few canonical scenes headless at 160 x 120 and compares

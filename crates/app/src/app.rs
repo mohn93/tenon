@@ -2,32 +2,36 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
-use api::{ApiRoots, EditorState, Endpoint, Hub, listen};
+use api::{ApiRoots, EditorState, Hub};
+#[cfg(not(target_arch = "wasm32"))]
+use api::{Endpoint, listen};
 use glam::DVec2;
 use kernel::{EntityId, InstanceId, MaterialId, TagId, TextureImage};
 use render::{Renderer, Snapshotter, Viewport};
 use session::{Camera, Command, Lighting, OutlinerTable};
 use tools::{Axis, NoteRequest, TextSpec};
+use web_time::{Instant, SystemTime};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{
     DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase,
     WindowEvent,
 };
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 mod library_panel;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::awake::Awake;
-use crate::clipboard::SystemClipboard;
 use crate::editor::{
     DRAG_LOGICAL_PX, Editor, EditorKey, PrintJob, PrintOptions, PrintPurpose, PrintQueue,
 };
 use crate::feedback::Timing;
+use crate::flows::{Effect, Env, Flows, PlatformReply, Then, file_name};
 use crate::fly::FlyKey;
 use crate::gui::Gui;
 use crate::host::{AppHost, CLOSE_WAIT, Offscreen, editor_state};
@@ -38,6 +42,7 @@ use crate::menus;
 use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::paths;
+use crate::platform::{Features, Platform};
 use crate::prefs::{self, Prefs};
 use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
@@ -122,6 +127,9 @@ pub enum AppEvent {
     /// The AccessKit adapter: a screen reader asked for the tree, asked for an action, or went
     /// away.
     AccessKit(egui_winit::accesskit_winit::Event),
+    /// The platform answered a request it had left pending (a file picked, a question
+    /// answered).
+    Platform(PlatformReply),
 }
 
 impl From<egui_winit::accesskit_winit::Event> for AppEvent {
@@ -461,12 +469,25 @@ struct Gpu {
     config: wgpu::SurfaceConfiguration,
     /// Set when the device is lost; then it and everything made with it are made again.
     lost: Arc<AtomicBool>,
+    /// Whether the adapter can draw light shadows (see `render::supports_shadows`).
+    shadows: bool,
 }
 
-/// A surface for `window` and a device to draw into it, configured at the window's size. GPU
-/// errors are logged rather than ending the app, and a lost device is logged and flagged.
-fn gpu(instance: &wgpu::Instance, window: &Arc<Window>) -> Result<Gpu, String> {
-    let size = window.inner_size();
+/// A GPU adapter, device and queue with the surface they draw to. The desktop makes them when
+/// the window opens; a browser makes them before the app starts, because it can only ask for
+/// them asynchronously, and hands them to `App::new`.
+pub struct GpuContext {
+    pub instance: wgpu::Instance,
+    pub surface: wgpu::Surface<'static>,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+/// A surface for `window` and a device to draw into it. Blocks until the adapter and device
+/// are ready, which only a desktop may do.
+#[cfg(not(target_arch = "wasm32"))]
+fn native_context(instance: &wgpu::Instance, window: &Arc<Window>) -> Result<GpuContext, String> {
     let surface = instance
         .create_surface(window.clone())
         .map_err(|e| format!("cannot create a surface: {e}"))?;
@@ -480,6 +501,25 @@ fn gpu(instance: &wgpu::Instance, window: &Arc<Window>) -> Result<Gpu, String> {
         ..Default::default()
     }))
     .map_err(|e| format!("cannot get a GPU device: {e}"))?;
+    Ok(GpuContext {
+        instance: instance.clone(),
+        surface,
+        adapter,
+        device,
+        queue,
+    })
+}
+
+/// The window's GPU objects from `context`, configured at `size`. GPU errors are logged
+/// rather than ending the app, and a lost device is logged and flagged.
+fn gpu(context: GpuContext, size: (u32, u32)) -> Result<Gpu, String> {
+    let GpuContext {
+        surface,
+        adapter,
+        device,
+        queue,
+        ..
+    } = context;
     let lost = Arc::new(AtomicBool::new(false));
     device.set_device_lost_callback({
         let lost = lost.clone();
@@ -494,7 +534,7 @@ fn gpu(instance: &wgpu::Instance, window: &Arc<Window>) -> Result<Gpu, String> {
     device.on_uncaptured_error(Arc::new(|e| eprintln!("GPU error: {e}")));
 
     let mut config = surface
-        .get_default_config(&adapter, size.width.max(1), size.height.max(1))
+        .get_default_config(&adapter, size.0.max(1), size.1.max(1))
         .ok_or("surface not supported by adapter")?;
     // Colors are authored as sRGB values, so prefer a non-sRGB target that writes them as-is.
     // Keep the default format's channel layout when its non-sRGB twin is available.
@@ -516,7 +556,24 @@ fn gpu(instance: &wgpu::Instance, window: &Arc<Window>) -> Result<Gpu, String> {
         queue,
         config,
         lost,
+        // A desktop's renderer finds out for itself (it checks its shader); a browser's cannot
+        // wait for that.
+        shadows: cfg!(not(target_arch = "wasm32")) || render::supports_shadows(&adapter),
     })
+}
+
+/// The renderer for `format`, with light shadows when the adapter can draw them.
+fn make_renderer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    shadows: bool,
+) -> Renderer {
+    if shadows {
+        Renderer::new(device, queue, format)
+    } else {
+        Renderer::without_shadows(device, queue, format)
+    }
 }
 
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
@@ -689,6 +746,12 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     /// Set when the device is lost (see `gpu`).
     device_lost: Arc<AtomicBool>,
+    /// The system the window runs on: files, preferences, dialogs, clipboard, links.
+    platform: Box<dyn Platform>,
+    /// What it offers (`Platform::features`); what is off is hidden and never started.
+    features: Features,
+    /// The file flows (open, save, import, export) and the request waiting for the platform.
+    flows: Flows,
     /// The surface status of the last frame skipped and logged since one was drawn, so a run of
     /// skips is logged once.
     skip_logged: Option<&'static str>,
@@ -715,8 +778,6 @@ struct State {
     recover: Option<RecoverList>,
     /// The window's preferences, as chosen in this session.
     prefs: Prefs,
-    /// Where they are kept between sessions (None: HOME is not set; they last the session).
-    prefs_path: Option<PathBuf>,
     /// The recent files the start card lists: those that existed when the list last changed.
     recent_shown: Vec<PathBuf>,
     /// The start card was dismissed: it stays hidden for the rest of the session.
@@ -930,24 +991,43 @@ impl State {
         roots: ApiRoots,
         recovery: Option<PathBuf>,
         session: Result<Session, String>,
-        prefs_file: Option<prefs::PrefsFile>,
+        platform: Box<dyn Platform>,
+        context: Option<GpuContext>,
+        proxy: EventLoopProxy<AppEvent>,
     ) -> Self {
-        let prefs = prefs_file
-            .as_ref()
-            .map(prefs::load_file)
+        let flows = Flows::new(Arc::new(move |reply| {
+            let _ = proxy.send_event(AppEvent::Platform(reply));
+        }));
+        let features = platform.features();
+        let prefs = platform
+            .read_prefs()
+            .map(|text| prefs::from_text(&text))
             .unwrap_or_default();
-        let prefs_path = prefs_file.map(|f| f.path);
-        let recent_shown = prefs::existing(&prefs.recent, prefs::CARD_RECENT);
-        let instance = wgpu::Instance::default();
+        let recent_shown = if features.recent {
+            prefs::existing(&prefs.recent, prefs::CARD_RECENT)
+        } else {
+            Vec::new()
+        };
+        let size = window.inner_size();
+        let context = match context {
+            Some(context) => context,
+            #[cfg(not(target_arch = "wasm32"))]
+            None => native_context(&wgpu::Instance::default(), &window)
+                .unwrap_or_else(|e| panic!("{e}")),
+            #[cfg(target_arch = "wasm32")]
+            None => panic!("a browser must make the GPU context before the app starts"),
+        };
+        let instance = context.instance.clone();
         let Gpu {
             surface,
             device,
             queue,
             config,
             lost,
-        } = gpu(&instance, &window).unwrap_or_else(|e| panic!("{e}"));
+            shadows,
+        } = gpu(context, (size.width, size.height)).unwrap_or_else(|e| panic!("{e}"));
 
-        let renderer = Renderer::new(&device, &queue, config.format);
+        let renderer = make_renderer(&device, &queue, config.format, shadows);
         let gui = Gui::new(&window, &device, config.format, prefs.theme, prefs.ui_scale);
         set_min_window(&window, prefs.ui_scale);
         let view = Viewport::full((config.width, config.height));
@@ -958,7 +1038,7 @@ impl State {
         );
         editor.set_import_options(prefs.import);
         editor.set_trackpad(prefs.trackpad);
-        editor.set_clipboard(Box::new(SystemClipboard::default()));
+        editor.set_clipboard(platform.clipboard());
         let session = session
             .inspect_err(|why| editor.show_error(&format!("Autosave is off: {why}")))
             .ok();
@@ -970,6 +1050,9 @@ impl State {
             queue,
             config,
             device_lost: lost,
+            platform,
+            features,
+            flows,
             skip_logged: None,
             renderer,
             offscreen,
@@ -983,7 +1066,6 @@ impl State {
             recovered_doc: None,
             recover: None,
             prefs,
-            prefs_path,
             recent_shown,
             start_dismissed: false,
             agent_activity: false,
@@ -1092,55 +1174,60 @@ impl State {
         }
     }
 
+    /// Runs a step of the file flows over the editor and the platform, then what it asks of the
+    /// window (see `Flows`).
+    fn flow(&mut self, step: impl FnOnce(&mut Flows, &mut Env) -> Vec<Effect>) {
+        let recovered = self
+            .recovered_doc
+            .as_ref()
+            .filter(|r| r.documents == self.editor.documents())
+            .map(|r| r.name.as_str());
+        let mut env = Env {
+            editor: &mut self.editor,
+            platform: &*self.platform,
+            parent: Some(&*self.window),
+            recovered,
+        };
+        let effects = step(&mut self.flows, &mut env);
+        self.apply_effects(effects);
+    }
+
+    fn apply_effects(&mut self, effects: Vec<Effect>) {
+        for effect in effects {
+            match effect {
+                Effect::ClearAutosave => self.clear_autosave(),
+                Effect::RememberFile => self.remember_file(),
+                Effect::Quit => self.quit = true,
+                Effect::OpenRecovered(model) => self.open_recovered_now(&model),
+                Effect::ImportSheet(path) => {
+                    let options = self.editor.import_options();
+                    self.open_sheet(Sheet::Import { path, options });
+                }
+                Effect::LibraryFolder(folder) => {
+                    self.set_library_folder(Some(std::path::absolute(&folder).unwrap_or(folder)));
+                }
+                Effect::Pdf(options, path) => self.start_print(&options, Some(path)),
+            }
+        }
+    }
+
+    /// The platform answered a request it had left pending.
+    fn platform_reply(&mut self, reply: PlatformReply) {
+        self.flow(|flows, env| flows.answered(env, reply));
+    }
+
     /// Before the model is replaced or the window closes: if it has unsaved changes, asks
-    /// whether to save them. True when it is fine to go on (saved, or changes discarded).
-    fn settle_changes(&mut self) -> bool {
-        let doc = self.editor.doc();
-        if !doc.is_modified() {
-            return true;
-        }
-        // With a parent, macOS shows an NSAlert sheet: Escape cancels, Cmd+D is Don't Save.
-        let answer = rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title(unsaved_question(doc.path()))
-            .set_description("Your changes will be lost if you don't save them.")
-            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
-                "Save".into(),
-                "Don't Save".into(),
-                "Cancel".into(),
-            ))
-            .set_parent(&*self.window)
-            .show();
-        match unsaved_choice(&answer) {
-            UnsavedChoice::Save => self.save(false),
-            UnsavedChoice::DontSave => true,
-            UnsavedChoice::Cancel => false,
-        }
+    /// whether to save them, then does `then` (not if the answer cancels).
+    fn settle_and(&mut self, then: Then) {
+        self.flow(|flows, env| flows.settle_and(env, then));
     }
 
     fn new_model(&mut self) {
-        if self.settle_changes() {
-            self.editor.new_model();
-            self.clear_autosave();
-        }
+        self.settle_and(Then::NewModel);
     }
 
     fn open(&mut self) {
-        if !self.settle_changes() {
-            return;
-        }
-        if let Some(path) = open_dialog().pick_file() {
-            self.open_file(&path);
-        }
-    }
-
-    /// Opens the file at `path` (unsaved changes settled); a file that fails to open says why
-    /// in the status.
-    fn open_file(&mut self, path: &Path) {
-        if self.editor.open_file(path) {
-            self.clear_autosave();
-            self.remember_file();
-        }
+        self.flow(|flows, env| flows.open(env));
     }
 
     /// Removes this window's autosave: the model it copied was saved or replaced.
@@ -1239,7 +1326,21 @@ impl State {
         else {
             return;
         };
-        if !self.settle_changes() || !self.editor.open_recovered(&entry.model) {
+        self.settle_and(Then::OpenRecovered(entry.model));
+    }
+
+    /// Opens the recovered model whose copy is `model`, its unsaved changes settled.
+    fn open_recovered_now(&mut self, model: &Path) {
+        let Some(entry) = self
+            .recover
+            .as_ref()
+            .and_then(|r| r.entries.iter().find(|e| e.model == model))
+            .filter(|e| e.error.is_none())
+            .cloned()
+        else {
+            return;
+        };
+        if !self.editor.open_recovered(&entry.model) {
             return;
         }
         self.recovered_doc = Some(RecoveredDoc {
@@ -1288,6 +1389,9 @@ impl State {
 
     /// Puts the model's file first in the recent files, and keeps that in the preferences.
     fn remember_file(&mut self) {
+        if !self.features.recent {
+            return;
+        }
         if let Some(path) = self.editor.doc().path() {
             prefs::remember_recent(&mut self.prefs.recent, path);
             self.save_prefs();
@@ -1296,37 +1400,17 @@ impl State {
     }
 
     /// Saves to the current file, or to one chosen in a dialog when there is none or `choose`
-    /// is set. False if cancelled or the save failed.
-    fn save(&mut self, choose: bool) -> bool {
-        let path = if choose || self.editor.doc().path().is_none() {
-            let name = save_name(
-                self.editor.doc().path(),
-                self.editor.doc().imported_from(),
-                self.recovered_doc().map(|r| r.name.as_str()),
-            );
-            match skr_dialog().set_file_name(name).save_file() {
-                Some(path) => Some(path),
-                None => return false,
-            }
-        } else {
-            None
-        };
-        let saved = self.editor.save_file(path.as_deref());
-        if saved {
-            self.clear_autosave();
-            self.remember_file();
-        }
-        saved
+    /// is set.
+    fn save(&mut self, choose: bool) {
+        self.flow(|flows, env| flows.save(env, choose, None));
     }
 
     /// Gives a material the PNG or JPEG image chosen in a dialog as its texture.
     fn load_texture(&mut self, material: MaterialId) {
-        let chosen = rfd::FileDialog::new()
-            .add_filter("PNG or JPEG image", &["png", "jpg", "jpeg"])
-            .pick_file();
-        if let Some(path) = chosen {
-            self.editor.load_texture(material, &path);
-        }
+        self.flow(|flows, env| {
+            flows.load_texture(env, material);
+            Vec::new()
+        });
     }
 
     /// The sRGB color the Paint tool paints with: its material's, or the default material's
@@ -1446,55 +1530,33 @@ impl State {
     /// Asks for an OBJ, STL or SketchUp file, then opens the Import Options sheet for it; the
     /// file is read when the sheet's Import is pressed (`UiAction::ConfirmImport`).
     fn import(&mut self) {
-        let chosen = rfd::FileDialog::new()
-            .add_filter("OBJ, STL or SketchUp", &["obj", "stl", "skp"])
-            .add_filter("OBJ", &["obj"])
-            .add_filter("STL", &["stl"])
-            .add_filter("SketchUp", &["skp"])
-            .pick_file();
-        if let Some(path) = chosen {
-            let options = self.editor.import_options();
-            self.open_sheet(Sheet::Import { path, options });
-        }
+        self.flow(|flows, env| flows.import(env));
     }
 
     /// Exports to a file chosen in a dialog; its extension picks the format. The dialog
     /// suggests the format exported to last.
     fn export(&mut self) {
-        let stem = file_name(self.editor.doc().path());
-        let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
-        let formats = self.editor.export_formats();
-        let mut dialog = rfd::FileDialog::new();
-        for (name, ext) in &formats {
-            dialog = dialog.add_filter(*name, &[*ext]);
-        }
-        let chosen = dialog
-            .set_file_name(format!("{stem}.{}", formats[0].1))
-            .save_file();
-        if let Some(path) = chosen {
-            self.editor.export_file(&path);
-        }
+        self.flow(|flows, env| flows.export(env));
     }
 
     /// Starts printing the view as `spec` says: Export asks for the PDF's file first, Print
     /// uses a temp file. The status says "Printing..." and the render, which blocks the window,
     /// runs two frames later (see `PrintQueue`).
     fn print(&mut self, purpose: PrintPurpose, spec: &PrintOptions) {
-        let path = match purpose {
+        if !self.features.print {
+            return;
+        }
+        match purpose {
             PrintPurpose::Export => {
-                let stem = file_name(self.editor.doc().path());
-                let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
-                let chosen = rfd::FileDialog::new()
-                    .add_filter("PDF", &["pdf"])
-                    .set_file_name(format!("{stem}.pdf"))
-                    .save_file();
-                match chosen {
-                    Some(path) => Some(path),
-                    None => return,
-                }
+                let options = *spec;
+                self.flow(|flows, env| flows.export_pdf(env, options));
             }
-            PrintPurpose::Print => None,
-        };
+            PrintPurpose::Print => self.start_print(spec, None),
+        }
+    }
+
+    /// Queues the print of the view to the PDF at `path` (None: a temp file that is opened).
+    fn start_print(&mut self, spec: &PrintOptions, path: Option<PathBuf>) {
         self.editor.show_info("Printing...");
         self.print_queue.queue(PrintJob {
             options: *spec,
@@ -1511,8 +1573,15 @@ impl State {
                 self.editor
                     .export_pdf_file(snapshotter, &job.options, &path);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             None => {
                 self.editor.print_and_open(snapshotter, &job.options);
+            }
+            // Printing is off where there is no program to open the file with.
+            #[cfg(target_arch = "wasm32")]
+            None => {
+                let _ = snapshotter;
+                self.editor.show_error("Printing is not available here");
             }
         }
         self.window.request_redraw();
@@ -1521,13 +1590,8 @@ impl State {
     /// Writes the preferences, when the window has a prefs file. A failed save leaves the
     /// change for this session, with a warning.
     fn save_prefs(&self) {
-        if let Some(path) = &self.prefs_path
-            && let Err(e) = prefs::save(path, &self.prefs)
-        {
-            eprintln!(
-                "warning: cannot save the preferences to {}: {e}",
-                path.display()
-            );
+        if let Err(why) = self.platform.write_prefs(&prefs::to_text(&self.prefs)) {
+            eprintln!("warning: cannot save the preferences to {why}");
         }
     }
 
@@ -1550,7 +1614,10 @@ impl State {
                     self.editor.set_import_options(options);
                     self.prefs.import = options;
                     self.save_prefs();
-                    self.editor.import_file(&path);
+                    self.flow(|flows, env| {
+                        flows.import_confirmed(env, &path);
+                        Vec::new()
+                    });
                 }
             }
             UiAction::CloseSheet => {
@@ -1828,11 +1895,7 @@ impl State {
             UiAction::ToggleFly => {
                 self.editor.toggle_fly();
             }
-            UiAction::Quit => {
-                if self.settle_changes() {
-                    self.quit = true;
-                }
-            }
+            UiAction::Quit => self.settle_and(Then::Quit),
             UiAction::ShowAgentActivity(open) => self.agent_activity = open,
             UiAction::ShowShortcuts(open) => self.shortcuts_window = open,
             UiAction::SetTheme(choice) => {
@@ -1898,9 +1961,7 @@ impl State {
             }
             UiAction::OpenRecent(path) => {
                 // A file that fails to open says why in the status and stays in the list.
-                if self.settle_changes() {
-                    self.open_file(&path);
-                }
+                self.settle_and(Then::OpenFile(path));
             }
             UiAction::ClearRecent => {
                 if !self.prefs.recent.is_empty() {
@@ -1977,13 +2038,29 @@ impl State {
     /// Makes the device, the surface and everything drawn with them again after the device was
     /// lost. False, logged, when that fails (tried again later).
     fn recreate_gpu(&mut self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // A browser hands out its device asynchronously: only a reload gets a new one.
+            eprintln!("the GPU device was lost; reload the page");
+            false
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.recreate_native_gpu()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recreate_native_gpu(&mut self) -> bool {
+        let size = self.window.inner_size();
+        let made = native_context(&self.instance, &self.window)
+            .and_then(|context| gpu(context, (size.width, size.height)));
         let Gpu {
             surface,
             device,
             queue,
             config,
             lost,
-        } = match gpu(&self.instance, &self.window) {
+            shadows,
+        } = match made {
             Ok(gpu) => gpu,
             Err(e) => {
                 eprintln!("cannot make the GPU device again: {e}");
@@ -1991,7 +2068,7 @@ impl State {
             }
         };
         eprintln!("GPU device made again");
-        self.renderer = Renderer::new(&device, &queue, config.format);
+        self.renderer = make_renderer(&device, &queue, config.format, shadows);
         self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
         // The window and its AccessKit adapter stay; only the panels' renderer is new.
         self.gui = self.gui.rebuilt(
@@ -2071,8 +2148,11 @@ impl State {
         self.editor.refresh_hover();
         let doc = self.editor.doc();
         let modified = doc.is_modified();
+        // Where files have no path, the name the model was opened from or saved under.
+        let kept = self.flows.kept_name().map(Path::new);
         let title = window_title(
-            doc.path(),
+            doc.path()
+                .or(kept.filter(|_| doc.imported_from().is_none())),
             doc.imported_from(),
             self.recovered_doc().map(|r| r.name.as_str()),
             modified,
@@ -2228,6 +2308,7 @@ impl State {
                 .then_some(StartCard {
                     recent: &self.recent_shown,
                 }),
+            features: self.features,
             recent: &self.prefs.recent,
             sheet: self.sheet.as_ref(),
             rename: rename.as_ref(),
@@ -2736,37 +2817,6 @@ fn view_input_reaches_editor(flying: bool, pointer_in_view: bool, sheet_open: bo
 }
 
 /// A file dialog for `.skr` models.
-fn skr_dialog() -> rfd::FileDialog {
-    rfd::FileDialog::new().add_filter("SketchUp Alt model", &["skr"])
-}
-
-/// The File > Open dialog: `.skr` models, and SketchUp files (opened as new models).
-fn open_dialog() -> rfd::FileDialog {
-    rfd::FileDialog::new()
-        .add_filter("SketchUp Alt or SketchUp model", &["skr", "skp"])
-        .add_filter("SketchUp Alt model", &["skr"])
-        .add_filter("SketchUp model", &["skp"])
-}
-
-/// The name the save dialog suggests: the file's, else the SketchUp file's stem with `.skr`
-/// (never the SketchUp file itself), else "Untitled.skr".
-/// A recovered model never saved (`recovered`: its name) suggests "<name>.skr".
-fn save_name(path: Option<&Path>, imported_from: Option<&Path>, recovered: Option<&str>) -> String {
-    match (path, imported_from.and_then(|p| p.file_stem()), recovered) {
-        (None, Some(stem), _) => format!("{}.skr", stem.to_string_lossy()),
-        (None, None, Some(name)) => format!("{name}.skr"),
-        _ => file_name(path),
-    }
-}
-
-/// The file's name, or "Untitled.skr" for a model never saved.
-fn file_name(path: Option<&Path>) -> String {
-    path.and_then(|p| p.file_name()).map_or_else(
-        || "Untitled.skr".into(),
-        |n| n.to_string_lossy().into_owned(),
-    )
-}
-
 /// The window title: the file name alone on macOS, where the close button shows unsaved
 /// changes; elsewhere "house.skr* - sketchup-alt". A model opened from a SketchUp file and
 /// not saved yet is "desk.skp (imported)"; one opened from the Recover Models window
@@ -2788,31 +2838,6 @@ fn window_title(
     }
     let star = if modified { "*" } else { "" };
     format!("{name}{star} - sketchup-alt")
-}
-
-/// `Do you want to save changes to "house.skr"?`
-fn unsaved_question(path: Option<&Path>) -> String {
-    format!("Do you want to save changes to \"{}\"?", file_name(path))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UnsavedChoice {
-    Save,
-    DontSave,
-    Cancel,
-}
-
-/// What the unsaved-changes alert's answer asks for. Yes and No come from a backend that
-/// ignores custom labels; anything else (Escape, a dismissed alert) cancels.
-fn unsaved_choice(answer: &rfd::MessageDialogResult) -> UnsavedChoice {
-    use rfd::MessageDialogResult as R;
-    match answer {
-        R::Yes => UnsavedChoice::Save,
-        R::No => UnsavedChoice::DontSave,
-        R::Custom(label) if label == "Save" => UnsavedChoice::Save,
-        R::Custom(label) if label == "Don't Save" => UnsavedChoice::DontSave,
-        _ => UnsavedChoice::Cancel,
-    }
 }
 
 /// The editor key for a key press. Characters from non-ASCII layouts (e.g. Arabic) fall back to
@@ -2896,12 +2921,50 @@ fn map_button(button: MouseButton) -> Button {
     }
 }
 
+/// What `App::new` needs besides the event loop's proxy.
+pub struct AppConfig {
+    /// Files, preferences, dialogs, the clipboard and links.
+    pub platform: Box<dyn Platform>,
+    /// The GPU objects, made beforehand where they can only be requested asynchronously (a
+    /// browser). None: the window makes them when it opens, waiting for them.
+    pub gpu: Option<GpuContext>,
+    /// A model to open once the window exists.
+    pub file: Option<PathBuf>,
+    /// The folders the API's file paths must lie within.
+    pub roots: ApiRoots,
+    /// Where work an agent discards is kept.
+    pub recovery: Option<PathBuf>,
+    /// The recovery session, handed to the window when it is made (Err: why there is none).
+    pub session: Result<Session, String>,
+    /// Where the agent API listens; None runs without it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub socket: Option<Endpoint>,
+}
+
+impl AppConfig {
+    /// A window with nothing beyond `platform`: no API folders, recovery, socket or model.
+    pub fn new(platform: Box<dyn Platform>) -> Self {
+        Self {
+            platform,
+            gpu: None,
+            file: None,
+            roots: ApiRoots::default(),
+            recovery: None,
+            session: Err("there is no folder to keep autosaves in".into()),
+            #[cfg(not(target_arch = "wasm32"))]
+            socket: None,
+        }
+    }
+}
+
 pub struct App {
     state: Option<State>,
     hub: Hub,
     /// Held while agents are connected, so macOS does not nap the window they drive.
+    #[cfg(not(target_arch = "wasm32"))]
     awake: Awake,
     /// Where the agent API listens; a socket file is removed on exit (None if listening failed).
+    #[cfg(not(target_arch = "wasm32"))]
     socket: Option<Endpoint>,
     /// A model to open once the window exists.
     file: Option<PathBuf>,
@@ -2911,49 +2974,46 @@ pub struct App {
     recovery: Option<PathBuf>,
     /// The recovery session, handed to the window when it is made (Err: why there is none).
     session: Option<Result<Session, String>>,
-    /// The window's preferences file (None: HOME is not set).
-    prefs: Option<prefs::PrefsFile>,
+    /// The platform and the GPU, handed to the window when it is made.
+    platform: Option<Box<dyn Platform>>,
+    gpu: Option<GpuContext>,
     /// Carries native menu and AccessKit events to the loop.
     proxy: EventLoopProxy<AppEvent>,
 }
 
 impl App {
-    /// `socket` is where the agent API listens; None runs without it. `file` is a model to
-    /// open at start.
-    pub fn new(
-        event_loop: &EventLoop<AppEvent>,
-        socket: Option<Endpoint>,
-        file: Option<PathBuf>,
-        roots: ApiRoots,
-        recovery: Option<PathBuf>,
-        session: Result<Session, String>,
-        prefs: Option<prefs::PrefsFile>,
-    ) -> Self {
-        let proxy = event_loop.create_proxy();
+    /// The window app. `proxy` is the event loop's (`EventLoop::create_proxy`).
+    pub fn new(proxy: EventLoopProxy<AppEvent>, config: AppConfig) -> Self {
         let api_proxy = proxy.clone();
         let hub = Hub::new(move || {
             let _ = api_proxy.send_event(AppEvent::Api);
         });
-        let socket = socket.and_then(|socket| match listen(&socket, hub.inbox()) {
-            Ok(()) => {
-                eprintln!("agent API listening on {socket}");
-                Some(socket)
-            }
-            Err(e) => {
-                eprintln!("agent API disabled: cannot listen on {socket}: {e}");
-                None
-            }
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let socket = config
+            .socket
+            .and_then(|socket| match listen(&socket, hub.inbox()) {
+                Ok(()) => {
+                    eprintln!("agent API listening on {socket}");
+                    Some(socket)
+                }
+                Err(e) => {
+                    eprintln!("agent API disabled: cannot listen on {socket}: {e}");
+                    None
+                }
+            });
         Self {
             state: None,
             hub,
+            #[cfg(not(target_arch = "wasm32"))]
             awake: Awake::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             socket,
-            file,
-            roots,
-            recovery,
-            session: Some(session),
-            prefs,
+            file: config.file,
+            roots: config.roots,
+            recovery: config.recovery,
+            session: Some(config.session),
+            platform: Some(config.platform),
+            gpu: config.gpu,
             proxy,
         }
     }
@@ -2964,12 +3024,17 @@ impl App {
         // times slower, and an agent's first request often arrives with its connection.
         let state = &mut self.state;
         let hub = &mut self.hub;
+        #[cfg(not(target_arch = "wasm32"))]
         self.awake.serve(|_| {
             if let Some(s) = state.as_mut() {
                 s.process_api(hub);
             }
             hub.open_connections() > 0
         });
+        #[cfg(target_arch = "wasm32")]
+        if let Some(s) = state.as_mut() {
+            s.process_api(hub);
+        }
         // An agent asked to quit; any unsaved changes were refused or discarded already.
         if self.state.as_ref().is_some_and(|s| s.quit) {
             event_loop.exit();
@@ -3003,6 +3068,7 @@ impl ApplicationHandler<AppEvent> for App {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // The last replies (a `quit`'s) reach their agents before the app ends.
         self.hub.close(CLOSE_WAIT);
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(endpoint) = self.socket.take() {
             endpoint.remove();
         }
@@ -3036,6 +3102,16 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Api => self.serve_api(event_loop),
             #[cfg(target_os = "macos")]
             AppEvent::Menu { id, repeat } => self.menu_event(event_loop, &id, repeat),
+            AppEvent::Platform(reply) => {
+                if let Some(s) = self.state.as_mut() {
+                    s.platform_reply(reply);
+                    s.notify_api(&mut self.hub);
+                    s.window.request_redraw();
+                    if s.quit {
+                        event_loop.exit();
+                    }
+                }
+            }
             AppEvent::AccessKit(event) => {
                 if let Some(s) = self.state.as_mut()
                     && s.gui.on_accesskit(event.window_event)
@@ -3064,14 +3140,21 @@ impl ApplicationHandler<AppEvent> for App {
         }
         let attrs = window_attributes();
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        let Some(platform) = self.platform.take() else {
+            return;
+        };
+        let session = self
+            .session
+            .take()
+            .unwrap_or_else(|| Err("autosave already started".into()));
         let mut state = State::new(
             window,
             self.roots.clone(),
             self.recovery.clone(),
-            self.session
-                .take()
-                .unwrap_or_else(|| Err("autosave already started".into())),
-            self.prefs.clone(),
+            session,
+            platform,
+            self.gpu.take(),
+            self.proxy.clone(),
         );
         // The adapter before the window is first shown (it panics otherwise), then the window,
         // whatever happens next.
@@ -3126,8 +3209,8 @@ impl ApplicationHandler<AppEvent> for App {
         }
         let changed = match event {
             WindowEvent::CloseRequested => {
-                if s.settle_changes() {
-                    s.quit = true;
+                s.settle_and(Then::Quit);
+                if s.quit {
                     event_loop.exit();
                 }
                 false
@@ -3310,8 +3393,8 @@ impl ApplicationHandler<AppEvent> for App {
                     });
                     match bound {
                         Some(Bound::Quit) => {
-                            if s.settle_changes() {
-                                s.quit = true;
+                            s.settle_and(Then::Quit);
+                            if s.quit {
                                 event_loop.exit();
                             }
                             false
@@ -3427,6 +3510,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::flows::save_name;
     use winit::keyboard::SmolStr;
 
     #[test]
@@ -4133,33 +4217,6 @@ mod tests {
         assert_eq!(save_name(None, desk, None), "desk.skr");
         assert_eq!(save_name(saved, None, None), "desk.skr");
         assert_eq!(save_name(None, None, None), "Untitled.skr");
-    }
-
-    #[test]
-    fn the_unsaved_question_names_the_file() {
-        assert_eq!(
-            unsaved_question(Some(Path::new("/m/house.skr"))),
-            "Do you want to save changes to \"house.skr\"?"
-        );
-        assert_eq!(
-            unsaved_question(None),
-            "Do you want to save changes to \"Untitled.skr\"?"
-        );
-    }
-
-    #[test]
-    fn unsaved_answers_map_to_save_dont_save_and_cancel() {
-        use rfd::MessageDialogResult as R;
-        let custom = |s: &str| R::Custom(s.into());
-        for answer in [custom("Save"), R::Yes] {
-            assert_eq!(unsaved_choice(&answer), UnsavedChoice::Save, "{answer}");
-        }
-        for answer in [custom("Don't Save"), R::No] {
-            assert_eq!(unsaved_choice(&answer), UnsavedChoice::DontSave, "{answer}");
-        }
-        for answer in [custom("Cancel"), R::Cancel, R::Ok, custom("other")] {
-            assert_eq!(unsaved_choice(&answer), UnsavedChoice::Cancel, "{answer}");
-        }
     }
 
     #[test]

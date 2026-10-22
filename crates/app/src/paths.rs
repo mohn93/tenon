@@ -12,7 +12,9 @@ use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::cli::FALLBACK_DIR;
+/// Base folder under HOME for the files that live there on macOS, and for the socket when the
+/// preferred folder is unusable.
+pub const FALLBACK_DIR: &str = ".sketchup-alt";
 
 /// The app's folder name under the XDG base folders and the Windows application data folders.
 const XDG_DIR: &str = "sketchup-alt";

@@ -10,6 +10,7 @@ use session::{LengthUnit, Units};
 use super::theme::{ThemeChoice, UiScale};
 use super::{SettingsView, UiAction, View, widgets};
 use crate::navigation::TrackpadScroll;
+use crate::platform::Features;
 use crate::prefs;
 
 /// The window's width, in points.
@@ -53,12 +54,16 @@ pub(super) fn settings_window(
         .constrain(true)
         .show(&ctx, |ui| {
             ui.horizontal(|ui| {
+                let files = view.features.autosave || view.features.library;
                 for (name, this) in [
                     ("Appearance", Tab::Appearance),
                     ("Input", Tab::Input),
                     ("Files", Tab::Files),
                     ("Model", Tab::Model),
                 ] {
+                    if this == Tab::Files && !files {
+                        continue;
+                    }
                     if ui.add(Button::selectable(tab == this, name)).clicked() {
                         tab = this;
                     }
@@ -68,7 +73,13 @@ pub(super) fn settings_window(
             match tab {
                 Tab::Appearance => appearance(ui, view.theme, settings.ui_scale, actions),
                 Tab::Input => input(ui, settings.trackpad, actions),
-                Tab::Files => files(ui, settings.autosave_minutes, view.library.folder, actions),
+                Tab::Files => files(
+                    ui,
+                    settings.autosave_minutes,
+                    view.library.folder,
+                    view.features,
+                    actions,
+                ),
                 Tab::Model => model(ui, settings.units, actions),
             }
         });
@@ -138,16 +149,30 @@ fn files(
     ui: &mut Ui,
     minutes: u32,
     library: Option<&std::path::Path>,
+    features: Features,
     actions: &mut Vec<UiAction>,
 ) {
     let mut value = minutes;
+    if features.autosave {
+        autosave(ui, &mut value, minutes, actions);
+    }
+    if features.library {
+        if features.autosave {
+            ui.add_space(8.0);
+        }
+        library_folder(ui, library, actions);
+    }
+}
+
+/// The autosave slider.
+fn autosave(ui: &mut Ui, value: &mut u32, minutes: u32, actions: &mut Vec<UiAction>) {
     ui.horizontal(|ui| {
         let label = ui.label("Autosave every");
         if widgets::slider_row(
             ui,
             label.id,
             "Autosave every",
-            &mut value,
+            value,
             0..=prefs::MAX_AUTOSAVE_MINUTES,
             1.0,
             |b| {
@@ -156,9 +181,9 @@ fn files(
             },
         )
         .changed()
-            && value != minutes
+            && *value != minutes
         {
-            actions.push(UiAction::SetAutosave(value));
+            actions.push(UiAction::SetAutosave(*value));
         }
     });
     ui.label(
@@ -167,7 +192,10 @@ fn files(
         )
         .weak(),
     );
-    ui.add_space(8.0);
+}
+
+/// The library folder and its buttons.
+fn library_folder(ui: &mut Ui, library: Option<&std::path::Path>, actions: &mut Vec<UiAction>) {
     ui.label("Library folder");
     ui.horizontal(|ui| {
         let shown = library.map_or_else(|| "Not set".to_string(), |p| p.display().to_string());

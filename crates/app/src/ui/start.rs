@@ -12,7 +12,13 @@ pub const HINT: &str = "R: drag a rectangle.  P: pull it up into a box.";
 
 /// The card in the bottom left of the view (`view_rect`), in its own `Area`, so presses on it
 /// never reach the tools.
-pub fn start_card(ui: &Ui, view_rect: Rect, card: &StartCard, actions: &mut Vec<UiAction>) {
+pub fn start_card(
+    ui: &Ui,
+    view_rect: Rect,
+    card: &StartCard,
+    show_recent: bool,
+    actions: &mut Vec<UiAction>,
+) {
     let t = theme::tokens(ui.ctx().theme());
     // The frame's padding and its 1 pt border lie inside the card's size.
     let inner = theme::START_CARD - Vec2::splat(2.0 * (theme::START_CARD_PADDING + 1.0));
@@ -40,12 +46,12 @@ pub fn start_card(ui: &Ui, view_rect: Rect, card: &StartCard, actions: &mut Vec<
                 ui.set_min_size(inner);
                 ui.set_max_size(inner);
                 ui.spacing_mut().item_spacing.y = 2.0;
-                contents(ui, card, actions);
+                contents(ui, card, show_recent, actions);
             });
         });
 }
 
-fn contents(ui: &mut Ui, card: &StartCard, actions: &mut Vec<UiAction>) {
+fn contents(ui: &mut Ui, card: &StartCard, show_recent: bool, actions: &mut Vec<UiAction>) {
     let t = theme::tokens(ui.ctx().theme());
     ui.horizontal(|ui| {
         if ui.button("New").clicked() {
@@ -69,24 +75,26 @@ fn contents(ui: &mut Ui, card: &StartCard, actions: &mut Vec<UiAction>) {
         });
     });
     ui.add_space(theme::GRID);
-    ui.label(
-        RichText::new("RECENT")
-            .size(theme::SECTION_SIZE)
-            .family(fonts::semibold())
-            .color(t.text_secondary),
-    );
-    if card.recent.is_empty() {
-        ui.label(RichText::new("No recent files").color(t.text_secondary));
-    }
-    ui.scope(|ui| {
-        ui.spacing_mut().interact_size.y = theme::START_CARD_ROW;
-        ui.spacing_mut().button_padding.y = 0.0;
-        for path in card.recent {
-            if recent_row(ui, path).clicked() {
-                actions.push(UiAction::OpenRecent(path.clone()));
-            }
+    if show_recent {
+        ui.label(
+            RichText::new("RECENT")
+                .size(theme::SECTION_SIZE)
+                .family(fonts::semibold())
+                .color(t.text_secondary),
+        );
+        if card.recent.is_empty() {
+            ui.label(RichText::new("No recent files").color(t.text_secondary));
         }
-    });
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = theme::START_CARD_ROW;
+            ui.spacing_mut().button_padding.y = 0.0;
+            for path in card.recent {
+                if recent_row(ui, path).clicked() {
+                    actions.push(UiAction::OpenRecent(path.clone()));
+                }
+            }
+        });
+    }
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
         ui.label(
             RichText::new(HINT)

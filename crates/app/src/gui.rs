@@ -69,6 +69,7 @@ impl Gui {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// A new Gui for a new device, keeping this one's AccessKit adapter and screen-reader
     /// state (the adapter belongs to the window, which stays).
     pub fn rebuilt(

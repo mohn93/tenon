@@ -161,16 +161,28 @@ impl Document {
     /// them, and marks the model as saved (no unsaved changes). The model's own path, if any,
     /// is left as it is: the caller decides where the bytes go.
     pub fn save_bytes(&mut self) -> Result<Vec<u8>, CommandError> {
-        let bytes = file::encode(
+        let bytes = self.encode_bytes()?;
+        self.mark_saved();
+        Ok(bytes)
+    }
+
+    /// The bytes `save_bytes` returns, leaving the model as it is (still with its unsaved
+    /// changes): for a caller that marks the model saved (`mark_saved`) only once the bytes
+    /// went somewhere.
+    pub fn encode_bytes(&self) -> Result<Vec<u8>, CommandError> {
+        file::encode(
             &self.scene,
             &self.camera,
             self.view_look(),
             &self.info_entries(),
         )
-        .map_err(|e| file_error("the model", e))?;
+        .map_err(|e| file_error("the model", e))
+    }
+
+    /// Marks the model as saved (no unsaved changes), as a save does.
+    pub fn mark_saved(&mut self) {
         self.imported_from = None;
         self.clean_revision = self.revision;
-        Ok(bytes)
     }
 
     /// Replaces the model, view and lighting with those of the `.skr` copy at `path` (a

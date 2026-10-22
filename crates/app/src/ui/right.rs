@@ -33,7 +33,7 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
             }
         }
     }
-    if let Some(instance) = view.component {
+    if let Some(instance) = view.component.filter(|_| view.features.library) {
         let enabled = view.library.folder.is_some();
         let button = ui.add_enabled(enabled, egui::Button::new("Save to Library"));
         let button = if enabled {

@@ -17,6 +17,7 @@ use tools::ToolKind;
 use crate::editor::{ImportOptions, PrintOptions, RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
 use crate::navigation::TrackpadScroll;
+use crate::platform::Features;
 use theme::{ThemeChoice, UiScale};
 
 pub(crate) mod context_bar;
@@ -460,6 +461,8 @@ pub struct View<'a> {
     pub camera: &'a Camera,
     /// The card over an empty, unedited model; None: hidden.
     pub start: Option<StartCard<'a>>,
+    /// What the system offers; the panels hide what is off.
+    pub features: Features,
     /// The recent files as kept in the preferences, newest first (File > Open Recent).
     pub recent: &'a [PathBuf],
     /// The sheet open over the window, if any.
@@ -653,7 +656,7 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     // In the root's own layer, under every window and menu.
     viewport::hud(ui, central, view.hud);
     if let Some(card) = &view.start {
-        start::start_card(ui, central, card, actions);
+        start::start_card(ui, central, card, view.features.recent, actions);
     }
     if !view.flying {
         viewport::gizmo(ui, central, view.camera, view.projection, actions);

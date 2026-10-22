@@ -26,6 +26,7 @@ impl Clipboard for MemoryClipboard {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// The system clipboard, through arboard. It is opened at first use and kept open (on X11 the
 /// text copied is served while it is); a failure to open it (no display) is retried next time.
 #[derive(Default)]
@@ -33,6 +34,7 @@ pub struct SystemClipboard {
     board: Option<arboard::Clipboard>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SystemClipboard {
     fn board(&mut self) -> Result<&mut arboard::Clipboard, String> {
         if self.board.is_none() {
@@ -42,6 +44,7 @@ impl SystemClipboard {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Clipboard for SystemClipboard {
     fn get_text(&mut self) -> Result<Option<String>, String> {
         match self.board()?.get_text() {

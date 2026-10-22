@@ -9,36 +9,13 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+use web_time::{SystemTime, UNIX_EPOCH};
+
+pub use crate::recovered::{Entry, Kind, Listing, MAX_LISTED, autosave_due, file_stem};
 
 use serde::{Deserialize, Serialize};
 use session::Document;
-
-/// What a recovery entry is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    /// The window's periodic copy of its model.
-    Autosave,
-    /// Unsaved work an agent's `new`, `open` or `quit` discarded.
-    Discarded,
-}
-
-/// A model in the recovery folder another session left behind.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Entry {
-    pub kind: Kind,
-    /// The name the model went by: its file's stem, or "Untitled".
-    pub name: String,
-    /// The file the model was opened from or saved to.
-    pub original: Option<PathBuf>,
-    /// When the copy was written.
-    pub saved: SystemTime,
-    /// The copy.
-    pub model: PathBuf,
-    /// Why the entry cannot be opened (it can only be discarded).
-    pub error: Option<String>,
-}
 
 /// This process's hold on the recovery folder: its lock, and the autosave it last wrote.
 pub struct Session {
@@ -80,26 +57,6 @@ pub fn ensure_folder(dir: &Path) -> io::Result<()> {
         crate::cli::ensure_private_dir(parent)?;
     }
     crate::cli::ensure_private_xdg_dir(crate::paths::Os::current(), dir)
-}
-
-/// The stem recovery files of the model at `open_file` (or an unsaved one) are named with:
-/// the file's stem with characters other than letters, digits, `-`, `_` and spaces made `_`,
-/// or "untitled".
-pub fn file_stem(open_file: Option<&Path>) -> String {
-    open_file
-        .and_then(Path::file_stem)
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "untitled".into())
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn unix_secs(t: SystemTime) -> u64 {
@@ -458,21 +415,9 @@ fn is_live(dir: &Path, id: &str) -> bool {
     }
 }
 
-/// The most entries a listing returns.
-pub const MAX_LISTED: usize = 200;
-
 /// How old a leftover temporary file (a write's `.partial`, a session's `.locking`) must be
 /// before a listing removes it.
 const STALE_TEMP: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// What `list_newest` found: the newest entries, and how many older candidates were left out.
-#[derive(Debug, Default)]
-pub struct Listing {
-    pub entries: Vec<Entry>,
-    /// Older recovery notes and copies not looked at or not returned (some may turn out to
-    /// belong to a running window).
-    pub older: usize,
-}
 
 /// `list_newest` with the default bound, the entries only (what the tests read).
 #[cfg(test)]
@@ -662,30 +607,11 @@ pub fn discard(entry: &Entry) -> io::Result<()> {
     remove_entry(&entry.model)
 }
 
-/// Whether an autosave should run now: autosave is on (`interval` not zero), the document is
-/// `modified`, its `revision` is not the one last autosaved, no tool operation is in progress
-/// (`busy`), and `interval` has passed since `since` (the later of the last autosave and the
-/// first unsaved change).
-pub fn autosave_due(
-    now: Instant,
-    since: Instant,
-    interval: Duration,
-    revision: u64,
-    saved_revision: Option<u64>,
-    modified: bool,
-    busy: bool,
-) -> bool {
-    !interval.is_zero()
-        && modified
-        && !busy
-        && saved_revision != Some(revision)
-        && now.saturating_duration_since(since) >= interval
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use web_time::Instant;
 
     use glam::DVec2;
     use serde_json::Value;
