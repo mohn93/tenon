@@ -30,6 +30,8 @@ pub enum ExportFormat {
     /// SketchUp 2017 (`.skp`): the whole scene, with its groups, components, materials and
     /// guides, rather than triangles (see `skp_export`).
     Skp,
+    /// A line drawing of the current view (hidden lines removed), as SVG (see `drawing`).
+    Svg,
 }
 
 impl ExportFormat {
@@ -43,6 +45,7 @@ impl ExportFormat {
             "glb" => ExportFormat::Glb,
             "gltf" => ExportFormat::Gltf,
             "skp" => ExportFormat::Skp,
+            "svg" => ExportFormat::Svg,
             _ => return None,
         })
     }
@@ -107,6 +110,9 @@ pub struct ExportReport {
     /// SketchUp files: tags written (every tag of the model). Absent when 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tags: usize,
+    /// SVG: polylines drawn (visible edges and cut edges). Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub lines: usize,
     /// What the file could not hold (glowing materials, curves, empty groups; for every
     /// format, dimensions and notes). Absent when there is nothing to say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -149,6 +155,9 @@ pub(crate) fn encode(
         ExportFormat::Gltf => only(gltf(&groups).into_bytes()),
         ExportFormat::Skp => {
             return Err("a SketchUp file is written from the scene, not triangles".to_string());
+        }
+        ExportFormat::Svg => {
+            return Err("an SVG file is drawn from the view, not triangles".to_string());
         }
     })
 }

@@ -1290,7 +1290,7 @@ atomic batch.
 triangles: the root's faces and every instance's, placed in root coordinates (a component placed
 twice is written twice), whatever instance is open. Edges without faces are not written, nor
 is what hidden tags hide (see Tags; a model whose faces are all hidden is "nothing to export").
-`format` (`obj`, `stl`, `glb`, `gltf`, `skp`) defaults to the one the path's extension names, in
+`format` (`obj`, `stl`, `glb`, `gltf`, `skp`, `svg`) defaults to the one the path's extension names, in
 any case; any other extension without `format` is `invalid_input`, and so is a model with no
 faces (for `skp`: with nothing at all, or only empty groups and components, "nothing to export"). A SketchUp file holds the whole
 scene rather than triangles (see the `skp` row below).
@@ -1343,6 +1343,27 @@ dimensions, notes and section planes; `warnings` then says "N dimensions were no
 not written" and "N section planes were not written" ("1 section plane was not written"; the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
 triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused
 with `invalid_input` and nothing is written.
+
+#### SVG line drawing
+
+`{"type": "export", "path": "/abs/view.svg"}` (or `"format": "svg"`) draws the current view (the
+document's camera at its viewport size) as a line drawing, not triangles. Visible edges only,
+found on the CPU: soft edges, edges and faces on hidden tags, and what the active section planes cut
+away are left out (with the section display's `cuts` on, as in the window), each edge is cut into pieces of
+about 2 px (at most 256 per edge) and a piece shows when nothing nearer lies on the line of sight to
+its middle; neighbouring visible pieces join into one `<polyline>`. A section cut adds its fill (grey
+`#3a3a3a` polygons, when the display's `fill` is on, which also hides what is behind them) and its outline
+(`cuts`, 3 times as thick). Dimensions and notes add their lines and their text (a dimension's
+length, a note's text, a screen note at its fraction of the view); guides and section plane
+outlines are not drawn. Layers, in this order: `fills`, `lines`, `cuts`, `annotations`, `labels`.
+Black lines of 1 px, text of 11 px, y down from the view's top left; numbers have 3
+decimals and the same view gives the same bytes. A drawing that would test more than 2,000,000 pieces
+is `invalid_input` ("the model is too large for a line drawing at this size"), and so is a view with
+nothing to draw ("nothing to export"). With a parallel camera, `"scale": 100` exports at 1:100: the SVG
+is in millimetres (`width`, `height` and `viewBox` in mm, lines 0.25 mm, text 3 mm), 1 m of the model
+being 10 mm. A scale with a perspective camera is `invalid_input` ("Switch to parallel projection to
+export at scale"), and so is one for another format or one that is not a positive number. The result's
+`export` has `"lines"`: the polylines drawn (edges and cut outlines), and no triangles.
 
 ### Import
 

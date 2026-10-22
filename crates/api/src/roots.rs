@@ -480,6 +480,7 @@ mod tests {
                 format: None,
                 overwrite: false,
                 refuse_links: false,
+                scale: None,
             },
             Command::Import {
                 path: "a.obj".into(),

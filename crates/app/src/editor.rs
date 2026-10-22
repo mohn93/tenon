@@ -1556,6 +1556,7 @@ impl Editor {
             // The file dialog asked before replacing a file.
             overwrite: true,
             refuse_links: false,
+            scale: None,
         });
         let Some(outcome) = outcome else {
             return false;

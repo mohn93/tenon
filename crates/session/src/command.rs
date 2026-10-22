@@ -535,13 +535,17 @@ pub enum Command {
     },
     /// Write every face of the model (all instances placed, in root coordinates) as triangles
     /// to `path`. `format` defaults to the one the file name's extension names (`.obj`,
-    /// `.stl`, `.glb`, `.gltf`, `.skp`). Not an undo step. The outcome's `export` counts the
+    /// `.stl`, `.glb`, `.gltf`, `.skp`, `.svg`). Not an undo step. The outcome's `export` counts the
     /// triangles written and the faces left out because they could not be triangulated. A
     /// SketchUp 2017 file (`skp`) holds the whole scene instead: every definition the root
     /// places written once, faces with holes, soft edges, guides and materials with their
     /// textures; its `export` counts definitions, instances, faces, edges, guides and
     /// materials, with `warnings` for what the file cannot hold (glow, curves, empty groups).
-    /// No format holds dimensions or notes: `warnings` counts those left out.
+    /// No format holds dimensions or notes (SVG draws them): `warnings` counts those left out.
+    /// An SVG (`.svg`, or `format` `svg`) is a line drawing of the current view (the document's
+    /// camera and viewport): visible edges only (soft edges, hidden tags and what section cuts
+    /// remove are left out), section cuts with their fill and outlines, and the labels and
+    /// lines of dimensions and notes; its `export` counts the polylines drawn in `lines`.
     /// An existing file that is not of the format written, or the SketchUp file the model
     /// was opened from, is refused unless `overwrite` is true.
     Export {
@@ -556,6 +560,12 @@ pub enum Command {
         /// writes beside it, must not be symbolic links. Never read from or written to JSON.
         #[serde(skip)]
         refuse_links: bool,
+        /// SVG only: export at 1:`scale` (a drawing in millimetres, 1 m of the model being
+        /// 1000 / `scale` mm), instead of in pixels at the view's size. Needs a parallel
+        /// camera: with a perspective one it is refused ("Switch to parallel projection to
+        /// export at scale"). Absent: pixels.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale: Option<f64>,
     },
     /// Read an OBJ, STL or SketchUp file and add its faces to the open context, as one undo
     /// step: as a new group (default) or component named after the file, placed at the

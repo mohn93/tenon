@@ -9,6 +9,7 @@ mod clip;
 mod commands;
 mod contract;
 mod curves;
+mod drawing;
 mod export;
 mod files;
 mod follow_me;

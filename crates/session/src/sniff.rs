@@ -23,6 +23,8 @@ pub(crate) enum Kind {
     Image,
     /// A SketchUp model.
     Skp,
+    /// An SVG drawing.
+    Svg,
 }
 
 impl Kind {
@@ -36,6 +38,7 @@ impl Kind {
             Kind::Gltf => "glTF",
             Kind::Image => "PNG or JPEG",
             Kind::Skp => "SketchUp model",
+            Kind::Svg => "SVG",
         }
     }
 }
@@ -149,6 +152,11 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
                         == len)
         }
         Kind::Gltf => gltf_json(head),
+        Kind::Svg => {
+            let text = String::from_utf8_lossy(head);
+            let text = text.trim_start_matches('\u{feff}').trim_start();
+            text.starts_with("<?xml") || text.starts_with("<svg")
+        }
         Kind::Obj => keyword_text(head, len, OBJ_KEYWORDS, None),
         Kind::Mtl => keyword_text(head, len, MTL_KEYWORDS, Some("newmtl")),
     }

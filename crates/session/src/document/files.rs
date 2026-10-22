@@ -186,13 +186,34 @@ impl Document {
         format: Option<ExportFormat>,
         overwrite: bool,
         refuse_links: bool,
+        scale: Option<f64>,
     ) -> Result<ExportReport, CommandError> {
         let Some(format) = format.or_else(|| ExportFormat::from_path(Path::new(path))) else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "give a format, or a path ending in .obj, .stl, .glb, .gltf or .skp",
+                "give a format, or a path ending in .obj, .stl, .glb, .gltf, .skp or .svg",
             ));
         };
+        if let Some(n) = scale {
+            if format != ExportFormat::Svg {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "a scale applies to SVG exports only",
+                ));
+            }
+            if !(n.is_finite() && n > 0.0) {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "the scale must be a positive number (1:scale)",
+                ));
+            }
+            if !self.camera.is_parallel() {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "Switch to parallel projection to export at scale",
+                ));
+            }
+        }
         let target = Path::new(path);
         check_nul(target)?;
         if target
@@ -229,6 +250,9 @@ impl Document {
         }
         if format == ExportFormat::Skp {
             return export_skp(&self.scene, target, overwrite, refuse_links);
+        }
+        if format == ExportFormat::Svg {
+            return self.export_svg(target, overwrite, refuse_links, scale);
         }
         let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
         if triangles.is_empty() {
@@ -286,6 +310,7 @@ impl Document {
                 ExportFormat::Glb => Kind::Glb,
                 ExportFormat::Gltf => Kind::Gltf,
                 ExportFormat::Skp => Kind::Skp,
+                ExportFormat::Svg => Kind::Svg,
             };
             let checks = std::iter::once((target.to_path_buf(), kind)).chain(side);
             if let Some((p, k)) = checks.into_iter().find(|(p, k)| !sniff::replaceable(p, *k)) {
@@ -308,6 +333,41 @@ impl Document {
             triangles: triangles.len(),
             skipped_faces,
             warnings: export::annotation_warnings(&self.scene),
+            ..ExportReport::default()
+        })
+    }
+
+    /// Writes the current view as a line drawing in SVG (see `drawing` and `svg`): in pixels at
+    /// the viewport's size, or with `scale` (1:N, a parallel view) in millimetres.
+    fn export_svg(
+        &self,
+        target: &Path,
+        overwrite: bool,
+        refuse_links: bool,
+        scale: Option<f64>,
+    ) -> Result<ExportReport, CommandError> {
+        let camera = &self.camera;
+        let drawing = crate::drawing::line_drawing(self, camera, camera.viewport)?;
+        if drawing.is_empty() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "nothing to export: no edge is in view (hidden tags and section cuts hide the rest)",
+            ));
+        }
+        // Millimetres on paper per pixel of the view: a pixel is `pixel_size` meters of the
+        // model in a parallel view.
+        let mm_per_px = scale.map(|n| camera.pixel_size(camera.target) * 1000.0 / n);
+        let bytes = crate::svg::to_svg(&drawing, mm_per_px);
+        if refuse_links {
+            check_links(std::iter::once(target))?;
+        }
+        if !overwrite && !sniff::replaceable(target, Kind::Svg) {
+            return Err(sniff::refusal(target, Kind::Svg));
+        }
+        file::replace_file(target, bytes.as_bytes(), Access::Default)
+            .map_err(|e| file_error(&target.display().to_string(), e))?;
+        Ok(ExportReport {
+            lines: drawing.lines.len() + drawing.cut_lines.len(),
             ..ExportReport::default()
         })
     }
