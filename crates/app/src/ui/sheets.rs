@@ -603,7 +603,8 @@ fn print_sheet(
                 }
                 ui.horizontal(|ui| {
                     let exact = spec.scale.is_some();
-                    if ui.radio(exact, "1 :").clicked() && !exact {
+                    let radio = ui.radio(exact, "1 :");
+                    if radio.clicked() && !exact {
                         spec.scale = Some(PrintOptions::DEFAULT_SCALE);
                     }
                     if let Some(n) = &mut spec.scale {
@@ -612,7 +613,8 @@ fn print_sheet(
                                 .range(0.01..=1_000_000.0)
                                 .speed(1.0)
                                 .max_decimals(2),
-                        );
+                        )
+                        .labelled_by(radio.id);
                     }
                 });
                 ui.label(

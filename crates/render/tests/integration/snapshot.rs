@@ -175,3 +175,35 @@ fn night_is_dark_except_near_glowing_faces_which_show_unshaded() {
     assert!(far < 60, "far {far}");
     assert!(gray(at(&day, DVec3::new(6.0, -1.0, 0.0))) > 180);
 }
+
+#[test]
+fn print_mode_draws_white_paper_without_ground_grid_or_axes() {
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let scene = Scene::from_root(Model::new());
+    let mut camera = Camera::new(DVec2::new(64.0, 64.0));
+    camera.eye = DVec3::new(0.0, -6.0, 3.0);
+    camera.target = DVec3::ZERO;
+    let capture = |snap: &mut Snapshotter, lighting| {
+        snap.prepare(&scene, &[], &BTreeSet::new());
+        snap.capture_prepared(&camera, lighting, 64, 64)
+            .expect("capture")
+    };
+    let normal = capture(&mut snap, Lighting::Day);
+    assert!(
+        normal.chunks(4).any(|p| p[..3] != [255, 255, 255]),
+        "the normal view has a background and axes"
+    );
+    snap.set_print_mode(true);
+    for lighting in [Lighting::Day, Lighting::Night] {
+        let printed = capture(&mut snap, lighting);
+        assert!(
+            printed.chunks(4).all(|p| p == [255, 255, 255, 255]),
+            "{lighting:?}: pure white"
+        );
+    }
+    snap.set_print_mode(false);
+    assert_eq!(capture(&mut snap, Lighting::Day), normal, "normal again");
+}

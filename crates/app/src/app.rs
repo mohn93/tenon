@@ -22,7 +22,9 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 use crate::awake::Awake;
 use crate::clipboard::SystemClipboard;
-use crate::editor::{DRAG_LOGICAL_PX, Editor, EditorKey, PrintOptions, PrintPurpose};
+use crate::editor::{
+    DRAG_LOGICAL_PX, Editor, EditorKey, PrintJob, PrintOptions, PrintPurpose, PrintQueue,
+};
 use crate::feedback::Timing;
 use crate::fly::FlyKey;
 use crate::gui::Gui;
@@ -690,6 +692,8 @@ struct State {
     renderer: Renderer,
     /// What `render_view` renders with, on the window's device.
     offscreen: Offscreen,
+    /// A print waiting for its "Printing..." message to be shown.
+    print_queue: PrintQueue,
     editor: Editor,
     /// The app should end: an agent's `quit`, or the Quit action or closing the window once
     /// any unsaved changes were saved or discarded. An exit without it was not settled.
@@ -964,6 +968,7 @@ impl State {
             skip_logged: None,
             renderer,
             offscreen,
+            print_queue: PrintQueue::default(),
             editor,
             quit: false,
             roots,
@@ -1464,9 +1469,11 @@ impl State {
         }
     }
 
-    /// Prints the view as `spec` says: Export asks for the PDF's file, Print opens a temp file.
+    /// Starts printing the view as `spec` says: Export asks for the PDF's file first, Print
+    /// uses a temp file. The status says "Printing..." and the render, which blocks the window,
+    /// runs two frames later (see `PrintQueue`).
     fn print(&mut self, purpose: PrintPurpose, spec: &PrintOptions) {
-        match purpose {
+        let path = match purpose {
             PrintPurpose::Export => {
                 let stem = file_name(self.editor.doc().path());
                 let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
@@ -1474,16 +1481,34 @@ impl State {
                     .add_filter("PDF", &["pdf"])
                     .set_file_name(format!("{stem}.pdf"))
                     .save_file();
-                if let Some(path) = chosen {
-                    let snapshotter = self.offscreen.get();
-                    self.editor.export_pdf_file(snapshotter, spec, &path);
+                match chosen {
+                    Some(path) => Some(path),
+                    None => return,
                 }
             }
-            PrintPurpose::Print => {
-                let snapshotter = self.offscreen.get();
-                self.editor.print_and_open(snapshotter, spec);
+            PrintPurpose::Print => None,
+        };
+        self.editor.show_info("Printing...");
+        self.print_queue.queue(PrintJob {
+            options: *spec,
+            path,
+        });
+        self.window.request_redraw();
+    }
+
+    /// Runs the print `PrintQueue` released.
+    fn run_print(&mut self, job: PrintJob) {
+        let snapshotter = self.offscreen.get();
+        match job.path {
+            Some(path) => {
+                self.editor
+                    .export_pdf_file(snapshotter, &job.options, &path);
+            }
+            None => {
+                self.editor.print_and_open(snapshotter, &job.options);
             }
         }
+        self.window.request_redraw();
     }
 
     /// Writes the preferences, when the window has a prefs file. A failed save leaves the
@@ -2263,7 +2288,11 @@ impl State {
             }
             self.apply(action);
         }
-        if acted {
+        // A print waits for a frame that shows its message.
+        if let Some(job) = self.print_queue.frame_done() {
+            self.run_print(job);
+        }
+        if acted || self.print_queue.waiting() {
             self.window.request_redraw();
         }
         acted

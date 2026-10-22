@@ -15,9 +15,21 @@ pub struct Printed {
 }
 
 /// Renders the current view of `doc` as `spec` says: one page per sheet, each tile drawn with
-/// the document's lighting, tag colors and section display, nothing selected. Pixels are
-/// composited over white and stored as RGB.
+/// the document's lighting, tag colors and section display on white paper (no ground grid or
+/// axes), nothing selected and no open group (the model is printed as it looks closed, without
+/// the fading around an open context). Pixels are composited over white and stored as RGB.
 pub fn render_pdf(
+    snapshotter: &mut Snapshotter,
+    doc: &Document,
+    spec: &PrintSpec,
+) -> Result<Printed, CommandError> {
+    snapshotter.set_print_mode(true);
+    let printed = render_sheets(snapshotter, doc, spec);
+    snapshotter.set_print_mode(false);
+    printed
+}
+
+fn render_sheets(
     snapshotter: &mut Snapshotter,
     doc: &Document,
     spec: &PrintSpec,
@@ -25,7 +37,7 @@ pub fn render_pdf(
     let layout = layout(doc, &doc.camera, spec)?;
     snapshotter.set_color_by_tag(doc.color_by_tag);
     snapshotter.set_section_display(doc.section_display);
-    snapshotter.prepare(doc.scene(), doc.context(), &Default::default());
+    snapshotter.prepare(doc.scene(), &[], &Default::default());
     let mut pdf = Pdf::new();
     for (index, sheet) in layout.sheets.iter().enumerate() {
         let mut images = Vec::new();

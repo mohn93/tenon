@@ -180,23 +180,16 @@ fn print_spec(
 }
 
 /// Runs `export_pdf`: checks the path first (so a refusal costs no rendering), prints, writes.
-fn export_pdf(host: &mut dyn Host, command: EditorCommand) -> Result<PdfReport, CommandError> {
-    let EditorCommand::ExportPdf {
-        path,
-        paper,
-        landscape,
-        scale,
-        dpi,
-        overwrite,
-    } = command
-    else {
-        unreachable!("export_pdf takes an export_pdf command");
-    };
-    let spec = print_spec(paper.as_deref(), landscape, scale, dpi)?;
+fn export_pdf(
+    host: &mut dyn Host,
+    path: &str,
+    spec: PrintSpec,
+    overwrite: Option<bool>,
+) -> Result<PdfReport, CommandError> {
     let overwrite = overwrite.unwrap_or(false);
     let (path, refuse_links) = match host.roots() {
-        Some(roots) => (roots.write(&path)?.display().to_string(), true),
-        None => (path, false),
+        Some(roots) => (roots.write(path)?.display().to_string(), true),
+        None => (path.to_string(), false),
     };
     host.document()
         .check_pdf_target(&path, overwrite, refuse_links)?;
@@ -274,8 +267,19 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
         "execute" if type_of(&params).is_some_and(|t| EDITOR_COMMANDS.contains(&t)) => {
             let command: EditorCommand = params_as(params)?;
             let pdf = match command {
-                EditorCommand::ExportPdf { .. } => {
-                    Some(export_pdf(host, command).map_err(command_failed)?)
+                EditorCommand::ExportPdf {
+                    path,
+                    paper,
+                    landscape,
+                    scale,
+                    dpi,
+                    overwrite,
+                } => {
+                    let spec = print_spec(paper.as_deref(), landscape, scale, dpi);
+                    Some(
+                        spec.and_then(|spec| export_pdf(host, &path, spec, overwrite))
+                            .map_err(command_failed)?,
+                    )
                 }
                 command => {
                     host.editor_command(command).map_err(command_failed)?;
@@ -488,7 +492,7 @@ pub fn describe() -> Value {
         "discard": "in the window, new, open and quit with discard: true first write the unsaved model to a recovery file in ~/.sketchup-alt/recovery (the status bar and View > Agent Activity name it); if that fails the command fails with file and nothing is discarded; headless writes nothing",
         "methods": {
             "execute": {
-                "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, revision})",
+                "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, pdf?: {sheets, warnings} (export_pdf only), revision})",
                 "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, positioned?: integer, purged?: integer, text_3d?: Text3dReport, units?: Units, revision}: the Outcome plus revision",
                 "params_schema": any_of_root(vec![
                     schema::<Command>(),

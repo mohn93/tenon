@@ -38,7 +38,7 @@ pub use input::{DriveError, Driven, Stopped};
 mod labels;
 mod notes;
 mod print;
-pub use print::{PaperChoice, PrintOptions, PrintPurpose};
+pub use print::{PaperChoice, PrintJob, PrintOptions, PrintPurpose, PrintQueue};
 mod scenes;
 mod sections;
 mod soften;

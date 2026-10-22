@@ -55,6 +55,12 @@ impl Snapshotter {
         self.renderer.set_color_by_tag(on);
     }
 
+    /// Captures from now on as printed pages (or, off, as views): white paper without the
+    /// ground grid and axes.
+    pub fn set_print_mode(&mut self, on: bool) {
+        self.renderer.set_print_mode(on);
+    }
+
     /// Shows section planes and cuts as `display` says in the captures from now on.
     pub fn set_section_display(&mut self, display: SectionDisplay) {
         self.renderer.set_section_display(display);

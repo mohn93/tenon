@@ -452,6 +452,8 @@ pub struct Renderer {
     section_display: SectionDisplay,
     /// How the frames look, as of the last `set_style`.
     style: ViewStyle,
+    /// Printing: white paper, no canvas gradient, ground grid or axes.
+    print: bool,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
     /// The grid and the axes in the style's colors (see `set_style`); `flat_axes` is the X and
@@ -990,6 +992,7 @@ impl Renderer {
             color_by_tag: false,
             section_display: SectionDisplay::default(),
             style: ViewStyle::CLASSIC,
+            print: false,
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
@@ -1290,6 +1293,13 @@ impl Renderer {
         self.pixels_per_point = scale;
     }
 
+    /// Draws the frames from now on as printed pages (or, off, as views): cleared to white, and
+    /// without the canvas gradient, the ground grid and the axes. Shading and lighting are the
+    /// view's.
+    pub fn set_print_mode(&mut self, on: bool) {
+        self.print = on;
+    }
+
     /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
     /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild; the grid
     /// and axes are rebuilt only when their colors change.
@@ -1383,7 +1393,11 @@ impl Renderer {
             glass.sort(&self.queue, camera);
         }
 
-        let [r, g, b, a] = background(self.lighting, &self.style).map(f64::from);
+        let [r, g, b, a] = if self.print {
+            [1.0; 4]
+        } else {
+            background(self.lighting, &self.style).map(f64::from)
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -1416,7 +1430,7 @@ impl Renderer {
                 pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
-                if self.lighting == Lighting::Day && self.style.has_gradient() {
+                if !self.print && self.lighting == Lighting::Day && self.style.has_gradient() {
                     pass.set_pipeline(&self.canvas_pipeline);
                     pass.draw(0..3, 0..1);
                 }
@@ -1436,23 +1450,25 @@ impl Renderer {
                         pass.draw(0..mesh.count, 0..1);
                     }
                 };
-                draw(
-                    &mut pass,
-                    &self.flat_ground_pipeline,
-                    Some(&self.flat_ground),
-                );
-                if self.style.wide_axes {
-                    bind(&mut pass, &self.wide_flat_axes_pipeline, &self.flat_axes);
-                    pass.draw(0..self.flat_axes.count, 0..axis_copies);
-                }
-                draw(&mut pass, &self.ground_pipeline, Some(&self.vertical_axis));
-                if self.style.wide_axes {
-                    bind(
+                if !self.print {
+                    draw(
                         &mut pass,
-                        &self.wide_vertical_axis_pipeline,
-                        &self.vertical_axis,
+                        &self.flat_ground_pipeline,
+                        Some(&self.flat_ground),
                     );
-                    pass.draw(0..self.vertical_axis.count, 0..axis_copies);
+                    if self.style.wide_axes {
+                        bind(&mut pass, &self.wide_flat_axes_pipeline, &self.flat_axes);
+                        pass.draw(0..self.flat_axes.count, 0..axis_copies);
+                    }
+                    draw(&mut pass, &self.ground_pipeline, Some(&self.vertical_axis));
+                    if self.style.wide_axes {
+                        bind(
+                            &mut pass,
+                            &self.wide_vertical_axis_pipeline,
+                            &self.vertical_axis,
+                        );
+                        pass.draw(0..self.vertical_axis.count, 0..axis_copies);
+                    }
                 }
                 match (&self.faces, &self.glass) {
                     (Some(faces), Some(glass)) => {

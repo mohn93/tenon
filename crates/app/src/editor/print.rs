@@ -168,7 +168,115 @@ fn temp_print_path() -> PathBuf {
     }
 }
 
+/// How long a printed temp file is kept.
+const STALE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Removes the files of `dir` named like a printed temp file that are regular files (not
+/// links), older than 24 hours at `now`, and, where `owner` is given (Unix), owned by that user.
+/// Returns how many were removed. Failures are ignored: it is housekeeping.
+pub fn remove_stale_prints(dir: &Path, now: std::time::SystemTime, owner: Option<u32>) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with("sketchup-alt-print-") && name.ends_with(".pdf")) {
+            continue;
+        }
+        // The entry itself, never what a link points to.
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if !meta.is_file() || !owned_by(&meta, owner) {
+            continue;
+        }
+        let old = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age > STALE);
+        if old && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[cfg(unix)]
+fn owned_by(meta: &std::fs::Metadata, owner: Option<u32>) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    owner.is_none_or(|uid| meta.uid() == uid)
+}
+
+#[cfg(not(unix))]
+fn owned_by(_: &std::fs::Metadata, _: Option<u32>) -> bool {
+    true
+}
+
+/// The user id of the file at `path` (the current user's, for a file just created), where the
+/// system has user ids.
+fn file_owner(path: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(path).ok().map(|m| m.uid())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// A print waiting to run: the window shows its status message first, so the render (which
+/// blocks the window) does not start before "Printing..." is on screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrintJob {
+    pub options: PrintOptions,
+    /// The file to write (Export PDF); None prints to a temp file and opens it.
+    pub path: Option<PathBuf>,
+}
+
+/// Holds one [`PrintJob`] for two frames: the frame whose actions queued it presented before
+/// the message was set, the next one presents the message, and the job runs after that.
+#[derive(Debug, Default)]
+pub struct PrintQueue {
+    job: Option<PrintJob>,
+    frames: u8,
+}
+
+impl PrintQueue {
+    /// Queues `job`, replacing one still waiting.
+    pub fn queue(&mut self, job: PrintJob) {
+        self.job = Some(job);
+        self.frames = 0;
+    }
+
+    /// Whether a job waits (so another frame is needed).
+    pub fn waiting(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Called at the end of every frame, after its actions: the job once the message has been
+    /// presented.
+    pub fn frame_done(&mut self) -> Option<PrintJob> {
+        self.job.as_ref()?;
+        self.frames += 1;
+        if self.frames < 2 {
+            return None;
+        }
+        self.job.take()
+    }
+}
+
 impl Editor {
+    /// Shows `text` in the status bar as information.
+    pub fn show_info(&mut self, text: &str) {
+        self.message = Some(Message::info(text));
+    }
+
     /// Prints the view as `options` say to the PDF at `path` (replacing a file there: the save
     /// dialog asked). False if it cannot be printed; the status then says why.
     pub fn export_pdf_file(
@@ -219,6 +327,7 @@ impl Editor {
         snapshotter: Option<&mut Snapshotter>,
         options: &PrintOptions,
     ) -> bool {
+        self.message = None;
         let Some(snapshotter) = snapshotter else {
             self.show_error("Printing needs a GPU adapter");
             return false;
@@ -235,6 +344,12 @@ impl Editor {
             self.show_error(&format!("Could not write {}: {e}", path.display()));
             return false;
         }
+        // Housekeeping: earlier prints no one will look at now.
+        remove_stale_prints(
+            &std::env::temp_dir(),
+            std::time::SystemTime::now(),
+            file_owner(&path),
+        );
         match open_file(&path) {
             Ok(()) => {
                 self.message = Some(Message::info(format!("Opened {}", path.display())));
@@ -304,6 +419,76 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(&format!("sketchup-alt-print-{}-", std::process::id()))
         );
+    }
+
+    #[test]
+    fn a_print_waits_two_frames_for_its_message_to_be_shown() {
+        let job = PrintJob {
+            options: PrintOptions::default(),
+            path: None,
+        };
+        let mut queue = PrintQueue::default();
+        assert_eq!(queue.frame_done(), None);
+        assert!(!queue.waiting());
+        queue.queue(job.clone());
+        assert!(queue.waiting());
+        // The frame that queued it, then the frame that presented the message.
+        assert_eq!(queue.frame_done(), None);
+        assert!(queue.waiting());
+        assert_eq!(queue.frame_done(), Some(job.clone()));
+        assert!(!queue.waiting());
+        assert_eq!(queue.frame_done(), None);
+        // Queuing again starts the wait over.
+        queue.queue(job.clone());
+        assert_eq!(queue.frame_done(), None);
+        queue.queue(job.clone());
+        assert_eq!(queue.frame_done(), None);
+        assert_eq!(queue.frame_done(), Some(job));
+    }
+
+    #[test]
+    fn only_old_regular_printed_files_of_the_user_are_removed() {
+        use std::time::{Duration, SystemTime};
+        let dir = std::env::temp_dir().join(format!("stale-prints-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now();
+        let make = |name: &str, age_hours: u64| {
+            let path = dir.join(name);
+            let file = std::fs::File::create(&path).unwrap();
+            file.set_modified(now - Duration::from_secs(age_hours * 3600))
+                .unwrap();
+            path
+        };
+        let old = make("sketchup-alt-print-1-0.pdf", 25);
+        let fresh = make("sketchup-alt-print-1-1.pdf", 23);
+        let other_name = make("notes.pdf", 100);
+        let other_ext = make("sketchup-alt-print-1-2.txt", 100);
+        let folder = dir.join("sketchup-alt-print-1-3.pdf");
+        std::fs::create_dir(&folder).unwrap();
+        #[cfg(unix)]
+        let link = {
+            let target = make("target.dat", 100);
+            let link = dir.join("sketchup-alt-print-1-4.pdf");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            link
+        };
+        assert_eq!(remove_stale_prints(&dir, now, file_owner(&fresh)), 1);
+        assert!(!old.exists());
+        for kept in [&fresh, &other_name, &other_ext, &folder] {
+            assert!(kept.exists(), "{kept:?}");
+        }
+        #[cfg(unix)]
+        assert!(std::fs::symlink_metadata(&link).is_ok(), "a link is left");
+        // Another user's file is left alone.
+        let theirs = make("sketchup-alt-print-2-0.pdf", 48);
+        let me = file_owner(&theirs).unwrap_or(0);
+        if cfg!(unix) {
+            assert_eq!(remove_stale_prints(&dir, now, Some(me.wrapping_add(1))), 0);
+            assert!(theirs.exists());
+        }
+        assert_eq!(remove_stale_prints(&dir, now, Some(me)), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

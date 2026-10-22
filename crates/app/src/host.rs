@@ -294,13 +294,9 @@ impl Host for AppHost<'_> {
                 EditorCommand::CutSelection {} => editor.cut()?,
                 EditorCommand::PasteClipboard { at } => editor.paste(at)?,
                 EditorCommand::PasteInPlace {} => editor.paste_in_place()?,
-                // The dispatcher prints: it needs the renderer and reports the pages.
-                EditorCommand::ExportPdf { .. } => {
-                    return Err(CommandError::new(
-                        ErrorKind::InvalidInput,
-                        "export_pdf runs through execute",
-                    ));
-                }
+                // `api::call` prints (it needs the renderer and reports the pages) and never
+                // sends this here.
+                EditorCommand::ExportPdf { .. } => unreachable!("api::call runs export_pdf"),
             }
             Ok(())
         })
