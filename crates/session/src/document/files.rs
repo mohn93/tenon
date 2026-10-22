@@ -180,19 +180,7 @@ impl Document {
         let name = path.display().to_string();
         check_nul(path)?;
         let opened = file::read(path).map_err(|e| file_error(&name, e))?;
-        let c = opened.camera;
-        let camera = self
-            .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
-            .unwrap_or_else(|_| Camera::new(self.camera.viewport));
-        self.replace(opened.scene, camera);
-        self.units = opened.units;
-        self.lighting = c.lighting;
-        self.color_by_tag = c.color_by_tag;
-        self.section_display = SectionDisplay {
-            planes: c.section_planes,
-            cuts: c.section_cuts,
-            fill: c.section_fill,
-        };
+        self.apply_opened(opened);
         self.path = None;
         self.library_info = crate::library::info_of(path);
         // The revision before the model was replaced, which it never returns to.
@@ -455,7 +443,7 @@ impl Document {
 
     /// Exports the model in `format` as bytes, as `export` writes a file (this is the web's
     /// export, where there are no paths). `stem` is the file name without extension, which an
-    /// OBJ with painted faces uses to name its material library (`<stem>.mtl`). `scale` is for
+    /// OBJ with painted faces uses to name its material library (`<stem>.mtl`); empty means "model", and a path separator is `invalid_input`. `scale` is for
     /// SVG as in `export`. The result holds the file's bytes, the files an OBJ names beside it
     /// (its `.mtl` and the texture images) and the report.
     pub fn export_bytes(
@@ -464,6 +452,13 @@ impl Document {
         stem: &str,
         scale: Option<f64>,
     ) -> Result<ExportedBytes, CommandError> {
+        let stem = if stem.is_empty() { "model" } else { stem };
+        if stem.contains(['/', '\\', '\0']) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "the file name must not contain a path separator",
+            ));
+        }
         self.check_export_scale(format, scale)?;
         match format {
             ExportFormat::Skp => {

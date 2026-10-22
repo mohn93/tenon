@@ -206,15 +206,28 @@ fn import_bytes_equals_import_of_the_path() {
 #[test]
 fn import_bytes_reads_no_material_library_and_checks_the_name() {
     let mut d = doc();
-    let obj = "mtllib quad.mtl\nusemtl red\nv 0 0 0\nv 1 0 0\nv 1 1 0\nf 1 2 3\n";
-    // A library of that name in the working directory is not read.
+    // A library beside the working folder, which a path import of the same text would find.
+    let lib = format!("bytes-probe-{}.mtl", std::process::id());
+    std::fs::write(&lib, "newmtl red\nKd 1 0 0\n").unwrap();
+    let obj = format!("mtllib {lib}\nusemtl red\nv 0 0 0\nv 1 0 0\nv 1 1 0\nf 1 2 3\n");
     let outcome = d
         .import_bytes(
             "quad.obj",
-            obj.as_bytes().to_vec(),
+            obj.clone().into_bytes(),
             &ImportOptions::default(),
         )
         .unwrap();
+    // The same text next to its library does make the material, so the library was findable.
+    let beside = std::env::current_dir().unwrap().join("bytes-probe.obj");
+    std::fs::write(&beside, &obj).unwrap();
+    let mut by_path = doc();
+    let found = run(
+        &mut by_path,
+        json!({"type": "import", "path": path_str(&beside)}),
+    );
+    let _ = std::fs::remove_file(&beside);
+    let _ = std::fs::remove_file(&lib);
+    assert_eq!(found.unwrap()["import"]["materials"], 1);
     assert_eq!(
         serde_json::to_value(&outcome).unwrap()["import"]["materials"],
         0
@@ -308,4 +321,20 @@ fn export_bytes_refuses_what_export_refuses() {
             .kind,
         ErrorKind::InvalidInput
     );
+}
+
+#[test]
+fn export_bytes_names_the_library_after_the_stem_and_refuses_paths() {
+    let mut d = doc();
+    boxed(&mut d);
+    assert!(d.export_bytes(ExportFormat::Obj, "", None).is_ok());
+    for bad in ["../x", "a/b", "a\\b"] {
+        assert_eq!(
+            d.export_bytes(ExportFormat::Obj, bad, None)
+                .unwrap_err()
+                .kind,
+            ErrorKind::InvalidInput,
+            "{bad}"
+        );
+    }
 }

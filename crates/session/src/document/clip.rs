@@ -134,9 +134,14 @@ pub(super) fn new_token() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
+    // The web has no process id (asking for it traps): the time and the count tell documents
+    // apart there.
+    #[cfg(target_arch = "wasm32")]
+    let process = 0;
+    #[cfg(not(target_arch = "wasm32"))]
+    let process = std::process::id();
     format!(
-        "{:x}-{nanos:x}-{:x}",
-        std::process::id(),
+        "{process:x}-{nanos:x}-{:x}",
         NEXT.fetch_add(1, Ordering::Relaxed)
     )
 }

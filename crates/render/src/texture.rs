@@ -168,7 +168,8 @@ impl TextureArray {
             size: wgpu::Extent3d {
                 width: side,
                 height: side,
-                depth_or_array_layers: images.len().max(1) as u32,
+                // At least two layers: WebGL2 cannot view a one-layer array as a 2D array.
+                depth_or_array_layers: images.len().max(2) as u32,
             },
             mip_level_count: levels,
             sample_count: 1,

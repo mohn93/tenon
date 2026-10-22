@@ -46,7 +46,8 @@ const EDGE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![
 pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
     #[cfg(target_arch = "wasm32")]
     let defaults = if adapter.get_info().backend == wgpu::Backend::Gl {
-        wgpu::Limits::downlevel_webgl2_defaults()
+        // The adapter's own texture size, so canvases past 2048 px work.
+        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
     } else {
         wgpu::Limits::default()
     };
