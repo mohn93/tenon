@@ -449,6 +449,26 @@ edge colour. Closed cuts are filled dark grey (`#3a3a3a`) at the plane, showing 
 fill. The fill and cut edges are drawn nearer than faces lying in the plane. With `cuts` off
 geometry is drawn whole and nothing is filled; with `fill` off only the cut edges are drawn.
 
+Picking and inference ignore what an active plane cuts away: in each placement, a face is not
+picked, hovered, or snapped to (nor does it hide anything behind it) where the ray meets it on the
+cut-away side of any plane cutting that placement (its own mesh's active plane and its ancestors'),
+a vertex on that side is not an endpoint or box-selected, and an edge is not picked or snapped to
+where its nearest point lies there (an edge wholly cut away is not found at all; `pick` leaves such
+faces, edges and points out too). Faces on the plane are kept. With `cuts` off nothing is left out.
+A section plane is picked by its outline (like a dimension), and a box selects it by its outline
+(crossing) or by all four corners (inside); a double-click selects it alone.
+
+In the window, the Section Plane tool (Tools menu and the rail; no key) previews a square under the
+cursor: on the face under it (the face's normal, turned to face the camera) or, over no face, on
+the ground; an arrow key locks the normal to the red (Right), green (Left) or blue (Up) axis (the
+same key again, or Escape, unlocks), and a click places the plane through the clicked point with
+`add_section_plane` (active, one undo step). Right-clicking in the view with a section plane
+selected opens its context menu: Flip (`flip_section_plane`) and Active Cut, checked while the
+plane is active (`activate_section_plane` when checked, `deactivate_section` when cleared). The
+View menu has Section Planes, Section Cuts and Section Fill checkboxes (`set_section_display`).
+Entity Info for a single plane shows "Section Plane", "Active" or "Not active", its point and its
+normal.
+
 Files keep planes, each mesh's active plane and the display (schema 13, see Files). Every export
 format leaves planes out (see Export), and a SketchUp file's section planes are not imported.
 
@@ -972,8 +992,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `polygon`, `arc`, `push_pull`, `move`,
-  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `dimension`, `text`, `erase` or
-  `paint`. The editor starts in the Select tool.
+  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `dimension`, `text`, `erase`, `paint`
+  or `section_plane`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
@@ -1604,6 +1624,7 @@ under a pixel and where a click would snap.
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | Drawing by dragging (Line, Rectangle, Circle, Polygon, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
+| Tools > Section Plane (rail; no key): click a face or the ground, arrow keys lock the normal to an axis; right-click a selected plane: Flip, Active Cut; View > Section Planes, Section Cuts, Section Fill; Entity Info of a plane | `tool_input` (`click`, arrow `key`s) or `add_section_plane`; `flip_section_plane`, `activate_section_plane`, `deactivate_section`; `set_section_display`; `section_planes`, `section_display`, `entity` |
 | Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Follow Me (select the path, click the face), Tape Measure, Dimension (Ctrl: diameter or radius), Text (and its note sheet), Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `follow_me` (`face`, `path`), `add_guide_line` / `add_guide_point`, `add_dimension`, `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |
 | Select: double-click a note, then its text in the note sheet | `change_note` |

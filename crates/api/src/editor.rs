@@ -29,6 +29,7 @@ pub enum ToolName {
     Text,
     Erase,
     Paint,
+    SectionPlane,
 }
 
 impl From<ToolKind> for ToolName {
@@ -51,6 +52,7 @@ impl From<ToolKind> for ToolName {
             ToolKind::Text => ToolName::Text,
             ToolKind::Erase => ToolName::Erase,
             ToolKind::Paint => ToolName::Paint,
+            ToolKind::SectionPlane => ToolName::SectionPlane,
         }
     }
 }
@@ -75,6 +77,7 @@ impl From<ToolName> for ToolKind {
             ToolName::Text => ToolKind::Text,
             ToolName::Erase => ToolKind::Erase,
             ToolName::Paint => ToolKind::Paint,
+            ToolName::SectionPlane => ToolKind::SectionPlane,
         }
     }
 }

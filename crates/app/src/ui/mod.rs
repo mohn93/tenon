@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use egui::{Panel, Ui};
 use kernel::{DefinitionId, EntityId, PageId, TagId, TexturePlacement};
-use session::{Camera, Lighting, MaterialId, OutlinerTable, Projection, StandardView, Units};
+use session::{
+    Camera, Lighting, MaterialId, OutlinerTable, Projection, SectionDisplay, StandardView, Units,
+};
 use tools::ToolKind;
 
 use crate::editor::{ImportOptions, RenameTarget, SelectionTag, Status};
@@ -120,6 +122,18 @@ pub enum UiAction {
     SetTextureSize(MaterialId, [u32; 2]),
     /// Draw faces in their tags' colors, or by their materials.
     SetColorByTag(bool),
+    /// Show or hide the section planes (View > Section Planes).
+    SetSectionPlanes(bool),
+    /// Cut or not the geometry the active section planes cut away (View > Section Cuts).
+    SetSectionCuts(bool),
+    /// Fill the cuts or not (View > Section Fill).
+    SetSectionFill(bool),
+    /// The selected section plane's context menu: negate its normal.
+    FlipSection,
+    /// The selected section plane's context menu: make it the active cut, or clear it.
+    SetSectionActive(bool),
+    /// Close the section plane's context menu.
+    CloseSectionMenu,
     AddTag,
     /// Delete a tag: at once when nothing is on it, otherwise after asking where what is on it
     /// goes (the Delete Tag sheet).
@@ -322,6 +336,10 @@ pub struct View<'a> {
     pub tags: &'a [TagRow],
     /// Whether faces are drawn in their tags' colors.
     pub color_by_tag: bool,
+    /// Whether section planes are drawn, cut and filled (checked in the View menu).
+    pub section_display: SectionDisplay,
+    /// The context menu over the selected section plane, while it is open.
+    pub section_menu: Option<SectionMenu>,
     /// Every scene, in order: the scene tabs show while there is one.
     pub scenes: &'a [SceneRow],
     /// How many times the document was replaced (`Editor::documents`): what a panel holds by
@@ -368,6 +386,14 @@ pub struct View<'a> {
     pub settings: Option<SettingsView>,
     /// What the Recover Models window lists; Some while it is open.
     pub recover: Option<RecoverView<'a>>,
+}
+
+/// The context menu of the selected section plane: where it opened (points) and whether the
+/// plane is the active cut (Active Cut is checked).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SectionMenu {
+    pub at: egui::Pos2,
+    pub active: bool,
 }
 
 /// What the Recover Models window lists.
@@ -521,6 +547,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     if let Some(angle) = view.soften {
         dialogs::soften_window(ui, angle, actions);
+    }
+    if let Some(menu) = view.section_menu {
+        dialogs::section_menu(ui, menu, actions);
     }
     if let Some(log) = view.agents.log {
         dialogs::agent_activity(ui, &view.agents, log, actions);

@@ -34,6 +34,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     let mut guides = Vec::new();
+    let mut sections = Vec::new();
     let (mut dimensions, mut notes) = (0, 0);
     let mut annotation = None;
     for id in doc.selection() {
@@ -50,25 +51,37 @@ fn selection_info(doc: &Document) -> Vec<String> {
                 notes += 1;
                 annotation = Some(*id);
             }
-            // Section planes have no entity info yet.
-            EntityId::Vertex(_) | EntityId::Section(_) => {}
+            EntityId::Section(s) => sections.push(*s),
+            EntityId::Vertex(_) => {}
         }
     }
     let annotations = dimensions + notes;
+    if let ([], [], [], [], [s], 0) = (
+        &edges[..],
+        &faces[..],
+        &instances[..],
+        &guides[..],
+        &sections[..],
+        annotations,
+    ) {
+        return section_info(doc, *s);
+    }
     if annotations == 1
         && edges.is_empty()
         && faces.is_empty()
         && instances.is_empty()
         && guides.is_empty()
+        && sections.is_empty()
         && let Some(id) = annotation
     {
         return annotation_info(doc, id);
     }
-    if let ([], [], [], [g], 0) = (
+    if let ([], [], [], [g], [], 0) = (
         &edges[..],
         &faces[..],
         &instances[..],
         &guides[..],
+        &sections[..],
         annotations,
     ) {
         let xyz = |v: glam::DVec3| v.to_array().map(number).join(", ");
@@ -92,9 +105,10 @@ fn selection_info(doc: &Document) -> Vec<String> {
             None => Vec::new(),
         };
     }
-    // Guides and annotations: neither is described with other entities.
+    // Guides, section planes and annotations: none is described with other entities.
     let guides = guides.len();
-    let others = guides + annotations;
+    let planes = sections.len();
+    let others = guides + planes + annotations;
     if instances.is_empty()
         && faces.is_empty()
         && others == 0
@@ -149,6 +163,9 @@ fn selection_info(doc: &Document) -> Vec<String> {
             if guides > 0 {
                 parts.push(count(guides, "guide"));
             }
+            if planes > 0 {
+                parts.push(count(planes, "section plane"));
+            }
             if dimensions > 0 {
                 parts.push(count(dimensions, "dimension"));
             }
@@ -158,6 +175,27 @@ fn selection_info(doc: &Document) -> Vec<String> {
             vec![parts.join(", ")]
         }
     }
+}
+
+/// A single section plane: "Section Plane", whether it is the open context's active plane,
+/// its point and its unit normal (the side it points to is kept).
+fn section_info(doc: &Document, id: kernel::SectionId) -> Vec<String> {
+    let m = doc.model();
+    let Some(plane) = m.section(id) else {
+        return Vec::new();
+    };
+    let place = plane.point.to_array().map(format_length).join(", ");
+    let n = plane.normal.to_array().map(number);
+    vec![
+        "Section Plane".into(),
+        if m.active_section() == Some(id) {
+            "Active".into()
+        } else {
+            "Not active".into()
+        },
+        format!("Point: {place}"),
+        format!("Normal: {}, {}, {}", n[0], n[1], n[2]),
+    ]
 }
 
 /// The kind and label text of the dimension or note `id` of the open context: "1 linear
@@ -702,5 +740,50 @@ mod tests {
             ],
         );
         assert_eq!(entity_info(&d), ["1 face, 1 dimension, 2 notes"]);
+    }
+
+    #[test]
+    fn describes_a_section_plane_active_or_not() {
+        let mut d = doc_with_square();
+        let first = create(
+            &mut d,
+            Command::AddSectionPlane {
+                point: [1.0, 0.0, 0.5],
+                normal: [0.0, 0.0, 2.0],
+                activate: Some(true),
+            },
+        );
+        let second = create(
+            &mut d,
+            Command::AddSectionPlane {
+                point: [0.0, 0.0, 0.0],
+                normal: [1.0, 0.0, 0.0],
+                activate: Some(false),
+            },
+        );
+        let show = |d: &mut Document, ids: &[EntityId]| {
+            let ids: Vec<String> = ids.iter().map(ToString::to_string).collect();
+            select(d, &ids.iter().map(String::as_str).collect::<Vec<_>>());
+            entity_info(d)
+        };
+        assert_eq!(
+            show(&mut d, &[first]),
+            [
+                "Section Plane",
+                "Active",
+                "Point: 1 m, 0 m, 0.5 m",
+                "Normal: 0, 0, 1"
+            ]
+        );
+        assert_eq!(
+            show(&mut d, &[second]),
+            [
+                "Section Plane",
+                "Not active",
+                "Point: 0 m, 0 m, 0 m",
+                "Normal: 1, 0, 0"
+            ]
+        );
+        assert_eq!(show(&mut d, &[first, second]), ["2 section planes"]);
     }
 }

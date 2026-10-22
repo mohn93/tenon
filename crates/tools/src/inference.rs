@@ -265,11 +265,10 @@ fn snap_point(
         offer(p, SnapKind::Endpoint, vec![(k, EntityId::Vertex(v))]);
     }
     for &(k, e, a, b) in &near.segments {
-        offer(
-            (a + b) * 0.5,
-            SnapKind::Midpoint,
-            vec![(k, EntityId::Edge(e))],
-        );
+        let middle = (a + b) * 0.5;
+        if scenery.part(k).kept(middle) {
+            offer(middle, SnapKind::Midpoint, vec![(k, EntityId::Edge(e))]);
+        }
     }
     offer(DVec3::ZERO, SnapKind::Origin, Vec::new());
     let guides = scenery.guides();
@@ -328,6 +327,9 @@ fn snap_point(
         for cd in &lines[i + 1..] {
             if let Some((p, far, ab_nearer)) = apparent_crossing(camera, ab, cd)
                 && let Some(dist) = near_enough(p)
+                && [ab.who, cd.who]
+                    .iter()
+                    .all(|&(k, id)| !matches!(id, EntityId::Edge(_)) || scenery.part(k).kept(p))
             {
                 let involved = if ab_nearer {
                     vec![ab.who, cd.who]
@@ -349,6 +351,9 @@ fn snap_point(
         .iter()
         .filter_map(|&(k, e, a, b)| {
             let p = closest_on_line_to_ray(a, b - a, &ray, true);
+            if !scenery.part(k).kept(p) {
+                return None;
+            }
             near_enough(p).map(|d| (d, (p, (k, EntityId::Edge(e)))))
         })
         .collect();
@@ -429,7 +434,7 @@ pub fn label_under(
         .map(|l| (l.owner, l.id))
 }
 
-/// The visible dimension or leader note whose lines pass nearest the cursor on screen, within
+/// The visible dimension, leader note or section plane whose lines pass nearest the cursor on screen, within
 /// `radius_px`, among those whose owner passes `keep`: whose it is and the annotation (an id
 /// in its own mesh). Screen notes have no lines; their labels pick them (`label_under`).
 pub fn annotation_under_where(
@@ -441,17 +446,26 @@ pub fn annotation_under_where(
 ) -> Option<(Owner, EntityId)> {
     let ray = camera.ray(cursor);
     let projector = camera.projector();
-    // Annotations are few, so they are scanned, not indexed.
-    let candidates = scenery
+    // Annotations and section planes (by their outlines) are few, so they are scanned, not
+    // indexed.
+    let lines = scenery
         .annotations()
         .iter()
+        .map(|(part, id, shape)| (*part, *id, shape.segments()))
+        .chain(
+            scenery
+                .sections()
+                .iter()
+                .map(|(part, id, shape)| (*part, *id, shape.segments().to_vec())),
+        );
+    let candidates = lines
         .filter(|(part, ..)| keep(scenery.part(*part).owner))
-        .flat_map(|(part, id, shape)| {
-            let owner = scenery.part(*part).owner;
-            shape
-                .segments()
+        .flat_map(|(part, id, segments)| {
+            let owner = scenery.part(part).owner;
+            let ray = &ray;
+            segments
                 .into_iter()
-                .map(move |[a, b]| (closest_on_line_to_ray(a, b - a, &ray, true), owner, *id))
+                .map(move |[a, b]| (closest_on_line_to_ray(a, b - a, ray, true), owner, id))
         })
         .filter_map(|(p, owner, id)| {
             let d = projector.project(p)?.distance(cursor);
@@ -592,6 +606,9 @@ pub fn edge_under_where(
                 return None;
             }
             let p = closest_on_line_to_ray(a, b - a, &ray, true);
+            if !scenery.part(part).kept(p) {
+                return None;
+            }
             let d = projector.project(p)?.distance(cursor);
             (d <= radius_px).then_some((d, (owner, id, a, b, p)))
         })
@@ -637,12 +654,15 @@ impl Near {
                 local.slope,
                 |s| match *s {
                     Shape::Point(v, p) => {
-                        if part.shows_vertex(v) {
+                        if part.shows_vertex(v) && part.kept(at(p)) {
                             near.points.push((k, v, at(p)));
                         }
                     }
                     Shape::Segment(e, a, b) => {
-                        if part.model.edge(e).is_some_and(|edge| !edge.soft) && part.shows_edge(e) {
+                        if part.model.edge(e).is_some_and(|edge| !edge.soft)
+                            && part.shows_edge(e)
+                            && !part.cuts_away(&[at(a), at(b)])
+                        {
                             near.segments.push((k, e, at(a), at(b)));
                         }
                     }
@@ -808,12 +828,12 @@ impl<'s> Sight<'s> {
                 && part
                     .model
                     .index()
-                    .ray_hit_where(
+                    .ray_hit_at(
                         part.back.transform_point3(eye),
                         part.back.transform_vector3(dir),
                         from,
                         reach,
-                        |f| part.shows_face(f),
+                        |f, t| part.shows_face(f) && part.kept(eye + dir * t),
                     )
                     .is_some()
         };
@@ -872,12 +892,12 @@ fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVe
         if !part.may_meet_ray(ray.origin, ray.dir, reach) {
             continue;
         }
-        if let Some((f, t)) = part.model.index().ray_hit_where(
+        if let Some((f, t)) = part.model.index().ray_hit_at(
             part.back.transform_point3(ray.origin),
             part.back.transform_vector3(ray.dir),
             from,
             reach,
-            |f| part.shows_face(f),
+            |f, t| part.shows_face(f) && part.kept(ray.origin + ray.dir * t),
         ) && best.is_none_or(|(bt, _, _)| t < bt)
         {
             best = Some((t, k, f));

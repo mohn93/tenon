@@ -51,6 +51,7 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::TapeMeasure => ph::RULER,
         ToolKind::Dimension => ph::ARROWS_HORIZONTAL,
         ToolKind::Text => ph::TEXT_T,
+        ToolKind::SectionPlane => ph::SQUARE_HALF,
     }
 }
 

@@ -2033,3 +2033,75 @@ fn dimensions_and_notes_inside_an_opened_moved_group_anchor_to_its_vertices() {
         "{r}"
     );
 }
+
+/// The section planes of the open context.
+fn planes(e: &mut Editor) -> Vec<Value> {
+    ask(e, json!({"type": "section_planes"}))["planes"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn the_section_plane_tool_places_an_active_plane_on_the_ground_facing_the_camera() {
+    let mut e = editor();
+    tool(&mut e, "section_plane");
+    assert_eq!(
+        ask(&mut e, json!({"type": "editor"}))["tool"],
+        "section_plane"
+    );
+    let r = input(&mut e, json!([{"type": "click", "point": [5, 4, 0]}]));
+    assert_eq!(ran(&r), ["add_section_plane"], "{r}");
+    let planes = planes(&mut e);
+    assert_eq!(planes.len(), 1);
+    assert_eq!(planes[0]["active"], true);
+    assert!(near(&planes[0]["point"], [5.0, 4.0, 0.0]));
+    // The ground's normal is vertical, turned to the camera above it.
+    assert!(
+        near(&planes[0]["normal"], [0.0, 0.0, 1.0]),
+        "{:?}",
+        planes[0]
+    );
+    // One undo step.
+    exec(&mut e, json!({"type": "undo"}));
+    assert!(super::tool_input_tests::planes(&mut e).is_empty());
+}
+
+#[test]
+fn the_section_plane_tool_takes_a_faces_normal_turned_to_the_camera() {
+    let mut e = editor();
+    cube(&mut e);
+    tool(&mut e, "section_plane");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 1]}]));
+    assert_eq!(ran(&r), ["add_section_plane"], "{r}");
+    let plane = planes(&mut e).remove(0);
+    let (point, normal) = (vec3(&plane["point"]), vec3(&plane["normal"]));
+    assert!(near(&plane["normal"], [0.0, 0.0, 1.0]) || near(&plane["normal"], [0.0, 0.0, -1.0]));
+    let camera = ask(&mut e, json!({"type": "camera"}));
+    let eye = vec3(&camera["eye"]);
+    assert!(normal.dot(eye - point) > 0.0, "faces the camera: {plane}");
+}
+
+#[test]
+fn arrow_keys_lock_the_section_planes_normal_and_escape_unlocks() {
+    let mut e = editor();
+    cube(&mut e);
+    tool(&mut e, "section_plane");
+    let key = |e: &mut Editor, k: &str| input(e, json!([{"type": "key", "key": k}]));
+    assert_eq!(key(&mut e, "right")["editor"]["lock"], "Locked: red axis");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 1]}]));
+    assert_eq!(ran(&r), ["add_section_plane"], "{r}");
+    let normal = vec3(&planes(&mut e)[0]["normal"]);
+    assert!((normal.x.abs() - 1.0).abs() < 1e-9, "{normal}");
+    // The lock lasts across placements; up locks blue, Escape clears it.
+    assert_eq!(key(&mut e, "up")["editor"]["lock"], "Locked: blue axis");
+    assert_eq!(key(&mut e, "escape")["editor"]["lock"], Value::Null);
+    input(&mut e, json!([{"type": "click", "point": [0.5, 0.5, 1]}]));
+    let placed = planes(&mut e);
+    assert_eq!(placed.len(), 2);
+    assert_eq!(
+        placed.iter().filter(|p| p["active"] == true).count(),
+        1,
+        "the new plane is the active one"
+    );
+}

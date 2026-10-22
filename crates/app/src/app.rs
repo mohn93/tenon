@@ -39,8 +39,8 @@ use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, RecoverRow, RecoverView, SceneRow, SettingsView, Sheet, StartCard, TagRow,
-    TexturePosition, TextureRow, UiAction, View,
+    Agents, MaterialRow, RecoverRow, RecoverView, SceneRow, SectionMenu, SettingsView, Sheet,
+    StartCard, TagRow, TexturePosition, TextureRow, UiAction, View,
 };
 use crate::ui::{theme, viewport};
 
@@ -765,6 +765,9 @@ struct State {
     /// Where the left button was last pressed in the view, so a release that ends a drag does
     /// not count as a click.
     left_press: Option<DVec2>,
+    /// Where the context menu of the selected section plane was opened (points), while it is
+    /// open.
+    section_menu: Option<egui::Pos2>,
     /// Whether the window has keyboard focus.
     focused: bool,
     /// How fly mode holds the pointer now.
@@ -997,6 +1000,7 @@ impl State {
             #[cfg(target_os = "macos")]
             edited: false,
             left_press: None,
+            section_menu: None,
             focused: true,
             capture: Capture::Free,
             look_held: false,
@@ -1668,6 +1672,22 @@ impl State {
             UiAction::SetColorByTag(on) => {
                 self.editor.set_color_by_tag(on);
             }
+            UiAction::SetSectionPlanes(on) => {
+                self.editor.set_section_display(Some(on), None, None);
+            }
+            UiAction::SetSectionCuts(on) => {
+                self.editor.set_section_display(None, Some(on), None);
+            }
+            UiAction::SetSectionFill(on) => {
+                self.editor.set_section_display(None, None, Some(on));
+            }
+            UiAction::FlipSection => {
+                self.editor.flip_selected_section();
+            }
+            UiAction::SetSectionActive(on) => {
+                self.editor.set_selected_section_active(on);
+            }
+            UiAction::CloseSectionMenu => self.section_menu = None,
             UiAction::AddTag => {
                 self.editor.add_tag();
             }
@@ -2047,6 +2067,13 @@ impl State {
             material: self.editor.current_material(),
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
+            section_display: self.editor.doc().section_display,
+            section_menu: self.section_menu.zip(self.editor.selected_section()).map(
+                |(at, selected)| SectionMenu {
+                    at,
+                    active: selected.active,
+                },
+            ),
             scenes: &scenes,
             documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
@@ -3013,6 +3040,19 @@ impl ApplicationHandler<AppEvent> for App {
                     s.look_held = state == ElementState::Pressed && s.pointer_in_view();
                 }
                 false
+            }
+            // Right-clicking a selected section plane opens its context menu.
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Right,
+                ..
+            } if s.pointer_in_view() && s.editor.selected_section().is_some() => {
+                let ppp = f64::from(s.gui.pixels_per_point());
+                s.section_menu = Some(egui::pos2(
+                    (s.cursor.x / ppp) as f32,
+                    (s.cursor.y / ppp) as f32,
+                ));
+                true
             }
             // Presses go to the view only when they land in it; releases always do, so a drag
             // that ends over a panel still finishes.

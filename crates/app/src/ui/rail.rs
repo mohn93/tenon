@@ -29,7 +29,12 @@ pub const GROUPS: [&[ToolKind]; 4] = [
         ToolKind::Offset,
         ToolKind::FollowMe,
     ],
-    &[ToolKind::TapeMeasure, ToolKind::Dimension, ToolKind::Text],
+    &[
+        ToolKind::TapeMeasure,
+        ToolKind::Dimension,
+        ToolKind::Text,
+        ToolKind::SectionPlane,
+    ],
 ];
 
 /// The side of the rail's buttons when `height` points are free for them: `RAIL_BUTTON`, or

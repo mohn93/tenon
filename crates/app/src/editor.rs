@@ -38,6 +38,7 @@ pub use input::{DriveError, Driven, Stopped};
 mod labels;
 mod notes;
 mod scenes;
+mod sections;
 mod soften;
 mod tags;
 mod texture_position;

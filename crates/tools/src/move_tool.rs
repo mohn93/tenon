@@ -8,6 +8,7 @@ use kernel::EntityId;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, MAX_COPIES};
 
+use crate::scenery::Owner;
 use crate::select::{box_outline, face_outline, guide_outline, pick, whole_curve};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_length, parse_array, parse_length};
@@ -109,8 +110,14 @@ pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
             // A screen note has no lines.
             EntityId::Dimension(_) | EntityId::Note(_) => out
                 .extend(session::AnnotationShape::of(m, *id).map_or(Vec::new(), |s| s.segments())),
-            // Section planes are not drawn by the tools yet.
-            EntityId::Vertex(_) | EntityId::Section(_) => {}
+            EntityId::Section(_) => out.extend(
+                ctx.scenery
+                    .sections()
+                    .iter()
+                    .filter(|(k, sid, _)| sid == id && ctx.scenery.part(*k).owner == Owner::Open)
+                    .flat_map(|(_, _, shape)| shape.segments()),
+            ),
+            EntityId::Vertex(_) => {}
         }
     }
     out

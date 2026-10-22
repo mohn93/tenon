@@ -222,6 +222,19 @@ impl Index {
         max_t: f64,
         keep: impl Fn(FaceId) -> bool,
     ) -> Option<(FaceId, f64)> {
+        self.ray_hit_at(origin, dir, min_t, max_t, |f, _| keep(f))
+    }
+
+    /// `ray_hit` among the hits `keep` passes, told the face and the `t` of the hit (one on a
+    /// cut-away side of a section plane, say, is passed by).
+    pub fn ray_hit_at(
+        &self,
+        origin: DVec3,
+        dir: DVec3,
+        min_t: f64,
+        max_t: f64,
+        keep: impl Fn(FaceId, f64) -> bool,
+    ) -> Option<(FaceId, f64)> {
         let mut best: Option<(FaceId, f64)> = None;
         let mut walk = Walk::new();
         while let Some(i) = walk.pop() {
@@ -241,7 +254,7 @@ impl Index {
                             && t > min_t
                             && t <= best.map_or(max_t, |(_, bt)| bt)
                             && best.is_none_or(|(_, bt)| t < bt)
-                            && keep(f)
+                            && keep(f, t)
                         {
                             best = Some((f, t));
                         }

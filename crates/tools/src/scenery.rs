@@ -12,10 +12,10 @@ use std::sync::OnceLock;
 use glam::{DAffine3, DMat3, DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{
-    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, TagId, VertexId,
-    tag_shown_among,
+    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, SectionPlane,
+    TagId, VertexId, tag_shown_among,
 };
-use session::{AnnotationShape, Camera};
+use session::{AnnotationShape, Camera, SectionShape};
 
 /// Whose geometry a part is, seen from the open context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +175,9 @@ pub struct Part<'s> {
     placed: &'s Placed,
     /// The tags hidden.
     hidden: &'s BTreeSet<TagId>,
+    /// The active section planes cutting the part (its own mesh's and its ancestors'), in the
+    /// open context's coordinates; empty when cuts are not applied.
+    cuts: &'s [SectionPlane],
 }
 
 impl Part<'_> {
@@ -195,6 +198,23 @@ impl Part<'_> {
     /// Whether the vertex shows: some edge or face using it does (see `Model::vertex_shown`).
     pub fn shows_vertex(&self, v: VertexId) -> bool {
         self.model.vertex_shown(v, self.hidden)
+    }
+}
+
+impl Part<'_> {
+    /// Whether the point `p` (in the open context's coordinates) is not cut away: every plane
+    /// cutting the part keeps it.
+    pub fn kept(&self, p: DVec3) -> bool {
+        self.cuts.iter().all(|c| c.keeps(p))
+    }
+
+    /// Whether some plane cutting the part cuts away all of the shape with these corner
+    /// points (in the open context's coordinates; a segment's ends, a face's vertices): all lie
+    /// on the cut-away side of it.
+    pub fn cuts_away(&self, points: &[DVec3]) -> bool {
+        self.cuts
+            .iter()
+            .any(|c| points.iter().all(|p| !c.keeps(*p)))
     }
 }
 
@@ -226,6 +246,13 @@ pub struct Layout {
     /// context's coordinates (a screen note as it is), with the index of the part it comes
     /// from, in part order, dimensions before notes, each in id order.
     annotations: Vec<(usize, EntityId, AnnotationShape)>,
+    /// Every section plane of every part not on a hidden tag, as the outline square the plane
+    /// is drawn with, placed in the open context's coordinates, with the index of the part it
+    /// comes from, in part and id order.
+    sections: Vec<(usize, EntityId, SectionShape)>,
+    /// The active section planes cutting each part (its own mesh's and its ancestors'), in the
+    /// open context's coordinates.
+    cuts: Vec<Vec<SectionPlane>>,
     /// The instances of the open context, by id, each with its box once asked for.
     boxes: Vec<(InstanceId, OnceLock<Option<[DVec3; 2]>>)>,
     /// The tags hidden: what is on them is not seen.
@@ -245,7 +272,7 @@ impl Layout {
             MeshId::Root,
             to_root.inverse(),
             context,
-            &mut Vec::new(),
+            &mut Trail::default(),
             &mut found,
         );
         // The open mesh first, then the others in walk order.
@@ -254,9 +281,11 @@ impl Layout {
         let mut meshes = Vec::new();
         let mut models = Vec::new();
         let mut paths = Vec::new();
+        let mut cuts = Vec::new();
         let parts = found
             .into_iter()
             .map(|f| {
+                cuts.push(f.cuts);
                 let mesh = *slots.entry(f.id).or_insert_with(|| {
                     meshes.push(f.id);
                     models.push(f.model);
@@ -266,7 +295,30 @@ impl Layout {
                 (mesh, f.place, f.owner)
             })
             .collect();
-        Some(Layout::new(meshes, &models, parts, paths, hidden))
+        let mut layout = Layout::new(meshes, &models, parts, paths, cuts, hidden);
+        // The section planes' squares, each mesh's side worked out once.
+        let sides: Vec<f64> = layout
+            .meshes
+            .iter()
+            .map(|id| SectionShape::side(scene.shown_bounds(*id, &[])))
+            .collect();
+        layout.sections = layout
+            .parts
+            .iter()
+            .enumerate()
+            .flat_map(|(k, part)| {
+                let hidden = &layout.hidden;
+                let side = sides[part.mesh];
+                models[part.mesh]
+                    .sections()
+                    .filter(move |(_, p)| tag_shown_among(hidden, p.tag()))
+                    .map(move |(id, p)| {
+                        let shape = SectionShape::new(p, side);
+                        (k, EntityId::Section(id), shape.transformed(part.place))
+                    })
+            })
+            .collect();
+        Some(layout)
     }
 
     /// A layout of `parts` (each the index of its mesh in `meshes`, its placement and its
@@ -276,6 +328,7 @@ impl Layout {
         models: &[&Model],
         parts: Vec<(usize, DAffine3, Owner)>,
         paths: Vec<Vec<InstanceId>>,
+        cuts: Vec<Vec<SectionPlane>>,
         hidden: BTreeSet<TagId>,
     ) -> Layout {
         let boxes: Vec<Option<[DVec3; 2]>> = models.iter().map(|m| mesh_box(m)).collect();
@@ -337,6 +390,8 @@ impl Layout {
             paths,
             guides,
             annotations,
+            sections: Vec::new(),
+            cuts,
             boxes: instances
                 .into_iter()
                 .map(|i| (i, OnceLock::new()))
@@ -359,6 +414,8 @@ pub struct Scenery<'a> {
     layout: Cow<'a, Layout>,
     /// When set, only what lies at this depth counts (see [`Slab`]).
     slab: Option<Slab>,
+    /// Whether the active section planes cut: what they cut away is not seen.
+    cuts: bool,
 }
 
 /// The depths around a model point the cursor stands for: what lies in front of the point or
@@ -427,7 +484,16 @@ impl<'a> Scenery<'a> {
     /// Just one mesh, open, in its own coordinates.
     pub fn single(model: &'a Model) -> Self {
         let parts = vec![(0, DAffine3::IDENTITY, Owner::Open)];
+        let cuts = vec![
+            model
+                .active_section()
+                .and_then(|s| model.section(s))
+                .copied()
+                .into_iter()
+                .collect(),
+        ];
         Scenery {
+            cuts: true,
             slab: None,
             models: vec![model],
             layout: Cow::Owned(Layout::new(
@@ -435,6 +501,7 @@ impl<'a> Scenery<'a> {
                 &[model],
                 parts,
                 vec![Vec::new()],
+                cuts,
                 BTreeSet::new(),
             )),
         }
@@ -448,6 +515,7 @@ impl<'a> Scenery<'a> {
             models: layout.models(scene)?,
             layout: Cow::Owned(layout),
             slab: None,
+            cuts: true,
         })
     }
 
@@ -459,12 +527,20 @@ impl<'a> Scenery<'a> {
             models: layout.models(scene)?,
             layout: Cow::Borrowed(layout),
             slab: None,
+            cuts: true,
         })
     }
 
     /// The same scenery seen only within `slab`: for a model point the cursor stands for.
     pub fn within(mut self, slab: Slab) -> Self {
         self.slab = Some(slab);
+        self
+    }
+
+    /// The same scenery with the active section planes cutting (the default) or not
+    /// (`session::SectionDisplay::cuts` off): what a plane cuts away is then seen like the rest.
+    pub fn cut(mut self, cuts: bool) -> Self {
+        self.cuts = cuts;
         self
     }
 
@@ -483,6 +559,18 @@ impl<'a> Scenery<'a> {
         self.layout.parts.is_empty()
     }
 
+    /// The planes cutting the `k`th part, none when cuts are off.
+    fn cuts_of(&self, k: usize) -> &[SectionPlane] {
+        if self.cuts { &self.layout.cuts[k] } else { &[] }
+    }
+
+    /// Every section plane of every part not on a hidden tag, as the outline square it is drawn
+    /// with, placed in the open context's coordinates, with the index of the part it comes
+    /// from (the plane's id is an `EntityId::Section` in that part's mesh).
+    pub fn sections(&self) -> &[(usize, EntityId, SectionShape)] {
+        &self.layout.sections
+    }
+
     /// The `k`th placed mesh.
     pub fn part(&self, k: usize) -> Part<'_> {
         let placed = &self.layout.parts[k];
@@ -490,16 +578,22 @@ impl<'a> Scenery<'a> {
             model: self.models[placed.mesh],
             placed,
             hidden: &self.layout.hidden,
+            cuts: self.cuts_of(k),
         }
     }
 
     /// Every placed mesh, the open context's first.
     pub fn parts(&self) -> impl ExactSizeIterator<Item = Part<'_>> + '_ {
-        self.layout.parts.iter().map(|placed| Part {
-            model: self.models[placed.mesh],
-            placed,
-            hidden: &self.layout.hidden,
-        })
+        self.layout
+            .parts
+            .iter()
+            .enumerate()
+            .map(|(k, placed)| Part {
+                model: self.models[placed.mesh],
+                placed,
+                hidden: &self.layout.hidden,
+                cuts: self.cuts_of(k),
+            })
     }
 
     /// The instances from the root down to the one placing the `k`th part (empty for the
@@ -570,10 +664,21 @@ struct Found<'a> {
     owner: Owner,
     /// The instances from the root down to the one placing it.
     path: Vec<InstanceId>,
+    /// The active section planes cutting it, in the open context's coordinates.
+    cuts: Vec<SectionPlane>,
+}
+
+/// Where `collect` has got to: the instances from the root down to the mesh being added, and
+/// the active section planes of the meshes on the way (the mesh's own last), in the open
+/// context's coordinates.
+#[derive(Default)]
+struct Trail {
+    path: Vec<InstanceId>,
+    cuts: Vec<SectionPlane>,
 }
 
 /// Adds the mesh `id`, placed by `place` (into the open context's coordinates) and reached by
-/// `path`, and everything it places, each with its owner. Instances on the tags `hidden` are
+/// `trail`, and everything it places, each with its owner. Instances on the tags `hidden` are
 /// left out with all they place, unless the open context is in them.
 fn collect<'a>(
     scene: &'a Scene,
@@ -581,14 +686,19 @@ fn collect<'a>(
     id: MeshId,
     place: DAffine3,
     context: &[InstanceId],
-    path: &mut Vec<InstanceId>,
+    trail: &mut Trail,
     found: &mut Vec<Found<'a>>,
 ) {
     let Some(model) = scene.mesh(id) else { return };
-    let owner = if path.as_slice() == context {
+    let plane = model
+        .active_section()
+        .and_then(|s| model.section(s))
+        .map(|p| p.transformed(place));
+    trail.cuts.extend(plane);
+    let owner = if trail.path.as_slice() == context {
         Owner::Open
-    } else if path.starts_with(context) {
-        Owner::Instance(path[context.len()])
+    } else if trail.path.starts_with(context) {
+        Owner::Instance(trail.path[context.len()])
     } else {
         Owner::Outside
     };
@@ -597,13 +707,14 @@ fn collect<'a>(
         model,
         place,
         owner,
-        path: path.clone(),
+        path: trail.path.clone(),
+        cuts: trail.cuts.clone(),
     });
     for (iid, instance) in model.instances() {
-        path.push(iid);
+        trail.path.push(iid);
         let shown = tag_shown_among(hidden, instance.tag);
-        if !shown && !context.starts_with(path) {
-            path.pop();
+        if !shown && !context.starts_with(&trail.path) {
+            trail.path.pop();
             continue;
         }
         collect(
@@ -612,10 +723,13 @@ fn collect<'a>(
             MeshId::Definition(instance.definition),
             place * instance.transform,
             context,
-            path,
+            trail,
             found,
         );
-        path.pop();
+        trail.path.pop();
+    }
+    if plane.is_some() {
+        trail.cuts.pop();
     }
 }
 

@@ -11,6 +11,7 @@ mod menus;
 mod outliner;
 mod recover;
 mod scenes;
+mod sections;
 mod settings;
 mod sheets;
 mod start;
@@ -26,13 +27,15 @@ use egui::{Pos2, Rect, Ui, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use kernel::{DefinitionKind, EntityId, TexturePlacement};
-use session::{Camera, Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection};
+use session::{
+    Camera, Lighting, MaterialId, OutlinerRow, OutlinerTable, Projection, SectionDisplay,
+};
 use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, RecoverRow, RecoverView, SceneRow, SettingsView,
-    Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction, View, draw,
+    Agents, DockLayout, DockTab, MaterialRow, RecoverRow, RecoverView, SceneRow, SectionMenu,
+    SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction, View, draw,
 };
 use crate::editor::{RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
@@ -57,6 +60,8 @@ pub(super) struct Fixture {
     pub material: Option<MaterialId>,
     pub tags: Vec<TagRow>,
     pub color_by_tag: bool,
+    pub section_display: SectionDisplay,
+    pub section_menu: Option<SectionMenu>,
     pub scenes: Vec<SceneRow>,
     /// How many times the document was replaced.
     pub documents: u64,
@@ -133,6 +138,8 @@ impl Default for Fixture {
             material: None,
             tags: Vec::new(),
             color_by_tag: false,
+            section_display: SectionDisplay::default(),
+            section_menu: None,
             scenes: Vec::new(),
             documents: 0,
             selection_tag: None,
@@ -194,6 +201,8 @@ impl Fixture {
             material: self.material,
             tags: &self.tags,
             color_by_tag: self.color_by_tag,
+            section_display: self.section_display,
+            section_menu: self.section_menu,
             scenes: &self.scenes,
             documents: self.documents,
             selection_tag: self.selection_tag,

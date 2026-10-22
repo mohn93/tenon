@@ -57,7 +57,10 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
         );
         // Normals go into the open context's coordinates by the inverse transpose.
         let normals = part.back.matrix3.transpose();
-        for (f, t) in faces.into_iter().filter(|(f, _)| part.shows_face(*f)) {
+        let faces = faces
+            .into_iter()
+            .filter(|(f, t)| part.shows_face(*f) && part.kept(ray.origin + ray.dir * *t));
+        for (f, t) in faces {
             let normal = part
                 .model
                 .face(f)
@@ -112,11 +115,10 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
         }
     };
     for (k, e, a, b) in Near::in_cone(scenery, cone).segments {
-        offer(
-            EntityId::Edge(e),
-            k,
-            closest_on_line_to_ray(a, b - a, ray, true),
-        );
+        let point = closest_on_line_to_ray(a, b - a, ray, true);
+        if scenery.part(k).kept(point) {
+            offer(EntityId::Edge(e), k, point);
+        }
     }
     for &(k, id, g) in scenery.guides() {
         let point = match g {
@@ -129,6 +131,21 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
     }
     // An annotation is met once, at the point of its lines nearest the ray.
     for (k, id, shape) in scenery.annotations() {
+        let off_ray = |p: &DVec3| {
+            let t = (*p - ray.origin).dot(ray.dir);
+            (*p - ray.origin - ray.dir * t).length()
+        };
+        let nearest = shape
+            .segments()
+            .into_iter()
+            .map(|[a, b]| closest_on_line_to_ray(a, b - a, ray, true))
+            .min_by(|p, q| off_ray(p).total_cmp(&off_ray(q)));
+        if let Some(point) = nearest {
+            offer(*id, *k, point);
+        }
+    }
+    // A section plane is met once, at the point of its outline nearest the ray.
+    for (k, id, shape) in scenery.sections() {
         let off_ray = |p: &DVec3| {
             let t = (*p - ray.origin).dot(ray.dir);
             (*p - ray.origin - ray.dir * t).length()

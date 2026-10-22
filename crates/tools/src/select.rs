@@ -106,7 +106,7 @@ fn bounded(model: &Model, id: EntityId) -> Vec<EntityId> {
                 }
             }
         }
-        EntityId::Guide(_) | EntityId::Dimension(_) | EntityId::Note(_) => {}
+        EntityId::Guide(_) | EntityId::Dimension(_) | EntityId::Note(_) | EntityId::Section(_) => {}
         _ => return Vec::new(),
     }
     ids.into_iter().collect()
@@ -244,7 +244,16 @@ pub fn select_box(
         }
     };
     let mut ids = Vec::new();
+    // What the open context's own and its ancestors' active section planes cut away is not
+    // selected.
+    let cut = scenery.part(0);
+    let world = |points: &[kernel::VertexId]| -> Vec<DVec3> {
+        points.iter().filter_map(|v| m.position(*v)).collect()
+    };
     for (id, e) in m.edges().filter(|(_, e)| scenery.shows(e.tag)) {
+        if cut.cuts_away(&world(&e.v)) {
+            continue;
+        }
         if screen(&e.v).is_some_and(|pts| chosen(false, &pts)) {
             ids.push(EntityId::Edge(id));
         }
@@ -267,6 +276,9 @@ pub fn select_box(
         let Some(corners) = box_corners(scenery, id) else {
             continue;
         };
+        if cut.cuts_away(&corners) {
+            continue;
+        }
         let Some(pts) = corners
             .iter()
             .map(|p| camera.project(*p))
@@ -333,7 +345,31 @@ pub fn select_box(
             ids.push(*id);
         }
     }
+    for (part, id, shape) in scenery.sections() {
+        if scenery.part(*part).owner != Owner::Open {
+            continue;
+        }
+        let hit = if window {
+            shape
+                .corners
+                .iter()
+                .all(|p| camera.project(*p).is_some_and(inside))
+        } else {
+            shape.segments().iter().any(|[p, q]| {
+                camera
+                    .project(*p)
+                    .zip(camera.project(*q))
+                    .is_some_and(|(p, q)| touches(p, q))
+            })
+        };
+        if hit {
+            ids.push(*id);
+        }
+    }
     for (id, f) in m.faces().filter(|(_, f)| scenery.shows(f.tag)) {
+        if cut.cuts_away(&world(&f.outer)) {
+            continue;
+        }
         let all = face_loops(f).all(|l| screen(l).is_some_and(|pts| !pts.is_empty()));
         let hit = if window {
             all && face_loops(f).all(|l| screen(l).is_some_and(|pts| chosen(true, &pts)))

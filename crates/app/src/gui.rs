@@ -154,6 +154,11 @@ impl Gui {
         wants_pointer_at(&self.ctx, pos)
     }
 
+    /// Physical pixels per point now: the window's scale factor times the UI scale.
+    pub fn pixels_per_point(&self) -> f32 {
+        self.ctx.pixels_per_point()
+    }
+
     /// True while a text field has focus (a focused button must not swallow editor keys).
     pub fn wants_keyboard(&self) -> bool {
         self.ctx.text_edit_focused()

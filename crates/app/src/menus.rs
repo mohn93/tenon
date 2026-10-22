@@ -180,6 +180,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::TapeMeasure,
         ToolKind::Dimension,
         ToolKind::Text,
+        ToolKind::SectionPlane,
         ToolKind::Erase,
         ToolKind::Paint,
     ]
@@ -281,6 +282,25 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             entries: theme,
         },
         Item::new("Agent Activity", UiAction::ShowAgentActivity(true)).entry(),
+        Entry::Separator,
+        Item::new(
+            "Section Planes",
+            UiAction::SetSectionPlanes(!view.section_display.planes),
+        )
+        .checked(view.section_display.planes)
+        .entry(),
+        Item::new(
+            "Section Cuts",
+            UiAction::SetSectionCuts(!view.section_display.cuts),
+        )
+        .checked(view.section_display.cuts)
+        .entry(),
+        Item::new(
+            "Section Fill",
+            UiAction::SetSectionFill(!view.section_display.fill),
+        )
+        .checked(view.section_display.fill)
+        .entry(),
         Entry::Separator,
         Item::new("Add Scene", UiAction::AddScene).entry(),
         bound_item(

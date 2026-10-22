@@ -1,8 +1,9 @@
-//! The Agent Activity, Keyboard Shortcuts and Soften Edges windows.
+//! The Agent Activity, Keyboard Shortcuts and Soften Edges windows, and the section plane's
+//! context menu.
 
 use egui::{RichText, Ui};
 
-use super::{Agents, UiAction, widgets};
+use super::{Agents, SectionMenu, UiAction, widgets};
 use crate::shortcuts::TABLE;
 
 /// The width of each of the Keyboard Shortcuts window's two columns, in points.
@@ -149,6 +150,53 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
     widgets::name_title_bar(ui.ctx(), &shown, title);
     if !open {
         actions.push(UiAction::ShowSoften(false));
+    }
+}
+
+/// The context menu over a selected section plane, at `menu.at`: Flip, and Active Cut (checked
+/// while the plane is the active one). It closes with a choice, Escape, or a press elsewhere.
+pub(super) fn section_menu(ui: &mut Ui, menu: SectionMenu, actions: &mut Vec<UiAction>) {
+    let area = egui::Area::new(egui::Id::new("section plane menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(menu.at)
+        .constrain(true)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                // egui senses clicks on the area (its layer's id with "move") without naming it.
+                widgets::name_egui_widget(
+                    ui.ctx(),
+                    ui.layer_id().id.with("move"),
+                    egui::accesskit::Role::Menu,
+                    || "Section Plane menu".into(),
+                );
+                if widgets::menu_item(ui, "Flip", None, true).clicked() {
+                    actions.push(UiAction::FlipSection);
+                    actions.push(UiAction::CloseSectionMenu);
+                }
+                let button = egui::Button::selectable(menu.active, "Active Cut");
+                let response = ui.add(button);
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        true,
+                        menu.active,
+                        "Active Cut",
+                    )
+                });
+                if response.clicked() {
+                    actions.push(UiAction::SetSectionActive(!menu.active));
+                    actions.push(UiAction::CloseSectionMenu);
+                }
+            });
+        });
+    let escaped = ui.ctx().input(|i| i.key_pressed(egui::Key::Escape));
+    let elsewhere = ui.ctx().input(|i| i.pointer.any_pressed())
+        && ui
+            .ctx()
+            .pointer_interact_pos()
+            .is_some_and(|p| !area.response.rect.contains(p));
+    if escaped || elsewhere {
+        actions.push(UiAction::CloseSectionMenu);
     }
 }
 

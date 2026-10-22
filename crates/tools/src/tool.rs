@@ -25,6 +25,7 @@ use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
 use crate::scale::ScaleTool;
 use crate::scenery::{Label, Scenery};
+use crate::section::SectionPlaneTool;
 use crate::select::SelectTool;
 use crate::tape::TapeMeasureTool;
 use crate::text::TextTool;
@@ -257,11 +258,12 @@ pub enum ToolKind {
     Text,
     Erase,
     Paint,
+    SectionPlane,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 17] = [
+    pub const ALL: [ToolKind; 18] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -279,6 +281,7 @@ impl ToolKind {
         ToolKind::Text,
         ToolKind::Erase,
         ToolKind::Paint,
+        ToolKind::SectionPlane,
     ];
 
     /// The tool with default settings.
@@ -309,6 +312,7 @@ impl ToolKind {
             ToolKind::Text => Box::new(TextTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
             ToolKind::Paint => Box::new(PaintTool::new()),
+            ToolKind::SectionPlane => Box::new(SectionPlaneTool::new()),
         }
     }
 
@@ -332,10 +336,11 @@ impl ToolKind {
             ToolKind::Text => "Text",
             ToolKind::Erase => "Erase",
             ToolKind::Paint => "Paint",
+            ToolKind::SectionPlane => "Section Plane",
         }
     }
 
-    /// The key that selects the tool, if it has one (the Dimension and Text tools have none).
+    /// The key that selects the tool, if it has one (the Dimension, Text and Section Plane tools have none).
     pub fn shortcut(self) -> Option<char> {
         Some(match self {
             ToolKind::Select => ' ',
@@ -351,7 +356,7 @@ impl ToolKind {
             ToolKind::Offset => 'o',
             ToolKind::FollowMe => 'j',
             ToolKind::TapeMeasure => 't',
-            ToolKind::Dimension | ToolKind::Text => return None,
+            ToolKind::Dimension | ToolKind::Text | ToolKind::SectionPlane => return None,
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',
         })
