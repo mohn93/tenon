@@ -4,7 +4,7 @@ use egui::{Color32, RichText, Ui, Vec2};
 use session::MaterialId;
 
 use super::widgets::{self, Fill, take_row};
-use super::{MaterialRow, UiAction, View, theme};
+use super::{LibrarySave, MaterialRow, UiAction, View, theme};
 use crate::editor::MATERIAL_PALETTE;
 
 /// The default material's swatch: its front color.
@@ -85,6 +85,16 @@ fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     else {
         return;
     };
+    let enabled = view.library.folder.is_some();
+    let save = ui.add_enabled(enabled, egui::Button::new("Save to Library"));
+    let save = if enabled {
+        save
+    } else {
+        save.on_disabled_hover_text("Choose a library folder in Settings > Files first")
+    };
+    if save.clicked() {
+        actions.push(UiAction::SaveToLibrary(LibrarySave::Material(m.id)));
+    }
     widgets::section_header(ui, "Edit material");
     // The name being typed lives in egui's memory until the field loses focus.
     let key = egui::Id::new(("material-name", m.id.0));

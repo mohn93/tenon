@@ -5,7 +5,7 @@ use egui::Ui;
 use kernel::{DefinitionId, EntityId};
 
 use super::widgets::{self, take_row};
-use super::{TexturePosition, UiAction, View, tags};
+use super::{LibrarySave, TexturePosition, UiAction, View, tags};
 use crate::editor::RenameTarget;
 
 /// Entity Info, the dock's first tab (the tab is its title).
@@ -31,6 +31,18 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
             for line in view.info {
                 ui.label(line);
             }
+        }
+    }
+    if let Some(instance) = view.component {
+        let enabled = view.library.folder.is_some();
+        let button = ui.add_enabled(enabled, egui::Button::new("Save to Library"));
+        let button = if enabled {
+            button
+        } else {
+            button.on_disabled_hover_text("Choose a library folder in Settings > Files first")
+        };
+        if button.clicked() {
+            actions.push(UiAction::SaveToLibrary(LibrarySave::Component(instance)));
         }
     }
     if let Some(current) = view.selection_tag {

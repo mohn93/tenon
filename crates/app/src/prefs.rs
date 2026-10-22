@@ -35,6 +35,10 @@ pub struct Prefs {
     /// How often the open model is copied to the recovery folder, in minutes (0: never).
     /// Loaded at most `MAX_AUTOSAVE_MINUTES`.
     pub autosave_minutes: u32,
+    /// The component library's folder (Settings > Files); None: not chosen. Loaded only when
+    /// absolute.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<PathBuf>,
 }
 
 impl Default for Prefs {
@@ -48,6 +52,7 @@ impl Default for Prefs {
             import: ImportOptions::default(),
             print: PrintOptions::default(),
             autosave_minutes: DEFAULT_AUTOSAVE_MINUTES,
+            library: None,
         }
     }
 }
@@ -158,6 +163,9 @@ pub fn load(path: &Path) -> Prefs {
         recent: cleaned(prefs.recent),
         print: prefs.print.cleaned(),
         autosave_minutes: prefs.autosave_minutes.min(MAX_AUTOSAVE_MINUTES),
+        library: prefs
+            .library
+            .filter(|p| p.is_absolute() && !p.to_string_lossy().contains('\0')),
         ..prefs
     }
 }
@@ -380,6 +388,7 @@ mod tests {
             import: ImportOptions::default(),
             print: PrintOptions::default(),
             autosave_minutes: 30,
+            library: None,
         };
         assert_ne!(prefs.theme, ThemeChoice::default());
         assert_ne!(prefs.dock, DockLayout::default());
@@ -405,6 +414,7 @@ mod tests {
                 import: ImportOptions::default(),
                 print: PrintOptions::default(),
                 autosave_minutes: 5,
+                library: None,
             }
         );
         std::fs::write(
@@ -593,6 +603,28 @@ mod tests {
         let mut want = vec![PathBuf::from(format!("{drive}/x/a.skr"))];
         want.extend((0..9).map(|i| PathBuf::from(format!("{drive}/y/{i}.skr"))));
         assert_eq!(load(&path).recent, want);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn the_library_folder_round_trips_and_loads_only_when_absolute() {
+        let home = home("library");
+        let path = path_in(&home);
+        let drive = if cfg!(windows) { "C:" } else { "" };
+        let folder = PathBuf::from(format!("{drive}/lib/parts"));
+        let prefs = Prefs {
+            library: Some(folder.clone()),
+            ..Default::default()
+        };
+        save(&path, &prefs).unwrap();
+        assert_eq!(load(&path).library, Some(folder));
+        // Not written when unset, and a relative folder is dropped on load.
+        save(&path, &Prefs::default()).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("library"));
+        std::fs::write(&path, br#"{"library": "parts"}"#).unwrap();
+        assert_eq!(load(&path).library, None);
+        std::fs::write(&path, b"{}").unwrap();
+        assert_eq!(load(&path).library, None);
         std::fs::remove_dir_all(home).unwrap();
     }
 

@@ -169,7 +169,7 @@ impl Editor {
 
     /// Brings out `tool` (a Paste tool) over the current one, which Escape or the placing
     /// click goes back to.
-    fn start_paste_tool(&mut self, tool: PasteTool) {
+    pub(super) fn start_paste_tool(&mut self, tool: PasteTool) {
         // Read before `hover_now`, which shows the hover again.
         let in_view = !self.flying && !self.hover_hidden && !self.covered;
         let back = self.paste_return.unwrap_or(self.kind);
@@ -197,7 +197,7 @@ impl Editor {
     }
 
     /// Shows `e` in the status and gives it back.
-    fn refuse(&mut self, e: CommandError) -> CommandError {
+    pub(super) fn refuse(&mut self, e: CommandError) -> CommandError {
         self.message = Some(Message::error(e.message.clone()));
         e
     }

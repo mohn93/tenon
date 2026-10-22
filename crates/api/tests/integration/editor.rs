@@ -96,6 +96,7 @@ impl Host for Editing {
             | EditorCommand::CutSelection {}
             | EditorCommand::PasteClipboard { .. }
             | EditorCommand::PasteInPlace {}
+            | EditorCommand::PlaceLibraryItem { .. }
             | EditorCommand::ExportPdf { .. } => {}
         }
         Ok(())

@@ -4,7 +4,7 @@ use crate::ui::SettingsView;
 use crate::ui::theme::UiScale;
 
 /// The Settings window open at 100%.
-fn settings_fixture() -> Fixture {
+pub(super) fn settings_fixture() -> Fixture {
     Fixture {
         settings: Some(SettingsView {
             ui_scale: UiScale::P100,

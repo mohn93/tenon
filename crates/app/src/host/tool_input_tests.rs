@@ -2180,3 +2180,117 @@ fn the_section_plane_tool_places_a_plane_in_an_open_groups_coordinates() {
     exec(&mut e, json!({"type": "close_instance"}));
     assert!(planes(&mut e).is_empty());
 }
+
+/// `call` with the API restricted to `roots`.
+fn call_in(e: &mut Editor, roots: &ApiRoots, method: &str, params: Value) -> Value {
+    let (mut offscreen, mut quit) = (Offscreen::headless(), false);
+    let mut host = AppHost {
+        editor: e,
+        offscreen: &mut offscreen,
+        quit: &mut quit,
+        roots,
+        recovery: None,
+        session: None,
+    };
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+    serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
+}
+
+#[test]
+fn place_library_item_brings_out_the_paste_tool_and_a_click_inserts() {
+    let dir = std::env::temp_dir().join(format!("sketchup-alt-place-item-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let item = dir.join("plate.skr").display().to_string();
+    let mut e = editor();
+    square(&mut e);
+    tool(&mut e, "line");
+    exec(
+        &mut e,
+        json!({"type": "save_to_library", "path": item, "kind": "model", "name": "Plate"}),
+    );
+    let revision = e.doc().revision();
+    let r = exec(&mut e, json!({"type": "place_library_item", "path": item}));
+    assert_eq!(r["editor"]["tool"], "line", "the tool to go back to: {r}");
+    assert_eq!(r["editor"]["phase"], "active", "{r}");
+    assert_eq!(r["editor"]["prompt"], "Click where to paste (Esc cancels)");
+    assert_eq!(e.doc().revision(), revision, "placing changes nothing");
+    // The item's edges follow the cursor by their box's minimum corner.
+    let r = input(&mut e, json!([{"type": "move", "point": [4, 0, 0]}]));
+    let preview = r["preview"].as_array().unwrap();
+    assert_eq!(preview.len(), 4, "{r}");
+    assert!(
+        preview
+            .iter()
+            .any(|s| near(&s[0], [4.0, 0.0, 0.0]) || near(&s[1], [4.0, 0.0, 0.0])),
+        "{r}"
+    );
+    // A click inserts it there as one step, and Line comes back.
+    let r = input(&mut e, json!([{"type": "click", "point": [4, 0, 0]}]));
+    assert_eq!(ran(&r), ["insert_library_item"], "{r}");
+    assert_eq!(r["editor"]["tool"], "line", "{r}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    assert_eq!(count(&mut e, "faces"), 2);
+    assert_eq!(undo_labels(&mut e)[0], "insert");
+    // Escape and `cancel` put it away.
+    exec(&mut e, json!({"type": "place_library_item", "path": item}));
+    input(&mut e, json!([{"type": "key", "key": "escape"}]));
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+    exec(&mut e, json!({"type": "place_library_item", "path": item}));
+    exec(&mut e, json!({"type": "cancel"}));
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+    assert_eq!(count(&mut e, "faces"), 2, "nothing more was inserted");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn place_library_item_refuses_what_it_cannot_place() {
+    let dir = std::env::temp_dir().join(format!("sketchup-alt-place-bad-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let inside = dir.join("inside");
+    std::fs::create_dir_all(&inside).unwrap();
+    let mut e = editor();
+    let r = exec(
+        &mut e,
+        json!({"type": "add_material", "name": "Red", "color": [200, 30, 30]}),
+    );
+    let material = r["changes"]["materials"][0].clone();
+    let path = |name: &str| inside.join(name).display().to_string();
+    exec(
+        &mut e,
+        json!({"type": "save_to_library", "path": path("red.skr"), "kind": "material", "item": material}),
+    );
+    // A material is inserted, not placed; a missing file is refused as well.
+    for file in ["red.skr", "missing.skr"] {
+        let r = call(
+            &mut e,
+            "execute",
+            json!({"type": "place_library_item", "path": path(file)}),
+        );
+        assert!(!r["error"].is_null(), "{file}: {r}");
+        assert_eq!(ask(&mut e, json!({"type": "editor"}))["phase"], "idle");
+    }
+    // Paths follow the API roots, as the insert command's do.
+    let other = dir.join("elsewhere");
+    std::fs::create_dir_all(&other).unwrap();
+    let roots = ApiRoots::new(&[other]).unwrap();
+    let r = call_in(
+        &mut e,
+        &roots,
+        "execute",
+        json!({"type": "place_library_item", "path": path("red.skr")}),
+    );
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
+    assert!(
+        r["error"]["data"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("api-root")
+            || r["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("api-root"),
+        "{r}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

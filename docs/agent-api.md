@@ -231,7 +231,26 @@ folder is `file`, except under `--api-root`, where it is `invalid_input` (as eve
 roots refusal is). A file with more than 10,000 archive entries is listed with an `error`, and a
 `library.json` over 16 KiB is ignored (the file is a model named by its stem). The `.skr`
 extension is matched ignoring case. With `--api-root` the folder, `save_to_library`'s path and
-`insert_library_item`'s path must lie within the roots (the root itself is a folder to list).
+`insert_library_item`'s path must lie within the roots (the root itself is a folder to list); so
+must `place_library_item`'s.
+
+The window keeps the library folder in its preferences (Settings > Files > Library folder:
+Choose..., Clear) and lists it in the Library dock tab, after Scenes. With no folder the tab says
+"Choose a library folder". Otherwise it has a search field (a case-insensitive part of the name),
+a kind filter (All, Components, Materials, Models) and a grid of tiles, a thumbnail and a name
+each. The list is made again when the tab is shown, after a save or a delete, and when the window
+gains focus (no folder watching). Thumbnails are made lazily for the tiles in view, at most two a
+frame, 128 x 128 pixels, in an iso view fitted to the item on white paper, kept in memory by file
+and modification time; a material's is its color or texture, and an item that cannot be drawn
+shows an icon. A click on a component or model tile is `place_library_item`; a click on a
+material tile is `insert_library_item` and the material becomes `set_paint_material`'s. The tile's
+context menu has Insert (`insert_library_item` at the open context's origin), Open (`open` with
+the file, asking about unsaved changes first) and Delete from Library (after a confirmation the
+file is removed, only when it is a regular `.skr` file directly in the folder and not a link).
+Saving asks for a name in a sheet and writes `<folder>/<name>.skr` as `save_to_library` does
+(characters a file name may not hold become `_`; an existing file asks before it is replaced):
+Entity Info's Save to Library for one selected component instance, the Materials panel's Save to
+Library for the chosen material, and File > Save Model to Library.... They need a folder.
 
 ### References inside a batch
 
@@ -1066,7 +1085,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 
 Editor commands go through `execute` (not `batch`). They are not undo steps of their own and,
 except for `cut_selection`, `paste_clipboard` with `at` and `paste_in_place`, which each run one
-model step (`cut` or `paste`), do not change the revision; each returns
+model step (`cut` or `paste`), do not change the revision (`place_library_item` changes nothing
+itself; the click that places the item is the `insert` step); each returns
 `{"editor": {...}, "revision": n}`, the state after it:
 
 | Command | Effect |
@@ -1081,6 +1101,7 @@ model step (`cut` or `paste`), do not change the revision; each returns
 | `{"type": "cut_selection"}` | Edit > Cut (Cmd+X): `copy_selection`, then erases the selection as one undo step labelled `cut`. Nothing is erased when the copy fails. |
 | `{"type": "paste_clipboard", "at": [3, 0, 0]}` | Edit > Paste (Cmd+V). With `at` (a point of the open context), runs `paste` with the clipboard's clip there. Without it the Paste tool comes out: the clip's edges follow the cursor, its base point on the snapped point under it, and the next click (`tool_input`) pastes there as one `paste` step (the pasted entities become the selection; see `selection`); then (even when the paste changed nothing, landing exactly on what is there), or on Escape or `cancel`, the tool used before comes back (`editor.tool` stays that tool meanwhile, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`; the snap marker and `snap_label` show even when that tool is Select). Typed distances are not taken. With `at` too the pasted entities become the selection. Text that is not a clip is `invalid_input` with the message `The clipboard does not hold sketchup-alt geometry`, and changes nothing; a clip `paste` refuses (damaged, over 64 MiB, nested more than 32 deep, over 100,000 instances or 20,000,000 faces with nesting counted, or landing beyond the coordinate limit) is `invalid_input` with why, before the Paste tool comes out, and changes nothing; a clipboard that cannot be read is `file` (`Could not read the clipboard: ...`). |
 | `{"type": "paste_in_place"}` | Edit > Paste In Place: runs `paste` with the clipboard's clip and no `at`, so it lands where it was copied from in world coordinates, and the pasted entities become the selection (see `selection`). Refused as `paste_clipboard` is. |
+| `{"type": "place_library_item", "path": "/abs/lib/chair.skr"}` | The Library tab's tile click: the Paste tool comes out with the library item at `path` (a component or model item; see Library items) instead of the clipboard's clip, as `paste_clipboard` without `at` does. The item's edges follow the cursor by the minimum corner of its box, and the next click (`tool_input`) runs `insert_library_item` there as one undo step labelled `insert`, with new definitions each time, then the tool used before comes back; Escape or `cancel` puts it away with nothing inserted. `editor.tool` stays the tool used before, with `phase` `active` and the prompt `Click where to paste (Esc cancels)`. `path` follows the read rules (`--api-root`). `invalid_input` for a material item (use `insert_library_item`), and for a file that is not a valid item or is too large, before the tool comes out. |
 | `{"type": "export_pdf", "path": "/abs/plan.pdf", "paper": "a3", "landscape": true, "scale": 100, "dpi": 150, "overwrite": false}` | File > Export PDF...: renders the current view (camera, lighting, display settings and section cuts; nothing selected or highlighted) with the GPU on white paper, without the ground grid and axes, and with no group open (the model as it looks closed) and writes a PDF 1.4, one page per sheet. `paper`: `a4` (default), `a3`, `letter`, `legal`, `tabloid`; `landscape` defaults to true; `dpi` 72 to 300 (default 150). Without `scale` the view, its aspect kept, is fitted on one sheet inside 10 mm margins. With `scale` (1:N, a parallel view; a perspective view is `invalid_input`, "Switch to parallel projection to print at scale") the extent of the print as drawn (no group open, only the geometry kept by section cuts, and the shown dimensions and notes, so one placed outside the model widens the print) is printed along the view at exactly 1:N, tiled across ceil(w/W) x ceil(h/H) sheets (more than 100 is `invalid_input` naming the count), with trim marks at each tile's corners, a scale bar (1, 2 or 5 times a power of ten of the display unit: feet for feet and inches, inches for inches, metres otherwise, labelled in the model's length format) and a "Sheet r,c of R x C" footer. Dimension and note text is placed as PDF text over the image. The bytes are the same for the same model and view on the same GPU. Path rules are the export's: `--api-root`, `.skr` and the open model's own file refused, an existing file that is not a PDF refused unless `overwrite`; they are checked before rendering. Result: `{"editor": ..., "pdf": {"sheets": n, "warnings": [...]}, "revision": r}`. Without a GPU adapter (headless on a machine without one) it is `invalid_input`, "printing needs a GPU adapter". Not an undo step. |
 | `{"type": "set_dialog", "dialog": "soften_edges"}` | Opens the Soften Edges window over the view (`null` or absent closes it), as Edit > Soften Edges... and its close button do. |
 | `{"type": "set_soften_angle", "angle": 30}` | The Soften Edges window's angle, in whole degrees (0 to 180; above 180 is `invalid_input`, a negative or fractional angle `-32602`), which its Soften button uses. |
@@ -1659,7 +1680,9 @@ under a pixel and where a click would snap.
 | File > Export PDF... and File > Print... (a Print sheet: paper, orientation, Fit or 1:N, resolution; remembered in the prefs; Print writes `sketchup-alt-print-<pid>-<n>.pdf` in the temp folder and opens it with the system's viewer) | `export_pdf` (`path`, `paper`, `landscape`, `scale`, `dpi`, `overwrite`) |
 | Quit (app menu on macOS, File menu elsewhere; Cmd+Q), closing the window | `quit` (`discard`) |
 | View > Agent Activity; the context bar's Agent Activity indicator; the status bar's `Agents: N` | none: they only show what agents do |
-| Settings (Cmd+,): Appearance (theme, UI scale), Input (trackpad scroll) and Files (autosave interval); View > Theme | none: window chrome, kept in the prefs file (see below) |
+| Settings (Cmd+,): Appearance (theme, UI scale), Input (trackpad scroll) and Files (autosave interval, library folder); View > Theme | none: window chrome, kept in the prefs file (see below) |
+| Library tab: a tile click, a tile's Insert, Open and Delete from Library | `place_library_item` (component or model), `insert_library_item` (a material, or Insert), `open`; the `library` query lists the folder; deleting a file has no command |
+| Entity Info's Save to Library, the Materials panel's Save to Library, File > Save Model to Library... | `save_to_library` (`kind` `component`, `material`, `model`) |
 | Settings, Model tab: the model's display units and precision (saved in the model) | `set_units`; the `units` query |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
@@ -1698,7 +1721,7 @@ which menus are open, tooltips, which Outliner rows are expanded, the Outliner's
 agent filters the `outliner` query's rows itself), the Help > Keyboard Shortcuts window, the export
 dialog's suggested format, keyboard focus, and the window's preferences: the theme (Settings or
 View > Theme), the UI scale, the trackpad scroll setting, the import options, the dock's width,
-divider position and tab, and the recent files list, kept in `~/.sketchup-alt/prefs.json` on
+divider position and tab, the library folder and the recent files list, kept in `~/.sketchup-alt/prefs.json` on
 macOS and in `$XDG_CONFIG_HOME/sketchup-alt/prefs.json` (by default
 `~/.config/sketchup-alt/prefs.json`) on Linux, which the API never reads or writes (files an agent opens or saves are not added to the list). The card
 the window shows over an untouched empty model (New, Open..., recent files, a drawing hint) is

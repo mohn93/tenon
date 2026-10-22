@@ -9,6 +9,7 @@ mod gui;
 mod headless;
 mod host;
 mod info;
+mod library;
 mod mcp;
 mod menus;
 #[cfg(target_os = "macos")]

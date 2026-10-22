@@ -217,6 +217,15 @@ pub enum EditorCommand {
     /// Edit > Paste In Place: pastes the clip on the clipboard where it was copied from, in
     /// world coordinates (one `paste` step). `invalid_input` when the clipboard holds no clip.
     PasteInPlace {},
+    /// Brings out the Paste tool with the library item at `path` (a `.skr` file; see
+    /// `save_to_library`), like `paste_clipboard` without `at`: the item's edges follow the
+    /// cursor, its box's minimum corner on the snapped point under it, and the next click
+    /// (`tool_input`) inserts it there as one `insert` step, with new definitions each time
+    /// (`insert_library_item`). Escape or `cancel` goes back to the tool used before. `path`
+    /// follows the read rules (`--api-root`). `invalid_input` for a material item (use
+    /// `insert_library_item`), and for a file that is not a valid item, before the tool comes
+    /// out.
+    PlaceLibraryItem { path: String },
     /// File > Export PDF...: renders the current view (camera, display settings and section
     /// cuts; nothing highlighted) with the GPU and writes it as a PDF at `path`, one page per
     /// sheet. Without `scale` the view is fitted on one sheet; with `scale` (1:N, a parallel
@@ -255,7 +264,7 @@ pub struct PdfReport {
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 13] = [
+pub const EDITOR_COMMANDS: [&str; 14] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
@@ -268,6 +277,7 @@ pub const EDITOR_COMMANDS: [&str; 13] = [
     "cut_selection",
     "paste_clipboard",
     "paste_in_place",
+    "place_library_item",
     "export_pdf",
 ];
 

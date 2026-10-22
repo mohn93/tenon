@@ -281,6 +281,18 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
                             .map_err(command_failed)?,
                     )
                 }
+                EditorCommand::PlaceLibraryItem { path } => {
+                    let path = match host.roots() {
+                        Some(roots) => roots
+                            .read(&path)
+                            .map(|p| p.display().to_string())
+                            .map_err(command_failed)?,
+                        None => path,
+                    };
+                    host.editor_command(EditorCommand::PlaceLibraryItem { path })
+                        .map_err(command_failed)?;
+                    None
+                }
                 command => {
                     host.editor_command(command).map_err(command_failed)?;
                     None

@@ -20,6 +20,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
+mod library_panel;
+
 use crate::awake::Awake;
 use crate::clipboard::SystemClipboard;
 use crate::editor::{
@@ -41,8 +43,9 @@ use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
 use crate::ui::theme::UiScale;
 use crate::ui::{
-    Agents, MaterialRow, RecoverRow, RecoverView, SceneRow, SectionMenu, SettingsView, Sheet,
-    StartCard, TagRow, TexturePosition, TextureRow, UiAction, View,
+    Agents, DockTab, LibrarySave, LibraryView, MaterialRow, RecoverRow, RecoverView, SceneRow,
+    SectionMenu, SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction,
+    View,
 };
 use crate::ui::{theme, viewport};
 
@@ -743,6 +746,8 @@ struct State {
     tag_rows: Option<((u64, u64), Vec<TagRow>)>,
     /// Each textured material's swatch in the Materials list, with the image it shows.
     swatches: HashMap<MaterialId, (Arc<TextureImage>, egui::TextureHandle)>,
+    /// The component library's listing and thumbnails.
+    library: library_panel::LibraryState,
     modifiers: ModifiersState,
     /// Watches for a Ctrl tap, which switches copying (see `CtrlTap`).
     ctrl_tap: CtrlTap,
@@ -993,6 +998,7 @@ impl State {
             outliner: None,
             tag_rows: None,
             swatches: HashMap::new(),
+            library: library_panel::LibraryState::new(),
             modifiers: ModifiersState::empty(),
             ctrl_tap: CtrlTap::default(),
             view,
@@ -1420,11 +1426,12 @@ impl State {
     /// note being placed closes once the Text tool no longer places it (an agent's `cancel`
     /// or `set_tool`, or its text typed through `tool_input`).
     fn drop_outlived_sheet(&mut self) {
-        if self
-            .sheet
-            .as_ref()
-            .is_some_and(|s| !matches!(s, Sheet::DiscardRecovered { .. }))
-            && self.editor.documents() != self.sheet_origin.document
+        if self.sheet.as_ref().is_some_and(|s| {
+            !matches!(
+                s,
+                Sheet::DiscardRecovered { .. } | Sheet::DeleteLibraryItem { .. }
+            )
+        }) && self.editor.documents() != self.sheet_origin.document
         {
             self.sheet = None;
         }
@@ -1851,6 +1858,10 @@ impl State {
             }
             UiAction::SetDock(dock) => {
                 if self.prefs.dock != dock {
+                    // Shown again, the Library tab lists the folder again.
+                    if dock.tab == DockTab::Library && self.prefs.dock.tab != DockTab::Library {
+                        self.library_changed();
+                    }
                     self.prefs.dock = dock;
                     self.save_prefs();
                 }
@@ -1915,6 +1926,35 @@ impl State {
                     self.discard_recovered(&models);
                 }
             }
+            UiAction::ChooseLibraryFolder => self.choose_library_folder(),
+            UiAction::ClearLibraryFolder => self.set_library_folder(None),
+            UiAction::LibraryUse(path) => self.library_use(&path),
+            UiAction::LibraryInsert(path) => self.library_insert(&path),
+            UiAction::LibraryOpen(path) => self.library_open(&path),
+            UiAction::LibraryDelete(path) => self.library_ask_delete(path),
+            UiAction::ConfirmLibraryDelete => {
+                if let Some(Sheet::DeleteLibraryItem { path, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::DeleteLibraryItem { .. }))
+                {
+                    self.library_delete(&path);
+                }
+            }
+            UiAction::ThumbnailsWanted(paths) => self.want_thumbnails(&paths),
+            UiAction::SaveToLibrary(save) => self.library_ask_name(save),
+            UiAction::ConfirmSaveToLibrary(name) => {
+                if let Some(Sheet::SaveToLibrary { save, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::SaveToLibrary { .. }))
+                {
+                    self.library_save_named(save, &name);
+                }
+            }
+            UiAction::ConfirmOverwriteLibrary => {
+                if let Some(Sheet::OverwriteLibrary { save, name, file }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::OverwriteLibrary { .. }))
+                {
+                    self.library_write(save, &name, &file, true);
+                }
+            }
             UiAction::SetAutosave(minutes) => {
                 let minutes = minutes.min(prefs::MAX_AUTOSAVE_MINUTES);
                 if self.prefs.autosave_minutes != minutes {
@@ -1963,6 +2003,7 @@ impl State {
         );
         // The swatches belonged to the old panels' context.
         self.swatches.clear();
+        self.library.forget_thumbnails();
         self.drawn = None;
         self.surface = surface;
         self.device = device;
@@ -2049,6 +2090,9 @@ impl State {
         let status = self.editor.status_parts();
         let info = entity_info(self.editor.doc());
         let materials = self.material_rows();
+        // Thumbnails tiles in view asked for last frame; more wait for the next.
+        self.make_thumbnails();
+        let library_rows = self.library_rows();
         // Rebuilt only when the model changes; the open and selected marks are worked out
         // while drawing, from the context and selection.
         let revision = self.editor.doc().revision();
@@ -2104,7 +2148,21 @@ impl State {
         }
         self.drop_outlived_sheet();
         let rename = self.editor.rename_target();
+        let component = rename
+            .as_ref()
+            .filter(|t| t.kind == kernel::DefinitionKind::Component)
+            .and_then(|_| match self.editor.doc().selection().first() {
+                Some(EntityId::Instance(id)) => Some(*id),
+                _ => None,
+            });
         let panels = View {
+            library: LibraryView {
+                folder: self.prefs.library.as_deref(),
+                rows: &library_rows,
+                more: self.library.more(),
+                error: self.library.error(),
+            },
+            component,
             undo: self.editor.doc().undo_label(),
             redo: self.editor.doc().redo_label(),
             agents: Agents {
@@ -2444,8 +2502,11 @@ impl SheetOrigin {
 /// Whether `sheet`, opened over `origin`, still applies to what `editor` holds now (an agent
 /// may have changed it meanwhile). Err: what the status says when it does not.
 fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result<(), &'static str> {
-    // Recovered copies are not the model's.
-    if matches!(sheet, Sheet::DiscardRecovered { .. }) {
+    // Recovered copies and library files are not the model's.
+    if matches!(
+        sheet,
+        Sheet::DiscardRecovered { .. } | Sheet::DeleteLibraryItem { .. }
+    ) {
         return Ok(());
     }
     if editor.documents() != origin.document {
@@ -2470,7 +2531,21 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         Sheet::DeleteTag { tag, .. } if editor.doc().scene().tag(*tag).is_none() => {
             Err("The tag was already deleted")
         }
-        Sheet::DeleteTag { .. } | Sheet::DiscardRecovered { .. } => Ok(()),
+        Sheet::DeleteTag { .. }
+        | Sheet::DiscardRecovered { .. }
+        | Sheet::DeleteLibraryItem { .. } => Ok(()),
+        Sheet::SaveToLibrary { save, .. } | Sheet::OverwriteLibrary { save, .. } => {
+            let doc = editor.doc();
+            match save {
+                LibrarySave::Component(id) if doc.model().instance(*id).is_none() => {
+                    Err("The component is gone; nothing was saved")
+                }
+                LibrarySave::Material(id) if doc.scene().material(*id).is_none() => {
+                    Err("The material is gone; nothing was saved")
+                }
+                _ => Ok(()),
+            }
+        }
         Sheet::NoteText {
             request: NoteRequest::Edit(EntityId::Note(n)),
             ..
@@ -2635,6 +2710,9 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmFieldOfView(_)
             | UiAction::ConfirmDeleteTag(_)
             | UiAction::ConfirmDiscardRecovered
+            | UiAction::ConfirmLibraryDelete
+            | UiAction::ConfirmSaveToLibrary(_)
+            | UiAction::ConfirmOverwriteLibrary
             | UiAction::ConfirmNote(_)
             | UiAction::Confirm3dText(_)
             | UiAction::Quit
@@ -3095,7 +3173,9 @@ impl ApplicationHandler<AppEvent> for App {
                 // holds now.
                 let had = s.editor.clip_ready();
                 s.editor.refresh_clipboard();
-                had != s.editor.clip_ready()
+                // So may another app have changed the library folder.
+                s.library_changed();
+                had != s.editor.clip_ready() || s.prefs.dock.tab == DockTab::Library
             }
             // The frames skipped while the window was hidden (see `retries_at_once`).
             WindowEvent::Occluded(false) => true,
@@ -3642,6 +3722,10 @@ mod tests {
             UiAction::ShowSettings(true),
             UiAction::ExportPdf,
             UiAction::Print,
+            UiAction::LibraryUse("/lib/a.skr".into()),
+            UiAction::LibraryDelete("/lib/a.skr".into()),
+            UiAction::SaveToLibrary(LibrarySave::Model),
+            UiAction::ChooseLibraryFolder,
         ] {
             assert!(!action_allowed_with_sheet(&dropped), "{dropped:?}");
         }
@@ -3652,6 +3736,9 @@ mod tests {
             UiAction::ConfirmFieldOfView(35.0),
             UiAction::ConfirmPrint(PrintOptions::default()),
             UiAction::Confirm3dText(default_text_3d()),
+            UiAction::ConfirmSaveToLibrary("Chair".into()),
+            UiAction::ConfirmOverwriteLibrary,
+            UiAction::ConfirmLibraryDelete,
             UiAction::Quit,
         ] {
             assert!(action_allowed_with_sheet(&passed), "{passed:?}");
@@ -3776,6 +3863,36 @@ mod tests {
         // An agent deletes the tag meanwhile.
         e.delete_tag(walls, None);
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn library_sheets_apply_only_while_what_they_save_exists() {
+        let mut e = editor_with_selection();
+        let origin = SheetOrigin::of(&e);
+        let gone = Sheet::SaveToLibrary {
+            save: LibrarySave::Material(MaterialId(99)),
+            suggested: "x".into(),
+        };
+        assert!(sheet_applies(&gone, &origin, &e).is_err());
+        let gone = Sheet::OverwriteLibrary {
+            save: LibrarySave::Component(InstanceId(999)),
+            name: "x".into(),
+            file: "x.skr".into(),
+        };
+        assert!(sheet_applies(&gone, &origin, &e).is_err());
+        let model = Sheet::SaveToLibrary {
+            save: LibrarySave::Model,
+            suggested: "x".into(),
+        };
+        assert!(sheet_applies(&model, &origin, &e).is_ok());
+        // Deleting a library file does not depend on the model: it survives a new one.
+        let delete = Sheet::DeleteLibraryItem {
+            path: "/lib/a.skr".into(),
+            name: "a".into(),
+        };
+        e.new_model();
+        assert!(sheet_applies(&delete, &origin, &e).is_ok());
+        assert!(sheet_applies(&model, &origin, &e).is_err());
     }
 
     #[test]

@@ -36,6 +36,7 @@ mod clip;
 mod input;
 pub use input::{DriveError, Driven, Stopped};
 mod labels;
+mod library;
 mod notes;
 mod print;
 pub use print::{PaperChoice, PrintJob, PrintOptions, PrintPurpose, PrintQueue};
@@ -2060,7 +2061,12 @@ impl Editor {
                     }
             );
             let is_turn = matches!(command, Command::Rotate { copies: None, .. });
-            let is_paste = matches!(command, Command::Paste { .. } | Command::Add3dText { .. });
+            let is_paste = matches!(
+                command,
+                Command::Paste { .. }
+                    | Command::InsertLibraryItem { .. }
+                    | Command::Add3dText { .. }
+            );
             let revision = self.doc.revision();
             let outcome = self.run(command);
             let unchanged =
@@ -2141,7 +2147,11 @@ impl Editor {
 
     /// Runs a command on the document, noting it and its result while `tool_input` runs.
     fn execute_recorded(&mut self, command: Command) -> Result<Outcome, CommandError> {
-        let label = command.name();
+        // A library insert's undo step reads "insert", as `Document::execute` labels it.
+        let label = match command {
+            Command::InsertLibraryItem { .. } => "insert".to_string(),
+            _ => command.name(),
+        };
         self.execute_recorded_as(command, label)
     }
 

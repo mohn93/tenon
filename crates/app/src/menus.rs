@@ -8,7 +8,7 @@ use tools::ToolKind;
 
 use crate::shortcuts::Bound;
 use crate::ui::theme::ThemeChoice;
-use crate::ui::{FLY_HELP, UiAction, View, step_name};
+use crate::ui::{FLY_HELP, LibrarySave, UiAction, View, step_name};
 
 /// The title of the native app menu (macOS), which holds Settings... and Quit.
 pub const APP_MENU: &str = "sketchup-alt";
@@ -106,6 +106,13 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         bound_item("Import...", Bound::ImportFile, UiAction::ImportFile).entry(),
         bound_item("Export...", Bound::ExportFile, UiAction::ExportFile).entry(),
         Item::new("Export PDF...", UiAction::ExportPdf).entry(),
+        Item::new(
+            "Save Model to Library...",
+            UiAction::SaveToLibrary(LibrarySave::Model),
+        )
+        .enabled(view.library.folder.is_some())
+        .tooltip("Needs a library folder: Settings > Files")
+        .entry(),
         Entry::Separator,
         Item::new("Print...", UiAction::Print).entry(),
     ];

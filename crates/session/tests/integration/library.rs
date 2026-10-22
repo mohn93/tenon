@@ -792,3 +792,33 @@ fn the_skr_extension_is_matched_ignoring_case_when_saving_and_listing() {
     );
     assert_eq!(list(&dir)["items"][0]["name"], "Big");
 }
+
+#[test]
+fn an_items_outline_is_its_edges_and_its_corner_a_material_has_none() {
+    let dir = folder("outline");
+    let mut d = doc();
+    rectangle(&mut d, [1.0, 1.0, 0.0], [3.0, 4.0, 0.0]);
+    let model = dir.join("plate.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&model), "kind": "model"}),
+    );
+    let outline = session::library::outline(&model).unwrap();
+    assert_eq!(outline.base, glam::DVec3::new(1.0, 1.0, 0.0));
+    assert_eq!(outline.segments.len(), 4);
+    let red = ok(
+        &mut d,
+        json!({"type": "add_material", "name": "Red", "color": [200, 30, 30]}),
+    );
+    let material = dir.join("red.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&material), "kind": "material",
+               "item": red["changes"]["materials"][0]}),
+    );
+    let err = session::library::outline(&material).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidInput);
+    let err = session::library::outline(&dir.join("none.skr")).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::File);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -1,4 +1,4 @@
-//! The dock on the right: Entity Info, Materials, Tags and Scenes as tabs over the Outliner,
+//! The dock on the right: Entity Info, Materials, Tags, Scenes and Library as tabs over the Outliner,
 //! split by a divider. Its width, split and tab are kept in the preferences.
 
 use std::ops::RangeInclusive;
@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use egui::{Id, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 use serde::{Deserialize, Serialize};
 
-use super::{UiAction, View, materials, outliner, right, scenes, tags, theme, widgets};
+use super::{UiAction, View, library, materials, outliner, right, scenes, tags, theme, widgets};
 
 /// The tab shown in the dock's top area.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +17,7 @@ pub enum DockTab {
     Materials,
     Tags,
     Scenes,
+    Library,
 }
 
 impl DockTab {
@@ -26,6 +27,7 @@ impl DockTab {
             DockTab::Materials => "Materials",
             DockTab::Tags => "Tags",
             DockTab::Scenes => "Scenes",
+            DockTab::Library => "Library",
         }
     }
 }
@@ -160,6 +162,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             DockTab::Materials => materials::materials(ui, view, actions),
             DockTab::Tags => tags::tags(ui, view, actions),
             DockTab::Scenes => scenes::scenes(ui, view, actions),
+            DockTab::Library => library::library(ui, view, actions),
         });
     widgets::name_scroll_bars(ui.ctx(), top.id, view.dock.tab.name());
     divider(ui, divider_id, width);
@@ -168,11 +171,12 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
 }
 
 /// The tabs, in order.
-const TABS: [DockTab; 4] = [
+const TABS: [DockTab; 5] = [
     DockTab::EntityInfo,
     DockTab::Materials,
     DockTab::Tags,
     DockTab::Scenes,
+    DockTab::Library,
 ];
 
 /// The gap between two tabs.

@@ -68,7 +68,7 @@ pub(super) fn settings_window(
             match tab {
                 Tab::Appearance => appearance(ui, view.theme, settings.ui_scale, actions),
                 Tab::Input => input(ui, settings.trackpad, actions),
-                Tab::Files => files(ui, settings.autosave_minutes, actions),
+                Tab::Files => files(ui, settings.autosave_minutes, view.library.folder, actions),
                 Tab::Model => model(ui, settings.units, actions),
             }
         });
@@ -134,7 +134,12 @@ fn input(ui: &mut Ui, trackpad: TrackpadScroll, actions: &mut Vec<UiAction>) {
 
 /// How often the open model is copied to the recovery folder while it has unsaved changes: a
 /// slider of minutes, 0 shown as "Off".
-fn files(ui: &mut Ui, minutes: u32, actions: &mut Vec<UiAction>) {
+fn files(
+    ui: &mut Ui,
+    minutes: u32,
+    library: Option<&std::path::Path>,
+    actions: &mut Vec<UiAction>,
+) {
     let mut value = minutes;
     ui.horizontal(|ui| {
         let label = ui.label("Autosave every");
@@ -159,6 +164,29 @@ fn files(ui: &mut Ui, minutes: u32, actions: &mut Vec<UiAction>) {
     ui.label(
         egui::RichText::new(
             "A copy of unsaved changes, offered back if the app ends without saving",
+        )
+        .weak(),
+    );
+    ui.add_space(8.0);
+    ui.label("Library folder");
+    ui.horizontal(|ui| {
+        let shown = library.map_or_else(|| "Not set".to_string(), |p| p.display().to_string());
+        ui.add(egui::Label::new(egui::RichText::new(shown).weak()).truncate());
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Choose...").clicked() {
+            actions.push(UiAction::ChooseLibraryFolder);
+        }
+        if ui
+            .add_enabled(library.is_some(), Button::new("Clear"))
+            .clicked()
+        {
+            actions.push(UiAction::ClearLibraryFolder);
+        }
+    });
+    ui.label(
+        egui::RichText::new(
+            "Components, materials and models saved here appear in the Library tab",
         )
         .weak(),
     );

@@ -12,7 +12,7 @@ use session::MAX_COORDINATE;
 use session::text3d::MIN_TEXT_HEIGHT;
 use tools::{NoteRequest, TextSpec};
 
-use super::{UiAction, theme, widgets};
+use super::{LibrarySave, UiAction, theme, widgets};
 use crate::editor::{
     ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose, RenameTarget,
     UpAxis, is_sketchup_path,
@@ -57,6 +57,19 @@ pub enum Sheet {
     /// 3D Text: the text, its height and depth and whether it is filled, before the text is
     /// placed with the cursor.
     Text3d { spec: TextSpec },
+    /// Save to Library: the name to save `save` under, `suggested` filled in.
+    SaveToLibrary {
+        save: LibrarySave,
+        suggested: String,
+    },
+    /// The library already holds an item named `name` (the file `file`): replace it?
+    OverwriteLibrary {
+        save: LibrarySave,
+        name: String,
+        file: String,
+    },
+    /// Delete from Library, asking before the item's file is removed.
+    DeleteLibraryItem { path: PathBuf, name: String },
     /// Print: paper, orientation, Fit or 1:N and resolution, before the view is rendered to a
     /// PDF (`purpose`: a file chosen after it, or the system's viewer).
     Print {
@@ -113,6 +126,8 @@ impl Values {
             Sheet::DiscardRecovered { .. } => Values::Nothing,
             Sheet::NoteText { text, .. } => Values::Note(text.clone()),
             Sheet::Text3d { spec } => Values::Text3d(spec.clone()),
+            Sheet::SaveToLibrary { suggested, .. } => Values::Name(suggested.clone()),
+            Sheet::OverwriteLibrary { .. } | Sheet::DeleteLibraryItem { .. } => Values::Nothing,
             Sheet::Print { spec, .. } => Values::Print(*spec),
         }
     }
@@ -137,14 +152,26 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                     import_sheet(ui, path, options, actions);
                 }
                 (Sheet::NameComponent { .. }, Values::Name(name)) => {
-                    name_sheet(ui, "Make Component", "Create", name, false, fresh, actions);
+                    name_sheet(
+                        ui,
+                        ("Make Component", "Create"),
+                        name,
+                        NameUse::new(false, fresh, UiAction::ConfirmName),
+                        actions,
+                    );
                 }
                 (Sheet::Rename { target }, Values::Name(name)) => {
                     let (title, allow_blank) = match target.kind {
                         DefinitionKind::Group => ("Rename Group", true),
                         DefinitionKind::Component => ("Rename Component", false),
                     };
-                    name_sheet(ui, title, "Rename", name, allow_blank, fresh, actions);
+                    name_sheet(
+                        ui,
+                        (title, "Rename"),
+                        name,
+                        NameUse::new(allow_blank, fresh, UiAction::ConfirmName),
+                        actions,
+                    );
                 }
                 (Sheet::FieldOfView { .. }, Values::Degrees(degrees)) => {
                     field_of_view_sheet(ui, degrees, actions);
@@ -173,6 +200,26 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                 }
                 (Sheet::Text3d { .. }, Values::Text3d(spec)) => {
                     text_3d_sheet(ui, spec, fresh, actions);
+                }
+                (Sheet::SaveToLibrary { save, .. }, Values::Name(name)) => {
+                    let title = match save {
+                        LibrarySave::Component(_) => "Save Component to Library",
+                        LibrarySave::Material(_) => "Save Material to Library",
+                        LibrarySave::Model => "Save Model to Library",
+                    };
+                    name_sheet(
+                        ui,
+                        (title, "Save"),
+                        name,
+                        NameUse::new(false, fresh, UiAction::ConfirmSaveToLibrary),
+                        actions,
+                    );
+                }
+                (Sheet::OverwriteLibrary { name, file, .. }, Values::Nothing) => {
+                    overwrite_library_sheet(ui, name, file, actions);
+                }
+                (Sheet::DeleteLibraryItem { name, .. }, Values::Nothing) => {
+                    delete_library_sheet(ui, name, actions);
                 }
                 (Sheet::Print { purpose, .. }, Values::Print(spec)) => {
                     print_sheet(ui, *purpose, spec, actions);
@@ -271,19 +318,41 @@ fn mesh_options(ui: &mut Ui, options: &mut ImportOptions, secondary: egui::Color
     ui.end_row();
 }
 
-/// A sheet asking for a name: `title`, a "Name" field holding `name`, then Cancel and
-/// `button`. On the sheet's first frame (`fresh`) the field takes focus with all of it
-/// selected, so typing replaces it. A blank name is refused unless `allow_blank`: `button` is
-/// then disabled and Enter does nothing. Enter in the field or `button` reports `ConfirmName`.
-fn name_sheet(
-    ui: &mut Ui,
-    title: &str,
-    button: &str,
-    name: &mut String,
+/// How a name sheet behaves: whether a blank name is taken, whether it is the sheet's first
+/// frame (the field then takes focus with all of it selected, so typing replaces it) and which
+/// action carries the name.
+struct NameUse {
     allow_blank: bool,
     fresh: bool,
+    confirm: fn(String) -> UiAction,
+}
+
+impl NameUse {
+    fn new(allow_blank: bool, fresh: bool, confirm: fn(String) -> UiAction) -> Self {
+        Self {
+            allow_blank,
+            fresh,
+            confirm,
+        }
+    }
+}
+
+/// A sheet asking for a name: `title` and `button` (the confirm button), a "Name" field
+/// holding `name`. A blank name is refused unless `how.allow_blank`: the button is then
+/// disabled and Enter does nothing. Enter in the field or the button reports the name through
+/// `how.confirm`.
+fn name_sheet(
+    ui: &mut Ui,
+    (title, button): (&str, &str),
+    name: &mut String,
+    how: NameUse,
     actions: &mut Vec<UiAction>,
 ) {
+    let NameUse {
+        allow_blank,
+        fresh,
+        confirm,
+    } = how;
     widgets::section_header(ui, title);
     ui.add_space(theme::GRID);
     let field_id = Id::new("sheet-name");
@@ -320,7 +389,32 @@ fn name_sheet(
     }
     let clicked = buttons(ui, button, valid, actions);
     if valid && (entered || clicked) {
-        actions.push(UiAction::ConfirmName(name.clone()));
+        actions.push(confirm(name.clone()));
+    }
+}
+
+/// The overwrite sheet: the library holds an item in `file` already; Replace reports
+/// `ConfirmOverwriteLibrary`.
+fn overwrite_library_sheet(ui: &mut Ui, name: &str, file: &str, actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "Replace Library Item");
+    ui.add_space(theme::GRID);
+    ui.label(format!(
+        "The library already holds {file}. Replace it with {name}?"
+    ));
+    if buttons(ui, "Replace", true, actions) {
+        actions.push(UiAction::ConfirmOverwriteLibrary);
+    }
+}
+
+/// The Delete from Library sheet: names the item, says the file goes, Delete reports
+/// `ConfirmLibraryDelete`.
+fn delete_library_sheet(ui: &mut Ui, name: &str, actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "Delete from Library");
+    ui.add_space(theme::GRID);
+    ui.label(format!("Delete {name} from the library?"));
+    ui.label("Its file is deleted. This cannot be undone.");
+    if buttons(ui, "Delete", true, actions) {
+        actions.push(UiAction::ConfirmLibraryDelete);
     }
 }
 

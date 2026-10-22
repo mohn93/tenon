@@ -7,9 +7,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use egui::{Panel, Ui};
-use kernel::{DefinitionId, EntityId, PageId, TagId, TexturePlacement};
+use kernel::{DefinitionId, EntityId, InstanceId, PageId, TagId, TexturePlacement};
 use session::{
-    Camera, Lighting, MaterialId, OutlinerTable, Projection, SectionDisplay, StandardView, Units,
+    Camera, LibraryKind, Lighting, MaterialId, OutlinerTable, Projection, SectionDisplay,
+    StandardView, Units,
 };
 use tools::ToolKind;
 
@@ -23,6 +24,7 @@ mod dialogs;
 mod dock;
 mod fonts;
 mod icons;
+mod library;
 mod materials;
 mod menu_bar;
 mod outliner;
@@ -42,10 +44,8 @@ pub mod theme;
 pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
-pub use sheets::Sheet;
-// Only the tests name a tab outside the dock.
-#[cfg(test)]
 pub use dock::DockTab;
+pub use sheets::Sheet;
 pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
@@ -248,6 +248,85 @@ pub enum UiAction {
     SetAutosave(u32),
     /// Set the model's display units (Settings' Model tab), as an undo step.
     SetUnits(Units),
+    /// Choose the library folder in a dialog (Settings > Files, the Library tab).
+    ChooseLibraryFolder,
+    /// Forget the library folder.
+    ClearLibraryFolder,
+    /// A Library tile clicked: a component or model is placed with the Paste tool, a material
+    /// is added and chosen to paint with.
+    LibraryUse(PathBuf),
+    /// A Library tile's Insert: a component or model at the open context's origin, a material
+    /// as a click does.
+    LibraryInsert(PathBuf),
+    /// A Library tile's Open: the item's file becomes the open model (after asking about
+    /// unsaved changes).
+    LibraryOpen(PathBuf),
+    /// A Library tile's Delete from Library: ask first.
+    LibraryDelete(PathBuf),
+    /// The Delete from Library sheet's Delete.
+    ConfirmLibraryDelete,
+    /// The tiles at these paths are in view without a thumbnail.
+    ThumbnailsWanted(Vec<PathBuf>),
+    /// Open the name sheet to save something to the library.
+    SaveToLibrary(LibrarySave),
+    /// The save sheet's Save: the name typed.
+    ConfirmSaveToLibrary(String),
+    /// The overwrite sheet's Replace.
+    ConfirmOverwriteLibrary,
+}
+
+/// What a library save stores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LibrarySave {
+    /// The component instance.
+    Component(InstanceId),
+    /// The material.
+    Material(MaterialId),
+    /// The whole model.
+    Model,
+}
+
+impl LibrarySave {
+    pub fn kind(self) -> LibraryKind {
+        match self {
+            LibrarySave::Component(_) => LibraryKind::Component,
+            LibrarySave::Material(_) => LibraryKind::Material,
+            LibrarySave::Model => LibraryKind::Model,
+        }
+    }
+}
+
+/// A library item's thumbnail as its tile shows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Thumb {
+    Ready(egui::TextureId),
+    /// Not made yet: a tile in view asks for it.
+    Pending,
+    /// Could not be made: the tile shows an icon.
+    Failed,
+}
+
+/// An item of the library folder as the Library tab lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LibraryRow {
+    pub path: PathBuf,
+    pub name: String,
+    pub kind: LibraryKind,
+    /// Why the file cannot be used as an item.
+    pub error: Option<String>,
+    pub thumb: Thumb,
+}
+
+/// What the Library tab shows.
+#[derive(Clone, Copy, Debug)]
+pub struct LibraryView<'a> {
+    /// The library folder; None: not chosen.
+    pub folder: Option<&'a std::path::Path>,
+    pub rows: &'a [LibraryRow],
+    /// The folder holds more items than are listed.
+    pub more: bool,
+    /// Why the folder could not be listed.
+    pub error: Option<&'a str>,
 }
 
 /// A material as the Materials list shows it.
@@ -385,6 +464,10 @@ pub struct View<'a> {
     pub recent: &'a [PathBuf],
     /// The sheet open over the window, if any.
     pub sheet: Option<&'a Sheet>,
+    /// The Library tab's folder and items.
+    pub library: LibraryView<'a>,
+    /// The one selected component instance, which Save to Library saves.
+    pub component: Option<InstanceId>,
     /// The one selected group or component (`Editor::rename_target`): Rename Component works
     /// on it and Entity Info shows its Name field.
     pub rename: Option<&'a RenameTarget>,

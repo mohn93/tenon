@@ -212,13 +212,17 @@ pub(crate) fn from_scene(scene: Scene, source: String) -> Result<Clip, CommandEr
 
 /// The Paste tool's preview of clip text: its base point and edges. Fails as paste would.
 pub fn outline(text: &str) -> Result<ClipOutline, CommandError> {
-    let clip = decode(text)?;
+    Ok(outline_of(&decode(text)?))
+}
+
+/// The preview of `clip`.
+pub(crate) fn outline_of(clip: &Clip) -> ClipOutline {
     let mut segments = Vec::new();
     add_segments(&clip.scene, MeshId::Root, DAffine3::IDENTITY, &mut segments);
-    Ok(ClipOutline {
+    ClipOutline {
         base: clip.base,
         segments,
-    })
+    }
 }
 
 /// The edges of mesh `mesh` and of the instances in it, placed by `to_world`: at most

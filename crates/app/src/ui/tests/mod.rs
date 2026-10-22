@@ -6,6 +6,7 @@ mod context;
 mod dock;
 mod entity;
 mod layout;
+mod library;
 mod materials;
 mod menus;
 mod outliner;
@@ -34,8 +35,9 @@ use tools::ToolKind;
 
 use super::theme::{self, ThemeChoice};
 use super::{
-    Agents, DockLayout, DockTab, MaterialRow, RecoverRow, RecoverView, SceneRow, SectionMenu,
-    SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction, View, draw,
+    Agents, DockLayout, DockTab, LibraryRow, LibraryView, MaterialRow, RecoverRow, RecoverView,
+    SceneRow, SectionMenu, SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow,
+    UiAction, View, draw,
 };
 use crate::editor::{RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
@@ -109,6 +111,17 @@ pub(super) struct Fixture {
     pub recover: Option<Vec<RecoverRow>>,
     /// How many older entries the Recover Models window left out.
     pub recover_older: usize,
+    /// The library folder, when one is chosen.
+    pub library_folder: Option<PathBuf>,
+    /// The Library tab's items.
+    pub library_rows: Vec<LibraryRow>,
+    pub library_more: bool,
+    pub library_error: Option<String>,
+    /// The one selected component instance.
+    pub component: Option<kernel::InstanceId>,
+    /// Whether the panels report something while they are first laid out (a tile in view
+    /// asking for its thumbnail); the harness then keeps those actions.
+    pub reports_on_layout: bool,
 }
 
 impl Default for Fixture {
@@ -172,6 +185,12 @@ impl Default for Fixture {
             settings: None,
             recover: None,
             recover_older: 0,
+            library_folder: None,
+            library_rows: Vec::new(),
+            library_more: false,
+            library_error: None,
+            component: None,
+            reports_on_layout: false,
         }
     }
 }
@@ -224,6 +243,13 @@ impl Fixture {
             sheet: self.sheet.as_ref(),
             rename: self.rename.as_ref(),
             settings: self.settings,
+            library: LibraryView {
+                folder: self.library_folder.as_deref(),
+                rows: &self.library_rows,
+                more: self.library_more,
+                error: self.library_error.as_deref(),
+            },
+            component: self.component,
             recover: self.recover.as_deref().map(|rows| RecoverView {
                 rows,
                 older: self.recover_older,
@@ -289,8 +315,12 @@ fn harness_built(f: Fixture, size: Vec2, pixels_per_point: f32) -> H {
         );
     h.run_ok();
     // Laying the panels out reports nothing by itself.
-    assert_eq!(h.state().actions, [], "actions from the first frames");
-    h.state_mut().actions.clear();
+    if !h.state().reports_on_layout {
+        assert_eq!(h.state().actions, [], "actions from the first frames");
+    }
+    if !h.state().reports_on_layout {
+        h.state_mut().actions.clear();
+    }
     h
 }
 

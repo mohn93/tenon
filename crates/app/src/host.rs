@@ -294,6 +294,9 @@ impl Host for AppHost<'_> {
                 EditorCommand::CutSelection {} => editor.cut()?,
                 EditorCommand::PasteClipboard { at } => editor.paste(at)?,
                 EditorCommand::PasteInPlace {} => editor.paste_in_place()?,
+                EditorCommand::PlaceLibraryItem { path } => {
+                    editor.place_library_item(Path::new(&path))?
+                }
                 // `api::call` prints (it needs the renderer and reports the pages) and never
                 // sends this here.
                 EditorCommand::ExportPdf { .. } => unreachable!("api::call runs export_pdf"),

@@ -25,6 +25,8 @@ enum Placing {
     Clip(String),
     /// 3D text, drawn.
     Text(TextSpec),
+    /// The library item at this path, inserted.
+    Library(String),
 }
 
 /// 3D text as the window's 3D Text sheet sets it (see `session::Command::Add3dText`).
@@ -55,6 +57,14 @@ impl PasteTool {
         }
     }
 
+    /// A tool placing the library item at `path` (a component or model) whose outline is
+    /// `outline` (`session::library::outline`); a click inserts it with `insert_library_item`.
+    pub fn library(path: String, outline: &ClipOutline) -> Self {
+        let mut tool = Self::new(String::new(), outline);
+        tool.placing = Placing::Library(path);
+        tool
+    }
+
     /// A tool placing the 3D text `spec`, whose letters' sides are `outline` (relative to the
     /// first line's baseline start: `session::text3d::shape(..).segments()`).
     pub fn text(spec: TextSpec, outline: Vec<[DVec3; 2]>) -> Self {
@@ -77,14 +87,14 @@ impl PasteTool {
 impl Tool for PasteTool {
     fn name(&self) -> &'static str {
         match self.placing {
-            Placing::Clip(_) => "Paste",
+            Placing::Clip(_) | Placing::Library(_) => "Paste",
             Placing::Text(_) => "3D Text",
         }
     }
 
     fn prompt(&self) -> &'static str {
         match self.placing {
-            Placing::Clip(_) => "Click where to paste (Esc cancels)",
+            Placing::Clip(_) | Placing::Library(_) => "Click where to paste (Esc cancels)",
             Placing::Text(_) => "Click where the text starts (Esc cancels)",
         }
     }
@@ -113,6 +123,10 @@ impl Tool for PasteTool {
                         clip: clip.clone(),
                         at: Some(hit.point.to_array()),
                     },
+                    Placing::Library(path) => Command::InsertLibraryItem {
+                        path: path.clone(),
+                        at: Some(hit.point.to_array()),
+                    },
                     Placing::Text(spec) => Command::Add3dText {
                         text: spec.text.clone(),
                         position: hit.point.to_array(),
@@ -124,7 +138,7 @@ impl Tool for PasteTool {
             }
             ToolEvent::Value(_) => {
                 let what = match self.placing {
-                    Placing::Clip(_) => "Click where to paste",
+                    Placing::Clip(_) | Placing::Library(_) => "Click where to paste",
                     Placing::Text(_) => "Click where the text starts",
                 };
                 out.message = Some(format!("{what}: typed distances are not taken"));
@@ -220,6 +234,23 @@ mod tests {
             }]
         );
         assert!(out.preview.is_empty());
+    }
+
+    #[test]
+    fn a_library_tool_clicks_an_insert() {
+        let outline = ClipOutline {
+            base: DVec3::ZERO,
+            segments: vec![[DVec3::ZERO, DVec3::X]],
+        };
+        let mut t = PasteTool::library("/lib/a.skr".into(), &outline);
+        let out = send(&mut t, ToolEvent::Click(at(DVec3::new(2.0, 3.0, 0.0))));
+        assert_eq!(
+            out.commands,
+            vec![Command::InsertLibraryItem {
+                path: "/lib/a.skr".into(),
+                at: Some([2.0, 3.0, 0.0]),
+            }]
+        );
     }
 
     #[test]

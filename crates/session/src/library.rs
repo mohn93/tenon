@@ -297,6 +297,20 @@ pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
     })
 }
 
+/// What the Paste tool draws for the component or model item at `path`: its edges and base
+/// point (the corner a click puts at the cursor). A material item has none: `invalid_input`.
+pub fn outline(path: &Path) -> Result<crate::ClipOutline, CommandError> {
+    let item = read_item(path)?;
+    if item.kind == LibraryKind::Material {
+        return Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            "a material item is not placed with the cursor",
+        ));
+    }
+    let clip = crate::clip::from_scene(item.scene, String::new())?;
+    Ok(crate::clip::outline_of(&clip))
+}
+
 /// Whether two materials are the same but for their ids and names: color, opacity, emission
 /// and texture (its image's file bytes and its size).
 pub(crate) fn same_material(a: &Material, b: &Material) -> bool {
