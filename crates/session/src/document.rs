@@ -93,6 +93,9 @@ pub struct Document {
     path: Option<PathBuf>,
     /// The SketchUp file the model was opened from, until it is saved.
     imported_from: Option<PathBuf>,
+    /// The `library.json` entry of the library item the model was opened from, written back
+    /// by every save so a saved item stays an item (`library::INFO_ENTRY`).
+    library_info: Option<Vec<u8>>,
     /// The revision the model had when it was last opened, saved or started.
     clean_revision: u64,
     /// What the last `import` edit made, until its outcome takes it.
@@ -135,6 +138,7 @@ impl Document {
             log_start: 0,
             path: None,
             imported_from: None,
+            library_info: None,
             clean_revision: 0,
             import_report: None,
             soften_report: None,

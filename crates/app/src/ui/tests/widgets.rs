@@ -227,6 +227,24 @@ fn the_panels_draw_every_icon_in_the_icon_family() {
     for clipped in &scenes.output().shapes {
         collect(&clipped.shape, &glyphs, &mut drawn);
     }
+    // The Library tab's tile for an item with no thumbnail, and the context bar's Save
+    // Component to Library button.
+    let library = harness(Fixture {
+        dock: super::dock_on_library(),
+        library_folder: Some("/lib".into()),
+        library_rows: vec![crate::ui::LibraryRow {
+            path: "/lib/a.skr".into(),
+            name: "A".into(),
+            kind: session::LibraryKind::Component,
+            error: None,
+            thumb: crate::ui::Thumb::Failed,
+        }],
+        component: Some(kernel::InstanceId(1)),
+        ..Default::default()
+    });
+    for clipped in &library.output().shapes {
+        collect(&clipped.shape, &glyphs, &mut drawn);
+    }
     let wrong: Vec<_> = drawn.iter().filter(|(_, f)| *f != fonts::icons()).collect();
     assert_eq!(wrong, Vec::<&(char, egui::FontFamily)>::new());
     let seen: BTreeSet<char> = drawn.iter().map(|(c, _)| *c).collect();

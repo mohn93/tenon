@@ -822,3 +822,73 @@ fn an_items_outline_is_its_edges_and_its_corner_a_material_has_none() {
     assert_eq!(err.kind, ErrorKind::File);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The `kind` and `name` the listing gives the file at `path`.
+fn listed(dir: &Path, file: &str) -> (String, String) {
+    let l = ask(&doc(), json!({"type": "library", "folder": p(dir)}));
+    let item = l["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["path"].as_str().unwrap().ends_with(file))
+        .unwrap_or_else(|| panic!("{file} in {l}"))
+        .clone();
+    (
+        item["kind"].as_str().unwrap().to_string(),
+        item["name"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn an_item_opened_and_saved_stays_an_item_and_a_new_model_forgets_it() {
+    let dir = folder("keep-info");
+    let mut d = doc();
+    let ids = rectangle(&mut d, [0.0; 3], [2.0, 2.0, 0.0]);
+    let instance = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Tile"}),
+    ));
+    let item = dir.join("tile.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&item), "kind": "component",
+               "item": instance, "name": "Pretty Tile"}),
+    );
+    assert_eq!(
+        listed(&dir, "tile.skr"),
+        ("component".into(), "Pretty Tile".into())
+    );
+    // Open the item, change it and save: still the same kind and name.
+    let mut e = doc();
+    ok(&mut e, json!({"type": "open", "path": p(&item)}));
+    rectangle(&mut e, [5.0, 5.0, 0.0], [6.0, 6.0, 0.0]);
+    ok(&mut e, json!({"type": "save"}));
+    assert_eq!(
+        listed(&dir, "tile.skr"),
+        ("component".into(), "Pretty Tile".into())
+    );
+    // Save As to another path keeps it too.
+    let copy = dir.join("copy.skr");
+    ok(&mut e, json!({"type": "save", "path": p(&copy)}));
+    assert_eq!(
+        listed(&dir, "copy.skr"),
+        ("component".into(), "Pretty Tile".into())
+    );
+    // A plain model saved from a new one is not an item with a kind, whatever was open before.
+    ok(&mut e, json!({"type": "new", "discard": true}));
+    rectangle(&mut e, [0.0; 3], [1.0, 1.0, 0.0]);
+    let plain = dir.join("plain.skr");
+    ok(&mut e, json!({"type": "save", "path": p(&plain)}));
+    assert_eq!(listed(&dir, "plain.skr"), ("model".into(), "plain".into()));
+    // Opening a plain file after an item forgets the item's entry.
+    let mut f = doc();
+    ok(&mut f, json!({"type": "open", "path": p(&item)}));
+    ok(
+        &mut f,
+        json!({"type": "open", "path": p(&plain), "discard": true}),
+    );
+    let again = dir.join("again.skr");
+    ok(&mut f, json!({"type": "save", "path": p(&again)}));
+    assert_eq!(listed(&dir, "again.skr"), ("model".into(), "again".into()));
+    std::fs::remove_dir_all(dir).unwrap();
+}

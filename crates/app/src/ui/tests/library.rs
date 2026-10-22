@@ -433,3 +433,43 @@ fn settings_chooses_and_clears_the_library_folder() {
     assert!(drawn_texts(&h).iter().any(|t| t == "Not set"));
     assert!(h.get_by_label("Clear").accesskit_node().is_disabled());
 }
+
+#[test]
+fn the_context_bar_saves_a_selected_component() {
+    let f = |folder: Option<&str>, component| Fixture {
+        library_folder: folder.map(PathBuf::from),
+        component,
+        ..Default::default()
+    };
+    let mut h = harness(f(Some("/lib"), Some(InstanceId(7))));
+    assert_eq!(
+        click(&mut h, "Save Component to Library"),
+        [UiAction::SaveToLibrary(LibrarySave::Component(InstanceId(
+            7
+        )))]
+    );
+    let h = harness(f(None, Some(InstanceId(7))));
+    assert!(
+        h.get_by_label("Save Component to Library")
+            .accesskit_node()
+            .is_disabled()
+    );
+    let h = harness(f(Some("/lib"), None));
+    assert!(h.query_by_label("Save Component to Library").is_none());
+}
+
+#[test]
+fn a_material_tile_says_a_click_adds_it_and_paints_with_it() {
+    let mut h = harness(library());
+    h.get_by_label("Red Brick").hover();
+    for _ in 0..30 {
+        h.step();
+    }
+    let texts = drawn_texts(&h);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("click to add to the model and paint with it")),
+        "{texts:?}"
+    );
+}

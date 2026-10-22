@@ -160,6 +160,47 @@ impl<T> Thumbnails<T> {
 /// A thumbnail's pixels: `THUMB_SIZE` square RGBA, top row first.
 pub struct Pixels(pub Vec<u8>);
 
+/// RGBA8 `pixels` of a `width` x `height` image fitted inside a `side` x `side` square on white,
+/// centred, keeping the image's aspect (box filtered). Opaque.
+pub fn letterbox(pixels: &[u8], width: u32, height: u32, side: u32) -> Vec<u8> {
+    let (w, h, s) = (width.max(1) as usize, height.max(1) as usize, side as usize);
+    let mut out = vec![255u8; s * s * 4];
+    if pixels.len() < w * h * 4 || s == 0 {
+        return out;
+    }
+    let longest = w.max(h);
+    let nw = (s * w / longest).clamp(1, s);
+    let nh = (s * h / longest).clamp(1, s);
+    let (left, top) = ((s - nw) / 2, (s - nh) / 2);
+    for y in 0..nh {
+        let (y0, y1) = (
+            y * h / nh,
+            ((y + 1) * h).div_ceil(nh).clamp(y * h / nh + 1, h),
+        );
+        for x in 0..nw {
+            let (x0, x1) = (
+                x * w / nw,
+                ((x + 1) * w).div_ceil(nw).clamp(x * w / nw + 1, w),
+            );
+            let mut sum = [0u32; 3];
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let at = (sy * w + sx) * 4;
+                    for c in 0..3 {
+                        sum[c] += u32::from(pixels[at + c]);
+                    }
+                }
+            }
+            let n = ((y1 - y0) * (x1 - x0)) as u32;
+            let at = ((top + y) * s + left + x) * 4;
+            for c in 0..3 {
+                out[at + c] = (sum[c] / n) as u8;
+            }
+        }
+    }
+    out
+}
+
 /// Makes the thumbnail of the item at `path`: a component or model in an iso view fitted to
 /// its box on white paper, a material as its color or texture. None when the item cannot be
 /// read, is empty or the GPU fails.
@@ -169,12 +210,7 @@ pub fn make(snapshotter: &mut Snapshotter, path: &Path) -> Option<Pixels> {
     if item.kind == LibraryKind::Material {
         let (_, material) = item.scene.materials().next()?;
         let mut pixels = match &material.texture {
-            Some(t) => render::texture::resample(
-                &t.image.pixels,
-                t.image.width,
-                t.image.height,
-                THUMB_SIZE,
-            ),
+            Some(t) => letterbox(&t.image.pixels, t.image.width, t.image.height, THUMB_SIZE),
             None => material
                 .color
                 .iter()
@@ -269,6 +305,41 @@ mod tests {
         assert_eq!(t.next_batch(), [key("d", 1)]);
         t.clear();
         assert!(t.get(Path::new("/lib/a.skr"), 1).is_none());
+    }
+
+    #[test]
+    fn a_wide_texture_is_letterboxed_not_squashed() {
+        // 4 x 2: left half red, right half blue.
+        let mut image = Vec::new();
+        for _ in 0..2 {
+            for x in 0..4 {
+                image.extend_from_slice(if x < 2 {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
+            }
+        }
+        let out = letterbox(&image, 4, 2, 8);
+        let px = |x: usize, y: usize| out[(y * 8 + x) * 4..(y * 8 + x) * 4 + 4].to_vec();
+        // The image fills the width and the middle four rows; white above and below.
+        assert_eq!(px(0, 0), [255, 255, 255, 255]);
+        assert_eq!(px(7, 7), [255, 255, 255, 255]);
+        assert_eq!(px(0, 2), [255, 0, 0, 255]);
+        assert_eq!(px(3, 5), [255, 0, 0, 255]);
+        assert_eq!(px(4, 2), [0, 0, 255, 255]);
+        assert_eq!(px(7, 5), [0, 0, 255, 255]);
+        assert_eq!(px(3, 1), [255, 255, 255, 255]);
+        assert_eq!(px(3, 6), [255, 255, 255, 255]);
+        // A square image fills it; a tall one is centred in columns.
+        let square = letterbox(&[9, 9, 9, 255].repeat(4), 2, 2, 4);
+        assert!(square.chunks(4).all(|p| p == [9, 9, 9, 255]));
+        let tall = letterbox(&[1, 2, 3, 255].repeat(2), 1, 2, 4);
+        let at = |x: usize, y: usize| tall[(y * 4 + x) * 4..(y * 4 + x) * 4 + 3].to_vec();
+        assert_eq!(at(0, 0), [255, 255, 255]);
+        assert_eq!(at(1, 0), [1, 2, 3]);
+        assert_eq!(at(2, 3), [1, 2, 3]);
+        assert_eq!(at(3, 3), [255, 255, 255]);
     }
 
     #[test]

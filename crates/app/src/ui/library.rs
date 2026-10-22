@@ -187,7 +187,7 @@ fn tile(
                     square.center(),
                     egui::Align2::CENTER_CENTER,
                     icons::CUBE,
-                    egui::FontId::proportional(24.0),
+                    egui::FontId::new(24.0, super::fonts::icons()),
                     t.text_secondary,
                 );
             } else if ui.is_rect_visible(square) {
@@ -206,6 +206,10 @@ fn tile(
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &row.name));
     let response = match &row.error {
         Some(why) => response.on_hover_text(why),
+        None if row.kind == LibraryKind::Material => response.on_hover_text(format!(
+            "{}: click to add to the model and paint with it",
+            row.name
+        )),
         None => response.on_hover_text(format!("{}: click to place", row.name)),
     };
     if response.clicked() && row.error.is_none() {

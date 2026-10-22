@@ -24,8 +24,19 @@ impl Document {
             &self.camera,
             self.view_look(),
             Access::Private,
+            &self.info_entries(),
         )
         .map_err(|e| file_error(&path.display().to_string(), e))
+    }
+
+    /// The extra archive entries a save writes: the `library.json` of the library item the
+    /// model was opened from, if it was.
+    fn info_entries(&self) -> Vec<(&str, &[u8])> {
+        self.library_info
+            .as_deref()
+            .map(|bytes| (crate::library::INFO_ENTRY, bytes))
+            .into_iter()
+            .collect()
     }
 
     /// The lighting and coloring a file saves with the camera.
@@ -58,6 +69,7 @@ impl Document {
         self.color_by_tag = false;
         self.section_display = SectionDisplay::default();
         self.path = None;
+        self.library_info = None;
     }
 
     /// Replaces the model, view and lighting with a file's. A file whose view cannot be used
@@ -88,6 +100,7 @@ impl Document {
             fill: c.section_fill,
         };
         self.path = Some(PathBuf::from(path));
+        self.library_info = crate::library::info_of(Path::new(path));
         Ok(None)
     }
 
@@ -112,6 +125,7 @@ impl Document {
             fill: c.section_fill,
         };
         self.path = None;
+        self.library_info = crate::library::info_of(path);
         // The revision before the model was replaced, which it never returns to.
         self.clean_revision = self.revision - 1;
         Ok(())
@@ -140,6 +154,7 @@ impl Document {
         self.color_by_tag = false;
         self.section_display = SectionDisplay::default();
         self.path = None;
+        self.library_info = None;
         self.imported_from = Some(PathBuf::from(path));
         Ok(report)
     }
@@ -169,6 +184,7 @@ impl Document {
             &self.camera,
             self.view_look(),
             Access::Default,
+            &self.info_entries(),
         )
         .map_err(|e| file_error(&target.display().to_string(), e))?;
         self.path = Some(target);

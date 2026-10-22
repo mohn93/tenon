@@ -5,7 +5,7 @@ use egui::{Align, Button, Layout, RichText, Sense, TextStyle, Ui, Vec2, WidgetIn
 use kernel::EntityId;
 use session::Lighting;
 
-use super::{UiAction, View, fonts, icons, menu_bar, outliner, theme, widgets};
+use super::{LibrarySave, UiAction, View, fonts, icons, menu_bar, outliner, theme, widgets};
 use crate::shortcuts::Bound;
 
 /// The longest crumb name drawn whole, in characters.
@@ -49,6 +49,27 @@ pub(super) fn context_bar(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
             for (applies, icon, label, bound, action) in buttons {
                 if applies && widgets::icon_button(ui, icon, label, label, bound, true).clicked() {
                     actions.push(action);
+                }
+            }
+            // A selected component can be saved to the library from here as in Entity Info.
+            if let Some(instance) = view.component {
+                let folder = view.library.folder.is_some();
+                let tip = if folder {
+                    "Save Component to Library"
+                } else {
+                    "Save Component to Library: choose a library folder in Settings > Files first"
+                };
+                if widgets::icon_button(
+                    ui,
+                    icons::BOOKMARK,
+                    "Save Component to Library",
+                    tip,
+                    None,
+                    folder,
+                )
+                .clicked()
+                {
+                    actions.push(UiAction::SaveToLibrary(LibrarySave::Component(instance)));
                 }
             }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

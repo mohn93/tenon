@@ -2092,7 +2092,7 @@ impl State {
         let materials = self.material_rows();
         // Thumbnails tiles in view asked for last frame; more wait for the next.
         self.make_thumbnails();
-        let library_rows = self.library_rows();
+        self.update_library_rows();
         // Rebuilt only when the model changes; the open and selected marks are worked out
         // while drawing, from the context and selection.
         let revision = self.editor.doc().revision();
@@ -2158,7 +2158,7 @@ impl State {
         let panels = View {
             library: LibraryView {
                 folder: self.prefs.library.as_deref(),
-                rows: &library_rows,
+                rows: self.library.rows(),
                 more: self.library.more(),
                 error: self.library.error(),
             },
@@ -2257,7 +2257,7 @@ impl State {
         // Applied once the frame is presented: some open modal dialogs, which must not run
         // while this frame's surface texture is held.
         let actions = std::mem::take(&mut gui_frame.actions);
-        let acted = !actions.is_empty();
+        let mut acted = false;
         if gui_frame.viewport != self.view {
             self.view = gui_frame.viewport;
             let v = self.view;
@@ -2341,9 +2341,12 @@ impl State {
         // Actions from a pass with a sheet open (or after one opened) are only the sheet's own.
         let sheet_was_open = self.sheet.is_some();
         for action in actions {
-            if (sheet_was_open || self.sheet.is_some()) && !action_allowed_with_sheet(&action) {
+            if !action_applies(sheet_was_open || self.sheet.is_some(), &action) {
                 continue;
             }
+            // Only what was applied asks for another frame: a tile's thumbnail request
+            // dropped under a sheet must not keep the window redrawing.
+            acted = true;
             self.apply(action);
         }
         // A print waits for a frame that shows its message.
@@ -2697,6 +2700,12 @@ fn keys_reach_editor(text_focused: bool, sheet_open: bool) -> bool {
     !text_focused && !sheet_open
 }
 
+/// Whether a panel's `action` is applied: always without a sheet, with one only if
+/// `action_allowed_with_sheet`.
+fn action_applies(sheet_open: bool, action: &UiAction) -> bool {
+    !sheet_open || action_allowed_with_sheet(action)
+}
+
 /// Whether `action` is applied while a sheet is open: only closing or confirming the sheet,
 /// and Quit. egui presses a widget behind the sheet's modal layer on a screen reader's Click,
 /// so the panels' actions can still arrive and are dropped here.
@@ -2711,6 +2720,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmDeleteTag(_)
             | UiAction::ConfirmDiscardRecovered
             | UiAction::ConfirmLibraryDelete
+            | UiAction::ThumbnailsWanted(_)
             | UiAction::ConfirmSaveToLibrary(_)
             | UiAction::ConfirmOverwriteLibrary
             | UiAction::ConfirmNote(_)
@@ -3863,6 +3873,24 @@ mod tests {
         // An agent deletes the tag meanwhile.
         e.delete_tag(walls, None);
         assert!(sheet_applies(&sheet, &origin, &e).is_err());
+    }
+
+    #[test]
+    fn dropped_actions_do_not_count_and_thumbnail_requests_pass_a_sheet() {
+        let wanted = UiAction::ThumbnailsWanted(vec!["/lib/a.skr".into()]);
+        assert!(
+            action_applies(true, &wanted),
+            "thumbnails render under a sheet"
+        );
+        assert!(action_applies(
+            false,
+            &UiAction::LibraryUse("/lib/a.skr".into())
+        ));
+        assert!(!action_applies(
+            true,
+            &UiAction::LibraryUse("/lib/a.skr".into())
+        ));
+        assert!(action_applies(true, &UiAction::CloseSheet));
     }
 
     #[test]

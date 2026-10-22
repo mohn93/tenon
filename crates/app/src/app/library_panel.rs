@@ -22,6 +22,10 @@ pub(super) struct LibraryState {
     /// The listing is out of date: it is made again when the tab is shown.
     stale: bool,
     thumbs: Thumbnails<egui::TextureHandle>,
+    /// The tab's rows, built from `items` and `thumbs` when either changed.
+    rows: Vec<LibraryRow>,
+    /// `rows` no longer match `items` and `thumbs`.
+    rows_stale: bool,
 }
 
 impl LibraryState {
@@ -29,6 +33,7 @@ impl LibraryState {
     pub(super) fn new() -> Self {
         Self {
             stale: true,
+            rows_stale: true,
             ..Self::default()
         }
     }
@@ -36,6 +41,12 @@ impl LibraryState {
     /// The thumbnails belonged to the old panels' context.
     pub(super) fn forget_thumbnails(&mut self) {
         self.thumbs.clear();
+        self.rows_stale = true;
+    }
+
+    /// The rows the tab shows (see `State::update_library_rows`).
+    pub(super) fn rows(&self) -> &[LibraryRow] {
+        &self.rows
     }
 
     pub(super) fn more(&self) -> bool {
@@ -65,6 +76,7 @@ impl State {
     /// Lists the folder again.
     fn refresh_library(&mut self) {
         self.library.stale = false;
+        self.library.rows_stale = true;
         let Some(folder) = self.prefs.library.clone() else {
             self.library.items.clear();
             self.library.more = false;
@@ -93,16 +105,22 @@ impl State {
         self.library.thumbs.keep_only(&listed);
     }
 
-    /// The Library tab's rows, listing the folder first when it is out of date and the tab is
-    /// shown. Empty while another tab is.
-    pub(super) fn library_rows(&mut self) -> Vec<LibraryRow> {
+    /// Brings the Library tab's rows up to date: lists the folder first when it is out of date
+    /// and the tab is shown; the rows are built again only when the listing or a thumbnail
+    /// changed (`LibraryState::rows`).
+    pub(super) fn update_library_rows(&mut self) {
         if !self.library_shown() {
-            return Vec::new();
+            return;
         }
         if self.library.stale {
             self.refresh_library();
         }
-        self.library
+        if !self.library.rows_stale {
+            return;
+        }
+        self.library.rows_stale = false;
+        let lib = &self.library;
+        let rows = lib
             .items
             .iter()
             .map(|item| {
@@ -110,7 +128,7 @@ impl State {
                 let thumb = if item.error.is_some() {
                     Thumb::Failed
                 } else {
-                    match self.library.thumbs.get(&path, item.modified) {
+                    match lib.thumbs.get(&path, item.modified) {
                         Some(Slot::Ready(handle)) => Thumb::Ready(handle.id()),
                         Some(Slot::Failed) => Thumb::Failed,
                         None => Thumb::Pending,
@@ -124,7 +142,8 @@ impl State {
                     thumb,
                 }
             })
-            .collect()
+            .collect();
+        self.library.rows = rows;
     }
 
     /// Notes the tiles in view that have no thumbnail (a tile asks every frame until it has
@@ -158,6 +177,7 @@ impl State {
                 )
             });
             self.library.thumbs.store(key, texture);
+            self.library.rows_stale = true;
         }
     }
 
@@ -183,6 +203,7 @@ impl State {
             self.library.thumbs.clear();
             self.library.items.clear();
             self.library.stale = true;
+            self.library.rows_stale = true;
         }
     }
 

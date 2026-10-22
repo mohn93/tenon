@@ -639,3 +639,11 @@ pub(super) fn house_fixture(context: &[&str]) -> Fixture {
         ..Default::default()
     }
 }
+
+/// The dock on the Library tab.
+pub(super) fn dock_on_library() -> DockLayout {
+    DockLayout {
+        tab: DockTab::Library,
+        ..Default::default()
+    }
+}

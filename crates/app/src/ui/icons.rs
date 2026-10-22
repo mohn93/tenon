@@ -8,6 +8,8 @@ pub const REDO: &str = ph::ARROW_U_UP_RIGHT;
 /// Make Group, Make Component and Explode.
 pub const BOUNDING_BOX: &str = ph::BOUNDING_BOX;
 pub const CUBE: &str = ph::CUBE;
+/// Save to Library.
+pub const BOOKMARK: &str = ph::BOOKMARK_SIMPLE;
 pub const ARROWS_OUT: &str = ph::ARROWS_OUT;
 /// The day/night toggle by day and at night.
 pub const SUN: &str = ph::SUN;
@@ -63,6 +65,7 @@ pub fn all() -> Vec<&'static str> {
         REDO,
         BOUNDING_BOX,
         CUBE,
+        BOOKMARK,
         ARROWS_OUT,
         SUN,
         MOON,

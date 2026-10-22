@@ -195,6 +195,17 @@ fn stem(name: &str) -> String {
         .collect()
 }
 
+/// The `library.json` entry of the `.skr` file at `path` when it has a valid one (kind known, a
+/// usable name when it has one): what a save of a model opened from an item writes back.
+pub(crate) fn info_of(path: &Path) -> Option<Vec<u8>> {
+    let bytes = file::read_entry(path, INFO_ENTRY, MAX_INFO_BYTES).ok()??;
+    let info: Info = serde_json::from_slice(&bytes).ok()?;
+    if info.name.as_deref().is_some_and(|n| check_name(n).is_err()) {
+        return None;
+    }
+    Some(bytes)
+}
+
 /// The kind and name a file's `library.json` gives, or a model named by the file's stem when
 /// it has none or it is not valid.
 fn describe(path: &Path, file_name: &str) -> Result<(LibraryKind, String), String> {

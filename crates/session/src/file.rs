@@ -123,7 +123,7 @@ pub(crate) struct ViewLook {
     pub units: Units,
 }
 
-/// Writes the model, camera, lighting and coloring to `path`, replacing it only once the whole
+/// Writes the model, camera, lighting and coloring to `path` (with the `extra` archive entries), replacing it only once the whole
 /// file is written. Fails when the model has given out ids past [`MAX_ID`], which no file can
 /// hold.
 pub(crate) fn write(
@@ -132,8 +132,9 @@ pub(crate) fn write(
     camera: &Camera,
     look: ViewLook,
     access: Access,
+    extra: &[(&str, &[u8])],
 ) -> Result<(), String> {
-    let bytes = write_bytes(scene, camera, look, ENTRY, &[])?;
+    let bytes = write_bytes(scene, camera, look, ENTRY, extra)?;
     replace_file(path, &bytes, access)
 }
 
@@ -650,7 +651,7 @@ mod tests {
             section: SectionDisplay::default(),
             units: Units::default(),
         };
-        let err = write(&path, &scene, &camera, look, Access::Default).unwrap_err();
+        let err = write(&path, &scene, &camera, look, Access::Default, &[]).unwrap_err();
         assert!(err.contains("scene p") && err.contains("beyond"), "{err}");
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);

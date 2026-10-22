@@ -217,7 +217,10 @@ ignore it, and a `.skr` file without it is a model item named by its file name. 
 root holds one instance of the component at the origin, with the rotation and scale it had
 (the translation is removed), and the materials and tags it uses; a material item holds only
 that material (texture included); a model item is the whole model. `save_to_library` writes them
-and `insert_library_item` places them (see Commands).
+and `insert_library_item` places them (see Commands). A model opened from a library item (`open`)
+remembers its `library.json`, and every save of it (`save`, to its own path or another) writes the
+entry back, so the saved file is still the same kind and name; `new` and opening a file without
+the entry forget it.
 
 The `library` query lists a folder: the `.skr` files directly in it (no subfolders), sorted by
 name ignoring case, at most 1000 (`more` is true when the folder holds more; then the first
@@ -250,7 +253,7 @@ file is removed, only when it is a regular `.skr` file directly in the folder an
 Saving asks for a name in a sheet and writes `<folder>/<name>.skr` as `save_to_library` does
 (characters a file name may not hold become `_`; an existing file asks before it is replaced):
 Entity Info's Save to Library for one selected component instance, the Materials panel's Save to
-Library for the chosen material, and File > Save Model to Library.... They need a folder.
+Library for the chosen material, the context bar's Save Component to Library button, and File > Save Model to Library.... They need a folder.
 
 ### References inside a batch
 
