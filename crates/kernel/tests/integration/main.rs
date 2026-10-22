@@ -20,6 +20,7 @@ mod pages;
 mod perf;
 mod push_pull;
 mod scale;
+mod sections;
 mod smooth;
 mod soften;
 mod tags;

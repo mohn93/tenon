@@ -36,7 +36,8 @@ impl Scene {
     }
 
     /// `make_group` of `parts`' edges, faces and instances that also moves its guides,
-    /// dimensions and notes into the new definition, keeping their ids. An annotation
+    /// section planes, dimensions and notes into the new definition, keeping their ids. A
+    /// plane that was the active one of `parent` is the active one of the new definition. An annotation
     /// anchored to a vertex of the grouped geometry stays anchored to it there; one anchored
     /// to another vertex is anchored to where that vertex is, and a curve not grouped is
     /// measured as a fixed circle. Screen notes stay in the root.
@@ -72,6 +73,10 @@ impl Scene {
             .collect();
         let copied = source.vertices_of(edges, faces);
         let annotations = source.lift(&parts.dimensions, &notes, DAffine3::IDENTITY, &copied);
+        let planes = source.lift_sections(&parts.sections, DAffine3::IDENTITY);
+        let active = source
+            .active_section()
+            .filter(|a| planes.iter().any(|(id, _)| id == a));
 
         let (definition, added) = self.add_definition(name, kind);
         let mut placed = None;
@@ -81,6 +86,10 @@ impl Scene {
             }
             for (id, _) in &guides {
                 m.remove_guide(*id);
+            }
+            // Removing the active plane leaves the parent with none active.
+            for (id, _) in &planes {
+                m.remove_section(*id);
             }
             // The moved annotations go before the geometry is detached: they are put back in
             // the definition below, so the parent's upkeep must not freeze them on the way out.
@@ -97,6 +106,8 @@ impl Scene {
             for (id, g) in guides {
                 m.insert_guide_as(id, g);
             }
+            m.land_sections(planes, true);
+            m.set_active(active);
             m.land(annotations, true);
             Ok(m.take_changes())
         })?;
@@ -108,8 +119,9 @@ impl Scene {
 impl Scene {
     /// Replaces an instance in mesh `parent` by its definition's geometry, placed by the
     /// instance's transform and drawn like new edges, so it merges with what it touches.
-    /// Instances, guides and annotations inside it come out into `parent`, with new ids (an
-    /// annotation anchored to a vertex stays anchored to it); a group inside a
+    /// Instances, guides, section planes and annotations inside it come out into `parent`,
+    /// with new ids (an annotation anchored to a vertex stays anchored to it; a plane comes
+    /// out inactive, and the active plane of `parent` stays); a group inside a
     /// component gets a copy of its definition. A group's definition goes with its last
     /// instance; a component's stays. The instance's material passes to the face sides and
     /// instances that come out without one, and its tag to the edges, faces, instances and
@@ -148,6 +160,12 @@ impl Scene {
                 g.transformed(placed.transform)
                     .with_tag(g.tag().or(placed.tag))
             })
+            .collect();
+        let planes: Vec<_> = definition
+            .mesh
+            .lift_sections(&definition.mesh.all_sections(), placed.transform)
+            .into_iter()
+            .map(|(id, p)| (id, p.with_tag(p.tag.or(placed.tag))))
             .collect();
         let (dimensions, notes) = definition.mesh.all_annotations();
         let annotations: Vec<_> = definition
@@ -188,6 +206,7 @@ impl Scene {
             for g in guides {
                 m.insert_guide(g);
             }
+            m.land_sections(planes, false);
             m.land(annotations, false);
             Ok(m.take_changes())
         })?;
@@ -264,14 +283,17 @@ impl Scene {
         Ok(SceneChange::join([steps, placed]))
     }
 
-    /// A new group definition holding a copy of `id`'s geometry, guides and annotations, with
-    /// new ids; groups inside it are copied too, components inside are placed again.
+    /// A new group definition holding a copy of `id`'s geometry, guides, section planes
+    /// (inactive) and annotations, with new ids; groups inside it are copied too, components inside are placed again.
     fn duplicate(&mut self, id: DefinitionId) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
         let (name, kind) = (original.name.clone(), original.kind);
         let stencil = whole(&original.mesh);
         let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
         let guides: Vec<Guide> = original.mesh.guides().map(|(_, g)| *g).collect();
+        let planes = original
+            .mesh
+            .lift_sections(&original.mesh.all_sections(), DAffine3::IDENTITY);
         let (dimensions, notes) = original.mesh.all_annotations();
         let annotations = original.mesh.lift(
             &dimensions,
@@ -307,6 +329,7 @@ impl Scene {
                 for g in guides {
                     m.insert_guide(g);
                 }
+                m.land_sections(planes, false);
                 m.land(annotations, false);
                 Ok(m.take_changes())
             })

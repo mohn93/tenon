@@ -24,6 +24,8 @@ mod page;
 mod push_pull;
 mod regions;
 mod scene;
+mod section;
+mod section_loops;
 mod smooth;
 mod soften;
 pub mod sweep;
@@ -41,12 +43,12 @@ pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     AnchorData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
     InstanceData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData,
-    RadialAnchorData, SceneData, TagData, TextureData, VertexData,
+    RadialAnchorData, SceneData, SectionData, TagData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, TagId, VertexId,
+    NoteId, PageId, SectionId, TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -59,6 +61,8 @@ pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView};
 pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
+pub use section::SectionPlane;
+pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
 pub use tag::{MAX_TAG_NAME, TAG_COLORS, Tag, TagEdit, UNTAGGED, tag_shown_among};

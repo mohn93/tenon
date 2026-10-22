@@ -9,9 +9,10 @@ use crate::annotation::{Dimension, Note};
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, TagId, VertexId,
+    NoteId, PageId, SectionId, TagId, VertexId,
 };
 use crate::index::Index;
+use crate::section::SectionPlane;
 use crate::texture::{TexturePlacement, is_level};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -250,6 +251,10 @@ pub enum Op {
     RemoveDimension(DimensionId, Dimension),
     AddNote(NoteId, Note),
     RemoveNote(NoteId, Note),
+    AddSection(SectionId, SectionPlane),
+    RemoveSection(SectionId, SectionPlane),
+    /// The mesh's active section plane changed from the first to the second.
+    SetActiveSection(Option<SectionId>, Option<SectionId>),
 }
 
 impl Op {
@@ -276,33 +281,40 @@ impl Op {
             Op::RemoveDimension(id, d) => Op::AddDimension(id, d),
             Op::AddNote(id, n) => Op::RemoveNote(id, n),
             Op::RemoveNote(id, n) => Op::AddNote(id, n),
+            Op::AddSection(id, p) => Op::RemoveSection(id, p),
+            Op::RemoveSection(id, p) => Op::AddSection(id, p),
+            Op::SetActiveSection(from, to) => Op::SetActiveSection(to, from),
         }
     }
 
-    /// The entity this op touches and whether it exists before and after the op.
-    fn entity(&self) -> (EntityId, bool, bool) {
+    /// The entity this op touches and whether it exists before and after the op; None for an
+    /// op on no one entity (a change of the active section plane, see `ChangeSet::summary`).
+    fn entity(&self) -> Option<(EntityId, bool, bool)> {
         match self {
-            Op::AddVertex(id, _) => (EntityId::Vertex(*id), false, true),
-            Op::RemoveVertex(id, _) => (EntityId::Vertex(*id), true, false),
-            Op::MoveVertex(id, _, _) => (EntityId::Vertex(*id), true, true),
-            Op::AddEdge(id, _) => (EntityId::Edge(*id), false, true),
-            Op::RemoveEdge(id, _) => (EntityId::Edge(*id), true, false),
-            Op::ChangeEdge(id, _, _) => (EntityId::Edge(*id), true, true),
-            Op::AddFace(id, _) => (EntityId::Face(*id), false, true),
-            Op::RemoveFace(id, _) => (EntityId::Face(*id), true, false),
-            Op::AddInstance(id, _) => (EntityId::Instance(*id), false, true),
-            Op::RemoveInstance(id, _) => (EntityId::Instance(*id), true, false),
-            Op::TransformInstance(id, _, _) => (EntityId::Instance(*id), true, true),
-            Op::AddGuide(id, _) => (EntityId::Guide(*id), false, true),
-            Op::RemoveGuide(id, _) => (EntityId::Guide(*id), true, false),
-            Op::PaintFace(id, _, _) => (EntityId::Face(*id), true, true),
-            Op::PaintInstance(id, _, _) => (EntityId::Instance(*id), true, true),
-            Op::PlaceTexture(id, _, _) => (EntityId::Face(*id), true, true),
-            Op::SetTag(id, _, _) => (*id, true, true),
-            Op::AddDimension(id, _) => (EntityId::Dimension(*id), false, true),
-            Op::RemoveDimension(id, _) => (EntityId::Dimension(*id), true, false),
-            Op::AddNote(id, _) => (EntityId::Note(*id), false, true),
-            Op::RemoveNote(id, _) => (EntityId::Note(*id), true, false),
+            Op::AddVertex(id, _) => Some((EntityId::Vertex(*id), false, true)),
+            Op::RemoveVertex(id, _) => Some((EntityId::Vertex(*id), true, false)),
+            Op::MoveVertex(id, _, _) => Some((EntityId::Vertex(*id), true, true)),
+            Op::AddEdge(id, _) => Some((EntityId::Edge(*id), false, true)),
+            Op::RemoveEdge(id, _) => Some((EntityId::Edge(*id), true, false)),
+            Op::ChangeEdge(id, _, _) => Some((EntityId::Edge(*id), true, true)),
+            Op::AddFace(id, _) => Some((EntityId::Face(*id), false, true)),
+            Op::RemoveFace(id, _) => Some((EntityId::Face(*id), true, false)),
+            Op::AddInstance(id, _) => Some((EntityId::Instance(*id), false, true)),
+            Op::RemoveInstance(id, _) => Some((EntityId::Instance(*id), true, false)),
+            Op::TransformInstance(id, _, _) => Some((EntityId::Instance(*id), true, true)),
+            Op::AddGuide(id, _) => Some((EntityId::Guide(*id), false, true)),
+            Op::RemoveGuide(id, _) => Some((EntityId::Guide(*id), true, false)),
+            Op::PaintFace(id, _, _) => Some((EntityId::Face(*id), true, true)),
+            Op::PaintInstance(id, _, _) => Some((EntityId::Instance(*id), true, true)),
+            Op::PlaceTexture(id, _, _) => Some((EntityId::Face(*id), true, true)),
+            Op::SetTag(id, _, _) => Some((*id, true, true)),
+            Op::AddDimension(id, _) => Some((EntityId::Dimension(*id), false, true)),
+            Op::RemoveDimension(id, _) => Some((EntityId::Dimension(*id), true, false)),
+            Op::AddNote(id, _) => Some((EntityId::Note(*id), false, true)),
+            Op::RemoveNote(id, _) => Some((EntityId::Note(*id), true, false)),
+            Op::AddSection(id, _) => Some((EntityId::Section(*id), false, true)),
+            Op::RemoveSection(id, _) => Some((EntityId::Section(*id), true, false)),
+            Op::SetActiveSection(..) => None,
         }
     }
 }
@@ -389,8 +401,15 @@ impl ChangeSet {
         // entity -> (existed before, exists after)
         let mut state: BTreeMap<EntityId, (bool, bool)> = BTreeMap::new();
         for op in &self.ops {
-            let (id, before, after) = op.entity();
-            state.entry(id).or_insert((before, after)).1 = after;
+            if let Op::SetActiveSection(from, to) = op {
+                // The planes that stop and start being active are modified (unless the same
+                // change makes or erases them).
+                for id in [from, to].into_iter().flatten() {
+                    state.entry(EntityId::Section(*id)).or_insert((true, true));
+                }
+            } else if let Some((id, before, after)) = op.entity() {
+                state.entry(id).or_insert((before, after)).1 = after;
+            }
         }
         let mut s = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -405,7 +424,7 @@ impl ChangeSet {
     }
 }
 
-/// The geometry of one mesh, plus the instances, guides and annotations placed in it. Every mutation is
+/// The geometry of one mesh, plus the instances, guides, annotations and section planes placed in it. Every mutation is
 /// recorded as an `Op` until `take_changes`.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
@@ -416,6 +435,9 @@ pub struct Model {
     guides: BTreeMap<GuideId, Guide>,
     pub(crate) dimensions: BTreeMap<DimensionId, Dimension>,
     pub(crate) notes: BTreeMap<NoteId, Note>,
+    pub(crate) sections: BTreeMap<SectionId, SectionPlane>,
+    /// The plane cutting this mesh's view, if any (always one of `sections`).
+    pub(crate) active_section: Option<SectionId>,
     /// Dimensions an edit is about to move; see `hold_dimensions`.
     pub(crate) held: BTreeSet<DimensionId>,
     next_id: u64,
@@ -451,6 +473,8 @@ impl PartialEq for Model {
             && self.guides == other.guides
             && self.dimensions == other.dimensions
             && self.notes == other.notes
+            && self.sections == other.sections
+            && self.active_section == other.active_section
     }
 }
 
@@ -506,6 +530,21 @@ impl Model {
             m.faces.insert(id, f);
         }
         m
+    }
+
+    /// The model with these section planes and active plane, and new ids continuing after
+    /// theirs. The caller validates the result.
+    pub(crate) fn with_sections(
+        mut self,
+        sections: BTreeMap<SectionId, SectionPlane>,
+        active: Option<SectionId>,
+    ) -> Model {
+        if let Some(max) = sections.keys().map(|k| k.0).max() {
+            self.bump(max);
+        }
+        self.sections = sections;
+        self.active_section = active;
+        self
     }
 
     // ---- read access ----
@@ -799,6 +838,11 @@ impl Model {
                         *n = n.clone().with_tag(to);
                     }
                 }
+                EntityId::Section(p) => {
+                    if let Some(p) = self.sections.get_mut(&p) {
+                        *p = p.with_tag(to);
+                    }
+                }
                 EntityId::Vertex(_) => {}
             },
             Op::AddDimension(id, d) => {
@@ -814,6 +858,16 @@ impl Model {
             }
             Op::RemoveNote(id, _) => {
                 self.notes.remove(&id);
+            }
+            Op::AddSection(id, p) => {
+                self.bump(id.0);
+                self.sections.insert(id, p);
+            }
+            Op::RemoveSection(id, _) => {
+                self.sections.remove(&id);
+            }
+            Op::SetActiveSection(_, to) => {
+                self.active_section = to;
             }
         }
     }
@@ -1079,6 +1133,44 @@ impl Model {
         n
     }
 
+    pub(crate) fn insert_section(&mut self, plane: SectionPlane) -> SectionId {
+        let id = SectionId(self.alloc());
+        self.record(Op::AddSection(id, plane));
+        id
+    }
+
+    /// Adds a section plane under an id it had elsewhere (moved between meshes) or before
+    /// (changed in place).
+    pub(crate) fn insert_section_as(&mut self, id: SectionId, plane: SectionPlane) {
+        self.record(Op::AddSection(id, plane));
+    }
+
+    /// Removes a section plane; when it is the active one, the mesh has none active after, in
+    /// the same change.
+    pub(crate) fn remove_section(&mut self, id: SectionId) -> SectionPlane {
+        let p = self.sections[&id];
+        if self.active_section == Some(id) {
+            self.record(Op::SetActiveSection(Some(id), None));
+        }
+        self.record(Op::RemoveSection(id, p));
+        p
+    }
+
+    /// Changes a plane in place, keeping its id and whether it is active.
+    pub(crate) fn replace_section(&mut self, id: SectionId, plane: SectionPlane) {
+        let old = self.sections[&id];
+        self.record(Op::RemoveSection(id, old));
+        self.record(Op::AddSection(id, plane));
+    }
+
+    /// Makes `to` the active section plane (None: no plane), recording a change only when it
+    /// differs. The plane must exist.
+    pub(crate) fn set_active(&mut self, to: Option<SectionId>) {
+        if self.active_section != to {
+            self.record(Op::SetActiveSection(self.active_section, to));
+        }
+    }
+
     /// Moves instances by `offset` as one ChangeSet. Each listed instance moves once; unknown
     /// ids are skipped.
     pub fn move_instances(&mut self, ids: &[InstanceId], offset: DVec3) -> ChangeSet {
@@ -1125,7 +1217,7 @@ impl Model {
         }
     }
 
-    /// The tag of an edge, face, instance, guide, dimension or note (None: Untagged); None for
+    /// The tag of an edge, face, instance, guide, dimension, note or section plane (None: Untagged); None for
     /// a vertex or an unknown id.
     pub fn tag_of(&self, id: EntityId) -> Option<Option<TagId>> {
         match id {
@@ -1135,11 +1227,12 @@ impl Model {
             EntityId::Guide(g) => self.guides.get(&g).map(Guide::tag),
             EntityId::Dimension(d) => self.dimensions.get(&d).map(Dimension::tag),
             EntityId::Note(n) => self.notes.get(&n).map(Note::tag),
+            EntityId::Section(p) => self.sections.get(&p).map(SectionPlane::tag),
             EntityId::Vertex(_) => None,
         }
     }
 
-    /// Puts an edge, face, instance, guide or annotation on `tag` (None: Untagged), recording a
+    /// Puts an edge, face, instance, guide, annotation or section plane on `tag` (None: Untagged), recording a
     /// change only when it differs. Vertices and unknown ids are skipped.
     pub(crate) fn set_tag(&mut self, id: EntityId, tag: Option<TagId>) {
         if let Some(from) = self.tag_of(id)
@@ -1260,7 +1353,8 @@ impl Model {
             }
         }
         self.validate_curves()?;
-        self.validate_annotations()
+        self.validate_annotations()?;
+        self.validate_sections()
     }
 
     /// Checks that the vertex grid and the vertex-to-edge and vertex-to-face maps match the

@@ -53,7 +53,8 @@ impl Editor {
                 | EntityId::Edge(_)
                 | EntityId::Face(_)
                 | EntityId::Instance(_)
-                | EntityId::Guide(_) => None,
+                | EntityId::Guide(_)
+                | EntityId::Section(_) => None,
             };
             let Some(text) = text else { continue };
             let (at, anchor) = match (shape.label_point(), shape) {

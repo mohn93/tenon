@@ -21,6 +21,7 @@ id_type!(GuideId);
 id_type!(CurveId);
 id_type!(DimensionId);
 id_type!(NoteId);
+id_type!(SectionId);
 
 /// Shown as "c12". A curve is not an entity: it names the chain of edges tagged with it.
 impl fmt::Display for CurveId {
@@ -30,7 +31,7 @@ impl fmt::Display for CurveId {
 }
 
 /// Any kernel entity. Serialized as a short string: "v12", "e3", "f7", "i4", "g9", "r5",
-/// "n6".
+/// "n6", "s2".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum EntityId {
@@ -45,6 +46,8 @@ pub enum EntityId {
     Dimension(DimensionId),
     /// A leader or screen note (see `Note`).
     Note(NoteId),
+    /// A section plane (see `SectionPlane`).
+    Section(SectionId),
 }
 
 impl fmt::Display for EntityId {
@@ -57,6 +60,7 @@ impl fmt::Display for EntityId {
             EntityId::Guide(id) => write!(f, "g{}", id.0),
             EntityId::Dimension(id) => write!(f, "r{}", id.0),
             EntityId::Note(id) => write!(f, "n{}", id.0),
+            EntityId::Section(id) => write!(f, "s{}", id.0),
         }
     }
 }
@@ -74,6 +78,7 @@ impl FromStr for EntityId {
             'g' => Ok(EntityId::Guide(GuideId(n))),
             'r' => Ok(EntityId::Dimension(DimensionId(n))),
             'n' => Ok(EntityId::Note(NoteId(n))),
+            's' => Ok(EntityId::Section(SectionId(n))),
             _ => Err(format!("invalid entity id {s:?}")),
         }
     }
@@ -95,7 +100,7 @@ fn parse_prefixed(s: &str) -> Option<(char, u64)> {
 }
 
 /// Ids appear in JSON as strings: "v12" (vertex), "e3" (edge), "f7" (face), "i4" (instance),
-/// "g9" (guide), "r5" (dimension), "n6" (note).
+/// "g9" (guide), "r5" (dimension), "n6" (note), "s2" (section plane).
 impl schemars::JsonSchema for EntityId {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "EntityId".into()
@@ -104,8 +109,8 @@ impl schemars::JsonSchema for EntityId {
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "pattern": "^[vefigrn](0|[1-9][0-9]*)$",
-            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face, i<n> instance, g<n> guide, r<n> dimension, n<n> note"
+            "pattern": "^[vefigrns](0|[1-9][0-9]*)$",
+            "description": "Entity id: v<n> vertex, e<n> edge, f<n> face, i<n> instance, g<n> guide, r<n> dimension, n<n> note, s<n> section plane"
         })
     }
 }
@@ -342,6 +347,7 @@ mod tests {
             EntityId::Guide(GuideId(9)),
             EntityId::Dimension(DimensionId(5)),
             EntityId::Note(NoteId(6)),
+            EntityId::Section(SectionId(2)),
         ] {
             assert_eq!(id.to_string().parse::<EntityId>().unwrap(), id);
         }
@@ -350,6 +356,7 @@ mod tests {
         assert_eq!(EntityId::Guide(GuideId(9)).to_string(), "g9");
         assert_eq!(EntityId::Dimension(DimensionId(5)).to_string(), "r5");
         assert_eq!(EntityId::Note(NoteId(6)).to_string(), "n6");
+        assert_eq!(EntityId::Section(SectionId(2)).to_string(), "s2");
         assert_eq!("d3".parse::<DefinitionId>(), Ok(DefinitionId(3)));
         assert_eq!(DefinitionId(3).to_string(), "d3");
         for s in ["", "d", "f3", "d03", "d-1"] {

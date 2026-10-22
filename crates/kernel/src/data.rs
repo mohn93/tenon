@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::annotation::{Anchor, Dimension, Note, RadialAnchor};
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
-    PageId, TagId, VertexId,
+    PageId, SectionId, TagId, VertexId,
 };
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::page::{Page, PageView};
 use crate::scene::{Definition, DefinitionKind, Scene};
+use crate::section::SectionPlane;
 use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
 
@@ -140,6 +141,12 @@ pub struct MeshData {
     /// Absent in files written before notes existed (and when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<NoteData>,
+    /// Absent in files written before section planes existed (and when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<SectionData>,
+    /// The id of the plane cutting the mesh (absent: none, as when there are no planes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_section: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -292,6 +299,18 @@ pub enum NoteData {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<u64>,
     },
+}
+
+/// A section plane (see `SectionPlane`): `normal` is a unit vector.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SectionData {
+    pub id: u64,
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    /// The tag it is on (absent: Untagged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -514,6 +533,16 @@ fn mesh_data(m: &Model) -> MeshData {
             .map(|(id, d)| dimension_data(id, d))
             .collect(),
         notes: m.notes().map(|(id, n)| note_data(id, n)).collect(),
+        sections: m
+            .sections()
+            .map(|(id, p)| SectionData {
+                id: id.0,
+                point: p.point.to_array(),
+                normal: p.normal.to_array(),
+                tag: p.tag.map(|t| t.0),
+            })
+            .collect(),
+        active_section: m.active_section().map(|id| id.0),
     }
 }
 
@@ -810,13 +839,39 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             return Err(format!("note n{id} appears twice"));
         }
     }
+    let mut sections = BTreeMap::new();
+    for p in &data.sections {
+        let what = format!("section plane s{}", p.id);
+        check_id("section plane s", p.id)?;
+        finite(&p.point, what.clone())?;
+        finite(&p.normal, what.clone())?;
+        let plane = SectionPlane {
+            point: DVec3::from(p.point),
+            normal: DVec3::from(p.normal),
+            tag: p.tag.map(TagId),
+        };
+        plane.check().map_err(|e| format!("{what}: {e}"))?;
+        if sections.insert(SectionId(p.id), plane).is_some() {
+            return Err(format!("section plane s{} appears twice", p.id));
+        }
+    }
+    let active = match data.active_section {
+        None => None,
+        Some(id) if sections.contains_key(&SectionId(id)) => Some(SectionId(id)),
+        Some(id) => {
+            return Err(format!(
+                "the active section plane s{id} is not a plane of the mesh"
+            ));
+        }
+    };
     let ids = vertices.len()
         + edges.len()
         + faces.len()
         + instances.len()
         + guides.len()
         + dimensions.len()
-        + notes.len();
+        + notes.len()
+        + sections.len();
     let distinct: std::collections::BTreeSet<u64> = vertices
         .keys()
         .map(|k| k.0)
@@ -826,11 +881,13 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
         .chain(guides.keys().map(|k| k.0))
         .chain(dimensions.keys().map(|k| k.0))
         .chain(notes.keys().map(|k| k.0))
+        .chain(sections.keys().map(|k| k.0))
         .collect();
     if distinct.len() != ids {
         return Err("two entities of different kinds share an id".into());
     }
-    Ok(Model::from_parts(
-        vertices, edges, faces, instances, guides, dimensions, notes,
-    ))
+    Ok(
+        Model::from_parts(vertices, edges, faces, instances, guides, dimensions, notes)
+            .with_sections(sections, active),
+    )
 }

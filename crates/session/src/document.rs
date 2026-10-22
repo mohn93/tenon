@@ -1530,7 +1530,8 @@ impl Document {
                 EntityId::Instance(_)
                 | EntityId::Guide(_)
                 | EntityId::Dimension(_)
-                | EntityId::Note(_) => {}
+                | EntityId::Note(_)
+                | EntityId::Section(_) => {}
                 EntityId::Edge(e) => out.extend(m.edge(e).map(|e| e.v).into_iter().flatten()),
                 EntityId::Face(f) => {
                     if let Some(f) = m.face(f) {
@@ -1610,6 +1611,7 @@ impl Document {
             EntityId::Guide(g) => m.guide(g).is_some(),
             EntityId::Dimension(d) => m.dimension(d).is_some(),
             EntityId::Note(n) => m.note(n).is_some(),
+            EntityId::Section(p) => m.section(p).is_some(),
         }
     }
 
@@ -1749,6 +1751,14 @@ impl Document {
                     EntityId::Note(n) => {
                         QueryResult::Note(m.note(n).map(|_| self.note_info(n)).ok_or_else(missing)?)
                     }
+                    // Section planes have no entity info yet.
+                    EntityId::Section(_) => {
+                        return Err(CommandError::new(
+                            ErrorKind::InvalidInput,
+                            "section planes have no entity info yet",
+                        )
+                        .with_ids(vec![*id]));
+                    }
                 }
             }
             Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
@@ -1880,6 +1890,13 @@ impl Document {
             }
             EntityId::Note(n) => {
                 return m.note_point(n).into_iter().map(|p| p.to_array()).collect();
+            }
+            EntityId::Section(p) => {
+                return m
+                    .section(p)
+                    .map(|p| p.point.to_array())
+                    .into_iter()
+                    .collect();
             }
             EntityId::Edge(e) => m.edge(e).map(|e| e.v.to_vec()).unwrap_or_default(),
             EntityId::Face(f) => m

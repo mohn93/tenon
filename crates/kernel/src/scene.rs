@@ -9,7 +9,7 @@ use crate::annotation::Note;
 use crate::edit::KernelError;
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, TagId,
+    NoteId, PageId, SectionId, TagId,
 };
 use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
@@ -49,6 +49,7 @@ pub struct Parts {
     pub guides: Vec<GuideId>,
     pub dimensions: Vec<DimensionId>,
     pub notes: Vec<NoteId>,
+    pub sections: Vec<SectionId>,
 }
 
 impl Parts {
@@ -64,6 +65,7 @@ impl Parts {
                 EntityId::Guide(g) => parts.guides.push(g),
                 EntityId::Dimension(d) => parts.dimensions.push(d),
                 EntityId::Note(n) => parts.notes.push(n),
+                EntityId::Section(p) => parts.sections.push(p),
             }
         }
         parts
@@ -470,10 +472,10 @@ impl Scene {
         enclose(&placed_box(instance.transform, b))
     }
 
-    /// The anchors of the guides and the annotation points (see `Model::annotation_points`)
-    /// inside an instance's definition, nested definitions included, in the coordinates of
-    /// the mesh holding the instance. Bounds leave guides and annotations out; this lets
-    /// callers check them.
+    /// The anchors of the guides, the annotation points (see `Model::annotation_points`) and
+    /// the points of the section planes inside an instance's definition, nested definitions
+    /// included, in the coordinates of the mesh holding the instance. Bounds leave these
+    /// out; this lets callers check them.
     pub fn instance_guide_anchors(&self, instance: &Instance) -> Vec<DVec3> {
         let mut out = Vec::new();
         if let Some(m) = self.mesh(MeshId::Definition(instance.definition)) {
@@ -482,6 +484,10 @@ impl Scene {
                     .map(|(_, g)| instance.transform.transform_point3(g.anchor())),
             );
             out.extend(m.annotation_points(instance.transform));
+            out.extend(
+                m.sections()
+                    .map(|(_, p)| instance.transform.transform_point3(p.point)),
+            );
             for (_, i) in m.instances() {
                 let placed = Instance::new(i.definition, instance.transform * i.transform);
                 out.extend(self.instance_guide_anchors(&placed));
@@ -660,7 +666,7 @@ impl Scene {
         }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
-        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "r", "n", "c",
+        // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "r", "n", "s", "c",
         // "d", "m", "t", "p").
         let mut owner: BTreeMap<u64, char> = BTreeMap::new();
         let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
@@ -720,6 +726,7 @@ impl Scene {
                     EntityId::Guide(g) => ('g', g.0),
                     EntityId::Dimension(d) => ('r', d.0),
                     EntityId::Note(n) => ('n', n.0),
+                    EntityId::Section(p) => ('s', p.0),
                 };
                 claim(n, prefix)?;
             }
@@ -811,4 +818,5 @@ fn entity_ids(m: &Model) -> impl Iterator<Item = EntityId> + '_ {
         .chain(m.guides().map(|(id, _)| EntityId::Guide(id)))
         .chain(m.dimensions().map(|(id, _)| EntityId::Dimension(id)))
         .chain(m.notes().map(|(id, _)| EntityId::Note(id)))
+        .chain(m.sections().map(|(id, _)| EntityId::Section(id)))
 }

@@ -421,7 +421,8 @@ impl Spans {
                 ..Ranges::default()
             }),
             EntityId::Instance(id) => find(&self.instances, id).cloned(),
-            EntityId::Vertex(_) => None,
+            // Section planes are not drawn yet.
+            EntityId::Vertex(_) | EntityId::Section(_) => None,
         }
     }
 

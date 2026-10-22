@@ -226,6 +226,8 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         guides: vec![],
         dimensions: vec![],
         notes: vec![],
+        sections: vec![],
+        active_section: None,
     }
 }
 

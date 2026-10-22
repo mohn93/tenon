@@ -11,11 +11,12 @@ use crate::edit::KernelError;
 use crate::group::whole;
 use crate::ids::{
     DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
-    TagId,
+    SectionId, TagId,
 };
 use crate::import_tree::MAX_IMPORT_DEPTH;
 use crate::model::{Guide, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Parts, Scene, SceneChange};
+use crate::section::SectionPlane;
 
 /// What an insert made in the mesh it inserted into (its top level only).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub struct Inserted {
     pub guides: Vec<GuideId>,
     pub dimensions: Vec<DimensionId>,
     pub notes: Vec<NoteId>,
+    pub sections: Vec<SectionId>,
     /// The target definition each clip definition the insert placed maps to (an existing
     /// component reused, or the new copy), by the clip definition's id.
     pub definitions: BTreeMap<DefinitionId, DefinitionId>,
@@ -63,7 +65,8 @@ impl Scene {
         self.extract_with(mesh, &parts, to_world)
     }
 
-    /// `extract` of `parts`, dimensions and notes included. An annotation anchored to a
+    /// `extract` of `parts`, dimensions, notes and section planes included (the planes are
+    /// inactive in the clip). An annotation anchored to a
     /// vertex of the extracted geometry stays anchored to it in the clip; one anchored to
     /// another vertex is anchored to where that vertex is, and a curve not extracted is
     /// measured as a fixed circle. Missing dimensions and notes are skipped.
@@ -103,6 +106,8 @@ impl Scene {
             &source.vertices_of(edges, faces),
         );
 
+        let planes = source.lift_sections(&parts.sections, to_world);
+
         let mut reached = BTreeMap::new();
         let mut stack: Vec<DefinitionId> = placed.iter().map(|i| i.definition).collect();
         while let Some(id) = stack.pop() {
@@ -133,6 +138,7 @@ impl Scene {
             for g in lines {
                 m.insert_guide(g.transformed(to_world));
             }
+            m.land_sections(planes, false);
             m.land(annotations, false);
             Ok(m.take_changes())
         })?;
@@ -211,6 +217,9 @@ impl Scene {
             for (_, n) in m.notes() {
                 tags.extend(n.tag());
             }
+            for (_, p) in m.sections() {
+                tags.extend(p.tag());
+            }
         }
         (materials, tags)
     }
@@ -285,6 +294,7 @@ impl Paste<'_> {
         let stencil = self.stencil_of(root).textures_carried(&placement);
         let children = self.instances_of(scene, root, placement)?;
         let guides = self.guides_of(root, placement);
+        let planes = self.sections_of(root, placement);
         let annotations: Vec<Lifted> = self
             .annotations_of(root, placement)
             .into_iter()
@@ -305,6 +315,7 @@ impl Paste<'_> {
             inserted.faces = faces.into_iter().collect();
             inserted.instances = children.into_iter().map(|i| m.insert_instance(i)).collect();
             inserted.guides = guides.into_iter().map(|g| m.insert_guide(g)).collect();
+            inserted.sections = m.land_sections(planes, false);
             for id in m.land(annotations, false) {
                 match id {
                     EntityId::Dimension(d) => inserted.dimensions.push(d),
@@ -357,6 +368,7 @@ impl Paste<'_> {
         let stencil = self.stencil_of(&original.mesh);
         let children = self.instances_of(scene, &original.mesh, DAffine3::IDENTITY)?;
         let guides = self.guides_of(&original.mesh, DAffine3::IDENTITY);
+        let planes = self.sections_of(&original.mesh, DAffine3::IDENTITY);
         let annotations = self.annotations_of(&original.mesh, DAffine3::IDENTITY);
         let (copy, added) = scene.add_definition(&original.name, original.kind);
         self.done.push(added.into());
@@ -368,6 +380,7 @@ impl Paste<'_> {
             for g in guides {
                 m.insert_guide(g);
             }
+            m.land_sections(planes, false);
             m.land(annotations, false);
             Ok(m.take_changes())
         })?;
@@ -417,6 +430,17 @@ impl Paste<'_> {
 }
 
 impl Paste<'_> {
+    /// A clip mesh's section planes placed by `placement`, on the target's tags.
+    fn sections_of(&self, m: &Model, placement: DAffine3) -> Vec<(SectionId, SectionPlane)> {
+        m.lift_sections(&m.all_sections(), placement)
+            .into_iter()
+            .map(|(id, p)| {
+                let tag = p.tag.and_then(|id| self.tags.get(&id).copied());
+                (id, p.with_tag(tag))
+            })
+            .collect()
+    }
+
     /// A clip mesh's dimensions and notes placed by `placement`, on the target's tags, still
     /// anchored to the mesh's vertices once its geometry is drawn.
     fn annotations_of(&self, m: &Model, placement: DAffine3) -> Vec<Lifted> {

@@ -50,7 +50,8 @@ fn selection_info(doc: &Document) -> Vec<String> {
                 notes += 1;
                 annotation = Some(*id);
             }
-            EntityId::Vertex(_) => {}
+            // Section planes have no entity info yet.
+            EntityId::Vertex(_) | EntityId::Section(_) => {}
         }
     }
     let annotations = dimensions + notes;
@@ -194,7 +195,8 @@ fn annotation_info(doc: &Document, id: EntityId) -> Vec<String> {
         | EntityId::Edge(_)
         | EntityId::Face(_)
         | EntityId::Instance(_)
-        | EntityId::Guide(_) => return Vec::new(),
+        | EntityId::Guide(_)
+        | EntityId::Section(_) => return Vec::new(),
     };
     let mut lines = vec![kind.to_string()];
     if let Some(text) = text {

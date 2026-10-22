@@ -67,7 +67,8 @@ impl AnnotationShape {
             | EntityId::Edge(_)
             | EntityId::Face(_)
             | EntityId::Instance(_)
-            | EntityId::Guide(_) => None,
+            | EntityId::Guide(_)
+            | EntityId::Section(_) => None,
         }
     }
 

@@ -63,6 +63,9 @@ pub enum KernelError {
     /// circle or an arc, text that is blank or too long, a screen note off the view or
     /// outside the root; the text says which.
     Annotation(String),
+    /// A section plane is invalid or unknown: a normal that is not a unit vector, numbers that
+    /// are not finite, or an id naming no plane of the mesh; the text says which.
+    Section(String),
 }
 
 impl fmt::Display for KernelError {
@@ -101,7 +104,8 @@ impl fmt::Display for KernelError {
             | KernelError::TagName(why)
             | KernelError::Page(why)
             | KernelError::InvalidImport(why)
-            | KernelError::Annotation(why) => {
+            | KernelError::Annotation(why)
+            | KernelError::Section(why) => {
                 write!(f, "{why}")
             }
             KernelError::NothingToImport => {

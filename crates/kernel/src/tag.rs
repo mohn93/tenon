@@ -1,5 +1,5 @@
-//! Tags: named, colored groupings of edges, faces, instances, guides and annotations, shown
-//! or hidden together. An entity is on at most one tag; on none it is "Untagged". Tags are
+//! Tags: named, colored groupings of edges, faces, instances, guides, annotations and section
+//! planes, shown or hidden together. An entity is on at most one tag; on none it is "Untagged". Tags are
 //! shared by every mesh of a scene.
 
 use std::collections::BTreeSet;
@@ -113,8 +113,8 @@ impl Model {
         self.take_changes()
     }
 
-    /// The edges, faces, instances, guides, dimensions and notes on `tag`, in kind then id
-    /// order.
+    /// The edges, faces, instances, guides, dimensions, notes and section planes on `tag`, in
+    /// kind then id order.
     pub fn tagged(&self, tag: TagId) -> impl Iterator<Item = EntityId> + '_ {
         let on = move |t: Option<TagId>| t == Some(tag);
         self.edges()
@@ -144,6 +144,11 @@ impl Model {
                 self.notes()
                     .filter(move |(_, n)| on(n.tag()))
                     .map(|(id, _)| EntityId::Note(id)),
+            )
+            .chain(
+                self.sections()
+                    .filter(move |(_, p)| on(p.tag))
+                    .map(|(id, _)| EntityId::Section(id)),
             )
     }
 }

@@ -12,7 +12,8 @@
 use std::fmt;
 
 use kernel::{
-    DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId, VertexId,
+    DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId, SectionId,
+    VertexId,
 };
 use serde_json::Value;
 
@@ -444,7 +445,8 @@ fn number(id: &EntityId) -> u64 {
         | EntityId::Instance(InstanceId(n))
         | EntityId::Guide(GuideId(n))
         | EntityId::Dimension(DimensionId(n))
-        | EntityId::Note(NoteId(n)) => *n,
+        | EntityId::Note(NoteId(n))
+        | EntityId::Section(SectionId(n)) => *n,
     }
 }
 

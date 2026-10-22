@@ -460,8 +460,8 @@ fn read_limited(reader: impl Read, limit: u64, what: &str) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
-/// Fails, naming the entity, when a vertex, an instance's position, a guide's point or an
-/// annotation's numbers are beyond `MAX_COORDINATE`, the limit commands keep to (a dimension's
+/// Fails, naming the entity, when a vertex, an instance's position, a guide's point, a
+/// section plane's point or an annotation's numbers are beyond `MAX_COORDINATE`, the limit commands keep to (a dimension's
 /// offset and a radial dimension's leader reach from one point within it to another, so up
 /// to twice the limit; a fixed circle's center plus or minus its radius along each axis is
 /// within it).
@@ -476,6 +476,7 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
             guides,
             dimensions,
             notes,
+            sections,
             ..
         } = mesh;
         if let Some(v) = vertices.iter().find(|v| !within(&v.position)) {
@@ -486,6 +487,9 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
         }
         if let Some(g) = guides.iter().find(|g| !within(&g.point)) {
             return Err(beyond(format!("guide g{}", g.id)));
+        }
+        if let Some(p) = sections.iter().find(|p| !within(&p.point)) {
+            return Err(beyond(format!("section plane s{}", p.id)));
         }
         let anchor = |a: &AnchorData| match a {
             AnchorData::Vertex(_) => true,

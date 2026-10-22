@@ -109,7 +109,8 @@ pub(crate) fn outline(ctx: &ToolContext, ids: &[EntityId]) -> Vec<[DVec3; 2]> {
             // A screen note has no lines.
             EntityId::Dimension(_) | EntityId::Note(_) => out
                 .extend(session::AnnotationShape::of(m, *id).map_or(Vec::new(), |s| s.segments())),
-            EntityId::Vertex(_) => {}
+            // Section planes are not drawn by the tools yet.
+            EntityId::Vertex(_) | EntityId::Section(_) => {}
         }
     }
     out

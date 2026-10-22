@@ -2115,6 +2115,7 @@ impl Editor {
                 EntityId::Guide(g) => m.guide(g).is_some(),
                 EntityId::Dimension(d) => m.dimension(d).is_some(),
                 EntityId::Note(n) => m.note(n).is_some(),
+                EntityId::Section(p) => m.section(p).is_some(),
                 EntityId::Vertex(_) => false,
             })
             .collect();
@@ -3685,7 +3686,8 @@ mod tests {
                 | EntityId::Instance(_)
                 | EntityId::Guide(_)
                 | EntityId::Dimension(_)
-                | EntityId::Note(_) => false,
+                | EntityId::Note(_)
+                | EntityId::Section(_) => false,
             }
         }));
         // Typing another array must not undo anything.

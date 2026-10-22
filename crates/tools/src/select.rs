@@ -180,6 +180,7 @@ pub(crate) fn selection_bounds(
             EntityId::Dimension(_) | EntityId::Note(_) => {
                 points.extend(AnnotationShape::of(m, *id).map_or(Vec::new(), |s| s.points()))
             }
+            EntityId::Section(p) => points.extend(m.section(p).map(|p| p.point)),
         }
     }
     let first = *points.first()?;
