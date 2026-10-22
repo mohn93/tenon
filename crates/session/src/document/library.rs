@@ -141,7 +141,7 @@ impl Document {
     /// from no document, so every definition is new, placed with the minimum corner of its
     /// box at `at`, or at the open context's origin; what it made is selected. A material: added
     /// as it is, or reused when the model has an identical one under the name, or added as
-    /// "<name> 2", "<name> 3"... (the lowest free); its id is the outcome's `material`.
+    /// "<name> 2", "<name> 3"... (the lowest free, the name shortened to fit the length limit); its id is the outcome's `material`.
     pub(super) fn insert_library_changes(
         &mut self,
         path: &str,
@@ -177,7 +177,11 @@ impl Document {
             let name = if n == 1 {
                 material.name.clone()
             } else {
-                format!("{} {n}", material.name)
+                // The base is shortened so the suffix still fits the kernel's name limit.
+                let suffix = format!(" {n}");
+                let room = kernel::MAX_MATERIAL_NAME.saturating_sub(suffix.chars().count());
+                let base: String = material.name.chars().take(room).collect();
+                format!("{base}{suffix}")
             };
             let existing = self
                 .scene

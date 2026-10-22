@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use glam::DVec3;
 use kernel::MaterialId;
 use session::{Command, CommandError, ErrorKind, LibraryKind, LibraryRef, library};
 use tools::PasteTool;
@@ -21,12 +22,30 @@ fn text(path: &Path) -> Result<String, CommandError> {
 impl Editor {
     /// Brings out the Paste tool with the component or model item at `path`: its edges follow
     /// the cursor and a click inserts it there (`insert_library_item`, one `insert` step,
-    /// new definitions each time); Escape goes back to the tool used before. A material
+    /// new definitions each time; inside a turned or scaled group the preview is drawn in world
+    /// axes and size too, as the insert keeps them); Escape goes back to the tool used before. A material
     /// item, or a file that is not a valid item, is refused with why in the status.
     pub fn place_library_item(&mut self, path: &Path) -> Result<(), CommandError> {
         let outline = match library::outline(path) {
             Ok(outline) => outline,
             Err(e) => return Err(self.refuse_library(e)),
+        };
+        // The tool adds the cursor in context coordinates and the view maps the preview through
+        // the context, while an insert keeps the item's world orientation and size: the outline
+        // goes through the inverse of the context's linear part so both agree.
+        let linear = self.doc().context_transform().matrix3;
+        let outline = if linear.determinant().abs() > 1e-12 {
+            let back = linear.inverse();
+            session::ClipOutline {
+                base: DVec3::ZERO,
+                segments: outline
+                    .segments
+                    .iter()
+                    .map(|[a, b]| [back * (*a - outline.base), back * (*b - outline.base)])
+                    .collect(),
+            }
+        } else {
+            outline
         };
         let tool = PasteTool::library(text(path)?, &outline);
         self.start_paste_tool(tool);
@@ -182,6 +201,73 @@ mod tests {
         // One undo takes the last insert back.
         assert!(e.undo());
         assert_eq!(definitions(&e), before + 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The corners of the box around `points`.
+    fn world_box(points: &[DVec3]) -> (DVec3, DVec3) {
+        let lo = points.iter().fold(DVec3::splat(f64::MAX), |a, p| a.min(*p));
+        let hi = points.iter().fold(DVec3::splat(f64::MIN), |a, p| a.max(*p));
+        (lo, hi)
+    }
+
+    #[test]
+    fn inside_a_turned_scaled_group_the_preview_is_where_and_as_large_as_the_insert() {
+        let dir = folder("turned");
+        let path = dir.join("tile.skr");
+        let mut e = with_component();
+        save_tile(&mut e, &path);
+        e.execute(Command::Select {
+            ids: Vec::new(),
+            mode: SelectMode::Replace,
+            all: true,
+        })
+        .unwrap();
+        let all = e.doc().selection().iter().copied().collect();
+        e.execute(Command::MakeGroup { ids: all }).unwrap();
+        let group = e.doc().selection().first().copied().unwrap();
+        e.execute(Command::Rotate {
+            ids: vec![group],
+            center: [0.0; 3],
+            axis: None,
+            angle: 30.0,
+            copies: None,
+        })
+        .unwrap();
+        e.execute(Command::Scale {
+            ids: vec![group],
+            origin: [0.0; 3],
+            factors: [2.0, 1.0, 1.0],
+        })
+        .unwrap();
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        let context = e.doc().context_transform();
+        assert!(!context.matrix3.abs_diff_eq(glam::DMat3::IDENTITY, 1e-6));
+        e.place_library_item(&path).unwrap();
+        point_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        e.refresh_hover();
+        let shown: Vec<DVec3> = e
+            .preview
+            .iter()
+            .flat_map(|[a, b]| [context.transform_point3(*a), context.transform_point3(*b)])
+            .collect();
+        assert!(!shown.is_empty());
+        e.button(Button::Left, true);
+        e.button(Button::Left, false);
+        let EntityId::Instance(id) = e.doc().selection().first().copied().unwrap() else {
+            panic!("an instance was inserted")
+        };
+        let inserted = e.doc().model().instance(id).unwrap().clone();
+        let definition = e.doc().scene().definition(inserted.definition).unwrap();
+        let placed: Vec<DVec3> = definition
+            .mesh
+            .vertices()
+            .map(|(_, v)| context.transform_point3(inserted.transform.transform_point3(v.pos)))
+            .collect();
+        let (plo, phi) = world_box(&shown);
+        let (ilo, ihi) = world_box(&placed);
+        assert!(plo.abs_diff_eq(ilo, 1e-6), "{plo:?} vs {ilo:?}");
+        assert!(phi.abs_diff_eq(ihi, 1e-6), "{phi:?} vs {ihi:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

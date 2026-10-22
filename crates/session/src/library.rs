@@ -132,6 +132,9 @@ pub struct LibraryItem {
     pub kind: LibraryKind,
     /// When the file was last written, in seconds since 1970 (0 when unknown).
     pub modified: u64,
+    /// The file's size in bytes.
+    #[serde(default)]
+    pub size: u64,
     /// Why the file cannot be used as an item; absent for a good one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -211,10 +214,9 @@ pub(crate) fn info_of(path: &Path) -> Option<Vec<u8>> {
 fn describe(path: &Path, file_name: &str) -> Result<(LibraryKind, String), String> {
     let info = file::read_entry(path, INFO_ENTRY, MAX_INFO_BYTES)?
         .and_then(|bytes| serde_json::from_slice::<Info>(&bytes).ok())
-        .and_then(|info| {
-            let name = info.name?;
-            check_name(&name).ok()?;
-            Some((info.kind, name))
+        .and_then(|info| match info.name {
+            Some(name) => check_name(&name).ok().map(|()| (info.kind, name)),
+            None => Some((info.kind, stem(file_name))),
         });
     Ok(info.unwrap_or((LibraryKind::Model, stem(file_name))))
 }
@@ -233,7 +235,7 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
         return Err(file_error("not a folder".into()));
     }
     let read = std::fs::read_dir(folder).map_err(|e| file_error(e.to_string()))?;
-    let mut found: Vec<(String, std::path::PathBuf, u64)> = Vec::new();
+    let mut found: Vec<(String, std::path::PathBuf, u64, u64)> = Vec::new();
     for entry in read.take(MAX_SCANNED).flatten() {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
@@ -252,14 +254,14 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_secs());
-        found.push((name, entry.path(), modified));
+        found.push((name, entry.path(), modified, meta.len()));
     }
     found.sort_by_cached_key(|(name, ..)| (name.to_lowercase(), name.clone()));
     let more = found.len() > MAX_LISTED;
     found.truncate(MAX_LISTED);
     let mut items: Vec<LibraryItem> = found
         .into_iter()
-        .map(|(file_name, path, modified)| {
+        .map(|(file_name, path, modified, size)| {
             let (kind, name, error) = match describe(&path, &file_name) {
                 Ok((kind, name)) => (kind, name, None),
                 Err(e) => (LibraryKind::Model, stem(&file_name), Some(e)),
@@ -269,6 +271,7 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
                 name,
                 kind,
                 modified,
+                size,
                 error,
             }
         })
@@ -278,7 +281,8 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
 }
 
 /// Reads the item at `path` with every check opening a `.skr` file makes: a regular file of
-/// at most [`MAX_ITEM_BYTES`].
+/// at most [`MAX_ITEM_BYTES`]; a component or model also passes the clip caps (nesting depth,
+/// expanded instances, placed faces), so nothing walking its placements can run away.
 pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
     let named = path.display().to_string();
     let file_error = |e: String| CommandError::new(ErrorKind::File, format!("{named}: {e}"));
@@ -301,6 +305,10 @@ pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
         .unwrap_or("item.skr");
     let (kind, name) = describe(path, file_name).map_err(file_error)?;
     let opened = file::read(path).map_err(file_error)?;
+    if kind != LibraryKind::Material {
+        crate::clip::check_item_caps(&opened.scene)
+            .map_err(|e| CommandError::new(e.kind, format!("{named}: {}", e.message)))?;
+    }
     Ok(LibraryContent {
         kind,
         name,

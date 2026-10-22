@@ -16,8 +16,9 @@ pub const THUMB_SIZE: u32 = 128;
 /// The most thumbnails made in one frame.
 pub const THUMBS_PER_FRAME: usize = 2;
 
-/// The longest file name stem a saved item gets, in characters.
+/// The longest file name stem a saved item gets, in characters and in UTF-8 bytes.
 const MAX_STEM: usize = 100;
+const MAX_STEM_BYTES: usize = 200;
 
 /// The file name (with `.skr`) an item named `name` is saved under: characters a file name may
 /// not hold become `_`, surrounding spaces and dots go, a name Windows reserves gets a `_`
@@ -31,10 +32,15 @@ pub fn file_name_for(name: &str) -> Option<String> {
             c => c,
         })
         .collect();
+    let mut bytes = 0;
     let stem: String = cleaned
         .trim_matches(|c: char| c.is_whitespace() || c == '.')
         .chars()
         .take(MAX_STEM)
+        .take_while(|c| {
+            bytes += c.len_utf8();
+            bytes <= MAX_STEM_BYTES
+        })
         .collect();
     let stem = stem.trim_end_matches(|c: char| c.is_whitespace() || c == '.');
     if stem.is_empty() {
@@ -77,25 +83,31 @@ pub fn delete_item(folder: &Path, path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| format!("{name}: {e}"))
 }
 
-/// A thumbnail asked for: a file and when it was last written.
+/// What tells one version of a file from another: its modification time (seconds) and size,
+/// so an overwrite within the same second still shows.
+pub type Stamp = (u64, u64);
+
+/// A thumbnail asked for: a file and the version of it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ThumbKey {
     pub path: PathBuf,
-    pub modified: u64,
+    pub stamp: Stamp,
 }
 
 /// What is known of a thumbnail.
 #[derive(Debug, PartialEq)]
 pub enum Slot<T> {
     Ready(T),
-    Failed,
+    /// Could not be made. With a reason, the item itself is refused (see `session::library::
+    /// read_item`); without, there is only no preview (empty, no GPU).
+    Failed(Option<String>),
 }
 
 /// The thumbnails made so far, by file and modification time, and the ones asked for. Which
 /// to make next is decided here (at most `THUMBS_PER_FRAME` a frame, in the order asked); how
 /// to make one is the caller's.
 pub struct Thumbnails<T> {
-    slots: HashMap<PathBuf, (u64, Slot<T>)>,
+    slots: HashMap<PathBuf, (Stamp, Slot<T>)>,
     wanted: Vec<ThumbKey>,
 }
 
@@ -109,18 +121,18 @@ impl<T> Default for Thumbnails<T> {
 }
 
 impl<T> Thumbnails<T> {
-    /// What is held for `path` as of `modified`; None when not made yet (or made for another
+    /// What is held for `path` as of `stamp`; None when not made yet (or made for another
     /// version of the file).
-    pub fn get(&self, path: &Path, modified: u64) -> Option<&Slot<T>> {
+    pub fn get(&self, path: &Path, stamp: Stamp) -> Option<&Slot<T>> {
         self.slots
             .get(path)
-            .filter(|(m, _)| *m == modified)
+            .filter(|(m, _)| *m == stamp)
             .map(|(_, slot)| slot)
     }
 
     /// Asks for a thumbnail, unless it is held or already asked for.
     pub fn want(&mut self, key: ThumbKey) {
-        if self.get(&key.path, key.modified).is_none() && !self.wanted.contains(&key) {
+        if self.get(&key.path, key.stamp).is_none() && !self.wanted.contains(&key) {
             self.wanted.push(key);
         }
     }
@@ -138,13 +150,13 @@ impl<T> Thumbnails<T> {
     }
 
     /// Holds the thumbnail made for `key`, or that it could not be made.
-    pub fn store(&mut self, key: ThumbKey, made: Option<T>) {
-        let slot = made.map_or(Slot::Failed, Slot::Ready);
-        self.slots.insert(key.path, (key.modified, slot));
+    pub fn store(&mut self, key: ThumbKey, made: Result<T, Option<String>>) {
+        let slot = made.map_or_else(Slot::Failed, Slot::Ready);
+        self.slots.insert(key.path, (key.stamp, slot));
     }
 
     /// Drops what is held and asked for, except for these files (the listing now).
-    pub fn keep_only(&mut self, listed: &[(PathBuf, u64)]) {
+    pub fn keep_only(&mut self, listed: &[(PathBuf, Stamp)]) {
         let live: BTreeSet<&PathBuf> = listed.iter().map(|(p, _)| p).collect();
         self.slots.retain(|p, _| live.contains(p));
         self.wanted.retain(|k| live.contains(&k.path));
@@ -202,10 +214,15 @@ pub fn letterbox(pixels: &[u8], width: u32, height: u32, side: u32) -> Vec<u8> {
 }
 
 /// Makes the thumbnail of the item at `path`: a component or model in an iso view fitted to
-/// its box on white paper, a material as its color or texture. None when the item cannot be
-/// read, is empty or the GPU fails.
-pub fn make(snapshotter: &mut Snapshotter, path: &Path) -> Option<Pixels> {
-    let item = library::read_item(path).ok()?;
+/// its box on white paper, a material as its color or texture. Err says why not: the item
+/// cannot be read (`Some` reason: also when it is over the clip caps, which `read_item`
+/// checks before anything walks its placements), is empty or the GPU fails (`None`).
+pub fn make(snapshotter: &mut Snapshotter, path: &Path) -> Result<Pixels, Option<String>> {
+    let item = library::read_item(path).map_err(|e| Some(e.message))?;
+    make_from(snapshotter, &item).ok_or(None)
+}
+
+fn make_from(snapshotter: &mut Snapshotter, item: &session::LibraryContent) -> Option<Pixels> {
     let side = THUMB_SIZE as usize;
     if item.kind == LibraryKind::Material {
         let (_, material) = item.scene.materials().next()?;
@@ -250,8 +267,18 @@ mod tests {
     fn key(name: &str, modified: u64) -> ThumbKey {
         ThumbKey {
             path: PathBuf::from(format!("/lib/{name}.skr")),
-            modified,
+            stamp: (modified, 10),
         }
+    }
+
+    #[test]
+    fn a_file_name_stem_is_at_most_100_characters_and_200_bytes() {
+        let long = file_name_for(&"a".repeat(300)).unwrap();
+        assert_eq!(long.len(), 100 + ".skr".len());
+        let wide = file_name_for(&"\u{1F600}".repeat(100)).unwrap();
+        assert_eq!(wide.len(), 200 + ".skr".len());
+        let kana = file_name_for(&"\u{3042}".repeat(100)).unwrap();
+        assert_eq!(kana.len(), 66 * 3 + ".skr".len());
     }
 
     #[test]
@@ -272,39 +299,61 @@ mod tests {
     #[test]
     fn a_thumbnail_is_kept_by_file_and_modification_time() {
         let mut t = Thumbnails::default();
-        t.store(key("a", 1), Some(7u32));
-        t.store(key("b", 1), None);
-        assert_eq!(t.get(Path::new("/lib/a.skr"), 1), Some(&Slot::Ready(7)));
-        assert_eq!(t.get(Path::new("/lib/b.skr"), 1), Some(&Slot::Failed));
+        t.store(key("a", 1), Ok(7u32));
+        t.store(key("b", 1), Err(Some("too deep".into())));
+        assert_eq!(
+            t.get(Path::new("/lib/a.skr"), (1, 10)),
+            Some(&Slot::Ready(7))
+        );
+        assert_eq!(
+            t.get(Path::new("/lib/b.skr"), (1, 10)),
+            Some(&Slot::Failed(Some("too deep".into())))
+        );
         // Held ones are not asked for again; a file written since is.
         t.want(key("a", 1));
         t.want(key("b", 1));
         assert!(!t.pending());
-        assert_eq!(t.get(Path::new("/lib/a.skr"), 2), None);
+        assert_eq!(t.get(Path::new("/lib/a.skr"), (2, 10)), None);
         t.want(key("a", 2));
         assert_eq!(t.next_batch(), [key("a", 2)]);
         // The newer one replaces the old.
-        t.store(key("a", 2), Some(8));
-        assert_eq!(t.get(Path::new("/lib/a.skr"), 1), None);
-        assert_eq!(t.get(Path::new("/lib/a.skr"), 2), Some(&Slot::Ready(8)));
+        t.store(key("a", 2), Ok(8));
+        assert_eq!(t.get(Path::new("/lib/a.skr"), (1, 10)), None);
+        assert_eq!(
+            t.get(Path::new("/lib/a.skr"), (2, 10)),
+            Some(&Slot::Ready(8))
+        );
+    }
+
+    #[test]
+    fn a_same_second_overwrite_of_another_size_is_a_new_version() {
+        let mut t = Thumbnails::default();
+        t.store(key("a", 1), Ok(1u32));
+        let rewritten = ThumbKey {
+            stamp: (1, 11),
+            ..key("a", 1)
+        };
+        assert!(t.get(&rewritten.path, rewritten.stamp).is_none());
+        t.want(rewritten.clone());
+        assert_eq!(t.next_batch(), [rewritten]);
     }
 
     #[test]
     fn items_gone_from_the_listing_are_forgotten() {
         let mut t = Thumbnails::default();
-        t.store(key("a", 1), Some(1u32));
-        t.store(key("b", 1), Some(2));
+        t.store(key("a", 1), Ok(1u32));
+        t.store(key("b", 1), Ok(2));
         t.want(key("c", 1));
         t.want(key("d", 1));
         t.keep_only(&[
-            (PathBuf::from("/lib/a.skr"), 1),
-            (PathBuf::from("/lib/d.skr"), 1),
+            (PathBuf::from("/lib/a.skr"), (1, 10)),
+            (PathBuf::from("/lib/d.skr"), (1, 10)),
         ]);
-        assert!(t.get(Path::new("/lib/a.skr"), 1).is_some());
-        assert!(t.get(Path::new("/lib/b.skr"), 1).is_none());
+        assert!(t.get(Path::new("/lib/a.skr"), (1, 10)).is_some());
+        assert!(t.get(Path::new("/lib/b.skr"), (1, 10)).is_none());
         assert_eq!(t.next_batch(), [key("d", 1)]);
         t.clear();
-        assert!(t.get(Path::new("/lib/a.skr"), 1).is_none());
+        assert!(t.get(Path::new("/lib/a.skr"), (1, 10)).is_none());
     }
 
     #[test]

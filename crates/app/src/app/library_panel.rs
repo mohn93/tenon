@@ -96,11 +96,11 @@ impl State {
                 self.library.error = Some(e.message);
             }
         }
-        let listed: Vec<(PathBuf, u64)> = self
+        let listed: Vec<(PathBuf, (u64, u64))> = self
             .library
             .items
             .iter()
-            .map(|i| (PathBuf::from(&i.path), i.modified))
+            .map(|i| (PathBuf::from(&i.path), (i.modified, i.size)))
             .collect();
         self.library.thumbs.keep_only(&listed);
     }
@@ -125,12 +125,17 @@ impl State {
             .iter()
             .map(|item| {
                 let path = PathBuf::from(&item.path);
-                let thumb = if item.error.is_some() {
+                let mut error = item.error.clone();
+                let thumb = if error.is_some() {
                     Thumb::Failed
                 } else {
-                    match lib.thumbs.get(&path, item.modified) {
+                    match lib.thumbs.get(&path, (item.modified, item.size)) {
                         Some(Slot::Ready(handle)) => Thumb::Ready(handle.id()),
-                        Some(Slot::Failed) => Thumb::Failed,
+                        Some(Slot::Failed(why)) => {
+                            // An item that cannot be read for use is shown as unusable.
+                            error.clone_from(why);
+                            Thumb::Failed
+                        }
                         None => Thumb::Pending,
                     }
                 };
@@ -138,7 +143,7 @@ impl State {
                     path,
                     name: item.name.clone(),
                     kind: item.kind,
-                    error: item.error.clone(),
+                    error,
                     thumb,
                 }
             })
@@ -153,7 +158,7 @@ impl State {
             if let Some(item) = self.library_item(path) {
                 let key = ThumbKey {
                     path: path.clone(),
-                    modified: item.modified,
+                    stamp: (item.modified, item.size),
                 };
                 self.library.thumbs.want(key);
             }
@@ -164,10 +169,10 @@ impl State {
     /// they still show none, which brings the next frame).
     pub(super) fn make_thumbnails(&mut self) {
         for key in self.library.thumbs.next_batch() {
-            let made = self
-                .offscreen
-                .get()
-                .and_then(|snapshotter| library::make(snapshotter, &key.path));
+            let made = self.offscreen.get().map_or_else(
+                || Err(None),
+                |snapshotter| library::make(snapshotter, &key.path),
+            );
             let texture = made.map(|pixels| {
                 let side = library::THUMB_SIZE as usize;
                 self.gui.ctx().load_texture(
@@ -230,6 +235,11 @@ impl State {
 
     /// An item's Open: its file becomes the open model.
     pub(super) fn library_open(&mut self, path: &Path) {
+        // The caps every library read passes: a nesting bomb is refused here, not opened.
+        if let Err(e) = session::library::read_item(path) {
+            self.editor.show_error(&e.message);
+            return;
+        }
         if self.settle_changes() {
             self.open_file(path);
         }

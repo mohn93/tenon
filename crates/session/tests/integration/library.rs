@@ -892,3 +892,162 @@ fn an_item_opened_and_saved_stays_an_item_and_a_new_model_forgets_it() {
     assert_eq!(listed(&dir, "again.skr"), ("model".into(), "again".into()));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A component item whose definitions nest `levels` deep with `width` instances each: a few
+/// hundred bytes that expand to `width^levels` placements.
+fn nesting_bomb(dir: &Path, levels: u64, width: u64) -> PathBuf {
+    use std::io::{Read, Write};
+    let mut d = doc();
+    let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let made = ok(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "A"}),
+    );
+    let instance = instance_of(&made);
+    let good = dir.join("good.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&good), "kind": "component",
+               "item": instance, "name": "Bomb"}),
+    );
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&good).unwrap()).unwrap();
+    let mut text = String::new();
+    zip.by_name("document.json")
+        .unwrap()
+        .read_to_string(&mut text)
+        .unwrap();
+    let mut doc: Value = serde_json::from_str(&text).unwrap();
+    let defs = doc["model"]["definitions"].as_array_mut().unwrap();
+    let a = defs.iter().position(|x| x["name"] == "A").unwrap();
+    let mut prev = defs[a]["id"].as_u64().unwrap();
+    let mut next = 1000u64;
+    let identity = |x: f64| json!([1, 0, 0, 0, 1, 0, 0, 0, 1, x, 0, 0]);
+    let mut kept = vec![defs[a].clone()];
+    for k in 1..=levels {
+        let id = next;
+        next += 1;
+        let mut instances = Vec::new();
+        for j in 0..width {
+            instances.push(
+                json!({"id": next, "definition": prev, "transform": identity(0.001 * j as f64)}),
+            );
+            next += 1;
+        }
+        kept.push(
+            json!({"id": id, "name": format!("D{k}"), "kind": "component",
+            "mesh": {"vertices": [], "edges": [], "faces": [], "instances": instances}}),
+        );
+        prev = id;
+    }
+    doc["model"]["definitions"] = Value::Array(kept);
+    doc["model"]["root"]["instances"] =
+        json!([{"id": next, "definition": prev, "transform": identity(0.0)}]);
+    doc["model"]["next_id"] = json!(next + 1);
+    let bomb = dir.join("bomb.skr");
+    let mut z = zip::ZipWriter::new(std::fs::File::create(&bomb).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    z.start_file("document.json", options).unwrap();
+    z.write_all(doc.to_string().as_bytes()).unwrap();
+    z.start_file("library.json", options).unwrap();
+    z.write_all(br#"{"kind":"component","name":"Bomb"}"#)
+        .unwrap();
+    z.finish().unwrap();
+    bomb
+}
+
+#[test]
+fn every_item_read_runs_the_clip_caps_so_a_nesting_bomb_is_refused_before_any_walk() {
+    let dir = folder("bomb");
+    let bomb = nesting_bomb(&dir, 10, 10);
+    let started = std::time::Instant::now();
+    let err = session::library::read_item(&bomb).err().expect("refused");
+    assert_eq!(err.kind, ErrorKind::InvalidInput);
+    assert!(err.message.contains("the item"), "{}", err.message);
+    let err = session::library::outline(&bomb).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidInput);
+    let mut d = doc();
+    let r = run(
+        &mut d,
+        json!({"type": "insert_library_item", "path": p(&bomb)}),
+    );
+    assert_eq!(r.unwrap_err().0, ErrorKind::InvalidInput);
+    assert_eq!(d.revision(), 0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    // A modest nest is still an item.
+    let fine = nesting_bomb(&folder("bomb-fine"), 2, 3);
+    assert!(session::library::read_item(&fine).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_entry_with_a_kind_and_no_name_is_listed_under_the_file_stem_with_that_kind() {
+    let dir = folder("nameless");
+    let mut d = doc();
+    rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let file = dir.join("Plate.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "model"}),
+    );
+    // Rewrite library.json without a name.
+    use std::io::{Read, Write};
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+    let mut entries = Vec::new();
+    for i in 0..zip.len() {
+        let mut e = zip.by_index(i).unwrap();
+        let mut b = Vec::new();
+        e.read_to_end(&mut b).unwrap();
+        entries.push((e.name().unwrap().to_string(), b));
+    }
+    let mut z = zip::ZipWriter::new(std::fs::File::create(&file).unwrap());
+    for (n, b) in entries {
+        z.start_file(n.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        if n == "library.json" {
+            z.write_all(br#"{"kind":"component"}"#).unwrap();
+        } else {
+            z.write_all(&b).unwrap();
+        }
+    }
+    z.finish().unwrap();
+    assert_eq!(
+        listed(&dir, "Plate.skr"),
+        ("component".to_string(), "Plate".to_string())
+    );
+    assert!(session::library::read_item(&file).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_material_with_a_longest_name_still_gets_a_numbered_name_that_fits() {
+    let dir = folder("long-material");
+    let long = "m".repeat(256);
+    let mut d = doc();
+    let out = ok(
+        &mut d,
+        json!({"type": "add_material", "name": long, "color": [9, 9, 9]}),
+    );
+    let id = out["changes"]["materials"][0].as_str().unwrap().to_string();
+    let file = dir.join("long.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "material", "item": id}),
+    );
+    let mut other = doc();
+    ok(
+        &mut other,
+        json!({"type": "add_material", "name": long, "color": [1, 2, 3]}),
+    );
+    ok(
+        &mut other,
+        json!({"type": "insert_library_item", "path": p(&file)}),
+    );
+    let names: Vec<String> = materials(&other)
+        .iter()
+        .map(|m| m["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names.len(), 2);
+    let added = names.iter().find(|n| n.ends_with(" 2")).expect("numbered");
+    assert_eq!(added.chars().count(), 256);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -183,19 +183,25 @@ fn check_caps(scene: &Scene) -> Result<(), Refused> {
     Ok(())
 }
 
-/// A clip of `scene` (in world coordinates) taken as from the document `source`, with the
-/// caps clip text meets; the base point is the minimum corner of its box. A library item's
-/// scene is made a clip this way, with a token no document has, so pasting it always makes
-/// new definitions.
-pub(crate) fn from_scene(scene: Scene, source: String) -> Result<Clip, CommandError> {
-    check_caps(&scene).map_err(|e| match e {
+/// The clip caps (nesting depth, expanded instances, placed faces) for a library item's scene;
+/// every walk of an item's placements comes after this.
+pub(crate) fn check_item_caps(scene: &Scene) -> Result<(), CommandError> {
+    check_caps(scene).map_err(|e| match e {
         Refused::Damaged(m) => {
             CommandError::new(ErrorKind::InvalidInput, format!("the item is damaged: {m}"))
         }
         Refused::Invalid(m) => {
             CommandError::new(ErrorKind::InvalidInput, m.replace("the clip", "the item"))
         }
-    })?;
+    })
+}
+
+/// A clip of `scene` (in world coordinates) taken as from the document `source`, with the
+/// caps clip text meets; the base point is the minimum corner of its box. A library item's
+/// scene is made a clip this way, with a token no document has, so pasting it always makes
+/// new definitions.
+pub(crate) fn from_scene(scene: Scene, source: String) -> Result<Clip, CommandError> {
+    check_item_caps(&scene)?;
     let base = base_point(&scene);
     if !base.is_finite() || base.abs().max_element() > MAX_COORDINATE {
         return Err(CommandError::new(
