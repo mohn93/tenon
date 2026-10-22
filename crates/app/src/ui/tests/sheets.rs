@@ -1,5 +1,8 @@
 use super::*;
-use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis};
+use crate::editor::{
+    ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose, RenameTarget,
+    UpAxis,
+};
 use kernel::DefinitionKind;
 
 /// The Import Options sheet for /m/chair.obj with the default options.
@@ -335,4 +338,87 @@ fn the_3d_text_sheet_reports_the_text_and_its_sizes() {
     assert!(drawn_texts(&h).iter().any(|t| t == "At most 64 lines"));
     let mut h = harness(text_3d_fixture("Plan"));
     assert_eq!(click(&mut h, "Cancel"), [UiAction::CloseSheet]);
+}
+
+fn print_fixture(purpose: PrintPurpose) -> Fixture {
+    Fixture {
+        sheet: Some(Sheet::Print {
+            purpose,
+            spec: PrintOptions::default(),
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_print_sheet_reports_its_options() {
+    let mut h = harness(print_fixture(PrintPurpose::Export));
+    assert!(h.query_by_label("Export PDF").is_some(), "the title");
+    assert_eq!(click(&mut h, "Paper"), []);
+    assert_eq!(click(&mut h, "Letter"), []);
+    assert_eq!(click(&mut h, "Portrait"), []);
+    assert_eq!(click(&mut h, "1 :"), []);
+    assert_eq!(
+        click(&mut h, "Export..."),
+        [UiAction::ConfirmPrint(PrintOptions {
+            paper: PaperChoice::Letter,
+            landscape: false,
+            scale: Some(PrintOptions::DEFAULT_SCALE),
+            dpi: 150,
+        })]
+    );
+}
+
+#[test]
+fn the_print_sheet_starts_from_the_remembered_values_and_fits_by_default() {
+    let mut h = harness(print_fixture(PrintPurpose::Print));
+    assert!(h.query_by_label("Print Setup").is_some(), "the title");
+    assert_eq!(
+        click(&mut h, "Print"),
+        [UiAction::ConfirmPrint(PrintOptions::default())]
+    );
+    let remembered = PrintOptions {
+        paper: PaperChoice::A3,
+        landscape: false,
+        scale: Some(50.0),
+        dpi: 200,
+    };
+    let mut h = harness(Fixture {
+        sheet: Some(Sheet::Print {
+            purpose: PrintPurpose::Print,
+            spec: remembered,
+        }),
+        ..Default::default()
+    });
+    assert_eq!(click(&mut h, "Fit to page"), []);
+    assert_eq!(
+        click(&mut h, "Print"),
+        [UiAction::ConfirmPrint(PrintOptions {
+            scale: None,
+            ..remembered
+        })]
+    );
+}
+
+#[test]
+fn the_print_sheet_cancels_and_clamps_a_resolution_out_of_range() {
+    let mut h = harness(print_fixture(PrintPurpose::Print));
+    assert_eq!(click(&mut h, "Cancel"), [UiAction::CloseSheet]);
+    let mut h = harness(Fixture {
+        sheet: Some(Sheet::Print {
+            purpose: PrintPurpose::Print,
+            spec: PrintOptions {
+                dpi: 9000,
+                ..PrintOptions::default()
+            },
+        }),
+        ..Default::default()
+    });
+    assert_eq!(
+        click(&mut h, "Print"),
+        [UiAction::ConfirmPrint(PrintOptions {
+            dpi: 300,
+            ..PrintOptions::default()
+        })]
+    );
 }

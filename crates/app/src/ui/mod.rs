@@ -13,7 +13,7 @@ use session::{
 };
 use tools::ToolKind;
 
-use crate::editor::{ImportOptions, RenameTarget, SelectionTag, Status};
+use crate::editor::{ImportOptions, PrintOptions, RenameTarget, SelectionTag, Status};
 use crate::feedback::Hud;
 use crate::navigation::TrackpadScroll;
 use theme::{ThemeChoice, UiScale};
@@ -96,6 +96,12 @@ pub enum UiAction {
     /// The Field of View sheet's value, in whole degrees.
     ConfirmFieldOfView(f64),
     ExportFile,
+    /// Open the Print sheet to export a PDF (a file is asked for after it).
+    ExportPdf,
+    /// Open the Print sheet to print and open the PDF in the system's viewer.
+    Print,
+    /// Print as the Print sheet's values say (kept in the preferences).
+    ConfirmPrint(PrintOptions),
     DeleteGuides,
     ZoomExtents,
     StandardView(StandardView),

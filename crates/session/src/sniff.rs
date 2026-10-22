@@ -25,6 +25,8 @@ pub(crate) enum Kind {
     Skp,
     /// An SVG drawing.
     Svg,
+    /// A PDF document.
+    Pdf,
 }
 
 impl Kind {
@@ -39,6 +41,7 @@ impl Kind {
             Kind::Image => "PNG or JPEG",
             Kind::Skp => "SketchUp model",
             Kind::Svg => "SVG",
+            Kind::Pdf => "PDF",
         }
     }
 }
@@ -157,6 +160,7 @@ fn is_kind(head: &[u8], len: u64, kind: Kind) -> bool {
             let text = text.trim_start_matches('\u{feff}').trim_start();
             (text.starts_with("<?xml") || text.starts_with("<svg")) && text.contains("<svg")
         }
+        Kind::Pdf => head.starts_with(b"%PDF-"),
         Kind::Obj => keyword_text(head, len, OBJ_KEYWORDS, None),
         Kind::Mtl => keyword_text(head, len, MTL_KEYWORDS, Some("newmtl")),
     }

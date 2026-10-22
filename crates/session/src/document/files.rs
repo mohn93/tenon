@@ -337,6 +337,68 @@ impl Document {
         })
     }
 
+    /// Checks that `path` may be written with a PDF the way an export is: not a `.skr`, not the
+    /// open model's own file, no link under `refuse_links`, and nothing but a PDF (or nothing)
+    /// there unless `overwrite`. Returns the path to write.
+    pub fn check_pdf_target(
+        &self,
+        path: &str,
+        overwrite: bool,
+        refuse_links: bool,
+    ) -> Result<PathBuf, CommandError> {
+        let target = Path::new(path);
+        check_nul(target)?;
+        if target
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("skr"))
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "a .skr path is a model file: use save, not export_pdf",
+            ));
+        }
+        if self
+            .path
+            .as_deref()
+            .is_some_and(|own| same_file(own, target))
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "that is the open model's own file: print to another path",
+            ));
+        }
+        if !overwrite
+            && self
+                .imported_from
+                .as_deref()
+                .is_some_and(|original| same_file(original, target))
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "this is the SketchUp file the model was opened from; pass overwrite to replace it",
+            ));
+        }
+        if refuse_links {
+            check_links(std::iter::once(target))?;
+        }
+        if !overwrite && !sniff::replaceable(target, Kind::Pdf) {
+            return Err(sniff::refusal(target, Kind::Pdf));
+        }
+        Ok(target.to_path_buf())
+    }
+
+    /// Writes `pdf` at `path` after the checks of [`Document::check_pdf_target`].
+    pub fn write_pdf(
+        &self,
+        path: &str,
+        pdf: &[u8],
+        overwrite: bool,
+        refuse_links: bool,
+    ) -> Result<(), CommandError> {
+        let target = self.check_pdf_target(path, overwrite, refuse_links)?;
+        file::replace_file(&target, pdf, Access::Default).map_err(|e| file_error(path, e))
+    }
+
     /// Writes the current view as a line drawing in SVG (see `drawing` and `svg`): in pixels at
     /// the viewport's size, or with `scale` (1:N, a parallel view) in millimetres.
     fn export_svg(

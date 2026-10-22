@@ -2,6 +2,7 @@ pub mod annotations;
 pub mod grid;
 pub mod guides;
 pub mod lights;
+pub mod print;
 pub mod renderer;
 pub mod scene;
 pub mod sections;

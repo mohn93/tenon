@@ -1164,3 +1164,118 @@ fn render_view_honours_the_section_display_settings() {
         cut["result"]["png_base64"]
     );
 }
+
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("api-pdf-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn no_gpu(r: &Value) -> bool {
+    r["error"]["message"] == "printing needs a GPU adapter"
+}
+
+#[test]
+fn export_pdf_writes_a_pdf_with_one_page_per_sheet_or_reports_no_gpu() {
+    let mut h = HeadlessHost::new();
+    call(&mut h, "batch", json!({"commands": square()}));
+    // Look down at it: parallel, so a scale can apply.
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_camera", "eye": [1, 1, 50], "target": [1, 1, 0], "fov_y_deg": 30,
+               "up": [0, 1, 0], "projection": "parallel"}),
+    );
+    let dir = scratch_dir("ok");
+    let fit = dir.join("fit.pdf");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": fit.display().to_string(), "dpi": 72}),
+    );
+    if no_gpu(&r) {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    assert_eq!(r["result"]["pdf"]["sheets"], 1, "{r}");
+    assert_eq!(r["result"]["pdf"]["warnings"], json!([]));
+    let bytes = std::fs::read(&fit).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1.4"));
+    assert!(String::from_utf8_lossy(&bytes).contains("/Count 1"));
+
+    // Exactly 1:200 on A4 landscape: the 2 m square fits one sheet; 1:5 needs several.
+    let tiled = dir.join("tiled.pdf");
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": tiled.display().to_string(), "dpi": 72,
+               "scale": 5, "paper": "a4", "landscape": false}),
+    );
+    assert!(r["result"]["pdf"]["sheets"].as_u64().unwrap() > 1, "{r}");
+
+    // A second run is byte for byte the same.
+    let again = dir.join("again.pdf");
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": again.display().to_string(), "dpi": 72}),
+    );
+    assert_eq!(std::fs::read(&again).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn export_pdf_refuses_bad_input_and_other_files_before_rendering() {
+    let mut h = HeadlessHost::new();
+    call(&mut h, "batch", json!({"commands": square()}));
+    let dir = scratch_dir("refuse");
+    let other = dir.join("notes.pdf");
+    std::fs::write(&other, "not a pdf").unwrap();
+    let path = other.display().to_string();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": path}),
+    );
+    assert_eq!(r["error"]["code"], codes::COMMAND_FAILED, "{r}");
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("overwrite")
+    );
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "not a pdf");
+
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": dir.join("a.pdf").display().to_string(), "paper": "b5"}),
+    );
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown paper")
+    );
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": dir.join("a.skr").display().to_string()}),
+    );
+    assert!(r["error"]["message"].as_str().unwrap().contains(".skr"));
+    // A perspective view cannot print at a scale (or, without a GPU, cannot print at all).
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": dir.join("a.pdf").display().to_string(), "scale": 100}),
+    );
+    assert_eq!(r["error"]["code"], codes::COMMAND_FAILED, "{r}");
+    let message = r["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("parallel") || message == "printing needs a GPU adapter",
+        "{message}"
+    );
+    assert!(!dir.join("a.pdf").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

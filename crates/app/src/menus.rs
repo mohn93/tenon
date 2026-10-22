@@ -105,6 +105,9 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Entry::Separator,
         bound_item("Import...", Bound::ImportFile, UiAction::ImportFile).entry(),
         bound_item("Export...", Bound::ExportFile, UiAction::ExportFile).entry(),
+        Item::new("Export PDF...", UiAction::ExportPdf).entry(),
+        Entry::Separator,
+        Item::new("Print...", UiAction::Print).entry(),
     ];
     if !native {
         file.push(Entry::Separator);

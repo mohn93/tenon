@@ -95,7 +95,8 @@ impl Host for Editing {
             | EditorCommand::CopySelection {}
             | EditorCommand::CutSelection {}
             | EditorCommand::PasteClipboard { .. }
-            | EditorCommand::PasteInPlace {} => {}
+            | EditorCommand::PasteInPlace {}
+            | EditorCommand::ExportPdf { .. } => {}
         }
         Ok(())
     }
@@ -456,4 +457,17 @@ fn tool_input_reaches_the_editor_checked() {
         json!({"events": [{"type": "click", "pixel": [1, 1]}]}),
     );
     assert_eq!(r["error"]["message"], "this program has no editor", "{r}");
+}
+
+#[test]
+fn export_pdf_without_a_gpu_host_says_so() {
+    let mut h = Editing::new();
+    let dir = std::env::temp_dir().join(format!("api-nogpu-{}.pdf", std::process::id()));
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "export_pdf", "path": dir.display().to_string()}),
+    );
+    assert_eq!(r["error"]["message"], "printing needs a GPU adapter", "{r}");
+    assert!(!dir.exists());
 }

@@ -16,8 +16,10 @@ mod transport;
 #[cfg(windows)]
 mod windows;
 
-pub use dispatch::{BatchResult, EditorQuery, ExecuteResult, Host, call, describe, handle};
-pub use editor::{Dialog, EditorCommand, EditorState, MessageKind, PhaseName, ToolName};
+pub use dispatch::{
+    BatchResult, EditorQuery, ExecuteResult, Host, call, describe, handle, no_gpu_for_printing,
+};
+pub use editor::{Dialog, EditorCommand, EditorState, MessageKind, PdfReport, PhaseName, ToolName};
 pub use headless::HeadlessHost;
 pub use hub::{ACTIVITY_LEN, Activity, Hub, Inbox};
 pub use input::{

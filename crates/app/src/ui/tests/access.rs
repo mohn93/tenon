@@ -132,6 +132,13 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
             },
         ),
         (
+            "the Print sheet",
+            Sheet::Print {
+                purpose: crate::editor::PrintPurpose::Export,
+                spec: crate::editor::PrintOptions::default(),
+            },
+        ),
+        (
             "the Field of View sheet",
             Sheet::FieldOfView { degrees: 35.0 },
         ),

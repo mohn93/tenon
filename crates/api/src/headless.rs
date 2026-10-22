@@ -2,11 +2,13 @@
 
 use glam::DVec2;
 use render::Snapshotter;
+use render::print::{Printed, render_pdf};
+use session::print::PrintSpec;
 use session::{
     BatchCommand, BatchError, Camera, Command, CommandError, Document, Lighting, Origin, Outcome,
 };
 
-use crate::dispatch::Host;
+use crate::dispatch::{Host, no_gpu_for_printing};
 use crate::roots::ApiRoots;
 
 pub struct HeadlessHost {
@@ -38,6 +40,16 @@ impl HeadlessHost {
     }
 }
 
+impl HeadlessHost {
+    /// Looks for a GPU on first use.
+    fn check_gpu(&mut self) {
+        if !self.gpu_checked {
+            self.gpu_checked = true;
+            self.snapshotter = Snapshotter::new_headless();
+        }
+    }
+}
+
 impl Default for HeadlessHost {
     fn default() -> Self {
         Self::new()
@@ -65,6 +77,12 @@ impl Host for HeadlessHost {
         self.doc.execute_batch(commands, atomic)
     }
 
+    fn render_pdf(&mut self, spec: &PrintSpec) -> Result<Printed, CommandError> {
+        self.check_gpu();
+        let snapshotter = self.snapshotter.as_mut().ok_or_else(no_gpu_for_printing)?;
+        render_pdf(snapshotter, &self.doc, spec)
+    }
+
     fn render_view(
         &mut self,
         camera: &Camera,
@@ -72,10 +90,7 @@ impl Host for HeadlessHost {
         width: u32,
         height: u32,
     ) -> Option<Vec<u8>> {
-        if !self.gpu_checked {
-            self.gpu_checked = true;
-            self.snapshotter = Snapshotter::new_headless();
-        }
+        self.check_gpu();
         let doc = &self.doc;
         self.snapshotter.as_mut().and_then(|s| {
             s.set_color_by_tag(doc.color_by_tag);

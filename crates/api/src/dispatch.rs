@@ -2,16 +2,18 @@
 
 use base64::Engine;
 use kernel::ChangeSummary;
+use render::print::Printed;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use session::print::{DEFAULT_DPI, Paper, PrintSpec};
 use session::{
     BatchCommand, BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind,
     Lighting, Outcome, Query, QueryResult, check_references,
 };
 
-use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState};
+use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState, PdfReport};
 use crate::input::{
     ToolInput, ToolInputError, ToolInputParams, ToolInputResult, ToolInputStopped, check,
 };
@@ -46,6 +48,8 @@ pub struct BatchResult {
 #[derive(Serialize, JsonSchema)]
 struct EditorResult {
     editor: Option<EditorState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pdf: Option<PdfReport>,
     revision: u64,
 }
 
@@ -92,6 +96,11 @@ pub trait Host {
     /// The editor's state, or None for a program without an editor (a bare document).
     fn editor(&self) -> Option<EditorState> {
         None
+    }
+    /// Renders the current view as a print (see `render::print`) with the GPU; the default is
+    /// a host without one.
+    fn render_pdf(&mut self, _spec: &PrintSpec) -> Result<Printed, CommandError> {
+        Err(no_gpu_for_printing())
     }
     /// Runs an editor command.
     fn editor_command(&mut self, _command: EditorCommand) -> Result<(), CommandError> {
@@ -142,6 +151,64 @@ fn quitting_error() -> RpcError {
 }
 
 /// The error for editor commands and queries in a program without an editor.
+pub fn no_gpu_for_printing() -> CommandError {
+    CommandError::new(ErrorKind::InvalidInput, "printing needs a GPU adapter")
+}
+
+/// The print an `export_pdf` command describes: its paper, orientation, scale and resolution.
+fn print_spec(
+    paper: Option<&str>,
+    landscape: Option<bool>,
+    scale: Option<f64>,
+    dpi: Option<u32>,
+) -> Result<PrintSpec, CommandError> {
+    let paper = match paper {
+        None => Paper::A4,
+        Some(name) => Paper::from_name(name).ok_or_else(|| {
+            CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("unknown paper {name:?}: use a4, a3, letter, legal or tabloid"),
+            )
+        })?,
+    };
+    Ok(PrintSpec {
+        paper,
+        landscape: landscape.unwrap_or(true),
+        scale,
+        dpi: dpi.unwrap_or(DEFAULT_DPI),
+    })
+}
+
+/// Runs `export_pdf`: checks the path first (so a refusal costs no rendering), prints, writes.
+fn export_pdf(host: &mut dyn Host, command: EditorCommand) -> Result<PdfReport, CommandError> {
+    let EditorCommand::ExportPdf {
+        path,
+        paper,
+        landscape,
+        scale,
+        dpi,
+        overwrite,
+    } = command
+    else {
+        unreachable!("export_pdf takes an export_pdf command");
+    };
+    let spec = print_spec(paper.as_deref(), landscape, scale, dpi)?;
+    let overwrite = overwrite.unwrap_or(false);
+    let (path, refuse_links) = match host.roots() {
+        Some(roots) => (roots.write(&path)?.display().to_string(), true),
+        None => (path, false),
+    };
+    host.document()
+        .check_pdf_target(&path, overwrite, refuse_links)?;
+    let printed = host.render_pdf(&spec)?;
+    host.document()
+        .write_pdf(&path, &printed.pdf, overwrite, refuse_links)?;
+    Ok(PdfReport {
+        sheets: printed.sheets,
+        warnings: printed.warnings,
+    })
+}
+
 fn no_editor() -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, "this program has no editor")
 }
@@ -206,9 +273,18 @@ pub fn call(host: &mut dyn Host, method: &str, params: Value) -> Result<Value, R
     match method {
         "execute" if type_of(&params).is_some_and(|t| EDITOR_COMMANDS.contains(&t)) => {
             let command: EditorCommand = params_as(params)?;
-            host.editor_command(command).map_err(command_failed)?;
+            let pdf = match command {
+                EditorCommand::ExportPdf { .. } => {
+                    Some(export_pdf(host, command).map_err(command_failed)?)
+                }
+                command => {
+                    host.editor_command(command).map_err(command_failed)?;
+                    None
+                }
+            };
             Ok(json!(EditorResult {
                 editor: host.editor(),
+                pdf,
                 revision: host.document().revision(),
             }))
         }

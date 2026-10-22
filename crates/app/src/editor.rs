@@ -37,6 +37,8 @@ mod input;
 pub use input::{DriveError, Driven, Stopped};
 mod labels;
 mod notes;
+mod print;
+pub use print::{PaperChoice, PrintOptions, PrintPurpose};
 mod scenes;
 mod sections;
 mod soften;
@@ -286,12 +288,13 @@ pub struct Editor {
 }
 
 /// The formats File > Export offers, as (filter name, extension).
-pub const EXPORT_FORMATS: [(&str, &str); 5] = [
+pub const EXPORT_FORMATS: [(&str, &str); 6] = [
     ("OBJ", "obj"),
     ("STL", "stl"),
     ("glTF binary", "glb"),
     ("glTF", "gltf"),
     ("SketchUp 2017 (.skp)", "skp"),
+    ("SVG drawing", "svg"),
 ];
 
 /// The colors the Materials panel offers; new materials get them in turn.
@@ -4865,6 +4868,21 @@ mod tests {
         assert!(e.export_file(&path));
         assert_eq!(e.export_formats()[0], ("SketchUp 2017 (.skp)", "skp"));
         assert!(std::fs::read(&path).unwrap().len() > 5000);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_export_dialog_offers_svg_and_exports_a_drawing() {
+        assert!(EXPORT_FORMATS.contains(&("SVG drawing", "svg")));
+        let mut e = editor();
+        e.select_tool(ToolKind::Line);
+        square(&mut e);
+        assert!(e.export_formats().contains(&("SVG drawing", "svg")));
+        let path = temp_file("dialog.svg");
+        assert!(e.export_file(&path));
+        assert_eq!(e.export_formats()[0], ("SVG drawing", "svg"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("<svg"), "{text}");
         let _ = std::fs::remove_file(&path);
     }
 

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::editor::ImportOptions;
+use crate::editor::{ImportOptions, PrintOptions};
 use crate::navigation::TrackpadScroll;
 use crate::ui::DockLayout;
 use crate::ui::theme::{ThemeChoice, UiScale};
@@ -30,6 +30,8 @@ pub struct Prefs {
     pub recent: Vec<PathBuf>,
     /// The Import Options sheet's values when Import was last pressed.
     pub import: ImportOptions,
+    /// The Print sheet's values when Export PDF or Print was last pressed.
+    pub print: PrintOptions,
     /// How often the open model is copied to the recovery folder, in minutes (0: never).
     /// Loaded at most `MAX_AUTOSAVE_MINUTES`.
     pub autosave_minutes: u32,
@@ -44,6 +46,7 @@ impl Default for Prefs {
             dock: DockLayout::default(),
             recent: Vec::new(),
             import: ImportOptions::default(),
+            print: PrintOptions::default(),
             autosave_minutes: DEFAULT_AUTOSAVE_MINUTES,
         }
     }
@@ -153,6 +156,7 @@ pub fn load(path: &Path) -> Prefs {
     Prefs {
         dock: prefs.dock.clamped(),
         recent: cleaned(prefs.recent),
+        print: prefs.print.cleaned(),
         autosave_minutes: prefs.autosave_minutes.min(MAX_AUTOSAVE_MINUTES),
         ..prefs
     }
@@ -334,7 +338,7 @@ mod tests {
         assert_eq!(load(&path).trackpad, TrackpadScroll::Zoom);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  },\n  \"autosave_minutes\": 5\n}"
+            "{\n  \"theme\": \"light\",\n  \"ui_scale\": 110,\n  \"trackpad\": \"zoom\",\n  \"dock\": {\n    \"width\": 280.0,\n    \"split\": 0.55,\n    \"tab\": \"entity_info\"\n  },\n  \"import\": {\n    \"units\": \"meters\",\n    \"as\": \"group\",\n    \"merge_coplanar\": true\n  },\n  \"print\": {\n    \"paper\": \"a4\",\n    \"landscape\": true,\n    \"scale\": null,\n    \"dpi\": 150\n  },\n  \"autosave_minutes\": 5\n}"
         );
         #[cfg(unix)]
         {
@@ -374,6 +378,7 @@ mod tests {
             ui_scale: UiScale::P125,
             trackpad: TrackpadScroll::Zoom,
             import: ImportOptions::default(),
+            print: PrintOptions::default(),
             autosave_minutes: 30,
         };
         assert_ne!(prefs.theme, ThemeChoice::default());
@@ -398,6 +403,7 @@ mod tests {
                 ui_scale: UiScale::P100,
                 trackpad: TrackpadScroll::Orbit,
                 import: ImportOptions::default(),
+                print: PrintOptions::default(),
                 autosave_minutes: 5,
             }
         );
@@ -637,6 +643,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(load(&path).import, options);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn print_options_round_trip_and_load_into_range() {
+        use crate::editor::PaperChoice;
+        let home = home("print");
+        let path = path_in(&home);
+        let options = PrintOptions {
+            paper: PaperChoice::Tabloid,
+            landscape: false,
+            scale: Some(200.0),
+            dpi: 300,
+        };
+        save(
+            &path,
+            &Prefs {
+                print: options,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(load(&path).print, options);
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(json["print"]["paper"], "tabloid");
+        // A file from before printing has the defaults; wild values are brought into range.
+        std::fs::write(&path, b"{\"theme\": \"dark\"}").unwrap();
+        assert_eq!(load(&path).print, PrintOptions::default());
+        std::fs::write(
+            &path,
+            b"{\"print\": {\"dpi\": 9000, \"scale\": -2.0, \"paper\": \"legal\"}}",
+        )
+        .unwrap();
+        let loaded = load(&path).print;
+        assert_eq!((loaded.dpi, loaded.scale), (300, None));
+        assert_eq!(loaded.paper, PaperChoice::Legal);
         std::fs::remove_dir_all(home).unwrap();
     }
 

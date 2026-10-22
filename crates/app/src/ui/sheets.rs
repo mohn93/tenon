@@ -13,7 +13,10 @@ use session::text3d::MIN_TEXT_HEIGHT;
 use tools::{NoteRequest, TextSpec};
 
 use super::{UiAction, theme, widgets};
-use crate::editor::{ImportAs, ImportOptions, ImportUnits, RenameTarget, UpAxis, is_sketchup_path};
+use crate::editor::{
+    ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose, RenameTarget,
+    UpAxis, is_sketchup_path,
+};
 
 /// The sheet open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +57,12 @@ pub enum Sheet {
     /// 3D Text: the text, its height and depth and whether it is filled, before the text is
     /// placed with the cursor.
     Text3d { spec: TextSpec },
+    /// Print: paper, orientation, Fit or 1:N and resolution, before the view is rendered to a
+    /// PDF (`purpose`: a file chosen after it, or the system's viewer).
+    Print {
+        purpose: PrintPurpose,
+        spec: PrintOptions,
+    },
 }
 
 /// A sheet's width, in points.
@@ -86,6 +95,8 @@ enum Values {
     Note(String),
     /// 3D text's text and sizes.
     Text3d(TextSpec),
+    /// The print options being edited.
+    Print(PrintOptions),
     /// A sheet with nothing to edit.
     Nothing,
 }
@@ -102,6 +113,7 @@ impl Values {
             Sheet::DiscardRecovered { .. } => Values::Nothing,
             Sheet::NoteText { text, .. } => Values::Note(text.clone()),
             Sheet::Text3d { spec } => Values::Text3d(spec.clone()),
+            Sheet::Print { spec, .. } => Values::Print(*spec),
         }
     }
 }
@@ -161,6 +173,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                 }
                 (Sheet::Text3d { .. }, Values::Text3d(spec)) => {
                     text_3d_sheet(ui, spec, fresh, actions);
+                }
+                (Sheet::Print { purpose, .. }, Values::Print(spec)) => {
+                    print_sheet(ui, *purpose, spec, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -540,6 +555,85 @@ fn text_3d_sheet(ui: &mut Ui, spec: &mut TextSpec, fresh: bool, actions: &mut Ve
             spec.depth = 0.0;
         }
         actions.push(UiAction::Confirm3dText(spec));
+    }
+}
+
+/// The Print sheet: paper, orientation, Fit or an exact 1:N scale (with N) and resolution.
+/// Export PDF then asks for a file; Print opens the result.
+fn print_sheet(
+    ui: &mut Ui,
+    purpose: PrintPurpose,
+    spec: &mut PrintOptions,
+    actions: &mut Vec<UiAction>,
+) {
+    let t = theme::tokens(ui.ctx().theme());
+    let (title, button) = match purpose {
+        PrintPurpose::Export => ("Export PDF", "Export..."),
+        PrintPurpose::Print => ("Print Setup", "Print"),
+    };
+    widgets::section_header(ui, title);
+    ui.add_space(theme::GRID);
+    egui::Grid::new("print-options")
+        .num_columns(2)
+        .spacing([theme::GRID * 2.0, theme::GRID])
+        .show(ui, |ui| {
+            let label = ui.label("Paper");
+            egui::ComboBox::from_id_salt("print-paper")
+                .selected_text(spec.paper.label())
+                .show_ui(ui, |ui| {
+                    for paper in PaperChoice::ALL {
+                        ui.selectable_value(&mut spec.paper, paper, paper.label());
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            ui.end_row();
+
+            ui.label("Orientation");
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut spec.landscape, false, "Portrait");
+                ui.radio_value(&mut spec.landscape, true, "Landscape");
+            });
+            ui.end_row();
+
+            ui.label("Scale");
+            ui.vertical(|ui| {
+                if ui.radio(spec.scale.is_none(), "Fit to page").clicked() {
+                    spec.scale = None;
+                }
+                ui.horizontal(|ui| {
+                    let exact = spec.scale.is_some();
+                    if ui.radio(exact, "1 :").clicked() && !exact {
+                        spec.scale = Some(PrintOptions::DEFAULT_SCALE);
+                    }
+                    if let Some(n) = &mut spec.scale {
+                        ui.add(
+                            egui::DragValue::new(n)
+                                .range(0.01..=1_000_000.0)
+                                .speed(1.0)
+                                .max_decimals(2),
+                        );
+                    }
+                });
+                ui.label(
+                    RichText::new("Exact scale needs a parallel view")
+                        .small()
+                        .color(t.text_secondary),
+                );
+            });
+            ui.end_row();
+
+            let label = ui.label("Resolution");
+            ui.add(
+                egui::DragValue::new(&mut spec.dpi)
+                    .range(session::print::MIN_DPI..=session::print::MAX_DPI)
+                    .suffix(" dpi"),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
+        });
+    if buttons(ui, button, spec.valid(), actions) {
+        actions.push(UiAction::ConfirmPrint(*spec));
     }
 }
 

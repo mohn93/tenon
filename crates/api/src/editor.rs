@@ -217,10 +217,45 @@ pub enum EditorCommand {
     /// Edit > Paste In Place: pastes the clip on the clipboard where it was copied from, in
     /// world coordinates (one `paste` step). `invalid_input` when the clipboard holds no clip.
     PasteInPlace {},
+    /// File > Export PDF...: renders the current view (camera, display settings and section
+    /// cuts; nothing highlighted) with the GPU and writes it as a PDF at `path`, one page per
+    /// sheet. Without `scale` the view is fitted on one sheet; with `scale` (1:N, a parallel
+    /// view only) the model is printed at that scale, tiled across sheets (at most 100) with
+    /// trim marks, a scale bar and a "Sheet r,c of R x C" footer. Paths follow the export
+    /// rules (`--api-root`, `overwrite`, never the open model's own file). The reply holds
+    /// `pdf: {sheets, warnings}`. `invalid_input` "printing needs a GPU adapter" when there
+    /// is none.
+    ExportPdf {
+        path: String,
+        /// "a4" (default), "a3", "letter", "legal" or "tabloid".
+        #[serde(default)]
+        paper: Option<String>,
+        /// Default true.
+        #[serde(default)]
+        landscape: Option<bool>,
+        /// Print at 1:scale; absent fits the view on one sheet.
+        #[serde(default)]
+        scale: Option<f64>,
+        /// Pixels per inch of the images, 72 to 300 (default 150).
+        #[serde(default)]
+        dpi: Option<u32>,
+        /// Replace an existing file that is not a PDF (default false).
+        #[serde(default)]
+        overwrite: Option<bool>,
+    },
+}
+
+/// What `export_pdf` reports.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct PdfReport {
+    /// Pages written.
+    pub sheets: usize,
+    /// Things the print could not do exactly (a capped image size, labels left out).
+    pub warnings: Vec<String>,
 }
 
 /// The `type` of each editor command.
-pub const EDITOR_COMMANDS: [&str; 12] = [
+pub const EDITOR_COMMANDS: [&str; 13] = [
     "set_tool",
     "set_paint_material",
     "set_import_units",
@@ -233,6 +268,7 @@ pub const EDITOR_COMMANDS: [&str; 12] = [
     "cut_selection",
     "paste_clipboard",
     "paste_in_place",
+    "export_pdf",
 ];
 
 #[cfg(test)]

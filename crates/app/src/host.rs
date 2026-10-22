@@ -7,9 +7,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use api::{
     ApiRoots, Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput,
-    ToolInputError, ToolInputResult, ToolInputStopped, ToolName, snap_name,
+    ToolInputError, ToolInputResult, ToolInputStopped, ToolName, no_gpu_for_printing, snap_name,
 };
 use render::Snapshotter;
+use render::print::{Printed, render_pdf};
+use session::print::PrintSpec;
 use session::{
     BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin,
     Outcome,
@@ -46,7 +48,7 @@ impl Offscreen {
         }
     }
 
-    fn get(&mut self) -> Option<&mut Snapshotter> {
+    pub fn get(&mut self) -> Option<&mut Snapshotter> {
         if !self.tried {
             self.tried = true;
             self.snapshotter = Snapshotter::new_headless();
@@ -260,6 +262,12 @@ impl Host for AppHost<'_> {
         )
     }
 
+    fn render_pdf(&mut self, spec: &PrintSpec) -> Result<Printed, CommandError> {
+        let doc = self.editor.doc();
+        let snapshotter = self.offscreen.get().ok_or_else(no_gpu_for_printing)?;
+        render_pdf(snapshotter, doc, spec)
+    }
+
     fn editor(&self) -> Option<EditorState> {
         Some(editor_state(self.editor))
     }
@@ -286,6 +294,13 @@ impl Host for AppHost<'_> {
                 EditorCommand::CutSelection {} => editor.cut()?,
                 EditorCommand::PasteClipboard { at } => editor.paste(at)?,
                 EditorCommand::PasteInPlace {} => editor.paste_in_place()?,
+                // The dispatcher prints: it needs the renderer and reports the pages.
+                EditorCommand::ExportPdf { .. } => {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        "export_pdf runs through execute",
+                    ));
+                }
             }
             Ok(())
         })
@@ -424,6 +439,13 @@ mod tests {
 
     fn editor() -> Editor {
         Editor::new(DVec2::new(800.0, 600.0), 1.0)
+    }
+
+    fn add_edge_command() -> Command {
+        Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        }
     }
 
     /// Sends one request through an `AppHost` and returns the reply.
@@ -571,6 +593,95 @@ mod tests {
         let r = call(&mut e, &mut quit, "query", json!({"type": "editor"}));
         assert_eq!(r["result"]["import_units"], "inches");
         assert!(!quit);
+    }
+
+    /// `call` with an offscreen renderer that found no GPU.
+    fn call_without_gpu(e: &mut Editor, params: Value) -> Value {
+        let mut offscreen = Offscreen {
+            snapshotter: None,
+            tried: true,
+        };
+        let mut quit = false;
+        let mut host = AppHost {
+            editor: e,
+            offscreen: &mut offscreen,
+            quit: &mut quit,
+            roots: &ApiRoots::default(),
+            recovery: None,
+            session: None,
+        };
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "execute", "params": params});
+        serde_json::from_str(&handle(&mut host, &line.to_string()).unwrap()).unwrap()
+    }
+
+    fn pdf_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("host-pdf-{}-{name}.pdf", std::process::id()))
+    }
+
+    #[test]
+    fn export_pdf_without_a_gpu_adapter_is_an_error_and_writes_nothing() {
+        let mut e = editor();
+        e.execute(add_edge_command()).unwrap();
+        let path = pdf_path("nogpu");
+        let r = call_without_gpu(
+            &mut e,
+            json!({"type": "export_pdf", "path": path.display().to_string()}),
+        );
+        assert_eq!(r["error"]["message"], "printing needs a GPU adapter", "{r}");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn export_pdf_writes_a_page_per_sheet_or_skips_without_a_gpu() {
+        let (mut e, mut quit) = (editor(), false);
+        let corners = [[0, 0], [2, 0], [2, 2], [0, 2]];
+        for i in 0..4 {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            let r = call(
+                &mut e,
+                &mut quit,
+                "execute",
+                json!({"type": "add_edge", "start": [a[0], a[1], 0], "end": [b[0], b[1], 0]}),
+            );
+            assert!(r["error"].is_null(), "{r}");
+        }
+        call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "set_camera", "eye": [1, 1, 50], "target": [1, 1, 0],
+                   "fov_y_deg": 30, "projection": "parallel"}),
+        );
+        let path = pdf_path("pages");
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "export_pdf", "path": path.display().to_string(), "dpi": 72}),
+        );
+        if r["error"]["message"] == "printing needs a GPU adapter" {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        }
+        assert_eq!(r["result"]["pdf"]["sheets"], 1, "{r}");
+        let one = std::fs::read(&path).unwrap();
+        assert!(one.starts_with(b"%PDF-1.4"));
+        assert!(String::from_utf8_lossy(&one).contains("/Count 1"));
+        // 1:5 on portrait A4 spreads the 2 m square over several sheets.
+        let r = call(
+            &mut e,
+            &mut quit,
+            "execute",
+            json!({"type": "export_pdf", "path": path.display().to_string(), "overwrite": true,
+                   "dpi": 72, "scale": 5, "landscape": false}),
+        );
+        let sheets = r["result"]["pdf"]["sheets"].as_u64().unwrap();
+        assert!(sheets > 1, "{r}");
+        let many = std::fs::read(&path).unwrap();
+        assert!(String::from_utf8_lossy(&many).contains(&format!("/Count {sheets}")));
+        // The model is not touched by printing.
+        assert!(e.doc().path().is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

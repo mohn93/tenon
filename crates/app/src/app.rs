@@ -22,7 +22,7 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes, WindowId};
 
 use crate::awake::Awake;
 use crate::clipboard::SystemClipboard;
-use crate::editor::{DRAG_LOGICAL_PX, Editor, EditorKey};
+use crate::editor::{DRAG_LOGICAL_PX, Editor, EditorKey, PrintOptions, PrintPurpose};
 use crate::feedback::Timing;
 use crate::fly::FlyKey;
 use crate::gui::Gui;
@@ -1464,6 +1464,28 @@ impl State {
         }
     }
 
+    /// Prints the view as `spec` says: Export asks for the PDF's file, Print opens a temp file.
+    fn print(&mut self, purpose: PrintPurpose, spec: &PrintOptions) {
+        match purpose {
+            PrintPurpose::Export => {
+                let stem = file_name(self.editor.doc().path());
+                let stem = stem.strip_suffix(".skr").unwrap_or(&stem);
+                let chosen = rfd::FileDialog::new()
+                    .add_filter("PDF", &["pdf"])
+                    .set_file_name(format!("{stem}.pdf"))
+                    .save_file();
+                if let Some(path) = chosen {
+                    let snapshotter = self.offscreen.get();
+                    self.editor.export_pdf_file(snapshotter, spec, &path);
+                }
+            }
+            PrintPurpose::Print => {
+                let snapshotter = self.offscreen.get();
+                self.editor.print_and_open(snapshotter, spec);
+            }
+        }
+    }
+
     /// Writes the preferences, when the window has a prefs file. A failed save leaves the
     /// change for this session, with a warning.
     fn save_prefs(&self) {
@@ -1532,6 +1554,24 @@ impl State {
                 self.editor.set_units(units);
             }
             UiAction::ExportFile => self.export(),
+            UiAction::ExportPdf => self.open_sheet(Sheet::Print {
+                purpose: PrintPurpose::Export,
+                spec: self.prefs.print,
+            }),
+            UiAction::Print => self.open_sheet(Sheet::Print {
+                purpose: PrintPurpose::Print,
+                spec: self.prefs.print,
+            }),
+            UiAction::ConfirmPrint(spec) => {
+                if let Some(Sheet::Print { purpose, .. }) =
+                    self.confirm_sheet(|s| matches!(s, Sheet::Print { .. }))
+                {
+                    let spec = spec.cleaned();
+                    self.prefs.print = spec;
+                    self.save_prefs();
+                    self.print(purpose, &spec);
+                }
+            }
             UiAction::Tool(kind) => self.editor.select_tool(kind),
             UiAction::Undo => {
                 self.editor.undo();
@@ -2383,7 +2423,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         return Err("The model was replaced; nothing was done");
     }
     match sheet {
-        Sheet::Import { .. } => Ok(()),
+        Sheet::Import { .. } | Sheet::Print { .. } => Ok(()),
         Sheet::NameComponent { .. } if *editor.doc().selection() != origin.selection => {
             Err("The selection changed; no component was made")
         }
@@ -2561,6 +2601,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
         action,
         UiAction::CloseSheet
             | UiAction::ConfirmImport(_)
+            | UiAction::ConfirmPrint(_)
             | UiAction::ConfirmName(_)
             | UiAction::ConfirmFieldOfView(_)
             | UiAction::ConfirmDeleteTag(_)
@@ -3570,6 +3611,8 @@ mod tests {
             UiAction::ShowFieldOfView,
             UiAction::Show3dText,
             UiAction::ShowSettings(true),
+            UiAction::ExportPdf,
+            UiAction::Print,
         ] {
             assert!(!action_allowed_with_sheet(&dropped), "{dropped:?}");
         }
@@ -3578,6 +3621,7 @@ mod tests {
             UiAction::ConfirmImport(crate::editor::ImportOptions::default()),
             UiAction::ConfirmName("Component 1".into()),
             UiAction::ConfirmFieldOfView(35.0),
+            UiAction::ConfirmPrint(PrintOptions::default()),
             UiAction::Confirm3dText(default_text_3d()),
             UiAction::Quit,
         ] {

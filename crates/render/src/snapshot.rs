@@ -74,6 +74,29 @@ impl Snapshotter {
         width: u32,
         height: u32,
     ) -> Option<Vec<u8>> {
+        self.renderer.set_scene(scene, context, selection);
+        self.capture_prepared(camera, lighting, width, height)
+    }
+
+    /// Sets the scene to render, with the open context and `selection` shown, for later
+    /// [`Snapshotter::capture_prepared`] calls: many views of one scene upload it once.
+    pub fn prepare(
+        &mut self,
+        scene: &Scene,
+        context: &[InstanceId],
+        selection: &BTreeSet<EntityId>,
+    ) {
+        self.renderer.set_scene(scene, context, selection);
+    }
+
+    /// [`Snapshotter::capture`] of the scene [`Snapshotter::prepare`] set (or the last capture's).
+    pub fn capture_prepared(
+        &mut self,
+        camera: &Camera,
+        lighting: Lighting,
+        width: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         let (width, height) = (width.max(1), height.max(1));
         let mut camera = camera.clone();
         camera.viewport = glam::DVec2::new(width as f64, height as f64);
@@ -94,7 +117,6 @@ impl Snapshotter {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.set_scene(scene, context, selection);
         self.renderer.set_lighting(lighting);
         self.renderer.render(&view, (width, height), &camera, &[]);
 

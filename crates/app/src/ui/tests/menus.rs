@@ -11,6 +11,8 @@ fn the_file_menu_reports_its_items() {
         ("Save As...", UiAction::SaveFileAs),
         ("Import...", UiAction::ImportFile),
         ("Export...", UiAction::ExportFile),
+        ("Export PDF...", UiAction::ExportPdf),
+        ("Print...", UiAction::Print),
     ] {
         let mut h = harness(Fixture::default());
         assert_eq!(click_menu(&mut h, &["File", item]), [action], "{item}");
