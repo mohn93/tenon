@@ -17,6 +17,7 @@ use crate::editor::{
     ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose, RenameTarget,
     UpAxis, is_sketchup_path,
 };
+use crate::platform::{UnsavedChoice, UnsavedPrompt};
 
 /// The sheet open over the window.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +71,10 @@ pub enum Sheet {
     },
     /// Delete from Library, asking before the item's file is removed.
     DeleteLibraryItem { path: PathBuf, name: String },
+    /// The unsaved-changes question, where the window asks it itself.
+    Unsaved { prompt: UnsavedPrompt },
+    /// Help > About; `shadows_off` adds that light shadows are off in this browser.
+    About { shadows_off: bool },
     /// Print: paper, orientation, Fit or 1:N and resolution, before the view is rendered to a
     /// PDF (`purpose`: a file chosen after it, or the system's viewer).
     Print {
@@ -123,7 +128,9 @@ impl Values {
             Sheet::Rename { target } => Values::Name(target.name.clone()),
             Sheet::FieldOfView { degrees } => Values::Degrees(degrees.round()),
             Sheet::DeleteTag { .. } => Values::Destination(None),
-            Sheet::DiscardRecovered { .. } => Values::Nothing,
+            Sheet::DiscardRecovered { .. } | Sheet::Unsaved { .. } | Sheet::About { .. } => {
+                Values::Nothing
+            }
             Sheet::NoteText { text, .. } => Values::Note(text.clone()),
             Sheet::Text3d { spec } => Values::Text3d(spec.clone()),
             Sheet::SaveToLibrary { suggested, .. } => Values::Name(suggested.clone()),
@@ -214,6 +221,12 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                         NameUse::new(false, fresh, UiAction::ConfirmSaveToLibrary),
                         actions,
                     );
+                }
+                (Sheet::Unsaved { prompt }, Values::Nothing) => {
+                    unsaved_sheet(ui, prompt, actions);
+                }
+                (Sheet::About { shadows_off }, Values::Nothing) => {
+                    about_sheet(ui, *shadows_off, actions);
                 }
                 (Sheet::OverwriteLibrary { name, file, .. }, Values::Nothing) => {
                     overwrite_library_sheet(ui, name, file, actions);
@@ -498,6 +511,50 @@ fn discard_recovered_sheet(ui: &mut Ui, names: &[String], actions: &mut Vec<UiAc
         actions.push(UiAction::ConfirmDiscardRecovered);
     }
 }
+
+/// The unsaved-changes question: Cancel, Don't Save and Save (rightmost). Escape and a click on
+/// the backdrop report `CloseSheet`, which the window answers as Cancel.
+fn unsaved_sheet(ui: &mut Ui, prompt: &UnsavedPrompt, actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "Unsaved Changes");
+    ui.add_space(theme::GRID);
+    ui.label(&prompt.question);
+    ui.label(prompt.detail);
+    ui.add_space(theme::GRID * 2.0);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            for (label, choice) in [
+                ("Save", UnsavedChoice::Save),
+                ("Don't Save", UnsavedChoice::DontSave),
+                ("Cancel", UnsavedChoice::Cancel),
+            ] {
+                if ui.button(label).clicked() {
+                    actions.push(UiAction::UnsavedAnswer(choice));
+                }
+            }
+        });
+    });
+}
+
+/// Help > About: the app's name, and what is off in this browser.
+fn about_sheet(ui: &mut Ui, shadows_off: bool, actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "About sketchup-alt");
+    ui.add_space(theme::GRID);
+    ui.label(format!("sketchup-alt {}", env!("CARGO_PKG_VERSION")));
+    if shadows_off {
+        ui.label(SHADOWS_OFF);
+    }
+    ui.add_space(theme::GRID * 2.0);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() {
+                actions.push(UiAction::CloseSheet);
+            }
+        });
+    });
+}
+
+/// What the status line and About say when the adapter cannot draw light shadows.
+pub const SHADOWS_OFF: &str = "Light shadows are off in this browser (WebGL2)";
 
 /// The note sheet: a box for the note's text, several lines long, then Cancel and Add (a
 /// new note) or Change. Blank text is taken only for a leader note (`automatic`, shown in the

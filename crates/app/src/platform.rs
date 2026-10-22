@@ -48,6 +48,9 @@ pub struct Features {
     pub print: bool,
     /// Open Recent and the start card's list.
     pub recent: bool,
+    /// The window draws its own dialogs (the unsaved-changes question, About) where the system
+    /// has no native ones to show; `Platform::confirm_unsaved` is not called then.
+    pub in_app_dialogs: bool,
 }
 
 impl Features {
@@ -58,6 +61,7 @@ impl Features {
         autosave: true,
         print: true,
         recent: true,
+        in_app_dialogs: false,
     };
 
     /// Only what a browser tab offers: files as bytes, nothing that needs folders or processes.
@@ -67,6 +71,7 @@ impl Features {
         autosave: false,
         print: false,
         recent: false,
+        in_app_dialogs: true,
     };
 }
 

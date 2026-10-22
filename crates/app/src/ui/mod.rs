@@ -46,7 +46,7 @@ pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
 pub use dock::DockTab;
-pub use sheets::Sheet;
+pub use sheets::{SHADOWS_OFF, Sheet};
 pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
@@ -200,6 +200,10 @@ pub enum UiAction {
     SetDock(DockLayout),
     /// Open or close the Keyboard Shortcuts window.
     ShowShortcuts(bool),
+    /// Open the About sheet.
+    ShowAbout,
+    /// Answer the unsaved-changes sheet.
+    UnsavedAnswer(crate::platform::UnsavedChoice),
     /// Open or close the Soften Edges window.
     ShowSoften(bool),
     /// Set the Soften Edges window's angle, in degrees (0 to 180).

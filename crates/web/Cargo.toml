@@ -1,0 +1,43 @@
+[package]
+name = "web"
+version.workspace = true
+edition.workspace = true
+description = "sketchup-alt in a browser canvas"
+
+[lib]
+# cdylib is what wasm-bindgen turns into the page's module; rlib lets the native gate test the
+# parts that do not touch the browser.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+app = { path = "../app" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+render = { path = "../render" }
+wgpu = { workspace = true, features = ["webgl"] }
+winit.workspace = true
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+js-sys = "=0.3.106"
+web-sys = { version = "=0.3.106", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "CssStyleDeclaration",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "KeyboardEvent",
+    "Navigator",
+    "Storage",
+    "Url",
+    "Window",
+    "console",
+] }
+getrandom = { version = "=0.3.4", features = ["wasm_js"] }

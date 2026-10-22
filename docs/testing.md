@@ -19,7 +19,8 @@ The `app` crate is a library with a thin binary: its unit tests are in the libra
 with `cargo test -p app --lib <filter>`; the binary's integration tests (the headless and MCP
 modes) are `cargo test -p app --test integration`. The shared crates and the app library also
 build for the browser: `cargo check --target wasm32-unknown-unknown -p kernel -p session -p tools
--p render -p api -p app --lib` (needs `rustup target add wasm32-unknown-unknown`).
+-p render -p api -p app --lib -p web` (needs `rustup target add wasm32-unknown-unknown`); `scripts/build-web.sh`
+builds the page (docs/web.md).
 
 ## Golden images
 

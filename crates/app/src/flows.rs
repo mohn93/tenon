@@ -68,6 +68,9 @@ pub enum Effect {
     LibraryFolder(PathBuf),
     /// Print the view to this PDF.
     Pdf(PrintOptions, PathBuf),
+    /// The window asks the unsaved-changes question itself (`Features::in_app_dialogs`) and
+    /// answers with `PlatformReply::Unsaved`.
+    AskUnsaved(UnsavedPrompt),
 }
 
 /// What a step works on.
@@ -199,6 +202,10 @@ impl Flows {
             question,
             detail: "Your changes will be lost if you don't save them.",
         };
+        if env.platform.features().in_app_dialogs {
+            self.waiting = Some(Waiting::Unsaved(then));
+            return vec![Effect::AskUnsaved(prompt)];
+        }
         let answer =
             env.platform
                 .confirm_unsaved(env.parent, &prompt, self.reply(PlatformReply::Unsaved));
@@ -781,6 +788,32 @@ mod tests {
         });
         assert_eq!(fx, [Effect::ClearAutosave]);
         assert_eq!(platform.asks.get(), 0);
+    }
+
+    #[test]
+    fn a_window_with_its_own_dialogs_asks_the_unsaved_question_itself() {
+        let platform = web();
+        let mut editor = edited();
+        let mut f = flows();
+        let fx = run(&mut f, &mut editor, &platform, |f, env| {
+            f.settle_and(env, Then::NewModel)
+        });
+        let [Effect::AskUnsaved(prompt)] = &fx[..] else {
+            panic!("expected the question, got {fx:?}");
+        };
+        assert!(prompt.question.contains("Untitled.skr"));
+        assert_eq!(platform.asks.get(), 0);
+        // The model is kept until the answer comes; a second request is ignored meanwhile.
+        assert!(editor.doc().is_modified());
+        let again = run(&mut f, &mut editor, &platform, |f, env| {
+            f.settle_and(env, Then::Quit)
+        });
+        assert!(again.is_empty());
+        let fx = run(&mut f, &mut editor, &platform, |f, env| {
+            f.answered(env, PlatformReply::Unsaved(UnsavedChoice::DontSave))
+        });
+        assert_eq!(fx, [Effect::ClearAutosave]);
+        assert!(!editor.doc().is_modified());
     }
 
     #[test]

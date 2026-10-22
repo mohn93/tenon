@@ -340,7 +340,10 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .entry(),
     ];
 
-    let help = vec![Item::new("Keyboard Shortcuts", UiAction::ShowShortcuts(true)).entry()];
+    let mut help = vec![Item::new("Keyboard Shortcuts", UiAction::ShowShortcuts(true)).entry()];
+    if view.features.in_app_dialogs {
+        help.push(Item::new("About", UiAction::ShowAbout).entry());
+    }
 
     let mut menus = Vec::new();
     if native {

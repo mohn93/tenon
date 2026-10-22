@@ -10,7 +10,7 @@ pub mod platform;
 mod awake;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
-mod clipboard;
+pub mod clipboard;
 mod editor;
 mod feedback;
 mod flows;
@@ -35,7 +35,7 @@ pub mod recovery;
 #[cfg(target_arch = "wasm32")]
 #[path = "recovery_off.rs"]
 pub mod recovery;
-mod shortcuts;
+pub mod shortcuts;
 mod ui;
 #[cfg(windows)]
 pub mod windows;

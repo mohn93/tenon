@@ -42,7 +42,7 @@ use crate::menus;
 use crate::native_menu::{self, NativeMenu};
 use crate::navigation::{Button, Scroll};
 use crate::paths;
-use crate::platform::{Features, Platform};
+use crate::platform::{Features, Platform, UnsavedChoice};
 use crate::prefs::{self, Prefs};
 use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
@@ -750,6 +750,8 @@ struct State {
     platform: Box<dyn Platform>,
     /// What it offers (`Platform::features`); what is off is hidden and never started.
     features: Features,
+    /// Whether the renderer draws light shadows (off where the adapter cannot).
+    shadows: bool,
     /// The file flows (open, save, import, export) and the request waiting for the platform.
     flows: Flows,
     /// The surface status of the last frame skipped and logged since one was drawn, so a run of
@@ -1039,6 +1041,9 @@ impl State {
         editor.set_import_options(prefs.import);
         editor.set_trackpad(prefs.trackpad);
         editor.set_clipboard(platform.clipboard());
+        if !shadows {
+            editor.show_info(crate::ui::SHADOWS_OFF);
+        }
         let session = session
             .inspect_err(|why| editor.show_error(&format!("Autosave is off: {why}")))
             .ok();
@@ -1052,6 +1057,7 @@ impl State {
             device_lost: lost,
             platform,
             features,
+            shadows,
             flows,
             skip_logged: None,
             renderer,
@@ -1207,6 +1213,7 @@ impl State {
                     self.set_library_folder(Some(std::path::absolute(&folder).unwrap_or(folder)));
                 }
                 Effect::Pdf(options, path) => self.start_print(&options, Some(path)),
+                Effect::AskUnsaved(prompt) => self.open_sheet(Sheet::Unsaved { prompt }),
             }
         }
     }
@@ -1519,7 +1526,10 @@ impl State {
         if self.sheet.as_ref().is_some_and(|s| {
             !matches!(
                 s,
-                Sheet::DiscardRecovered { .. } | Sheet::DeleteLibraryItem { .. }
+                Sheet::DiscardRecovered { .. }
+                    | Sheet::DeleteLibraryItem { .. }
+                    | Sheet::Unsaved { .. }
+                    | Sheet::About { .. }
             )
         }) && self.editor.documents() != self.sheet_origin.document
         {
@@ -1627,6 +1637,11 @@ impl State {
                 }
             }
             UiAction::CloseSheet => {
+                // The unsaved-changes question closed any other way is a Cancel.
+                if matches!(self.sheet, Some(Sheet::Unsaved { .. })) {
+                    self.sheet = None;
+                    self.platform_reply(PlatformReply::Unsaved(UnsavedChoice::Cancel));
+                }
                 // A note being placed is dropped with its sheet.
                 if let Some(Sheet::NoteText { request, .. }) = self.sheet.take()
                     && !matches!(request, NoteRequest::Edit(_))
@@ -1904,6 +1919,15 @@ impl State {
             UiAction::Quit => self.settle_and(Then::Quit),
             UiAction::ShowAgentActivity(open) => self.agent_activity = open,
             UiAction::ShowShortcuts(open) => self.shortcuts_window = open,
+            UiAction::ShowAbout => self.open_sheet(Sheet::About {
+                shadows_off: !self.shadows,
+            }),
+            UiAction::UnsavedAnswer(choice) => {
+                if matches!(self.sheet, Some(Sheet::Unsaved { .. })) {
+                    self.sheet = None;
+                    self.platform_reply(PlatformReply::Unsaved(choice));
+                }
+            }
             UiAction::SetTheme(choice) => {
                 self.prefs.theme = choice;
                 self.gui.set_theme(choice);
@@ -2595,7 +2619,10 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
     // Recovered copies and library files are not the model's.
     if matches!(
         sheet,
-        Sheet::DiscardRecovered { .. } | Sheet::DeleteLibraryItem { .. }
+        Sheet::DiscardRecovered { .. }
+            | Sheet::DeleteLibraryItem { .. }
+            | Sheet::Unsaved { .. }
+            | Sheet::About { .. }
     ) {
         return Ok(());
     }
@@ -2623,6 +2650,8 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         }
         Sheet::DeleteTag { .. }
         | Sheet::DiscardRecovered { .. }
+        | Sheet::Unsaved { .. }
+        | Sheet::About { .. }
         | Sheet::DeleteLibraryItem { .. } => Ok(()),
         Sheet::SaveToLibrary { save, .. } | Sheet::OverwriteLibrary { save, .. } => {
             let doc = editor.doc();
@@ -2812,6 +2841,7 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmOverwriteLibrary
             | UiAction::ConfirmNote(_)
             | UiAction::Confirm3dText(_)
+            | UiAction::UnsavedAnswer(_)
             | UiAction::Quit
     )
 }
@@ -2934,6 +2964,9 @@ pub struct AppConfig {
     /// The GPU objects, made beforehand where they can only be requested asynchronously (a
     /// browser). None: the window makes them when it opens, waiting for them.
     pub gpu: Option<GpuContext>,
+    /// How the window is made, where the platform shapes it (a browser's window is a canvas of
+    /// the page). None: the desktop window.
+    pub window: Option<WindowAttributes>,
     /// A model to open once the window exists.
     pub file: Option<PathBuf>,
     /// The folders the API's file paths must lie within.
@@ -2953,6 +2986,7 @@ impl AppConfig {
         Self {
             platform,
             gpu: None,
+            window: None,
             file: None,
             roots: ApiRoots::default(),
             recovery: None,
@@ -2983,6 +3017,8 @@ pub struct App {
     /// The platform and the GPU, handed to the window when it is made.
     platform: Option<Box<dyn Platform>>,
     gpu: Option<GpuContext>,
+    /// How the window is made (None: `window_attributes`).
+    window_attributes: Option<WindowAttributes>,
     /// Carries native menu and AccessKit events to the loop.
     proxy: EventLoopProxy<AppEvent>,
 }
@@ -3020,6 +3056,7 @@ impl App {
             session: Some(config.session),
             platform: Some(config.platform),
             gpu: config.gpu,
+            window_attributes: config.window,
             proxy,
         }
     }
@@ -3147,7 +3184,10 @@ impl ApplicationHandler<AppEvent> for App {
         let Some(platform) = self.platform.take() else {
             return;
         };
-        let attrs = window_attributes();
+        let attrs = self
+            .window_attributes
+            .take()
+            .unwrap_or_else(window_attributes);
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let session = self
             .session

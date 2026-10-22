@@ -66,6 +66,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # The browser build compiles (the page itself is checked by hand: docs/web.md).
+      - name: Web build check
+        if: matrix.arch == 'x86_64'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check --target wasm32-unknown-unknown --locked -p web
+
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
 
