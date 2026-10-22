@@ -22,10 +22,20 @@ pub struct SectionLoops {
     pub open: Vec<Vec<DVec3>>,
 }
 
+/// How far off the plane, to the cut-away side, the inside test samples.
+const SAMPLE_OFFSET: f64 = 1e-7;
+
 /// What the plane through `point` with normal `normal` (any length but not zero) cuts out of
-/// `triangles`. A triangle lying in the plane is skipped: its neighbours' cuts outline it.
-/// Collinear points are dropped, so a loop's points are its corners. Nothing is cut when a
-/// number is not finite or `normal` has no direction.
+/// `triangles`, which are taken to be the surface of solids. The plane keeps what is on it and
+/// on the side `normal` points to (as `SectionPlane::keeps`), so only triangles with a
+/// corner strictly on the other side are cut: a triangle in the plane is not, and neither is
+/// one touching it from the kept side. The pieces are noded (split where a corner lies on
+/// another piece) into a planar arrangement; each bounded region of it is a closed loop with
+/// its holes when it lies inside a solid (judged on the cut-away side of the plane, by the
+/// parity of the crossings of a ray with `triangles`). Pieces bounding no such region, and
+/// dangling ones, are returned as open chains. Collinear points are dropped, so a loop's
+/// points are its corners. Nothing is cut when a number is not finite or `normal` has no
+/// direction.
 pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> SectionLoops {
     let Some(normal) = normal.try_normalize() else {
         return SectionLoops::default();
@@ -43,16 +53,40 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
             }
         }
     }
-    let edges: Vec<(usize, usize)> = ends.into_iter().collect();
+    let (u, v) = Plane { normal, d: 0.0 }.basis();
+    let flat: Vec<DVec2> = welder
+        .points
+        .iter()
+        .map(|p| DVec2::new((*p - point).dot(u), (*p - point).dot(v)))
+        .collect();
+    let edges = node_edges(&ends, &flat);
+    let solid = |s: DVec2| {
+        let at = point + u * s.x + v * s.y - normal * SAMPLE_OFFSET;
+        inside(triangles, at)
+    };
+    let found = Arrangement::new(&edges, &flat).solid_faces(&solid);
+
+    let corners = |cycle: &[usize]| ring_corners(cycle.iter().map(|n| welder.points[*n]).collect());
+    let mut closed: Vec<(f64, Vec<Vec<DVec3>>)> = Vec::new();
+    for (area, rings) in &found.faces {
+        let rings: Vec<Vec<DVec3>> = rings.iter().map(|c| corners(c)).collect();
+        if rings[0].len() >= 3 {
+            closed.push((*area, rings.into_iter().filter(|r| r.len() >= 3).collect()));
+        }
+    }
+    closed.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+    // The pieces bounding no solid region, as chains.
     let mut adjacent: Vec<Vec<usize>> = vec![Vec::new(); welder.points.len()];
     for (k, (a, b)) in edges.iter().enumerate() {
-        adjacent[*a].push(k);
-        adjacent[*b].push(k);
+        if !found.bounds_solid[k] {
+            adjacent[*a].push(k);
+            adjacent[*b].push(k);
+        }
     }
-
-    let mut used = vec![false; edges.len()];
+    let mut used: Vec<bool> = found.bounds_solid.clone();
+    let mut open: Vec<Vec<DVec3>> = Vec::new();
     let mut chains: Vec<Vec<usize>> = Vec::new();
-    // Chains from the nodes where an odd number of pieces meet: ends of open chains.
     for node in 0..adjacent.len() {
         if adjacent[node].len() % 2 == 1 {
             while adjacent[node].iter().any(|e| !used[*e]) {
@@ -60,65 +94,38 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
             }
         }
     }
-    // What is left closes up.
     for e in 0..edges.len() {
         if !used[e] {
             chains.push(walk(edges[e].0, &adjacent, &edges, &mut used));
         }
     }
-
-    let mut rings: Vec<Vec<DVec3>> = Vec::new();
-    let mut open: Vec<Vec<DVec3>> = Vec::new();
     for chain in chains {
-        let mut points: Vec<DVec3> = chain.iter().map(|n| welder.points[*n]).collect();
-        if chain.len() >= 4 && chain.first() == chain.last() {
-            points.pop();
-            let ring = ring_corners(points);
-            if ring.len() >= 3 {
-                rings.push(ring);
-            }
-        } else {
-            let chain = chain_corners(points);
-            if chain.len() >= 2 {
-                open.push(chain);
-            }
+        let chain = chain_corners(chain.iter().map(|n| welder.points[*n]).collect());
+        if chain.len() >= 2 {
+            open.push(chain);
         }
     }
     SectionLoops {
-        closed: nest(rings, point, normal),
+        closed: closed.into_iter().map(|(_, rings)| rings).collect(),
         open,
     }
 }
 
-/// The cut of one triangle: the two ends of the piece of the plane inside it. None when the
-/// plane misses it, touches it at one point, or contains it.
+/// The cut of one triangle: the two ends of the piece of the plane inside it. None unless a
+/// corner is strictly on the cut-away side and another on the kept side or on the plane.
 fn cut_triangle(t: &[DVec3; 3], point: DVec3, normal: DVec3) -> Option<[DVec3; 2]> {
     if !t.iter().all(|p| p.is_finite()) {
         return None;
     }
     let d = t.map(|p| (p - point).dot(normal));
-    let side = d.map(|x| {
-        if x > LENGTH_TOL {
-            1
-        } else if x < -LENGTH_TOL {
-            -1
-        } else {
-            0
-        }
-    });
-    if side == [0; 3] {
+    // As `SectionPlane::keeps`: on the plane counts as the kept side.
+    let kept = d.map(|x| x >= -KEEP_TOL);
+    if kept == [true; 3] || kept == [false; 3] {
         return None;
     }
-    // The corners on the plane, and where the sides from one side to the other cross it. A
-    // corner on the plane and the side opposite it can only give two points in all.
-    let mut cuts: Vec<DVec3> = Vec::with_capacity(3);
-    for i in 0..3 {
-        if side[i] == 0 {
-            cuts.push(t[i] - normal * d[i]);
-        }
-    }
+    let mut cuts: Vec<DVec3> = Vec::with_capacity(2);
     for (i, j) in [(0, 1), (1, 2), (2, 0)] {
-        if side[i] * side[j] < 0 {
+        if kept[i] != kept[j] {
             let k = d[i] / (d[i] - d[j]);
             cuts.push(t[i] + (t[j] - t[i]) * k);
         }
@@ -127,6 +134,301 @@ fn cut_triangle(t: &[DVec3; 3], point: DVec3, normal: DVec3) -> Option<[DVec3; 2
         [a, b] if a.distance(b) >= LENGTH_TOL && a.is_finite() && b.is_finite() => Some([a, b]),
         _ => None,
     }
+}
+
+/// The tolerance `SectionPlane::keeps` has.
+const KEEP_TOL: f64 = 1e-9;
+
+/// Whether `p` is inside the solids bounded by `triangles`: an odd number of them lie in front
+/// of a ray from `p` in a direction chosen to avoid edges.
+fn inside(triangles: &[[DVec3; 3]], p: DVec3) -> bool {
+    let dir = DVec3::new(0.309_016_994, 0.512_345_678, 0.800_911_117).normalize();
+    let crossings = triangles.iter().filter(|t| ray_hits(t, p, dir)).count();
+    crossings % 2 == 1
+}
+
+/// Whether the ray from `origin` along `dir` meets the triangle (Moeller-Trumbore).
+fn ray_hits(t: &[DVec3; 3], origin: DVec3, dir: DVec3) -> bool {
+    let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+    let h = dir.cross(e2);
+    let a = e1.dot(h);
+    if a.abs() <= 1e-14 || a.is_nan() {
+        return false;
+    }
+    let f = 1.0 / a;
+    let s = origin - t[0];
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return false;
+    }
+    let q = s.cross(e1);
+    let v = f * dir.dot(q);
+    if !(v >= 0.0 && u + v <= 1.0) {
+        return false;
+    }
+    f * e2.dot(q) > 1e-12
+}
+
+/// `edges` split at the nodes lying on them (a corner on another piece), without duplicates:
+/// pieces that overlap end up as the same pieces.
+fn node_edges(edges: &BTreeSet<(usize, usize)>, flat: &[DVec2]) -> Vec<(usize, usize)> {
+    let mut order: Vec<usize> = (0..flat.len()).collect();
+    order.sort_by(|a, b| flat[*a].x.total_cmp(&flat[*b].x));
+    let mut out = BTreeSet::new();
+    for &(a, b) in edges {
+        let (pa, pb) = (flat[a], flat[b]);
+        let (lo, hi) = (pa.x.min(pb.x) - LENGTH_TOL, pa.x.max(pb.x) + LENGTH_TOL);
+        let first = order.partition_point(|n| flat[*n].x < lo);
+        let along = (pb - pa).length_squared();
+        let mut on: Vec<(f64, usize)> = vec![(0.0, a), (1.0, b)];
+        for n in order[first..].iter().take_while(|n| flat[**n].x <= hi) {
+            if *n != a && *n != b && segment_distance_2d(flat[*n], pa, pb) < LENGTH_TOL {
+                on.push(((flat[*n] - pa).dot(pb - pa) / along, *n));
+            }
+        }
+        on.sort_by(|x, y| x.0.total_cmp(&y.0));
+        for w in on.windows(2) {
+            let (x, y) = (w[0].1, w[1].1);
+            if x != y {
+                out.insert((x.min(y), x.max(y)));
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The regions a set of pieces (edges between nodes) cuts the plane into.
+struct Arrangement<'a> {
+    edges: &'a [(usize, usize)],
+    flat: &'a [DVec2],
+}
+
+/// The solid regions of an `Arrangement`.
+struct Solids {
+    /// Each solid region: its area, then its outline (counter-clockwise) and holes (clockwise)
+    /// as cycles of nodes.
+    faces: Vec<(f64, Vec<Vec<usize>>)>,
+    /// Per edge: whether it bounds a solid region.
+    bounds_solid: Vec<bool>,
+}
+
+impl<'a> Arrangement<'a> {
+    fn new(edges: &'a [(usize, usize)], flat: &'a [DVec2]) -> Self {
+        Arrangement { edges, flat }
+    }
+
+    /// The node half-edge `h` (edge `h / 2`, backwards when odd) starts from.
+    fn from(&self, h: usize) -> usize {
+        let e = self.edges[h / 2];
+        if h.is_multiple_of(2) { e.0 } else { e.1 }
+    }
+
+    fn to(&self, h: usize) -> usize {
+        self.from(h ^ 1)
+    }
+
+    /// The regions whose sample point `solid` accepts.
+    fn solid_faces(&self, solid: &dyn Fn(DVec2) -> bool) -> Solids {
+        let n = self.flat.len();
+        let mut adjacent: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (k, (a, b)) in self.edges.iter().enumerate() {
+            adjacent[*a].push(k);
+            adjacent[*b].push(k);
+        }
+        let mut alive = vec![true; self.edges.len()];
+        // Take away dangling pieces and bridges (a piece with the same region on both sides)
+        // until none is left: what remains outlines regions.
+        let (cycles, cycle_of) = loop {
+            let mut degree: Vec<usize> = adjacent
+                .iter()
+                .map(|l| l.iter().filter(|e| alive[**e]).count())
+                .collect();
+            let mut stack: Vec<usize> = (0..n).filter(|v| degree[*v] == 1).collect();
+            while let Some(v) = stack.pop() {
+                let Some(e) = adjacent[v].iter().copied().find(|e| alive[*e]) else {
+                    continue;
+                };
+                if degree[v] != 1 {
+                    continue;
+                }
+                alive[e] = false;
+                let (a, b) = self.edges[e];
+                let w = if a == v { b } else { a };
+                degree[v] -= 1;
+                degree[w] -= 1;
+                if degree[w] == 1 {
+                    stack.push(w);
+                }
+            }
+            let (cycles, cycle_of) = self.cycles(&alive);
+            let bridges: Vec<usize> = (0..self.edges.len())
+                .filter(|e| alive[*e] && cycle_of[2 * e] == cycle_of[2 * e + 1])
+                .collect();
+            if bridges.is_empty() {
+                break (cycles, cycle_of);
+            }
+            for e in bridges {
+                alive[e] = false;
+            }
+        };
+        let _ = cycle_of;
+
+        // The connected pieces.
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn root(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        }
+        for (k, (a, b)) in self.edges.iter().enumerate() {
+            if alive[k] {
+                let (ra, rb) = (root(&mut parent, *a), root(&mut parent, *b));
+                parent[ra] = rb;
+            }
+        }
+
+        struct Cycle {
+            half_edges: Vec<usize>,
+            nodes: Vec<usize>,
+            ring: Ring2,
+            component: usize,
+        }
+        let mut all: Vec<Cycle> = Vec::new();
+        for c in cycles {
+            let nodes: Vec<usize> = c.iter().map(|h| self.from(*h)).collect();
+            let ring = Ring2::new(nodes.iter().map(|n| self.flat[*n]).collect());
+            let component = root(&mut parent, nodes[0]);
+            all.push(Cycle {
+                half_edges: c,
+                nodes,
+                ring,
+                component,
+            });
+        }
+        let tiny = LENGTH_TOL * LENGTH_TOL;
+        let faces: Vec<usize> = (0..all.len())
+            .filter(|k| all[*k].ring.area > tiny)
+            .collect();
+        // A piece's outer boundary (clockwise) is a hole of the smallest region of another
+        // piece around it.
+        let mut holes: HashMap<usize, Vec<usize>> = HashMap::new();
+        for k in (0..all.len()).filter(|k| all[*k].ring.area < -tiny) {
+            let around = faces
+                .iter()
+                .copied()
+                .filter(|f| {
+                    all[*f].component != all[k].component
+                        && all[*f].ring.area > -all[k].ring.area
+                        && all[*f].ring.contains(&all[k].ring)
+                })
+                .min_by(|a, b| all[*a].ring.area.total_cmp(&all[*b].ring.area));
+            if let Some(f) = around {
+                holes.entry(f).or_default().push(k);
+            }
+        }
+
+        let mut out = Solids {
+            faces: Vec::new(),
+            bounds_solid: vec![false; self.edges.len()],
+        };
+        for f in faces {
+            let cycles: Vec<usize> = std::iter::once(f)
+                .chain(holes.get(&f).into_iter().flatten().copied())
+                .collect();
+            let rings: Vec<&Ring2> = cycles.iter().map(|c| &all[*c].ring).collect();
+            let Some(sample) = interior_point(&rings) else {
+                continue;
+            };
+            if solid(sample) {
+                for c in &cycles {
+                    for h in &all[*c].half_edges {
+                        out.bounds_solid[h / 2] = true;
+                    }
+                }
+                out.faces.push((
+                    all[f].ring.area,
+                    cycles.iter().map(|c| all[*c].nodes.clone()).collect(),
+                ));
+            }
+        }
+        out
+    }
+
+    /// The boundary cycles of the regions of the live pieces, as half-edges with the region on
+    /// their left, and the cycle each half-edge is in.
+    fn cycles(&self, alive: &[bool]) -> (Vec<Vec<usize>>, Vec<usize>) {
+        let n = self.flat.len();
+        let mut around: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for e in (0..self.edges.len()).filter(|e| alive[*e]) {
+            around[self.from(2 * e)].push(2 * e);
+            around[self.from(2 * e + 1)].push(2 * e + 1);
+        }
+        let angle = |h: usize| {
+            let d = self.flat[self.to(h)] - self.flat[self.from(h)];
+            d.y.atan2(d.x)
+        };
+        let mut slot = vec![0; 2 * self.edges.len()];
+        for list in &mut around {
+            list.sort_by(|a, b| angle(*a).total_cmp(&angle(*b)));
+            for (i, h) in list.iter().enumerate() {
+                slot[*h] = i;
+            }
+        }
+        // At the end of a half-edge, the next one is the first clockwise from the way back.
+        let next = |h: usize| {
+            let list = &around[self.to(h)];
+            list[(slot[h ^ 1] + list.len() - 1) % list.len()]
+        };
+        let mut cycle_of = vec![usize::MAX; 2 * self.edges.len()];
+        let mut cycles = Vec::new();
+        for e in (0..self.edges.len()).filter(|e| alive[*e]) {
+            for start in [2 * e, 2 * e + 1] {
+                if cycle_of[start] != usize::MAX {
+                    continue;
+                }
+                let mut cycle = Vec::new();
+                let mut h = start;
+                while cycle_of[h] == usize::MAX {
+                    cycle_of[h] = cycles.len();
+                    cycle.push(h);
+                    h = next(h);
+                }
+                cycles.push(cycle);
+            }
+        }
+        (cycles, cycle_of)
+    }
+}
+
+/// A point inside the region bounded by `rings` (the outline first, then the holes): the
+/// middle of the largest triangle of its triangulation.
+fn interior_point(rings: &[&Ring2]) -> Option<DVec2> {
+    let mut points: Vec<DVec2> = Vec::new();
+    let mut coords: Vec<f64> = Vec::new();
+    let mut hole_starts: Vec<usize> = Vec::new();
+    for (k, r) in rings.iter().enumerate() {
+        if k > 0 {
+            hole_starts.push(points.len());
+        }
+        for p in &r.points {
+            points.push(*p);
+            coords.extend([p.x, p.y]);
+        }
+    }
+    let indices = earcutr::earcut(&coords, &hole_starts, 2).ok()?;
+    indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|c| [points[c[0]], points[c[1]], points[c[2]]])
+        .max_by(|a, b| {
+            let area = |t: &[DVec2; 3]| (t[1] - t[0]).perp_dot(t[2] - t[0]).abs();
+            area(a).total_cmp(&area(b))
+        })
+        .filter(|t| (t[1] - t[0]).perp_dot(t[2] - t[0]).abs() > 0.0)
+        .map(|t| (t[0] + t[1] + t[2]) / 3.0)
 }
 
 /// Numbers the points, giving points within `LENGTH_TOL` of each other one number.
@@ -238,11 +540,7 @@ struct Ring2 {
 }
 
 impl Ring2 {
-    fn new(ring: &[DVec3], origin: DVec3, u: DVec3, v: DVec3) -> Ring2 {
-        let points: Vec<DVec2> = ring
-            .iter()
-            .map(|p| DVec2::new((*p - origin).dot(u), (*p - origin).dot(v)))
-            .collect();
+    fn new(points: Vec<DVec2>) -> Ring2 {
         let area = 0.5
             * (0..points.len())
                 .map(|i| points[i].perp_dot(points[(i + 1) % points.len()]))
@@ -295,60 +593,6 @@ impl Ring2 {
         }
         inside
     }
-}
-
-/// Rings nested even-odd: a ring inside an even number of others is an outline, inside an odd
-/// number a hole of the smallest ring around it.
-fn nest(rings: Vec<Vec<DVec3>>, point: DVec3, normal: DVec3) -> Vec<Vec<Vec<DVec3>>> {
-    if rings.is_empty() {
-        return Vec::new();
-    }
-    let (u, v) = Plane { normal, d: 0.0 }.basis();
-    let flat: Vec<Ring2> = rings.iter().map(|r| Ring2::new(r, point, u, v)).collect();
-    // Largest first, so a ring can only be inside the ones before it.
-    let mut order: Vec<usize> = (0..rings.len())
-        .filter(|k| flat[*k].area.abs() > LENGTH_TOL * LENGTH_TOL)
-        .collect();
-    order.sort_by(|a, b| flat[*b].area.abs().total_cmp(&flat[*a].area.abs()));
-
-    // For each ring (by position in `order`): the rings around it, the smallest last.
-    let around: Vec<Vec<usize>> = (0..order.len())
-        .map(|k| {
-            (0..k)
-                .filter(|j| flat[order[*j]].contains(&flat[order[k]]))
-                .collect()
-        })
-        .collect();
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut group_of: HashMap<usize, usize> = HashMap::new();
-    for k in 0..order.len() {
-        let hole_of = around[k]
-            .last()
-            .filter(|j| around[k].len() % 2 == 1 && around[**j].len().is_multiple_of(2));
-        match hole_of {
-            Some(j) => groups[group_of[j]].push(order[k]),
-            None => {
-                group_of.insert(k, groups.len());
-                groups.push(vec![order[k]]);
-            }
-        }
-    }
-    groups
-        .into_iter()
-        .map(|g| {
-            g.into_iter()
-                .enumerate()
-                .map(|(i, r)| {
-                    let mut ring = rings[r].clone();
-                    // Outline counter-clockwise, holes clockwise.
-                    if (flat[r].area > 0.0) != (i == 0) {
-                        ring.reverse();
-                    }
-                    ring
-                })
-                .collect()
-        })
-        .collect()
 }
 
 /// Triangles filling the closed loops `section_loops` returns (each an outline and its

@@ -330,7 +330,7 @@ fn exploding_a_group_brings_its_planes_out_inactive_and_leaves_the_parents_activ
 }
 
 #[test]
-fn copying_a_group_copies_its_planes_inactive() {
+fn copying_a_group_keeps_the_active_plane_inside_its_copy() {
     let mut s = box_scene();
     let mut inner = SectionId(0);
     s.edit(MeshId::Root, |m| {
@@ -352,9 +352,54 @@ fn copying_a_group_copies_its_planes_inactive() {
         .unwrap();
     let m = s.mesh(MeshId::Definition(copy)).unwrap();
     assert_eq!(m.sections().count(), 1);
-    assert_eq!(m.active_section(), None);
+    let (copied, _) = m.sections().next().unwrap();
+    assert_eq!(
+        m.active_section(),
+        Some(copied),
+        "the content is copied as is"
+    );
     s.apply(&change.inverse());
     assert!(s == before);
+}
+
+#[test]
+fn a_pasted_group_keeps_its_active_plane_but_a_pasted_plane_is_inactive() {
+    let mut s = box_scene();
+    let mut inner = SectionId(0);
+    s.edit(MeshId::Root, |m| {
+        inner = add(m, p(0.0, 0.0, 0.5), DVec3::Z, true);
+        Ok(kernel::ChangeSet::default())
+    })
+    .unwrap();
+    let (i, _) = group_everything(&mut s, vec![inner]);
+    let loose = {
+        let mut id = SectionId(0);
+        s.edit(MeshId::Root, |m| {
+            id = add(m, DVec3::ZERO, DVec3::X, true);
+            Ok(kernel::ChangeSet::default())
+        })
+        .unwrap();
+        id
+    };
+    let parts = Parts {
+        instances: vec![i],
+        sections: vec![loose],
+        ..Parts::default()
+    };
+    let clip = s
+        .extract_with(MeshId::Root, &parts, DAffine3::IDENTITY)
+        .unwrap();
+    let mut target = Scene::new();
+    let (inserted, _) = target
+        .insert(MeshId::Root, &clip, DAffine3::IDENTITY, &|_| None)
+        .unwrap();
+    target.validate().unwrap();
+    assert_eq!(target.root().active_section(), None);
+    assert_eq!(inserted.sections.len(), 1);
+    let def = target.root().instances().next().unwrap().1.definition;
+    let m = target.mesh(MeshId::Definition(def)).unwrap();
+    assert_eq!(m.sections().count(), 1);
+    assert!(m.active_section().is_some());
 }
 
 #[test]
@@ -677,11 +722,7 @@ fn a_plane_touching_only_an_edge_or_a_corner_or_missing_is_harmless() {
         (p(0.0, 0.0, -1.0), DVec3::Z),
     ] {
         let r = section_loops(&tris, point, normal);
-        assert!(r.closed.is_empty(), "{r:?}");
-        for chain in &r.open {
-            assert!(chain.len() >= 2);
-            assert!(chain.windows(2).all(|w| w[0].distance(w[1]) > 1e-6));
-        }
+        assert!(r.closed.is_empty() && r.open.is_empty(), "{r:?}");
     }
 }
 
@@ -714,4 +755,76 @@ fn degenerate_input_never_panics() {
     assert!(triangulate_section(&[vec![vec![DVec3::ZERO, DVec3::X]]], DVec3::Z).is_empty());
     assert!(triangulate_section(&[vec![vec![DVec3::NAN; 4]]], DVec3::Z).is_empty());
     assert!(triangulate_section(&[vec![]], DVec3::Z).is_empty());
+}
+
+fn fill_of(tris: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> (kernel::SectionLoops, f64) {
+    let r = section_loops(tris, point, normal);
+    let fill = triangulate_section(&r.closed, normal);
+    let area = fill_area(&fill, normal);
+    (r, area)
+}
+
+#[test]
+fn a_plane_on_the_joint_of_stacked_boxes_fills_the_part_it_cuts_away() {
+    // The plane keeps what is on it and above (+Z), so the lower box is the part cut away.
+    let mut tris = box_tris(DVec3::ZERO, p(4.0, 4.0, 1.0));
+    tris.extend(box_tris(p(1.0, 1.0, 1.0), p(3.0, 3.0, 2.0)));
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
+    assert_eq!((r.closed.len(), r.open.len()), (1, 0), "{r:?}");
+    assert_eq!(r.closed[0].len(), 1);
+    assert!(
+        (area - 16.0).abs() < 1e-9,
+        "the lower box's 4 x 4 cap: {area}"
+    );
+    // Keeping what is below instead, the upper box is cut away.
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), -DVec3::Z);
+    assert_eq!((r.closed.len(), r.open.len()), (1, 0), "{r:?}");
+    assert!(
+        (area - 4.0).abs() < 1e-9,
+        "the upper box's 2 x 2 cap: {area}"
+    );
+}
+
+#[test]
+fn a_plane_through_the_step_of_an_l_shape_fills_the_cut_away_part() {
+    // A 4 x 4 slab with a 2 x 4 block on half of it.
+    let mut tris = box_tris(DVec3::ZERO, p(4.0, 4.0, 1.0));
+    tris.extend(box_tris(p(0.0, 0.0, 1.0), p(2.0, 4.0, 2.0)));
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
+    assert!(r.open.is_empty(), "{r:?}");
+    assert!((area - 16.0).abs() < 1e-9, "{area}");
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), -DVec3::Z);
+    assert!(r.open.is_empty(), "{r:?}");
+    assert!((area - 8.0).abs() < 1e-9, "{area}");
+}
+
+#[test]
+fn a_cut_across_a_face_two_boxes_share_fills_both() {
+    let mut tris = box_tris(DVec3::ZERO, p(2.0, 2.0, 1.0));
+    tris.extend(box_tris(p(0.0, 0.0, 1.0), p(2.0, 2.0, 2.0)));
+    let (r, area) = fill_of(&tris, p(1.0, 0.0, 0.0), DVec3::X);
+    assert!(r.open.is_empty(), "{r:?}");
+    assert_eq!(r.closed.len(), 2, "{r:?}");
+    assert!((area - 4.0).abs() < 1e-9, "{area}");
+}
+
+#[test]
+fn a_cut_where_one_boxs_edge_ends_inside_anothers_still_closes() {
+    // The upper box is half as wide: its bottom edge ends in the middle of the lower one's top.
+    let mut tris = box_tris(DVec3::ZERO, p(2.0, 2.0, 1.0));
+    tris.extend(box_tris(p(0.0, 0.0, 1.0), p(2.0, 1.0, 2.0)));
+    let (r, area) = fill_of(&tris, p(1.0, 0.0, 0.0), DVec3::X);
+    assert!(r.open.is_empty(), "{r:?}");
+    assert!((area - 3.0).abs() < 1e-9, "{area}");
+}
+
+#[test]
+fn two_regions_touching_at_a_point_are_two_fills() {
+    let mut tris = box_tris(DVec3::ZERO, DVec3::ONE);
+    tris.extend(box_tris(p(1.0, 1.0, 0.0), p(2.0, 2.0, 1.0)));
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 0.5), DVec3::Z);
+    assert!(r.open.is_empty(), "{r:?}");
+    assert_eq!(r.closed.len(), 2, "{r:?}");
+    assert!(r.closed.iter().all(|g| g.len() == 1 && g[0].len() == 4));
+    assert!((area - 2.0).abs() < 1e-9, "{area}");
 }

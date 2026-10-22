@@ -369,6 +369,10 @@ impl Paste<'_> {
         let children = self.instances_of(scene, &original.mesh, DAffine3::IDENTITY)?;
         let guides = self.guides_of(&original.mesh, DAffine3::IDENTITY);
         let planes = self.sections_of(&original.mesh, DAffine3::IDENTITY);
+        let active = original
+            .mesh
+            .active_section()
+            .and_then(|a| planes.iter().position(|(id, _)| *id == a));
         let annotations = self.annotations_of(&original.mesh, DAffine3::IDENTITY);
         let (copy, added) = scene.add_definition(&original.name, original.kind);
         self.done.push(added.into());
@@ -380,7 +384,8 @@ impl Paste<'_> {
             for g in guides {
                 m.insert_guide(g);
             }
-            m.land_sections(planes, false);
+            let landed = m.land_sections(planes, false);
+            m.set_active(active.map(|i| landed[i]));
             m.land(annotations, false);
             Ok(m.take_changes())
         })?;

@@ -283,8 +283,8 @@ impl Scene {
         Ok(SceneChange::join([steps, placed]))
     }
 
-    /// A new group definition holding a copy of `id`'s geometry, guides, section planes
-    /// (inactive) and annotations, with new ids; groups inside it are copied too, components inside are placed again.
+    /// A new group definition holding a copy of `id`'s geometry, guides, section planes (the
+    /// active one stays active) and annotations, with new ids; groups inside it are copied too, components inside are placed again.
     fn duplicate(&mut self, id: DefinitionId) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
         let (name, kind) = (original.name.clone(), original.kind);
@@ -294,6 +294,10 @@ impl Scene {
         let planes = original
             .mesh
             .lift_sections(&original.mesh.all_sections(), DAffine3::IDENTITY);
+        let active = original
+            .mesh
+            .active_section()
+            .and_then(|a| planes.iter().position(|(id, _)| *id == a));
         let (dimensions, notes) = original.mesh.all_annotations();
         let annotations = original.mesh.lift(
             &dimensions,
@@ -329,7 +333,8 @@ impl Scene {
                 for g in guides {
                     m.insert_guide(g);
                 }
-                m.land_sections(planes, false);
+                let landed = m.land_sections(planes, false);
+                m.set_active(active.map(|i| landed[i]));
                 m.land(annotations, false);
                 Ok(m.take_changes())
             })
