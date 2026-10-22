@@ -35,12 +35,14 @@ mod import;
 mod materials;
 mod placement;
 mod scenes;
+mod sections;
 mod soften;
 mod tags;
 mod text3d;
 
 pub use annotations::{dimension_label, dimension_value, note_label};
 use import::ImportOptions;
+pub use sections::SectionDisplay;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -71,6 +73,8 @@ pub struct Document {
     pub lighting: Lighting,
     /// Faces are drawn in their tags' colors; saved with the camera.
     pub color_by_tag: bool,
+    /// Whether section planes are drawn, cut and filled; saved with the camera.
+    pub section_display: SectionDisplay,
     /// How labels write lengths; saved with the model, changed by undo steps.
     units: Units,
     selection: BTreeSet<EntityId>,
@@ -116,6 +120,7 @@ impl Document {
             camera: Camera::new(viewport),
             lighting: Lighting::Day,
             color_by_tag: false,
+            section_display: SectionDisplay::default(),
             units: Units::default(),
             selection: BTreeSet::new(),
             selected_scene: None,
@@ -351,6 +356,10 @@ impl Document {
                 self.color_by_tag = on;
                 Ok(Outcome::default())
             }
+            Command::SetSectionDisplay { planes, cuts, fill } => {
+                self.set_section_display_changes(planes, cuts, fill);
+                Ok(Outcome::default())
+            }
             Command::OpenInstance { id } => {
                 self.open_instance(id)?;
                 Ok(Outcome::default())
@@ -431,6 +440,11 @@ impl Document {
                                 .filter(|(_, n)| shown(n.tag()))
                                 .map(|(id, _)| EntityId::Note(id)),
                         )
+                        .chain(
+                            m.sections()
+                                .filter(|(_, p)| shown(p.tag()))
+                                .map(|(id, _)| EntityId::Section(id)),
+                        )
                         .collect()
                 } else {
                     self.parts(&ids)?;
@@ -461,6 +475,10 @@ impl Document {
             | Command::AddNote { .. }
             | Command::AddScreenNote { .. }
             | Command::ChangeNote { .. }
+            | Command::AddSectionPlane { .. }
+            | Command::FlipSectionPlane { .. }
+            | Command::ActivateSectionPlane { .. }
+            | Command::DeactivateSection {}
             | Command::Add3dText { .. }
             | Command::SetUnits { .. }
             | Command::PushPull { .. }
@@ -583,6 +601,14 @@ impl Document {
             } => self.add_note_changes(*anchor, *position, text.clone()),
             Command::AddScreenNote { at, text } => self.add_screen_note_changes(*at, text),
             Command::ChangeNote { note, text } => self.change_note_changes(*note, text.clone()),
+            Command::AddSectionPlane {
+                point,
+                normal,
+                activate,
+            } => self.add_section_plane_changes(*point, *normal, activate.unwrap_or(true)),
+            Command::FlipSectionPlane { plane } => self.flip_section_plane_changes(*plane),
+            Command::ActivateSectionPlane { plane } => self.activate_section_plane_changes(*plane),
+            Command::DeactivateSection {} => Ok(self.deactivate_section_changes()),
             Command::Add3dText {
                 text,
                 position,
@@ -754,6 +780,7 @@ impl Document {
             | Command::SetProjection { .. }
             | Command::SetLighting { .. }
             | Command::SetColorByTag { .. }
+            | Command::SetSectionDisplay { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
             | Command::CloseInstance {}
@@ -804,6 +831,7 @@ impl Document {
         let camera_before = self.camera.clone();
         let lighting_before = self.lighting;
         let color_by_tag_before = self.color_by_tag;
+        let section_display_before = self.section_display;
         let selected_scene_before = self.selected_scene;
         let selection_before = self.selection.clone();
         let context_before = self.context.clone();
@@ -858,6 +886,7 @@ impl Document {
                     self.camera = camera_before;
                     self.lighting = lighting_before;
                     self.color_by_tag = color_by_tag_before;
+                    self.section_display = section_display_before;
                     self.selected_scene = selected_scene_before;
                     self.selection = selection_before;
                     self.context = context_before;
@@ -1068,6 +1097,8 @@ impl Document {
                 m.transform_annotations(&parts.dimensions, &parts.notes, shift)
                     .ops,
             );
+            c.ops
+                .extend(m.transform_sections(&parts.sections, shift).ops);
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -1215,6 +1246,7 @@ impl Document {
                 m.transform_annotations(&parts.dimensions, &parts.notes, t)
                     .ops,
             );
+            c.ops.extend(m.transform_sections(&parts.sections, t).ops);
             Ok(c)
         })
         .map_err(|e| self.kernel_error(e, ids))
@@ -1456,9 +1488,10 @@ impl Document {
                     m.copy_annotations(&parts.dimensions, &parts.notes, places, &copied)
                         .ops,
                 );
+                c.ops.extend(m.copy_sections(&parts.sections, places).ops);
                 Ok(c)
             })
-            .expect("copying guides and annotations cannot fail");
+            .expect("copying guides, annotations and planes cannot fail");
         Ok(SceneChange::join([geometry, placed, guides]))
     }
 
@@ -1484,6 +1517,13 @@ impl Document {
                     .iter()
                     .filter_map(|g| m.guide(*g))
                     .map(|g| at(g.anchor())),
+            );
+            moved.extend(
+                parts
+                    .sections
+                    .iter()
+                    .filter_map(|p| m.section(*p))
+                    .map(|p| at(p.point)),
             );
             let follows = |v: VertexId| copies || vertices.contains(&v);
             moved.extend(
@@ -1526,7 +1566,8 @@ impl Document {
                 EntityId::Vertex(v) => {
                     out.insert(v);
                 }
-                // Annotations are anchored to vertices but are not made of them.
+                // Annotations are anchored to vertices but are not made of them; planes
+                // have no vertices.
                 EntityId::Instance(_)
                 | EntityId::Guide(_)
                 | EntityId::Dimension(_)
@@ -1566,6 +1607,7 @@ impl Document {
                 let mut c = m.erase_annotations(&parts.dimensions, &parts.notes);
                 c.ops.extend(m.erase(&parts.edges, &parts.faces).ops);
                 c.ops.extend(m.erase_guides(&parts.guides).ops);
+                c.ops.extend(m.erase_sections(&parts.sections).ops);
                 Ok(c)
             })
             .expect("erase cannot fail");
@@ -1751,14 +1793,11 @@ impl Document {
                     EntityId::Note(n) => {
                         QueryResult::Note(m.note(n).map(|_| self.note_info(n)).ok_or_else(missing)?)
                     }
-                    // Section planes have no entity info yet.
-                    EntityId::Section(_) => {
-                        return Err(CommandError::new(
-                            ErrorKind::InvalidInput,
-                            "section planes have no entity info yet",
-                        )
-                        .with_ids(vec![*id]));
-                    }
+                    EntityId::Section(p) => QueryResult::SectionPlane(
+                        m.section(p)
+                            .map(|_| self.section_plane_info(p))
+                            .ok_or_else(missing)?,
+                    ),
                 }
             }
             Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
@@ -1858,6 +1897,18 @@ impl Document {
                 revision: self.revision,
             },
             Query::Units {} => QueryResult::Units(self.units),
+            Query::SectionPlanes {} => QueryResult::SectionPlanes {
+                planes: m
+                    .sections()
+                    .map(|(id, _)| self.section_plane_info(id))
+                    .collect(),
+                revision: self.revision,
+            },
+            Query::SectionDisplay {} => QueryResult::SectionDisplay {
+                planes: self.section_display.planes,
+                cuts: self.section_display.cuts,
+                fill: self.section_display.fill,
+            },
         })
     }
 

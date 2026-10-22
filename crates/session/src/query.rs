@@ -28,7 +28,7 @@ pub enum Query {
         #[serde(default)]
         within: Option<Bounds>,
     },
-    /// One entity by id ("v3", "e7", "f2", "i4", "g9", "r5", "n6").
+    /// One entity by id ("v3", "e7", "f2", "i4", "g9", "r5", "n6", "s8").
     Entity {
         id: EntityId,
     },
@@ -72,6 +72,10 @@ pub enum Query {
     Annotations {},
     /// The model's display units (see `set_units`).
     Units {},
+    /// Every section plane of the open context, with whether it is the active one.
+    SectionPlanes {},
+    /// How section planes are shown (see `set_section_display`).
+    SectionDisplay {},
 }
 
 /// An axis-aligned box, bounds included.
@@ -209,6 +213,18 @@ pub struct GuideInfo {
     pub point: [f64; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f64; 3]>,
+    /// The tag it is on; null when Untagged.
+    pub tag: Option<TagId>,
+}
+
+/// A section plane: through `point` with the unit vector `normal`, keeping the side the normal
+/// points to; `active` when it is the one cutting its context.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SectionPlaneInfo {
+    pub id: EntityId,
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    pub active: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
 }
@@ -458,6 +474,7 @@ pub enum QueryResult {
     Guide(GuideInfo),
     Dimension(DimensionInfo),
     Note(NoteInfo),
+    SectionPlane(SectionPlaneInfo),
     Curve(CurveInfo),
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
@@ -556,6 +573,18 @@ pub enum QueryResult {
         revision: u64,
     },
     Units(Units),
+    /// The open context's section planes, in id order.
+    SectionPlanes {
+        planes: Vec<SectionPlaneInfo>,
+        revision: u64,
+    },
+    /// Whether the plane entities are drawn, the active planes' cuts applied and closed cuts
+    /// filled.
+    SectionDisplay {
+        planes: bool,
+        cuts: bool,
+        fill: bool,
+    },
 }
 
 /// One model change: the revision it produced and what it changed.

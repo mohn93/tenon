@@ -990,7 +990,10 @@ fn files_keep_annotations_units_frozen_anchors_and_screen_notes() {
     )
     .unwrap();
     let document = stored(&path);
-    assert_eq!(document["schema_version"], session::file::SCHEMA_VERSION);
+    assert_eq!(
+        document["schema_version"],
+        session::file::ANNOTATIONS_SCHEMA_VERSION
+    );
     assert_eq!(document["schema_version"], 12);
     assert_eq!(
         document["units"],
@@ -1141,7 +1144,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
     // A newer schema is refused as before.
     let newer = scratch("newer.skr");
     std::fs::copy(&path, &newer).unwrap();
-    edit_file(&newer, |doc| doc["schema_version"] = json!(13));
+    edit_file(&newer, |doc| doc["schema_version"] = json!(14));
     let (_, message, _) = open(&newer);
     assert!(message.contains("newer"), "{message}");
 }

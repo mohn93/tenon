@@ -78,8 +78,10 @@ Queries:
 | `{"type": "entities", "kinds": ["face"]}` | only the listed kinds (`vertex`, `edge`, `face`, `instance`, `guide`) |
 | `{"type": "entities", "ids": ["v0", "e2"]}` | only the listed ids; unknown ids are absent, not an error |
 | `{"type": "entities", "within": {"min": [0,0,0], "max": [2,2,1]}}` | only entities whose vertices (an instance: its bounding box; a guide point: its position) all lie in the box, bounds included; an instance with nothing in it and a guide line are in no box. `ids`, `kinds` and `within` combine (all must match); empty lists mean no filter |
-| `{"type": "entity", "id": "f7"}` | one entity, or a not-found error; a dimension (`r5`) or note (`n6`) gives its info with its label (see Dimensions and notes) |
+| `{"type": "entity", "id": "f7"}` | one entity, or a not-found error; a dimension (`r5`) or note (`n6`) gives its info with its label (see Dimensions and notes), a section plane (`s8`) its point, normal and whether it is active (see Section planes) |
 | `{"type": "annotations"}` | every dimension and note of the open context, each as `entity` gives it, plus `revision`; see Dimensions and notes below |
+| `{"type": "section_planes"}` | every section plane of the open context with whether it is active, plus `revision`; see Section planes below |
+| `{"type": "section_display"}` | `planes`, `cuts` and `fill`: how section planes are shown; see Section planes below |
 | `{"type": "units"}` | the model's display units: `length` and `precision`; see Dimensions and notes below |
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
@@ -106,13 +108,14 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_dimension`,
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
-`add_3d_text`, `set_units`, `add_material`,
+`add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
+`deactivate_section`, `set_section_display`, `add_material`,
 `change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `paste`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note), `s8` (section plane). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -215,13 +218,13 @@ predicting them:
 ], "atomic": true}
 ```
 
-A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnm])(0|[1-9][0-9]*|\*)|\*)$`:
+A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsm])(0|[1-9][0-9]*|\*)|\*)$`:
 
 - `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
-  face, `i` instance, `g` guide, `r` dimension, `n` note from its `changes.created` (lowest id
+  face, `i` instance, `g` guide, `r` dimension, `n` note, `s` section plane from its `changes.created` (lowest id
   first, which is the order they were made), or `m` material from its `changes.materials`.
 - `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance, guide,
-  dimension and note it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
+  dimension, note and section plane it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
   `*` references are allowed only in id lists (`ids`, and `path` of `open_path` and `follow_me`), where they
   expand in place, keeping order; one that expands to nothing leaves nothing in its place.
 - N counts commands of the batch from 0 and must be lower than the referring command's own
@@ -229,8 +232,8 @@ A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnm])(0|[1-9]
 
 References are read only in a command's top-level `ids`, `face`, `id` and `material`, in
 `path` of `open_path` and `follow_me`, in `a` and `b` of `add_dimension`, `edge` of
-`add_edge_dimension` and `add_radial_dimension`, `anchor` of `add_note` and `note` of
-`change_note`. Any other string, such as a name or a file path, stays as written even
+`add_edge_dimension` and `add_radial_dimension`, `anchor` of `add_note`, `note` of
+`change_note` and `plane` of `flip_section_plane` and `activate_section_plane`. Any other string, such as a name or a file path, stays as written even
 when it looks like a reference. `material` takes only `m` references, the other fields only
 entity references; whether the entity suits the command (a face for `push_pull`) is checked by
 the command, as for a written id. Tag ids (`tag`, `move_to`) and scene ids (`scene`) take no
@@ -392,6 +395,52 @@ display units are set in the window in Settings, Model tab (`set_units` here).
 Files keep them (schema 12, see Files). A SketchUp file's dimensions and text are not imported.
 For a 2017-2020 file the import report's `warnings` counts them ("N dimensions and text labels
 were not imported"); a 2021 or newer file's are not read, so not counted.
+
+### Section planes
+
+A section plane cuts the model open to show its inside. It is an entity of a mesh (the root or
+a definition) like a guide, with the id `s8`: the plane through `point` with the unit vector
+`normal`, keeping the side the normal points to (a point `p` is kept when
+`(p - point) . normal >= -1e-9`, so faces lying on the plane are kept). A mesh has at most one
+active plane. The active plane of the root cuts the whole model; one in a group or component cuts
+only that definition's geometry and the instances inside it, never its parent or siblings, and the
+cut follows the group when it is moved, turned or scaled (also non-uniformly). A hidden plane
+still cuts (as in SketchUp), and a hidden tag hides the plane entity like any other.
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_section_plane", "point": [0,0,1], "normal": [0,0,1]}` | Adds a plane to the open context; with `"activate": false` it is not made active (default true, replacing the active plane). The normal is any non-zero length and is normalized; a zero or non-finite one, or a point beyond the coordinate limit, is `invalid_input`. The new id is in the outcome's `changes.created`. |
+| `{"type": "flip_section_plane", "plane": "s8"}` | Negates the normal, keeping the point and whether the plane is active. |
+| `{"type": "activate_section_plane", "plane": "s8"}` | Makes it the context's active plane (the previous one is no longer). Already active changes nothing and makes no undo step. |
+| `{"type": "deactivate_section"}` | Makes no plane of the open context active. Nothing active changes nothing and makes no undo step. |
+| `{"type": "set_section_display", "cuts": false}` | Sets how planes are shown; absent fields stay. `planes` draws the plane entities, `cuts` applies the active planes' cuts (off: geometry is drawn whole), `fill` fills closed cuts. All default to true. A view setting like `set_lighting`: not an undo step, no change to the revision, restored by a failed atomic batch, saved with the view. |
+
+Each of the first four is one undo step; undo restores exactly (erasing the active plane and
+undoing brings it back active). A plane that is not in the open context (another mesh's, an
+unknown id or an id of another kind) is `invalid_input` naming it. `erase`, `move`, `rotate`,
+`scale`, `copy`, `select` (and `select` with `all`), `make_group`, `make_component`, `explode` and
+the clipboard accept `s` ids: `move`, `rotate` and `scale` carry the point and bend the normal as a
+plane's normal bends (the kept side stays the kept side of the same geometry, also under a mirror),
+and must keep the point within the coordinate limit (so must copies and pasted planes); `copy`
+(and `rotate` with `copies`) and `paste` make inactive planes; `make_group` moves planes with the
+geometry (planes alone cannot be grouped), an active one staying active in the new definition;
+`explode` brings a definition's planes out into the context as inactive planes with new ids, placed
+by the instance's transform. Erasing the active plane clears the context's active plane in the
+same step.
+
+`entity` of a plane (and each entry of `section_planes`) is `{"type": "section_plane", "id":
+"s8", "point": [0,0,1], "normal": [0,0,1], "active": true, "tag": null}`. `section_display`
+answers `{"type": "section_display", "planes": true, "cuts": true, "fill": true}`.
+
+Drawing (the window and `render_view`): a plane is a square outline centred on its point in the
+plane, the larger of 1 m and 1.2 times the diagonal of its context's shown bounds, with four
+inward arrows on the edges along the normal; the active plane's outline is in the accent colour,
+inactive ones in the guide colour. Cut edges are the section loops, drawn twice as wide as normal
+edges. Closed cuts are filled dark grey (`#3a3a3a`) at the plane, showing the kept material; cuts
+through open meshes get cut edges but no fill. With `cuts` off geometry is drawn whole.
+
+Files keep planes, each mesh's active plane and the display (schema 13, see Files). Every export
+format leaves planes out (see Export), and a SketchUp file's section planes are not imported.
 
 ### 3D text
 
@@ -1117,7 +1166,7 @@ there (unless the Paste tool is out). `preview` no longer outlines the hovered t
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
@@ -1259,8 +1308,8 @@ cannot hold: "N materials glow; SketchUp files cannot store that", "N curves wer
 separate edges", "N empty groups or components were left out", "N textured faces kept the
 default texture placement; their corners are too close to a line", and what it does not write:
 "N scenes were not written" (scenes are not exported). Every format, `skp` included, leaves out
-dimensions and notes; `warnings` then says "N dimensions were not written" and "N notes were
-not written" (the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
+dimensions, notes and section planes; `warnings` then says "N dimensions were not written", "N notes were
+not written" and "N section planes were not written" ("1 section plane was not written"; the root and each definition the root places counted once). A binary STL holds at most 2^32 - 1
 triangles and a `.glb` at most 4 GiB (about 59 million triangles); a larger model is refused
 with `invalid_input` and nothing is written.
 

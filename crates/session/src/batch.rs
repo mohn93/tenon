@@ -1,10 +1,10 @@
 //! Batch commands that refer to ids made by earlier commands of the same batch.
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
-//! kind K (`v e f i g r n` from `changes.created`, `m` from `changes.materials`) in command N's
+//! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`) in command N's
 //! outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
-//! dimension and note command N created (not vertices: `"$N:v*"` names those). `*` references expand in place in
-//! id lists only.
+//! dimension, note and section plane command N created (not vertices: `"$N:v*"` names
+//! those). `*` references expand in place in id lists only.
 //!
 //! A parsed command holds stand-in ids (numbers from `STAND_IN_BASE` up) where its references
 //! were; they are replaced by real ids when the command's turn comes.
@@ -35,6 +35,7 @@ pub enum RefKind {
     Guide,
     Dimension,
     Note,
+    Section,
     Material,
 }
 
@@ -48,6 +49,7 @@ impl RefKind {
             'g' => RefKind::Guide,
             'r' => RefKind::Dimension,
             'n' => RefKind::Note,
+            's' => RefKind::Section,
             'm' => RefKind::Material,
             _ => return None,
         })
@@ -62,6 +64,7 @@ impl RefKind {
             RefKind::Guide => 'g',
             RefKind::Dimension => 'r',
             RefKind::Note => 'n',
+            RefKind::Section => 's',
             RefKind::Material => 'm',
         }
     }
@@ -83,6 +86,8 @@ impl RefKind {
             RefKind::Dimension => "dimensions",
             RefKind::Note if one => "note",
             RefKind::Note => "notes",
+            RefKind::Section if one => "section plane",
+            RefKind::Section => "section planes",
             RefKind::Material if one => "material",
             RefKind::Material => "materials",
         }
@@ -98,6 +103,7 @@ impl RefKind {
                 | (RefKind::Guide, EntityId::Guide(_))
                 | (RefKind::Dimension, EntityId::Dimension(_))
                 | (RefKind::Note, EntityId::Note(_))
+                | (RefKind::Section, EntityId::Section(_))
         )
     }
 }
@@ -126,7 +132,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnm])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsm])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -247,6 +253,10 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("note", Some("change_note"))
+                | (
+                    "plane",
+                    Some("flip_section_plane" | "activate_section_plane")
+                )
         )
 }
 
@@ -498,6 +508,9 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::One(edge))
         }
         Command::ChangeNote { note, .. } => f(Slot::One(note)),
+        Command::FlipSectionPlane { plane } | Command::ActivateSectionPlane { plane } => {
+            f(Slot::One(plane))
+        }
         Command::FollowMe { face, path } => {
             f(Slot::One(face));
             f(Slot::List(path));
@@ -520,6 +533,9 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddGuidePoint { .. }
         | Command::DeleteGuides {}
         | Command::AddScreenNote { .. }
+        | Command::AddSectionPlane { .. }
+        | Command::DeactivateSection {}
+        | Command::SetSectionDisplay { .. }
         | Command::Add3dText { .. }
         | Command::SetUnits { .. }
         | Command::CloseInstance {}

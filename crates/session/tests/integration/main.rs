@@ -26,6 +26,7 @@ mod polygon;
 mod rotate;
 mod scale;
 mod scenes;
+mod sections;
 mod selection;
 mod skp;
 mod skp_export;

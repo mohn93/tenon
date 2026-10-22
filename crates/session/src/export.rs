@@ -48,19 +48,20 @@ impl ExportFormat {
     }
 }
 
-/// What an export leaves out of `scene`'s annotations, as warnings: "2 dimensions were not
-/// written", "1 note was not written". The root and every definition it places count, each
-/// definition once.
+/// What an export leaves out of `scene`'s annotations and section planes, as warnings: "2
+/// dimensions were not written", "1 note was not written", "1 section plane was not written".
+/// The root and every definition it places count, each definition once.
 pub(crate) fn annotation_warnings(scene: &Scene) -> Vec<String> {
     let meshes = std::iter::once(scene.root()).chain(
         crate::skp_export::reached(scene)
             .into_iter()
             .filter_map(|d| scene.definition(d).map(|d| &d.mesh)),
     );
-    let (mut dimensions, mut notes) = (0, 0);
+    let (mut dimensions, mut notes, mut sections) = (0, 0, 0);
     for m in meshes {
         dimensions += m.dimensions().count();
         notes += m.notes().count();
+        sections += m.sections().count();
     }
     let said = |n: usize, one: &str, many: &str| match n {
         0 => None,
@@ -70,6 +71,7 @@ pub(crate) fn annotation_warnings(scene: &Scene) -> Vec<String> {
     said(dimensions, "dimension", "dimensions")
         .into_iter()
         .chain(said(notes, "note", "notes"))
+        .chain(said(sections, "section plane", "section planes"))
         .collect()
 }
 

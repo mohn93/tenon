@@ -247,6 +247,7 @@ fn reference_keys_cover_every_id_field() {
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")
                         | ("note", "change_note")
+                        | ("plane", "flip_section_plane" | "activate_section_plane")
                 );
             // Tag ids are not references (a reference has no `t` kind), so a field holding
             // them must not be a reference key: "$0:t0" there is refused as a tag id.

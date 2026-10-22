@@ -184,6 +184,41 @@ pub enum Command {
         #[serde(default = "yes")]
         filled: bool,
     },
+    /// Add a section plane to the open context, as one undo step: the plane through `point`
+    /// with `normal` (any non-zero length; it is normalized), which keeps the side the normal
+    /// points to. With `activate` (default true) it becomes the context's active plane, which
+    /// cuts the context's geometry and what is inside its instances (a plane in a group cuts
+    /// only that group). The outcome's `changes.created` names it ("s5"). A zero or non-finite
+    /// normal, or a point beyond the coordinate limit, is `invalid_input`.
+    AddSectionPlane {
+        #[schemars(with = "ModelPoint")]
+        point: [f64; 3],
+        normal: [f64; 3],
+        #[serde(default)]
+        activate: Option<bool>,
+    },
+    /// Negate a section plane's normal (the other side is kept), as one undo step. The point
+    /// and whether it is active stay. A plane not in the open context is `invalid_input`.
+    FlipSectionPlane { plane: EntityId },
+    /// Make a section plane the open context's active plane, as one undo step (the one that
+    /// was active no longer is; already active changes nothing). A plane not in the open
+    /// context is `invalid_input`.
+    ActivateSectionPlane { plane: EntityId },
+    /// Make no section plane of the open context active, as one undo step (none active
+    /// changes nothing and makes no undo step). The planes stay.
+    DeactivateSection {},
+    /// Set how section planes are shown; absent fields stay as they are: `planes` draws the
+    /// plane entities, `cuts` applies the active planes' cuts, `fill` fills closed cuts. All
+    /// default to true. A view setting like `set_lighting`: saved with the model, but not an
+    /// undo step and not a change to the revision.
+    SetSectionDisplay {
+        #[serde(default)]
+        planes: Option<bool>,
+        #[serde(default)]
+        cuts: Option<bool>,
+        #[serde(default)]
+        fill: Option<bool>,
+    },
     /// Set the model's display units, which dimension and note labels are written in, as one
     /// undo step; absent fields stay as they are. `precision` is the decimals kept (0 to 6),
     /// or for `feet_inches` the finest fraction of an inch, 1/2^precision (6: 1/64). Saved
@@ -194,12 +229,14 @@ pub enum Command {
         #[serde(default)]
         precision: Option<u8>,
     },
-    /// Erase edges, faces, instances, guides, dimensions and notes as one undo step. An erased edge
+    /// Erase edges, faces, instances, guides, dimensions, notes and section planes as one undo
+    /// step. An erased edge
     /// takes the faces it bounds with it, except that two faces in one plane meeting there merge
     /// into one. Vertices go away with their last edge and cannot be erased directly. A group's
     /// definition goes with its last instance.
     Erase { ids: Vec<EntityId> },
-    /// Move vertices, edges, faces, instances, guides, dimensions and notes by `offset` meters
+    /// Move vertices, edges, faces, instances, guides, dimensions, notes and section planes by
+    /// `offset` meters
     /// as one undo step. Faces that share some of the moved vertices stretch and may tilt, but
     /// must stay flat. An annotation's fixed points and offsets move; its vertex anchors move
     /// with their vertices; a dimension whose two ends the move brings together is removed.
@@ -207,7 +244,8 @@ pub enum Command {
         ids: Vec<EntityId>,
         offset: [f64; 3],
     },
-    /// Copy edges, faces, instances, guides, dimensions and notes `count` times (default 1), copy k
+    /// Copy edges, faces, instances, guides, dimensions, notes and section planes (copies are
+    /// inactive) `count` times (default 1), copy k
     /// shifted by `k * offset`, as one undo step. A copied annotation anchored to a copied vertex
     /// anchors to that vertex's copy; its other vertex anchors become points. Copies merge with
     /// geometry they touch; copied faces keep their orientation. A copied component instance places
@@ -218,8 +256,8 @@ pub enum Command {
         #[serde(default)]
         count: Option<u32>,
     },
-    /// Rotate vertices, edges, faces (their vertices), instances, guides and annotations (as
-    /// `move` moves them) by `angle` degrees
+    /// Rotate vertices, edges, faces (their vertices), instances, guides, annotations and section
+    /// planes (as `move` moves them) by `angle` degrees
     /// about the line through `center` along `axis` (default Z), counter-clockwise looking
     /// down the axis, as one undo step. Faces that share some of the turned vertices stretch
     /// and may tilt, but must stay flat. With `copies`, the originals stay and that many copies
@@ -234,8 +272,8 @@ pub enum Command {
         #[serde(default)]
         copies: Option<u32>,
     },
-    /// Scale vertices, edges, faces (their vertices), instances, guides and annotations (as
-    /// `move` moves them; a fixed circle keeps its area) by `factors` along
+    /// Scale vertices, edges, faces (their vertices), instances, guides, annotations and section
+    /// planes (as `move` moves them; a fixed circle keeps its area) by `factors` along
     /// model x, y and z about `origin`, as one undo step. Each factor is finite, non-zero and
     /// between 1e-4 and 1e4 in size; a negative factor mirrors (faces stay facing out). Faces
     /// that share some of the scaled vertices stretch and may tilt, but must stay flat.
@@ -269,9 +307,10 @@ pub enum Command {
     /// path segments, on one curve that is not a polygon are soft. `path` may not include the
     /// face's own edges unless it is exactly the outer loop of another face.
     FollowMe { face: EntityId, path: Vec<EntityId> },
-    /// Turn edges, faces (with their edges), instances, guides and annotations into a group:
-    /// they move into a new definition, placed by one new instance where they were. Guides and
-    /// annotations alone cannot be grouped; screen notes stay in the root. The instance
+    /// Turn edges, faces (with their edges), instances, guides, annotations and section planes
+    /// into a group:
+    /// they move into a new definition, placed by one new instance where they were. Guides,
+    /// annotations and section planes alone cannot be grouped; screen notes stay in the root. The instance
     /// becomes the selection.
     MakeGroup { ids: Vec<EntityId> },
     /// Like `MakeGroup`, but the definition is a named component: copies of its instances
@@ -692,6 +731,7 @@ impl Command {
                 | Command::SetProjection { .. }
                 | Command::SetLighting { .. }
                 | Command::SetColorByTag { .. }
+                | Command::SetSectionDisplay { .. }
         )
     }
 }

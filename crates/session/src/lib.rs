@@ -37,8 +37,8 @@ pub use command::{
     SelectMode, TextureSource,
 };
 pub use document::{
-    Document, MAX_COORDINATE, MAX_COPIES, check_coordinates, dimension_label, dimension_value,
-    note_label, unit_vector,
+    Document, MAX_COORDINATE, MAX_COPIES, SectionDisplay, check_coordinates, dimension_label,
+    dimension_value, note_label, unit_vector,
 };
 pub use export::ExportReport;
 pub use import::{
@@ -51,7 +51,7 @@ pub use query::{
     AnchorInfo, Bounds, ChangeEvent, CurveInfo, DefinitionInfo, DimensionInfo, DimensionKind,
     EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind, InstanceInfo, MaterialInfo, NoteInfo,
     NoteKind, OutlinerNode, OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo, SceneView,
-    TagInfo, TextureInfo, VertexInfo,
+    SectionPlaneInfo, TagInfo, TextureInfo, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;

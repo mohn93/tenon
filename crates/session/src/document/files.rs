@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use kernel::{DefinitionId, DefinitionKind, MeshId, Scene, SceneChange};
 
-use super::Document;
+use super::{Document, SectionDisplay};
 use crate::camera::{Camera, Lighting};
 use crate::command::{CommandError, ErrorKind};
 use crate::export::{self, ExportFormat, ExportReport};
@@ -33,6 +33,7 @@ impl Document {
         ViewLook {
             lighting: self.lighting,
             color_by_tag: self.color_by_tag,
+            section: self.section_display,
             units: self.units,
         }
     }
@@ -55,6 +56,7 @@ impl Document {
         self.replace(Scene::new(), camera);
         self.lighting = Lighting::Day;
         self.color_by_tag = false;
+        self.section_display = SectionDisplay::default();
         self.path = None;
     }
 
@@ -80,6 +82,11 @@ impl Document {
         self.units = opened.units;
         self.lighting = c.lighting;
         self.color_by_tag = c.color_by_tag;
+        self.section_display = SectionDisplay {
+            planes: c.section_planes,
+            cuts: c.section_cuts,
+            fill: c.section_fill,
+        };
         self.path = Some(PathBuf::from(path));
         Ok(None)
     }
@@ -99,6 +106,11 @@ impl Document {
         self.units = opened.units;
         self.lighting = c.lighting;
         self.color_by_tag = c.color_by_tag;
+        self.section_display = SectionDisplay {
+            planes: c.section_planes,
+            cuts: c.section_cuts,
+            fill: c.section_fill,
+        };
         self.path = None;
         // The revision before the model was replaced, which it never returns to.
         self.clean_revision = self.revision - 1;
@@ -126,6 +138,7 @@ impl Document {
         self.replace(fresh.scene, camera);
         self.lighting = Lighting::Day;
         self.color_by_tag = false;
+        self.section_display = SectionDisplay::default();
         self.path = None;
         self.imported_from = Some(PathBuf::from(path));
         Ok(report)

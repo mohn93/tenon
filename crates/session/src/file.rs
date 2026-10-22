@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::camera::{Camera, Lighting, Projection};
-use crate::document::MAX_COORDINATE;
+use crate::document::{MAX_COORDINATE, SectionDisplay};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 use crate::units::{Units, check_precision};
 
@@ -28,10 +28,15 @@ pub const FORMAT: &str = "sketchup-alt";
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
-/// version 10 tags and coloring by tag, version 11 scenes, and version 12 dimensions, notes
-/// and display units; older files still open (untagged before version 10, without scenes
-/// before version 11, without annotations and in the default units before version 12).
-pub const SCHEMA_VERSION: u32 = 12;
+/// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
+/// and display units, and version 13 section planes and the section display settings; older
+/// files still open (untagged before version 10, without scenes before version 11, without
+/// annotations and in the default units before version 12, without section planes and with
+/// the default section display before version 13).
+pub const SCHEMA_VERSION: u32 = 13;
+/// The version written when the model has a dimension or a note, or the non-default display
+/// units, but no section plane and the default section display.
+pub const ANNOTATIONS_SCHEMA_VERSION: u32 = 12;
 /// The version written when the model has a scene but no dimension or note and the default
 /// display units.
 pub const SCENES_SCHEMA_VERSION: u32 = 11;
@@ -87,6 +92,22 @@ pub(crate) struct StoredCamera {
     pub lighting: Lighting,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub color_by_tag: bool,
+    /// The section display settings, written only when off; files before version 13 show
+    /// planes, apply cuts and fill them.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_planes: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_cuts: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_fill: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(on: &bool) -> bool {
+    *on
 }
 
 fn is_day(lighting: &Lighting) -> bool {
@@ -98,6 +119,7 @@ fn is_day(lighting: &Lighting) -> bool {
 pub(crate) struct ViewLook {
     pub lighting: Lighting,
     pub color_by_tag: bool,
+    pub section: SectionDisplay,
     pub units: Units,
 }
 
@@ -127,6 +149,7 @@ pub(crate) fn write_bytes(
     let ViewLook {
         lighting,
         color_by_tag,
+        section,
         units,
     } = look;
     let mut model = scene.to_data();
@@ -162,6 +185,10 @@ pub(crate) fn write_bytes(
         .chain(model.definitions.iter().map(|d| &d.mesh))
         .any(|m| !m.dimensions.is_empty() || !m.notes.is_empty())
         || units != Units::default();
+    let sectioned = std::iter::once(&model.root)
+        .chain(model.definitions.iter().map(|d| &d.mesh))
+        .any(|m| !m.sections.is_empty())
+        || section != SectionDisplay::default();
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -178,8 +205,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if annotated {
+        schema_version: if sectioned {
             SCHEMA_VERSION
+        } else if annotated {
+            ANNOTATIONS_SCHEMA_VERSION
         } else if has_scenes {
             SCENES_SCHEMA_VERSION
         } else if tagged {
@@ -203,6 +232,9 @@ pub(crate) fn write_bytes(
             projection: camera.projection,
             lighting,
             color_by_tag,
+            section_planes: section.planes,
+            section_cuts: section.cuts,
+            section_fill: section.fill,
         },
         units: (units != Units::default()).then_some(units),
         model,
@@ -592,6 +624,7 @@ mod tests {
         let look = ViewLook {
             lighting: Lighting::Day,
             color_by_tag: false,
+            section: SectionDisplay::default(),
             units: Units::default(),
         };
         let err = write(&path, &scene, &camera, look, Access::Default).unwrap_err();

@@ -206,6 +206,11 @@ fn describe_lists_methods_and_schemas() {
         "change_note",
         "add_3d_text",
         "set_units",
+        "add_section_plane",
+        "flip_section_plane",
+        "activate_section_plane",
+        "deactivate_section",
+        "set_section_display",
         "select",
         "undo",
         "redo",
@@ -260,6 +265,8 @@ fn describe_lists_methods_and_schemas() {
         "outliner",
         "annotations",
         "units",
+        "section_planes",
+        "section_display",
     ] {
         assert!(
             query_schema.contains(variant),

@@ -19,7 +19,7 @@ impl Document {
         &self.token
     }
 
-    /// The clip text of `ids` (edges, faces, instances, guides and annotations of the open
+    /// The clip text of `ids` (edges, faces, instances, guides, annotations and section planes of the open
     /// context): them,
     /// in world coordinates, with every definition, material and tag they use. An empty list
     /// is `invalid_input`; vertex ids are `invalid_input` and unknown ids `not_found`, as for
@@ -67,6 +67,7 @@ impl Document {
                 .into_iter()
                 .map(|p| p.to_array()),
         );
+        points.extend(root.sections().map(|(_, p)| at(p.point)));
         for (_, i) in root.instances() {
             let placed = placement * i.transform;
             match boxes.get(&i.definition).copied().flatten() {
@@ -109,6 +110,7 @@ impl Document {
             .chain(inserted.guides.iter().map(|g| EntityId::Guide(*g)))
             .chain(inserted.dimensions.iter().map(|r| EntityId::Dimension(*r)))
             .chain(inserted.notes.iter().map(|n| EntityId::Note(*n)))
+            .chain(inserted.sections.iter().map(|s| EntityId::Section(*s)))
             .collect::<BTreeSet<_>>();
         Ok(change)
     }

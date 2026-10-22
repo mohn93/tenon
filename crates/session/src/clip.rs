@@ -311,6 +311,7 @@ fn mesh_box(
     let mut points: Vec<DVec3> = m.vertices().map(|(_, v)| v.pos).collect();
     points.extend(m.guides().map(|(_, g)| g.anchor()));
     points.extend(m.annotation_points(DAffine3::IDENTITY));
+    points.extend(m.sections().map(|(_, p)| p.point));
     for (_, i) in m.instances() {
         match boxes.get(&i.definition).copied().flatten() {
             Some(b) => points.extend(corners(i.transform, b)),
