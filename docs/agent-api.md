@@ -434,10 +434,19 @@ answers `{"type": "section_display", "planes": true, "cuts": true, "fill": true}
 
 Drawing (the window and `render_view`): a plane is a square outline centred on its point in the
 plane, the larger of 1 m and 1.2 times the diagonal of its context's shown bounds, with four
-inward arrows on the edges along the normal; the active plane's outline is in the accent colour,
-inactive ones in the guide colour. Cut edges are the section loops, drawn twice as wide as normal
-edges. Closed cuts are filled dark grey (`#3a3a3a`) at the plane, showing the kept material; cuts
-through open meshes get cut edges but no fill. With `cuts` off geometry is drawn whole.
+arrows, one from the middle of each side, pointing along the normal toward the kept side (about 30
+points long on screen). The active plane's outline is in the accent colour (the selection colour
+of the view style), inactive ones in the guide colour; selecting or hovering a plane colours it as
+it does a guide. Planes are drawn only with `planes` on, and not when their tag is hidden (a
+hidden plane still cuts). With `cuts` on, a placement is cut by the active plane of its own mesh
+and of every mesh it is placed in, each in world space: faces and edges are clipped to the kept
+side (triangles that straddle a plane are split), and a plane in a group cuts only that group.
+Clipped faces cast shadows only where they remain; a glowing face still lights as a whole. Cut
+edges are the section loops, drawn four points wide (twice the width of selected edges) in the
+edge colour. Closed cuts are filled dark grey (`#3a3a3a`) at the plane, showing the kept material
+(a cut through a box with a hole fills with a hole); cuts through open meshes get cut edges but no
+fill. The fill and cut edges are drawn nearer than faces lying in the plane. With `cuts` off
+geometry is drawn whole and nothing is filled; with `fill` off only the cut edges are drawn.
 
 Files keep planes, each mesh's active plane and the display (schema 13, see Files). Every export
 format leaves planes out (see Export), and a SketchUp file's section planes are not imported.

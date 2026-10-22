@@ -41,7 +41,8 @@ struct Lighting {
     hover_face: vec4<f32>,
     // Hovered edges and guides.
     hover_edge: vec4<f32>,
-    // The step in pixels between the copies of a wide edge (x) and of a wide axis (y).
+    // The step in pixels between the copies of a wide edge (x), of a wide axis (y) and of a section
+    // cut edge (z).
     wide: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
@@ -127,6 +128,33 @@ fn wide_copy(line: LineOut, k: u32, step: f32) -> LineOut {
         / lighting.lines.zw;
     out.pos = vec4<f32>(out.pos.xy + shift * out.pos.w, out.pos.zw);
     return out;
+}
+
+// The fill of closed section cuts: pulled toward the camera a little less than the cut edges
+// (so those win) but more than the faces, which it must beat where they lie in the cut plane.
+@vertex
+fn vs_cut_fill(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
+    return line_vertex(pos, color, 1.0003);
+}
+
+// Section cut edges, faded like model edges; `vs_cut_edge_wide` draws them again across (even
+// instances) and up (odd ones) by `lighting.wide.z` pixels per pair.
+@vertex
+fn vs_cut_edge(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
+    return line_vertex(pos, faded_line(color, lighting.lines.x), 1.0006);
+}
+
+@vertex
+fn vs_cut_edge_wide(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @builtin(instance_index) k: u32,
+) -> LineOut {
+    return wide_copy(
+        line_vertex(pos, faded_line(color, lighting.lines.x), 1.0006),
+        k,
+        lighting.wide.z,
+    );
 }
 
 // Guides: pulled toward the camera like model edges; their color already shows the selection.

@@ -17,6 +17,7 @@ mod query;
 mod rectangle;
 mod rotate;
 mod schema;
+mod section_shape;
 mod skp;
 mod skp_export;
 mod sniff;
@@ -56,5 +57,6 @@ pub use query::{
 pub use rectangle::{rectangle_axes, rectangle_corners};
 pub use rotate::rotation;
 pub use schema::ModelPoint;
+pub use section_shape::{MIN_SECTION_SIDE, SECTION_SIDE_SCALE, SectionShape};
 pub use text3d::{SkippedCharacter, Text3dReport};
 pub use units::{LengthUnit, MAX_PRECISION, Units, format_length_in};

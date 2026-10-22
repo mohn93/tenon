@@ -4,6 +4,7 @@ pub mod guides;
 pub mod lights;
 pub mod renderer;
 pub mod scene;
+pub mod sections;
 mod shadow_maps;
 pub mod shadows;
 pub mod snapshot;

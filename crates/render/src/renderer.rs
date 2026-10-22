@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use kernel::{EntityId, InstanceId, Scene};
-use session::{Camera, Lighting};
+use session::{Camera, Lighting, SectionDisplay};
 use wgpu::util::DeviceExt;
 
 use crate::annotations::{AnnotationLook, annotation_lines};
@@ -11,8 +11,10 @@ use crate::grid::{
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{
-    BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base_with, shown_annotations, shown_guides,
+    BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base_shown, shown_annotations, shown_guides,
+    shown_sections,
 };
+use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
 use crate::style::ViewStyle;
@@ -152,8 +154,8 @@ struct LightingUniforms {
     hover_face: [f32; 4],
     /// Hovered edges and guides. Zero without a hover.
     hover_edge: [f32; 4],
-    /// The step in pixels between the copies of a wide edge (x, see `vs_edge_wide`) and of a
-    /// wide axis (y).
+    /// The step in pixels between the copies of a wide edge (x, see `vs_edge_wide`), of a wide
+    /// axis (y) and of a section cut edge (z, see `vs_cut_edge_wide`).
     wide: [f32; 4],
     lights: [LightUniform; MAX_LIGHTS],
 }
@@ -240,6 +242,8 @@ pub struct PreviewVertex {
 
 /// Selected and hovered edges, in points, where the style widens them.
 const WIDE_EDGE_PT: f32 = 2.0;
+/// Section cut edges, in points: twice the width of selected edges.
+const CUT_EDGE_PT: f32 = 2.0 * WIDE_EDGE_PT;
 /// The axes, in points, where the style widens them.
 const WIDE_AXIS_PT: f32 = 1.5;
 
@@ -409,6 +413,11 @@ pub struct Renderer {
     /// The day canvas's gradient, when the style has one.
     canvas_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
+    /// The fill of closed cuts, flat, nearer than the faces it lies on.
+    cut_fill_pipeline: wgpu::RenderPipeline,
+    /// The cuts' outlines, and again across and up for their width (see `vs_cut_edge_wide`).
+    cut_edge_pipeline: wgpu::RenderPipeline,
+    wide_cut_edge_pipeline: wgpu::RenderPipeline,
     overlay_pipeline: wgpu::RenderPipeline,
     /// A tool's translucent preview solid.
     preview_pipeline: wgpu::RenderPipeline,
@@ -439,6 +448,8 @@ pub struct Renderer {
     /// Faces drawn in their tags' colors, as of the last `set_color_by_tag` (see
     /// `scene::scene_base_with`).
     color_by_tag: bool,
+    /// How section planes are shown, as of the last `set_section_display`.
+    section_display: SectionDisplay,
     /// How the frames look, as of the last `set_style`.
     style: ViewStyle,
     /// The scene's lights, as of the last `set_model`.
@@ -449,6 +460,9 @@ pub struct Renderer {
     vertical_axis: Mesh,
     flat_axes: Mesh,
     faces: Option<Mesh>,
+    /// The fill and the outlines of the section cuts.
+    cut_fill: Option<Mesh>,
+    cut_edges: Option<Mesh>,
     /// The see-through triangles of `faces`, if any.
     glass: Option<Glass>,
     edges: Option<Mesh>,
@@ -477,6 +491,11 @@ pub struct Renderer {
     base_annotations: Vec<AnnotationLook>,
     annotations: Vec<AnnotationLook>,
     annotation_flags: Vec<bool>,
+    /// The section planes as the guides: in root coordinates with nothing selected, with the
+    /// selection and hover shown, and which are selected.
+    base_sections: Vec<SectionLook>,
+    sections: Vec<SectionLook>,
+    section_flags: Vec<bool>,
     targets: Option<Targets>,
 }
 
@@ -799,6 +818,44 @@ impl Renderer {
             },
             None,
         );
+        // The fill of closed cuts, both sides: it lies where the faces end, so it is pulled
+        // toward the camera (see `vs_cut_fill`) to win against faces lying in the plane.
+        let cut_fill_pipeline = pipeline(
+            "cut fill",
+            "vs_cut_fill",
+            "fs_line",
+            &lines_only,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::GreaterEqual,
+            },
+            None,
+        );
+        let cut_edge_pipeline = pipeline(
+            "cut edges",
+            "vs_cut_edge",
+            "fs_line",
+            &lines_only,
+            lines,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::GreaterEqual,
+            },
+            None,
+        );
+        let wide_cut_edge_pipeline = pipeline(
+            "wide cut edges",
+            "vs_cut_edge_wide",
+            "fs_line",
+            &lines_only,
+            lines,
+            DepthUse {
+                write: true,
+                compare: wgpu::CompareFunction::GreaterEqual,
+            },
+            None,
+        );
         let overlay_pipeline = pipeline(
             "overlay",
             "vs_overlay",
@@ -912,6 +969,9 @@ impl Renderer {
             wide_edge_pipeline,
             canvas_pipeline,
             guide_pipeline,
+            cut_fill_pipeline,
+            cut_edge_pipeline,
+            wide_cut_edge_pipeline,
             overlay_pipeline,
             preview_pipeline,
             uniforms,
@@ -928,12 +988,15 @@ impl Renderer {
             caster_generation: 0,
             lighting: Lighting::Day,
             color_by_tag: false,
+            section_display: SectionDisplay::default(),
             style: ViewStyle::CLASSIC,
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
             flat_axes,
             faces: None,
+            cut_fill: None,
+            cut_edges: None,
             glass: None,
             edges: None,
             edges_selected: false,
@@ -949,6 +1012,9 @@ impl Renderer {
             base_annotations: Vec::new(),
             annotations: Vec::new(),
             annotation_flags: Vec::new(),
+            base_sections: Vec::new(),
+            sections: Vec::new(),
+            section_flags: Vec::new(),
             targets: None,
         }
     }
@@ -972,10 +1038,12 @@ impl Renderer {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
             self.rebind();
         }
-        let base = scene_base_with(scene, context, self.color_by_tag);
+        let base = scene_base_shown(scene, context, self.color_by_tag, self.section_display);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
+        self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
+        self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
         self.spans = base.spans;
         self.guides = base.guides.clone();
         self.guide_flags = vec![false; base.guides.len()];
@@ -987,6 +1055,9 @@ impl Renderer {
         self.annotations = base.annotations.clone();
         self.annotation_flags = vec![false; base.annotations.len()];
         self.base_annotations = base.annotations;
+        self.sections = base.sections.clone();
+        self.section_flags = vec![false; base.sections.len()];
+        self.base_sections = base.sections;
         self.lights = base.lights;
         // Shadow maps are drawn again only when the casters move, not when, say, a group is
         // opened or a color changes.
@@ -1081,6 +1152,14 @@ impl Renderer {
         changed
     }
 
+    /// Shows section planes and cuts as `display` says from the next `set_model` on. True when
+    /// that changes what is drawn, so the model must be set again.
+    pub fn set_section_display(&mut self, display: SectionDisplay) -> bool {
+        let changed = self.section_display != display;
+        self.section_display = display;
+        changed
+    }
+
     /// Lights the frames drawn from now on by day or by night.
     pub fn set_lighting(&mut self, lighting: Lighting) {
         self.lighting = lighting;
@@ -1099,6 +1178,7 @@ impl Renderer {
         self.edges_selected = flags.edges.iter().any(|&f| f > 0.5);
         self.guide_flags = flags.guides;
         self.annotation_flags = flags.annotations;
+        self.section_flags = flags.sections;
         self.refresh_guides();
     }
 
@@ -1144,7 +1224,19 @@ impl Renderer {
             &self.annotation_flags,
             self.style.selected_edge,
         );
+        self.sections = shown_sections(
+            &self.base_sections,
+            &self.section_flags,
+            self.style.selected_edge,
+        );
+        // The active plane is drawn in the accent unless the selection already is.
+        for s in self.sections.iter_mut().filter(|s| s.active) {
+            s.color = self.style.selected_edge;
+        }
         if let Some((_, look)) = self.hover {
+            for s in &mut self.sections[self.hover_ranges.sections.clone()] {
+                s.color = look.edge;
+            }
             for g in &mut self.guides[self.hover_ranges.guides.clone()] {
                 g.color = look.edge;
             }
@@ -1263,12 +1355,21 @@ impl Renderer {
         let (axis_copies, axis_step) = spread(WIDE_AXIS_PT * self.pixels_per_point);
         lighting.wide[0] = wide_step;
         lighting.wide[1] = axis_step;
+        // Cut edges are twice as wide as the selected edges would be.
+        let (cut_copies, cut_step) = spread(CUT_EDGE_PT * self.pixels_per_point);
+        lighting.wide[2] = cut_step;
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         let targets = self.targets.as_ref().expect("targets just created");
         let overlay = mesh(&self.device, "overlay", overlay);
         // Guides and annotations: both drawn anew for the camera, in the same pipeline.
         let mut guide_vertices = guide_lines(&self.guides, camera);
+        section_lines(
+            &self.sections,
+            camera,
+            f64::from(self.pixels_per_point),
+            &mut guide_vertices,
+        );
         annotation_lines(
             &self.annotations,
             camera,
@@ -1372,6 +1473,12 @@ impl Renderer {
                 {
                     bind(&mut pass, &self.wide_edge_pipeline, edges);
                     pass.draw(0..edges.count, 0..wide_copies);
+                }
+                draw(&mut pass, &self.cut_fill_pipeline, self.cut_fill.as_ref());
+                if let Some(cuts) = &self.cut_edges {
+                    draw(&mut pass, &self.cut_edge_pipeline, Some(cuts));
+                    bind(&mut pass, &self.wide_cut_edge_pipeline, cuts);
+                    pass.draw(0..cuts.count, 0..cut_copies);
                 }
                 draw(&mut pass, &self.guide_pipeline, guides.as_ref());
                 // See-through faces last but for the overlay: everything opaque shows through.

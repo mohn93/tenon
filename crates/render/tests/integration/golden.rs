@@ -11,8 +11,8 @@ use kernel::EntityId;
 use render::Snapshotter;
 use session::{Command, Document, ImportAs, MaterialId, Projection, Side, StandardView, UpAxis};
 
-const WIDTH: u32 = 160;
-const HEIGHT: u32 = 120;
+pub(crate) const WIDTH: u32 = 160;
+pub(crate) const HEIGHT: u32 = 120;
 
 /// A pixel differs when one of its color channels differs by more than this.
 const CHANNEL_TOLERANCE: u8 = 24;
@@ -122,6 +122,7 @@ fn check(name: &str, doc: &Document) {
         eprintln!("{name}: software GPU adapter, skipping golden comparison");
         return;
     }
+    snap.set_section_display(doc.section_display);
     let actual = snap
         .capture(
             doc.scene(),
@@ -176,16 +177,16 @@ fn check(name: &str, doc: &Document) {
     }
 }
 
-fn run(doc: &mut Document, command: Command) -> session::Outcome {
+pub(crate) fn run(doc: &mut Document, command: Command) -> session::Outcome {
     doc.execute(command.clone())
         .unwrap_or_else(|e| panic!("{command:?}: {e}"))
 }
 
-fn doc() -> Document {
+pub(crate) fn doc() -> Document {
     Document::new(glam::DVec2::new(WIDTH as f64, HEIGHT as f64))
 }
 
-fn look(doc: &mut Document, eye: [f64; 3], target: [f64; 3]) {
+pub(crate) fn look(doc: &mut Document, eye: [f64; 3], target: [f64; 3]) {
     run(
         doc,
         Command::SetCamera {
@@ -198,7 +199,7 @@ fn look(doc: &mut Document, eye: [f64; 3], target: [f64; 3]) {
     );
 }
 
-fn created_face(outcome: &session::Outcome) -> EntityId {
+pub(crate) fn created_face(outcome: &session::Outcome) -> EntityId {
     *outcome
         .changes
         .created
@@ -208,7 +209,7 @@ fn created_face(outcome: &session::Outcome) -> EntityId {
 }
 
 /// A 2 x 1.5 x 1 m box with a corner at the origin; returns the top face.
-fn add_box(doc: &mut Document, origin: [f64; 2]) -> EntityId {
+pub(crate) fn add_box(doc: &mut Document, origin: [f64; 2]) -> EntityId {
     let [x, y] = origin;
     let base = run(
         doc,
@@ -224,7 +225,7 @@ fn add_box(doc: &mut Document, origin: [f64; 2]) -> EntityId {
 }
 
 /// Push-pulls a ground face of the open context up by `height`, whichever way it faces.
-fn raise(doc: &mut Document, face: EntityId, height: f64) {
+pub(crate) fn raise(doc: &mut Document, face: EntityId, height: f64) {
     let EntityId::Face(id) = face else {
         panic!("{face} is not a face")
     };
@@ -234,7 +235,7 @@ fn raise(doc: &mut Document, face: EntityId, height: f64) {
 }
 
 /// The face of the open context whose vertices all lie at height `z`.
-fn top_face(doc: &Document, z: f64) -> EntityId {
+pub(crate) fn top_face(doc: &Document, z: f64) -> EntityId {
     let model = doc.model();
     let (id, _) = model
         .faces()
@@ -261,7 +262,7 @@ fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> MaterialId {
     outcome.changes.materials[0]
 }
 
-fn all_faces(doc: &Document) -> Vec<EntityId> {
+pub(crate) fn all_faces(doc: &Document) -> Vec<EntityId> {
     doc.model()
         .faces()
         .map(|(id, _)| EntityId::Face(id))
@@ -703,6 +704,50 @@ fn golden_open_group_fades_the_rest() {
     check("open_group", &d);
 }
 
+#[test]
+fn golden_section_cut_through_a_box() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [1.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    // From the cut-away side, so the filled cut shows.
+    look(&mut d, [-3.5, -3.5, 3.0], [1.0, 0.75, 0.4]);
+    check("section_cut", &d);
+}
+
+#[test]
+fn golden_section_plane_in_a_group_cuts_only_the_group() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let faces = all_faces(&d);
+    let group = run(&mut d, Command::MakeGroup { ids: faces });
+    let instance = *group
+        .changes
+        .created
+        .iter()
+        .find(|e| matches!(e, EntityId::Instance(_)))
+        .expect("an instance");
+    add_box(&mut d, [3.0, 0.5]);
+    run(&mut d, Command::OpenInstance { id: instance });
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [1.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    run(&mut d, Command::CloseInstance {});
+    look(&mut d, [-3.0, -5.0, 4.0], [2.5, 1.0, 0.4]);
+    check("section_group", &d);
+}
+
 /// A 16 x 16 pixel PNG in four quadrants, red top left, yellow top right, green bottom left and
 /// blue bottom right, with a white line along its top and left edges; returns its path.
 fn quadrants_png() -> PathBuf {
@@ -1045,6 +1090,8 @@ fn every_golden_image_has_a_test() {
         "night",
         "positioned",
         "shadow",
+        "section_cut",
+        "section_group",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

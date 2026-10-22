@@ -16,14 +16,15 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     DimensionId, EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model,
-    NoteId, Scene, TagId, VertexId, back_texture_position,
+    NoteId, Scene, SectionId, SectionPlane, TagId, VertexId, back_texture_position,
 };
-use session::AnnotationShape;
+use session::{AnnotationShape, SectionDisplay, SectionShape};
 
 use crate::annotations::{ANNOTATION_COLOR, AnnotationLook, FADED_ANNOTATION_COLOR};
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
+use crate::sections::{CUT_FILL_COLOR, SectionLook, clip_segment, clip_triangle, cut_surface};
 use crate::texture::layers;
 
 /// A face corner with its selection flag, as `scene_geometry` returns it.
@@ -206,6 +207,7 @@ pub struct ModelGeometry {
     pub edges: Vec<LineVertex>,
     pub guides: Vec<GuideShape>,
     pub annotations: Vec<AnnotationLook>,
+    pub sections: Vec<SectionLook>,
 }
 
 /// Geometry for the whole scene in root coordinates, every instance placed by its transform.
@@ -239,6 +241,13 @@ pub struct SceneBase {
     /// Dimensions and leader notes (screen notes have no lines), in ANNOTATION_COLOR inside
     /// the open instance and FADED_ANNOTATION_COLOR outside it.
     pub annotations: Vec<AnnotationLook>,
+    /// The section planes drawn (see `SectionDisplay::planes`), in the guide colors (see `SectionLook`).
+    pub sections: Vec<SectionLook>,
+    /// The triangles filling the closed cuts of the active section planes, in
+    /// `CUT_FILL_COLOR`. They are drawn after the faces, nearer than the faces they lie on.
+    pub cut_fill: Vec<LineVertex>,
+    /// The cuts' outlines as line pairs in the edge color, drawn wide.
+    pub cut_edges: Vec<LineVertex>,
     /// Where the open context's entities lie in the lists above.
     pub spans: Spans,
     /// A light for each placement of a mesh whose own faces glow, in root coordinates. They do
@@ -324,6 +333,7 @@ impl SceneBase {
                 &flags.annotations,
                 SELECTED_EDGE_COLOR,
             ),
+            sections: shown_sections(&self.sections, &flags.sections, SELECTED_EDGE_COLOR),
         }
     }
 }
@@ -357,6 +367,18 @@ pub fn shown_guides(guides: &[GuideShape], lit: &[bool], color: [f32; 4]) -> Vec
         .collect()
 }
 
+/// The section planes of a `SceneBase` with the selected ones (`lit`, one per plane) in `color`.
+pub fn shown_sections(sections: &[SectionLook], lit: &[bool], color: [f32; 4]) -> Vec<SectionLook> {
+    sections
+        .iter()
+        .zip(lit)
+        .map(|(s, &lit)| SectionLook {
+            color: if lit { color } else { s.color },
+            ..*s
+        })
+        .collect()
+}
+
 /// Where each selectable entity of the open context lies in a `SceneBase`'s lists, so a
 /// selection can be shown without rebuilding them. Each list is sorted by id.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -365,6 +387,7 @@ pub struct Spans {
     edge_vertices: usize,
     guide_count: usize,
     annotation_count: usize,
+    section_count: usize,
     faces: Vec<(FaceId, Range<usize>)>,
     edges: Vec<(EdgeId, Range<usize>)>,
     /// Each guide's index.
@@ -372,6 +395,8 @@ pub struct Spans {
     /// Each dimension's and leader note's index among the annotations.
     dimensions: Vec<(DimensionId, usize)>,
     notes: Vec<(NoteId, usize)>,
+    /// Each section plane's index among the sections.
+    sections: Vec<(SectionId, usize)>,
     /// Everything an instance places, at any depth.
     instances: Vec<(InstanceId, Ranges)>,
 }
@@ -384,6 +409,7 @@ pub struct Flags {
     pub edges: Vec<f32>,
     pub guides: Vec<bool>,
     pub annotations: Vec<bool>,
+    pub sections: Vec<bool>,
 }
 
 /// Where one entity of the open context lies in a `SceneBase`'s lists (a group: all it places).
@@ -393,6 +419,7 @@ pub struct Ranges {
     pub edges: Range<usize>,
     pub guides: Range<usize>,
     pub annotations: Range<usize>,
+    pub sections: Range<usize>,
 }
 
 impl Spans {
@@ -421,8 +448,11 @@ impl Spans {
                 ..Ranges::default()
             }),
             EntityId::Instance(id) => find(&self.instances, id).cloned(),
-            // Section planes are not drawn yet.
-            EntityId::Vertex(_) | EntityId::Section(_) => None,
+            EntityId::Section(id) => find(&self.sections, id).map(|&k| Ranges {
+                sections: k..k + 1,
+                ..Ranges::default()
+            }),
+            EntityId::Vertex(_) => None,
         }
     }
 
@@ -434,12 +464,14 @@ impl Spans {
             edges: vec![0.0; self.edge_vertices],
             guides: vec![false; self.guide_count],
             annotations: vec![false; self.annotation_count],
+            sections: vec![false; self.section_count],
         };
         for r in selection.iter().filter_map(|&id| self.ranges(id)) {
             f.faces[r.faces].fill(1.0);
             f.edges[r.edges].fill(1.0);
             f.guides[r.guides].fill(true);
             f.annotations[r.annotations].fill(true);
+            f.sections[r.sections].fill(true);
         }
         f
     }
@@ -463,6 +495,22 @@ pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
 /// sides; other faces keep their material's color, without textures. Edges keep their colors,
 /// and lights and shadows stay as the materials make them.
 pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool) -> SceneBase {
+    scene_base_shown(scene, context, color_by_tag, SectionDisplay::default())
+}
+
+/// `scene_base_with`, with the section planes shown as `section` says. A placement is cut by
+/// the active section plane of its own mesh and of each mesh it is placed in, when
+/// `section.cuts`: faces and edges are clipped to what the planes keep, and where a plane cuts
+/// the placement's surface, `cut_edges` hold the outline and, with `section.fill`, `cut_fill`
+/// the closed cuts' fill. Clipped faces cast shadows only where they remain. The plane
+/// entities are listed in `sections` when `section.planes`. Lights from glowing faces are
+/// those of the whole faces, cut or not.
+pub fn scene_base_shown(
+    scene: &Scene,
+    context: &[InstanceId],
+    color_by_tag: bool,
+    section: SectionDisplay,
+) -> SceneBase {
     let layers = layers(scene);
     let parts = placed_parts(scene, &layers);
     let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
@@ -473,6 +521,8 @@ pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool
         parts: &parts,
         glowing: scene.materials().any(|(_, m)| m.glows()),
         color_by_tag,
+        display: section,
+        planes: Vec::new(),
         glows: HashMap::new(),
         path: Vec::new(),
         base: SceneBase {
@@ -509,12 +559,14 @@ pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool
     spans.edge_vertices = base.edges.len();
     spans.guide_count = base.guides.len();
     spans.annotation_count = base.annotations.len();
+    spans.section_count = base.sections.len();
     // `Spans::flags` finds ids by binary search; meshes list their entities in id order.
     debug_assert!(spans.faces.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.edges.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.guides.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.dimensions.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.notes.is_sorted_by_key(|(id, _)| *id));
+    debug_assert!(spans.sections.is_sorted_by_key(|(id, _)| *id));
     debug_assert!(spans.instances.is_sorted_by_key(|(id, _)| *id));
     base
 }
@@ -534,6 +586,15 @@ const BOX_EDGES: [(usize, usize); 12] = [
     (2, 6),
     (3, 7),
 ];
+
+/// A clipped corner's normal and texture coordinates, `t` of the way from `a` to `b`.
+fn mix_corner(a: (DVec3, [f32; 4]), b: (DVec3, [f32; 4]), t: f64) -> (DVec3, [f32; 4]) {
+    let t32 = t as f32;
+    (
+        a.0.lerp(b.0, t),
+        std::array::from_fn(|k| a.1[k] + (b.1[k] - a.1[k]) * t32),
+    )
+}
 
 /// What a mesh draws wherever it is placed, in its own coordinates.
 struct MeshParts {
@@ -710,6 +771,11 @@ struct Walk<'a> {
     glowing: bool,
     /// Faces are drawn in their tags' colors (see `scene_base_with`).
     color_by_tag: bool,
+    /// How section planes are shown.
+    display: SectionDisplay,
+    /// The active section planes of the meshes from the root down to the one being walked, in
+    /// root coordinates; empty unless cuts are on.
+    planes: Vec<SectionPlane>,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
     /// glow for an instance's mesh, one per connected group of glowing faces for the root's.
     glows: HashMap<(MeshId, Option<MaterialId>), Vec<Glow>>,
@@ -745,11 +811,23 @@ impl Walk<'_> {
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
         // The mesh's glow, when it has to be worked out (in its own coordinates).
         let glow_key = (id, inherited);
+        let mut pushed_plane = false;
         // Each glowing face's glow, with the face.
         let mut glow: Option<Vec<(Glow, FaceId)>> =
             (self.glowing && !self.glows.contains_key(&glow_key)).then(Vec::new);
         let scene = self.scene;
         let color_by_tag = self.color_by_tag;
+        let display = self.display;
+        if display.cuts
+            && let Some(plane) = model.active_section().and_then(|s| model.section(s))
+        {
+            self.planes.push(plane.transformed(t));
+            pushed_plane = true;
+        }
+        let planes: Vec<SectionPlane> = self.planes.clone();
+        let cutting = !planes.is_empty();
+        // The placement's own surface in root coordinates, before any cut, for the cut outlines.
+        let mut surface: Vec<[DVec3; 3]> = Vec::new();
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
@@ -770,7 +848,7 @@ impl Walk<'_> {
                 (front, back)
             };
             let corner = |(p, n, uv): (DVec3, DVec3, [f32; 4])| BaseFaceVertex {
-                pos: t.transform_point3(p).as_vec3().to_array(),
+                pos: p.as_vec3().to_array(),
                 normal: (normal_map * n).normalize().as_vec3().to_array(),
                 front: drawn_front.color,
                 back: drawn_back.color,
@@ -797,10 +875,22 @@ impl Walk<'_> {
                 } else {
                     [(a, na, ua), (b, nb, ub), (c, nc, uc)]
                 };
-                base.faces.extend(tri.map(corner));
-                if casts {
-                    let placed = &base.faces[base.faces.len() - 3..];
-                    base.casters.extend(placed.iter().map(|v| v.pos));
+                let tri = tri.map(|(p, n, uv)| (t.transform_point3(p), n, uv));
+                let emit = |base: &mut SceneBase, tri: [(DVec3, DVec3, [f32; 4]); 3]| {
+                    base.faces.extend(tri.map(corner));
+                    if casts {
+                        let placed = &base.faces[base.faces.len() - 3..];
+                        base.casters.extend(placed.iter().map(|v| v.pos));
+                    }
+                };
+                if cutting {
+                    surface.push(tri.map(|c| c.0));
+                    let attributes = tri.map(|(p, n, uv)| (p, (n, uv)));
+                    for piece in clip_triangle(attributes, &planes, &mix_corner) {
+                        emit(base, piece.map(|(p, (n, uv))| (p, n, uv)));
+                    }
+                } else {
+                    emit(base, tri);
                 }
             }
             if let Some(g) = &mut glow
@@ -858,14 +948,40 @@ impl Walk<'_> {
                 continue;
             }
             let start = base.edges.len();
-            base.edges
-                .extend(parts.ends[ends.clone()].iter().map(|p| LineVertex {
+            let ends = &parts.ends[ends.clone()];
+            if cutting {
+                // The ends of an edge come in a pair.
+                if let [a, b] = ends
+                    && let Some(kept) =
+                        clip_segment(t.transform_point3(*a), t.transform_point3(*b), &planes)
+                {
+                    base.edges.extend(kept.map(|p| LineVertex {
+                        pos: p.as_vec3().to_array(),
+                        color,
+                    }));
+                }
+            } else {
+                base.edges.extend(ends.iter().map(|p| LineVertex {
                     pos: t.transform_point3(*p).as_vec3().to_array(),
                     color,
                 }));
+            }
             if open {
                 base.spans.edges.push((*eid, start..base.edges.len()));
             }
+        }
+        if cutting && !surface.is_empty() {
+            let cut = cut_surface(&surface, &planes, display.fill);
+            base.cut_fill
+                .extend(cut.fill.iter().flatten().map(|p| LineVertex {
+                    pos: p.as_vec3().to_array(),
+                    color: CUT_FILL_COLOR,
+                }));
+            base.cut_edges
+                .extend(cut.edges.iter().flatten().map(|p| LineVertex {
+                    pos: p.as_vec3().to_array(),
+                    color,
+                }));
         }
         let color = if inside {
             GUIDE_COLOR
@@ -927,6 +1043,28 @@ impl Walk<'_> {
                 color,
             });
         }
+        if display.planes {
+            let mut side = None;
+            for (sid, plane) in model.sections() {
+                if !scene.tag_shown(plane.tag()) {
+                    continue;
+                }
+                let side =
+                    *side.get_or_insert_with(|| SectionShape::side(scene.shown_bounds(id, &[])));
+                if open {
+                    base.spans.sections.push((sid, base.sections.len()));
+                }
+                base.sections.push(SectionLook {
+                    shape: SectionShape::new(plane, side).transformed(t),
+                    color: if inside {
+                        GUIDE_COLOR
+                    } else {
+                        FADED_GUIDE_COLOR
+                    },
+                    active: inside && model.active_section() == Some(sid),
+                });
+            }
+        }
         for (iid, instance) in model.instances() {
             // A hidden instance hides all it places, but for the one being edited (or holding
             // it), which stays drawn.
@@ -938,6 +1076,7 @@ impl Walk<'_> {
                 self.base.edges.len(),
                 self.base.guides.len(),
                 self.base.annotations.len(),
+                self.base.sections.len(),
             );
             self.path.push(iid);
             self.mesh(
@@ -953,9 +1092,13 @@ impl Walk<'_> {
                     edges: start.1..self.base.edges.len(),
                     guides: start.2..self.base.guides.len(),
                     annotations: start.3..self.base.annotations.len(),
+                    sections: start.4..self.base.sections.len(),
                 };
                 self.base.spans.instances.push((iid, placed));
             }
+        }
+        if pushed_plane {
+            self.planes.pop();
         }
     }
 

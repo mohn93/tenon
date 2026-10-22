@@ -111,7 +111,13 @@ fn each_segment(
 /// An arrowhead with its tip at `tip`, pointing along `dir` as the screen shows it: two
 /// strokes `size_px` pixels long back from the tip. None where the camera does not see the
 /// tip, or `dir` points along the view.
-fn arrow(camera: &Camera, tip: DVec3, dir: DVec3, size_px: f64, f: &mut impl FnMut([DVec3; 2])) {
+pub(crate) fn arrow(
+    camera: &Camera,
+    tip: DVec3,
+    dir: DVec3,
+    size_px: f64,
+    f: &mut impl FnMut([DVec3; 2]),
+) {
     if !camera.sees_depth(tip) {
         return;
     }

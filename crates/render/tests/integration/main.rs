@@ -4,5 +4,6 @@
 mod golden;
 mod headless;
 mod perf;
+mod sections;
 mod snapshot;
 mod tags;

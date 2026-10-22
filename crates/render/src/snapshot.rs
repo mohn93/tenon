@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use kernel::{EntityId, InstanceId, Scene};
-use session::{Camera, Lighting};
+use session::{Camera, Lighting, SectionDisplay};
 
 use crate::Renderer;
 
@@ -53,6 +53,11 @@ impl Snapshotter {
     /// Colors faces by tag (or by material, the default) in the captures from now on.
     pub fn set_color_by_tag(&mut self, on: bool) {
         self.renderer.set_color_by_tag(on);
+    }
+
+    /// Shows section planes and cuts as `display` says in the captures from now on.
+    pub fn set_section_display(&mut self, display: SectionDisplay) {
+        self.renderer.set_section_display(display);
     }
 
     /// Renders `scene` as seen by `camera` (its viewport is replaced by the image size) and lit

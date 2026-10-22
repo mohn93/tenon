@@ -248,6 +248,7 @@ impl Host for AppHost<'_> {
         let doc = self.editor.doc();
         let snapshotter = self.offscreen.get()?;
         snapshotter.set_color_by_tag(doc.color_by_tag);
+        snapshotter.set_section_display(doc.section_display);
         snapshotter.capture(
             doc.scene(),
             doc.context(),
