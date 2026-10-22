@@ -13,7 +13,7 @@ Only `src/dropped_file.rs`: the `egui::DroppedFile` impl for `NativeFile` now ha
 those two trait methods on wasm32, so the unpatched crate does not compile for the web.
 Dropped files are not used on the web (the app opens files through its `Platform`).
 
-`src/lib.rs`, three changes for the web, native behaviour unchanged:
+`src/lib.rs`, two changes for the web, native behaviour unchanged:
 - `ModifiersChanged` sets `mac_cmd` and `command` through `command_flags`: on wasm32 Cmd (Super)
   is `mac_cmd` and, with Ctrl, the `command` key. Upstream only does that on macOS, so Cmd chords
   in a browser typed their letter into text fields. (`web_tests` covers `command_flags`.)
