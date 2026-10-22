@@ -48,8 +48,6 @@ pub struct Features {
     pub print: bool,
     /// Open Recent and the start card's list.
     pub recent: bool,
-    /// The agent socket and the hub's transports.
-    pub agent_socket: bool,
 }
 
 impl Features {
@@ -60,7 +58,6 @@ impl Features {
         autosave: true,
         print: true,
         recent: true,
-        agent_socket: true,
     };
 
     /// Only what a browser tab offers: files as bytes, nothing that needs folders or processes.
@@ -70,7 +67,6 @@ impl Features {
         autosave: false,
         print: false,
         recent: false,
-        agent_socket: false,
     };
 }
 

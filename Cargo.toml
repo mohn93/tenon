@@ -37,14 +37,14 @@ miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-
 zip = { version = "=9.0.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 skrifa = "=0.44.0"
 
-# Dependencies are built optimized and without debug info in dev and test builds: tests that
-# inflate, parse JSON or draw with wgpu run several times faster, the build output stays small
-# enough to link on CI runners, and the workspace crates stay unoptimized so they rebuild quickly.
 # egui-winit 0.36.2 does not build for wasm32 (its dropped-file type lacks the web method); the
 # copy in vendor/ is the same crate with that one method added under cfg(wasm32).
 [patch.crates-io]
 egui-winit = { path = "vendor/egui-winit" }
 
+# Dependencies are built optimized and without debug info in dev and test builds: tests that
+# inflate, parse JSON or draw with wgpu run several times faster, the build output stays small
+# enough to link on CI runners, and the workspace crates stay unoptimized so they rebuild quickly.
 [profile.dev.package."*"]
 opt-level = 2
 debug = false

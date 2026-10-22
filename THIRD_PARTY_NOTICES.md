@@ -5,6 +5,12 @@ crates compiled into the app (dependencies under MIT, Apache-2.0 and other licen
 `Cargo.lock`) are not yet included, here or in the Windows zip, and must be added before any
 public release.
 
+## egui-winit (vendored, patched)
+
+`vendor/egui-winit` is egui-winit 0.36.2 from crates.io with one change for wasm32, listed in
+`vendor/egui-winit/VENDORED.md`. It is distributed under MIT OR Apache-2.0; the licence texts
+are `vendor/egui-winit/LICENSE-MIT` and `vendor/egui-winit/LICENSE-APACHE`.
+
 ## skp (vendored from openskp-rs)
 
 `crates/skp` is the `core/skpcore` reader of openskp-rs

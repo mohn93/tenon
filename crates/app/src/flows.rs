@@ -57,8 +57,9 @@ pub enum PlatformReply {
 pub enum Effect {
     /// The model the autosave copied was saved or replaced.
     ClearAutosave,
-    /// The model's file goes first in the recent files.
-    RememberFile,
+    /// The model's file (as of the step: later steps may replace the model) goes first in the
+    /// recent files.
+    RememberFile(Option<PathBuf>),
     Quit,
     OpenRecovered(PathBuf),
     /// The Import Options sheet opens for this file (a name only when the platform keeps
@@ -89,6 +90,11 @@ pub struct Flows {
     kept_name: Option<String>,
     /// The file picked for the open Import Options sheet, where files have no path.
     import: Option<(String, Vec<u8>)>,
+}
+
+/// The effect that remembers the open model's file.
+fn remember(env: &Env) -> Effect {
+    Effect::RememberFile(env.editor.doc().path().map(Path::to_path_buf))
 }
 
 fn skr_filters() -> Vec<Filter> {
@@ -232,7 +238,7 @@ impl Flows {
     fn open_path(&mut self, env: &mut Env, path: &Path) -> Vec<Effect> {
         if env.editor.open_file(path) {
             self.kept_name = None;
-            vec![Effect::ClearAutosave, Effect::RememberFile]
+            vec![Effect::ClearAutosave, remember(env)]
         } else {
             Vec::new()
         }
@@ -267,7 +273,7 @@ impl Flows {
             }) => {
                 if env.editor.open_bytes(&name, &bytes) {
                     self.kept_name = Some(skr_name(&name));
-                    vec![Effect::ClearAutosave, Effect::RememberFile]
+                    vec![Effect::ClearAutosave, remember(env)]
                 } else {
                     Vec::new()
                 }
@@ -349,7 +355,7 @@ impl Flows {
             return Vec::new();
         }
         self.kept_name = None;
-        let mut effects = vec![Effect::ClearAutosave, Effect::RememberFile];
+        let mut effects = vec![Effect::ClearAutosave, remember(env)];
         if let Some(then) = then {
             effects.extend(self.run_then(env, then));
         }
@@ -841,10 +847,38 @@ mod tests {
         });
         assert_eq!(
             fx,
-            [Effect::ClearAutosave, Effect::RememberFile, Effect::Quit]
+            [
+                Effect::ClearAutosave,
+                Effect::RememberFile(Some(path.clone())),
+                Effect::Quit
+            ]
         );
         assert!(!editor.doc().is_modified());
         assert!(path.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_model_saved_from_the_prompt_is_remembered_before_the_new_one_replaces_it() {
+        let platform = desktop();
+        let dir =
+            std::env::temp_dir().join(format!("sketchup-alt-flows-rem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("house.skr");
+        platform
+            .unsaved
+            .borrow_mut()
+            .push_back(Answer::Ready(UnsavedChoice::Save));
+        platform
+            .paths
+            .borrow_mut()
+            .push_back(Answer::Ready(Some(path.clone())));
+        let mut editor = edited();
+        let mut f = flows();
+        let fx = run(&mut f, &mut editor, &platform, |f, env| {
+            f.settle_and(env, Then::NewModel)
+        });
+        assert!(fx.contains(&Effect::RememberFile(Some(path))), "{fx:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -891,7 +925,7 @@ mod tests {
         let fx = run(&mut f, &mut editor, &platform, |f, env| {
             f.answered(env, PlatformReply::Picked(Some(picked)))
         });
-        assert_eq!(fx, [Effect::ClearAutosave, Effect::RememberFile]);
+        assert_eq!(fx, [Effect::ClearAutosave, Effect::RememberFile(None)]);
         assert!(!editor.doc().is_modified());
         assert_eq!(editor.doc().scene().root().edges().count(), 1);
         assert_eq!(f.kept_name(), Some("house.skr"));

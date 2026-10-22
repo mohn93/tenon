@@ -1196,7 +1196,7 @@ impl State {
         for effect in effects {
             match effect {
                 Effect::ClearAutosave => self.clear_autosave(),
-                Effect::RememberFile => self.remember_file(),
+                Effect::RememberFile(path) => self.remember_path(path.as_deref()),
                 Effect::Quit => self.quit = true,
                 Effect::OpenRecovered(model) => self.open_recovered_now(&model),
                 Effect::ImportSheet(path) => {
@@ -1389,10 +1389,16 @@ impl State {
 
     /// Puts the model's file first in the recent files, and keeps that in the preferences.
     fn remember_file(&mut self) {
+        let path = self.editor.doc().path().map(Path::to_path_buf);
+        self.remember_path(path.as_deref());
+    }
+
+    /// Puts `path` first in the recent files, and keeps that in the preferences.
+    fn remember_path(&mut self, path: Option<&Path>) {
         if !self.features.recent {
             return;
         }
-        if let Some(path) = self.editor.doc().path() {
+        if let Some(path) = path {
             prefs::remember_recent(&mut self.prefs.recent, path);
             self.save_prefs();
             self.recent_shown = prefs::existing(&self.prefs.recent, prefs::CARD_RECENT);
@@ -3138,11 +3144,11 @@ impl ApplicationHandler<AppEvent> for App {
                 });
             }));
         }
-        let attrs = window_attributes();
-        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let Some(platform) = self.platform.take() else {
             return;
         };
+        let attrs = window_attributes();
+        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let session = self
             .session
             .take()

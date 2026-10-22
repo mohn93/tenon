@@ -157,16 +157,14 @@ fn source_of(file: &PrefsFile) -> &Path {
 pub fn read_text(file: &PrefsFile) -> Option<String> {
     let source = source_of(file);
     match read(source) {
-        Ok(Some(bytes)) => match String::from_utf8(bytes) {
-            Ok(text) => Some(text),
-            Err(_) => {
-                eprintln!(
-                    "warning: {} is not valid preferences; using the defaults",
-                    source.display()
-                );
-                None
+        Ok(Some(bytes)) => {
+            // Not valid: the warning names the file, as `load`'s does, and the defaults apply.
+            if serde_json::from_slice::<Prefs>(&bytes).is_err() {
+                parse(&bytes, &source.display().to_string());
+                return None;
             }
-        },
+            String::from_utf8(bytes).ok()
+        }
         Ok(None) => None,
         Err(e) => {
             unreadable(source, &e);
