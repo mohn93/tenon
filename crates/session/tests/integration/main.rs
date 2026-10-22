@@ -24,6 +24,7 @@ mod offset;
 mod outliner;
 mod perf;
 mod polygon;
+mod print;
 mod rotate;
 mod scale;
 mod scenes;

@@ -15,6 +15,7 @@ zip.workspace = true
 base64.workspace = true
 image.workspace = true
 skrifa.workspace = true
+miniz_oxide.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
