@@ -452,9 +452,9 @@ geometry is drawn whole and nothing is filled; with `fill` off only the cut edge
 Picking and inference ignore what an active plane cuts away: in each placement, a face is not
 picked, hovered, or snapped to (nor does it hide anything behind it) where the ray meets it on the
 cut-away side of any plane cutting that placement (its own mesh's active plane and its ancestors'),
-a vertex on that side is not an endpoint or box-selected, and an edge is not picked or snapped to
+a vertex on that side is not an endpoint, and an edge is not picked or snapped to
 where its nearest point lies there (an edge wholly cut away is not found at all; `pick` leaves such
-faces, edges and points out too). Faces on the plane are kept. With `cuts` off nothing is left out.
+faces, edges and points out too). Faces on the plane are kept. With `cuts` off nothing is left out, and with `planes` off section planes are not picked, hovered or box-selected.
 A section plane is picked by its outline (like a dimension), and a box selects it by its outline
 (crossing) or by all four corners (inside); a double-click selects it alone.
 

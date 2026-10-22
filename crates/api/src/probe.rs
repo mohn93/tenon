@@ -275,7 +275,9 @@ fn invalid(message: impl Into<String>) -> CommandError {
 
 /// Everything placed, seen from the open context.
 fn scenery(doc: &Document) -> Scenery<'_> {
-    Scenery::of(doc.scene(), doc.context()).expect("the open context exists")
+    Scenery::of(doc.scene(), doc.context())
+        .expect("the open context exists")
+        .section_display(doc.section_display)
 }
 
 /// `camera` (in root coordinates) carried into the open context's.

@@ -2105,3 +2105,78 @@ fn arrow_keys_lock_the_section_planes_normal_and_escape_unlocks() {
         "the new plane is the active one"
     );
 }
+
+#[test]
+fn section_cuts_off_lets_a_click_select_the_cut_away_half() {
+    let mut e = editor();
+    cube(&mut e);
+    // Keeps x <= 1: the half of the box beyond is cut away.
+    exec(
+        &mut e,
+        json!({"type": "add_section_plane", "point": [1, 0, 0], "normal": [-1, 0, 0]}),
+    );
+    tool(&mut e, "select");
+    let selected = |e: &mut Editor| {
+        ask(e, json!({"type": "selection"}))["ids"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let pick_faces = |e: &mut Editor| {
+        let r = ask(
+            e,
+            json!({"type": "pick", "ray": {"origin": [1.75, 1, 50], "direction": [0, 0, -1]}}),
+        );
+        r["hits"].as_array().map_or(0, |h| {
+            h.iter()
+                .filter(|x| x["id"].as_str().is_some_and(|i| i.starts_with('f')))
+                .count()
+        })
+    };
+    let near_away = json!([{"type": "click", "point": [1.75, 1, 1]}]);
+    input(&mut e, near_away.clone());
+    let kept_ids = selected(&mut e);
+    let cut_on = pick_faces(&mut e);
+    exec(&mut e, json!({"type": "select", "ids": []}));
+    exec(
+        &mut e,
+        json!({"type": "set_section_display", "cuts": false}),
+    );
+    input(&mut e, near_away);
+    let uncut_ids = selected(&mut e);
+    let cut_off = pick_faces(&mut e);
+    assert!(
+        cut_off > cut_on,
+        "pick sees more with cuts off: {cut_on} {cut_off}"
+    );
+    assert_ne!(
+        kept_ids, uncut_ids,
+        "the click reaches the cut-away top face"
+    );
+}
+
+#[test]
+fn the_section_plane_tool_places_a_plane_in_an_open_groups_coordinates() {
+    let mut e = editor();
+    cube(&mut e);
+    select_all(&mut e);
+    let all = ask(&mut e, json!({"type": "selection"}))["ids"].clone();
+    let g = exec(&mut e, json!({"type": "make_group", "ids": all}));
+    let group = created(&g, 'i')[0].clone();
+    exec(
+        &mut e,
+        json!({"type": "move", "ids": [group], "offset": [10, 0, 0]}),
+    );
+    exec(&mut e, json!({"type": "open_instance", "id": group}));
+    tool(&mut e, "section_plane");
+    // The group's own coordinates: its box is at x 0..2 inside.
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 1]}]));
+    assert_eq!(ran(&r), ["add_section_plane"], "{r}");
+    let placed = planes(&mut e);
+    assert_eq!(placed.len(), 1);
+    assert_eq!(placed[0]["active"], true);
+    assert!(near(&placed[0]["point"], [1.0, 1.0, 1.0]), "{}", placed[0]);
+    // It cuts the group only: the root has no plane.
+    exec(&mut e, json!({"type": "close_instance"}));
+    assert!(planes(&mut e).is_empty());
+}

@@ -743,3 +743,50 @@ fn a_plane_in_a_group_cuts_only_the_group() {
     assert!(face_under_in(&view, &c, px(&c, p(3.25, 0.5, 1.0))).is_some());
     assert!(edge_under_in(&view, &c, px(&c, p(0.5, -2.0, 0.0)), R).is_some());
 }
+
+#[test]
+fn with_planes_off_a_plane_is_not_picked_or_box_selected() {
+    let (s, _, id) = cut_scene();
+    let c = camera(DVec3::ZERO);
+    let shape = Scenery::of(&s, &[]).unwrap().sections()[0].2;
+    let on_outline = (shape.corners[0] + shape.corners[1]) * 0.5;
+    let display = |planes| session::SectionDisplay {
+        planes,
+        cuts: true,
+        fill: true,
+    };
+    let on = Scenery::of(&s, &[]).unwrap().section_display(display(true));
+    let off = Scenery::of(&s, &[])
+        .unwrap()
+        .section_display(display(false));
+    let pick_at =
+        |v: &Scenery| annotation_under_where(v, &c, px(&c, on_outline), R, |o| o == Owner::Open);
+    assert_eq!(pick_at(&on), Some((Owner::Open, EntityId::Section(id))));
+    assert_eq!(pick_at(&off), None);
+    let (a, b) = (
+        px(&c, shape.corners[0]) - DVec2::splat(5.0),
+        px(&c, shape.corners[0]) + DVec2::splat(5.0),
+    );
+    assert!(select_box(&on, &c, a, b, true, &[]).contains(&EntityId::Section(id)));
+    assert!(!select_box(&off, &c, a, b, true, &[]).contains(&EntityId::Section(id)));
+}
+
+#[test]
+fn a_box_touching_only_the_cut_away_half_of_a_sectioned_group_does_not_select_it() {
+    let (mut s, i) = scene();
+    let def = s.root().instance(i).unwrap().definition;
+    s.edit(MeshId::Definition(def), |m| {
+        m.add_section(kernel::SectionPlane::new(p(0.5, 0.0, 0.0), -DVec3::X), true)
+    })
+    .unwrap();
+    let c = camera(DVec3::ZERO);
+    let around = |q: DVec3| (px(&c, q) - DVec2::splat(2.0), px(&c, q) + DVec2::splat(2.0));
+    let (a, b) = around(p(4.0, 0.0, 1.0));
+    let cut = Scenery::of(&s, &[]).unwrap();
+    let whole = Scenery::of(&s, &[]).unwrap().cut(false);
+    let has = |v: &Scenery| select_box(v, &c, a, b, true, &[]).contains(&EntityId::Instance(i));
+    assert!(has(&whole), "uncut, the box touches the group");
+    assert!(!has(&cut), "cut, the group's kept half lies elsewhere");
+    let (a, b) = around(p(3.25, 0.0, 0.5));
+    assert!(select_box(&cut, &c, a, b, true, &[]).contains(&EntityId::Instance(i)));
+}

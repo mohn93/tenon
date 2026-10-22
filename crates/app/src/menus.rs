@@ -456,11 +456,14 @@ pub fn items(menus: &[Menu]) -> Vec<&Item> {
 }
 
 /// A stable id for the item: its action's Debug text. The lighting toggle's action flips
-/// between day and night, so it has one id for both.
+/// between day and night, so it has one id for both; so do the section toggles.
 #[cfg(any(target_os = "macos", test))]
 pub fn item_id(action: &UiAction) -> String {
     match action {
         UiAction::SetLighting(_) => "ToggleNightLighting".into(),
+        UiAction::SetSectionPlanes(_) => "ToggleSectionPlanes".into(),
+        UiAction::SetSectionCuts(_) => "ToggleSectionCuts".into(),
+        UiAction::SetSectionFill(_) => "ToggleSectionFill".into(),
         _ => format!("{action:?}"),
     }
 }

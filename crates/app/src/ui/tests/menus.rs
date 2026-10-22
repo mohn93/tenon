@@ -756,6 +756,11 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
         has_guides: true,
         flying: true,
         lighting,
+        section_display: SectionDisplay {
+            planes: false,
+            cuts: false,
+            fill: false,
+        },
         recent: vec!["/a/house.skr".into(), "/b/shed.skr".into()],
         ..Default::default()
     };

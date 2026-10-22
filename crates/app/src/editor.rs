@@ -2315,6 +2315,7 @@ fn scenery_in<'a>(layout: &'a Layout, doc: &'a Document) -> Scenery<'a> {
     Scenery::view(layout, doc.scene())
         .or_else(|| Scenery::of(doc.scene(), doc.context()))
         .expect("the open context exists")
+        .section_display(doc.section_display)
 }
 
 /// `scenery`, seen only within `slab` when there is one.

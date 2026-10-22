@@ -208,6 +208,25 @@ impl Part<'_> {
         self.cuts.iter().all(|c| c.keeps(p))
     }
 
+    /// The part of the segment `a`-`b` (in the open context's coordinates) that no plane cutting
+    /// the part cuts away; None when nothing of it is kept.
+    pub fn clip(&self, a: DVec3, b: DVec3) -> Option<[DVec3; 2]> {
+        let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+        for c in self.cuts {
+            let (da, db) = ((a - c.point).dot(c.normal), (b - c.point).dot(c.normal));
+            let tol = -1e-9;
+            if da < tol && db < tol {
+                return None;
+            }
+            if da < tol {
+                t0 = t0.max(da / (da - db));
+            } else if db < tol {
+                t1 = t1.min(da / (da - db));
+            }
+        }
+        (t0 <= t1).then(|| [a.lerp(b, t0), a.lerp(b, t1)])
+    }
+
     /// Whether some plane cutting the part cuts away all of the shape with these corner
     /// points (in the open context's coordinates; a segment's ends, a face's vertices): all lie
     /// on the cut-away side of it.
@@ -416,6 +435,8 @@ pub struct Scenery<'a> {
     slab: Option<Slab>,
     /// Whether the active section planes cut: what they cut away is not seen.
     cuts: bool,
+    /// Whether section planes are seen (picked, hovered, box-selected).
+    planes: bool,
 }
 
 /// The depths around a model point the cursor stands for: what lies in front of the point or
@@ -494,6 +515,7 @@ impl<'a> Scenery<'a> {
         ];
         Scenery {
             cuts: true,
+            planes: true,
             slab: None,
             models: vec![model],
             layout: Cow::Owned(Layout::new(
@@ -516,6 +538,7 @@ impl<'a> Scenery<'a> {
             layout: Cow::Owned(layout),
             slab: None,
             cuts: true,
+            planes: true,
         })
     }
 
@@ -528,6 +551,7 @@ impl<'a> Scenery<'a> {
             layout: Cow::Borrowed(layout),
             slab: None,
             cuts: true,
+            planes: true,
         })
     }
 
@@ -541,6 +565,14 @@ impl<'a> Scenery<'a> {
     /// (`session::SectionDisplay::cuts` off): what a plane cuts away is then seen like the rest.
     pub fn cut(mut self, cuts: bool) -> Self {
         self.cuts = cuts;
+        self
+    }
+
+    /// The same scenery seen as the section display says: `cuts` as [`Scenery::cut`], and
+    /// without `planes` no section plane is seen.
+    pub fn section_display(mut self, display: session::SectionDisplay) -> Self {
+        self.cuts = display.cuts;
+        self.planes = display.planes;
         self
     }
 
@@ -568,7 +600,11 @@ impl<'a> Scenery<'a> {
     /// with, placed in the open context's coordinates, with the index of the part it comes
     /// from (the plane's id is an `EntityId::Section` in that part's mesh).
     pub fn sections(&self) -> &[(usize, EntityId, SectionShape)] {
-        &self.layout.sections
+        if self.planes {
+            &self.layout.sections
+        } else {
+            &[]
+        }
     }
 
     /// The `k`th placed mesh.
@@ -629,6 +665,35 @@ impl<'a> Scenery<'a> {
     /// is not what is open).
     pub fn inside_instance(&self) -> bool {
         self.layout.parts.iter().any(|p| p.owner == Owner::Outside)
+    }
+
+    /// The box around what an instance of the open context places, in the open context's
+    /// coordinates, but for what the planes cutting its parts cut away (clipped edge by edge);
+    /// None when nothing is left.
+    pub fn kept_instance_box(&self, id: InstanceId) -> Option<[DVec3; 2]> {
+        let mut points = self
+            .parts()
+            .filter(|p| p.owner == Owner::Instance(id))
+            .flat_map(|p| {
+                let vertices = p
+                    .model
+                    .vertices()
+                    .filter(move |(v, _)| p.shows_vertex(*v))
+                    .map(move |(_, v)| p.place.transform_point3(v.pos))
+                    .filter(move |q| p.kept(*q));
+                let edges = p
+                    .model
+                    .edges()
+                    .filter(move |(e, _)| p.shows_edge(*e))
+                    .filter_map(move |(_, e)| {
+                        let at = |v| p.model.position(v).map(|q| p.place.transform_point3(q));
+                        p.clip(at(e.v[0])?, at(e.v[1])?)
+                    })
+                    .flatten();
+                vertices.chain(edges)
+            });
+        let first = points.next()?;
+        Some(points.fold([first, first], |[lo, hi], q| [lo.min(q), hi.max(q)]))
     }
 
     /// The box around everything an instance of the open context places, in the open

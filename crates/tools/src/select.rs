@@ -140,7 +140,11 @@ fn box_corners(scenery: &Scenery, id: EntityId) -> Option<[DVec3; 8]> {
     let EntityId::Instance(i) = id else {
         return None;
     };
-    let [lo, hi] = scenery.instance_box(i)?;
+    box_of(scenery.instance_box(i)?)
+}
+
+/// The corners of the box `lo..hi` (bit 0 picks x, bit 1 y, bit 2 z).
+fn box_of([lo, hi]: [DVec3; 2]) -> Option<[DVec3; 8]> {
     Some(std::array::from_fn(|k| {
         DVec3::new(
             if k & 1 == 0 { lo.x } else { hi.x },
@@ -273,12 +277,12 @@ pub fn select_box(
     // screen rectangle overlaps the selection box.
     for (id, _) in m.instances().filter(|(_, i)| scenery.shows(i.tag)) {
         let id = EntityId::Instance(id);
-        let Some(corners) = box_corners(scenery, id) else {
+        let EntityId::Instance(instance) = id else {
             continue;
         };
-        if cut.cuts_away(&corners) {
+        let Some(corners) = scenery.kept_instance_box(instance).and_then(box_of) else {
             continue;
-        }
+        };
         let Some(pts) = corners
             .iter()
             .map(|p| camera.project(*p))
