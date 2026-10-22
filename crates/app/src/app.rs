@@ -661,10 +661,11 @@ fn fly_move_key(key: PhysicalKey) -> Option<FlyKey> {
     })
 }
 
-/// Whether a command key is down: Cmd or Ctrl on macOS, Ctrl alone elsewhere, where Super is
-/// the desktop's own key and never runs a command.
+/// Whether a command key is down: Cmd or Ctrl on macOS and in a browser (where the page cannot
+/// tell Apple's computers apart from others, and Cmd must work on them), Ctrl alone elsewhere,
+/// where Super is the desktop's own key and never runs a command.
 fn command_held(os: paths::Os, super_key: bool, control_key: bool) -> bool {
-    control_key || (os == paths::Os::MacOs && super_key)
+    control_key || (matches!(os, paths::Os::MacOs | paths::Os::Web) && super_key)
 }
 
 /// Whether the key that has the menu bar's chords is down: Cmd on macOS, none elsewhere.
@@ -687,7 +688,7 @@ fn fly_shortcut(
     if os == paths::Os::MacOs {
         return super_key;
     }
-    control_key
+    (control_key || (os == paths::Os::Web && super_key))
         && letter
             .is_some_and(|l| shortcuts::window_command(l, shift, false, false, false).is_some())
 }
@@ -3307,6 +3308,11 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(s) = self.state.as_mut() else { return };
+        if matches!(event, WindowEvent::KeyboardInput { .. })
+            && let Some(held) = s.platform.event_modifiers()
+        {
+            s.modifiers = held;
+        }
         let egui_repaint = s.gui.on_event(&s.window, &event);
         if redraws_for_egui(&event, egui_repaint) {
             s.window.request_redraw();
@@ -3746,6 +3752,29 @@ mod tests {
         );
         assert!(is_modifier_key(&Key::Named(NamedKey::Control)));
         assert!(!is_modifier_key(&Key::Character("z".into())));
+    }
+
+    #[test]
+    fn in_a_browser_ctrl_and_cmd_both_run_chords() {
+        use crate::paths::Os;
+        assert!(command_held(Os::Web, false, true), "Ctrl");
+        assert!(command_held(Os::Web, true, false), "Cmd");
+        assert!(!command_held(Os::Web, false, false));
+        assert!(!menu_bar_held(Os::Web, true), "no native menu bar");
+        // No native menus: the key path takes the chord whichever key made it.
+        assert_eq!(
+            shortcuts::window_command('z', false, false, false, false),
+            Some(Bound::Undo)
+        );
+        assert!(
+            fly_shortcut(Os::Web, Some('s'), false, true, false),
+            "Cmd+S"
+        );
+        assert!(
+            fly_shortcut(Os::Web, Some('s'), false, false, true),
+            "Ctrl+S"
+        );
+        assert!(!fly_shortcut(Os::Web, Some('w'), false, false, true));
     }
 
     #[test]

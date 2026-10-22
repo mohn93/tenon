@@ -18,6 +18,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::Event;
 use winit::event_loop::EventLoopProxy;
+use winit::keyboard::ModifiersState;
 
 use crate::files;
 use crate::names::{self, Storage};
@@ -35,6 +36,8 @@ pub struct WebPlatform {
     clip: Rc<RefCell<Option<String>>>,
     /// Whether the open model has unsaved changes (`Platform::set_modified`).
     modified: Rc<Cell<bool>>,
+    /// The modifier keys of the key event being delivered (`watch_modifiers`).
+    held: Rc<Cell<ModifiersState>>,
     /// Reaches the window: late errors for its status line.
     proxy: EventLoopProxy<AppEvent>,
 }
@@ -45,7 +48,10 @@ impl WebPlatform {
         watch_clipboard(&clip, &proxy);
         let modified = Rc::new(Cell::new(false));
         guard_unload(&modified);
+        let held = Rc::new(Cell::new(ModifiersState::empty()));
+        watch_modifiers(&held);
         Self {
+            held,
             kept: Rc::default(),
             clip,
             modified,
@@ -57,6 +63,33 @@ impl WebPlatform {
 fn report(proxy: &EventLoopProxy<AppEvent>, text: &str) {
     log(text);
     let _ = proxy.send_event(AppEvent::Error(text.to_string()));
+}
+
+/// Keeps `held` as the modifier keys of each key event, read before winit sees the event: winit
+/// reports a modifier change after the key that came with it, so Ctrl+Z pressed as one event
+/// (and Cmd, whose key-up the browser never sends) would be read without its modifier.
+fn watch_modifiers(held: &Rc<Cell<ModifiersState>>) {
+    let note = {
+        let held = held.clone();
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
+            let mut state = ModifiersState::empty();
+            state.set(ModifiersState::SHIFT, event.shift_key());
+            state.set(ModifiersState::CONTROL, event.ctrl_key());
+            state.set(ModifiersState::ALT, event.alt_key());
+            state.set(ModifiersState::SUPER, event.meta_key());
+            held.set(state);
+        })
+    };
+    // In the capture phase, so before winit's listener on the canvas.
+    let document = files::document();
+    for name in ["keydown", "keyup"] {
+        let _ = document.add_event_listener_with_callback_and_bool(
+            name,
+            note.as_ref().unchecked_ref(),
+            true,
+        );
+    }
+    note.forget();
 }
 
 /// Asks the browser to confirm before the tab closes or reloads while the model has unsaved
@@ -214,6 +247,10 @@ impl Platform for WebPlatform {
         Box::new(WebClipboard {
             text: self.clip.clone(),
         })
+    }
+
+    fn event_modifiers(&self) -> Option<ModifiersState> {
+        Some(self.held.get())
     }
 
     fn set_modified(&self, modified: bool) {

@@ -28,12 +28,16 @@ pub enum Os {
     MacOs,
     Linux,
     Windows,
+    /// A browser tab, on whatever computer: it has Ctrl and, on Apple's, Cmd.
+    Web,
     Other,
 }
 
 impl Os {
     pub const fn current() -> Os {
-        if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "wasm32") {
+            Os::Web
+        } else if cfg!(target_os = "macos") {
             Os::MacOs
         } else if cfg!(target_os = "linux") {
             Os::Linux
@@ -84,7 +88,7 @@ fn resolve_as(os: Os, env: Env, temp: &Path, pid: u32, uid: Option<u32>) -> Opti
             }
         }
         // Windows was resolved above, without HOME.
-        Os::MacOs | Os::Windows | Os::Other => Paths {
+        Os::MacOs | Os::Windows | Os::Web | Os::Other => Paths {
             prefs: fallback.join("prefs.json"),
             recovery: fallback.join("recovery"),
             socket_dir,

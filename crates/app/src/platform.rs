@@ -208,6 +208,13 @@ pub trait Platform {
     /// The clipboard Cut, Copy and Paste use.
     fn clipboard(&self) -> Box<dyn Clipboard>;
 
+    /// The modifier keys held as the key event being delivered says it (a browser's events
+    /// carry them; winit reports the change only after the key). None: winit's own state
+    /// is right.
+    fn event_modifiers(&self) -> Option<winit::keyboard::ModifiersState> {
+        None
+    }
+
     /// Whether the open model has unsaved changes, told whenever a frame is drawn; a browser
     /// asks before the tab closes while it does.
     fn set_modified(&self, _modified: bool) {}
