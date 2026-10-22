@@ -203,9 +203,9 @@ fn add_segments(scene: &Scene, mesh: MeshId, to_world: DAffine3, out: &mut Vec<[
     }
 }
 
-/// The minimum corner of the box around the root's vertices, guides' anchors and instances
-/// (their definitions' boxes placed, or their positions when empty); the origin for an empty
-/// root.
+/// The minimum corner of the box around the root's vertices, guides' anchors, annotation points
+/// and instances (their definitions' boxes placed, or their positions when empty); the origin
+/// for an empty root.
 fn base_point(scene: &Scene) -> DVec3 {
     let root = scene.mesh(MeshId::Root).expect("a scene has a root");
     mesh_box(root, &definition_boxes(scene)).map_or(DVec3::ZERO, |[lo, _]| lo)
@@ -285,7 +285,8 @@ fn tally(scene: &Scene) -> Option<Tally> {
     Some(of(scene.mesh(MeshId::Root)?, &tallies))
 }
 
-/// The box around each definition's vertices, guides' anchors and placed instances' boxes,
+/// The box around each definition's vertices, guides' anchors, annotation points and placed
+/// instances' boxes,
 /// in its own coordinates (None when it holds none of these), worked out once per definition.
 /// Boxes of instances are the boxes around their definitions' boxes placed, as the kernel's
 /// `bounds` takes them.
@@ -301,8 +302,8 @@ pub(crate) fn definition_boxes(scene: &Scene) -> HashMap<DefinitionId, Option<[D
     boxes
 }
 
-/// The box around `m`'s vertices, guides' anchors and instances (by `boxes`, or their
-/// positions when empty).
+/// The box around `m`'s vertices, guides' anchors, annotation points and instances (by
+/// `boxes`, or their positions when empty).
 fn mesh_box(
     m: &kernel::Model,
     boxes: &HashMap<DefinitionId, Option<[DVec3; 2]>>,
