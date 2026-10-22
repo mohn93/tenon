@@ -435,9 +435,10 @@ answers `{"type": "section_display", "planes": true, "cuts": true, "fill": true}
 Drawing (the window and `render_view`): a plane is a square outline centred on its point in the
 plane, the larger of 1 m and 1.2 times the diagonal of its context's shown bounds, with four
 arrows, one from the middle of each side, pointing along the normal toward the kept side (about 30
-points long on screen). The active plane's outline is in the accent colour (the selection colour
-of the view style), inactive ones in the guide colour; selecting or hovering a plane colours it as
-it does a guide. Planes are drawn only with `planes` on, and not when their tag is hidden (a
+points long on screen). The active plane's outline is orange (`#f08c00`, whatever the theme; a
+faded orange when its mesh is outside the open group), inactive ones are in the guide colour;
+selecting or hovering a plane then colours it as it does a guide (orange first, then the
+selection, then the hover). Planes are drawn only with `planes` on, and not when their tag is hidden (a
 hidden plane still cuts). With `cuts` on, a placement is cut by the active plane of its own mesh
 and of every mesh it is placed in, each in world space: faces and edges are clipped to the kept
 side (triangles that straddle a plane are split), and a plane in a group cuts only that group.

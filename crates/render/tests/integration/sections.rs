@@ -335,3 +335,306 @@ fn a_plane_on_a_hidden_tag_is_not_drawn_but_still_cuts() {
     assert!(b.faces.iter().all(|v| v.pos[0] >= 1.0 - 1e-5));
     assert!(!b.cut_fill.is_empty());
 }
+
+/// A box in a group with a plane through it (in the group's coordinates), the group closed:
+/// the box is 2 x 1.5 x 1 at the origin, the plane keeps what `normal` points to.
+fn group_with_plane(point: [f64; 3], normal: [f64; 3]) -> (Document, EntityId) {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let ids: Vec<EntityId> = d
+        .model()
+        .faces()
+        .map(|(id, _)| EntityId::Face(id))
+        .chain(d.model().edges().map(|(id, _)| EntityId::Edge(id)))
+        .collect();
+    let out = run(&mut d, Command::MakeGroup { ids });
+    let group = *out
+        .changes
+        .created
+        .iter()
+        .find(|e| matches!(e, EntityId::Instance(_)))
+        .unwrap();
+    run(&mut d, Command::OpenInstance { id: group });
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point,
+            normal,
+            activate: None,
+        },
+    );
+    run(&mut d, Command::CloseInstance {});
+    (d, group)
+}
+
+/// Checks that the group's drawn faces are all on the kept side of the plane (given as its
+/// point and normal in the group's own coordinates, `to_local` mapping root to those) and that
+/// the fill lies in the plane with `area`.
+fn assert_cut_by(
+    d: &Document,
+    to_local: impl Fn(DVec3) -> DVec3,
+    point: DVec3,
+    normal: DVec3,
+    area: f64,
+) {
+    let b = base(d, SectionDisplay::default());
+    let local = |p: [f32; 3]| to_local(glam::Vec3::from(p).as_dvec3());
+    assert!(!b.faces.is_empty());
+    for v in &b.faces {
+        assert!(
+            (local(v.pos) - point).dot(normal) >= -1e-4,
+            "a face vertex on the cut-away side: {:?}",
+            v.pos
+        );
+    }
+    assert!(!b.cut_fill.is_empty(), "the cut is filled");
+    for v in &b.cut_fill {
+        assert!((local(v.pos) - point).dot(normal).abs() < 1e-4);
+    }
+    assert!(
+        (triangle_area(&b.cut_fill) - area).abs() < 1e-4,
+        "{}",
+        triangle_area(&b.cut_fill)
+    );
+}
+
+use glam::DVec3;
+
+#[test]
+fn a_plane_in_a_rotated_group_cuts_on_its_own_side() {
+    let (mut d, group) = group_with_plane([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        Command::Rotate {
+            ids: vec![group],
+            center: [0.0, 0.0, 0.0],
+            axis: Some([0.0, 0.0, 1.0]),
+            angle: 90.0,
+            copies: None,
+        },
+    );
+    // A quarter turn about z: local (x, y) is world (-y, x), so world (x, y) is local (y, -x).
+    assert_cut_by(
+        &d,
+        |p| DVec3::new(p.y, -p.x, p.z),
+        DVec3::new(1.0, 0.0, 0.0),
+        DVec3::X,
+        1.5,
+    );
+}
+
+#[test]
+fn a_tilted_plane_in_a_stretched_group_keeps_its_side() {
+    let n = DVec3::new(1.0, 0.0, 1.0).normalize();
+    let point = DVec3::new(1.0, 0.75, 0.5);
+    let (mut d, group) = group_with_plane(point.to_array(), n.to_array());
+    run(
+        &mut d,
+        Command::Scale {
+            ids: vec![group],
+            origin: [0.0, 0.0, 0.0],
+            factors: [3.0, 1.0, 1.0],
+        },
+    );
+    let b = base(&d, SectionDisplay::default());
+    // In the group's coordinates every face vertex is on the kept side and the fill is on the
+    // plane, whatever the stretch did to the plane's tilt in the world.
+    let local = |p: [f32; 3]| {
+        let p = glam::Vec3::from(p).as_dvec3();
+        DVec3::new(p.x / 3.0, p.y, p.z)
+    };
+    assert!(!b.faces.is_empty());
+    for v in &b.faces {
+        assert!((local(v.pos) - point).dot(n) >= -1e-4, "{:?}", v.pos);
+    }
+    assert!(!b.cut_fill.is_empty());
+    for v in &b.cut_fill {
+        assert!((local(v.pos) - point).dot(n).abs() < 1e-4);
+    }
+    // The tilted cut of a 2 x 1.5 x 1 box through (1, 0.75, 0.5): a 1.5 wide rectangle
+    // sqrt(2) long, stretched 3 along x only.
+    let expected = {
+        let (a, b) = (DVec3::new(0.5, 0.0, 1.0), DVec3::new(1.5, 0.0, 0.0));
+        let stretched = |p: DVec3| DVec3::new(3.0 * p.x, p.y, p.z);
+        stretched(a).distance(stretched(b)) * 1.5
+    };
+    assert!(
+        (triangle_area(&b.cut_fill) - expected).abs() < 1e-3,
+        "{}",
+        triangle_area(&b.cut_fill)
+    );
+}
+
+#[test]
+fn a_plane_in_a_mirrored_group_keeps_the_mirrored_side() {
+    let (mut d, group) = group_with_plane([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        Command::Scale {
+            ids: vec![group],
+            origin: [0.0, 0.0, 0.0],
+            factors: [-1.0, 1.0, 1.0],
+        },
+    );
+    // Local x is world -x: the kept half is the one at world x <= -1.
+    assert_cut_by(
+        &d,
+        |p| DVec3::new(-p.x, p.y, p.z),
+        DVec3::new(1.0, 0.0, 0.0),
+        DVec3::X,
+        1.5,
+    );
+    let b = base(&d, SectionDisplay::default());
+    assert!(b.faces.iter().all(|v| v.pos[0] <= -1.0 + 1e-4));
+}
+
+#[test]
+fn a_box_with_a_cavity_is_filled_with_a_hole() {
+    let mut d = doc();
+    let outer = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [4.0, 4.0, 0.0],
+            normal: None,
+        },
+    );
+    crate::golden::raise(&mut d, crate::golden::created_face(&outer), 4.0);
+    let inner = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [1.0, 1.0, 1.0],
+            opposite: [3.0, 3.0, 1.0],
+            normal: None,
+        },
+    );
+    crate::golden::raise(&mut d, crate::golden::created_face(&inner), 2.0);
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [0.0, 0.0, 2.0],
+            normal: [0.0, 0.0, 1.0],
+            activate: None,
+        },
+    );
+    let b = base(&d, SectionDisplay::default());
+    // The 4 x 4 square less the 2 x 2 hole.
+    assert!(
+        (triangle_area(&b.cut_fill) - 12.0).abs() < 1e-4,
+        "{}",
+        triangle_area(&b.cut_fill)
+    );
+    // Outlined twice over: 16 around, 8 around the hole.
+    assert!(
+        (length(&b.cut_edges) - 24.0).abs() < 1e-4,
+        "{}",
+        length(&b.cut_edges)
+    );
+}
+
+#[test]
+fn a_single_face_cut_shows_only_a_cut_edge() {
+    let mut d = doc();
+    run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [0.0, 0.0, 0.0],
+            opposite: [2.0, 2.0, 0.0],
+            normal: None,
+        },
+    );
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [1.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    let b = base(&d, SectionDisplay::default());
+    assert!(b.cut_fill.is_empty());
+    assert!(
+        (length(&b.cut_edges) - 2.0).abs() < 1e-4,
+        "{}",
+        length(&b.cut_edges)
+    );
+    assert!(b.faces.iter().all(|v| v.pos[0] >= 1.0 - 1e-5));
+}
+
+#[test]
+fn an_active_plane_is_orange_then_selected_then_hovered() {
+    use render::HoverLook;
+    use render::scene::SELECTED_EDGE_COLOR;
+    use render::sections::{ACTIVE_SECTION_COLOR, FADED_ACTIVE_SECTION_COLOR};
+
+    let Some(screen) = crate::headless::Offscreen::new() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let mut d = cut_box();
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [0.5, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: Some(false),
+        },
+    );
+    let ids: Vec<EntityId> = d
+        .model()
+        .sections()
+        .map(|(id, _)| EntityId::Section(id))
+        .collect();
+    let (active, inactive) = (ids[0], ids[1]);
+    assert_eq!(
+        d.model().active_section().map(EntityId::Section),
+        Some(active)
+    );
+    let mut r = screen.renderer();
+    r.set_scene(d.scene(), &[], &BTreeSet::new());
+    assert_eq!(
+        r.section_colors(),
+        [ACTIVE_SECTION_COLOR, render::guides::GUIDE_COLOR]
+    );
+    // Selecting recolors both the active and the inactive plane.
+    r.set_selection(&BTreeSet::from([active, inactive]));
+    assert_eq!(r.section_colors(), [SELECTED_EDGE_COLOR; 2]);
+    let hover = HoverLook {
+        face: [1.0; 3],
+        face_mix: 0.5,
+        edge: [0.9, 0.1, 0.9, 1.0],
+    };
+    r.set_hover(Some((active, hover)));
+    assert_eq!(r.section_colors(), [hover.edge, SELECTED_EDGE_COLOR]);
+    r.set_hover(None);
+    r.set_selection(&BTreeSet::new());
+    assert_eq!(
+        r.section_colors(),
+        [ACTIVE_SECTION_COLOR, render::guides::GUIDE_COLOR]
+    );
+    // Hovering without a selection: the hover wins over the orange.
+    r.set_hover(Some((active, hover)));
+    assert_eq!(r.section_colors()[0], hover.edge);
+
+    // A plane of the root seen from inside an open group is drawn faded.
+    let (mut g, group) = group_with_plane([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    run(&mut g, Command::OpenInstance { id: group });
+    run(&mut g, Command::DeactivateSection {});
+    run(&mut g, Command::CloseInstance {});
+    run(
+        &mut g,
+        Command::AddSectionPlane {
+            point: [5.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    run(&mut g, Command::OpenInstance { id: group });
+    let b = base(&g, SectionDisplay::default());
+    assert_eq!(b.sections.len(), 2);
+    assert!(
+        b.sections
+            .iter()
+            .any(|s| s.color == FADED_ACTIVE_SECTION_COLOR && s.active)
+    );
+}

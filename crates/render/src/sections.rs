@@ -14,6 +14,11 @@ use crate::grid::LineVertex;
 /// The fill of closed cuts: #3a3a3a, whatever the theme.
 pub const CUT_FILL_COLOR: [f32; 4] = [0.227, 0.227, 0.227, 1.0];
 
+/// The active plane's outline: orange #f08c00, whatever the theme.
+pub const ACTIVE_SECTION_COLOR: [f32; 4] = [0.941, 0.549, 0.0, 1.0];
+/// The active plane of a mesh outside the open instance, faded.
+pub const FADED_ACTIVE_SECTION_COLOR: [f32; 4] = [0.96, 0.80, 0.56, 1.0];
+
 /// How far a plane's arrows reach from its sides, in points.
 pub const SECTION_ARROW_PT: f64 = 3.0 * ARROW_PT;
 
@@ -26,9 +31,12 @@ const KEEP_TOL: f64 = 1e-9;
 pub struct SectionLook {
     pub shape: SectionShape,
     pub color: [f32; 4],
-    /// The plane is its context's active one, drawn in the style's accent.
+    /// The plane is its mesh's active one (drawn in orange, see `ACTIVE_SECTION_COLOR`).
     pub active: bool,
 }
+
+/// Twice the area below which a piece of a clipped triangle is dropped, in square meters.
+const MIN_AREA2: f64 = 1e-12;
 
 fn distance(plane: &SectionPlane, p: DVec3) -> f64 {
     (p - plane.point).dot(plane.normal)
@@ -46,11 +54,12 @@ pub fn clip_polygon<A: Copy>(
     for (k, &(p, a)) in poly.iter().enumerate() {
         let (q, b) = poly[(k + 1) % poly.len()];
         let (dp, dq) = (distance(plane, p), distance(plane, q));
-        let (kept_p, kept_q) = (dp >= -KEEP_TOL, dq >= -KEEP_TOL);
-        if kept_p {
+        if dp >= -KEEP_TOL {
             out.push((p, a));
         }
-        if kept_p != kept_q {
+        // A corner on the plane is kept as it is; only a side from clearly beyond it to
+        // clearly short of it is cut.
+        if (dp > KEEP_TOL && dq < -KEEP_TOL) || (dp < -KEEP_TOL && dq > KEEP_TOL) {
             let t = dp / (dp - dq);
             out.push((p.lerp(q, t), mix(a, b, t)));
         }
@@ -75,25 +84,42 @@ pub fn clip_triangle<A: Copy>(
             return Vec::new();
         }
     }
+    // Only a clipped polygon can have collapsed to a sliver.
+    let clipped = poly.len() != 3 || poly.iter().zip(&tri).any(|(a, b)| a.0 != b.0);
     (1..poly.len() - 1)
         .map(|k| [poly[0], poly[k], poly[k + 1]])
+        .filter(|t| !clipped || (t[1].0 - t[0].0).cross(t[2].0 - t[0].0).length() > MIN_AREA2)
         .collect()
 }
 
 /// The part of the segment a-b that every plane keeps.
 pub fn clip_segment(a: DVec3, b: DVec3, planes: &[SectionPlane]) -> Option<[DVec3; 2]> {
-    let (mut a, mut b) = (a, b);
+    let (mut p, mut q) = (a, b);
+    let mut clipped = false;
     for plane in planes {
-        let (da, db) = (distance(plane, a), distance(plane, b));
-        let (kept_a, kept_b) = (da >= -KEEP_TOL, db >= -KEEP_TOL);
-        match (kept_a, kept_b) {
+        let (dp, dq) = (distance(plane, p), distance(plane, q));
+        let (kept_p, kept_q) = (dp >= -KEEP_TOL, dq >= -KEEP_TOL);
+        match (kept_p, kept_q) {
             (true, true) => {}
             (false, false) => return None,
-            (true, false) => b = a.lerp(b, da / (da - db)),
-            (false, true) => a = a.lerp(b, da / (da - db)),
+            (true, false) => {
+                // Ending on the plane from the cut-away side leaves nothing but a point.
+                if dp <= KEEP_TOL {
+                    return None;
+                }
+                q = p.lerp(q, dp / (dp - dq));
+                clipped = true;
+            }
+            (false, true) => {
+                if dq <= KEEP_TOL {
+                    return None;
+                }
+                p = p.lerp(q, dp / (dp - dq));
+                clipped = true;
+            }
         }
     }
-    Some([a, b])
+    (!clipped || p.distance(q) > 1e-9).then_some([p, q])
 }
 
 /// What the planes of a placement cut out of its surface, in world coordinates.
@@ -235,7 +261,14 @@ mod tests {
         );
         let corner = tri([0.0, -1.0, -1.0]);
         let pieces = clip_triangle(corner, &[plane_x(0.0)], &mix);
-        assert!(pieces.iter().all(|t| area(t) < 1e-12), "{pieces:?}");
+        assert!(pieces.is_empty(), "{pieces:?}");
+        // One corner on the plane and the others kept: unchanged, no sliver added.
+        let apex = tri([0.0, 1.0, 1.0]);
+        assert_eq!(clip_triangle(apex, &[plane_x(0.0)], &mix), vec![apex]);
+        // A segment that ends on the plane from the cut-away side is gone, not a point.
+        let (a, b) = (DVec3::new(-1.0, 0.0, 0.0), DVec3::ZERO);
+        assert_eq!(clip_segment(a, b, &[plane_x(0.0)]), None);
+        assert_eq!(clip_segment(b, a, &[plane_x(0.0)]), None);
     }
 
     #[test]

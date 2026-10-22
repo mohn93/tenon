@@ -1116,3 +1116,51 @@ fn describe_batch_schema_accepts_references() {
     );
     assert!(d["schemas"]["BatchRef"].is_object());
 }
+
+#[test]
+fn render_view_honours_the_section_display_settings() {
+    let mut h = HeadlessHost::new();
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "add_section_plane", "point": [1, 0, 0], "normal": [1, 0, 0]}),
+    );
+    let top =
+        json!({"eye": [1, 1, 6], "target": [1, 1, 0], "up": [0, 1, 0], "projection": "parallel"});
+    let view = |h: &mut HeadlessHost| {
+        call(
+            h,
+            "render_view",
+            json!({"width": 64, "height": 48, "camera": top}),
+        )
+    };
+    let cut = view(&mut h);
+    if cut["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_section_display", "cuts": false}),
+    );
+    let whole = view(&mut h);
+    assert_ne!(
+        cut["result"]["png_base64"], whole["result"]["png_base64"],
+        "the cut half is missing only with cuts on"
+    );
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_section_display", "cuts": true}),
+    );
+    assert_eq!(
+        view(&mut h)["result"]["png_base64"],
+        cut["result"]["png_base64"]
+    );
+}

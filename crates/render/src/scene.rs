@@ -24,7 +24,10 @@ use crate::annotations::{ANNOTATION_COLOR, AnnotationLook, FADED_ANNOTATION_COLO
 use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
-use crate::sections::{CUT_FILL_COLOR, SectionLook, clip_segment, clip_triangle, cut_surface};
+use crate::sections::{
+    ACTIVE_SECTION_COLOR, CUT_FILL_COLOR, FADED_ACTIVE_SECTION_COLOR, SectionLook, clip_segment,
+    clip_triangle, cut_surface,
+};
 use crate::texture::layers;
 
 /// A face corner with its selection flag, as `scene_geometry` returns it.
@@ -523,6 +526,7 @@ pub fn scene_base_shown(
         color_by_tag,
         display: section,
         planes: Vec::new(),
+        sides: HashMap::new(),
         glows: HashMap::new(),
         path: Vec::new(),
         base: SceneBase {
@@ -776,6 +780,8 @@ struct Walk<'a> {
     /// The active section planes of the meshes from the root down to the one being walked, in
     /// root coordinates; empty unless cuts are on.
     planes: Vec<SectionPlane>,
+    /// The side of the square each mesh's section planes are drawn with.
+    sides: HashMap<MeshId, f64>,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
     /// glow for an instance's mesh, one per connected group of glowing faces for the root's.
     glows: HashMap<(MeshId, Option<MaterialId>), Vec<Glow>>,
@@ -824,6 +830,13 @@ impl Walk<'_> {
             self.planes.push(plane.transformed(t));
             pushed_plane = true;
         }
+        // The side of the squares this mesh's planes are drawn with, worked out once per mesh.
+        let side = (display.planes && model.sections().next().is_some()).then(|| {
+            *self
+                .sides
+                .entry(id)
+                .or_insert_with(|| SectionShape::side(scene.shown_bounds(id, &[])))
+        });
         let planes: Vec<SectionPlane> = self.planes.clone();
         let cutting = !planes.is_empty();
         // The placement's own surface in root coordinates, before any cut, for the cut outlines.
@@ -1043,25 +1056,24 @@ impl Walk<'_> {
                 color,
             });
         }
-        if display.planes {
-            let mut side = None;
+        if let Some(side) = side {
             for (sid, plane) in model.sections() {
                 if !scene.tag_shown(plane.tag()) {
                     continue;
                 }
-                let side =
-                    *side.get_or_insert_with(|| SectionShape::side(scene.shown_bounds(id, &[])));
                 if open {
                     base.spans.sections.push((sid, base.sections.len()));
                 }
+                let active = model.active_section() == Some(sid);
                 base.sections.push(SectionLook {
                     shape: SectionShape::new(plane, side).transformed(t),
-                    color: if inside {
-                        GUIDE_COLOR
-                    } else {
-                        FADED_GUIDE_COLOR
+                    color: match (active, inside) {
+                        (true, true) => ACTIVE_SECTION_COLOR,
+                        (true, false) => FADED_ACTIVE_SECTION_COLOR,
+                        (false, true) => GUIDE_COLOR,
+                        (false, false) => FADED_GUIDE_COLOR,
                     },
-                    active: inside && model.active_section() == Some(sid),
+                    active,
                 });
             }
         }

@@ -1229,10 +1229,6 @@ impl Renderer {
             &self.section_flags,
             self.style.selected_edge,
         );
-        // The active plane is drawn in the accent unless the selection already is.
-        for s in self.sections.iter_mut().filter(|s| s.active) {
-            s.color = self.style.selected_edge;
-        }
         if let Some((_, look)) = self.hover {
             for s in &mut self.sections[self.hover_ranges.sections.clone()] {
                 s.color = look.edge;
@@ -1244,6 +1240,12 @@ impl Renderer {
                 a.color = look.edge;
             }
         }
+    }
+
+    /// The colors the section planes are drawn in, in the order of `scene::SceneBase::sections`:
+    /// orange when active, the guide colors otherwise, then the selection's, then the hover's.
+    pub fn section_colors(&self) -> Vec<[f32; 4]> {
+        self.sections.iter().map(|s| s.color).collect()
     }
 
     /// Draws `triangles` (three vertices each) from the next frame, blended over the scene and

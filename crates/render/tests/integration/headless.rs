@@ -9,7 +9,7 @@ use session::{Camera, Lighting};
 const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
 const H: u32 = 256;
 
-fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(crate) fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -95,7 +95,7 @@ fn render_scene_with(
 }
 
 /// A W x H texture to render into and read back.
-struct Offscreen {
+pub(crate) struct Offscreen {
     device: wgpu::Device,
     queue: wgpu::Queue,
     texture: wgpu::Texture,
@@ -106,7 +106,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl Offscreen {
     /// None without a GPU.
-    fn new() -> Option<Self> {
+    pub(crate) fn new() -> Option<Self> {
         let (device, queue) = gpu()?;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
@@ -131,7 +131,7 @@ impl Offscreen {
         })
     }
 
-    fn renderer(&self) -> Renderer {
+    pub(crate) fn renderer(&self) -> Renderer {
         Renderer::new(&self.device, &self.queue, FORMAT)
     }
 
