@@ -626,3 +626,169 @@ fn save_to_library_takes_batch_references_to_an_earlier_commands_ids() {
     ];
     assert!(d.execute_batch(commands, true).is_err());
 }
+
+/// The world positions of the geometry of the instance `info` (an `entities` row of the open
+/// context), through the context's transform.
+fn world_geometry(d: &Document, info: &Value) -> Vec<glam::DVec3> {
+    let t: Vec<f64> = serde_json::from_value(info["transform"].clone()).unwrap();
+    let local = glam::DAffine3::from_mat3_translation(
+        glam::DMat3::from_cols_slice(&t[..9]),
+        glam::DVec3::from_slice(&t[9..]),
+    );
+    let to_world = d.context_transform() * local;
+    let definition = d
+        .model()
+        .instances()
+        .find(|(i, _)| EntityId::Instance(*i).to_string() == info["id"].as_str().unwrap());
+    let definition = definition.unwrap().1.definition;
+    d.scene()
+        .definition(definition)
+        .unwrap()
+        .mesh
+        .vertices()
+        .map(|(_, v)| to_world.transform_point3(v.pos))
+        .collect()
+}
+
+fn box_of(points: &[glam::DVec3]) -> (glam::DVec3, glam::DVec3) {
+    let lo = points.iter().copied().reduce(glam::DVec3::min).unwrap();
+    let hi = points.iter().copied().reduce(glam::DVec3::max).unwrap();
+    (lo, hi)
+}
+
+#[test]
+fn inserting_inside_a_turned_scaled_group_keeps_world_orientation_and_size() {
+    let dir = folder("turned-context");
+    let mut d = doc();
+    let ids = rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let group = instance_of(&ok(&mut d, json!({"type": "make_group", "ids": ids})));
+    ok(
+        &mut d,
+        json!({"type": "rotate", "ids": [group], "center": [0, 0, 0], "angle": 30}),
+    );
+    ok(
+        &mut d,
+        json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [2, 1, 1]}),
+    );
+    ok(
+        &mut d,
+        json!({"type": "move", "ids": [group], "offset": [3, -2, 1]}),
+    );
+    ok(&mut d, json!({"type": "open_instance", "id": group}));
+    let inner = rectangle(&mut d, [5.0, 5.0, 0.0], [6.0, 6.0, 0.0]);
+    let part = instance_of(&ok(
+        &mut d,
+        json!({"type": "make_component", "ids": inner, "name": "Tile"}),
+    ));
+    let file = dir.join("tile.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&file), "kind": "component", "item": part}),
+    );
+    let (lo, hi) = box_of(&world_geometry(&d, &instance_info(&d, &part)));
+    let want = hi - lo;
+    let context = d.context_transform();
+    for at in [None, Some([0.5, 0.25, 0.0])] {
+        let mut c = json!({"type": "insert_library_item", "path": p(&file)});
+        let point = at.map_or(context.translation, |a| {
+            context.transform_point3(glam::DVec3::from(a))
+        });
+        if let Some(a) = at {
+            c["at"] = json!(a);
+        }
+        let out = ok(&mut d, c);
+        let made = instance_info(&d, &instance_of(&out));
+        let (mlo, mhi) = box_of(&world_geometry(&d, &made));
+        for k in 0..3 {
+            assert!(((mhi - mlo)[k] - want[k]).abs() < 1e-9, "{at:?} {made}");
+            assert!((mlo[k] - point[k]).abs() < 1e-9, "{at:?}: {mlo} vs {point}");
+        }
+    }
+}
+
+#[test]
+fn a_big_library_entry_is_ignored_and_a_file_with_too_many_entries_is_marked() {
+    use std::io::{Read, Write};
+    let dir = folder("entries");
+    let mut d = doc();
+    rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    let good = dir.join("good.skr");
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&good), "kind": "model", "name": "Named"}),
+    );
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&good).unwrap()).unwrap();
+    let mut entries = Vec::new();
+    for i in 0..zip.len() {
+        let mut e = zip.by_index(i).unwrap();
+        let mut b = Vec::new();
+        e.read_to_end(&mut b).unwrap();
+        entries.push((e.name().unwrap().to_string(), b));
+    }
+    let write = |path: &Path, entries: &[(String, Vec<u8>)]| {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        for (n, b) in entries {
+            z.start_file(n.as_str(), zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(b).unwrap();
+        }
+        z.finish().unwrap();
+    };
+    let big = dir.join("big.skr");
+    let mut padded = entries.clone();
+    for (n, b) in &mut padded {
+        if n == "library.json" {
+            b.extend(vec![b' '; 20 * 1024]);
+        }
+    }
+    write(&big, &padded);
+    let many = dir.join("many.skr");
+    let mut crowded: Vec<_> = entries
+        .iter()
+        .filter(|(n, _)| n != "library.json")
+        .cloned()
+        .collect();
+    for k in 0..10_001 {
+        crowded.push((format!("extra-{k}"), Vec::new()));
+    }
+    write(&many, &crowded);
+    let listed = list(&dir);
+    let rows: Vec<(String, bool)> = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["name"].as_str().unwrap().to_string(),
+                i.get("error").is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("big".to_string(), false),
+            ("many".to_string(), true),
+            ("Named".to_string(), false)
+        ]
+    );
+    assert_eq!(listed["items"][0]["kind"], "model");
+    // The oversized entry does not stop it being inserted as a model.
+    let mut other = doc();
+    ok(
+        &mut other,
+        json!({"type": "insert_library_item", "path": p(&big)}),
+    );
+}
+
+#[test]
+fn the_skr_extension_is_matched_ignoring_case_when_saving_and_listing() {
+    let dir = folder("case");
+    let mut d = doc();
+    rectangle(&mut d, [0.0; 3], [1.0, 1.0, 0.0]);
+    ok(
+        &mut d,
+        json!({"type": "save_to_library", "path": p(&dir.join("Big.SKR")), "kind": "model"}),
+    );
+    assert_eq!(list(&dir)["items"][0]["name"], "Big");
+}

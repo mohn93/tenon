@@ -137,18 +137,26 @@ pub(crate) fn write(
     replace_file(path, &bytes, access)
 }
 
-/// The entry `name` of the `.skr` file at `path` (at most `limit` bytes), or None when the
-/// archive has no such entry. Reads the archive's directory and that entry only; fails when
-/// the file is not an archive holding a document.
+/// The most entries a `.skr` file's archive may hold for [`read_entry`] to look into it.
+const MAX_LISTED_ENTRIES: usize = 10_000;
+
+/// The entry `name` of the `.skr` file at `path`, or None when the archive has no such entry
+/// or it is over `limit` bytes. Reads the archive's directory and that entry only; fails when
+/// the file is not an archive holding a document, or holds more than 10,000 entries.
 pub(crate) fn read_entry(path: &Path, name: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|_| "not a sketchup-alt file".to_string())?;
+    if zip.len() > MAX_LISTED_ENTRIES {
+        return Err(format!(
+            "the file holds more than {MAX_LISTED_ENTRIES} entries"
+        ));
+    }
     if zip.by_name(ENTRY).is_err() {
         return Err("not a sketchup-alt file".into());
     }
     match zip.by_name(name) {
-        Ok(entry) => read_limited(entry, limit, name).map(Some),
-        Err(_) => Ok(None),
+        Ok(entry) if entry.size() <= limit => Ok(read_limited(entry, limit, name).ok()),
+        _ => Ok(None),
     }
 }
 

@@ -181,7 +181,7 @@ pub(crate) fn encode_info(kind: LibraryKind, name: &str) -> Result<Vec<u8>, Comm
     .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
 }
 
-fn is_skr(name: &str) -> bool {
+pub(crate) fn is_skr(name: &str) -> bool {
     name.len() > ".skr".len()
         && name
             .get(name.len() - ".skr".len()..)

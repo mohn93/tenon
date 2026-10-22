@@ -32,7 +32,7 @@ impl Document {
         let target = Path::new(path);
         super::files::check_nul(target)?;
         let file_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if file_name.len() <= 4 || !file_name.to_lowercase().ends_with(".skr") {
+        if !library::is_skr(file_name) {
             return Err(invalid(format!(
                 "{path} is not a library file: it must be named <name>.skr"
             )));
@@ -156,13 +156,12 @@ impl Document {
             return self.insert_material(&item.scene);
         }
         let clip = clip::from_scene(item.scene, new_token())?;
-        let placement = match at {
-            Some(at) => DAffine3::from_translation(DVec3::from(at) - clip.base),
-            None => {
-                let context = self.context_transform();
-                context.inverse() * DAffine3::from_translation(context.translation - clip.base)
-            }
-        };
+        // World orientation and size are kept: the item's world box minimum lands at the world
+        // point of `at` (a point of the open context), or of the context's origin.
+        let context = self.context_transform();
+        let point = at.map_or(DVec3::ZERO, DVec3::from);
+        let placement = context.inverse()
+            * DAffine3::from_translation(context.transform_point3(point) - clip.base);
         self.paste_clip(clip, placement, false)
     }
 
