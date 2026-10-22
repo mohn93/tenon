@@ -281,8 +281,8 @@ pub fn list(folder: &Path) -> Result<LibraryListing, CommandError> {
 }
 
 /// Reads the item at `path` with every check opening a `.skr` file makes: a regular file of
-/// at most [`MAX_ITEM_BYTES`]; a component or model also passes the clip caps (nesting depth,
-/// expanded instances, placed faces), so nothing walking its placements can run away.
+/// at most [`MAX_ITEM_BYTES`]; every item also passes the clip caps (nesting depth, expanded
+/// instances, placed faces), so nothing walking its placements can run away.
 pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
     let named = path.display().to_string();
     let file_error = |e: String| CommandError::new(ErrorKind::File, format!("{named}: {e}"));
@@ -305,10 +305,10 @@ pub fn read_item(path: &Path) -> Result<LibraryContent, CommandError> {
         .unwrap_or("item.skr");
     let (kind, name) = describe(path, file_name).map_err(file_error)?;
     let opened = file::read(path).map_err(file_error)?;
-    if kind != LibraryKind::Material {
-        crate::clip::check_item_caps(&opened.scene)
-            .map_err(|e| CommandError::new(e.kind, format!("{named}: {}", e.message)))?;
-    }
+    // Every kind passes the caps: a material item places nothing, so it always passes, and a
+    // file whose library.json only claims to be a material cannot slip past them.
+    crate::clip::check_item_caps(&opened.scene)
+        .map_err(|e| CommandError::new(e.kind, format!("{named}: {}", e.message)))?;
     Ok(LibraryContent {
         kind,
         name,
