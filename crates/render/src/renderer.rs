@@ -40,7 +40,17 @@ const EDGE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![
 
 /// The limits the renderer asks of a device: the defaults, with room for a cube shadow map per
 /// shadowed light (six array layers each) where the adapter has it.
+///
+/// On the web, a GL (WebGL2) adapter gets `downlevel_webgl2_defaults` as the base instead, since
+/// the full defaults exceed what WebGL2 offers.
 pub fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    #[cfg(target_arch = "wasm32")]
+    let defaults = if adapter.get_info().backend == wgpu::Backend::Gl {
+        wgpu::Limits::downlevel_webgl2_defaults()
+    } else {
+        wgpu::Limits::default()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let defaults = wgpu::Limits::default();
     let wanted = (6 * MAX_SHADOWS) as u32;
     let layers = wanted.min(adapter.limits().max_texture_array_layers);
@@ -64,19 +74,36 @@ fn scene_shader(device: &wgpu::Device, shadows: bool) -> wgpu::ShaderModule {
     })
 }
 
+/// True when the adapter supports cube-map array textures, which light shadows need. On the web
+/// (no blocking) the app decides with this and builds the renderer with
+/// [`Renderer::without_shadows`] when it is false; natively `Renderer::new` validates the shader
+/// instead, which catches the same devices.
+pub fn supports_shadows(adapter: &wgpu::Adapter) -> bool {
+    adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(wgpu::DownlevelFlags::CUBE_ARRAY_TEXTURES)
+}
+
 /// The scene shader with shadow lookups and how many lights may cast shadows, or None when the
 /// device cannot have them: it allows no cube-map array or rejects the shader (devices without
-/// cube-map arrays do).
+/// cube-map arrays do). On wasm the shader is not validated here (that would block): callers
+/// check [`supports_shadows`] first.
 fn shadowed_shader(device: &wgpu::Device) -> Option<(wgpu::ShaderModule, usize)> {
     let max = (device.limits().max_texture_array_layers as usize / 6).min(MAX_SHADOWS);
     if max == 0 {
         return None;
     }
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let shader = scene_shader(device, true);
-    pollster::block_on(scope.pop())
-        .is_none()
-        .then_some((shader, max))
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let shader = scene_shader(device, true);
+        pollster::block_on(scope.pop())
+            .is_none()
+            .then_some((shader, max))
+    }
+    #[cfg(target_arch = "wasm32")]
+    Some((scene_shader(device, true), max))
 }
 
 /// Camera data shared by every pipeline (matches `Uniforms` in scene.wgsl).

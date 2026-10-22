@@ -522,7 +522,7 @@ mod tests {
         for i in 0..50_000 {
             text += &format!("newmtl m{i}\nKd 0.5 0.5 0.5\n");
         }
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         assert_eq!(read_mtl(text.as_bytes()).len(), 50_000);
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }

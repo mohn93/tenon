@@ -13,6 +13,17 @@ use crate::import::{ImportReport, MAX_IMPORT_BYTES};
 use crate::skp_export;
 use crate::sniff::{self, Kind};
 
+/// What [`Document::export_bytes`] makes.
+#[derive(Clone, Debug)]
+pub struct ExportedBytes {
+    /// The exported file's bytes.
+    pub bytes: Vec<u8>,
+    /// The files an OBJ names beside it, by file name: its material library (`<stem>.mtl`) and
+    /// the texture images the library names. Empty for the other formats.
+    pub side_files: Vec<(String, Vec<u8>)>,
+    pub report: ExportReport,
+}
+
 impl Document {
     /// Writes the model, view and lighting as a `.skr` file at `path`, leaving the document's
     /// own file and its unsaved state as they are (a recovery copy). Only the user may read
@@ -86,6 +97,15 @@ impl Document {
             return self.open_skp(path).map(Some);
         }
         let opened = file::read(Path::new(path)).map_err(|e| file_error(path, e))?;
+        self.apply_opened(opened);
+        self.path = Some(PathBuf::from(path));
+        self.library_info = crate::library::info_of(Path::new(path));
+        Ok(None)
+    }
+
+    /// Replaces the model, view, lighting and units with those of an opened `.skr` file. A view
+    /// that cannot be used opens as the default view. The file's path is for the caller to set.
+    fn apply_opened(&mut self, opened: file::Opened) {
         let c = opened.camera;
         let camera = self
             .camera_for(c.eye, c.target, Some(c.fov_y_deg), c.up, Some(c.projection))
@@ -99,9 +119,58 @@ impl Document {
             cuts: c.section_cuts,
             fill: c.section_fill,
         };
-        self.path = Some(PathBuf::from(path));
-        self.library_info = crate::library::info_of(Path::new(path));
+    }
+
+    /// Opens a file given as bytes, as `open` does a path (this is the web's open, where there
+    /// are no paths): a `.skr` file replaces the model, view, lighting and units, a SketchUp
+    /// file (by its extension or its header) opens as a new model never saved, with its import
+    /// report. `name` is the file's name, for messages and the extension. Refuses with
+    /// `unsaved_changes` unless `discard`. The model has no path afterwards: save it with
+    /// [`Document::save_bytes`]. Nothing changes on failure.
+    pub fn open_bytes(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        discard: bool,
+    ) -> Result<Option<ImportReport>, CommandError> {
+        self.check_unsaved(discard)?;
+        check_nul(Path::new(name))?;
+        let skp = Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("skp"))
+            || sniff::is_skp_bytes(bytes);
+        if skp {
+            if bytes.len() as u64 > MAX_IMPORT_BYTES {
+                return Err(CommandError::new(
+                    ErrorKind::File,
+                    format!("{name}: the file is over {MAX_IMPORT_BYTES} bytes"),
+                ));
+            }
+            let report = self.open_skp_bytes(name, bytes.to_vec())?;
+            self.imported_from = None;
+            return Ok(Some(report));
+        }
+        let opened = file::read_slice(bytes).map_err(|e| file_error(name, e))?;
+        self.apply_opened(opened);
+        self.path = None;
+        self.library_info = None;
         Ok(None)
+    }
+
+    /// The model, view, lighting and units as the bytes of a `.skr` file, as `save` writes
+    /// them, and marks the model as saved (no unsaved changes). The model's own path, if any,
+    /// is left as it is: the caller decides where the bytes go.
+    pub fn save_bytes(&mut self) -> Result<Vec<u8>, CommandError> {
+        let bytes = file::encode(
+            &self.scene,
+            &self.camera,
+            self.view_look(),
+            &self.info_entries(),
+        )
+        .map_err(|e| file_error("the model", e))?;
+        self.imported_from = None;
+        self.clean_revision = self.revision;
+        Ok(bytes)
     }
 
     /// Replaces the model, view and lighting with those of the `.skr` copy at `path` (a
@@ -137,6 +206,14 @@ impl Document {
     fn open_skp(&mut self, path: &str) -> Result<ImportReport, CommandError> {
         let bytes = super::import::read_limited(Path::new(path), MAX_IMPORT_BYTES)
             .map_err(|e| file_error(path, e))?;
+        let report = self.open_skp_bytes(path, bytes)?;
+        self.imported_from = Some(PathBuf::from(path));
+        Ok(report)
+    }
+
+    /// [`Document::open_skp`] for the file's bytes; `name` is for messages.
+    fn open_skp_bytes(&mut self, name: &str, bytes: Vec<u8>) -> Result<ImportReport, CommandError> {
+        let path = name;
         // Built aside, so a file that fails leaves the open model as it is.
         let mut fresh = Document::new(self.camera.viewport);
         let built = fresh.build_skp(path, bytes, 1.0, |scene, tree| {
@@ -155,7 +232,6 @@ impl Document {
         self.section_display = SectionDisplay::default();
         self.path = None;
         self.library_info = None;
-        self.imported_from = Some(PathBuf::from(path));
         Ok(report)
     }
 
@@ -210,26 +286,7 @@ impl Document {
                 "give a format, or a path ending in .obj, .stl, .glb, .gltf, .skp or .svg",
             ));
         };
-        if let Some(n) = scale {
-            if format != ExportFormat::Svg {
-                return Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    "a scale applies to SVG exports only",
-                ));
-            }
-            if !(n.is_finite() && n > 0.0) {
-                return Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    "the scale must be a positive number (1:scale)",
-                ));
-            }
-            if !self.camera.is_parallel() {
-                return Err(CommandError::new(
-                    ErrorKind::InvalidInput,
-                    "Switch to parallel projection to export at scale",
-                ));
-            }
-        }
+        self.check_export_scale(format, scale)?;
         let target = Path::new(path);
         check_nul(target)?;
         if target
@@ -270,24 +327,12 @@ impl Document {
         if format == ExportFormat::Svg {
             return self.export_svg(target, overwrite, refuse_links, scale);
         }
-        let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
-        if triangles.is_empty() {
-            let message = if skipped_faces > 0 {
-                format!("nothing to export: {skipped_faces} faces could not be triangulated")
-            } else if self.scene.hides_faces() {
-                "nothing to export: no face is shown (hidden tags hide the rest)".to_string()
-            } else {
-                "nothing to export: the model has no faces".to_string()
-            };
-            return Err(CommandError::new(ErrorKind::InvalidInput, message));
-        }
         // An OBJ with painted faces names a material library beside it: same name, `.mtl`.
         let mtl_path = target.with_extension("mtl");
         let mtl_name = mtl_path
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let encoded = export::encode(&self.scene, &triangles, format, &mtl_name)
-            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
+        let (encoded, report) = self.encode_triangles(format, &mtl_name)?;
         if encoded.mtl.is_some() {
             // On a case-blind file system "x.MTL" is the library's own path.
             let same = |a: &Path, b: &Path| {
@@ -345,12 +390,113 @@ impl Document {
         }
         file::replace_file(target, &encoded.bytes, Access::Default)
             .map_err(|e| file_error(path, e))?;
-        Ok(ExportReport {
+        Ok(report)
+    }
+
+    /// The scale checks of an export: a scale is for SVG in a parallel view, positive.
+    fn check_export_scale(
+        &self,
+        format: ExportFormat,
+        scale: Option<f64>,
+    ) -> Result<(), CommandError> {
+        let Some(n) = scale else {
+            return Ok(());
+        };
+        if format != ExportFormat::Svg {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "a scale applies to SVG exports only",
+            ));
+        }
+        if !(n.is_finite() && n > 0.0) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "the scale must be a positive number (1:scale)",
+            ));
+        }
+        if !self.camera.is_parallel() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "Switch to parallel projection to export at scale",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Every face of the model as triangles encoded as an OBJ, STL or glTF (`mtl_name` is the
+    /// material library an OBJ names), with the report. `invalid_input` when there is nothing
+    /// to write.
+    fn encode_triangles(
+        &self,
+        format: ExportFormat,
+        mtl_name: &str,
+    ) -> Result<(export::Encoded, ExportReport), CommandError> {
+        let (triangles, skipped_faces) = self.scene.triangles_and_skipped();
+        if triangles.is_empty() {
+            let message = if skipped_faces > 0 {
+                format!("nothing to export: {skipped_faces} faces could not be triangulated")
+            } else if self.scene.hides_faces() {
+                "nothing to export: no face is shown (hidden tags hide the rest)".to_string()
+            } else {
+                "nothing to export: the model has no faces".to_string()
+            };
+            return Err(CommandError::new(ErrorKind::InvalidInput, message));
+        }
+        let encoded = export::encode(&self.scene, &triangles, format, mtl_name)
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
+        let report = ExportReport {
             triangles: triangles.len(),
             skipped_faces,
             warnings: export::annotation_warnings(&self.scene),
             ..ExportReport::default()
-        })
+        };
+        Ok((encoded, report))
+    }
+
+    /// Exports the model in `format` as bytes, as `export` writes a file (this is the web's
+    /// export, where there are no paths). `stem` is the file name without extension, which an
+    /// OBJ with painted faces uses to name its material library (`<stem>.mtl`). `scale` is for
+    /// SVG as in `export`. The result holds the file's bytes, the files an OBJ names beside it
+    /// (its `.mtl` and the texture images) and the report.
+    pub fn export_bytes(
+        &self,
+        format: ExportFormat,
+        stem: &str,
+        scale: Option<f64>,
+    ) -> Result<ExportedBytes, CommandError> {
+        self.check_export_scale(format, scale)?;
+        match format {
+            ExportFormat::Skp => {
+                let (bytes, report) = skp_bytes(&self.scene)?;
+                Ok(ExportedBytes {
+                    bytes,
+                    side_files: Vec::new(),
+                    report,
+                })
+            }
+            ExportFormat::Svg => {
+                let (bytes, report) = self.svg_bytes(scale)?;
+                Ok(ExportedBytes {
+                    bytes,
+                    side_files: Vec::new(),
+                    report,
+                })
+            }
+            _ => {
+                let (encoded, report) = self.encode_triangles(format, &format!("{stem}.mtl"))?;
+                let side_files = encoded
+                    .mtl
+                    .map(|mtl| (format!("{stem}.mtl"), mtl))
+                    .into_iter()
+                    .chain(encoded.images)
+                    .collect();
+                Ok(ExportedBytes {
+                    bytes: encoded.bytes,
+                    side_files,
+                    report,
+                })
+            }
+        }
     }
 
     /// Checks that `path` may be written with a PDF the way an export is: not a `.skr`, not the
@@ -430,6 +576,14 @@ impl Document {
         if !overwrite && !sniff::replaceable(target, Kind::Svg) {
             return Err(sniff::refusal(target, Kind::Svg));
         }
+        let (bytes, report) = self.svg_bytes(scale)?;
+        file::replace_file(target, &bytes, Access::Default)
+            .map_err(|e| file_error(&target.display().to_string(), e))?;
+        Ok(report)
+    }
+
+    /// The current view as an SVG line drawing, with its report.
+    fn svg_bytes(&self, scale: Option<f64>) -> Result<(Vec<u8>, ExportReport), CommandError> {
         let camera = &self.camera;
         let drawing = crate::drawing::line_drawing(self, camera, camera.viewport)?;
         if drawing.is_empty() {
@@ -441,13 +595,12 @@ impl Document {
         // Millimetres on paper per pixel of the view: a pixel is `pixel_size` meters of the
         // model in a parallel view.
         let mm_per_px = scale.map(|n| camera.pixel_size(camera.target) * 1000.0 / n);
-        let bytes = crate::svg::to_svg(&drawing, mm_per_px);
-        file::replace_file(target, bytes.as_bytes(), Access::Default)
-            .map_err(|e| file_error(&target.display().to_string(), e))?;
-        Ok(ExportReport {
+        let bytes = crate::svg::to_svg(&drawing, mm_per_px).into_bytes();
+        let report = ExportReport {
             lines: drawing.lines.len() + drawing.cut_lines.len(),
             ..ExportReport::default()
-        })
+        };
+        Ok((bytes, report))
     }
 
     /// Swaps in another model: history, selection and the open context start over, and event
@@ -503,7 +656,7 @@ fn export_skp(
     overwrite: bool,
     refuse_links: bool,
 ) -> Result<ExportReport, CommandError> {
-    let (bytes, stats) = skp_export::encode_skp(scene)?;
+    let (bytes, report) = skp_bytes(scene)?;
     if refuse_links {
         check_links(std::iter::once(target))?;
     }
@@ -512,17 +665,26 @@ fn export_skp(
     }
     file::replace_file(target, &bytes, Access::Default)
         .map_err(|e| file_error(&target.display().to_string(), e))?;
-    Ok(ExportReport {
-        definitions: stats.definitions,
-        instances: stats.instances,
-        faces: stats.faces,
-        edges: stats.edges,
-        guides: stats.guides,
-        materials: stats.materials,
-        tags: stats.tags,
-        warnings: stats.warnings,
-        ..ExportReport::default()
-    })
+    Ok(report)
+}
+
+/// The whole scene as the bytes of a SketchUp file, with the report.
+fn skp_bytes(scene: &Scene) -> Result<(Vec<u8>, ExportReport), CommandError> {
+    let (bytes, stats) = skp_export::encode_skp(scene)?;
+    Ok((
+        bytes,
+        ExportReport {
+            definitions: stats.definitions,
+            instances: stats.instances,
+            faces: stats.faces,
+            edges: stats.edges,
+            guides: stats.guides,
+            materials: stats.materials,
+            tags: stats.tags,
+            warnings: stats.warnings,
+            ..ExportReport::default()
+        },
+    ))
 }
 
 /// Refuses the first of `paths` that is a symbolic link (on Windows any reparse point, such as

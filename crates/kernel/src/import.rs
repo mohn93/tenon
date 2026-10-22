@@ -874,7 +874,7 @@ mod tests {
         // 81 x 81 cells, a cell open wherever both coordinates are odd: 40 x 40 holes.
         let (p, tris) = sheet(81, |x, y| x % 2 == 1 && y % 2 == 1);
         let list: Vec<&[usize]> = tris.iter().map(|t| &t[..]).collect();
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         let (s, report) = import(&p, &list, true);
         let took = start.elapsed();
         assert!(took.as_secs() < 10, "{took:?}");

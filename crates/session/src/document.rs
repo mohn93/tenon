@@ -42,7 +42,8 @@ mod tags;
 mod text3d;
 
 pub use annotations::{dimension_label, dimension_value, note_label};
-use import::ImportOptions;
+pub use files::ExportedBytes;
+pub use import::ImportOptions;
 pub use sections::SectionDisplay;
 
 /// Largest coordinate magnitude (meters) accepted from commands.
@@ -98,6 +99,8 @@ pub struct Document {
     library_info: Option<Vec<u8>>,
     /// The revision the model had when it was last opened, saved or started.
     clean_revision: u64,
+    /// The bytes [`Document::import_bytes`] hands the `import` edit it runs, in place of a file.
+    staged_import: Option<Vec<u8>>,
     /// What the last `import` edit made, until its outcome takes it.
     import_report: Option<ImportReport>,
     /// What the last soften edit did, until its outcome takes it.
@@ -140,6 +143,7 @@ impl Document {
             imported_from: None,
             library_info: None,
             clean_revision: 0,
+            staged_import: None,
             import_report: None,
             soften_report: None,
             positioned: None,
@@ -248,6 +252,32 @@ impl Document {
             .cloned()
             .collect();
         (events, truncated)
+    }
+
+    /// Imports an OBJ, STL or SketchUp file given as bytes, as the `import` command does a path
+    /// (this is the web's import, where there are no paths): one undo step, the new group,
+    /// component or geometry selected, the outcome's `import` saying what was made. `name` is the
+    /// file's name: its extension gives the format unless `options.format` does, and its stem
+    /// names the group or component. An OBJ's material libraries are not read (there is no
+    /// folder to find them in), so its materials the model lacks are not made.
+    pub fn import_bytes(
+        &mut self,
+        name: &str,
+        bytes: Vec<u8>,
+        options: &ImportOptions,
+    ) -> Result<Outcome, CommandError> {
+        self.staged_import = Some(bytes);
+        let outcome = self.execute(Command::Import {
+            path: name.to_string(),
+            format: options.format,
+            place: options.place,
+            scale: options.scale,
+            up: options.up,
+            merge_coplanar: options.merge_coplanar,
+            library_roots: None,
+        });
+        self.staged_import = None;
+        outcome
     }
 
     /// Runs one command. Each modeling command is one undo step; camera commands are not recorded.
@@ -779,17 +809,24 @@ impl Document {
                 up,
                 merge_coplanar,
                 library_roots,
-            } => self.import_changes(
-                path,
-                &ImportOptions {
-                    format: *format,
-                    place: *place,
-                    scale: *scale,
-                    up: *up,
-                    merge_coplanar: *merge_coplanar,
-                    library_roots: library_roots.clone(),
-                },
-            ),
+            } => {
+                let source = self
+                    .staged_import
+                    .take()
+                    .map_or(import::Source::Path, import::Source::Bytes);
+                self.import_changes(
+                    path,
+                    &ImportOptions {
+                        format: *format,
+                        place: *place,
+                        scale: *scale,
+                        up: *up,
+                        merge_coplanar: *merge_coplanar,
+                        library_roots: library_roots.clone(),
+                    },
+                    source,
+                )
+            }
             Command::Paste { clip, at } => self.paste_changes(clip, *at),
             Command::InsertLibraryItem { path, at } => self.insert_library_changes(path, *at),
             Command::New { .. }

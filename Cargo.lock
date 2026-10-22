@@ -263,6 +263,7 @@ dependencies = [
  "serde_json",
  "session",
  "tools",
+ "web-time",
  "windows-sys 0.61.2",
 ]
 
@@ -1778,6 +1779,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -3112,6 +3114,7 @@ dependencies = [
  "skp",
  "skpwrite",
  "skrifa",
+ "web-time",
  "windows-sys 0.61.2",
  "zip",
 ]

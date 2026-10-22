@@ -43,14 +43,31 @@ pub(super) struct BuiltSkp {
     tags_and_scenes: SceneChange,
 }
 
-/// Options of `Command::Import` besides the path.
-pub(crate) struct ImportOptions {
+/// Options of `Command::Import` besides the path; the same defaults as the command.
+#[derive(Clone, Debug, Default)]
+pub struct ImportOptions {
+    /// The file's format; by default the one the name's extension says, else SketchUp for
+    /// bytes with SketchUp's header.
     pub format: Option<ImportFormat>,
+    /// What the import makes: a group (default), a component or loose geometry.
     pub place: ImportAs,
+    /// Meters per file unit (default 1).
     pub scale: Option<f64>,
+    /// The file's up axis (OBJ and STL).
     pub up: Option<UpAxis>,
+    /// Merge neighbouring coplanar faces with one material (default true).
     pub merge_coplanar: Option<bool>,
+    /// Under `--api-root`, the folders an OBJ's material libraries may be read from. Not used
+    /// by [`Document::import_bytes`], which reads no libraries.
     pub library_roots: Option<Vec<PathBuf>>,
+}
+
+/// Where an import's bytes come from.
+pub(super) enum Source {
+    /// Read from the path (the command's own).
+    Path,
+    /// Given in memory under the path's name: no file is read, and no material library beside it.
+    Bytes(Vec<u8>),
 }
 
 impl Document {
@@ -60,6 +77,7 @@ impl Document {
         &mut self,
         path: &str,
         o: &ImportOptions,
+        source: Source,
     ) -> Result<SceneChange, CommandError> {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         let file = Path::new(path);
@@ -70,9 +88,14 @@ impl Document {
         {
             return Err(invalid("a .skr file is a model: use open, not import"));
         }
+        let from_bytes = matches!(source, Source::Bytes(_));
+        let sniffed = match &source {
+            Source::Path => sniff::is_skp(file),
+            Source::Bytes(b) => sniff::is_skp_bytes(b),
+        };
         let format = match o.format.or_else(|| ImportFormat::from_path(file)) {
             Some(format) => format,
-            None if sniff::is_skp(file) => ImportFormat::Skp,
+            None if sniffed => ImportFormat::Skp,
             None => {
                 return Err(invalid(
                     "give a format, or a path ending in .obj, .stl or .skp",
@@ -84,7 +107,15 @@ impl Document {
             return Err(invalid("scale must be a positive, finite number"));
         }
         let file_error = |m: String| CommandError::new(ErrorKind::File, format!("{path}: {m}"));
-        let bytes = read_limited(file, MAX_IMPORT_BYTES).map_err(file_error)?;
+        let bytes = match source {
+            Source::Path => read_limited(file, MAX_IMPORT_BYTES).map_err(file_error)?,
+            Source::Bytes(b) if b.len() as u64 > MAX_IMPORT_BYTES => {
+                return Err(file_error(format!(
+                    "the file is over {MAX_IMPORT_BYTES} bytes"
+                )));
+            }
+            Source::Bytes(b) => b,
+        };
         let mut read = match format {
             ImportFormat::Obj => read_obj(&bytes),
             ImportFormat::Stl => read_stl(&bytes),
@@ -107,7 +138,7 @@ impl Document {
         }
 
         let (materials, added) = self
-            .import_materials(file, &read, o.library_roots.as_deref())
+            .import_materials(file, &read, o.library_roots.as_deref(), from_bytes)
             .map_err(file_error)?;
         let polygon_count = read.polygons.len();
         let polygons: Vec<MeshPolygon> = std::mem::take(&mut read.polygons)
@@ -360,6 +391,7 @@ impl Document {
         obj: &Path,
         read: &ReadMesh,
         roots: Option<&[PathBuf]>,
+        from_bytes: bool,
     ) -> Result<(BTreeMap<String, MaterialId>, AddedMaterials), String> {
         let used: BTreeSet<&String> = read
             .polygons
@@ -368,7 +400,8 @@ impl Document {
             .filter(|m| m.as_str() != "default")
             .collect();
         let mut colors: HashMap<String, [u8; 3]> = HashMap::new();
-        if !used.is_empty() {
+        // Bytes have no folder to find a library in.
+        if !used.is_empty() && !from_bytes {
             let dir = obj.parent().unwrap_or(Path::new(""));
             let mut tried: HashSet<&String> = HashSet::new();
             for library in read

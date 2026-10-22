@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+web-time.workspace = true
 glam = { workspace = true, features = ["serde"] }
 serde.workspace = true
 schemars.workspace = true

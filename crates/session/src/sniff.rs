@@ -174,6 +174,11 @@ fn skp_magic() -> Vec<u8> {
     magic
 }
 
+/// True when `bytes` start as a SketchUp file does.
+pub(crate) fn is_skp_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(&skp_magic())
+}
+
 /// True when the regular file at `path` starts as a SketchUp file does.
 pub(crate) fn is_skp(path: &Path) -> bool {
     let magic = skp_magic();

@@ -44,10 +44,10 @@ pub use command::{
     SelectMode, TextureSource,
 };
 pub use document::{
-    Document, MAX_COORDINATE, MAX_COPIES, SectionDisplay, check_coordinates, dimension_label,
-    dimension_value, note_label, unit_vector,
+    Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES, SectionDisplay,
+    check_coordinates, dimension_label, dimension_value, note_label, unit_vector,
 };
-pub use export::ExportReport;
+pub use export::{ExportFormat, ExportReport};
 pub use import::{
     ImportAs, ImportFormat, ImportReport, ImportUnits, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS, MAX_IMPORT_POLYGONS, UpAxis,

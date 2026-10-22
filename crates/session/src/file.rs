@@ -134,8 +134,19 @@ pub(crate) fn write(
     access: Access,
     extra: &[(&str, &[u8])],
 ) -> Result<(), String> {
-    let bytes = write_bytes(scene, camera, look, ENTRY, extra)?;
+    let bytes = encode(scene, camera, look, extra)?;
     replace_file(path, &bytes, access)
+}
+
+/// The bytes [`write`] puts in a file: the `.skr` archive of the model, camera, lighting and
+/// coloring with the `extra` entries. What the web's save hands out as a download.
+pub(crate) fn encode(
+    scene: &Scene,
+    camera: &Camera,
+    look: ViewLook,
+    extra: &[(&str, &[u8])],
+) -> Result<Vec<u8>, String> {
+    write_bytes(scene, camera, look, ENTRY, extra)
 }
 
 /// The most entries a `.skr` file's archive may hold for [`read_entry`] to look into it.
@@ -375,6 +386,12 @@ pub(crate) struct Opened {
 pub(crate) fn read(path: &Path) -> Result<Opened, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let (opened, _) = read_archive(file, ENTRY, &[])?;
+    Ok(opened)
+}
+
+/// Reads the bytes of a file written by [`write`], with the same checks as [`read`].
+pub(crate) fn read_slice(bytes: &[u8]) -> Result<Opened, String> {
+    let (opened, _) = read_archive(std::io::Cursor::new(bytes), ENTRY, &[])?;
     Ok(opened)
 }
 

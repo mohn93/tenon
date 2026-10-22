@@ -8,7 +8,8 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use kernel::EntityId;
 use serde_json::{Value, json};
@@ -54,8 +55,10 @@ impl Writers {
 }
 
 /// Held by a transport's writer thread while it runs.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Writing(Arc<Writers>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Writing {
     fn drop(&mut self) {
         self.0.lock().running -= 1;
@@ -92,6 +95,7 @@ impl Inbox {
     }
 
     /// Counts a writer thread as running until the returned guard is dropped.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn writing(&self) -> Writing {
         self.writers.lock().running += 1;
         Writing(self.writers.clone())

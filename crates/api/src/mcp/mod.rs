@@ -2,6 +2,7 @@
 //! [`Backend`] that answers the API's own methods (a host in this process, or the app over its
 //! socket). Transport-free: [`serve_mcp`] reads and writes newline-delimited JSON.
 
+#[cfg(not(target_arch = "wasm32"))]
 mod socket;
 mod tools;
 
@@ -12,6 +13,7 @@ use serde_json::{Value, json};
 use crate::dispatch::{Host, call};
 use crate::protocol::{RpcError, codes, failure, parse_value, success};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use socket::SocketBackend;
 
 /// The MCP versions this server speaks, newest first. A client asking for another gets the

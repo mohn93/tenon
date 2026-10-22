@@ -3,6 +3,7 @@
 
 mod annotations;
 mod batch_refs;
+mod bytes;
 mod camera;
 mod circle;
 mod clip;

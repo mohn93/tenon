@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+web-time.workspace = true
 kernel = { path = "../kernel" }
 skp = { path = "../skp" }
 skpwrite = { path = "../skpwrite" }

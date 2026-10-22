@@ -12,6 +12,7 @@ mod probe;
 mod protocol;
 mod roots;
 pub mod schema;
+#[cfg(not(target_arch = "wasm32"))]
 mod transport;
 #[cfg(windows)]
 mod windows;
@@ -32,4 +33,5 @@ pub use probe::{
 };
 pub use protocol::{MAX_LINE_BYTES, RpcError, codes};
 pub use roots::ApiRoots;
+#[cfg(not(target_arch = "wasm32"))]
 pub use transport::{Endpoint, connect, listen, serve_stdio, serve_stream};

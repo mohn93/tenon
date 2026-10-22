@@ -18,7 +18,15 @@ pub struct Snapshotter {
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl Snapshotter {
+    /// Creates its own GPU device. None when no adapter is available, and always None on the web
+    /// (creating a device there is asynchronous; captures are not supported on the web).
+    #[cfg(target_arch = "wasm32")]
+    pub fn new_headless() -> Option<Self> {
+        None
+    }
+
     /// Creates its own GPU device. None when no adapter is available.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_headless() -> Option<Self> {
         let instance = wgpu::Instance::default();
         let adapter =
@@ -157,6 +165,24 @@ impl Snapshotter {
             size,
         );
         self.queue.submit([encoder.finish()]);
+        // Reading the pixels back blocks until the GPU is done, which a browser cannot do.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (&buffer, padded_row, row, height);
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.read_back(&buffer, padded_row, row, height)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_back(
+        &self,
+        buffer: &wgpu::Buffer,
+        padded_row: u32,
+        row: u32,
+        height: u32,
+    ) -> Option<Vec<u8>> {
         let (tx, rx) = std::sync::mpsc::channel();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
