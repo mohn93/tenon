@@ -787,8 +787,10 @@ fn a_plane_through_the_step_of_an_l_shape_fills_the_material_it_keeps() {
     // A 4 x 4 slab with a 2 x 4 block on half of it.
     let mut tris = box_tris(DVec3::ZERO, p(4.0, 4.0, 1.0));
     tris.extend(box_tris(p(0.0, 0.0, 1.0), p(2.0, 4.0, 2.0)));
-    let (_, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
+    let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
     assert!((area - 8.0).abs() < 1e-9, "{area}");
+    assert_eq!(r.closed.len(), 1, "{r:?}");
+    assert_eq!(r.open.len(), 1, "the slab's top beside the block: {r:?}");
     let (r, area) = fill_of(&tris, p(0.0, 0.0, 1.0), -DVec3::Z);
     assert!(r.open.is_empty(), "{r:?}");
     assert!((area - 16.0).abs() < 1e-9, "{area}");
@@ -823,4 +825,79 @@ fn two_regions_touching_at_a_point_are_two_fills() {
     assert_eq!(r.closed.len(), 2, "{r:?}");
     assert!(r.closed.iter().all(|g| g.len() == 1 && g[0].len() == 4));
     assert!((area - 2.0).abs() < 1e-9, "{area}");
+}
+
+#[test]
+fn a_cut_away_box_touching_the_plane_with_an_edge_gives_that_edge() {
+    let tris = box_tris(DVec3::ZERO, DVec3::ONE);
+    let n = -p(1.0, 1.0, 0.0).normalize();
+    let r = section_loops(&tris, DVec3::ZERO, n);
+    assert!(r.closed.is_empty(), "{r:?}");
+    assert_eq!(r.open.len(), 1, "{r:?}");
+    let mut ends = r.open[0].clone();
+    ends.sort_by(|a, b| a.z.total_cmp(&b.z));
+    assert_eq!(ends.len(), 2);
+    assert!(ends[0].distance(DVec3::ZERO) < 1e-9 && ends[1].distance(DVec3::Z) < 1e-9);
+}
+
+#[test]
+fn stacked_boxes_sharing_a_face_cut_vertically_fill_both() {
+    // Two 2 x 2 x 1 boxes with the face they share once, as the lower box's top.
+    let mut tris = box_tris(DVec3::ZERO, p(2.0, 2.0, 1.0));
+    let upper = box_tris(p(0.0, 0.0, 1.0), p(2.0, 2.0, 2.0));
+    tris.extend(upper.into_iter().filter(|t| !t.iter().all(|q| q.z == 1.0)));
+    let (r, area) = fill_of(&tris, p(1.0, 0.0, 0.0), DVec3::X);
+    assert_eq!(r.open.len(), 0, "{r:?}");
+    assert!((area - 4.0).abs() < 1e-9, "{area}");
+}
+
+#[test]
+fn a_partition_inside_a_box_does_not_split_the_fill() {
+    // A 2 x 2 x 4 box with a face across it at z = 2, facing up.
+    let mut tris = box_tris(DVec3::ZERO, p(2.0, 2.0, 4.0));
+    tris.push([p(0.0, 0.0, 2.0), p(2.0, 0.0, 2.0), p(2.0, 2.0, 2.0)]);
+    tris.push([p(0.0, 0.0, 2.0), p(2.0, 2.0, 2.0), p(0.0, 2.0, 2.0)]);
+    let (r, area) = fill_of(&tris, p(1.0, 0.0, 0.0), DVec3::X);
+    assert_eq!(r.open.len(), 0, "{r:?}");
+    assert!((area - 8.0).abs() < 1e-9, "{area}");
+}
+
+/// `count` separate walls on a grid, as one soup of triangles.
+fn wall_grid(count: usize) -> Vec<[DVec3; 3]> {
+    let side = (count as f64).sqrt().ceil() as usize;
+    (0..count)
+        .flat_map(|k| {
+            let (x, y) = ((k % side) as f64 * 3.0, (k / side) as f64 * 1.0);
+            box_tris(p(x, y, 0.0), p(x + 2.5, y + 0.2, 2.5))
+        })
+        .collect()
+}
+
+fn time_cut(walls: usize) -> std::time::Duration {
+    let tris = wall_grid(walls);
+    let start = std::time::Instant::now();
+    let r = section_loops(&tris, p(0.0, 0.0, 1.0), DVec3::Z);
+    let took = start.elapsed();
+    assert_eq!((r.closed.len(), r.open.len()), (walls, 0));
+    took
+}
+
+#[test]
+fn a_cut_through_many_walls_takes_a_moment() {
+    // Debug builds are slow; the bound only catches a return to cost growing with
+    // regions times triangles.
+    let took = time_cut(840);
+    assert!(took.as_secs_f64() < 5.0, "{took:?}");
+}
+
+#[test]
+#[ignore = "timing; run with --release -- --ignored --nocapture"]
+fn cut_timings_on_large_meshes() {
+    for walls in [840, 1860, 4140] {
+        println!(
+            "{walls} walls ({} triangles): {:?}",
+            walls * 12,
+            time_cut(walls)
+        );
+    }
 }

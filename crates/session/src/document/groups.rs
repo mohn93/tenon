@@ -35,7 +35,7 @@ impl Document {
         if parts.edges.is_empty() && parts.faces.is_empty() && parts.instances.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "guides and annotations alone cannot be grouped, nor can section planes: include an edge, face or instance",
+                "Guides, annotations and section planes alone cannot be grouped: include an edge, face or instance",
             )
             .with_ids(ids.to_vec()));
         }

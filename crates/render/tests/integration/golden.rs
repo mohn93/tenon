@@ -907,7 +907,12 @@ fn golden_positioned_textures() {
 }
 
 /// A material glowing at `emission`.
-fn add_lamp_material(doc: &mut Document, name: &str, color: [u8; 3], emission: f32) -> MaterialId {
+pub(crate) fn add_lamp_material(
+    doc: &mut Document,
+    name: &str,
+    color: [u8; 3],
+    emission: f32,
+) -> MaterialId {
     let outcome = run(
         doc,
         Command::AddMaterial {

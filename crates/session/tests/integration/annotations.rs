@@ -879,7 +879,10 @@ fn annotations_group_into_the_definition_and_come_out_when_exploded() {
     let (kind, message, _) =
         run(&mut d, json!({"type": "make_group", "ids": [screen]})).unwrap_err();
     assert_eq!(kind, ErrorKind::InvalidInput);
-    assert!(message.contains("annotations alone"), "{message}");
+    assert!(
+        message.contains("section planes alone cannot be grouped"),
+        "{message}"
+    );
 
     let out = run(&mut d, json!({"type": "explode", "ids": [instance]})).unwrap();
     let dims = created(&out, 'r');

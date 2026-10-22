@@ -168,6 +168,45 @@ fn placed_box(place: DAffine3, [lo, hi]: [DVec3; 2]) -> [DVec3; 2] {
     [a - pad, b + pad]
 }
 
+/// What one of a part's planes fills: the closed regions of its cut (each an outline then its
+/// holes), in the open context's coordinates.
+#[derive(Clone, Debug)]
+struct PlaneFill {
+    /// The plane's place among the part's cutting planes.
+    plane: usize,
+    regions: Vec<Vec<Vec<DVec3>>>,
+}
+
+impl PlaneFill {
+    /// Whether `p`, a point of the plane, lies in a region.
+    fn holds(&self, plane: &SectionPlane, p: DVec3) -> bool {
+        let (u, v) = kernel::geom::Plane {
+            normal: plane.normal,
+            d: 0.0,
+        }
+        .basis();
+        let at = |q: DVec3| DVec2::new((q - p).dot(u), (q - p).dot(v));
+        self.regions.iter().any(|rings| {
+            // Even-odd across the outline and its holes, the point being the origin.
+            let crossings: usize = rings
+                .iter()
+                .map(|ring| {
+                    let pts: Vec<DVec2> = ring.iter().map(|q| at(*q)).collect();
+                    (0..pts.len())
+                        .filter(|i| {
+                            let (a, b) = (pts[*i], pts[(i + 1) % pts.len()]);
+                            (a.y > 0.0) != (b.y > 0.0)
+                                && 0.0 < a.x + (0.0 - a.y) / (b.y - a.y) * (b.x - a.x)
+                        })
+                        .count()
+                        % 2
+                })
+                .sum();
+            crossings % 2 == 1
+        })
+    }
+}
+
 /// One placed mesh: the mesh, plus where and whose it is (its `Placed`, through `Deref`).
 #[derive(Clone, Copy, Debug)]
 pub struct Part<'s> {
@@ -227,13 +266,41 @@ impl Part<'_> {
         (t0 <= t1).then(|| [a.lerp(b, t0), a.lerp(b, t1)])
     }
 
-    /// Whether some plane cutting the part cuts away all of the shape with these corner
-    /// points (in the open context's coordinates; a segment's ends, a face's vertices): all lie
-    /// on the cut-away side of it.
+    /// The part of the polygon with these corners (in the open context's coordinates) that no
+    /// plane cutting the part cuts away: its corners, fewer than three when nothing is left.
+    pub fn clip_polygon(&self, corners: &[DVec3]) -> Vec<DVec3> {
+        let mut poly = corners.to_vec();
+        for c in self.cuts {
+            let d = |p: DVec3| (p - c.point).dot(c.normal);
+            let mut out = Vec::with_capacity(poly.len() + 1);
+            for (i, &p) in poly.iter().enumerate() {
+                let q = poly[(i + 1) % poly.len()];
+                let (dp, dq) = (d(p), d(q));
+                if dp >= -1e-9 {
+                    out.push(p);
+                }
+                if (dp > 1e-9 && dq < -1e-9) || (dp < -1e-9 && dq > 1e-9) {
+                    out.push(p.lerp(q, dp / (dp - dq)));
+                }
+            }
+            poly = out;
+            if poly.len() < 3 {
+                return Vec::new();
+            }
+        }
+        poly
+    }
+
+    /// Whether the planes cut away all of the shape with these corner points (in the open
+    /// context's coordinates; a segment's ends, a face's vertices): each corner is cut away by
+    /// some plane, as the picture clips one plane after another.
     pub fn cuts_away(&self, points: &[DVec3]) -> bool {
-        self.cuts
-            .iter()
-            .any(|c| points.iter().all(|p| !c.keeps(*p)))
+        !self.cuts.is_empty() && points.iter().all(|p| !self.kept(*p))
+    }
+
+    /// Whether some plane cuts the part.
+    pub fn is_cut(&self) -> bool {
+        !self.cuts.is_empty()
     }
 }
 
@@ -267,11 +334,15 @@ pub struct Layout {
     annotations: Vec<(usize, EntityId, AnnotationShape)>,
     /// Every section plane of every part not on a hidden tag, as the outline square the plane
     /// is drawn with, placed in the open context's coordinates, with the index of the part it
-    /// comes from, in part and id order.
+    /// comes from, in part and id order; at most `session::MAX_SECTION_OUTLINES`.
     sections: Vec<(usize, EntityId, SectionShape)>,
     /// The active section planes cutting each part (its own mesh's and its ancestors'), in the
     /// open context's coordinates.
     cuts: Vec<Vec<SectionPlane>>,
+    /// Whether any part is cut by a plane (cuts on or off).
+    cutting: bool,
+    /// What each part's planes fill, once asked for (see `Scenery::fill_hit`).
+    fills: Vec<OnceLock<Vec<PlaneFill>>>,
     /// The instances of the open context, by id, each with its box once asked for.
     boxes: Vec<(InstanceId, OnceLock<Option<[DVec3; 2]>>)>,
     /// The tags hidden: what is on them is not seen.
@@ -336,6 +407,7 @@ impl Layout {
                         (k, EntityId::Section(id), shape.transformed(part.place))
                     })
             })
+            .take(session::MAX_SECTION_OUTLINES)
             .collect();
         Some(layout)
     }
@@ -410,6 +482,8 @@ impl Layout {
             guides,
             annotations,
             sections: Vec::new(),
+            cutting: cuts.iter().any(|c| !c.is_empty()),
+            fills: cuts.iter().map(|_| OnceLock::new()).collect(),
             cuts,
             boxes: instances
                 .into_iter()
@@ -576,6 +650,83 @@ impl<'a> Scenery<'a> {
         self
     }
 
+    /// The nearest distance `t` in `from..=to` along the ray (unit `dir`) at which it meets
+    /// the fill of a section cut: where a plane cutting a part crosses a region of the cut
+    /// that the part's other planes keep. What lies beyond is behind the fill and hidden by
+    /// it. None when no cut is filled there, or cuts are off. The fills are worked out for
+    /// all of a part's planes the first time, and kept with the layout.
+    pub fn fill_hit(&self, origin: DVec3, dir: DVec3, from: f64, to: f64) -> Option<f64> {
+        if !self.cuts || !self.layout.cutting {
+            return None;
+        }
+        let mut best: Option<f64> = None;
+        for (k, planes) in self.layout.cuts.iter().enumerate() {
+            if planes.is_empty() {
+                continue;
+            }
+            let fills = self.layout.fills[k].get_or_init(|| self.fills_of(k));
+            for fill in fills {
+                let plane = &planes[fill.plane];
+                let denom = dir.dot(plane.normal);
+                if denom.abs() < 1e-12 {
+                    continue;
+                }
+                let t = (plane.point - origin).dot(plane.normal) / denom;
+                if !(t >= from && t <= best.unwrap_or(to)) {
+                    continue;
+                }
+                let at = origin + dir * t;
+                let others_keep = planes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, o)| i == fill.plane || o.keeps(at));
+                if others_keep && fill.holds(plane, at) {
+                    best = Some(t);
+                }
+            }
+        }
+        best
+    }
+
+    /// What each plane cutting the `k`th part fills of its shown faces.
+    fn fills_of(&self, k: usize) -> Vec<PlaneFill> {
+        let part = self.part_uncut(k);
+        let triangles: Vec<[DVec3; 3]> = part
+            .model
+            .faces()
+            .filter(|(f, _)| part.shows_face(*f))
+            .filter_map(|(f, _)| part.model.triangulate(f))
+            .flatten()
+            .map(|t| t.map(|p| part.place.transform_point3(p)))
+            .collect();
+        self.layout.cuts[k]
+            .iter()
+            .enumerate()
+            .filter(|(_, plane)| {
+                // A plane that cuts nothing away fills nothing.
+                triangles
+                    .iter()
+                    .flatten()
+                    .any(|p| (*p - plane.point).dot(plane.normal) < -1e-9)
+            })
+            .map(|(plane, p)| PlaneFill {
+                plane,
+                regions: kernel::section_loops(&triangles, p.point, p.normal).closed,
+            })
+            .collect()
+    }
+
+    /// The `k`th placed mesh, whether cuts are on or not.
+    fn part_uncut(&self, k: usize) -> Part<'_> {
+        let placed = &self.layout.parts[k];
+        Part {
+            model: self.models[placed.mesh],
+            placed,
+            hidden: &self.layout.hidden,
+            cuts: &self.layout.cuts[k],
+        }
+    }
+
     /// The slab the scenery is seen within, if any.
     pub fn slab(&self) -> Option<Slab> {
         self.slab
@@ -671,6 +822,14 @@ impl<'a> Scenery<'a> {
     /// coordinates, but for what the planes cutting its parts cut away (clipped edge by edge);
     /// None when nothing is left.
     pub fn kept_instance_box(&self, id: InstanceId) -> Option<[DVec3; 2]> {
+        // Nothing cut: the box worked out once per layout.
+        if !self.layout.cutting
+            || !self
+                .parts()
+                .any(|p| p.owner == Owner::Instance(id) && p.is_cut())
+        {
+            return self.instance_box(id);
+        }
         let mut points = self
             .parts()
             .filter(|p| p.owner == Owner::Instance(id))

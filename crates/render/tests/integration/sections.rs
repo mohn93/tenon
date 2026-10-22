@@ -638,3 +638,143 @@ fn an_active_plane_is_orange_then_selected_then_hovered() {
             .any(|s| s.color == FADED_ACTIVE_SECTION_COLOR && s.active)
     );
 }
+
+/// A component of the box at the origin holding a plane through x = 1, placed twice (the second
+/// copy 5 m along x).
+fn cut_component_twice() -> (Document, EntityId) {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let ids: Vec<EntityId> = d
+        .model()
+        .faces()
+        .map(|(id, _)| EntityId::Face(id))
+        .chain(d.model().edges().map(|(id, _)| EntityId::Edge(id)))
+        .collect();
+    let out = run(
+        &mut d,
+        Command::MakeComponent {
+            ids,
+            name: "Box".into(),
+        },
+    );
+    let first = *out
+        .changes
+        .created
+        .iter()
+        .find(|e| matches!(e, EntityId::Instance(_)))
+        .unwrap();
+    run(&mut d, Command::OpenInstance { id: first });
+    run(
+        &mut d,
+        Command::AddSectionPlane {
+            point: [1.0, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            activate: None,
+        },
+    );
+    run(&mut d, Command::CloseInstance {});
+    let copied = run(
+        &mut d,
+        Command::Copy {
+            ids: vec![first],
+            offset: [5.0, 0.0, 0.0],
+            count: None,
+        },
+    );
+    let copy = *copied
+        .changes
+        .created
+        .iter()
+        .find(|e| matches!(e, EntityId::Instance(i) if d.model().instance(*i).is_some()))
+        .unwrap();
+    (d, copy)
+}
+
+#[test]
+fn a_component_placed_twice_is_cut_and_filled_in_each_place() {
+    let (d, _) = cut_component_twice();
+    let b = base(&d, SectionDisplay::default());
+    assert!((triangle_area(&b.cut_fill) - 3.0).abs() < 1e-5);
+    let (near, far): (Vec<&render::grid::LineVertex>, Vec<_>) =
+        b.cut_fill.iter().partition(|v| v.pos[0] < 3.0);
+    assert_eq!(near.len(), far.len());
+    assert!(near.iter().all(|v| (v.pos[0] - 1.0).abs() < 1e-5));
+    assert!(far.iter().all(|v| (v.pos[0] - 6.0).abs() < 1e-5));
+}
+
+#[test]
+fn a_mirrored_placement_of_a_cut_component_fills_its_own_side() {
+    let (mut d, copy) = cut_component_twice();
+    run(
+        &mut d,
+        Command::Scale {
+            ids: vec![copy],
+            origin: [5.0, 0.0, 0.0],
+            factors: [-1.0, 1.0, 1.0],
+        },
+    );
+    let b = base(&d, SectionDisplay::default());
+    assert!((triangle_area(&b.cut_fill) - 3.0).abs() < 1e-5);
+    // Mirrored about x = 5, the copy's kept half (local x from 1) lies at x = 4 to 5 and
+    // beyond; nothing of it is left of 3, and its fill is at x = 4.
+    let mirrored: Vec<_> = b.faces.iter().filter(|v| v.pos[0] > 2.5).collect();
+    assert!(!mirrored.is_empty());
+    let fill: Vec<_> = b.cut_fill.iter().filter(|v| v.pos[0] > 2.5).collect();
+    assert!(!fill.is_empty());
+    assert!(
+        fill.iter().all(|v| (v.pos[0] - 4.0).abs() < 1e-4),
+        "{fill:?}"
+    );
+}
+
+#[test]
+fn a_glowing_face_cut_away_entirely_gives_no_light() {
+    let mut d = doc();
+    let lamp = run(
+        &mut d,
+        Command::AddRectangle {
+            corner: [0.0, 0.0, 2.0],
+            opposite: [1.0, 1.0, 2.0],
+            normal: None,
+        },
+    );
+    let glow = crate::golden::add_lamp_material(&mut d, "Glow", [255, 255, 255], 6.0);
+    run(
+        &mut d,
+        Command::Paint {
+            ids: vec![crate::golden::created_face(&lamp)],
+            material: Some(glow),
+            side: session::Side::Front,
+        },
+    );
+    let lights = |d: &Document| base(d, SectionDisplay::default()).lights.len();
+    assert_eq!(lights(&d), 1, "uncut");
+    for (z, expected) in [(1.0, 1), (3.0, 0)] {
+        run(
+            &mut d,
+            Command::AddSectionPlane {
+                point: [0.0, 0.0, z],
+                normal: [0.0, 0.0, 1.0],
+                activate: Some(true),
+            },
+        );
+        assert_eq!(lights(&d), expected, "plane at z = {z}");
+    }
+}
+
+#[test]
+fn at_most_a_thousand_plane_outlines_are_drawn_and_the_rest_still_cut() {
+    let mut s = kernel::Scene::from_root(kernel::Model::new());
+    s.edit(kernel::MeshId::Root, |m| {
+        let mut change = kernel::ChangeSet::default();
+        for k in 0..1005 {
+            let plane =
+                kernel::SectionPlane::new(glam::DVec3::new(k as f64, 0.0, 0.0), glam::DVec3::X);
+            change.ops.extend(m.add_section(plane, k == 1004)?.ops);
+        }
+        Ok(change)
+    })
+    .unwrap();
+    let b = scene_base_shown(&s, &[], false, SectionDisplay::default());
+    assert_eq!(b.sections.len(), session::MAX_SECTION_OUTLINES);
+}

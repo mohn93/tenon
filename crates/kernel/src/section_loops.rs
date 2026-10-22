@@ -32,7 +32,7 @@ const SAMPLE_OFFSET: f64 = 1e-7;
 /// one touching it from the kept side. The pieces are noded (split where a corner lies on
 /// another piece) into a planar arrangement; each bounded region of it is a closed loop with
 /// its holes when it lies inside a solid (judged just on the kept side of the plane, by the
-/// parity of the crossings of a ray with `triangles`). Pieces bounding no such region, and
+/// parity of the crossings of rays with `triangles`, most rays deciding). Pieces bounding no such region, and
 /// dangling ones, are returned as open chains. Collinear points are dropped, so a loop's
 /// points are its corners. Nothing is cut when a number is not finite or `normal` has no
 /// direction.
@@ -65,9 +65,10 @@ pub fn section_loops(triangles: &[[DVec3; 3]], point: DVec3, normal: DVec3) -> S
         .map(|p| DVec2::new((*p - point).dot(u), (*p - point).dot(v)))
         .collect();
     let (edges, cut) = node_edges(&ends, &flat);
+    let hierarchy = Triangles::new(triangles);
     let solid = |s: DVec2| {
         let at = point + u * s.x + v * s.y + normal * SAMPLE_OFFSET;
-        inside(triangles, at)
+        hierarchy.inside(at)
     };
     let found = Arrangement::new(&edges, &flat).solid_faces(&solid);
 
@@ -157,16 +158,164 @@ fn cut_triangle(
 /// The tolerance `SectionPlane::keeps` has.
 const KEEP_TOL: f64 = 1e-9;
 
-/// Whether `p` is inside the solids bounded by `triangles`: an odd number of them lie in front
-/// of a ray from `p` in a direction chosen to avoid edges.
-fn inside(triangles: &[[DVec3; 3]], p: DVec3) -> bool {
-    let dir = DVec3::new(0.309_016_994, 0.512_345_678, 0.800_911_117).normalize();
-    let crossings = triangles.iter().filter(|t| ray_hits(t, p, dir)).count();
-    crossings % 2 == 1
+/// The directions `Triangles::inside` casts rays in: the six axes, each tilted a little so
+/// that no ray runs along the edges of axis-aligned solids. A face shared by two solids
+/// misleads the rays that meet it first; being near an axis each, only one of the six does.
+const RAYS: [[f64; 3]; 6] = [
+    [1.0, 0.123, 0.071],
+    [-1.0, 0.087, -0.131],
+    [0.097, 1.0, -0.113],
+    [-0.059, -1.0, 0.127],
+    [0.083, 0.141, 1.0],
+    [-0.109, 0.067, -1.0],
+];
+
+/// Rays that must cross an odd number of triangles for a point to be inside.
+const INSIDE_VOTES: usize = 4;
+
+/// Triangles with a bounding volume hierarchy, for the nearest triangle along a ray.
+struct Triangles<'a> {
+    triangles: &'a [[DVec3; 3]],
+    /// Triangle numbers, grouped by leaf.
+    order: Vec<usize>,
+    nodes: Vec<BvhNode>,
 }
 
-/// Whether the ray from `origin` along `dir` meets the triangle (Moeller-Trumbore).
-fn ray_hits(t: &[DVec3; 3], origin: DVec3, dir: DVec3) -> bool {
+struct BvhNode {
+    lo: DVec3,
+    hi: DVec3,
+    /// A leaf: the range of `order`; else the first child is the next node and this is the
+    /// second child's number.
+    kind: BvhKind,
+}
+
+enum BvhKind {
+    Leaf(usize, usize),
+    Inner(usize),
+}
+
+const LEAF_SIZE: usize = 4;
+
+impl<'a> Triangles<'a> {
+    fn new(triangles: &'a [[DVec3; 3]]) -> Self {
+        let mut me = Triangles {
+            triangles,
+            order: (0..triangles.len()).collect(),
+            nodes: Vec::new(),
+        };
+        if !triangles.is_empty() {
+            me.build(0, triangles.len());
+        }
+        me
+    }
+
+    fn build(&mut self, start: usize, end: usize) -> usize {
+        let at = self.nodes.len();
+        let (mut lo, mut hi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+        let (mut clo, mut chi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
+        for &i in &self.order[start..end] {
+            let t = &self.triangles[i];
+            let c = (t[0] + t[1] + t[2]) / 3.0;
+            clo = clo.min(c);
+            chi = chi.max(c);
+            for p in t {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+        }
+        self.nodes.push(BvhNode {
+            lo,
+            hi,
+            kind: BvhKind::Leaf(start, end),
+        });
+        if end - start <= LEAF_SIZE {
+            return at;
+        }
+        let size = chi - clo;
+        let axis = if size.x >= size.y && size.x >= size.z {
+            0
+        } else if size.y >= size.z {
+            1
+        } else {
+            2
+        };
+        let triangles = self.triangles;
+        let centre = |i: &usize| {
+            let t = &triangles[*i];
+            ((t[0] + t[1] + t[2]) / 3.0)[axis]
+        };
+        let mid = (start + end) / 2;
+        self.order[start..end]
+            .select_nth_unstable_by(mid - start, |a, b| centre(a).total_cmp(&centre(b)));
+        self.build(start, mid);
+        let second = self.build(mid, end);
+        self.nodes[at].kind = BvhKind::Inner(second);
+        at
+    }
+
+    /// How many triangles the ray from `origin` along `dir` meets.
+    fn crossings(&self, origin: DVec3, dir: DVec3) -> usize {
+        if self.nodes.is_empty() {
+            return 0;
+        }
+        let inv = DVec3::new(1.0 / dir.x, 1.0 / dir.y, 1.0 / dir.z);
+        let mut count = 0;
+        let mut stack = vec![0usize];
+        while let Some(n) = stack.pop() {
+            let node = &self.nodes[n];
+            if !slab(node.lo, node.hi, origin, inv) {
+                continue;
+            }
+            match node.kind {
+                BvhKind::Leaf(a, b) => {
+                    count += self.order[a..b]
+                        .iter()
+                        .filter(|i| ray_hit(&self.triangles[**i], origin, dir))
+                        .count();
+                }
+                BvhKind::Inner(second) => {
+                    stack.push(second);
+                    stack.push(n + 1);
+                }
+            }
+        }
+        count
+    }
+
+    /// Whether `p` is inside the solids bounded by the triangles: an odd number of triangles
+    /// lie in front of it along at least `INSIDE_VOTES` of the `RAYS`. A face two solids share
+    /// exists once, which turns the count even for the rays that meet it; the others still
+    /// say inside.
+    fn inside(&self, p: DVec3) -> bool {
+        let votes = RAYS
+            .iter()
+            .filter(|d| self.crossings(p, DVec3::from_array(**d).normalize()) % 2 == 1)
+            .count();
+        votes >= INSIDE_VOTES
+    }
+}
+
+/// Whether the ray (`inv` the reciprocals of its direction) meets the box.
+fn slab(lo: DVec3, hi: DVec3, origin: DVec3, inv: DVec3) -> bool {
+    let (mut near, mut far) = (0.0_f64, f64::INFINITY);
+    for k in 0..3 {
+        let (a, b) = ((lo[k] - origin[k]) * inv[k], (hi[k] - origin[k]) * inv[k]);
+        if a.is_nan() || b.is_nan() {
+            // On the slab's plane along a ray parallel to it: inside when between.
+            if origin[k] < lo[k] || origin[k] > hi[k] {
+                return false;
+            }
+            continue;
+        }
+        near = near.max(a.min(b));
+        far = far.min(a.max(b));
+    }
+    near <= far
+}
+
+/// Whether the ray from `origin` along `dir` meets the triangle (Moeller-Trumbore), its edges
+/// half-open so a ray through a seam meets one side only.
+fn ray_hit(t: &[DVec3; 3], origin: DVec3, dir: DVec3) -> bool {
     let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
     let h = dir.cross(e2);
     let a = e1.dot(h);
@@ -176,12 +325,12 @@ fn ray_hits(t: &[DVec3; 3], origin: DVec3, dir: DVec3) -> bool {
     let f = 1.0 / a;
     let s = origin - t[0];
     let u = f * s.dot(h);
-    if !(0.0..=1.0).contains(&u) {
+    if !(0.0..1.0).contains(&u) {
         return false;
     }
     let q = s.cross(e1);
     let v = f * dir.dot(q);
-    if !(v >= 0.0 && u + v <= 1.0) {
+    if !(v >= 0.0 && u + v < 1.0) {
         return false;
     }
     f * e2.dot(q) > 1e-12
@@ -260,7 +409,7 @@ impl<'a> Arrangement<'a> {
         let mut alive = vec![true; self.edges.len()];
         // Take away dangling pieces and bridges (a piece with the same region on both sides)
         // until none is left: what remains outlines regions.
-        let (cycles, cycle_of) = loop {
+        let cycles = loop {
             let mut degree: Vec<usize> = adjacent
                 .iter()
                 .map(|l| l.iter().filter(|e| alive[**e]).count())
@@ -287,13 +436,12 @@ impl<'a> Arrangement<'a> {
                 .filter(|e| alive[*e] && cycle_of[2 * e] == cycle_of[2 * e + 1])
                 .collect();
             if bridges.is_empty() {
-                break (cycles, cycle_of);
+                break cycles;
             }
             for e in bridges {
                 alive[e] = false;
             }
         };
-        let _ = cycle_of;
 
         // The connected pieces.
         let mut parent: Vec<usize> = (0..n).collect();

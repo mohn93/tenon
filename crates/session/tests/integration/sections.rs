@@ -117,9 +117,8 @@ fn cube(d: &mut Document) -> Vec<String> {
     )
     .unwrap();
     let face = made(&out, 'f');
-    let out = run(d, json!({"type": "push_pull", "face": face, "distance": 1})).unwrap();
+    run(d, json!({"type": "push_pull", "face": face, "distance": 1})).unwrap();
     let all = ask(d, json!({"type": "entities"}));
-    let _ = out;
     all["edges"]
         .as_array()
         .unwrap()
@@ -244,8 +243,6 @@ fn planes_of_another_context_or_no_plane_are_invalid_input() {
     let mut d = doc();
     let ids = cube(&mut d);
     let root_plane = plane(&mut d, [0.0; 3], [0.0, 0.0, 1.0], false);
-    let mut group_ids = ids.clone();
-    group_ids.push(root_plane.clone());
     let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
     let i = made(&out, 'i');
     run(&mut d, json!({"type": "open_instance", "id": i})).unwrap();
@@ -726,4 +723,134 @@ fn a_model_without_planes_exports_no_plane_warning() {
     )
     .unwrap();
     assert!(!out["export"]["warnings"].to_string().contains("section"));
+}
+
+#[test]
+fn flip_and_activate_work_inside_an_open_group() {
+    let mut d = doc();
+    let ids = cube(&mut d);
+    let root_plane = plane(&mut d, [0.0; 3], [0.0, 0.0, 1.0], true);
+    let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let i = made(&out, 'i');
+    run(&mut d, json!({"type": "open_instance", "id": i})).unwrap();
+    let inner = plane(&mut d, [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], false);
+    let other = plane(&mut d, [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], true);
+    run(
+        &mut d,
+        json!({"type": "activate_section_plane", "plane": inner}),
+    )
+    .unwrap();
+    assert_eq!(active(&d), vec![inner.clone()], "one active plane per mesh");
+    run(
+        &mut d,
+        json!({"type": "flip_section_plane", "plane": other}),
+    )
+    .unwrap();
+    near(
+        &ask(&d, json!({"type": "entity", "id": other}))["normal"],
+        [0.0, -1.0, 0.0],
+    );
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    assert_eq!(
+        active(&d),
+        vec![root_plane],
+        "the root's plane is untouched"
+    );
+}
+
+#[test]
+fn rotating_a_plane_past_the_coordinate_limit_is_refused() {
+    let mut d = doc();
+    let a = plane(&mut d, [9.0e5, 0.0, 0.0], [1.0, 0.0, 0.0], false);
+    let (kind, ..) = run(
+        &mut d,
+        json!({"type": "rotate", "ids": [a], "center": [-5.0e5, 0, 0], "angle": 90}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    assert_eq!(planes(&d).len(), 1);
+}
+
+#[test]
+fn geometry_and_a_plane_move_and_erase_together() {
+    let mut d = doc();
+    let mut ids = cube(&mut d);
+    let a = plane(&mut d, [1.0, 1.0, 0.5], [0.0, 0.0, 1.0], true);
+    ids.push(a.clone());
+    run(
+        &mut d,
+        json!({"type": "move", "ids": ids, "offset": [0, 0, 3]}),
+    )
+    .unwrap();
+    near(
+        &ask(&d, json!({"type": "entity", "id": a}))["point"],
+        [1.0, 1.0, 3.5],
+    );
+    let all = ask(&d, json!({"type": "entities"}));
+    assert!(
+        all["vertices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["position"][2].as_f64().unwrap() >= 3.0 - 1e-9)
+    );
+    run(&mut d, json!({"type": "erase", "ids": ids})).unwrap();
+    assert!(planes(&d).is_empty());
+    assert!(
+        ask(&d, json!({"type": "entities"}))["edges"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(planes(&d).len(), 1);
+}
+
+#[test]
+fn a_component_with_a_plane_placed_twice_counts_it_once_in_export_warnings() {
+    let mut d = doc();
+    let mut ids = cube(&mut d);
+    ids.push(plane(&mut d, [1.0, 1.0, 0.5], [0.0, 0.0, 1.0], true));
+    let out = run(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Box"}),
+    )
+    .unwrap();
+    let i = made(&out, 'i');
+    run(
+        &mut d,
+        json!({"type": "copy", "ids": [i], "offset": [5, 0, 0]}),
+    )
+    .unwrap();
+    let path = scratch("twice.obj");
+    let out = run(
+        &mut d,
+        json!({"type": "export", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let warnings = out["export"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.contains(&json!("1 section plane was not written")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn select_all_skips_planes_while_they_are_not_shown() {
+    let mut d = doc();
+    let a = plane(&mut d, [0.0; 3], [0.0, 0.0, 1.0], true);
+    run(
+        &mut d,
+        json!({"type": "set_section_display", "planes": false}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "select", "ids": [], "all": true})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "selection"}))["ids"], json!([]));
+    run(
+        &mut d,
+        json!({"type": "set_section_display", "planes": true}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "select", "ids": [], "all": true})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "selection"}))["ids"], json!([a]));
 }

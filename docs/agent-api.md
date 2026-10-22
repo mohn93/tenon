@@ -87,10 +87,10 @@ Queries:
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
 | `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
 | `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`; see Camera below |
-| `{"type": "selection"}` | the selected edge, face, instance, guide, dimension and note ids, plus `revision` |
+| `{"type": "selection"}` | the selected edge, face, instance, guide, dimension, note and section plane ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
-| `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances, guides, dimensions and notes in the whole model are on it; see Tags below |
+| `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances, guides, dimensions, notes and section planes in the whole model are on it; see Tags below |
 | `{"type": "scenes"}` | every scene, in order: `id`, `name`, whether it stores a view (`camera`) and tag visibility (`tags`), and whether it is `selected`; plus `revision`; see Scenes below |
 | `{"type": "scene", "scene": "p40"}` | one scene: `id`, `name`, the `view` it stores (null when none) and the tags it hides (`hidden_tags`, null when it does not store tag visibility); see Scenes below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
@@ -150,7 +150,7 @@ selected with the `selection` query. Vertex ids are `invalid_input` and unknown 
 (Select None).
 
 `{"type": "select", "all": true, "mode": "replace"}` selects every edge, face, instance, guide,
-dimension and note of the open context that no hidden tag hides (see Tags), combined with the current selection by `mode` as `ids` are. `ids` must then
+dimension, note and section plane (while section planes are shown) of the open context that no hidden tag hides (see Tags), combined with the current selection by `mode` as `ids` are. `ids` must then
 be absent or empty: giving both is `invalid_input` ("select takes ids or all, not both").
 
 `{"type": "select", "box": {"from": [100, 80], "to": [300, 240]}, "mode": "add"}` selects by a box
@@ -454,7 +454,8 @@ picked, hovered, or snapped to (nor does it hide anything behind it) where the r
 cut-away side of any plane cutting that placement (its own mesh's active plane and its ancestors'),
 a vertex on that side is not an endpoint, and an edge is not picked or snapped to
 where its nearest point lies there (an edge wholly cut away is not found at all; `pick` leaves such
-faces, edges and points out too). Faces on the plane are kept. With `cuts` off nothing is left out, and with `planes` off section planes are not picked, hovered or box-selected.
+faces, edges and points out too). Faces on the plane are kept. With `cuts` off nothing is left out, and with `planes` off section planes are not picked, hovered, box-selected or selected by `select` with `all`.
+The fill of a cut hides what lies behind it from picking too: a ray that meets a cut plane inside the fill of a placement's cut (the region its other planes keep) meets nothing past that point, so no face, edge or snap point behind the fill is found. A box select looks only at the kept part of an edge or face: a box over only the cut-away half of one that straddles a plane does not select it. At most 1,000 plane outlines per scene are drawn and picked; planes past that still cut.
 A section plane is picked by its outline (like a dimension), and a box selects it by its outline
 (crossing) or by all four corners (inside); a double-click selects it alone.
 
@@ -663,7 +664,7 @@ Untagged (which is not a tag). Vertices cannot be tagged. Tags are shared by the
 | `{"type": "add_tag", "name": "Walls", "color": [200, 80, 60]}` | Adds a shown tag. Without `name` it is called `Tag` (`Tag 2`, ... when taken). A name must not be blank or `Untagged`, must have at most 256 characters and must differ from every other tag's (case counts, as for materials; `invalid_input`). Without `color` (sRGB, whole numbers 0 to 255) it takes the first of a fixed palette of twelve colors no tag has (once all are used, the next in turn). The new id is the outcome's `changes.tags`, e.g. `["t31"]`. |
 | `{"type": "change_tag", "tag": "t31", "name": "Old walls", "color": [9, 9, 9], "visible": false}` | Renames, recolors, hides (`visible`: false) or shows a tag; absent fields stay. Hiding and showing are undo steps like any other change and mark the model modified. |
 | `{"type": "delete_tag", "tag": "t31", "move_to": "t32"}` | Removes a tag. Everything on it, anywhere in the model, moves to `move_to` (absent or null: Untagged) in the same undo step, so undo restores the tag and every entity's tag. `move_to` naming the deleted tag is `invalid_input`. |
-| `{"type": "set_tag", "ids": ["e4", "f8", "i12", "g20"], "tag": "t31"}` | Puts edges, faces, instances, guides, dimensions and notes of the open context on a tag (absent or null `tag`: Untagged), as one undo step. Vertex ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. Entities already on it are left as they are. |
+| `{"type": "set_tag", "ids": ["e4", "f8", "i12", "g20"], "tag": "t31"}` | Puts edges, faces, instances, guides, dimensions, notes and section planes of the open context on a tag (absent or null `tag`: Untagged), as one undo step. Vertex ids are `invalid_input` (naming them), as is an empty list; unknown ids are `not_found`. Entities already on it are left as they are. |
 
 A command that adds, removes, renames, recolors, shows or hides a tag lists it in its
 `changes.tags` (also in `changed` notifications and `events`); `set_tag` and `delete_tag`

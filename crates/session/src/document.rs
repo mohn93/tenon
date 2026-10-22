@@ -409,7 +409,8 @@ impl Document {
                             "select takes ids or all, not both",
                         ));
                     }
-                    // What hidden tags hide is left out, as in SketchUp.
+                    // What hidden tags hide is left out, as in SketchUp; so are section planes while
+                    // they are not shown.
                     let m = self.model();
                     let shown = |tag| self.scene.tag_shown(tag);
                     m.edges()
@@ -442,7 +443,7 @@ impl Document {
                         )
                         .chain(
                             m.sections()
-                                .filter(|(_, p)| shown(p.tag()))
+                                .filter(|(_, p)| self.section_display.planes && shown(p.tag()))
                                 .map(|(id, _)| EntityId::Section(id)),
                         )
                         .collect()
@@ -1065,7 +1066,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one vertex, edge, face, instance, guide, dimension or note",
+                "ids must list at least one vertex, edge, face, instance, guide, dimension, note or section plane",
             ));
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -1115,7 +1116,7 @@ impl Document {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         if ids.is_empty() {
             return Err(invalid(
-                "ids must list at least one vertex, edge, face, instance, guide, dimension or note",
+                "ids must list at least one vertex, edge, face, instance, guide, dimension, note or section plane",
             ));
         }
         check_coordinates(&[center])?;
@@ -1172,7 +1173,7 @@ impl Document {
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         if ids.is_empty() {
             return Err(invalid(
-                "ids must list at least one vertex, edge, face, instance, guide, dimension or note",
+                "ids must list at least one vertex, edge, face, instance, guide, dimension, note or section plane",
             ));
         }
         check_coordinates(&[origin])?;
@@ -1439,7 +1440,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face, instance, guide, dimension or note",
+                "ids must list at least one edge, face, instance, guide, dimension, note or section plane",
             ));
         }
         if !(1..=MAX_COPIES).contains(&count) {
@@ -1597,7 +1598,7 @@ impl Document {
         if ids.is_empty() {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "ids must list at least one edge, face, instance, guide, dimension or note",
+                "ids must list at least one edge, face, instance, guide, dimension, note or section plane",
             ));
         }
         let parts = self.parts(ids)?;

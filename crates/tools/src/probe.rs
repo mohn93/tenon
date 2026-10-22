@@ -45,6 +45,10 @@ pub enum Reach<'a> {
 /// within `reach`. What hidden tags hide is not met (see `Scenery`).
 pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
     let mut hits = Vec::new();
+    // Nothing behind the fill of a section cut is met.
+    let behind = scenery
+        .fill_hit(ray.origin, ray.dir, 0.0, f64::INFINITY)
+        .map_or(f64::INFINITY, |t| t + 1e-9);
     for (k, part) in scenery.parts().enumerate() {
         if !part.may_meet_ray(ray.origin, ray.dir, f64::INFINITY) {
             continue;
@@ -57,9 +61,9 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
         );
         // Normals go into the open context's coordinates by the inverse transpose.
         let normals = part.back.matrix3.transpose();
-        let faces = faces
-            .into_iter()
-            .filter(|(f, t)| part.shows_face(*f) && part.kept(ray.origin + ray.dir * *t));
+        let faces = faces.into_iter().filter(|(f, t)| {
+            *t <= behind && part.shows_face(*f) && part.kept(ray.origin + ray.dir * *t)
+        });
         for (f, t) in faces {
             let normal = part
                 .model
@@ -104,7 +108,7 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
     };
     let mut offer = |id: EntityId, part: usize, point: DVec3| {
         let distance = (point - ray.origin).dot(ray.dir);
-        if distance >= 0.0 && near_enough(point) {
+        if distance >= 0.0 && distance <= behind && near_enough(point) {
             hits.push(Hit {
                 id,
                 part,

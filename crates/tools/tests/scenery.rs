@@ -790,3 +790,142 @@ fn a_box_touching_only_the_cut_away_half_of_a_sectioned_group_does_not_select_it
     let (a, b) = around(p(3.25, 0.0, 0.5));
     assert!(select_box(&cut, &c, a, b, true, &[]).contains(&EntityId::Instance(i)));
 }
+
+#[test]
+fn a_shape_is_cut_away_when_each_corner_is_cut_by_some_plane() {
+    // The root's plane keeps y <= 0.5; the group's own keeps its local x <= 0.5 (world 3.5).
+    let (mut s, i) = scene();
+    let def = s.root().instance(i).unwrap().definition;
+    s.edit(MeshId::Definition(def), |m| {
+        m.add_section(kernel::SectionPlane::new(p(0.5, 0.0, 0.0), -DVec3::X), true)
+    })
+    .unwrap();
+    s.edit(MeshId::Root, |m| {
+        m.add_section(kernel::SectionPlane::new(p(0.0, 0.5, 0.0), -DVec3::Y), true)
+    })
+    .unwrap();
+    let view = Scenery::of(&s, &[]).unwrap();
+    let part = view
+        .parts()
+        .find(|part| part.owner == Owner::Instance(i))
+        .unwrap();
+    // One end cut by the group's plane only, the other by the root's only.
+    assert!(part.cuts_away(&[p(3.8, 0.2, 0.0), p(3.2, 0.8, 0.0)]));
+    // One end kept.
+    assert!(!part.cuts_away(&[p(3.2, 0.2, 0.0), p(3.2, 0.8, 0.0)]));
+    // The root's own part is cut by its plane alone.
+    assert!(
+        view.part(0)
+            .cuts_away(&[p(0.0, 0.8, 0.0), p(1.0, 0.9, 0.0)])
+    );
+    assert!(
+        !view
+            .part(0)
+            .cuts_away(&[p(0.0, 0.2, 0.0), p(1.0, 0.9, 0.0)])
+    );
+    assert!(
+        !Scenery::of(&s, &[])
+            .unwrap()
+            .cut(false)
+            .part(0)
+            .cuts_away(&[p(0.0, 0.8, 0.0)])
+    );
+}
+
+#[test]
+fn box_select_looks_only_at_the_kept_part_of_edges_and_faces() {
+    let (mut s, _, _) = cut_scene();
+    // A root edge and a root square across the plane at x = 3.5.
+    s.edit(MeshId::Root, |m| {
+        let mut c = m.add_edge(p(3.0, -2.0, 0.0), p(4.0, -2.0, 0.0))?;
+        c.ops.extend(
+            m.add_polygon(&[
+                p(3.0, -5.0, 0.0),
+                p(4.0, -5.0, 0.0),
+                p(4.0, -4.0, 0.0),
+                p(3.0, -4.0, 0.0),
+            ])?
+            .ops,
+        );
+        Ok(c)
+    })
+    .unwrap();
+    let c = camera(DVec3::ZERO);
+    let cut = Scenery::of(&s, &[]).unwrap();
+    let whole = Scenery::of(&s, &[]).unwrap().cut(false);
+    let kinds = |v: &Scenery, at: DVec3| {
+        let (a, b) = (
+            px(&c, at) - DVec2::splat(2.0),
+            px(&c, at) + DVec2::splat(2.0),
+        );
+        let ids = select_box(v, &c, a, b, true, &[]);
+        (
+            ids.iter().any(|id| matches!(id, EntityId::Edge(_))),
+            ids.iter().any(|id| matches!(id, EntityId::Face(_))),
+        )
+    };
+    // Over the cut-away half: selected uncut, nothing cut.
+    assert!(kinds(&whole, p(3.8, -2.0, 0.0)).0);
+    assert_eq!(kinds(&cut, p(3.8, -2.0, 0.0)), (false, false));
+    assert!(kinds(&whole, p(3.8, -4.5, 0.0)).1);
+    assert_eq!(kinds(&cut, p(3.8, -4.5, 0.0)), (false, false));
+    // Over the kept half: still selected.
+    assert!(kinds(&cut, p(3.2, -2.0, 0.0)).0);
+    assert!(kinds(&cut, p(3.2, -4.5, 0.0)).1);
+}
+
+#[test]
+fn the_kept_box_of_an_instance_is_its_whole_box_when_nothing_cuts_it() {
+    let (s, i) = scene();
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert_eq!(view.kept_instance_box(i), view.instance_box(i));
+    // A plane in the root that cuts the group does not change the other answer.
+    let (s, i, _) = cut_scene();
+    let view = Scenery::of(&s, &[]).unwrap();
+    let [lo, hi] = view.kept_instance_box(i).unwrap();
+    assert!(
+        (lo.x - 3.0).abs() < 1e-9 && (hi.x - 3.5).abs() < 1e-9,
+        "{lo} {hi}"
+    );
+    let whole = Scenery::of(&s, &[]).unwrap().cut(false);
+    assert_eq!(whole.kept_instance_box(i), whole.instance_box(i));
+}
+
+#[test]
+fn the_fill_of_a_cut_hides_what_lies_behind_it() {
+    let (s, _, _) = cut_scene();
+    // Looking along -x at the cut face of the group's box (x = 3.5), from the cut-away side.
+    let mut c = camera(DVec3::ZERO);
+    c.eye = p(9.0, 0.5, 0.5);
+    c.target = p(3.5, 0.5, 0.5);
+    let view = Scenery::of(&s, &[]).unwrap();
+    let whole = Scenery::of(&s, &[]).unwrap().cut(false);
+    let at = px(&c, p(3.5, 0.5, 0.5));
+    // Uncut the near wall (x = 4) is met; cut, the fill is in the way and nothing is met.
+    assert!(face_under_in(&whole, &c, at).is_some());
+    assert!(face_under_in(&view, &c, at).is_none());
+    let faces = |v: &Scenery| {
+        pick(v, &c.ray(at), Reach::Around { radius: 0.0 })
+            .iter()
+            .filter(|h| matches!(h.id, EntityId::Face(_)))
+            .count()
+    };
+    assert!(faces(&whole) > 0);
+    assert_eq!(faces(&view), 0);
+}
+
+#[test]
+fn at_most_a_thousand_plane_outlines_are_drawn_and_picked() {
+    let (mut s, _) = scene();
+    s.edit(MeshId::Root, |m| {
+        let mut change = kernel::ChangeSet::default();
+        for k in 0..1005 {
+            let plane = kernel::SectionPlane::new(p(k as f64, 0.0, 0.0), DVec3::X);
+            change.ops.extend(m.add_section(plane, false)?.ops);
+        }
+        Ok(change)
+    })
+    .unwrap();
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert_eq!(view.sections().len(), session::MAX_SECTION_OUTLINES);
+}

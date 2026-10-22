@@ -10,6 +10,9 @@ pub const MIN_SECTION_SIDE: f64 = 1.0;
 /// How far past the diagonal of the shown bounds the square reaches.
 pub const SECTION_SIDE_SCALE: f64 = 1.2;
 
+/// Most plane outlines a scene draws and tools pick; planes past it still cut.
+pub const MAX_SECTION_OUTLINES: usize = 1000;
+
 /// A section plane's outline placed in some coordinates (a mesh's own, or another by
 /// `transformed`).
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -823,6 +823,10 @@ impl<'s> Sight<'s> {
         if from >= reach {
             return true;
         }
+        // The fill of a section cut hides all that lies behind it.
+        if self.scenery.fill_hit(eye, dir, from, reach).is_some() {
+            return false;
+        }
         let hides = |part: Part| {
             part.may_meet_ray(eye, dir, reach)
                 && part
@@ -886,6 +890,10 @@ fn nearest_face_part(scenery: &Scenery, ray: &Ray) -> Option<(usize, FaceId, DVe
         Some(slab) => slab.face_span(ray.origin, ray.dir)?,
         None => (0.0, f64::INFINITY),
     };
+    // Nothing behind the fill of a section cut is met.
+    let to = scenery
+        .fill_hit(ray.origin, ray.dir, from, to)
+        .map_or(to, |t| t + 1e-9);
     let mut best: Option<(f64, usize, FaceId)> = None;
     for (k, part) in scenery.parts().enumerate() {
         let reach = best.map_or(to, |(t, _, _)| t);

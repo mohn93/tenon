@@ -25,8 +25,8 @@ use crate::grid::LineVertex;
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
 use crate::sections::{
-    ACTIVE_SECTION_COLOR, CUT_FILL_COLOR, FADED_ACTIVE_SECTION_COLOR, SectionLook, clip_segment,
-    clip_triangle, cut_surface,
+    ACTIVE_SECTION_COLOR, CUT_FILL_COLOR, Cut, FADED_ACTIVE_SECTION_COLOR, SectionLook,
+    clip_segment, clip_triangle, cut_surface,
 };
 use crate::texture::layers;
 
@@ -526,6 +526,7 @@ pub fn scene_base_shown(
         color_by_tag,
         display: section,
         planes: Vec::new(),
+        cuts: HashMap::new(),
         sides: HashMap::new(),
         glows: HashMap::new(),
         path: Vec::new(),
@@ -765,6 +766,20 @@ fn drawn_count(
     (faces, edges)
 }
 
+/// Adds a placement's cut to the base: the fill, and the cut edges in `color`.
+fn push_cut(base: &mut SceneBase, cut: &Cut, color: [f32; 4]) {
+    base.cut_fill
+        .extend(cut.fill.iter().flatten().map(|p| LineVertex {
+            pos: p.as_vec3().to_array(),
+            color: CUT_FILL_COLOR,
+        }));
+    base.cut_edges
+        .extend(cut.edges.iter().flatten().map(|p| LineVertex {
+            pos: p.as_vec3().to_array(),
+            color,
+        }));
+}
+
 struct Walk<'a> {
     scene: &'a Scene,
     context: &'a [InstanceId],
@@ -780,6 +795,9 @@ struct Walk<'a> {
     /// The active section planes of the meshes from the root down to the one being walked, in
     /// root coordinates; empty unless cuts are on.
     planes: Vec<SectionPlane>,
+    /// What a mesh's own active plane cuts out of it, in the mesh's coordinates, by the mesh
+    /// and the plane: a mesh placed many times, cut by no plane but its own, is cut once.
+    cuts: HashMap<(MeshId, [u64; 6]), Cut>,
     /// The side of the square each mesh's section planes are drawn with.
     sides: HashMap<MeshId, f64>,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
@@ -815,20 +833,19 @@ impl Walk<'_> {
         let mirrored = t.matrix3.determinant() < 0.0;
         let front = side_look(self.scene, self.layers, inherited, DEFAULT_FRONT);
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
-        // The mesh's glow, when it has to be worked out (in its own coordinates).
         let glow_key = (id, inherited);
-        let mut pushed_plane = false;
-        // Each glowing face's glow, with the face.
-        let mut glow: Option<Vec<(Glow, FaceId)>> =
-            (self.glowing && !self.glows.contains_key(&glow_key)).then(Vec::new);
         let scene = self.scene;
         let color_by_tag = self.color_by_tag;
         let display = self.display;
+        let mut pushed_plane = false;
+        // The mesh's own active plane in its own coordinates.
+        let mut own_plane = None;
         if display.cuts
             && let Some(plane) = model.active_section().and_then(|s| model.section(s))
         {
             self.planes.push(plane.transformed(t));
             pushed_plane = true;
+            own_plane = Some(*plane);
         }
         // The side of the squares this mesh's planes are drawn with, worked out once per mesh.
         let side = (display.planes && model.sections().next().is_some()).then(|| {
@@ -839,6 +856,19 @@ impl Walk<'_> {
         });
         let planes: Vec<SectionPlane> = self.planes.clone();
         let cutting = !planes.is_empty();
+        // With no plane but its own cutting it, the cut is the same for every placement.
+        let cache_key = own_plane.filter(|_| planes.len() == 1).map(|p| {
+            let bits = [
+                p.point.x, p.point.y, p.point.z, p.normal.x, p.normal.y, p.normal.z,
+            ];
+            (id, bits.map(f64::to_bits))
+        });
+        let collect_local = cache_key.is_some_and(|k| !self.cuts.contains_key(&k));
+        // The mesh's glow, when it has to be worked out (in its own coordinates). A placement
+        // that is cut works out its own: a face cut away entirely does not shine. Each glowing
+        // face's glow, with the face.
+        let mut glow: Option<Vec<(Glow, FaceId)>> =
+            (self.glowing && (!self.glows.contains_key(&glow_key) || cutting)).then(Vec::new);
         // The placement's own surface in root coordinates, before any cut, for the cut outlines.
         let mut surface: Vec<[DVec3; 3]> = Vec::new();
         let base = &mut self.base;
@@ -897,7 +927,11 @@ impl Walk<'_> {
                     }
                 };
                 if cutting {
-                    surface.push(tri.map(|c| c.0));
+                    if collect_local {
+                        surface.push([a, b, c]);
+                    } else if cache_key.is_none() {
+                        surface.push(tri.map(|c| c.0));
+                    }
                     let attributes = tri.map(|(p, n, uv)| (p, (n, uv)));
                     for piece in clip_triangle(attributes, &planes, &mix_corner) {
                         emit(base, piece.map(|(p, (n, uv))| (p, n, uv)));
@@ -908,6 +942,7 @@ impl Walk<'_> {
             }
             if let Some(g) = &mut glow
                 && face_glow.glows()
+                && (!cutting || base.faces.len() > start)
             {
                 g.push((face_glow, face.id));
             }
@@ -927,6 +962,7 @@ impl Walk<'_> {
                 hi: hi.to_array(),
             });
         }
+        let mut cut_glows: Option<Vec<Glow>> = None;
         if let Some(faces) = glow {
             let glows = if id == MeshId::Root {
                 let faces: Vec<(Glow, Vec<VertexId>)> = faces
@@ -950,9 +986,13 @@ impl Walk<'_> {
                 }
                 vec![all]
             };
-            self.glows.insert(glow_key, glows);
+            if cutting {
+                cut_glows = Some(glows);
+            } else {
+                self.glows.insert(glow_key, glows);
+            }
         }
-        if let Some(glows) = self.glows.get(&glow_key) {
+        if let Some(glows) = cut_glows.as_ref().or_else(|| self.glows.get(&glow_key)) {
             base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
@@ -983,18 +1023,28 @@ impl Walk<'_> {
                 base.spans.edges.push((*eid, start..base.edges.len()));
             }
         }
-        if cutting && !surface.is_empty() {
+        if let (Some(key), Some(plane)) = (cache_key, own_plane) {
+            if collect_local && !surface.is_empty() {
+                self.cuts
+                    .insert(key, cut_surface(&surface, &[plane], display.fill));
+            }
+            if let Some(cut) = self.cuts.get(&key) {
+                // A mirroring placement turns the fill's triangles inside out.
+                let place = |tri: &[DVec3; 3]| {
+                    let [a, b, c] = tri.map(|p| t.transform_point3(p));
+                    if mirrored { [a, c, b] } else { [a, b, c] }
+                };
+                let fill: Vec<[DVec3; 3]> = cut.fill.iter().map(place).collect();
+                let edges: Vec<[DVec3; 2]> = cut
+                    .edges
+                    .iter()
+                    .map(|e| e.map(|p| t.transform_point3(p)))
+                    .collect();
+                push_cut(base, &Cut { fill, edges }, color);
+            }
+        } else if cutting && !surface.is_empty() {
             let cut = cut_surface(&surface, &planes, display.fill);
-            base.cut_fill
-                .extend(cut.fill.iter().flatten().map(|p| LineVertex {
-                    pos: p.as_vec3().to_array(),
-                    color: CUT_FILL_COLOR,
-                }));
-            base.cut_edges
-                .extend(cut.edges.iter().flatten().map(|p| LineVertex {
-                    pos: p.as_vec3().to_array(),
-                    color,
-                }));
+            push_cut(base, &cut, color);
         }
         let color = if inside {
             GUIDE_COLOR
@@ -1060,6 +1110,10 @@ impl Walk<'_> {
             for (sid, plane) in model.sections() {
                 if !scene.tag_shown(plane.tag()) {
                     continue;
+                }
+                // Planes past the limit still cut but are neither drawn nor picked.
+                if base.sections.len() >= session::MAX_SECTION_OUTLINES {
+                    break;
                 }
                 if open {
                     base.spans.sections.push((sid, base.sections.len()));

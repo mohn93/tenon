@@ -255,23 +255,33 @@ pub fn select_box(
         points.iter().filter_map(|v| m.position(*v)).collect()
     };
     for (id, e) in m.edges().filter(|(_, e)| scenery.shows(e.tag)) {
-        if cut.cuts_away(&world(&e.v)) {
-            continue;
-        }
-        if screen(&e.v).is_some_and(|pts| chosen(false, &pts)) {
+        // Only the part of the edge the planes keep is looked at.
+        let ends = world(&e.v);
+        let kept = match (cut.is_cut(), ends.as_slice()) {
+            (false, _) => None,
+            (true, [a, b]) => match cut.clip(*a, *b) {
+                Some(ends) => Some(ends),
+                None => continue,
+            },
+            (true, _) => None,
+        };
+        let pts = match kept {
+            Some(ends) => ends
+                .iter()
+                .map(|p| camera.project(*p))
+                .collect::<Option<Vec<DVec2>>>(),
+            None => screen(&e.v),
+        };
+        if pts.is_some_and(|pts| chosen(false, &pts)) {
             ids.push(EntityId::Edge(id));
         }
     }
     // A crossing box also selects a face that it lies entirely inside: some corner of the box
     // is within the face's projected outer loop and outside all of its holes.
-    let within = |f: &Face| {
-        let Some(outer) = screen(&f.outer) else {
-            return false;
-        };
-        let holes: Vec<Vec<DVec2>> = f.holes.iter().filter_map(|h| screen(h)).collect();
+    let within = |outer: &[DVec2], holes: &[&Vec<DVec2>]| {
         corners
             .iter()
-            .any(|c| point_in_polygon(*c, &outer) && !holes.iter().any(|h| point_in_polygon(*c, h)))
+            .any(|c| point_in_polygon(*c, outer) && !holes.iter().any(|h| point_in_polygon(*c, h)))
     };
     // Instances by their bounding boxes: inside when every corner is, touching when the box's
     // screen rectangle overlaps the selection box.
@@ -370,16 +380,41 @@ pub fn select_box(
             ids.push(*id);
         }
     }
+    // A face is looked at by the part of it the planes keep.
+    let kept_screen = |points: &[kernel::VertexId]| -> Option<Vec<DVec2>> {
+        let corners = world(points);
+        if cut.is_cut() {
+            cut.clip_polygon(&corners)
+        } else {
+            corners
+        }
+        .into_iter()
+        .map(|p| camera.project(p))
+        .collect()
+    };
     for (id, f) in m.faces().filter(|(_, f)| scenery.shows(f.tag)) {
         if cut.cuts_away(&world(&f.outer)) {
             continue;
         }
-        let all = face_loops(f).all(|l| screen(l).is_some_and(|pts| !pts.is_empty()));
+        let projected: Vec<Option<Vec<DVec2>>> = face_loops(f).map(|l| kept_screen(l)).collect();
+        let all = projected.iter().all(Option::is_some);
+        let loops: Vec<&Vec<DVec2>> = projected
+            .iter()
+            .flatten()
+            .filter(|pts| !pts.is_empty())
+            .collect();
+        if loops.is_empty() {
+            continue;
+        }
         let hit = if window {
-            all && face_loops(f).all(|l| screen(l).is_some_and(|pts| chosen(true, &pts)))
+            all && loops.iter().all(|pts| chosen(true, pts))
         } else {
-            face_loops(f).any(|l| screen(l).is_some_and(|pts| chosen(true, &pts)))
-                || (all && within(f))
+            loops.iter().any(|pts| chosen(true, pts))
+                || (all
+                    && projected[0].as_ref().is_some_and(|outer| {
+                        !outer.is_empty()
+                            && within(outer, &projected[1..].iter().flatten().collect::<Vec<_>>())
+                    }))
         };
         if hit {
             ids.push(EntityId::Face(id));
