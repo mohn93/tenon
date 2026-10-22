@@ -416,6 +416,8 @@ pub struct Model {
     guides: BTreeMap<GuideId, Guide>,
     pub(crate) dimensions: BTreeMap<DimensionId, Dimension>,
     pub(crate) notes: BTreeMap<NoteId, Note>,
+    /// Dimensions an edit is about to move; see `hold_dimensions`.
+    pub(crate) held: BTreeSet<DimensionId>,
     next_id: u64,
     pending: Vec<Op>,
     /// Built on first use after a change to vertices, edges or faces; see `Model::index`.

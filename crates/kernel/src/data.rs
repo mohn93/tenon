@@ -771,7 +771,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             }
         };
         if dimensions.insert(DimensionId(id), dimension).is_some() {
-            return Err(format!("dimension d{id} appears twice"));
+            return Err(format!("dimension r{id} appears twice"));
         }
     }
     let mut notes = BTreeMap::new();

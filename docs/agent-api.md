@@ -406,7 +406,7 @@ It is one undo step. The outcome's `text_3d` is `{"instance": "i5", "definition"
 "skipped": [{"character": "中", "index": 2, "reason": "the font has no glyph for it"}]}`: the new
 group's instance and definition, the faces in it, and the characters left out, in order (`index`
 counts characters from 0, line breaks included): characters the font has no glyph for, and
-letters whose outlines cross or touch ("its outlines cross or touch"). Spaces only move the next
+letters whose outlines cross ("its outlines cross or touch", within one letter) or whose faces could not be built ("its faces could not be built (a crossing or degenerate outline)"). Letters that touch each other are kept as nested "Letter" groups. Spaces only move the next
 letter on and are not listed. Text with no letter to draw (only spaces, or only characters the
 font lacks) is `invalid_input`.
 

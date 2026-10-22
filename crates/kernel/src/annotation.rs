@@ -249,19 +249,25 @@ impl Circle {
         }
     }
 
-    /// The center and the points `radius` from it along each axis: what a coordinate limit
+    /// The center and the points the circle reaches along each axis, in its own plane (per
+    /// axis `radius * sqrt(1 - n_axis^2)` for the unit normal `n`): what a coordinate limit
     /// on the circle checks.
     pub fn extent(&self) -> [DVec3; 7] {
-        let r = self.radius.abs();
         let c = self.center;
+        let n = self.normal.try_normalize().unwrap_or(DVec3::Z);
+        let r = DVec3::new(
+            self.radius.abs() * (1.0 - n.x * n.x).max(0.0).sqrt(),
+            self.radius.abs() * (1.0 - n.y * n.y).max(0.0).sqrt(),
+            self.radius.abs() * (1.0 - n.z * n.z).max(0.0).sqrt(),
+        );
         [
             c,
-            c + DVec3::X * r,
-            c - DVec3::X * r,
-            c + DVec3::Y * r,
-            c - DVec3::Y * r,
-            c + DVec3::Z * r,
-            c - DVec3::Z * r,
+            c + DVec3::X * r.x,
+            c - DVec3::X * r.x,
+            c + DVec3::Y * r.y,
+            c - DVec3::Y * r.y,
+            c + DVec3::Z * r.z,
+            c - DVec3::Z * r.z,
         ]
     }
 }
@@ -569,6 +575,15 @@ impl Model {
         }
     }
 
+    /// Names the linear dimensions an edit in progress is about to move with
+    /// `transform_annotations`: until the next call, the upkeep that closes the geometry's
+    /// part of the edit leaves their ends alone (even where a moved vertex lands on a point
+    /// end's old place), and `transform_annotations` decides on the final state. Pass `&[]`
+    /// to end it, also when the edit fails.
+    pub fn hold_dimensions(&mut self, dimensions: &[DimensionId]) {
+        self.held = dimensions.iter().copied().collect();
+    }
+
     /// Moves dimensions and notes by the affine map `t` as one ChangeSet, keeping their ids
     /// (each is reported as modified): point anchors, fixed circles, offsets, leaders and
     /// note positions move; vertex anchors and curves stay with their geometry, and screen
@@ -600,6 +615,7 @@ impl Model {
                 }
             }
         }
+        self.held.clear();
         self.take_changes()
     }
 
@@ -892,7 +908,9 @@ impl Model {
         let mut lost_curves: Vec<(DimensionId, CurveId)> = Vec::new();
         for (id, d) in &self.dimensions {
             match *d {
-                Dimension::Linear { a, b, offset, tag } if on_touched(&a) || on_touched(&b) => {
+                Dimension::Linear { a, b, offset, tag }
+                    if !self.held.contains(id) && (on_touched(&a) || on_touched(&b)) =>
+                {
                     let (fa, fb) = (freeze(self, a), freeze(self, b));
                     let (a2, b2) = (fa.unwrap_or(a), fb.unwrap_or(b));
                     let frozen = Dimension::Linear {

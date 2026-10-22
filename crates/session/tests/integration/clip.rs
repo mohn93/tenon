@@ -742,3 +742,27 @@ fn a_clip_showing_too_many_faces_is_refused() {
     // With 230 squares, about 19.2 million faces: under the cap (the outline is capped too).
     assert!(clip::outline(&nested_clip(230, 4, 17)).is_ok());
 }
+
+#[test]
+fn a_clip_of_a_dimension_alone_is_based_at_its_lowest_point() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_dimension", "a": [5, 0, 0], "b": [7, 0, 0], "offset": [0, 1, 0]}),
+    )
+    .unwrap();
+    let r = created(&out)
+        .into_iter()
+        .find(|i| i.starts_with('r'))
+        .unwrap();
+    let id: EntityId = serde_json::from_value(json!(r)).unwrap();
+    let text = d.clip(&[id]).unwrap();
+    let out = paste(&mut d, &text, Some([10.0, 0.0, 0.0])).unwrap();
+    let pasted = created(&out)
+        .into_iter()
+        .find(|i| i.starts_with('r'))
+        .unwrap();
+    let info = ask(&d, json!({"type": "entity", "id": pasted}));
+    assert_eq!(info["a"]["point"], json!([10.0, 0.0, 0.0]), "{info}");
+    assert_eq!(info["b"]["point"], json!([12.0, 0.0, 0.0]), "{info}");
+}

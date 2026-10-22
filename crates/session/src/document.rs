@@ -1052,7 +1052,16 @@ impl Document {
         let shift = DAffine3::from_translation(offset);
         self.check_placed(&vertices, &parts, &[shift], false)?;
         self.edit_mesh(|m| {
-            let mut c = m.move_vertices(&vertices, offset)?;
+            // Held, so the dimensions that move too are judged once everything has moved.
+            m.hold_dimensions(&parts.dimensions);
+            let moved = m.move_vertices(&vertices, offset);
+            let mut c = match moved {
+                Ok(c) => c,
+                Err(e) => {
+                    m.hold_dimensions(&[]);
+                    return Err(e);
+                }
+            };
             c.ops.extend(m.move_instances(&parts.instances, offset).ops);
             c.ops.extend(m.transform_guides(&parts.guides, shift).ops);
             c.ops.extend(
@@ -1190,7 +1199,16 @@ impl Document {
         t: DAffine3,
     ) -> Result<SceneChange, CommandError> {
         self.edit_mesh(|m| {
-            let mut c = m.transform_vertices(vertices, t)?;
+            // Held, so the dimensions that move too are judged once everything has moved.
+            m.hold_dimensions(&parts.dimensions);
+            let moved = m.transform_vertices(vertices, t);
+            let mut c = match moved {
+                Ok(c) => c,
+                Err(e) => {
+                    m.hold_dimensions(&[]);
+                    return Err(e);
+                }
+            };
             c.ops.extend(m.transform_instances(&parts.instances, t).ops);
             c.ops.extend(m.transform_guides(&parts.guides, t).ops);
             c.ops.extend(

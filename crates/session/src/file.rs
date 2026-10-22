@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use glam::DVec3;
 use kernel::{
     AnchorData, DimensionData, MAX_ID, MAX_TEXTURES, MeshData, NoteData, RadialAnchorData, Scene,
     SceneData, TextureImage,
@@ -501,11 +502,15 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
                 } => {
                     let center = match curve {
                         RadialAnchorData::Curve(_) => true,
-                        // The circle reaches its radius from the center along each axis.
-                        RadialAnchorData::Fixed(c) => c
-                            .center
-                            .iter()
-                            .all(|x| x.abs() + c.radius.abs() <= MAX_COORDINATE),
+                        // The circle reaches `radius * sqrt(1 - n^2)` from the center along
+                        // each axis (see `Circle::extent`).
+                        RadialAnchorData::Fixed(c) => {
+                            let n = DVec3::from(c.normal).try_normalize().unwrap_or(DVec3::Z);
+                            c.center.iter().zip(n.to_array()).all(|(x, n)| {
+                                x.abs() + c.radius.abs() * (1.0 - n * n).max(0.0).sqrt()
+                                    <= MAX_COORDINATE
+                            })
+                        }
                     };
                     (id, center && reach(leader))
                 }

@@ -1332,3 +1332,102 @@ fn outcomes_and_events_carry_the_display_units_they_set() {
     assert_eq!(outcomes[0].units, Some(units(LengthUnit::Inches, 1)));
     assert_eq!(outcomes[1].units, None);
 }
+
+/// An edge (0,0,0)-(0,1,0) with a dimension from its first vertex to the point [1,0,0].
+fn edge_with_point_dimension(d: &mut Document) -> (Vec<Value>, String) {
+    let out = run(
+        d,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [0, 1, 0]}),
+    )
+    .unwrap();
+    let edge = made(&out, 'e');
+    let v0 = vertex_at(d, [0.0, 0.0, 0.0]);
+    let out = run(
+        d,
+        json!({"type": "add_dimension", "a": v0, "b": [1, 0, 0], "offset": [0, -1, 0]}),
+    )
+    .unwrap();
+    let r = made(&out, 'r');
+    (vec![json!(edge), json!(r)], r)
+}
+
+#[test]
+fn moving_an_edge_with_its_dimension_onto_the_dimensions_old_point_keeps_the_dimension() {
+    let mut d = doc();
+    let (ids, r) = edge_with_point_dimension(&mut d);
+    run(
+        &mut d,
+        json!({"type": "move", "ids": ids, "offset": [1, 0, 0]}),
+    )
+    .unwrap();
+    let info = entity(&d, &r);
+    assert_eq!(info["value"], 1.0, "{info}");
+    assert_eq!(info["a"]["point"], json!([1.0, 0.0, 0.0]));
+    assert_eq!(info["b"]["point"], json!([2.0, 0.0, 0.0]));
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    let info = entity(&d, &r);
+    assert_eq!(info["a"]["point"], json!([0.0, 0.0, 0.0]));
+    assert_eq!(info["b"]["point"], json!([1.0, 0.0, 0.0]));
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(entity(&d, &r)["a"]["point"], json!([1.0, 0.0, 0.0]));
+}
+
+#[test]
+fn rotating_an_edge_with_its_dimension_onto_the_dimensions_old_point_keeps_the_dimension() {
+    let mut d = doc();
+    let (ids, r) = edge_with_point_dimension(&mut d);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": ids, "center": [0.5, 0, 0], "axis": [0, 0, 1], "angle": 180}),
+    )
+    .unwrap();
+    let info = entity(&d, &r);
+    assert_eq!(info["value"], 1.0, "{info}");
+    let a = info["a"]["point"].as_array().unwrap();
+    assert!((a[0].as_f64().unwrap() - 1.0).abs() < 1e-9, "{info}");
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    let info = entity(&d, &r);
+    assert_eq!(info["a"]["point"], json!([0.0, 0.0, 0.0]));
+    assert_eq!(info["b"]["point"], json!([1.0, 0.0, 0.0]));
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(entity(&d, &r)["value"], 1.0);
+}
+
+#[test]
+fn a_dimension_frozen_near_the_limit_still_saves_and_opens() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_circle", "center": [0, 0, 0], "radius": 1}),
+    )
+    .unwrap();
+    let edges = created(&out, 'e');
+    let out = run(
+        &mut d,
+        json!({"type": "add_radial_dimension", "edge": edges[0], "leader": [0.5, 0, 0]}),
+    )
+    .unwrap();
+    let r = made(&out, 'r');
+    let mut ids: Vec<Value> = edges.iter().map(|e| json!(e)).collect();
+    run(
+        &mut d,
+        json!({"type": "move", "ids": ids, "offset": [0, 0, 999999.5]}),
+    )
+    .unwrap();
+    ids = edges.iter().map(|e| json!(e)).collect();
+    run(&mut d, json!({"type": "erase", "ids": ids})).unwrap();
+    assert!(entity(&d, &r).get("curve").is_none());
+    let path = scratch("frozen-near-limit.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(entity(&e, &r)["radius"], 1.0);
+}
