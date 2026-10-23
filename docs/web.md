@@ -62,6 +62,18 @@ tested by hand (open, draw, save, reopen).
   to the system clipboard. Safari may not fire `paste` on a canvas that is not editable; there
   Ctrl/Cmd+V does nothing (use the Edit menu, which pastes the text last copied in the app).
 
+## Viewer mode
+
+When the page's address has a share fragment (`#v1.<id>.<key>`, made by File > Open on Phone on a
+desktop) the page starts a read-only, touch-first viewer instead of the editor: it fetches the
+encrypted model from `/s/<id>` on the server that served the page, decrypts it in the browser,
+opens it read only, and removes the fragment from the address bar. `Features::VIEWER` is
+`Features::WEB` with `read_only` on: a small top bar over the 3D view, no menus, tools, dock,
+status line, library, autosave, print or share, and the document refuses every command that
+changes the model. Touch gestures (orbit, pan, pinch, tap, double tap) and the rest are in
+[phone.md](phone.md). The `web` crate's `viewer` module holds the testable parts (fragment
+meaning, the 256 MiB cap, the messages) and `load` the browser's fetch and history calls.
+
 ## What is off
 
 - Quit (File > Quit, Ctrl+Q): the tab is closed by the browser.

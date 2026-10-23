@@ -18,6 +18,7 @@ mod sheets;
 mod start;
 mod status;
 mod tags;
+mod viewer;
 mod viewport;
 mod widgets;
 
@@ -102,6 +103,7 @@ pub(super) struct Fixture {
     /// The recent files File > Open Recent lists, newest first.
     pub recent: Vec<PathBuf>,
     pub features: crate::platform::Features,
+    pub model_name: String,
     /// The sheet open over the window.
     pub sheet: Option<Sheet>,
     /// The one selected group or component, which Rename Component and the Name field rename.
@@ -182,6 +184,7 @@ impl Default for Fixture {
             start: None,
             recent: Vec::new(),
             features: crate::platform::Features::ALL,
+            model_name: "Shared model".into(),
             sheet: None,
             rename: None,
             settings: None,
@@ -242,6 +245,7 @@ impl Fixture {
             camera: &self.camera,
             start: self.start.as_deref().map(|recent| StartCard { recent }),
             features: self.features,
+            model_name: &self.model_name,
             recent: &self.recent,
             sheet: self.sheet.as_ref(),
             rename: self.rename.as_ref(),
@@ -286,7 +290,7 @@ pub(super) fn harness_sized(f: Fixture, size: Vec2) -> H {
     harness_built(f, size, 1.0)
 }
 
-fn harness_built(f: Fixture, size: Vec2, pixels_per_point: f32) -> H {
+pub(super) fn harness_built(f: Fixture, size: Vec2, pixels_per_point: f32) -> H {
     let mut h = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(pixels_per_point)

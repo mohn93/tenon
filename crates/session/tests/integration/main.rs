@@ -27,6 +27,7 @@ mod outliner;
 mod perf;
 mod polygon;
 mod print;
+mod read_only;
 mod rotate;
 mod scale;
 mod scenes;

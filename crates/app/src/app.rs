@@ -46,6 +46,7 @@ use crate::platform::{Features, Platform, UnsavedChoice};
 use crate::prefs::{self, Prefs};
 use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
+use crate::touch::{self, TouchEvent, Touches};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::PhoneView;
 use crate::ui::theme::UiScale;
@@ -809,6 +810,14 @@ struct State {
     recent_shown: Vec<PathBuf>,
     /// The start card was dismissed: it stays hidden for the rest of the session.
     start_dismissed: bool,
+    /// Touch gestures (the viewer), the fingers that began in the view, when the window began
+    /// (for the gestures' times) and the name the viewer's top bar shows.
+    touches: Touches,
+    touch_owned: Vec<u64>,
+    epoch: Instant,
+    model_name: String,
+    /// The model was just opened in the viewer: fit it to the view once the view's size is known.
+    fit_pending: bool,
     /// The Agent Activity window is open.
     agent_activity: bool,
     /// Whether the Keyboard Shortcuts window is open.
@@ -1068,8 +1077,11 @@ impl State {
         );
         editor.set_import_options(prefs.import);
         editor.set_trackpad(prefs.trackpad);
+        editor.set_read_only(features.read_only);
+        let mut touches = Touches::default();
+        touches.set_scale_factor(window.scale_factor());
         editor.set_clipboard(platform.clipboard());
-        if !shadows {
+        if !shadows && !features.read_only {
             editor.show_info(crate::ui::SHADOWS_OFF);
         }
         let session = session
@@ -1105,7 +1117,12 @@ impl State {
             recover: None,
             prefs,
             recent_shown,
-            start_dismissed: false,
+            start_dismissed: features.read_only,
+            touches,
+            touch_owned: Vec::new(),
+            epoch: Instant::now(),
+            model_name: String::new(),
+            fit_pending: false,
             agent_activity: false,
             shortcuts_window: false,
             settings_open: false,
@@ -1179,6 +1196,53 @@ impl State {
             && self
                 .editor
                 .fly_look(look_delta(raw, self.window.scale_factor()))
+    }
+
+    /// Opens the model the viewer was given, read-only, and fits it to the view once the view's
+    /// size is known; the window says so when it cannot.
+    fn open_shared(&mut self, model: SharedModel) {
+        self.model_name = model.name.clone();
+        if self.editor.open_bytes(&model.name, &model.bytes) {
+            self.fit_pending = true;
+        } else {
+            self.editor.show_error(DAMAGED_LINK);
+        }
+    }
+
+    /// A touch (or the viewer's mouse button, `MOUSE_TOUCH`) began, moved or ended at `p`, in
+    /// window coordinates: only touches that began in the view, over no window, go to the
+    /// gestures. True if anything visible may have changed.
+    fn touch(&mut self, phase: touch::Phase, id: u64, p: DVec2) -> bool {
+        if !self.features.read_only {
+            return false;
+        }
+        let owned = self.touch_owned.contains(&id);
+        match phase {
+            touch::Phase::Start => {
+                if owned || self.sheet.is_some() || !self.in_view(p) || self.gui.wants_pointer_at(p)
+                {
+                    return false;
+                }
+                self.touch_owned.push(id);
+            }
+            _ if !owned => return false,
+            touch::Phase::End | touch::Phase::Cancel => self.touch_owned.retain(|i| *i != id),
+            touch::Phase::Move => {}
+        }
+        // Where the pointer is, for what is covered by a window and what is under it.
+        self.cursor = p;
+        let origin = DVec2::new(self.view.x as f64, self.view.y as f64);
+        let event = TouchEvent {
+            phase,
+            id,
+            pos: p - origin,
+            at_ms: self.epoch.elapsed().as_millis() as u64,
+        };
+        let mut changed = false;
+        for gesture in self.touches.event(event) {
+            changed |= self.editor.touch(gesture);
+        }
+        changed
     }
 
     /// True if a press or scroll at the cursor goes to the 3D view: the cursor is in it, egui
@@ -1720,6 +1784,9 @@ impl State {
     }
 
     fn apply(&mut self, action: UiAction) {
+        if self.features.read_only && !viewer_allows(&action) {
+            return;
+        }
         match action {
             UiAction::NewModel => self.new_model(),
             UiAction::OpenFile => self.open(),
@@ -2326,14 +2393,18 @@ impl State {
         self.platform.set_modified(modified);
         // Where files have no path, the name the model was opened from or saved under.
         let kept = self.flows.kept_name().map(Path::new);
-        let title = window_title(
-            doc.path()
-                .or(kept.filter(|_| doc.imported_from().is_none())),
-            doc.imported_from(),
-            self.recovered_doc().map(|r| r.name.as_str()),
-            modified,
-            cfg!(target_os = "macos"),
-        );
+        let title = if self.features.read_only {
+            format!("{} - sketchup-alt", self.model_name)
+        } else {
+            window_title(
+                doc.path()
+                    .or(kept.filter(|_| doc.imported_from().is_none())),
+                doc.imported_from(),
+                self.recovered_doc().map(|r| r.name.as_str()),
+                modified,
+                cfg!(target_os = "macos"),
+            )
+        };
         if title != self.title {
             self.window.set_title(&title);
             self.title = title;
@@ -2487,6 +2558,7 @@ impl State {
                     recent: &self.recent_shown,
                 }),
             features: self.features,
+            model_name: &self.model_name,
             recent: &self.prefs.recent,
             sheet: self.sheet.as_ref(),
             rename: rename.as_ref(),
@@ -2532,6 +2604,9 @@ impl State {
             let v = self.view;
             self.editor
                 .resize(DVec2::new(v.width.max(1) as f64, v.height.max(1) as f64));
+        }
+        if std::mem::take(&mut self.fit_pending) {
+            self.editor.zoom_extents();
         }
 
         let doc = self.editor.doc();
@@ -3122,6 +3197,25 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
     })
 }
 
+/// The id the mouse's left button has among the viewer's touches.
+const MOUSE_TOUCH: u64 = u64::MAX;
+
+/// The actions the viewer lets through (`Features::read_only`): the rest would change the
+/// model or open what a viewer does not have. The document refuses edits as well
+/// (`Document::set_read_only`); this keeps the window from starting them.
+fn viewer_allows(action: &UiAction) -> bool {
+    matches!(
+        action,
+        UiAction::SelectNone
+            | UiAction::CloseSheet
+            | UiAction::ZoomExtents
+            | UiAction::StandardView(_)
+            | UiAction::SetProjection(_)
+            | UiAction::SetLighting(_)
+            | UiAction::SetTheme(_)
+    )
+}
+
 fn map_button(button: MouseButton) -> Button {
     match button {
         MouseButton::Left => Button::Left,
@@ -3131,6 +3225,17 @@ fn map_button(button: MouseButton) -> Button {
 }
 
 /// What `App::new` needs besides the event loop's proxy.
+/// A model given as bytes (`AppConfig::model`).
+pub struct SharedModel {
+    /// The name the viewer's top bar shows.
+    pub name: String,
+    /// A `.skr` file's bytes.
+    pub bytes: Vec<u8>,
+}
+
+/// What the viewer says of a model it cannot open.
+pub const DAMAGED_LINK: &str = "This link is damaged or expired";
+
 pub struct AppConfig {
     /// Files, preferences, dialogs, the clipboard and links.
     pub platform: Box<dyn Platform>,
@@ -3142,6 +3247,10 @@ pub struct AppConfig {
     pub window: Option<WindowAttributes>,
     /// A model to open once the window exists.
     pub file: Option<PathBuf>,
+    /// A model given as bytes, opened once the window exists and fitted to the view (the
+    /// phone viewer's: with `Features::VIEWER` it is opened read-only). When it cannot be
+    /// opened the window says "This link is damaged or expired".
+    pub model: Option<SharedModel>,
     /// The folders the API's file paths must lie within.
     pub roots: ApiRoots,
     /// Where work an agent discards is kept.
@@ -3161,6 +3270,7 @@ impl AppConfig {
             gpu: None,
             window: None,
             file: None,
+            model: None,
             roots: ApiRoots::default(),
             recovery: None,
             session: Err("there is no folder to keep autosaves in".into()),
@@ -3181,6 +3291,8 @@ pub struct App {
     socket: Option<Endpoint>,
     /// A model to open once the window exists.
     file: Option<PathBuf>,
+    /// A model given as bytes, opened once the window exists.
+    model: Option<SharedModel>,
     /// The folders the API's file paths must lie within.
     roots: ApiRoots,
     /// Where work an agent discards is kept.
@@ -3224,6 +3336,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             socket,
             file: config.file,
+            model: config.model,
             roots: config.roots,
             recovery: config.recovery,
             session: Some(config.session),
@@ -3330,7 +3443,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             AppEvent::Paste(text) => {
-                if let Some(s) = self.state.as_mut() {
+                if let Some(s) = self.state.as_mut().filter(|s| !s.features.read_only) {
                     s.paste_event(text);
                     s.notify_api(&mut self.hub);
                     s.window.request_redraw();
@@ -3406,6 +3519,9 @@ impl ApplicationHandler<AppEvent> for App {
                 state.recover = Some(RecoverList::new(false, crashed));
             }
         }
+        if let Some(model) = self.model.take() {
+            state.open_shared(model);
+        }
         if let Some(path) = self.file.take() {
             let open = Command::Open {
                 path: path.display().to_string(),
@@ -3462,6 +3578,7 @@ impl ApplicationHandler<AppEvent> for App {
                 true
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                s.touches.set_scale_factor(scale_factor);
                 s.editor.set_scale_factor(scale_factor);
                 false
             }
@@ -3497,6 +3614,8 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::Focused(false) => {
                 // Releases may never arrive: no click or double-click spans the focus change.
+                s.touches.reset();
+                s.touch_owned.clear();
                 s.left_press = None;
                 s.clicks = None;
                 s.focused = false;
@@ -3515,7 +3634,36 @@ impl ApplicationHandler<AppEvent> for App {
             // The frames skipped while the window was hidden (see `retries_at_once`).
             WindowEvent::Occluded(false) => true,
             WindowEvent::CursorMoved { position, .. } => {
-                s.cursor_moved(DVec2::new(position.x, position.y))
+                let p = DVec2::new(position.x, position.y);
+                let moved = s.cursor_moved(p);
+                // A mouse drag in the viewer is a one-finger touch.
+                s.touch(touch::Phase::Move, MOUSE_TOUCH, p) || moved
+            }
+            WindowEvent::Touch(t) if s.features.read_only => {
+                let phase = match t.phase {
+                    TouchPhase::Started => touch::Phase::Start,
+                    TouchPhase::Moved => touch::Phase::Move,
+                    TouchPhase::Ended => touch::Phase::End,
+                    TouchPhase::Cancelled => touch::Phase::Cancel,
+                };
+                s.touch(phase, t.id, DVec2::new(t.location.x, t.location.y))
+            }
+            // The viewer has no keyboard: nothing a key could do is a view.
+            WindowEvent::KeyboardInput { .. } if s.features.read_only => false,
+            // The mouse's left button in the viewer is a finger: a click selects, a drag
+            // orbits, a double click zooms. The other buttons and the wheel navigate as usual.
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if s.features.read_only => {
+                let phase = if state == ElementState::Pressed {
+                    touch::Phase::Start
+                } else {
+                    touch::Phase::End
+                };
+                let at = s.cursor;
+                s.touch(phase, MOUSE_TOUCH, at)
             }
             WindowEvent::CursorLeft { .. } => s.editor.cursor_left(),
             // While flying, clicks do nothing to the model; without a grabbed pointer the left
@@ -3711,6 +3859,53 @@ impl ApplicationHandler<AppEvent> for App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_viewer_features_turn_everything_that_edits_off() {
+        let v = Features::VIEWER;
+        assert!(v.read_only);
+        const { assert!(!Features::ALL.read_only && !Features::WEB.read_only) };
+        assert!(!v.library && !v.autosave && !v.print && !v.recent && !v.quit && !v.share);
+        assert!(!v.file_paths && v.in_app_dialogs && v.paste_by_event);
+    }
+
+    #[test]
+    fn the_viewer_lets_only_view_actions_through() {
+        use crate::ui::UiAction as A;
+        for action in [
+            A::SelectNone,
+            A::CloseSheet,
+            A::ZoomExtents,
+            A::StandardView(session::StandardView::Top),
+        ] {
+            assert!(viewer_allows(&action), "{action:?}");
+        }
+        for action in [
+            A::Undo,
+            A::Redo,
+            A::Cut,
+            A::Paste,
+            A::EraseSelection,
+            A::MakeGroup,
+            A::MakeComponent,
+            A::Explode,
+            A::NewModel,
+            A::OpenFile,
+            A::SaveFile,
+            A::ImportFile,
+            A::Tool(tools::ToolKind::Line),
+            A::SelectAll,
+            A::ToggleFly,
+            A::Quit,
+            A::OpenOnPhone,
+            A::PurgeUnused,
+            A::DeleteGuides,
+            A::AddTag,
+            A::AddScene,
+        ] {
+            assert!(!viewer_allows(&action), "{action:?}");
+        }
+    }
+
     #[test]
     fn activity_lines_read_newest_first_with_age_and_result() {
         let now = Instant::now();

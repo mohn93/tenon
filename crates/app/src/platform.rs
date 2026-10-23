@@ -58,6 +58,10 @@ pub struct Features {
     pub paste_by_event: bool,
     /// File > Open on Phone: a local-network server for the phone viewer (desktops only).
     pub share: bool,
+    /// The phone viewer: the model is looked at, never edited. Every command that changes it is
+    /// refused (`Document::set_read_only`), no tool but Select can be chosen, and the window is
+    /// a small top bar over the view (no menus, tools, dock, status line or start card).
+    pub read_only: bool,
 }
 
 impl Features {
@@ -72,6 +76,7 @@ impl Features {
         quit: true,
         paste_by_event: false,
         share: true,
+        read_only: false,
     };
 
     /// Only what a browser tab offers: files as bytes, nothing that needs folders or processes.
@@ -85,6 +90,13 @@ impl Features {
         quit: false,
         paste_by_event: true,
         share: false,
+        read_only: false,
+    };
+
+    /// The phone viewer: a browser tab (`WEB`) that only views.
+    pub const VIEWER: Features = Features {
+        read_only: true,
+        ..Features::WEB
     };
 }
 

@@ -45,4 +45,58 @@ offers Share the new version, which makes a new link and code and stops the old 
   tree's `web/dist`. Otherwise the sheet says "The phone viewer is not built: run
   scripts/build-web.sh".
 
+## The viewer (what the phone shows)
+
+The web build starts the viewer instead of the editor when the page's address has a share in its
+fragment (`#v1.<id>.<key>`). It:
+
+1. Fetches `/s/<id>` from the server that served the page. Only the id is requested; the key
+   never leaves the browser. A response that says it is over 256 MiB is refused before any of
+   it is read, and no more than 256 MiB is ever collected. The request is not cached and sends
+   no cookies.
+2. Decrypts it with the key (a wrong key, a changed or cut-off blob is refused by the
+   authentication tag) and opens the model read only.
+3. Removes the fragment (and any query) from the address bar and the history entry
+   (`history.replaceState`), so the key is not left in the browser's address, history or a
+   bookmark made afterwards. The key is never logged.
+4. Fits the model to the screen.
+
+Errors are shown as a message instead of the viewer: "This link is damaged or expired" (the
+link is malformed, the key is wrong, the blob is damaged or too big, or the share has stopped),
+"Could not reach the computer sharing this model" (the request failed: the computer is off the
+network or the share stopped and the page was reloaded).
+
+The screen is the 3D view with a small top bar showing the model's name (the link carries no
+name, so it reads "Shared model"). There are no menus, tools, panels, status line or keyboard
+shortcuts, and the model cannot be changed: the session refuses every command that changes the
+model (editing, undo and redo, new, open, import, save), whatever asked, and only the Select
+tool can be chosen.
+
+### Touch
+
+| Gesture | Does |
+| --- | --- |
+| One finger drag | Orbit about the point under the finger where the drag began |
+| Two finger drag | Pan (by the midpoint) |
+| Pinch | Zoom (by the ratio of the distance between the fingers), toward the midpoint |
+| Tap | Select the part (top-level group or component) under the finger; tap empty space to clear |
+| Double tap | Zoom to the tapped part, or to the whole model on empty space |
+
+A tap is a touch shorter than 300 ms that moves at most 10 points; a double tap is two taps
+within 300 ms and 30 points. Lifting one finger of a pair does not start an orbit with the
+other. Touches that begin over the top bar or a window belong to it, not to the view. With a
+mouse (desktop testing) the left button does the same as one finger (click selects, drag
+orbits, double click zooms), the wheel zooms, and the middle button orbits (Shift pans).
+
+Phones without WebGPU (plain `http://` on a local address has none) use WebGL2: light shadows
+are off there, as in the web build.
+
+### Trying it by hand
+
+Run the desktop app, File > Open on Phone..., and open the shown URL in a phone's browser (or
+in a browser tab with a phone-sized window, device toolbar on, 375 x 812 at 3x). Check: the model
+appears fitted; the address bar loses the `#...` part; reloading the page then starts the
+editor, not the viewer; orbit, pan, pinch, tap and double tap work; no editing is reachable.
+After Stop in the sheet, a new request for the link says "This link is damaged or expired".
+
 There is no agent API for sharing in this version.

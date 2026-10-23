@@ -42,6 +42,7 @@ mod tags;
 #[cfg(test)]
 mod tests;
 pub mod theme;
+pub(crate) mod viewer_bar;
 pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
@@ -478,6 +479,8 @@ pub struct View<'a> {
     pub start: Option<StartCard<'a>>,
     /// What the system offers; the panels hide what is off.
     pub features: Features,
+    /// The name the viewer's top bar shows (`Features::read_only`).
+    pub model_name: &'a str,
     /// The recent files as kept in the preferences, newest first (File > Open Recent).
     pub recent: &'a [PathBuf],
     /// The sheet open over the window, if any.
@@ -579,6 +582,9 @@ fn dock_resize_id() -> egui::Id {
 /// egui can lay a frame out more than once, and only the first pass sees the frame's input; so
 /// a caller keeps every pass's actions and the last pass's rectangle.
 pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect {
+    if view.features.read_only {
+        return viewer_bar::draw(ui, view, actions);
+    }
     let t = theme::tokens(ui.ctx().theme());
     Panel::top("context")
         .resizable(false)

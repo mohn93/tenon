@@ -1,7 +1,7 @@
 //! The module's entry point: finds the canvas, makes the GPU objects (WebGPU, else WebGL2),
 //! and hands the window app to winit's web event loop.
 
-use app::app::{App, AppConfig, AppEvent, GpuContext};
+use app::app::{App, AppConfig, AppEvent, GpuContext, SharedModel};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -11,8 +11,10 @@ use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 use winit::window::Window;
 
 use crate::files::{describe, document, window};
+use crate::load;
 use crate::names::{self, CANVAS_ID};
 use crate::platform::WebPlatform;
+use crate::viewer::{self, Start};
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -140,7 +142,29 @@ fn guard_input(canvas: &HtmlCanvasElement) {
     on_press.forget();
 }
 
+/// The share the page's fragment names, fetched and opened with its key: the model's bytes
+/// (None: no share, the editor starts). The key is only ever in the fragment: the request is
+/// for the id alone. Once the model is decrypted the fragment is taken out of the address bar.
+async fn shared_model() -> Result<Option<SharedModel>, String> {
+    let link = match viewer::classify(&load::hash()) {
+        Start::Editor => return Ok(None),
+        Start::Damaged => return Err(viewer::DAMAGED.to_string()),
+        Start::Viewer(link) => link,
+    };
+    let blob = load::fetch_blob(&viewer::blob_path(&link.id))
+        .await
+        .map_err(|failure| failure.message().to_string())?;
+    let bytes = session::share::open(&blob, &link.id, &link.key)
+        .map_err(|_| viewer::DAMAGED.to_string())?;
+    load::forget_fragment();
+    Ok(Some(SharedModel {
+        name: viewer::MODEL_NAME.to_string(),
+        bytes,
+    }))
+}
+
 async fn run() -> Result<(), String> {
+    let model = shared_model().await?;
     let canvas = canvas()?;
     let context = gpu(&canvas).await?;
     guard_input(&canvas);
@@ -149,7 +173,12 @@ async fn run() -> Result<(), String> {
     let event_loop = EventLoop::<AppEvent>::with_user_event()
         .build()
         .map_err(|e| format!("cannot start the event loop: {e}"))?;
-    let mut config = AppConfig::new(Box::new(WebPlatform::new(event_loop.create_proxy())));
+    let viewing = model.is_some();
+    let mut config = AppConfig::new(Box::new(WebPlatform::new(
+        event_loop.create_proxy(),
+        viewing,
+    )));
+    config.model = model;
     config.gpu = Some(context);
     config.window = Some(
         Window::default_attributes()

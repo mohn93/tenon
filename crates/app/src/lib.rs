@@ -38,6 +38,7 @@ pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 mod share_server;
 pub mod shortcuts;
+mod touch;
 mod ui;
 #[cfg(windows)]
 pub mod windows;

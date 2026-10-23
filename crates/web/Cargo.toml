@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 app = { path = "../app" }
+session = { path = "../session" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 render = { path = "../render" }
@@ -30,12 +31,21 @@ web-sys = { version = "=0.3.106", features = [
     "EventTarget",
     "File",
     "FileList",
+    "Headers",
+    "History",
     "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",
     "HtmlInputElement",
     "KeyboardEvent",
+    "Location",
     "Navigator",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "RequestCache",
+    "RequestCredentials",
+    "RequestInit",
+    "Response",
     "Storage",
     "Url",
     "Window",

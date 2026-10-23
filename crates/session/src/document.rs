@@ -119,6 +119,8 @@ pub struct Document {
     /// The definition each paste made, by the clip's source token and the clip definition it
     /// copied, so pasting the same clip again places it; not saved, forgotten with the model.
     pasted: BTreeMap<(String, DefinitionId), DefinitionId>,
+    /// A viewer's document: commands that change the model are refused (see `set_read_only`).
+    read_only: bool,
 }
 
 impl Document {
@@ -152,7 +154,37 @@ impl Document {
             library_material: None,
             token: clip::new_token(),
             pasted: BTreeMap::new(),
+            read_only: false,
         }
+    }
+
+    /// Makes the document read-only (or not): every command that `changes_model` (editing,
+    /// undo and redo, new, open, import) and Save are refused with `invalid_input`; camera, selection
+    /// and export commands still run. Opening bytes (`open_bytes`) is not a command and still
+    /// replaces the model, which is how a viewer loads what it shows.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+    }
+
+    /// Whether commands that change the model are refused.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    fn refuse_if_read_only(&self, command: &Command) -> Result<(), CommandError> {
+        if self.read_only
+            && (command.changes_model()
+                || matches!(
+                    command,
+                    Command::Save { .. } | Command::SaveToLibrary { .. }
+                ))
+        {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "this model is open for viewing only",
+            ));
+        }
+        Ok(())
     }
 
     /// Who the steps recorded from now on are attributed to.
@@ -297,6 +329,7 @@ impl Document {
         command: Command,
         label: impl Into<String>,
     ) -> Result<Outcome, CommandError> {
+        self.refuse_if_read_only(&command)?;
         let units_before = self.units;
         if let Some(changes) = self.edit(&command) {
             let changes = changes?;
@@ -873,6 +906,16 @@ impl Document {
     ) -> Result<Vec<Outcome>, BatchError> {
         let commands: Vec<BatchCommand> = commands.into_iter().map(Into::into).collect();
         let mut outcomes = Vec::new();
+        for (index, command) in commands.iter().enumerate() {
+            if let Err(error) = self.refuse_if_read_only(command.command()) {
+                return Err(BatchError {
+                    index,
+                    error,
+                    completed: Vec::new(),
+                    rolled_back: true,
+                });
+            }
+        }
         if !atomic {
             for (index, command) in commands.iter().enumerate() {
                 match command

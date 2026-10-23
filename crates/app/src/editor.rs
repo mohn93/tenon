@@ -48,6 +48,7 @@ mod sections;
 mod soften;
 mod tags;
 mod texture_position;
+mod viewer;
 
 use soften::SoftenWindow;
 pub use tags::SelectionTag;
@@ -194,6 +195,8 @@ impl Message {
 pub struct Editor {
     doc: Document,
     nav: Navigation,
+    /// The point a touch drag turns or pans about, found where it began (`touch`).
+    touch_pivot: Option<DVec3>,
     tool: Box<dyn Tool>,
     kind: ToolKind,
     /// Tool settings kept across tool switches (circle sides, arc segments).
@@ -324,6 +327,7 @@ impl Editor {
         Self {
             doc: Document::new(viewport),
             nav,
+            touch_pivot: None,
             tool: ToolKind::Select.make(),
             kind: ToolKind::Select,
             remembered: Remembered::default(),
@@ -428,6 +432,10 @@ impl Editor {
     /// current tool's operation and any typed text, and keeping the settings tools remember for
     /// the session, such as circle sides.
     pub fn select_tool(&mut self, kind: ToolKind) {
+        // A viewer only looks and selects.
+        if self.doc.is_read_only() && kind != ToolKind::Select {
+            return;
+        }
         self.paste_return = None;
         self.tool.remember(&mut self.remembered);
         self.tool = kind.make_with(&self.remembered);

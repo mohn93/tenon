@@ -35,10 +35,12 @@ pub struct WebPlatform {
     held: Rc<Cell<ModifiersState>>,
     /// Reaches the window: late errors for its status line.
     proxy: EventLoopProxy<AppEvent>,
+    /// The phone viewer: `Features::VIEWER` rather than `WEB`.
+    viewer: bool,
 }
 
 impl WebPlatform {
-    pub fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
+    pub fn new(proxy: EventLoopProxy<AppEvent>, viewer: bool) -> Self {
         let clip = Rc::new(RefCell::new(None));
         watch_clipboard(&clip, &proxy);
         let modified = Rc::new(Cell::new(false));
@@ -51,6 +53,7 @@ impl WebPlatform {
             clip,
             modified,
             proxy,
+            viewer,
         }
     }
 }
@@ -129,7 +132,11 @@ impl Storage for Local {
 
 impl Platform for WebPlatform {
     fn features(&self) -> Features {
-        Features::WEB
+        if self.viewer {
+            Features::VIEWER
+        } else {
+            Features::WEB
+        }
     }
 
     fn pick_open(
