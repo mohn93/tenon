@@ -6,7 +6,7 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::annotation::{Dimension, Note};
-use crate::geom::{LENGTH_TOL, vector_area};
+use crate::geom::{LENGTH_TOL, Plane, vector_area};
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
     NoteId, PageId, SectionId, StyleId, TagId, VertexId,
@@ -506,6 +506,9 @@ pub struct Model {
     /// The vertices in each cell of a `VERTEX_CELL` grid, kept in step by `apply_op`, so
     /// lookups by position visit only the vertices nearby.
     vertex_cells: HashMap<[i64; 3], Vec<VertexId>>,
+    /// Openings that a drawn line cut a face open to, so that later lines across them still
+    /// leave them open; see `Model::remember_openings`. Not part of the model's identity.
+    pub(crate) openings: Vec<(Plane, Vec<DVec3>)>,
 }
 
 /// Side of the cells of the vertex grid, in meters.

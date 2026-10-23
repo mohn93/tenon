@@ -191,6 +191,8 @@ impl Model {
     /// plane the new edges reach, once. Faces come out as if the segments were drawn one by
     /// one, except that a region closed only by these segments is never treated as an
     /// existing face by a later one (it matters only inside an opening; see `rebuild_plane`).
+    /// An opening that an earlier segment of the batch cuts its face open to stays open, as it
+    /// does when the segments are drawn one by one (the model remembers it between them).
     pub(crate) fn draw_segments(&mut self, segments: &[(DVec3, DVec3)]) {
         let mut fresh: BTreeSet<EdgeId> = BTreeSet::new();
         let mut near = Nearby::for_batch(segments.len());
