@@ -150,15 +150,15 @@ impl Model {
     }
 
     /// Adds the closed polygon through `points` (each point joined to the next, the last to the
-    /// first) as one ChangeSet, with the same rules as `add_edge`.
+    /// first) as one ChangeSet, with the same rules as `add_edge`. The sides are drawn as one
+    /// batch, so faces are updated once rather than after every side.
     pub fn add_polygon(&mut self, points: &[DVec3]) -> Result<ChangeSet, KernelError> {
         let n = points.len();
-        for i in 0..n {
-            check_segment(points[i], points[(i + 1) % n])?;
+        let sides: Vec<(DVec3, DVec3)> = (0..n).map(|i| (points[i], points[(i + 1) % n])).collect();
+        for (a, b) in &sides {
+            check_segment(*a, *b)?;
         }
-        for i in 0..n {
-            self.draw_segment(points[i], points[(i + 1) % n]);
-        }
+        self.draw_segments(&sides);
         Ok(self.take_changes())
     }
 

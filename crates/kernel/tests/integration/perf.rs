@@ -371,3 +371,23 @@ fn time_intersecting_two_coplanar_combs() {
     assert!(!segs.is_empty());
     assert!(took < Duration::from_secs(1), "took {took:?}");
 }
+
+#[test]
+#[ignore]
+fn time_a_polygon_of_ten_thousand_corners() {
+    let n = 10_000;
+    let points: Vec<DVec3> = (0..n)
+        .map(|i| {
+            let a = TAU * i as f64 / n as f64;
+            DVec3::new(50.0 * a.cos(), 50.0 * a.sin(), 0.0)
+        })
+        .collect();
+    let mut m = Model::new();
+    let (_, took) = timed("a polygon of 10,000 corners", || {
+        m.add_polygon(&points).unwrap()
+    });
+    assert_eq!(m.faces().count(), 1);
+    assert_eq!(m.edges().count(), n);
+    m.validate().unwrap();
+    assert!(took < Duration::from_secs(2), "add_polygon took {took:?}");
+}
