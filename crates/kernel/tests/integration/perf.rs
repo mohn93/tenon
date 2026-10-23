@@ -268,3 +268,72 @@ fn time_shading_a_softened_twenty_thousand_face_terrain() {
     );
     assert!(took < Duration::from_secs(1), "shading took {took:?}");
 }
+
+/// A `n` x `n` grid of triangles (so `2 * n * n` faces) shifted by `(dx, dy)` and bent by a
+/// wave of the given frequency along x, so two of different frequencies cross in many places.
+fn wavy_grid(n: usize, dx: f64, dy: f64, z: f64, freq: f64) -> Model {
+    let mut points = Vec::new();
+    for y in 0..=n {
+        for x in 0..=n {
+            let (fx, fy) = (x as f64 + dx, y as f64 + dy);
+            points.push(DVec3::new(fx, fy, z + (fx * freq).sin() * (fy * 0.7).cos()));
+        }
+    }
+    let at = |x: usize, y: usize| y * (n + 1) + x;
+    let polygons: Vec<MeshPolygon> = (0..n)
+        .flat_map(|y| (0..n).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            [
+                vec![at(x, y), at(x + 1, y), at(x + 1, y + 1)],
+                vec![at(x, y), at(x + 1, y + 1), at(x, y + 1)],
+            ]
+        })
+        .map(|corners| MeshPolygon {
+            corners,
+            material: None,
+        })
+        .collect();
+    let mut scene = Scene::new();
+    scene
+        .import_mesh(
+            MeshId::Root,
+            &points,
+            &polygons,
+            false,
+            DefinitionKind::Group,
+            "grid",
+        )
+        .unwrap();
+    let def = scene.root().instances().next().unwrap().1.definition;
+    scene.mesh(MeshId::Definition(def)).unwrap().clone()
+}
+
+#[test]
+#[ignore]
+fn time_intersecting_two_overlapping_terrains() {
+    use kernel::intersect::{face_segments, face_shape};
+    let a = wavy_grid(100, 0.0, 0.0, 0.0, 0.9);
+    let mut b = wavy_grid(100, 0.5, 0.5, 0.3, 1.3);
+    assert!(a.faces().count() >= 20_000, "{}", a.faces().count());
+    let (segments, took) = timed("all crossings of two 20,000 face grids", || {
+        let mut out = Vec::new();
+        for (id, _) in a.faces() {
+            let Some(fa) = face_shape(&a, id, glam::DAffine3::IDENTITY) else {
+                continue;
+            };
+            let min = fa.outer.iter().fold(DVec3::MAX, |m, p| m.min(*p));
+            let max = fa.outer.iter().fold(DVec3::MIN, |m, p| m.max(*p));
+            for other in b.faces_near_box(min, max) {
+                if let Some(fb) = face_shape(&b, other, glam::DAffine3::IDENTITY) {
+                    out.extend(face_segments(&fa, &fb));
+                }
+            }
+        }
+        out
+    });
+    eprintln!("{} segments", segments.len());
+    assert!(took < Duration::from_secs(30), "crossings took {took:?}");
+    let (_, drew) = timed("add the crossings", || b.add_segments(&segments).unwrap());
+    assert!(drew < Duration::from_secs(60), "drawing took {drew:?}");
+    b.validate().unwrap();
+}

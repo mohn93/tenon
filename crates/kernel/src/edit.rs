@@ -149,6 +149,26 @@ impl Model {
         Ok(self.take_changes())
     }
 
+    /// Adds every segment as one batch with the rules of `add_edge` (see `draw_segments`), as
+    /// one ChangeSet. Segments shorter than `LENGTH_TOL` are skipped, since the result of
+    /// intersecting faces may hold slivers; a segment that is not finite is an error and nothing
+    /// is drawn. Segments that already exist change nothing.
+    pub fn add_segments(&mut self, segments: &[(DVec3, DVec3)]) -> Result<ChangeSet, KernelError> {
+        if segments
+            .iter()
+            .any(|(a, b)| !a.is_finite() || !b.is_finite())
+        {
+            return Err(KernelError::NotFinite);
+        }
+        let kept: Vec<(DVec3, DVec3)> = segments
+            .iter()
+            .copied()
+            .filter(|(a, b)| check_segment(*a, *b).is_ok())
+            .collect();
+        self.draw_segments(&kept);
+        Ok(self.take_changes())
+    }
+
     /// `add_edge` without input checks or ending the edit; the caller checked the segment.
     pub(crate) fn draw_segment(&mut self, a: DVec3, b: DVec3) {
         self.draw_segments(&[(a, b)]);

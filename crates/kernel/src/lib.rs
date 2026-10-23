@@ -16,6 +16,7 @@ mod ids;
 mod import;
 mod import_tree;
 mod index;
+pub mod intersect;
 mod material;
 mod mesh;
 mod model;

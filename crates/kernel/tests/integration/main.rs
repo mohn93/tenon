@@ -14,6 +14,7 @@ mod groups;
 mod guides;
 mod import_tree;
 mod index;
+mod intersect;
 mod materials;
 mod mesh;
 mod pages;
