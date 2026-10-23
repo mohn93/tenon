@@ -168,7 +168,10 @@ impl Editor {
         } else {
             self.set_hidden_of(Command::Unhide { ids }, "Unhid");
         }
-        if moved {
+        // Hiding the open group or one around it closes it, as SketchUp does: the user stays
+        // at its parent rather than inside what is no longer drawn.
+        let closes = hidden && context.starts_with(path);
+        if moved && !closes {
             // Back where the user was, with what was selected there (what is hidden leaves it).
             let message = self.message.take();
             let _ = self.execute(Command::OpenPath { path: context });
@@ -626,6 +629,26 @@ mod tests {
         // Opening inside to see it: the inner group is hidden.
         e.execute(Command::OpenPath { path: vec![outer] }).unwrap();
         assert!(e.context_has_hidden());
+    }
+
+    #[test]
+    fn hiding_the_open_group_from_the_outliner_leaves_it() {
+        let mut e = editor();
+        add_box(&mut e);
+        select_all(&mut e);
+        let ids = e.doc().selection().iter().copied().collect();
+        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let group = out
+            .changes
+            .created
+            .iter()
+            .copied()
+            .find(|id| matches!(id, EntityId::Instance(_)))
+            .unwrap();
+        e.execute(Command::OpenPath { path: vec![group] }).unwrap();
+        assert!(e.outliner_set_hidden(&[group], true));
+        assert!(e.doc().context().is_empty(), "closed with the group hidden");
+        assert!(e.doc().outliner_rows().roots[0].own_hidden);
     }
 
     #[test]
