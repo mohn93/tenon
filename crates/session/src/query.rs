@@ -38,6 +38,10 @@ pub enum Query {
         id: EntityId,
     },
     Camera {},
+    /// Where the model stands (see `set_location`).
+    Location {},
+    /// The sun at the shadow settings' date and time, whether or not shadows are on.
+    Sun {},
     Stats {},
     History {},
     /// The selected edges, faces, instances, guides, dimensions and notes.
@@ -245,6 +249,71 @@ pub struct AxesInfo {
     pub x: [f64; 3],
     pub y: [f64; 3],
     pub z: [f64; 3],
+}
+
+/// The sun's shadow settings: `date` as `YYYY-MM-DD`, `time` as `HH:MM` (the clock at the
+/// model's UTC offset), `light` and `dark` as percentages.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ShadowsInfo {
+    pub on: bool,
+    pub date: String,
+    pub time: String,
+    pub light: u8,
+    pub dark: u8,
+    pub on_ground: bool,
+}
+
+impl From<kernel::Shadows> for ShadowsInfo {
+    fn from(s: kernel::Shadows) -> Self {
+        ShadowsInfo {
+            on: s.on,
+            date: format!("{:04}-{:02}-{:02}", s.year, s.month, s.day),
+            time: format!("{:02}:{:02}", s.minutes / 60, s.minutes % 60),
+            light: s.light,
+            dark: s.dark,
+            on_ground: s.on_ground,
+        }
+    }
+}
+
+/// Where the model stands (see `set_location`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LocationInfo {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub north_angle: f64,
+    pub utc_offset: f64,
+}
+
+impl From<kernel::Location> for LocationInfo {
+    fn from(l: kernel::Location) -> Self {
+        LocationInfo {
+            latitude: l.latitude,
+            longitude: l.longitude,
+            north_angle: l.north_angle,
+            utc_offset: l.utc_offset,
+        }
+    }
+}
+
+/// The sun in the sky and the model (see the `sun` query).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SunInfo {
+    pub direction: [f64; 3],
+    pub azimuth: f64,
+    pub elevation: f64,
+    pub up: bool,
+}
+
+impl From<crate::sun::Sun> for SunInfo {
+    fn from(s: crate::sun::Sun) -> Self {
+        SunInfo {
+            direction: s.direction.to_array(),
+            azimuth: s.azimuth,
+            elevation: s.elevation,
+            up: s.is_up(),
+        }
+    }
 }
 
 /// A section plane: through `point` with the unit vector `normal`, keeping the side the normal
@@ -483,6 +552,7 @@ pub struct SceneView {
     pub color_by_tag: bool,
     pub x_ray: bool,
     pub hidden_geometry: bool,
+    pub shadows: ShadowsInfo,
 }
 
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
@@ -531,9 +601,16 @@ pub enum QueryResult {
         color_by_tag: bool,
         x_ray: bool,
         hidden_geometry: bool,
+        /// The sun's shadow settings (see `set_shadows`).
+        shadows: ShadowsInfo,
         /// The model axes (see `set_axes`).
         axes: AxesInfo,
     },
+    Location(LocationInfo),
+    /// The sun: `direction` the unit vector from the model towards it in the model's x, y and
+    /// z, `azimuth` the degrees clockwise from true north and `elevation` the degrees above
+    /// the horizon, `up` whether it is above the horizon.
+    Sun(SunInfo),
     /// Counts for the open context, plus the number of definitions.
     Stats {
         vertices: usize,

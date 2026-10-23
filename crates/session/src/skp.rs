@@ -1235,6 +1235,7 @@ fn page_view(
         color_by_tag: false,
         x_ray: false,
         hidden_geometry: false,
+        shadows: kernel::Shadows::default(),
     })
 }
 

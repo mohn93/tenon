@@ -258,6 +258,7 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
         tags: Vec::new(),
         pages: Vec::new(),
         axes: None,
+        location: None,
     };
     let s = Scene::from_data(&data).unwrap();
     let (tris, skipped) = s.triangles_and_skipped();

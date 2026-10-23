@@ -12,6 +12,7 @@ use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
     PageId, SectionId, TagId, VertexId,
 };
+use crate::location::Location;
 use crate::material::Material;
 use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::page::{Page, PageView};
@@ -50,6 +51,20 @@ pub struct SceneData {
     /// world axes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub axes: Option<AxesData>,
+    /// Where the model stands. Absent in files written before locations existed (and when it
+    /// is the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<LocationData>,
+}
+
+/// Where the model stands: see [`crate::Location`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocationData {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub north_angle: f64,
+    pub utc_offset: f64,
 }
 
 /// The model axes: an origin and three perpendicular unit vectors, right-handed.
@@ -398,6 +413,15 @@ impl Scene {
                     tags: p.tags.as_ref().map(|t| t.iter().map(|t| t.0).collect()),
                 })
                 .collect(),
+            location: (!self.location().is_default()).then(|| {
+                let l = self.location();
+                LocationData {
+                    latitude: l.latitude,
+                    longitude: l.longitude,
+                    north_angle: l.north_angle,
+                    utc_offset: l.utc_offset,
+                }
+            }),
             axes: (!self.axes().is_world()).then(|| {
                 let a = self.axes();
                 AxesData {
@@ -494,6 +518,16 @@ impl Scene {
         if let Some(a) = &data.axes {
             scene.axes = Axes::from_parts(a.origin.into(), a.x.into(), a.y.into(), a.z.into())
                 .map_err(|e| e.to_string())?;
+        }
+        if let Some(l) = &data.location {
+            let location = Location {
+                latitude: l.latitude,
+                longitude: l.longitude,
+                north_angle: l.north_angle,
+                utc_offset: l.utc_offset,
+            };
+            location.check().map_err(|e| e.to_string())?;
+            scene.location = location;
         }
         scene.validate()?;
         Ok(scene)

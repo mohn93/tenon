@@ -19,6 +19,7 @@ mod import;
 mod import_tree;
 mod index;
 pub mod intersect;
+mod location;
 mod material;
 mod mesh;
 mod model;
@@ -47,8 +48,8 @@ pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     AnchorData, AxesData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
-    InstanceData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData,
-    RadialAnchorData, SceneData, SectionData, TagData, TextureData, VertexData,
+    InstanceData, LocationData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData,
+    PageData, RadialAnchorData, SceneData, SectionData, TagData, TextureData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
@@ -62,10 +63,11 @@ pub use import_tree::{
     MAX_IMPORT_PLACEMENTS, TreeReport,
 };
 pub use index::{Index, Shape, ray_hits_triangle};
+pub use location::Location;
 pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use orient::OrientReport;
-pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView};
+pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView, SHADOW_YEARS, Shadows};
 pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use kernel::{DefinitionId, DefinitionKind, MeshId, Scene, SceneChange};
+use kernel::{DefinitionId, DefinitionKind, MeshId, Scene, SceneChange, Shadows};
 
 use super::{Document, SectionDisplay};
 use crate::camera::{Camera, Lighting};
@@ -57,6 +57,7 @@ impl Document {
             color_by_tag: self.color_by_tag,
             x_ray: self.x_ray,
             hidden_geometry: self.hidden_geometry,
+            shadows: self.shadows,
             section: self.section_display,
             units: self.units,
         }
@@ -82,6 +83,7 @@ impl Document {
         self.color_by_tag = false;
         self.x_ray = false;
         self.hidden_geometry = false;
+        self.shadows = Shadows::default();
         self.section_display = SectionDisplay::default();
         self.path = None;
         self.library_info = None;
@@ -120,6 +122,7 @@ impl Document {
         self.color_by_tag = c.color_by_tag;
         self.x_ray = c.x_ray;
         self.hidden_geometry = c.hidden_geometry;
+        self.shadows = c.shadows;
         self.section_display = SectionDisplay {
             planes: c.section_planes,
             cuts: c.section_cuts,
@@ -237,6 +240,7 @@ impl Document {
         self.color_by_tag = false;
         self.x_ray = false;
         self.hidden_geometry = false;
+        self.shadows = Shadows::default();
         self.section_display = SectionDisplay::default();
         self.path = None;
         self.library_info = None;

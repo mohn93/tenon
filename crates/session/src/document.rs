@@ -6,7 +6,7 @@ use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, DefinitionId, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId,
     KernelError, MaterialEdit, MaterialId, MeshId, Model, PageId, Parts, PlacementEdit, Scene,
-    SceneChange, SoftenReport, TagEdit, VertexId,
+    SceneChange, Shadows, SoftenReport, TagEdit, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
@@ -45,6 +45,7 @@ mod orient;
 mod placement;
 mod scenes;
 mod sections;
+mod shadows;
 mod soften;
 mod tags;
 mod text3d;
@@ -89,6 +90,8 @@ pub struct Document {
     /// Entities hidden by their own flag are drawn ghosted and can be picked; saved with the
     /// camera.
     pub hidden_geometry: bool,
+    /// The sun's shadows and when the sun is where; saved with the camera.
+    pub shadows: Shadows,
     /// Whether section planes are drawn, cut and filled; saved with the camera.
     pub section_display: SectionDisplay,
     /// How labels write lengths; saved with the model, changed by undo steps.
@@ -159,6 +162,7 @@ impl Document {
             color_by_tag: false,
             x_ray: false,
             hidden_geometry: false,
+            shadows: Shadows::default(),
             section_display: SectionDisplay::default(),
             units: Units::default(),
             selection: BTreeSet::new(),
@@ -525,6 +529,24 @@ impl Document {
                 self.x_ray = on;
                 Ok(Outcome::default())
             }
+            Command::SetShadows {
+                on,
+                ref date,
+                ref time,
+                light,
+                dark,
+                on_ground,
+            } => {
+                self.shadows = self.shadows_with(
+                    on,
+                    date.as_deref(),
+                    time.as_deref(),
+                    light,
+                    dark,
+                    on_ground,
+                )?;
+                Ok(Outcome::default())
+            }
             Command::SetHiddenGeometry { on } => {
                 self.hidden_geometry = on;
                 // Turned off, hidden entities leave the selection again.
@@ -686,6 +708,7 @@ impl Document {
             | Command::MakeUnique { .. }
             | Command::SetAxes { .. }
             | Command::ResetAxes {}
+            | Command::SetLocation { .. }
             | Command::Flip { .. }
             | Command::RenameDefinition { .. }
             | Command::PurgeDefinitions {}
@@ -854,6 +877,12 @@ impl Document {
                 y_axis,
             } => self.set_axes_changes(*origin, *x_axis, *y_axis),
             Command::ResetAxes {} => Ok(self.reset_axes_changes()),
+            Command::SetLocation {
+                latitude,
+                longitude,
+                north_angle,
+                utc_offset,
+            } => self.set_location_changes(*latitude, *longitude, *north_angle, *utc_offset),
             Command::MakeUnique { ids } => self.make_unique_changes(ids.as_deref()),
             Command::Flip { ids, axis, frame } => self.flip_changes(ids.as_deref(), *axis, *frame),
             Command::RenameDefinition { definition, name } => {
@@ -1010,6 +1039,7 @@ impl Document {
             | Command::SetColorByTag { .. }
             | Command::SetXRay { .. }
             | Command::SetHiddenGeometry { .. }
+            | Command::SetShadows { .. }
             | Command::SetSectionDisplay { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
@@ -1072,6 +1102,7 @@ impl Document {
         let lighting_before = self.lighting;
         let color_by_tag_before = self.color_by_tag;
         let (x_ray_before, hidden_geometry_before) = (self.x_ray, self.hidden_geometry);
+        let shadows_before = self.shadows;
         let section_display_before = self.section_display;
         let selected_scene_before = self.selected_scene;
         let selection_before = self.selection.clone();
@@ -1135,6 +1166,7 @@ impl Document {
                     self.color_by_tag = color_by_tag_before;
                     self.x_ray = x_ray_before;
                     self.hidden_geometry = hidden_geometry_before;
+                    self.shadows = shadows_before;
                     self.section_display = section_display_before;
                     self.selected_scene = selected_scene_before;
                     self.selection = selection_before;
@@ -2063,6 +2095,7 @@ impl Document {
                 color_by_tag: self.color_by_tag,
                 x_ray: self.x_ray,
                 hidden_geometry: self.hidden_geometry,
+                shadows: self.shadows.into(),
                 axes: {
                     let a = self.scene.axes();
                     AxesInfo {
@@ -2159,6 +2192,8 @@ impl Document {
                 revision: self.revision,
             },
             Query::Units {} => QueryResult::Units(self.units),
+            Query::Location {} => QueryResult::Location(self.scene.location().into()),
+            Query::Sun {} => QueryResult::Sun(self.sun().into()),
             Query::Library { folder } => {
                 QueryResult::Library(crate::library::list(std::path::Path::new(folder))?)
             }

@@ -29,6 +29,8 @@ pub enum KernelError {
     DefinitionNotFound,
     /// Axes that are not a frame; the text says why.
     BadAxes(&'static str),
+    /// A location that is out of range; the text says how.
+    BadLocation(&'static str),
     /// A material id names no material in the scene.
     MaterialNotFound,
     /// A material name is empty, too long or taken; the text says which.
@@ -96,6 +98,7 @@ impl fmt::Display for KernelError {
             KernelError::InstanceNotFound => write!(f, "no such instance"),
             KernelError::DefinitionNotFound => write!(f, "no such definition"),
             KernelError::BadAxes(why) => write!(f, "{why}"),
+            KernelError::BadLocation(why) => write!(f, "{why}"),
             KernelError::MaterialNotFound => write!(f, "no such material"),
             KernelError::TagNotFound => write!(f, "no such tag"),
             KernelError::PageNotFound => write!(f, "no such scene"),

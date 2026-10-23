@@ -204,7 +204,7 @@ fn moved_axes_are_saved_in_schema_15_and_older_files_are_unchanged() {
     )
     .unwrap();
     assert_eq!(version(&moved)["schema_version"], 15);
-    assert_eq!(session::file::SCHEMA_VERSION, 15);
+    assert_eq!(session::file::AXES_SCHEMA_VERSION, 15);
 
     let mut e = doc();
     run(

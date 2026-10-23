@@ -835,6 +835,44 @@ pub enum Command {
     /// hidden tags stay hidden. A view setting like `set_lighting`; print, PDF, SVG and the
     /// line drawing ignore it.
     SetHiddenGeometry { on: bool },
+    /// Set the sun's shadows; absent fields stay as they are. `on` draws the model lit by the
+    /// sun with shadows (ignored while the lighting is `night`). `date` is `YYYY-MM-DD` (years
+    /// 1800 to 2200) and `time` is `HH:MM`, the clock at the model's UTC offset (see
+    /// `set_location`); `light` and `dark` are percentages from 0 to 100 (the sunlit and
+    /// shaded brightness of a face); `on_ground` draws the shadows on the ground plane z = 0.
+    /// Defaults: off, 2026-11-08, 13:30, 80, 45, on the ground. A bad field is
+    /// `invalid_input` and none is applied. A view setting like `set_lighting`, saved with the
+    /// camera and scenes.
+    SetShadows {
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        date: Option<String>,
+        #[serde(default)]
+        time: Option<String>,
+        #[serde(default)]
+        light: Option<i64>,
+        #[serde(default)]
+        dark: Option<i64>,
+        #[serde(default)]
+        on_ground: Option<bool>,
+    },
+    /// Move the model on the Earth, as one undo step; absent fields stay as they are (nothing
+    /// to change makes no step). `latitude` -90 to 90 and `longitude` -180 to 180 degrees;
+    /// `north_angle` the degrees from the green axis clockwise (seen from above) to true
+    /// north, -360 to 360; `utc_offset` the clock's hours east of UTC, -12 to 14 in steps of
+    /// 0.25. Defaults: 40.0167, -105.2833, 0, -7. An out-of-range number is `invalid_input`.
+    /// Drawing axes (`set_axes`) do not move north.
+    SetLocation {
+        #[serde(default)]
+        latitude: Option<f64>,
+        #[serde(default)]
+        longitude: Option<f64>,
+        #[serde(default)]
+        north_angle: Option<f64>,
+        #[serde(default)]
+        utc_offset: Option<f64>,
+    },
 }
 
 impl Command {
@@ -876,6 +914,7 @@ impl Command {
                 | Command::SetColorByTag { .. }
                 | Command::SetXRay { .. }
                 | Command::SetHiddenGeometry { .. }
+                | Command::SetShadows { .. }
                 | Command::SetSectionDisplay { .. }
         )
     }

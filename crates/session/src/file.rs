@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use glam::DVec3;
 use kernel::{
     AnchorData, DimensionData, MAX_ID, MAX_TEXTURES, MeshData, NoteData, RadialAnchorData, Scene,
-    SceneData, TextureImage,
+    SceneData, Shadows, TextureImage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,18 +23,21 @@ use crate::units::{Units, check_precision};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when the model axes are
-/// not the world axes.
+/// The newest schema version this build reads, and the one it writes when the location is not
+/// the default or the camera or a scene's view has non-default shadow settings.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
 /// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
 /// and display units, version 13 section planes and the section display settings, and
-/// version 14 hidden entities and the x-ray and hidden geometry view flags, and version 15 the
-/// model axes; older files still open (untagged before version 10, without scenes before version 11, without
+/// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
+/// model axes, and version 16 the location and sun shadow settings; older files still open (untagged before version 10, without scenes before version 11, without
 /// annotations and in the default units before version 12, without section planes and with
 /// the default section display before version 13).
-pub const SCHEMA_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 16;
+/// The version written when the model axes are not the world axes but the location and the
+/// shadow settings are the defaults.
+pub const AXES_SCHEMA_VERSION: u32 = 15;
 /// The version written when an edge, face, instance or guide is hidden, or the camera or a
 /// scene's view has `x_ray` or `hidden_geometry` on, and the model axes are the world axes.
 pub const HIDDEN_SCHEMA_VERSION: u32 = 14;
@@ -105,6 +108,9 @@ pub(crate) struct StoredCamera {
     pub x_ray: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden_geometry: bool,
+    /// The sun shadow settings, written only when not the defaults (they need version 16).
+    #[serde(default, skip_serializing_if = "Shadows::is_default")]
+    pub shadows: Shadows,
     /// The section display settings, written only when off; files before version 13 show
     /// planes, apply cuts and fill them.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -134,6 +140,7 @@ pub(crate) struct ViewLook {
     pub color_by_tag: bool,
     pub x_ray: bool,
     pub hidden_geometry: bool,
+    pub shadows: Shadows,
     pub section: SectionDisplay,
     pub units: Units,
 }
@@ -201,6 +208,7 @@ pub(crate) fn write_bytes(
         color_by_tag,
         x_ray,
         hidden_geometry,
+        shadows,
         section,
         units,
     } = look;
@@ -257,6 +265,13 @@ pub(crate) fn write_bytes(
                     || m.instances.iter().any(|i| i.hidden)
                     || m.guides.iter().any(|g| g.hidden)
             });
+    // The location lives in the model data, the settings in the camera and scenes.
+    let shaded = model.location.is_some()
+        || !shadows.is_default()
+        || model
+            .pages
+            .iter()
+            .any(|p| p.view.is_some_and(|v| !v.shadows.is_default()));
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -273,8 +288,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if model.axes.is_some() {
+        schema_version: if shaded {
             SCHEMA_VERSION
+        } else if model.axes.is_some() {
+            AXES_SCHEMA_VERSION
         } else if hidden {
             HIDDEN_SCHEMA_VERSION
         } else if sectioned {
@@ -306,6 +323,7 @@ pub(crate) fn write_bytes(
             color_by_tag,
             x_ray,
             hidden_geometry,
+            shadows,
             section_planes: section.planes,
             section_cuts: section.cuts,
             section_fill: section.fill,
@@ -472,6 +490,11 @@ fn read_archive<R: Read + Seek>(
     }
     let mut stored: Stored = serde_json::from_slice(&json).map_err(json_error)?;
     check_coordinates(&stored.model)?;
+    stored
+        .camera
+        .shadows
+        .check()
+        .map_err(|e| format!("the camera's {e}"))?;
     let units = stored.units.unwrap_or_default();
     check_precision(units.precision).map_err(|e| format!("the display units: {e}"))?;
     // Refuse before decoding anything: each decode can take far more memory than its entry.
@@ -697,6 +720,7 @@ mod tests {
             color_by_tag: false,
             x_ray: false,
             hidden_geometry: false,
+            shadows: kernel::Shadows::default(),
         };
         let page = kernel::Page {
             name: "Far".into(),
@@ -713,6 +737,7 @@ mod tests {
             color_by_tag: false,
             x_ray: false,
             hidden_geometry: false,
+            shadows: kernel::Shadows::default(),
             section: SectionDisplay::default(),
             units: Units::default(),
         };

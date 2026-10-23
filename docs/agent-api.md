@@ -86,7 +86,9 @@ Queries:
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
 | `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
-| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`, `x_ray`, `hidden_geometry`; see Camera below |
+| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`, `x_ray`, `hidden_geometry`, `shadows`, `axes`; see Camera below |
+| `{"type": "location"}` | where the model stands: `latitude`, `longitude`, `north_angle`, `utc_offset`; see Location and sun shadows below |
+| `{"type": "sun"}` | the sun at the shadow settings' date and time: `direction`, `azimuth`, `elevation`, `up`; see Location and sun shadows below |
 | `{"type": "selection"}` | the selected edge, face, instance, guide, dimension, note and section plane ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
@@ -113,7 +115,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `deactivate_section`, `set_section_display`, `add_material`,
 `change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
-`set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `new`, `open`, `save`, `export`, `import`.
+`set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_location`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note), `s8` (section plane). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
@@ -842,12 +844,12 @@ SketchUp file (2021 or newer) adds its scenes (see Import).
 
 | Command | Effect |
 |---|---|
-| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting`, `color_by_tag`, `x_ray` and `hidden_geometry`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. A camera whose eye or target is beyond +/-1e6 m (window navigation can go that far) is not stored: `invalid_input` ("the camera is beyond +/-1000000 m: a scene cannot store it"); move the view closer first. |
+| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting`, `color_by_tag`, `x_ray`, `hidden_geometry` and `shadows`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. A camera whose eye or target is beyond +/-1e6 m (window navigation can go that far) is not stored: `invalid_input` ("the camera is beyond +/-1000000 m: a scene cannot store it"); move the view closer first. |
 | `{"type": "update_scene", "scene": "p40", "camera": true, "tags": false}` | Stores the current view and hidden tags in the scene again, as one undo step. An absent `camera` or `tags` stores that part again if the scene stores it; true starts storing it, false stops. Storing what it already stores is no step. Storing the camera beyond +/-1e6 m is refused as for `add_scene`. In the window, Update on a scene that stores neither part says so in the status and changes nothing. |
 | `{"type": "change_scene", "scene": "p40", "name": "Back", "camera": false, "tags": true}` | Renames a scene (name rules as for `add_scene`) and chooses what it stores, as one undo step (none when nothing changes). Each of `name`, `camera` and `tags` is optional, but at least one is needed (`invalid_input`). `camera` or `tags` false stops storing that part; true stores it from the current view or tag visibility only if the scene does not store it yet. A part that stays stored keeps exactly what was stored (unlike `update_scene`, which stores it again). Starting to store the camera beyond +/-1e6 m is refused as for `add_scene`. |
 | `{"type": "move_scene", "scene": "p40", "index": 0}` | Moves a scene to `index` in the order (0: first), as one undo step. An index past the last scene is `invalid_input`. |
 | `{"type": "delete_scene", "scene": "p40"}` | Removes a scene, as one undo step; undo puts it back at its place with what it stored. |
-| `{"type": "go_to_scene", "scene": "p40"}` | Goes to a scene, straight (no transition). A stored view sets the camera, projection, lighting, color by tag, X-ray and Hidden Geometry (going to a scene with Hidden Geometry off drops hidden entities from the selection), a view change like `set_camera` (not an undo step, no change to the revision, put back by a failed atomic batch); the camera comes back exactly as stored, so an `update_scene` right after stores no change. Stored tag visibility shows and hides tags to match (tags the scene does not hide are shown), as one undo step labeled `go_to_scene`, and only when that changes a tag; the outcome's `changes.tags` lists them. A part the scene does not store is left as it is. It becomes the selected scene. |
+| `{"type": "go_to_scene", "scene": "p40"}` | Goes to a scene, straight (no transition). A stored view sets the camera, projection, lighting, color by tag, X-ray, Hidden Geometry and the shadow settings (going to a scene with Hidden Geometry off drops hidden entities from the selection), a view change like `set_camera` (not an undo step, no change to the revision, put back by a failed atomic batch); the camera comes back exactly as stored, so an `update_scene` right after stores no change. Stored tag visibility shows and hides tags to match (tags the scene does not hide are shown), as one undo step labeled `go_to_scene`, and only when that changes a tag; the outcome's `changes.tags` lists them. A part the scene does not store is left as it is. It becomes the selected scene. |
 
 Every scene command but `go_to_scene` is an undo step (when it changes something), changes the
 revision, marks the model modified and lists the scene in its `changes.scenes` (also in
@@ -867,7 +869,7 @@ whatever instance is open; `go_to_scene` leaves the open instance open.
 `{"scenes": [{"id": "p40", "name": "Front", "camera": true, "tags": true, "selected": true}], "revision": 12}`.
 `{"type": "scene", "scene": "p40"}` gives the stored view in the `camera` query's terms (without
 `view_height`) and the hidden tag ids:
-`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false}, "hidden_tags": ["t31"], "revision": 12}`.
+`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false, "shadows": {"on": false, "date": "2026-11-08", "time": "13:30", "light": 80, "dark": 45, "on_ground": true}}, "hidden_tags": ["t31"], "revision": 12}`.
 
 ### Groups and components
 
@@ -1046,6 +1048,7 @@ fails with `invalid_input` and leaves the camera as it was.
 ```
 {"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
  "projection": "perspective", "view_height": 10.11, "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false,
+ "shadows": {"on": false, "date": "2026-11-08", "time": "13:30", "light": 80, "dark": 45, "on_ground": true},
  "axes": {"origin": [0,0,0], "x": [1,0,0], "y": [0,1,0], "z": [0,0,1]}}
 ```
 
@@ -1062,6 +1065,7 @@ fails with `invalid_input` and leaves the camera as it was.
 - `x_ray` is whether every shown face is drawn as glass (`set_x_ray`).
 - `hidden_geometry` is whether entities hidden by their own flag are drawn ghosted and can be
   picked (`set_hidden_geometry`; see Hide and unhide).
+- `shadows` is the sun's shadow settings (`set_shadows`; see Location and sun shadows below).
 - `axes` is the model axes (see Axes below): `origin` and the unit vectors `x` (red), `y` (green)
   and `z` (blue), the world axes until `set_axes` moves them.
 
@@ -1078,6 +1082,7 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "set_color_by_tag", "on": true}` | Draws faces in their tags' colors, or (`false`) by their materials (see Tags). A view setting like `set_lighting`. |
 | `{"type": "set_x_ray", "on": true}` | X-ray: every shown face is drawn as glass, opacity 0.5 on both sides (a side more transparent already keeps its own), so edges behind faces show. Picking, snapping and shadows are unchanged, and hidden entities stay hidden. A view setting like `set_lighting` (no undo step, not a change to the revision, put back by a failed atomic batch, saved with the camera and stored by scenes); print, PDF, SVG, the line drawing and library thumbnails ignore it. |
 | `{"type": "set_hidden_geometry", "on": true}` | Hidden Geometry: entities hidden by their own flag (see Hide and unhide) are drawn ghosted (faces as glass at opacity 0.25 in their material's color, edges and guides in light grey; they cast no shadow and give no light) and can be picked, box selected and selected, so they can be unhidden. Inference and the tools' snaps still ignore them, and entities on hidden tags stay hidden. Turning it off (or going to a scene that has it off) drops hidden entities from the selection. Annotations and section planes placed by a hidden instance are not drawn while it is on. A view setting like `set_x_ray`; print, PDF, SVG, the line drawing and thumbnails ignore it. |
+| `{"type": "set_shadows", "on": true, "date": "2026-06-21", "time": "16:45", "light": 80, "dark": 45, "on_ground": true}` | Sets the sun's shadows; every field is optional and absent ones stay as they are. See Location and sun shadows below. A view setting like `set_lighting` (no undo step, not a change to the revision, put back by a failed atomic batch, saved with the camera and stored by scenes). |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
 standard views, the two projections and Night Lighting (checked at night; `set_lighting`); it
@@ -1415,10 +1420,49 @@ also shows a failed command's message in `editor.message`. Subscribers get the u
 after the events. `inference` is reported in Select too, though the window draws no marker
 there (unless the Paste tool is out). `preview` no longer outlines the hovered target; agents read `editor.hovered` for that.
 
+### Location and sun shadows
+
+The model's location is a model property: `latitude` and `longitude` in degrees,
+`north_angle`, the degrees from the green axis clockwise (seen from above) to true north, and
+`utc_offset`, the clock's hours east of UTC. The defaults are SketchUp's: 40.0167, -105.2833
+(Boulder), 0 and -7. `{"type": "set_location", "latitude": 51.5, "longitude": -0.12,
+"north_angle": 12.5, "utc_offset": 0}` changes the fields given and keeps the others, as one
+undo step labeled `set_location` (a change to the revision; nothing to change makes no step).
+`latitude` is -90 to 90, `longitude` -180 to 180, `north_angle` -360 to 360 and `utc_offset`
+-12 to 14 in steps of 0.25 (5.5 is fine, 5.1 is not); anything else is `invalid_input` and
+changes nothing. The model's drawing axes (`set_axes`) do not move north: north is measured
+from the world green axis. `{"type": "location"}` returns `{"type": "location", "latitude":
+40.0167, "longitude": -105.2833, "north_angle": 0.0, "utc_offset": -7.0}`.
+
+The shadow settings are a view setting, in the `camera` query's `shadows`:
+
+```
+{"on": false, "date": "2026-11-08", "time": "13:30", "light": 80, "dark": 45, "on_ground": true}
+```
+
+`{"type": "set_shadows", ...}` takes any of these fields (the values above are the defaults).
+`on` lights the model by the sun and draws shadows (ignored, with no shadows drawn, while the
+lighting is `night`). `date` is `YYYY-MM-DD`, a real date in the years 1800 to 2200 (leap years
+count); `time` is `HH:MM`, the clock at the model's `utc_offset`, 00:00 to 23:59; `light` and
+`dark` are whole percentages, 0 to 100, for how bright a face the sun hits and a face in shade
+is; `on_ground` draws the shadows on the ground plane at z = 0. A bad field is `invalid_input`
+and none of the fields is applied. The settings are saved with the camera and stored by
+scenes (`add_scene`, `update_scene`; `go_to_scene` restores them; a scene's `view` has the same
+`shadows`), and `new` starts with the defaults.
+
+`{"type": "sun"}` returns the sun at the settings' date and time whether or not `on` is set:
+`{"type": "sun", "direction": [-0.421, -0.774, 0.472], "azimuth": 208.75, "elevation": 28.17,
+"up": true}`. `direction` is the unit vector from the model towards the sun, in the model's
+x, y, z (z up; true north is the green axis turned clockwise by `north_angle`), `azimuth` is
+degrees clockwise from true north (0 to 360), `elevation` degrees above the horizon (negative
+at night; geometric, with no refraction) and `up` is whether the sun is above the horizon. The
+position is NOAA's simplified solar calculation (fractional year, equation of time,
+declination, true solar time, hour angle), within 0.5 degrees of the NOAA calculator.
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque
@@ -1435,7 +1479,7 @@ and `new` starts by day, `"color_by_tag": true` when faces are colored by tag, a
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
 hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
 one's id, name, `view` when it stores one (`eye`, `target`, `up`, `fov_y` in radians, and
-`parallel`, `night`, `color_by_tag`, `x_ray` and `hidden_geometry` when true), and `tags`, the tag ids it hides, when it
+`parallel`, `night`, `color_by_tag`, `x_ray` and `hidden_geometry` when true, and `shadows` when not the defaults), and `tags`, the tag ids it hides, when it
 stores tag visibility), each mesh's `dimensions` and `notes` (see Dimensions and notes; absent
 when none), and the display `units` (absent when the default). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in
@@ -1811,7 +1855,7 @@ agent or the person at the window):
 | `changed` | `{revision, changes}`, plus `units` when the change set the display units | after every model change, in order (see Methods) |
 | `resync` | `{revision}` | changes were missed: read the model again |
 | `selection` | `{ids, revision}`, as the `selection` query returns | the selection changed |
-| `camera` | the `camera` query's result (without `type`) | the camera or the lighting changed: navigating in the window, fly mode, camera commands |
+| `camera` | the `camera` query's result (without `type`) | the camera, the lighting or the shadow settings changed: navigating in the window, fly mode, camera commands |
 | `editor` | the `editor` query's result (without `type`) | anything in it changed: the tool, its phase or points, what is under the cursor, the status bar or measurements box (which follow the cursor in the window), the paint material, import units, fly mode, the view's size, the Soften Edges window |
 
 `selection`, `camera` and `editor` are coalesced: at most one of each per frame the window draws

@@ -16,6 +16,7 @@ fn view(x: f64) -> PageView {
         color_by_tag: false,
         x_ray: false,
         hidden_geometry: false,
+        shadows: kernel::Shadows::default(),
     }
 }
 

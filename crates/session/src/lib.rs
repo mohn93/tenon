@@ -27,6 +27,7 @@ pub mod share;
 mod skp;
 mod skp_export;
 mod sniff;
+pub mod sun;
 mod svg;
 pub mod text3d;
 pub mod texture;

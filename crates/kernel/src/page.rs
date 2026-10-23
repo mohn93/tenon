@@ -41,6 +41,90 @@ pub struct PageView {
     /// Entities hidden by their own flag drawn ghosted and open to picking.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden_geometry: bool,
+    /// Sun shadows (see [`Shadows`]); written only when not the default.
+    #[serde(default, skip_serializing_if = "Shadows::is_default")]
+    pub shadows: Shadows,
+}
+
+/// The sun shadow settings of a view: whether the sun lights the model and casts shadows, and
+/// when. The date is a calendar date and `minutes` the local clock time (minutes since
+/// midnight) at the model's UTC offset. `light` and `dark` are percentages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Shadows {
+    pub on: bool,
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub minutes: u16,
+    pub light: u8,
+    pub dark: u8,
+    pub on_ground: bool,
+}
+
+impl Default for Shadows {
+    fn default() -> Self {
+        Shadows {
+            on: false,
+            year: 2026,
+            month: 11,
+            day: 8,
+            minutes: 13 * 60 + 30,
+            light: 80,
+            dark: 45,
+            on_ground: true,
+        }
+    }
+}
+
+/// The years a shadow date may have.
+pub const SHADOW_YEARS: std::ops::RangeInclusive<u16> = 1800..=2200;
+
+impl Shadows {
+    pub fn is_default(&self) -> bool {
+        *self == Shadows::default()
+    }
+
+    /// Whether `year` is a leap year of the Gregorian calendar.
+    pub fn is_leap_year(year: u16) -> bool {
+        (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+    }
+
+    /// The days in `month` (1 to 12) of `year`; 0 for any other month.
+    pub fn days_in_month(year: u16, month: u8) -> u8 {
+        match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if Shadows::is_leap_year(year) => 29,
+            2 => 28,
+            _ => 0,
+        }
+    }
+
+    /// Fails, saying why, when the date is not a real date in [`SHADOW_YEARS`], the time is
+    /// not within a day or a level is over 100.
+    pub fn check(&self) -> Result<(), String> {
+        if !SHADOW_YEARS.contains(&self.year) {
+            return Err(format!(
+                "a shadow date's year must be from {} to {}",
+                SHADOW_YEARS.start(),
+                SHADOW_YEARS.end()
+            ));
+        }
+        if self.day == 0 || self.day > Shadows::days_in_month(self.year, self.month) {
+            return Err(format!(
+                "{:04}-{:02}-{:02} is not a date",
+                self.year, self.month, self.day
+            ));
+        }
+        if self.minutes >= 24 * 60 {
+            return Err("a shadow time must be within a day (00:00 to 23:59)".into());
+        }
+        if self.light > 100 || self.dark > 100 {
+            return Err("light and dark must be from 0 to 100".into());
+        }
+        Ok(())
+    }
 }
 
 /// A saved scene. `view: None` leaves the camera and view settings alone when the page is gone
@@ -89,6 +173,7 @@ pub(crate) fn check_view(v: &PageView) -> Result<(), String> {
     if v.up.iter().all(|x| *x == 0.0) {
         return Err("a scene's up direction must not be zero".into());
     }
+    v.shadows.check().map_err(|e| format!("a scene's {e}"))?;
     Ok(())
 }
 
