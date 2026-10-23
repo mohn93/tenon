@@ -58,7 +58,7 @@ cargo test --release -p kernel --test integration perf:: -- --ignored --nocaptur
 ```
 
 `crates/session/tests/integration/perf.rs` times saving and opening a big model, purging many definitions,
-and Intersect Faces over 22,500 placed boxes with Select All (With Model, about 0.1 s):
+Intersect Faces over 22,500 placed boxes with Select All (With Model, about 0.1 s), and an ignored release test that two long self-crossing curves are refused or drawn in under a second:
 
 ```
 cargo test --release -p session --test integration perf:: -- --ignored --nocapture
