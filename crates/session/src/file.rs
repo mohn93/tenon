@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use glam::DVec3;
 use kernel::{
     AnchorData, DimensionData, MAX_ID, MAX_TEXTURES, MeshData, NoteData, RadialAnchorData, Scene,
-    SceneData, Shadows, TextureImage,
+    SceneData, Shadows, StyleId, TextureImage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,20 +23,26 @@ use crate::units::{StoredUnits, Units};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when the location is not
-/// the default or the camera or a scene's view has non-default shadow settings.
+/// The newest schema version this build reads.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
 /// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
 /// and display units, version 13 section planes and the section display settings, and
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
-/// model axes, version 16 the location and sun shadow settings, and version 17 decimal feet
-/// and the length and angle snapping settings of the display units; older files still open
+/// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
+/// and the length and angle snapping settings of the display units, and version 18 styles
+/// and the style a view chooses; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 17;
+pub const SCHEMA_VERSION: u32 = 18;
+/// The version written when the model has a style or the camera or a scene's view chooses
+/// one.
+pub const STYLES_SCHEMA_VERSION: u32 = 18;
+/// The version written when the display units have the decimal feet or snapping settings but
+/// the model has no style.
+pub const SNAP_SCHEMA_VERSION: u32 = 17;
 /// The version written when the location or the shadow settings are not the defaults but the
 /// display units are readable by version 16.
 pub const SHADOWS_SCHEMA_VERSION: u32 = 16;
@@ -116,6 +122,9 @@ pub(crate) struct StoredCamera {
     /// The sun shadow settings, written only when not the defaults (they need version 16).
     #[serde(default, skip_serializing_if = "Shadows::is_default")]
     pub shadows: Shadows,
+    /// The style the view draws with, written only when one is chosen (it needs version 18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<StyleId>,
     /// The section display settings, written only when off; files before version 13 show
     /// planes, apply cuts and fill them.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -146,6 +155,7 @@ pub(crate) struct ViewLook {
     pub x_ray: bool,
     pub hidden_geometry: bool,
     pub shadows: Shadows,
+    pub style: Option<StyleId>,
     pub section: SectionDisplay,
     pub units: Units,
 }
@@ -214,6 +224,7 @@ pub(crate) fn write_bytes(
         x_ray,
         hidden_geometry,
         shadows,
+        style,
         section,
         units,
     } = look;
@@ -277,6 +288,12 @@ pub(crate) fn write_bytes(
             .pages
             .iter()
             .any(|p| p.view.is_some_and(|v| !v.shadows.is_default()));
+    let styled = !model.styles.is_empty()
+        || style.is_some()
+        || model
+            .pages
+            .iter()
+            .any(|p| p.view.is_some_and(|v| v.style.is_some()));
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -293,8 +310,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if units.needs_snap_schema() {
-            SCHEMA_VERSION
+        schema_version: if styled {
+            STYLES_SCHEMA_VERSION
+        } else if units.needs_snap_schema() {
+            SNAP_SCHEMA_VERSION
         } else if shaded {
             SHADOWS_SCHEMA_VERSION
         } else if model.axes.is_some() {
@@ -331,6 +350,7 @@ pub(crate) fn write_bytes(
             x_ray,
             hidden_geometry,
             shadows,
+            style,
             section_planes: section.planes,
             section_cuts: section.cuts,
             section_fill: section.fill,
@@ -552,6 +572,11 @@ fn read_archive<R: Read + Seek>(
     }
     let scene = Scene::from_data(&stored.model)?;
     let c = &stored.camera;
+    if let Some(s) = c.style
+        && scene.style(s).is_none()
+    {
+        return Err(format!("the camera view chooses a missing style {s}"));
+    }
     if !c
         .eye
         .iter()
@@ -730,6 +755,7 @@ mod tests {
             x_ray: false,
             hidden_geometry: false,
             shadows: kernel::Shadows::default(),
+            style: None,
         };
         let page = kernel::Page {
             name: "Far".into(),
@@ -747,6 +773,7 @@ mod tests {
             x_ray: false,
             hidden_geometry: false,
             shadows: kernel::Shadows::default(),
+            style: None,
             section: SectionDisplay::default(),
             units: Units::default(),
         };

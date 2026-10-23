@@ -28,6 +28,7 @@ mod scale;
 mod sections;
 mod smooth;
 mod soften;
+mod styles;
 mod tags;
 mod texture_placement;
 mod textures;

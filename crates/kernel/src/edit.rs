@@ -55,6 +55,11 @@ pub enum KernelError {
     /// A page name is blank, too long or taken, its view is invalid, or a move index is out
     /// of range; the text says which.
     Page(String),
+    /// A style id names no style in the scene.
+    StyleNotFound,
+    /// A style name is blank, too long or taken, or its settings are out of range; the text
+    /// says which.
+    Style(String),
     /// An import makes nothing: nothing in the file makes a face, edge, guide or instance.
     NothingToImport,
     /// An import would make more faces than `MAX_IMPORT_FACES`.
@@ -102,6 +107,7 @@ impl fmt::Display for KernelError {
             KernelError::MaterialNotFound => write!(f, "no such material"),
             KernelError::TagNotFound => write!(f, "no such tag"),
             KernelError::PageNotFound => write!(f, "no such scene"),
+            KernelError::StyleNotFound => write!(f, "no such style"),
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
@@ -109,6 +115,7 @@ impl fmt::Display for KernelError {
             | KernelError::TexturePlacement(why)
             | KernelError::TagName(why)
             | KernelError::Page(why)
+            | KernelError::Style(why)
             | KernelError::InvalidImport(why)
             | KernelError::Annotation(why)
             | KernelError::Section(why) => {

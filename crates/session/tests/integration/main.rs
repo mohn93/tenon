@@ -44,6 +44,7 @@ mod skp;
 mod skp_export;
 mod small_tools;
 mod soften;
+mod styles;
 mod sun;
 mod tags;
 mod text3d;

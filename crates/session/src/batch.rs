@@ -1,8 +1,8 @@
 //! Batch commands that refer to ids made by earlier commands of the same batch.
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
-//! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`, `d` from the
-//! outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
+//! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`, `y` from
+//! `changes.styles`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
 //! dimension, note and section plane command N created (not vertices: `"$N:v*"` names
 //! those). `*` references expand in place in id lists only.
 //!
@@ -13,7 +13,7 @@ use std::fmt;
 
 use kernel::{
     DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
-    SectionId, VertexId,
+    SectionId, StyleId, VertexId,
 };
 use serde_json::Value;
 
@@ -39,6 +39,7 @@ pub enum RefKind {
     Section,
     Material,
     Definition,
+    Style,
 }
 
 impl RefKind {
@@ -54,6 +55,7 @@ impl RefKind {
             's' => RefKind::Section,
             'm' => RefKind::Material,
             'd' => RefKind::Definition,
+            'y' => RefKind::Style,
             _ => return None,
         })
     }
@@ -70,6 +72,7 @@ impl RefKind {
             RefKind::Section => 's',
             RefKind::Material => 'm',
             RefKind::Definition => 'd',
+            RefKind::Style => 'y',
         }
     }
 
@@ -96,6 +99,8 @@ impl RefKind {
             RefKind::Material => "materials",
             RefKind::Definition if one => "definition",
             RefKind::Definition => "definitions",
+            RefKind::Style if one => "style",
+            RefKind::Style => "styles",
         }
     }
 
@@ -138,7 +143,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmd])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -225,6 +230,12 @@ impl BatchRef {
         Ok(self.pick(made, RefKind::Definition)?[0])
     }
 
+    /// The style this reference stands for.
+    fn style(&self, done: &[Outcome]) -> Result<StyleId, CommandError> {
+        let styles = &self.outcome(done)?.changes.styles;
+        Ok(self.pick(styles, RefKind::Style)?[0])
+    }
+
     /// The material this reference stands for.
     fn material(&self, done: &[Outcome]) -> Result<MaterialId, CommandError> {
         let materials = &self.outcome(done)?.changes.materials;
@@ -271,6 +282,8 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("note", Some("change_note"))
+                | ("style", Some("change_style" | "delete_style" | "set_style"))
+                | ("from", Some("add_style"))
                 | (
                     "plane",
                     Some("flip_section_plane" | "activate_section_plane")
@@ -297,6 +310,8 @@ impl BatchCommand {
                     Want::Material
                 } else if key == "definition" {
                     Want::Definition
+                } else if key == "style" || key == "from" {
+                    Want::Style
                 } else if key == "item" {
                     Want::Either
                 } else {
@@ -349,6 +364,7 @@ impl BatchCommand {
                 Slot::One(id) => usize::from(is_stand_in(id)),
                 Slot::Material(m) => usize::from(m.0 >= STAND_IN_BASE),
                 Slot::Definition(d) => usize::from(d.0 >= STAND_IN_BASE),
+                Slot::Style(s) => usize::from(s.0 >= STAND_IN_BASE),
                 Slot::Item(r) => usize::from(is_stand_in_ref(r)),
             }
         });
@@ -389,6 +405,7 @@ impl BatchCommand {
                 Slot::One(id) => self.resolve_one(id, done),
                 Slot::Material(m) => self.resolve_material(m, done),
                 Slot::Definition(d) => self.resolve_definition(d, done),
+                Slot::Style(s) => self.resolve_style(s, done),
                 Slot::Item(r) => self.resolve_item(r, done),
             };
             if let Err(e) = result {
@@ -444,6 +461,13 @@ impl BatchCommand {
         Ok(())
     }
 
+    fn resolve_style(&self, s: &mut StyleId, done: &[Outcome]) -> Result<(), CommandError> {
+        if s.0 >= STAND_IN_BASE {
+            *s = self.reference(s.0).style(done)?;
+        }
+        Ok(())
+    }
+
     fn resolve_material(&self, m: &mut MaterialId, done: &[Outcome]) -> Result<(), CommandError> {
         if m.0 >= STAND_IN_BASE {
             *m = self.reference(m.0).material(done)?;
@@ -458,6 +482,7 @@ enum Want {
     Entity,
     Material,
     Definition,
+    Style,
     Either,
 }
 
@@ -475,6 +500,7 @@ fn replace(
         let literal = match want {
             Want::Material => text.parse::<MaterialId>().map(|m| m.0).ok(),
             Want::Definition => text.parse::<DefinitionId>().map(|d| d.0).ok(),
+            Want::Style => text.parse::<StyleId>().map(|s| s.0).ok(),
             Want::Entity => text.parse::<EntityId>().map(|id| number(&id)).ok(),
             Want::Either => text.parse::<LibraryRef>().ok().map(|r| match r {
                 LibraryRef::Entity(id) => number(&id),
@@ -490,6 +516,13 @@ fn replace(
     if r.command >= index {
         return Err(format!("{text:?} must refer to an earlier command"));
     }
+    let is_style = r.kind == Some(RefKind::Style);
+    if want == Want::Style && !is_style {
+        return Err(format!("{text:?} is not a style"));
+    }
+    if want != Want::Style && is_style {
+        return Err(format!("{text:?} is a style, not an id of that kind"));
+    }
     let is_material = r.kind == Some(RefKind::Material);
     let is_definition = r.kind == Some(RefKind::Definition);
     if want == Want::Material && !is_material {
@@ -504,11 +537,13 @@ fn replace(
     if want != Want::Definition && is_definition {
         return Err(format!("{text:?} is a definition, not an entity"));
     }
-    if r.index.is_none() && (is_material || is_definition) {
+    if r.index.is_none() && (is_material || is_definition || is_style) {
         return Err(format!(
             "{text:?} must name one {}",
             if is_material {
                 "material"
+            } else if is_style {
+                "style"
             } else {
                 "definition"
             }
@@ -552,6 +587,7 @@ enum Slot<'a> {
     One(&'a mut EntityId),
     Material(&'a mut MaterialId),
     Definition(&'a mut DefinitionId),
+    Style(&'a mut StyleId),
     /// An instance or a material (`save_to_library`'s `item`).
     Item(&'a mut LibraryRef),
 }
@@ -626,6 +662,19 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::List(ids));
             if let Some(material) = material {
                 f(Slot::Material(material));
+            }
+        }
+        Command::AddStyle { from, .. } => {
+            if let Some(from) = from {
+                f(Slot::Style(from));
+            }
+        }
+        Command::ChangeStyle { style, .. } | Command::DeleteStyle { style } => {
+            f(Slot::Style(style))
+        }
+        Command::SetStyle { style } => {
+            if let Some(style) = style {
+                f(Slot::Style(style));
             }
         }
         Command::AddEdge { .. }

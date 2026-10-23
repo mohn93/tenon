@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kernel::{
     ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, MaterialId,
-    PageId, TagId, TexturePlacement,
+    PageId, StyleId, StyleSettings, TagId, TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,9 @@ pub enum Query {
     Tags {},
     /// Every scene, in order: what each stores and which is selected.
     Scenes {},
+    /// The styles (see `add_style`): id, name and settings of each, in the order they were
+    /// made. `set_style` chooses one; the `camera` query tells which is chosen.
+    Styles {},
     /// One scene: the view and the hidden tags it stores.
     Scene {
         scene: PageId,
@@ -553,6 +556,17 @@ pub struct SceneView {
     pub x_ray: bool,
     pub hidden_geometry: bool,
     pub shadows: ShadowsInfo,
+    /// The style the scene chooses; absent when it chooses none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<StyleId>,
+}
+
+/// A style in the `styles` list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StyleInfo {
+    pub id: StyleId,
+    pub name: String,
+    pub settings: StyleSettings,
 }
 
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
@@ -603,6 +617,9 @@ pub enum QueryResult {
         hidden_geometry: bool,
         /// The sun's shadow settings (see `set_shadows`).
         shadows: ShadowsInfo,
+        /// The style the view draws with (see `set_style`); absent when none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<StyleId>,
         /// The model axes (see `set_axes`).
         axes: AxesInfo,
     },
@@ -647,6 +664,11 @@ pub enum QueryResult {
     },
     Tags {
         tags: Vec<TagInfo>,
+        revision: u64,
+    },
+    /// The styles, in the order they were made, each with its settings.
+    Styles {
+        styles: Vec<StyleInfo>,
         revision: u64,
     },
     Scenes {

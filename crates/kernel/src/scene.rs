@@ -10,12 +10,13 @@ use crate::axes::Axes;
 use crate::edit::KernelError;
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, SectionId, TagId,
+    NoteId, PageId, SectionId, StyleId, TagId,
 };
 use crate::location::Location;
 use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
 use crate::page::Page;
+use crate::style::Style;
 use crate::tag::Tag;
 
 /// A group has one instance, and a copy of it gets a definition of its own. A component is
@@ -100,6 +101,10 @@ pub enum Step {
     ChangePage(PageId, Page, Page),
     /// A page moved from the first index in the page order to the second.
     MovePage(PageId, usize, usize),
+    AddStyle(StyleId, Style),
+    RemoveStyle(StyleId, Style),
+    /// A style's name or settings changed from the first to the second.
+    ChangeStyle(StyleId, Style, Style),
     /// The model axes changed from the first to the second.
     SetAxes(Axes, Axes),
     /// The model's location changed from the first to the second.
@@ -123,6 +128,9 @@ impl Step {
             Step::RemovePage(id, index, p) => Step::AddPage(id, index, p),
             Step::ChangePage(id, from, to) => Step::ChangePage(id, to, from),
             Step::MovePage(id, from, to) => Step::MovePage(id, to, from),
+            Step::AddStyle(id, s) => Step::RemoveStyle(id, s),
+            Step::RemoveStyle(id, s) => Step::AddStyle(id, s),
+            Step::ChangeStyle(id, from, to) => Step::ChangeStyle(id, to, from),
             Step::SetAxes(from, to) => Step::SetAxes(to, from),
             Step::SetLocation(from, to) => Step::SetLocation(to, from),
         }
@@ -156,7 +164,7 @@ impl SceneChange {
     /// Net effect per entity across all meshes (ids are unique in a scene). Definitions are not
     /// listed; the instances that place them are. Materials added, removed or changed are
     /// listed in `materials`, tags so in `tags` and pages added, removed, changed or moved in
-    /// `scenes` (one added and removed again is not).
+    /// `scenes` and styles so in `styles` (one added and removed again is not).
     pub fn summary(&self) -> ChangeSummary {
         let ops = self
             .steps
@@ -216,6 +224,22 @@ impl SceneChange {
             .filter(|(_, (before, after))| *before || *after)
             .map(|(id, _)| id)
             .collect();
+        // style -> (existed before, exists after)
+        let mut styles: BTreeMap<StyleId, (bool, bool)> = BTreeMap::new();
+        for step in &self.steps {
+            let (id, before, after) = match step {
+                Step::AddStyle(id, _) => (*id, false, true),
+                Step::RemoveStyle(id, _) => (*id, true, false),
+                Step::ChangeStyle(id, _, _) => (*id, true, true),
+                _ => continue,
+            };
+            styles.entry(id).or_insert((before, after)).1 = after;
+        }
+        summary.styles = styles
+            .into_iter()
+            .filter(|(_, (before, after))| *before || *after)
+            .map(|(id, _)| id)
+            .collect();
         summary
     }
 }
@@ -237,6 +261,8 @@ pub struct Scene {
     pub(crate) tags: BTreeMap<TagId, Tag>,
     /// The pages (saved scenes), in their order.
     pub(crate) pages: Vec<(PageId, Page)>,
+    /// The styles views may choose, by id.
+    pub(crate) styles: BTreeMap<StyleId, Style>,
     /// The model axes (see [`Axes`]).
     pub(crate) axes: Axes,
     /// Where the model stands (see [`Location`]).
@@ -257,6 +283,7 @@ impl PartialEq for Scene {
             && self.materials == other.materials
             && self.tags == other.tags
             && self.pages == other.pages
+            && self.styles == other.styles
             && self.axes == other.axes
             && self.location == other.location
     }
@@ -276,6 +303,7 @@ impl Scene {
             materials: BTreeMap::new(),
             tags: BTreeMap::new(),
             pages: Vec::new(),
+            styles: BTreeMap::new(),
             axes: Axes::WORLD,
             location: Location::DEFAULT,
             view_hidden: BTreeSet::new(),
@@ -290,6 +318,7 @@ impl Scene {
         materials: BTreeMap<MaterialId, Material>,
         tags: BTreeMap<TagId, Tag>,
         pages: Vec<(PageId, Page)>,
+        styles: BTreeMap<StyleId, Style>,
         next_id: u64,
     ) -> Self {
         let used = definitions
@@ -298,6 +327,7 @@ impl Scene {
             .chain(materials.keys().map(|id| id.0.saturating_add(1)))
             .chain(tags.keys().map(|id| id.0.saturating_add(1)))
             .chain(pages.iter().map(|(id, _)| id.0.saturating_add(1)))
+            .chain(styles.keys().map(|id| id.0.saturating_add(1)))
             .chain([root.next_id(), next_id])
             .max()
             .unwrap_or(0);
@@ -307,6 +337,7 @@ impl Scene {
             materials,
             tags,
             pages,
+            styles,
             axes: Axes::WORLD,
             location: Location::DEFAULT,
             next_id: used,
@@ -379,6 +410,13 @@ impl Scene {
     /// A page id for a new page, taken from the entity id counter.
     pub(crate) fn alloc_page(&mut self) -> PageId {
         let id = PageId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// A style id for a new style, taken from the entity id counter.
+    pub(crate) fn alloc_style(&mut self) -> StyleId {
+        let id = StyleId(self.next_id);
         self.next_id += 1;
         id
     }
@@ -643,6 +681,18 @@ impl Scene {
                     *p = to.clone();
                 }
             }
+            Step::AddStyle(id, s) => {
+                self.next_id = self.next_id.max(id.0.saturating_add(1));
+                self.styles.insert(*id, s.clone());
+            }
+            Step::RemoveStyle(id, _) => {
+                self.styles.remove(id);
+            }
+            Step::ChangeStyle(id, _, to) => {
+                if let Some(s) = self.styles.get_mut(id) {
+                    *s = to.clone();
+                }
+            }
             Step::SetAxes(_, to) => self.axes = *to,
             Step::SetLocation(_, to) => self.location = *to,
             Step::MovePage(id, _, to) => {
@@ -702,6 +752,21 @@ impl Scene {
                 return Err(format!("scene {id} hides a missing tag {t}"));
             }
         }
+        let mut style_names = BTreeSet::new();
+        for (id, s) in &self.styles {
+            crate::style::check_name(&s.name).map_err(|e| format!("style {id}: {e}"))?;
+            s.settings.check().map_err(|e| format!("style {id}: {e}"))?;
+            if !style_names.insert(s.name.as_str()) {
+                return Err(format!("style {id}: two styles are named the same"));
+            }
+        }
+        for (id, p) in &self.pages {
+            if let Some(s) = p.view.and_then(|v| v.style)
+                && !self.styles.contains_key(&s)
+            {
+                return Err(format!("scene {id} chooses a missing style {s}"));
+            }
+        }
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
         // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "r", "n", "s", "c",
@@ -723,6 +788,9 @@ impl Scene {
         }
         for (id, _) in &self.pages {
             claim(id.0, 'p')?;
+        }
+        for id in self.styles.keys() {
+            claim(id.0, 'y')?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;

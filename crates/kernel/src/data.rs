@@ -10,7 +10,7 @@ use crate::annotation::{Anchor, Dimension, Note, RadialAnchor};
 use crate::axes::Axes;
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
-    PageId, SectionId, TagId, VertexId,
+    PageId, SectionId, StyleId, TagId, VertexId,
 };
 use crate::location::Location;
 use crate::material::Material;
@@ -18,6 +18,7 @@ use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::page::{Page, PageView};
 use crate::scene::{Definition, DefinitionKind, Scene};
 use crate::section::SectionPlane;
+use crate::style::{Style, StyleSettings};
 use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
 
@@ -47,6 +48,10 @@ pub struct SceneData {
     /// when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pages: Vec<PageData>,
+    /// The styles views may choose. Absent in files written before styles existed (and when
+    /// there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<StyleData>,
     /// The model axes. Absent in files written before axes existed (and when they are the
     /// world axes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,6 +93,15 @@ pub struct PageData {
     pub view: Option<PageView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<u64>>,
+}
+
+/// A style: a name and its settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StyleData {
+    pub id: u64,
+    pub name: String,
+    pub settings: StyleSettings,
 }
 
 /// A tag: `color` is sRGB red, green and blue.
@@ -413,6 +427,14 @@ impl Scene {
                     tags: p.tags.as_ref().map(|t| t.iter().map(|t| t.0).collect()),
                 })
                 .collect(),
+            styles: self
+                .styles()
+                .map(|(id, s)| StyleData {
+                    id: id.0,
+                    name: s.name.clone(),
+                    settings: s.settings,
+                })
+                .collect(),
             location: (!self.location().is_default()).then(|| {
                 let l = self.location();
                 LocationData {
@@ -439,7 +461,8 @@ impl Scene {
     /// it, a number is not finite, an instance's transform
     /// cannot be inverted, or the result breaks a model invariant (see [`Scene::validate`]:
     /// that includes painting with a missing material, an entity on a missing tag, a page
-    /// hiding a missing tag, an invalid page view, and blank, overlong or repeated material,
+    /// hiding a missing tag, an invalid page view, a page choosing a missing style, an invalid
+    /// style, and blank, overlong or repeated material,
     /// tag and page names).
     pub fn from_data(data: &SceneData) -> Result<Scene, String> {
         if data.next_id > MAX_ID {
@@ -514,7 +537,26 @@ impl Scene {
             };
             pages.push((PageId(p.id), page));
         }
-        let mut scene = Scene::from_meshes(root, definitions, materials, tags, pages, data.next_id);
+        let mut styles = BTreeMap::new();
+        for s in &data.styles {
+            check_id("style y", s.id)?;
+            let style = Style {
+                name: s.name.clone(),
+                settings: s.settings,
+            };
+            if styles.insert(StyleId(s.id), style).is_some() {
+                return Err(format!("style y{} appears twice", s.id));
+            }
+        }
+        let mut scene = Scene::from_meshes(
+            root,
+            definitions,
+            materials,
+            tags,
+            pages,
+            styles,
+            data.next_id,
+        );
         if let Some(a) = &data.axes {
             scene.axes = Axes::from_parts(a.origin.into(), a.x.into(), a.y.into(), a.z.into())
                 .map_err(|e| e.to_string())?;

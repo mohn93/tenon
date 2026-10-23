@@ -24,6 +24,7 @@ impl Document {
             self.x_ray,
             self.hidden_geometry,
             self.shadows,
+            self.style(),
         )
     }
 
@@ -221,6 +222,8 @@ impl Document {
             self.x_ray = v.x_ray;
             self.hidden_geometry = v.hidden_geometry;
             self.shadows = v.shadows;
+            // A scene's style exists (the model checks), so the choice is exact.
+            self.style = v.style;
             // A scene with it off drops hidden entities from the selection, as turning it off.
             self.prune_hidden_selection();
         }
@@ -268,6 +271,7 @@ impl Document {
                 x_ray: v.x_ray,
                 hidden_geometry: v.hidden_geometry,
                 shadows: v.shadows.into(),
+                style: v.style,
             }),
             hidden_tags: page.tags.as_ref().map(|t| t.iter().copied().collect()),
             revision: self.revision,

@@ -2,7 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 
 use kernel::{
-    ChangeSummary, DefinitionId, EntityId, MaterialId, PageId, Side, SoftenReport, TagId,
+    ChangeSummary, DefinitionId, EdgeColorMode, EntityId, Fog, Ground, MaterialId, PageId, Side,
+    Sketchy, SoftenReport, StyleId, TagId,
 };
 
 use schemars::JsonSchema;
@@ -554,6 +555,45 @@ pub enum Command {
     /// change like `set_camera`, not an undo step), and show and hide tags as it stores (one
     /// undo step, only when that changes a tag). It becomes the selected scene.
     GoToScene { scene: PageId },
+    /// Add a style after the last one, as one undo step: a copy of the style `from`, or the
+    /// default settings (today's look: near-black edges on a light gray background, no
+    /// profiles, sketchy edges, endpoints, sky, ground or fog) without it. Without `name` it is
+    /// called "Style 1" (or the lowest number no style has); names are trimmed and must be
+    /// distinct, not blank and at most 100 characters. The new id is in the outcome's
+    /// `changes.styles`. It is not chosen (see `set_style`).
+    AddStyle {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        from: Option<StyleId>,
+    },
+    /// Rename a style and/or change its settings, as one undo step (none when nothing
+    /// changes). At least one of `name` and `settings` is needed. In `settings` only the parts
+    /// given change: `edges` merges field by field (`color_mode`, `color`, `show_edges`,
+    /// `profiles` 2 to 10 px, `sketchy` {`jitter` 0 to 10 px, `extension` 0 to 30 px},
+    /// `endpoints` 2 to 30 px; null turns `profiles`, `sketchy` and `endpoints` off);
+    /// `background` and `sky` are `[r, g, b]` (0 to 255); `ground` is {`color`, `opacity` 0 to
+    /// 1, `from_below`}; `fog` is {`start`, `end` (meters, 0 <= start < end), `color`:
+    /// "background" or {"rgb": [r, g, b]}}; null turns `sky`, `ground` and `fog` off. A value
+    /// out of range is `invalid_input` and nothing changes.
+    ChangeStyle {
+        style: StyleId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        settings: Option<StylePatch>,
+    },
+    /// Remove a style, as one undo step. The view and every scene that chose it go back to no
+    /// style (the default look) in the same step; undo restores them.
+    DeleteStyle { style: StyleId },
+    /// Choose the style the view draws with (absent or null: none, the default look, with the
+    /// app theme's background). A view setting like `set_lighting`: saved with the camera and
+    /// scenes, but not an undo step and not a change to the revision. Renders (`render_view`,
+    /// snapshots and raster print) use it; the line drawing, SVG and vector PDF do not.
+    SetStyle {
+        #[serde(default)]
+        style: Option<StyleId>,
+    },
     /// Hide edges, faces, instances and guides of the open context, as one undo step (an
     /// entity already hidden is ignored; none to hide is a success with no undo step).
     /// A hidden entity is not drawn, picked or snapped to, and leaves the selection.
@@ -972,9 +1012,75 @@ impl Command {
                 | Command::SetXRay { .. }
                 | Command::SetHiddenGeometry { .. }
                 | Command::SetShadows { .. }
+                | Command::SetStyle { .. }
                 | Command::SetSectionDisplay { .. }
         )
     }
+}
+
+/// The parts of a style's settings `change_style` sets: a part left out stays, a null turns
+/// an optional part off.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StylePatch {
+    #[serde(default)]
+    pub edges: Option<EdgesPatch>,
+    #[serde(default)]
+    pub background: Option<[u8; 3]>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<[u8; 3]>")]
+    pub sky: Option<Option<[u8; 3]>>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<Ground>")]
+    pub ground: Option<Option<Ground>>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<Fog>")]
+    pub fog: Option<Option<Fog>>,
+}
+
+/// The parts of a style's edge settings `change_style` sets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EdgesPatch {
+    #[serde(default)]
+    pub color_mode: Option<EdgeColorMode>,
+    #[serde(default)]
+    pub color: Option<[u8; 3]>,
+    #[serde(default)]
+    pub show_edges: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<f32>")]
+    pub profiles: Option<Option<f32>>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<Sketchy>")]
+    pub sketchy: Option<Option<Sketchy>>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<f32>")]
+    pub endpoints: Option<Option<f32>>,
 }
 
 /// A texture for `add_material` or `change_material`: an image file and the size one copy of

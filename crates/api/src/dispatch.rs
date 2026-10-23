@@ -519,7 +519,7 @@ pub fn describe() -> Value {
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
-                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
+                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique made, \"$0:y0\" for a style add_style made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
                 "params_schema": batch_params_schema(),
                 "result_schema": schema::<BatchResult>(),
             },

@@ -257,6 +257,7 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
         materials: vec![],
         tags: Vec::new(),
         pages: Vec::new(),
+        styles: Vec::new(),
         axes: None,
         location: None,
     };

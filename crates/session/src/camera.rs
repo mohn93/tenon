@@ -1,6 +1,6 @@
 use glam::dcamera::rh::{proj::directx, view::look_at_mat4};
 use glam::{DAffine3, DMat3, DMat4, DQuat, DVec2, DVec3, Mat4};
-use kernel::{PageView, Shadows};
+use kernel::{PageView, Shadows, StyleId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
@@ -191,7 +191,7 @@ impl Camera {
     /// The view a scene stores: this camera (its `up` field, the field of view and the
     /// projection), lit by `lighting`, its faces colored by tag or not, drawn as glass or not
     /// (`x_ray`), with hidden entities ghosted or not (`hidden_geometry`), with the sun's shadows
-    /// as `shadows` says.
+    /// as `shadows` says, drawn in `style`.
     pub fn page_view(
         &self,
         lighting: Lighting,
@@ -199,6 +199,7 @@ impl Camera {
         x_ray: bool,
         hidden_geometry: bool,
         shadows: Shadows,
+        style: Option<StyleId>,
     ) -> PageView {
         PageView {
             eye: self.eye.to_array(),
@@ -211,6 +212,7 @@ impl Camera {
             x_ray,
             hidden_geometry,
             shadows,
+            style,
         }
     }
 

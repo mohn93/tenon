@@ -333,6 +333,57 @@ impl TryFrom<String> for PageId {
     }
 }
 
+/// A style: named edge, background and fog settings a view may choose. Serialized as
+/// "y<n>". Style ids come from the same counter as entity ids, so they never repeat one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct StyleId(pub u64);
+
+impl fmt::Display for StyleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "y{}", self.0)
+    }
+}
+
+impl FromStr for StyleId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('y', n)) => Ok(StyleId(n)),
+            _ => Err(format!("invalid style id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for StyleId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "StyleId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^y(0|[1-9][0-9]*)$",
+            "description": "Style id: y<n>"
+        })
+    }
+}
+
+impl From<StyleId> for String {
+    fn from(id: StyleId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for StyleId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +427,11 @@ mod tests {
         assert_eq!(PageId(5).to_string(), "p5");
         for s in ["", "p", "t5", "p05", "p+5"] {
             assert!(s.parse::<PageId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("y5".parse::<StyleId>(), Ok(StyleId(5)));
+        assert_eq!(StyleId(5).to_string(), "y5");
+        for s in ["", "y", "p5", "y05", "y+5"] {
+            assert!(s.parse::<StyleId>().is_err(), "{s:?} parsed");
         }
     }
 

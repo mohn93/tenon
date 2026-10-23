@@ -52,7 +52,7 @@ all commands and results.
   each self-contained (its `$ref`s point into its own `$defs`). `execute` params are any of
   Command, ScreenCommand and EditorCommand; `query` params any of Query and EditorQuery.
   `subscribe` and `describe` take no params (`params_schema` null).
-  In `batch` params an `EntityId`, `MaterialId` or `DefinitionId` may also be a `BatchRef` (see References inside
+  In `batch` params an `EntityId`, `MaterialId`, `DefinitionId` or `StyleId` may also be a `BatchRef` (see References inside
   a batch).
 - The `schemas` entries for Command, Query, EditorQuery, EditorCommand and ScreenCommand have
   `"type": "object"` at the root beside their `oneOf`.
@@ -94,6 +94,7 @@ Queries:
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
 | `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances, guides, dimensions, notes and section planes in the whole model are on it; see Tags below |
 | `{"type": "scenes"}` | every scene, in order: `id`, `name`, whether it stores a view (`camera`) and tag visibility (`tags`), and whether it is `selected`; plus `revision`; see Scenes below |
+| `{"type": "styles"}` | every style, in the order they were made: `id`, `name` and `settings`; plus `revision`; see Styles below |
 | `{"type": "scene", "scene": "p40"}` | one scene: `id`, `name`, the `view` it stores (null when none) and the tags it hides (`hidden_tags`, null when it does not store tag visibility); see Scenes below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
@@ -113,12 +114,12 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`, `look_around`, `position_camera`,
-`set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_location`, `new`, `open`, `save`, `export`, `import`.
+`set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_style`, `set_location`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
-component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note), `s8` (section plane). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
+component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note), `s8` (section plane). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`, styles `y9`. Ids are unique across the whole model, including inside
 groups and components.
 
 Modeling commands, each one undo step:
@@ -276,11 +277,11 @@ predicting them:
 ], "atomic": true}
 ```
 
-A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmd])(0|[1-9][0-9]*|\*)|\*)$`:
+A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1-9][0-9]*|\*)|\*)$`:
 
 - `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
   face, `i` instance, `g` guide, `r` dimension, `n` note, `s` section plane from its `changes.created` (lowest id
-  first, which is the order they were made), `m` material from its `changes.materials`, or `d` definition from its `definitions` (a `make_unique` outcome).
+  first, which is the order they were made), `m` material from its `changes.materials`, `y` style from its `changes.styles` (an `add_style` outcome), or `d` definition from its `definitions` (a `make_unique` outcome). Style ids (`style`, and `from` of `add_style`) take a `y` reference, which must name one style.
 - `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance, guide,
   dimension, note and section plane it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
   `*` references are allowed only in id lists (`ids`, and `path` of `open_path` and `follow_me`), where they
@@ -291,8 +292,8 @@ A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmd])(0|[1-
 References are read only in a command's top-level `ids`, `face`, `id` and `material`, in
 `path` of `open_path` and `follow_me`, in `a` and `b` of `add_dimension`, `edge` of
 `add_edge_dimension` and `add_radial_dimension`, `anchor` of `add_note`, `note` of
-`change_note`, `plane` of `flip_section_plane` and `activate_section_plane`, and `definition` of `rename_definition`. Any other string, such as a name or a file path, stays as written even
-when it looks like a reference. `material` takes only `m` references, `definition` only `d` references, the other fields only
+`change_note`, `plane` of `flip_section_plane` and `activate_section_plane`, `definition` of `rename_definition`, and `style` of `change_style`, `delete_style` and `set_style` and `from` of `add_style`. Any other string, such as a name or a file path, stays as written even
+when it looks like a reference. `material` takes only `m` references, `definition` only `d` references, `style` and `from` only `y` references, the other fields only
 entity references; whether the entity suits the command (a face for `push_pull`) is checked by
 the command, as for a written id. Tag ids (`tag`, `move_to`) and scene ids (`scene`) take no
 references: a `$` string there is not a tag or scene id and fails the batch's parsing.
@@ -876,6 +877,33 @@ whatever instance is open; `go_to_scene` leaves the open instance open.
 `view_height`) and the hidden tag ids:
 `{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false, "shadows": {"on": false, "date": "2026-11-08", "time": "13:30", "light": 80, "dark": 45, "on_ground": true}}, "hidden_tags": ["t31"], "revision": 12}`.
 
+### Styles
+
+A style is a named set of edge, background, sky, ground and fog settings. The styles are a list
+in the model (made, changed and deleted by undo steps, saved in the file); which one the view
+draws with is a view setting like `set_lighting`, saved with the camera and scenes. With no style
+chosen the view looks as it always did, including the app theme's background; a chosen style's
+background, sky and ground replace the theme's. Style ids look like `y41` and are
+batch-referable (`"$0:y0"`).
+
+| Command | Effect |
+|---|---|
+| `{"type": "add_style", "name": "Blueprint", "from": "y41"}` | Adds a style after the last one, as one undo step: a copy of style `from`'s settings, or the defaults without it. Without `name` it is called `Style 1` (the lowest number no style's name has). Names are trimmed, must not be blank, have at most 100 characters and differ from every other style's (`invalid_input`). The new id is the outcome's `changes.styles`. It is not chosen. |
+| `{"type": "change_style", "style": "y41", "name": "Plan", "settings": {...}}` | Renames a style and/or changes its settings, as one undo step (none when nothing changes). At least one of `name` and `settings` is needed (`invalid_input`). In `settings` only the parts given change (below); a value out of range is `invalid_input` and nothing changes. |
+| `{"type": "delete_style", "style": "y41"}` | Removes a style, as one undo step. The view and every scene that chose it go back to no style in the same step; undo puts the style and those choices back. |
+| `{"type": "set_style", "style": "y41"}` | Chooses the style the view draws with; `"style": null` (or absent) chooses none, the default look. A camera command: not an undo step, no change to the revision, put back by a failed atomic batch. An unknown id is `not_found`. |
+
+Settings (the shape `styles` returns; defaults in brackets):
+
+- `edges`: `color_mode` (`fixed` [default], `by_material` or `by_axis`), `color` (`[r, g, b]`, 0 to 255, [20, 20, 20]; the colour of all ordinary edges, and the fallback of the other modes), `show_edges` (true; false draws only profiles), `profiles` (null [off] or a width of 2 to 10 px), `sketchy` (null [off] or `{"jitter": 0 to 10, "extension": 0 to 30}` px), `endpoints` (null [off] or a mark length of 2 to 30 px).
+- `background` (`[r, g, b]`, [245, 245, 245]) and `sky` (null [off] or `[r, g, b]`, the zenith colour).
+- `ground`: null [off] or `{"color": [r, g, b], "opacity": 0 to 1, "from_below": bool}`.
+- `fog`: null [off] or `{"start": m, "end": m, "color": "background" or {"rgb": [r, g, b]}}` with 0 <= `start` < `end`.
+
+In `change_style` the parts left out of `settings` stay as they are; `edges` merges field by field, and a null turns `profiles`, `sketchy`, `endpoints`, `sky`, `ground` or `fog` off. Renders (`render_view`, snapshots, raster print) will draw with the chosen style; the line drawing, SVG and vector PDF ignore styles.
+
+Style commands that change the list are undo steps, change the revision, mark the model modified and list the style in `changes.styles`. `{"type": "styles"}` gives `{"styles": [{"id": "y41", "name": "Blueprint", "settings": {...}}], "revision": 12}`; the `camera` query's `style` (and a scene's `view.style`) says which is chosen. A chosen style that stops existing (its `add_style` undone, or it deleted) draws as none while it does not exist, and is chosen again if it comes back.
+
 ### Groups and components
 
 Commands and queries work on the open context: the root at first. `{"type": "open_instance",
@@ -1071,6 +1099,8 @@ fails with `invalid_input` and leaves the camera as it was.
 - `hidden_geometry` is whether entities hidden by their own flag are drawn ghosted and can be
   picked (`set_hidden_geometry`; see Hide and unhide).
 - `shadows` is the sun's shadow settings (`set_shadows`; see Location and sun shadows below).
+- `style` is the id of the style the view draws with (`set_style`; see Styles); absent when none
+  is chosen.
 - `axes` is the model axes (see Axes below): `origin` and the unit vectors `x` (red), `y` (green)
   and `z` (blue), the world axes until `set_axes` moves them.
 
@@ -1535,7 +1565,7 @@ larger than the detail loses sharpness, and redrawn only when the sun or the cas
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (17 when the display units use `feet` or have a `length_snap` other than 0, an `angle_precision` other than 1 or an `angle_snap` other than 15 (older builds refuse the fields), else 16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (18 when the model has a style or the view or a scene's view chooses one (written as `styles` in the model and `style` in the view and scene views; older builds refuse the file), else 17 when the display units use `feet` or have a `length_snap` other than 0, an `angle_precision` other than 1 or an `angle_snap` other than 15 (older builds refuse the fields), else 16 when the location is not the default (written in the model as `location` with `latitude`, `longitude`, `north_angle` and `utc_offset`) or the view or a scene's view has shadow settings other than the defaults (written as `shadows`, with `on`, `year`, `month`, `day`, `minutes`, `light`, `dark` and `on_ground`), else 15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque

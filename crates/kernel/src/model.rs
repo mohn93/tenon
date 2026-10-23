@@ -9,7 +9,7 @@ use crate::annotation::{Dimension, Note};
 use crate::geom::{LENGTH_TOL, vector_area};
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, SectionId, TagId, VertexId,
+    NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 use crate::index::Index;
 use crate::section::SectionPlane;
@@ -390,6 +390,10 @@ pub struct ChangeSummary {
     /// when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scenes: Vec<PageId>,
+    /// Styles added, removed, renamed or changed (see `SceneChange::summary`). Absent when
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<StyleId>,
 }
 
 impl ChangeSummary {
@@ -402,6 +406,7 @@ impl ChangeSummary {
         let mut materials = BTreeSet::new();
         let mut tags = BTreeSet::new();
         let mut scenes = BTreeSet::new();
+        let mut styles = BTreeSet::new();
         for s in summaries {
             let listed = s
                 .created
@@ -415,6 +420,7 @@ impl ChangeSummary {
             materials.extend(s.materials.iter().copied());
             tags.extend(s.tags.iter().copied());
             scenes.extend(s.scenes.iter().copied());
+            styles.extend(s.styles.iter().copied());
         }
         let mut net = ChangeSummary::default();
         for (id, (before, after)) in state {
@@ -428,6 +434,7 @@ impl ChangeSummary {
         net.materials = materials.into_iter().collect();
         net.tags = tags.into_iter().collect();
         net.scenes = scenes.into_iter().collect();
+        net.styles = styles.into_iter().collect();
         net
     }
 }
@@ -1519,6 +1526,7 @@ mod tests {
             materials: vec![],
             tags: vec![],
             scenes: vec![],
+            styles: vec![],
         };
         let b = ChangeSummary {
             created: vec![v(3)],
@@ -1527,6 +1535,7 @@ mod tests {
             materials: vec![],
             tags: vec![],
             scenes: vec![],
+            styles: vec![],
         };
         let net = ChangeSummary::join([&a, &b]);
         // made then changed is made; made then erased is gone

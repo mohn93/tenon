@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::edit::KernelError;
-use crate::ids::{PageId, TagId};
+use crate::ids::{PageId, StyleId, TagId};
 use crate::scene::{Scene, SceneChange, Step};
 
 /// The longest page name, in characters.
@@ -44,6 +44,9 @@ pub struct PageView {
     /// Sun shadows (see [`Shadows`]); written only when not the default.
     #[serde(default, skip_serializing_if = "Shadows::is_default")]
     pub shadows: Shadows,
+    /// The style the view draws with (see [`crate::Style`]); written only when one is chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<StyleId>,
 }
 
 /// The sun shadow settings of a view: whether the sun lights the model and casts shadows, and
@@ -273,6 +276,13 @@ impl Scene {
         }
         if page.tags.iter().flatten().any(|t| self.tag(*t).is_none()) {
             return Err(KernelError::TagNotFound);
+        }
+        if page
+            .view
+            .and_then(|v| v.style)
+            .is_some_and(|s| self.style(s).is_none())
+        {
+            return Err(KernelError::StyleNotFound);
         }
         Ok(())
     }

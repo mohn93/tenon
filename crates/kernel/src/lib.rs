@@ -33,6 +33,7 @@ mod section;
 mod section_loops;
 mod smooth;
 mod soften;
+mod style;
 pub mod sweep;
 mod tag;
 mod texture;
@@ -49,12 +50,13 @@ pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     AnchorData, AxesData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
     InstanceData, LocationData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData,
-    PageData, RadialAnchorData, SceneData, SectionData, TagData, TextureData, VertexData,
+    PageData, RadialAnchorData, SceneData, SectionData, StyleData, TagData, TextureData,
+    VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, SectionId, TagId, VertexId,
+    NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -73,6 +75,11 @@ pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
+pub use style::{
+    ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog, FogColor, Ground, MAX_STYLE_NAME,
+    PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER, STYLE_NAME_BASE, Sketchy, Style,
+    StyleSettings,
+};
 pub use tag::{MAX_TAG_NAME, TAG_COLORS, Tag, TagEdit, UNTAGGED, tag_shown_among};
 pub use texture::{
     ImageFormat, MAX_TEXTURE_OFFSET, MAX_TEXTURE_SCALE, MAX_TEXTURE_SIZE, MAX_TEXTURES,

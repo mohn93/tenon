@@ -125,6 +125,7 @@ impl Scene {
             self.materials.clone(),
             self.tags.clone(),
             Vec::new(),
+            BTreeMap::new(),
             self.next_id(),
         );
         clip.edit(MeshId::Root, |m| {

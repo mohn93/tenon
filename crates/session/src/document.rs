@@ -6,7 +6,7 @@ use kernel::offset::{self, Polyline};
 use kernel::{
     ChangeSet, DefinitionId, EdgeId, EntityId, FaceId, Guide, GuideId, Instance, InstanceId,
     KernelError, MaterialEdit, MaterialId, MeshId, Model, PageId, Parts, PlacementEdit, Scene,
-    SceneChange, Shadows, SoftenReport, TagEdit, VertexId,
+    SceneChange, Shadows, SoftenReport, StyleId, TagEdit, VertexId,
 };
 
 use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
@@ -47,6 +47,7 @@ mod scenes;
 mod sections;
 mod shadows;
 mod soften;
+mod styles;
 mod tags;
 mod text3d;
 
@@ -96,6 +97,8 @@ pub struct Document {
     pub hidden_geometry: bool,
     /// The sun's shadows and when the sun is where; saved with the camera.
     pub shadows: Shadows,
+    /// The style the view draws with, while it exists (see `style`); saved with the camera.
+    style: Option<StyleId>,
     /// Whether section planes are drawn, cut and filled; saved with the camera.
     pub section_display: SectionDisplay,
     /// How labels write lengths; saved with the model, changed by undo steps.
@@ -167,6 +170,7 @@ impl Document {
             x_ray: false,
             hidden_geometry: false,
             shadows: Shadows::default(),
+            style: None,
             section_display: SectionDisplay::default(),
             units: Units::default(),
             selection: BTreeSet::new(),
@@ -553,6 +557,10 @@ impl Document {
                 )?;
                 Ok(Outcome::default())
             }
+            Command::SetStyle { style } => {
+                self.choose_style(style)?;
+                Ok(Outcome::default())
+            }
             Command::SetHiddenGeometry { on } => {
                 self.hidden_geometry = on;
                 // Turned off, hidden entities leave the selection again.
@@ -734,6 +742,9 @@ impl Document {
             | Command::MoveScene { .. }
             | Command::DeleteScene { .. }
             | Command::GoToScene { .. }
+            | Command::AddStyle { .. }
+            | Command::ChangeStyle { .. }
+            | Command::DeleteStyle { .. }
             | Command::Hide { .. }
             | Command::Unhide { .. }
             | Command::UnhideLast {}
@@ -995,6 +1006,13 @@ impl Document {
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
             // Its view change is made here too, outside the returned change.
             Command::GoToScene { scene } => self.go_to_scene_changes(*scene),
+            Command::AddStyle { name, from } => self.add_style_changes(name.as_deref(), *from),
+            Command::ChangeStyle {
+                style,
+                name,
+                settings,
+            } => self.change_style_changes(*style, name.as_deref(), settings.as_ref()),
+            Command::DeleteStyle { style } => self.delete_style_changes(*style),
             Command::Hide { ids } => self.hide_changes(ids),
             Command::Unhide { ids } => self.unhide_changes(ids),
             Command::UnhideLast {} => self.unhide_last_changes(),
@@ -1072,6 +1090,7 @@ impl Document {
             | Command::SetXRay { .. }
             | Command::SetHiddenGeometry { .. }
             | Command::SetShadows { .. }
+            | Command::SetStyle { .. }
             | Command::SetSectionDisplay { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
@@ -1135,6 +1154,7 @@ impl Document {
         let color_by_tag_before = self.color_by_tag;
         let (x_ray_before, hidden_geometry_before) = (self.x_ray, self.hidden_geometry);
         let shadows_before = self.shadows;
+        let style_before = self.style;
         let section_display_before = self.section_display;
         let selected_scene_before = self.selected_scene;
         let selection_before = self.selection.clone();
@@ -1199,6 +1219,7 @@ impl Document {
                     self.x_ray = x_ray_before;
                     self.hidden_geometry = hidden_geometry_before;
                     self.shadows = shadows_before;
+                    self.style = style_before;
                     self.section_display = section_display_before;
                     self.selected_scene = selected_scene_before;
                     self.selection = selection_before;
@@ -2207,6 +2228,7 @@ impl Document {
                 x_ray: self.x_ray,
                 hidden_geometry: self.hidden_geometry,
                 shadows: self.shadows.into(),
+                style: self.style(),
                 axes: {
                     let a = self.scene.axes();
                     AxesInfo {
@@ -2266,6 +2288,10 @@ impl Document {
                 revision: self.revision,
             },
             Query::Scene { scene } => self.scene_detail(*scene)?,
+            Query::Styles {} => QueryResult::Styles {
+                styles: self.style_infos(),
+                revision: self.revision,
+            },
             Query::Context {} => QueryResult::Context {
                 path: self
                     .context

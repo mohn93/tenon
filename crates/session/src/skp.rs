@@ -1253,6 +1253,7 @@ fn page_view(
         x_ray: false,
         hidden_geometry: false,
         shadows: kernel::Shadows::default(),
+        style: None,
     })
 }
 

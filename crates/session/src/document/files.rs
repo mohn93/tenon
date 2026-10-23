@@ -58,6 +58,7 @@ impl Document {
             x_ray: self.x_ray,
             hidden_geometry: self.hidden_geometry,
             shadows: self.shadows,
+            style: self.style(),
             section: self.section_display,
             units: self.units,
         }
@@ -123,6 +124,7 @@ impl Document {
         self.x_ray = c.x_ray;
         self.hidden_geometry = c.hidden_geometry;
         self.shadows = c.shadows;
+        self.style = c.style;
         self.section_display = SectionDisplay {
             planes: c.section_planes,
             cuts: c.section_cuts,
@@ -638,6 +640,7 @@ impl Document {
         self.context.clear();
         self.selection.clear();
         self.selected_scene = None;
+        self.style = None;
         self.undo.clear();
         self.redo.clear();
         self.revision += 1;
