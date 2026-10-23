@@ -603,7 +603,10 @@ mod tests {
         let last = xs.len() - 1;
         let mut start = Model::new();
         for k in 0..last {
-            if !gap.iter().any(|g| g.0.min(g.1) == k && g.0.max(g.1) == k + 1) {
+            if !gap
+                .iter()
+                .any(|g| g.0.min(g.1) == k && g.0.max(g.1) == k + 1)
+            {
                 start.draw_segment(p(k), p(k + 1));
             }
         }
@@ -673,7 +676,11 @@ mod tests {
                 .collect();
             let g = 1 + (next() * (n - 3) as f64) as usize;
             let (a, b) = if next() < 0.5 { (g, g + 1) } else { (g + 1, g) };
-            let (c, d) = if next() < 0.5 { (g + 1, g + 2) } else { (g + 2, g + 1) };
+            let (c, d) = if next() < 0.5 {
+                (g + 1, g + 2)
+            } else {
+                (g + 2, g + 1)
+            };
             let (batch, one_by_one) = chain_faces(&xs, &bends, &[(a, b), (c, d)]);
             assert!(
                 batch >= one_by_one,
