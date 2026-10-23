@@ -300,6 +300,10 @@ impl Storage for Idb {
         self.failed.get()
     }
 
+    fn clear_failure(&mut self) {
+        self.failed.set(false);
+    }
+
     fn touch(&mut self, id: &str, time: f64) {
         let updated = {
             let mut infos = self.infos.borrow_mut();

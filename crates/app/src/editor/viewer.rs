@@ -476,6 +476,11 @@ mod tests {
     /// Draws a 2 m square at `x`..`x`+2 (y 1..3) with the Line tool and makes it a group, or a
     /// component named `component`.
     fn add_part(e: &mut Editor, x: f64, component: Option<&str>) {
+        add_part_at(e, x, 1.0, component);
+    }
+
+    /// [`add_part`] with the square's y range at `y`..`y`+2.
+    fn add_part_at(e: &mut Editor, x: f64, y: f64, component: Option<&str>) {
         let before: Vec<EntityId> = {
             let m = e.doc().model();
             m.edges()
@@ -484,7 +489,13 @@ mod tests {
                 .collect()
         };
         e.select_tool(ToolKind::Line);
-        for (px, py) in [(x, 1.0), (x + 2.0, 1.0), (x + 2.0, 3.0), (x, 3.0), (x, 1.0)] {
+        for (px, py) in [
+            (x, y),
+            (x + 2.0, y),
+            (x + 2.0, y + 2.0),
+            (x, y + 2.0),
+            (x, y),
+        ] {
             let px = e.doc().camera.project(DVec3::new(px, py, 0.0)).unwrap();
             e.cursor_moved(px);
             e.button(Button::Left, true);
@@ -787,6 +798,29 @@ mod tests {
         e.touch(Gesture::Tap { at });
         let first = e.measurement().unwrap().first();
         assert!(first.is_none_or(|p| p.length() > 1e-6), "{first:?}");
+    }
+
+    #[test]
+    fn a_tap_on_a_face_over_the_origin_mark_picks_a_point_of_the_face() {
+        // Not zoomed: the origin is within a finger's reach of the tap, and it outranks the
+        // face and the edge, so it must be passed over for the face under the finger.
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 2.0);
+        add_group(&mut e, -1.0);
+        e.set_read_only(true);
+        e.start_measure();
+        let on_face = DVec3::new(0.0, 1.1, 0.0);
+        let at = px(&e, on_face);
+        assert!(
+            at.distance(px(&e, DVec3::ZERO)) < measure::snap_radius(2.0),
+            "the origin is in reach"
+        );
+        assert!(e.touch(Gesture::Tap { at }), "something was picked");
+        let p = e.measurement().unwrap().first().expect("a point");
+        assert!(p.length() > 1e-6, "not the origin mark: {p:?}");
+        assert!(
+            p.x.abs() <= 1.0 + 1e-6 && p.y.abs() <= 1.0 + 1e-6 && p.z.abs() < 1e-9,
+            "a point of the square under the finger: {p:?}"
+        );
     }
 
     #[test]

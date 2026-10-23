@@ -86,6 +86,9 @@ pub trait Storage {
         false
     }
 
+    /// Forgets that the last `put` failed (a kept model was opened, so storage works).
+    fn clear_failure(&mut self) {}
+
     /// Sets when `id` was last opened.
     fn touch(&mut self, id: &str, time: f64);
 
@@ -149,7 +152,11 @@ impl Recent {
     pub fn attach(&mut self, storage: Box<dyn Storage>) {
         let available = storage.available();
         self.storage = Some(storage);
-        self.note = (!available).then_some(NO_STORAGE);
+        // A note set while waiting (a model too big to keep) stays; the replay below sets or
+        // clears it for the pending model.
+        if !available {
+            self.note = Some(NO_STORAGE);
+        }
         if let Some(record) = self.pending.take() {
             self.keep(record);
         }
@@ -223,6 +230,7 @@ impl Recent {
         // What is opened was kept, whatever the model before it was.
         self.note = (!storage.available()).then_some(NO_STORAGE);
         if storage.infos().iter().any(|i| i.id == id) {
+            storage.clear_failure();
             storage.touch(id, now);
         }
         storage.get(id, done);

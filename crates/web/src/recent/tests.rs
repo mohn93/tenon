@@ -41,6 +41,10 @@ impl Storage for Fake {
         self.failed.get()
     }
 
+    fn clear_failure(&mut self) {
+        self.failed.set(false);
+    }
+
     fn touch(&mut self, id: &str, time: f64) {
         for r in self
             .records
@@ -320,4 +324,41 @@ fn the_database_and_store_names_are_the_documented_ones() {
     assert_eq!(STORE, "recent");
     assert_eq!(KEEP, 5);
     assert_eq!(MAX_KEPT_BYTES, 64 * 1024 * 1024);
+}
+
+#[test]
+fn a_too_large_note_set_while_waiting_survives_the_storage_arriving() {
+    let big = |n: u8| Record {
+        info: Info {
+            id: id(n),
+            name: "Big".into(),
+            time: 1.0,
+            size: MAX_KEPT_BYTES + 1,
+        },
+        key: [n; 32],
+        blob: vec![0; MAX_KEPT_BYTES + 1],
+    };
+    let mut r = Recent::waiting();
+    assert_eq!(r.keep(big(1)), Kept::TooLarge);
+    r.attach(Box::new(Fake::default()));
+    assert_eq!(r.note(), Some(TOO_LARGE));
+    assert!(r.list(0.0).is_empty());
+    // A model kept while waiting replays on attach and clears an older note.
+    let mut r = Recent::waiting();
+    r.keep(big(1));
+    r.keep(record(2, 2.0, 10));
+    r.attach(Box::new(Fake::default()));
+    assert_eq!(r.note(), None);
+    assert_eq!(ids(&r), [id(2)]);
+}
+
+#[test]
+fn the_not_saved_note_goes_when_a_kept_model_opens() {
+    let (mut r, fake) = recent();
+    r.keep(record(1, 1.0, 10));
+    fake.full.set(true);
+    r.keep(record(2, 2.0, 10));
+    assert_eq!(r.note(), Some(NOT_SAVED));
+    r.open(&id(1), 3.0, Box::new(|found| assert!(found.is_some())));
+    assert_eq!(r.note(), None);
 }
