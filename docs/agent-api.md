@@ -1019,8 +1019,8 @@ green side of the red-green plane. A preview shows the axes as they will be. The
 runs one `set_axes` (in the open context's coordinates, so inside a group it re-origins that
 definition) and says "Axes moved". A second click on the origin, or a third in line with red,
 gives no direction and is ignored with a message; Escape starts again. Group > Make Unique
-(enabled with a selected component instance whose definition has another instance) runs
-`make_unique` and says "Made 2 components unique" (the definitions made). Group > Flip Along
+(enabled with a selected component instance whose definition is placed more often than it is
+selected) runs `make_unique` and says "Made 2 components unique". Group > Flip Along
 has Red, Green and Blue (the selection, `flip` with `frame` `axes`; "Flipped along red") and
 Component's Red, Green and Blue (exactly one instance selected, `frame` `own`). The viewport's
 right-click menu has Make Unique, the same Flip Along entries and, at the root with moved axes
