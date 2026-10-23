@@ -28,6 +28,10 @@ pub const INFO_STORE: &str = "recent-info";
 /// What is said while the model open now is not kept because it is too big.
 pub const TOO_LARGE: &str = "This model is over 64 MiB, so it is not kept for opening offline.";
 
+/// What is said while the last model could not be written (storage full or refused).
+pub const NOT_SAVED: &str =
+    "This model could not be kept on this phone (the browser's storage is full or refused it).";
+
 /// What is said when the browser keeps nothing (storage blocked, a private window).
 pub const NO_STORAGE: &str = "This browser does not allow keeping models for opening offline.";
 
@@ -72,8 +76,15 @@ pub trait Storage {
     /// Every kept model's entry, in any order.
     fn infos(&self) -> Vec<Info>;
 
-    /// Keeps `record`, replacing the one with the same id.
-    fn put(&mut self, record: Record);
+    /// Keeps `record`, replacing the one with the same id, and, once it is safely written,
+    /// removes the models `then_remove`. A write that fails (storage full) leaves the list as
+    /// it was, `then_remove` included, and is reported by `write_failed`.
+    fn put(&mut self, record: Record, then_remove: Vec<String>);
+
+    /// Whether the last `put` failed.
+    fn write_failed(&self) -> bool {
+        false
+    }
 
     /// Sets when `id` was last opened.
     fn touch(&mut self, id: &str, time: f64);
@@ -92,6 +103,9 @@ pub enum Kept {
     Yes,
     /// The share is over `MAX_KEPT_BYTES`.
     TooLarge,
+    /// The storage is not open yet (the browser opens it in the background): the share is kept
+    /// once it is.
+    Later,
     /// The browser keeps nothing.
     NoStorage,
 }
@@ -107,47 +121,76 @@ pub struct Entry {
 
 /// The Recent list over a `Storage`.
 pub struct Recent {
-    storage: Box<dyn Storage>,
+    /// None until the browser has opened its storage (`attach`).
+    storage: Option<Box<dyn Storage>>,
+    /// The model opened before the storage was, kept when it arrives.
+    pending: Option<Record>,
     /// Why the model open now is not kept, when it is not.
     note: Option<&'static str>,
 }
 
 impl Recent {
     pub fn new(storage: Box<dyn Storage>) -> Self {
-        let note = (!storage.available()).then_some(NO_STORAGE);
-        Self { storage, note }
+        let mut recent = Self::waiting();
+        recent.attach(storage);
+        recent
+    }
+
+    /// A list whose storage is still being opened: empty, and keeps nothing until `attach`.
+    pub fn waiting() -> Self {
+        Self {
+            storage: None,
+            pending: None,
+            note: None,
+        }
+    }
+
+    /// Gives the list its storage, and keeps the model that was opened meanwhile.
+    pub fn attach(&mut self, storage: Box<dyn Storage>) {
+        let available = storage.available();
+        self.storage = Some(storage);
+        self.note = (!available).then_some(NO_STORAGE);
+        if let Some(record) = self.pending.take() {
+            self.keep(record);
+        }
     }
 
     /// Why the model open now is not kept, when it is not.
     pub fn note(&self) -> Option<&'static str> {
+        if self.storage.as_ref().is_some_and(|s| s.write_failed()) {
+            return Some(NOT_SAVED);
+        }
         self.note
     }
 
-    /// Keeps `record` as the newest and drops the oldest beyond `KEEP`. A share over
-    /// `MAX_KEPT_BYTES` is not kept (and `note` says why); an old copy of the same share goes
-    /// either way, since it was just opened and the list should not offer a stale one.
+    /// Keeps `record` as the newest; the oldest beyond `KEEP` go once it is written. A share
+    /// over `MAX_KEPT_BYTES` is not kept (and `note` says why).
     pub fn keep(&mut self, record: Record) -> Kept {
-        if !self.storage.available() {
-            self.note = Some(NO_STORAGE);
-            return Kept::NoStorage;
-        }
         if record.blob.len() > MAX_KEPT_BYTES {
             self.note = Some(TOO_LARGE);
             return Kept::TooLarge;
         }
-        self.note = None;
-        self.storage.put(record);
-        for stale in self.ordered().into_iter().skip(KEEP) {
-            self.storage.remove(&stale.id);
+        let Some(storage) = self.storage.as_mut() else {
+            self.pending = Some(record);
+            return Kept::Later;
+        };
+        if !storage.available() {
+            self.note = Some(NO_STORAGE);
+            return Kept::NoStorage;
         }
+        self.note = None;
+        let mut infos = storage.infos();
+        infos.retain(|i| i.id != record.info.id);
+        infos.push(record.info.clone());
+        let stale = order(infos).into_iter().skip(KEEP).map(|i| i.id).collect();
+        storage.put(record, stale);
         Kept::Yes
     }
 
-    /// The kept models, newest first (ties by id).
+    /// The kept models, newest first, at most `KEEP`.
     fn ordered(&self) -> Vec<Info> {
-        let mut infos = self.storage.infos();
-        infos.sort_by(|a, b| b.time.total_cmp(&a.time).then_with(|| a.id.cmp(&b.id)));
-        infos
+        let infos = self.storage.as_ref().map(|s| s.infos()).unwrap_or_default();
+        order(infos).into_iter().take(KEEP).collect()
     }
 
     /// The list as shown at time `now` (milliseconds since the epoch).
@@ -165,19 +208,31 @@ impl Recent {
 
     /// Removes one model from the list.
     pub fn delete(&mut self, id: &str) {
-        self.storage.remove(id);
+        if let Some(storage) = self.storage.as_mut() {
+            storage.remove(id);
+        }
     }
 
     /// Reads a kept model back for opening, making it the newest. `done` gets None when it is
     /// no longer there.
     pub fn open(&mut self, id: &str, now: f64, done: Box<dyn FnOnce(Option<Record>)>) {
+        let Some(storage) = self.storage.as_mut() else {
+            done(None);
+            return;
+        };
         // What is opened was kept, whatever the model before it was.
-        self.note = (!self.storage.available()).then_some(NO_STORAGE);
-        if self.storage.infos().iter().any(|i| i.id == id) {
-            self.storage.touch(id, now);
+        self.note = (!storage.available()).then_some(NO_STORAGE);
+        if storage.infos().iter().any(|i| i.id == id) {
+            storage.touch(id, now);
         }
-        self.storage.get(id, done);
+        storage.get(id, done);
     }
+}
+
+/// `infos` newest first (ties by id).
+fn order(mut infos: Vec<Info>) -> Vec<Info> {
+    infos.sort_by(|a, b| b.time.total_cmp(&a.time).then_with(|| a.id.cmp(&b.id)));
+    infos
 }
 
 /// A record's model name and bytes, decrypted with the key kept beside it. Err says what to

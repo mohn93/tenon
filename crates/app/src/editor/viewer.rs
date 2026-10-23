@@ -232,7 +232,7 @@ impl Editor {
         self.measure.as_ref()
     }
 
-    /// Picks the point under `at` (view pixels) for the measurement: the nearest vertex, edge
+    /// Picks the point under `at` (view pixels) for the measurement (never the origin mark): the nearest vertex, edge
     /// middle or edge within a finger's reach (`measure::TOUCH_RADIUS_PX`), else the face
     /// under it. A tap on nothing is ignored. True if the measurement changed.
     pub fn measure_tap(&mut self, at: DVec2) -> bool {
@@ -243,13 +243,13 @@ impl Editor {
         let layout = self.layout();
         let scenery = scenery_in(&layout, &self.doc);
         let camera = self.doc.camera.placed(to_root.inverse());
-        let hit = infer_in(
-            &scenery,
-            &camera,
-            at,
-            &Guides::default(),
-            measure::snap_radius(self.scale_factor),
-        );
+        let infer = |radius| infer_in(&scenery, &camera, at, &Guides::default(), radius);
+        let mut hit = infer(measure::snap_radius(self.scale_factor));
+        if hit.kind == SnapKind::Origin {
+            // The origin mark is not geometry: look again with nothing to snap to, which gives
+            // the face under the finger (or nothing).
+            hit = infer(0.0);
+        }
         if !measure::on_model(hit.kind) {
             return false;
         }
@@ -776,6 +776,17 @@ mod tests {
         let bytes = e.doc().encode_bytes().unwrap();
         assert!(e.open_bytes("again", &bytes));
         assert!(e.measurement().is_none());
+    }
+
+    #[test]
+    fn the_origin_mark_is_not_a_measure_point() {
+        let mut e = two_parts();
+        e.start_measure();
+        // Tap on the origin itself: nothing there but ground, so nothing is picked.
+        let at = px(&e, DVec3::ZERO);
+        e.touch(Gesture::Tap { at });
+        let first = e.measurement().unwrap().first();
+        assert!(first.is_none_or(|p| p.length() > 1e-6), "{first:?}");
     }
 
     #[test]

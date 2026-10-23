@@ -662,3 +662,27 @@ fn a_client_that_never_reads_the_refusal_does_not_stall_accepting() {
     }
     assert!(t.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn the_preferred_port_is_used_when_free_and_a_free_one_otherwise() {
+    let d = viewer();
+    let free = {
+        let l = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let mut cfg = config(&d);
+    cfg.preferred_port = Some(free);
+    let first = Server::start(cfg).unwrap();
+    assert_eq!(first.port(), free);
+    let mut cfg = config(&d);
+    cfg.preferred_port = Some(free);
+    let second = Server::start(cfg).unwrap();
+    assert_ne!(second.port(), free, "taken: the OS chose another");
+    assert_eq!(get(second.port(), "/").status, 200);
+    drop(first);
+    // Freed by the first share's end, the next one gets it again.
+    let mut cfg = config(&d);
+    cfg.preferred_port = Some(free);
+    assert_eq!(Server::start(cfg).unwrap().port(), free);
+    assert_eq!(PREFERRED_PORT, 47240);
+}

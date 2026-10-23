@@ -16,14 +16,13 @@ pub fn snap_radius(scale_factor: f64) -> f64 {
     TOUCH_RADIUS_PX * scale_factor
 }
 
-/// Whether a snap is a point on the model: a corner, middle, edge, guide or face. Directions
-/// from nowhere, the ground and open air are not measured.
+/// Whether a snap is a point on the model: a corner, middle, edge, guide or face. The origin
+/// (a mark, not geometry), directions from nowhere, the ground and open air are not measured.
 pub fn on_model(kind: SnapKind) -> bool {
     matches!(
         kind,
         SnapKind::Endpoint
             | SnapKind::Midpoint
-            | SnapKind::Origin
             | SnapKind::GuidePoint
             | SnapKind::Intersection
             | SnapKind::OnEdge
@@ -136,7 +135,12 @@ mod tests {
         ] {
             assert!(on_model(kind), "{kind:?}");
         }
-        for kind in [SnapKind::Free, SnapKind::Ground, SnapKind::Parallel] {
+        for kind in [
+            SnapKind::Free,
+            SnapKind::Ground,
+            SnapKind::Parallel,
+            SnapKind::Origin,
+        ] {
             assert!(!on_model(kind), "{kind:?}");
         }
     }

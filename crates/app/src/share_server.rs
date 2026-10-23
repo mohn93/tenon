@@ -55,7 +55,13 @@ pub struct Config {
     pub response: Duration,
     /// Most simultaneous connections.
     pub max_connections: usize,
+    /// The port tried first; when it is taken (or None) the OS picks one.
+    pub preferred_port: Option<u16>,
 }
+
+/// The port every share tries first, so the viewer's origin (and the IndexedDB the phone keeps
+/// its Recent list in) stays the same from one share to the next on the same address.
+pub const PREFERRED_PORT: u16 = 47240;
 
 impl Config {
     pub fn new(dir: PathBuf, blob: Vec<u8>, id: [u8; 16]) -> Self {
@@ -67,6 +73,7 @@ impl Config {
             idle: IDLE,
             response: RESPONSE,
             max_connections: MAX_CONNECTIONS,
+            preferred_port: None,
         }
     }
 }
@@ -162,9 +169,15 @@ pub struct Server {
 }
 
 impl Server {
-    /// Binds `0.0.0.0` on a free port and starts serving.
+    /// Binds `0.0.0.0` on the preferred port, else on a free one, and starts serving.
     pub fn start(config: Config) -> std::io::Result<Server> {
-        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+        let listener = match config
+            .preferred_port
+            .map(|p| TcpListener::bind((Ipv4Addr::UNSPECIFIED, p)))
+        {
+            Some(Ok(listener)) => listener,
+            _ => TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?,
+        };
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let started = Instant::now();
@@ -655,8 +668,9 @@ impl Sharing {
         taken_at: (u64, u64),
     ) -> Result<Sharing, String> {
         let sealed = session::share::seal(name, model).map_err(|e| e.message)?;
-        let server = Server::start(Config::new(dir, sealed.blob, sealed.id))
-            .map_err(|e| format!("Could not start sharing: {e}"))?;
+        let mut config = Config::new(dir, sealed.blob, sealed.id);
+        config.preferred_port = Some(PREFERRED_PORT);
+        let server = Server::start(config).map_err(|e| format!("Could not start sharing: {e}"))?;
         let url = format!(
             "http://{ip}:{}/#{}",
             server.port(),

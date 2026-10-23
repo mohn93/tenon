@@ -6,7 +6,7 @@
 //! (storage full) takes its entry back out of the list. `time` in `recent` is when the model
 //! was first kept; the list goes by `recent-info`, which opening a model updates.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::{Array, Object, Promise, Reflect, Uint8Array};
@@ -15,7 +15,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
     Event, IdbDatabase, IdbObjectStoreParameters, IdbOpenDbRequest, IdbRequest, IdbTransaction,
-    IdbTransactionMode,
+    IdbTransactionMode, IdbVersionChangeEvent,
 };
 
 use crate::files::{describe, window};
@@ -32,6 +32,8 @@ type Infos = Rc<RefCell<Vec<Info>>>;
 pub struct Idb {
     db: IdbDatabase,
     infos: Infos,
+    /// Whether the last write failed.
+    failed: Rc<Cell<bool>>,
 }
 
 /// A storage that keeps nothing: the browser would not open IndexedDB.
@@ -46,7 +48,7 @@ impl Storage for Unavailable {
         Vec::new()
     }
 
-    fn put(&mut self, _: Record) {}
+    fn put(&mut self, _: Record, _: Vec<String>) {}
 
     fn touch(&mut self, _: &str, _: f64) {}
 
@@ -74,6 +76,40 @@ fn wait(request: &IdbRequest) -> Promise {
         request.set_onsuccess(Some(ok.unchecked_ref()));
         request.set_onerror(Some(failed.unchecked_ref()));
     })
+}
+
+/// [`wait`] for an open request, which is also refused when another tab holds an older
+/// version of the database open (`blocked`) rather than waiting for it forever.
+fn wait_open(request: &IdbOpenDbRequest) -> Promise {
+    let promise = wait(request);
+    let blocked = Promise::new(&mut |_, reject| {
+        let refuse = Closure::once_into_js(move |_: Event| {
+            let _ = reject.call1(
+                &JsValue::NULL,
+                &JsValue::from_str("the database is blocked"),
+            );
+        });
+        request.set_onblocked(Some(refuse.unchecked_ref()));
+    });
+    Promise::race(&Array::of2(&promise, &blocked))
+}
+
+/// Opens the database, giving up (None) after `ms` milliseconds: a browser that never answers
+/// must not hold the viewer back.
+pub async fn open_within(ms: i32) -> Option<Idb> {
+    let slot: Rc<RefCell<Option<Option<Idb>>>> = Rc::default();
+    let opening = {
+        let slot = slot.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            *slot.borrow_mut() = Some(open().await);
+            Ok(JsValue::UNDEFINED)
+        })
+    };
+    let timer = Promise::new(&mut |resolve, _| {
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+    });
+    let _ = JsFuture::from(Promise::race(&Array::of2(&opening, &timer))).await;
+    slot.borrow_mut().take().flatten()
 }
 
 /// Resolves when the transaction has completed (its writes are kept), rejects when it aborts.
@@ -150,7 +186,14 @@ pub async fn open() -> Option<Idb> {
     let request: IdbOpenDbRequest = factory.open_with_u32(DB_NAME, 1).ok()?;
     let upgrade = Closure::once_into_js({
         let request = request.clone();
-        move |_: Event| {
+        move |event: Event| {
+            // Version 1 creates the stores; a later version must add to them, not redo this.
+            let old = event
+                .dyn_ref::<IdbVersionChangeEvent>()
+                .map_or(0.0, IdbVersionChangeEvent::old_version);
+            if old >= 1.0 {
+                return;
+            }
             let Ok(db) = request.result().and_then(|r| r.dyn_into::<IdbDatabase>()) else {
                 return;
             };
@@ -162,7 +205,7 @@ pub async fn open() -> Option<Idb> {
         }
     });
     request.set_onupgradeneeded(Some(upgrade.unchecked_ref()));
-    let db: IdbDatabase = JsFuture::from(wait(&request))
+    let db: IdbDatabase = JsFuture::from(wait_open(&request))
         .await
         .map_err(|e| log(&describe(&e)))
         .ok()?
@@ -172,6 +215,7 @@ pub async fn open() -> Option<Idb> {
     Some(Idb {
         db,
         infos: Rc::new(RefCell::new(infos)),
+        failed: Rc::default(),
     })
 }
 
@@ -222,20 +266,38 @@ impl Storage for Idb {
         self.infos.borrow().clone()
     }
 
-    fn put(&mut self, record: Record) {
+    fn put(&mut self, record: Record, then_remove: Vec<String>) {
         {
             let mut infos = self.infos.borrow_mut();
             infos.retain(|i| i.id != record.info.id);
             infos.push(record.info.clone());
         }
-        let (db, infos) = (self.db.clone(), self.infos.clone());
+        let (db, infos, failed) = (self.db.clone(), self.infos.clone(), self.failed.clone());
         spawn_local(async move {
-            if let Err(e) = write(&db, &record).await {
-                log(&describe(&e));
-                // Not kept (storage full, or refused): the list does not offer it.
-                infos.borrow_mut().retain(|i| i.id != record.info.id);
+            match write(&db, &record).await {
+                Ok(()) => {
+                    failed.set(false);
+                    // Now that the new one is safe, the oldest may go.
+                    for id in then_remove {
+                        infos.borrow_mut().retain(|i| i.id != id);
+                        if let Err(e) = delete(&db, &id).await {
+                            log(&describe(&e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    log(&describe(&e));
+                    // Not kept (storage full, or refused): the list does not offer it, and
+                    // nothing older was dropped for it.
+                    failed.set(true);
+                    infos.borrow_mut().retain(|i| i.id != record.info.id);
+                }
             }
         });
+    }
+
+    fn write_failed(&self) -> bool {
+        self.failed.get()
     }
 
     fn touch(&mut self, id: &str, time: f64) {

@@ -8,6 +8,9 @@ use super::*;
 struct Fake {
     records: Rc<RefCell<Vec<Record>>>,
     blocked: bool,
+    /// Writes fail (storage full).
+    full: Rc<std::cell::Cell<bool>>,
+    failed: Rc<std::cell::Cell<bool>>,
 }
 
 impl Storage for Fake {
@@ -23,10 +26,19 @@ impl Storage for Fake {
             .collect()
     }
 
-    fn put(&mut self, record: Record) {
+    fn put(&mut self, record: Record, then_remove: Vec<String>) {
+        if self.full.get() {
+            self.failed.set(true);
+            return;
+        }
+        self.failed.set(false);
         let mut all = self.records.borrow_mut();
-        all.retain(|r| r.info.id != record.info.id);
+        all.retain(|r| r.info.id != record.info.id && !then_remove.contains(&r.info.id));
         all.push(record);
+    }
+
+    fn write_failed(&self) -> bool {
+        self.failed.get()
     }
 
     fn touch(&mut self, id: &str, time: f64) {

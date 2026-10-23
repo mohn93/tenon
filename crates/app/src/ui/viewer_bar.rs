@@ -76,7 +76,7 @@ pub(super) fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egu
                     ui.add(
                         Button::new(RichText::new(text).size(TEXT))
                             .selected(on)
-                            .min_size(vec2(0.0, 36.0)),
+                            .min_size(vec2(TOUCH_ROW, TOUCH_ROW)),
                     )
                     .clicked()
                 };

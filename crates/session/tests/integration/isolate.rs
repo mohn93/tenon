@@ -103,3 +103,32 @@ fn a_read_only_document_can_isolate_and_a_new_model_shows_everything() {
         "opening a model starts with everything shown"
     );
 }
+
+#[test]
+fn isolating_a_freshly_opened_document_leaves_it_unmodified() {
+    let (d, a, _) = two_groups();
+    let bytes = d.encode_bytes().unwrap();
+    let mut d = Document::new(DVec2::new(800.0, 600.0));
+    d.open_bytes("model", &bytes, true).unwrap();
+    assert!(!d.is_modified());
+    let a = d
+        .scene()
+        .root()
+        .instances()
+        .map(|(id, _)| id)
+        .next()
+        .unwrap_or(a);
+    assert!(d.isolate(&[a]));
+    assert!(!d.is_modified(), "isolate is not an edit");
+    assert!(d.show_all());
+    assert!(!d.is_modified(), "nor is Show all");
+    // A document that was modified stays modified.
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [0, 0, 5], "end": [1, 0, 5]}),
+    );
+    assert!(d.is_modified());
+    d.isolate(&[a]);
+    d.show_all();
+    assert!(d.is_modified());
+}

@@ -290,7 +290,7 @@ impl Document {
             return false;
         }
         self.scene.set_view_hidden(hidden);
-        self.revision += 1;
+        self.view_changed();
         true
     }
 
@@ -300,8 +300,18 @@ impl Document {
             return false;
         }
         self.scene.set_view_hidden(BTreeSet::new());
-        self.revision += 1;
+        self.view_changed();
         true
+    }
+
+    /// Moves the revision for a change of what is shown, not of the model: a document that was
+    /// unmodified stays so.
+    fn view_changed(&mut self) {
+        let clean = !self.is_modified();
+        self.revision += 1;
+        if clean {
+            self.clean_revision = self.revision;
+        }
     }
 
     /// Whether some parts are hidden by [`Document::isolate`].

@@ -3298,6 +3298,11 @@ fn viewer_allows(action: &UiAction) -> bool {
     )
 }
 
+/// Whether a key event is Escape going down (the viewer's one key).
+fn escape_pressed(key: &Key, state: ElementState) -> bool {
+    state == ElementState::Pressed && matches!(key, Key::Named(NamedKey::Escape))
+}
+
 fn map_button(button: MouseButton) -> Button {
     match button {
         MouseButton::Left => Button::Left,
@@ -3737,8 +3742,17 @@ impl ApplicationHandler<AppEvent> for App {
                 };
                 s.touch(phase, t.id, DVec2::new(t.location.x, t.location.y))
             }
-            // The viewer has no keyboard: nothing a key could do is a view.
-            WindowEvent::KeyboardInput { .. } if s.features.read_only => false,
+            // The viewer has no keyboard but Escape: it leaves Measure, else closes a list.
+            WindowEvent::KeyboardInput { event, .. } if s.features.read_only => {
+                if escape_pressed(&event.logical_key, event.state) {
+                    let measuring = s.editor.measurement().is_some();
+                    s.editor.stop_measure();
+                    let listed = s.viewer_panel.take().is_some();
+                    measuring || listed
+                } else {
+                    false
+                }
+            }
             // The mouse's left button in the viewer is a finger: a click selects, a drag
             // orbits, a double click zooms. The other buttons and the wheel navigate as usual.
             WindowEvent::MouseInput {
@@ -3957,6 +3971,18 @@ mod tests {
     fn the_viewer_features_turn_everything_that_edits_off() {
         let v = Features::VIEWER;
         assert!(v.read_only);
+        assert!(escape_pressed(
+            &Key::Named(NamedKey::Escape),
+            ElementState::Pressed
+        ));
+        assert!(!escape_pressed(
+            &Key::Named(NamedKey::Escape),
+            ElementState::Released
+        ));
+        assert!(!escape_pressed(
+            &Key::Named(NamedKey::Enter),
+            ElementState::Pressed
+        ));
         const { assert!(!Features::ALL.read_only && !Features::WEB.read_only) };
         assert!(!v.library && !v.autosave && !v.print && !v.recent && !v.quit && !v.share);
         assert!(!v.file_paths && v.in_app_dialogs && v.paste_by_event);

@@ -180,13 +180,19 @@ async fn shared_model() -> Result<Option<(SharedModel, Record)>, String> {
     Ok(Some((SharedModel { name, bytes }, record)))
 }
 
-/// The Recent list over the browser's storage (or over nothing, where it is blocked).
-async fn recent_list() -> Rc<RefCell<Recent>> {
-    let storage: Box<dyn recent::Storage> = match idb::open().await {
-        Some(db) => Box::new(db),
-        None => Box::new(idb::Unavailable),
-    };
-    Rc::new(RefCell::new(Recent::new(storage)))
+/// A Recent list whose storage opens in the background, so a browser that is slow with
+/// IndexedDB (or never answers: 3 seconds, then nothing is kept) cannot hold the viewer back.
+fn recent_list() -> Rc<RefCell<Recent>> {
+    let recent = Rc::new(RefCell::new(Recent::waiting()));
+    let waiting = recent.clone();
+    spawn_local(async move {
+        let storage: Box<dyn recent::Storage> = match idb::open_within(3000).await {
+            Some(db) => Box::new(db),
+            None => Box::new(idb::Unavailable),
+        };
+        waiting.borrow_mut().attach(storage);
+    });
+    recent
 }
 
 /// Opening another share link in this tab only changes its fragment: the page reloads, which
@@ -209,7 +215,7 @@ async fn run() -> Result<(), String> {
     // Only the viewer keeps models; the model just opened is the newest of them.
     let (model, recent) = match shared {
         Some((model, record)) => {
-            let recent = recent_list().await;
+            let recent = recent_list();
             recent.borrow_mut().keep(record);
             (Some(model), Some(recent))
         }

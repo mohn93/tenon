@@ -9,7 +9,8 @@ local network. The web build and the phone viewer itself do not have this item.
    not marked saved) with a random key and id, using ChaCha20-Poly1305 (`session::share`). The
    sealed data is the model's name (the document's file name without its extension, or
    "Untitled"; at most 256 bytes of UTF-8) and the model, so the name is encrypted too.
-2. A small HTTP server starts on this computer, on a free port of all interfaces, and the sheet
+2. A small HTTP server starts on this computer, on all interfaces, on port 47240 (or, when that
+   is taken, a free port the OS picks), and the sheet
    shows a QR code and the link `http://<this computer's address>:<port>/#v1.<id>.<key>`.
 3. The phone scans the code, loads the viewer from the server, fetches the encrypted model from
    `/s/<id>` and decrypts it in the browser with the key from the link.
@@ -101,8 +102,8 @@ The Parts button opens a list, every part with its size; a component's instances
 with their count ("Crate x3"). Rows are at least 44 points tall. Tapping a row selects its parts
 and frames them, and closes the list.
 
-Isolate hides every other part, for looking only: nothing is saved, undone or marked changed
-(the model's own bytes are the same), and what is hidden is hidden from drawing, picking,
+Isolate hides every other part, for looking only: nothing is saved or undone and the model
+is not marked changed (its own bytes are the same), and what is hidden is hidden from drawing, picking,
 snapping and Zoom Extents. While parts are hidden the card shows Show all instead (and a bar
 with Show all stays when nothing is selected). Selecting a row of the parts list shows
 everything again first. Opening another model starts with everything shown.
@@ -119,19 +120,31 @@ leaves; taps select parts again.
 
 ### Recent
 
-The viewer keeps the last 5 shared models it opened on the phone, so they open again with no
-computer: the Recent button lists them (name, when, size), a tap opens one, Delete forgets one.
-They live in the browser's IndexedDB: database `sketchup-alt-viewer`, object store `recent`
-(`id`, `key`, `name`, `time`, `blob`), and a small `recent-info` store (`id`, `name`, `time`,
-`size`) so the list does not read every blob. The blob is the encrypted share as the server sent
-it.
+The viewer keeps the last 5 shared models it opened in the phone's browser, and the Recent
+button lists them (name, when, size); a tap opens one, Delete forgets one. They live in the
+browser's IndexedDB: database `sketchup-alt-viewer`, object store `recent` (`id`, `key`, `name`,
+`time`, `blob`), and a small `recent-info` store (`id`, `name`, `time`, `size`) so the list does
+not read every blob. The blob is the encrypted share as the server sent it. The store opens in
+the background after the viewer starts (and is given up on after 3 seconds), so a slow browser
+does not delay the model.
 
-The key is kept beside the blob. That is deliberate: a model that opens offline must be able to
-decrypt itself. The encryption protects the model on the network and on the computer's server;
+What this is and is not: the models are kept on the phone, but the viewer page itself is
+served by the computer, so Recent works while a computer is sharing (any share, not only the
+one that made the entry) and the phone reaches it at the same address. The browser keeps
+IndexedDB per origin (address and port), which is why the app tries port 47240 first for every
+share: the origin stays the same from one share to the next on the same computer and network.
+If that port is taken the share uses another and Recent starts empty there. It does not work
+with the computer off or sharing nothing: a page served over plain `http` on a local network
+cannot install itself for offline use, so the phone has no viewer to open the kept models with.
+
+The key is kept beside the blob. That is deliberate: a kept model must be able to decrypt itself
+without the link. The encryption protects the model on the network and on the computer's server;
 on the phone the kept copy is as private as the browser's own storage (anyone with the unlocked
 phone and the browser's data can read it). Delete removes both. A share over 64 MiB is not kept
 and the Recent list says so. Where the browser blocks IndexedDB (some private windows) nothing
-is kept and the list says that.
+is kept and the list says that; when the storage is full the list says the model could not be
+kept, and the older ones stay. The oldest beyond 5 are removed only after the new one is safely
+written. Escape (or Done) leaves Measure; Escape also closes a list.
 
 ### Touch
 
