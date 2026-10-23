@@ -520,10 +520,15 @@ fn endpoints_mark_each_end_and_not_the_middle() {
         ..EdgeStyle::default()
     });
     let with = shoot(&one_edge(), Some(&marked), &camera).unwrap();
-    let y = (0..H)
-        .find(|&y| !plain.row_runs(y).is_empty())
+    // The edge is the row with the longest dark run (the blue axis is dark in every row on
+    // some adapters).
+    let (y, line) = (2..H)
+        .filter_map(|y| {
+            let longest = plain.row_runs(y).into_iter().max_by_key(|r| r.len())?;
+            Some((y, longest))
+        })
+        .max_by_key(|(_, r)| r.len())
         .expect("the edge");
-    let line = plain.row_runs(y).remove(0);
     // 3 px wide marks grow upward from the line: rows y-2 and y-1 are dark near the ends only.
     let above = |s: &Shot, x: u32| s.dark(x, y - 1) || s.dark(x, y - 2);
     let near_left = line.start + 4;

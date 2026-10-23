@@ -321,19 +321,6 @@ impl Shot {
             .sum()
     }
 
-    /// The most common color of the image.
-    fn dominant(&self) -> [u8; 3] {
-        let mut counts = std::collections::HashMap::new();
-        for k in 0..W * H {
-            *counts.entry(self.at(k % W, k / W)).or_insert(0u32) += 1;
-        }
-        counts
-            .into_iter()
-            .max_by_key(|(_, n)| *n)
-            .expect("pixels")
-            .0
-    }
-
     /// How many pixels of the whole image are within 2 of `color`.
     fn matches(&self, color: [u8; 3]) -> u32 {
         (0..H).map(|y| self.row_matches(y..y + 1, color)).sum()
@@ -512,8 +499,24 @@ fn a_parallel_top_view_is_all_ground() {
     let Some(shot) = shoot(&nothing(), Some(&s), &camera, Lighting::Day, false) else {
         return;
     };
-    // The grid's lines cross many pixels; most of the rest is ground.
-    assert_eq!(shot.dominant(), s.ground.unwrap().color);
+    // Compared with the same view without a ground (the grid may cover most pixels on some
+    // adapters): every pixel showing the background there shows the ground here.
+    let mut bare = s;
+    bare.ground = None;
+    let without = shoot(&nothing(), Some(&bare), &camera, Lighting::Day, false).unwrap();
+    let ground = s.ground.unwrap().color;
+    let open: Vec<u32> = (0..W * H)
+        .filter(|&k| near(without.at(k % W, k / W), s.background, 2))
+        .collect();
+    assert!(
+        !open.is_empty(),
+        "some background shows between the grid lines"
+    );
+    assert!(
+        open.iter().all(|&k| near(shot.at(k % W, k / W), ground, 2)),
+        "the ground fills the view"
+    );
+    assert_eq!(shot.matches(s.sky.unwrap()), 0, "no sky");
 }
 
 #[test]
