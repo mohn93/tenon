@@ -252,3 +252,122 @@ fn exploding_a_hidden_instance_does_not_hide_what_was_already_there() {
     }
     assert_eq!(m.edges().filter(|(_, e)| e.hidden).count(), 3);
 }
+
+/// A square component placed twice (at the origin and 5 m along x), and its definition's mesh.
+fn component_twice() -> (Scene, MeshId, Vec<InstanceId>) {
+    let (mut s, face) = square_scene();
+    let e: Vec<_> = s.root().edges().map(|(e, _)| e).collect();
+    let (first, _) = s
+        .make_group(
+            MeshId::Root,
+            &e,
+            &[face],
+            &[],
+            DefinitionKind::Component,
+            "Square",
+        )
+        .unwrap();
+    s.copy_instances(MeshId::Root, &[first], p(5.0, 0.0, 0.0), 1)
+        .unwrap();
+    let ids: Vec<_> = s.root().instances().map(|(id, _)| id).collect();
+    let def = MeshId::Definition(s.root().instance(first).unwrap().definition);
+    (s, def, ids)
+}
+
+fn hide(s: &mut Scene, mesh: MeshId, id: EntityId) {
+    s.edit(mesh, |m| Ok(m.hide_entities(&[id], true).0))
+        .unwrap();
+}
+
+#[test]
+fn a_hidden_face_inside_a_definition_is_left_out_of_every_instance() {
+    let (mut s, def, _) = component_twice();
+    assert_eq!(s.triangles().len(), 4, "two squares, two triangles each");
+    let face = s.mesh(def).unwrap().faces().next().unwrap().0;
+    hide(&mut s, def, EntityId::Face(face));
+    assert!(s.triangles().is_empty());
+    assert!(s.hides_faces());
+    assert!(!s.face_shown(s.mesh(def).unwrap().face(face).unwrap()));
+}
+
+#[test]
+fn a_hidden_instance_two_levels_deep_hides_what_it_places() {
+    let (mut s, _, ids) = component_twice();
+    // Group the two instances, so the squares sit one level below the group's definition.
+    let (outer, _) = s
+        .make_group(MeshId::Root, &[], &[], &ids, DefinitionKind::Group, "")
+        .unwrap();
+    let outer_def = MeshId::Definition(s.root().instance(outer).unwrap().definition);
+    assert_eq!(s.triangles().len(), 4);
+    let inner = s.mesh(outer_def).unwrap().instances().next().unwrap().0;
+    hide(&mut s, outer_def, EntityId::Instance(inner));
+    assert_eq!(s.triangles().len(), 2, "one of the two squares is left");
+    let kept = s.mesh(outer_def).unwrap().instances().nth(1).unwrap().0;
+    hide(&mut s, outer_def, EntityId::Instance(kept));
+    assert!(s.triangles().is_empty());
+    assert!(s.shown_bounds(MeshId::Root, &[]).is_none());
+    // The outer instance itself, shown again below, hides all it places.
+    s.edit(outer_def, |m| {
+        Ok(m.hide_entities(
+            &[EntityId::Instance(inner), EntityId::Instance(kept)],
+            false,
+        )
+        .0)
+    })
+    .unwrap();
+    assert_eq!(s.triangles().len(), 4);
+    hide(&mut s, MeshId::Root, EntityId::Instance(outer));
+    assert!(s.triangles().is_empty());
+}
+
+#[test]
+fn a_hidden_edge_still_bounds_its_face_and_leaves_triangles_alone() {
+    let (mut s, face) = square_scene();
+    let edge = s.root().edges().next().unwrap().0;
+    hide(&mut s, MeshId::Root, EntityId::Edge(edge));
+    assert_eq!(s.triangles().len(), 2);
+    assert!(s.root().face(face).is_some());
+    assert!(!s.edge_shown(s.root().edge(edge).unwrap()));
+    // The face still shows the whole square.
+    assert_eq!(
+        s.shown_bounds(MeshId::Root, &[]),
+        Some([p(0.0, 0.0, 0.0), p(2.0, 2.0, 0.0)])
+    );
+}
+
+#[test]
+fn shown_bounds_leave_out_hidden_entities_and_equal_bounds_when_nothing_is_hidden() {
+    let (mut s, def, ids) = component_twice();
+    assert_eq!(s.shown_bounds(MeshId::Root, &[]), s.bounds(MeshId::Root));
+    assert_eq!(
+        s.shown_bounds(MeshId::Root, &[]),
+        Some([p(0.0, 0.0, 0.0), p(7.0, 2.0, 0.0)])
+    );
+    // The copy at x = 5 hidden.
+    let far = ids
+        .iter()
+        .copied()
+        .find(|id| s.root().instance(*id).unwrap().transform.translation.x > 1.0)
+        .unwrap();
+    hide(&mut s, MeshId::Root, EntityId::Instance(far));
+    assert_eq!(
+        s.shown_bounds(MeshId::Root, &[]),
+        Some([p(0.0, 0.0, 0.0), p(2.0, 2.0, 0.0)])
+    );
+    // A hidden loose edge in the definition is not counted either.
+    s.edit(def, |m| m.add_edge(p(0.0, 0.0, 0.0), p(0.0, 0.0, 9.0)))
+        .unwrap();
+    assert_eq!(s.shown_bounds(MeshId::Root, &[]).unwrap()[1].z, 9.0);
+    let tall = s
+        .mesh(def)
+        .unwrap()
+        .edges()
+        .find(|(_, e)| {
+            e.v.iter()
+                .any(|v| s.mesh(def).unwrap().position(*v).unwrap().z > 8.0)
+        })
+        .unwrap()
+        .0;
+    hide(&mut s, def, EntityId::Edge(tall));
+    assert_eq!(s.shown_bounds(MeshId::Root, &[]).unwrap()[1].z, 0.0);
+}

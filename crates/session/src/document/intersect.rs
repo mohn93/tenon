@@ -116,7 +116,7 @@ impl Document {
         let context_mesh = places[context].mesh;
         if let Some(model) = scene.mesh(context_mesh) {
             for f in &parts.faces {
-                if model.face(*f).is_some_and(|f| scene.tag_shown(f.tag)) {
+                if model.face(*f).is_some_and(|f| scene.face_shown(f)) {
                     sources.insert((context, *f));
                 }
             }
@@ -136,7 +136,7 @@ impl Document {
                     sources.extend(
                         model
                             .faces()
-                            .filter(|(_, f)| scene.tag_shown(f.tag))
+                            .filter(|(_, f)| scene.face_shown(f))
                             .map(|(id, _)| (index, id)),
                     );
                 }
@@ -238,7 +238,7 @@ impl Document {
                     {
                         continue;
                     }
-                    if !model.face(f).is_some_and(|f| scene.tag_shown(f.tag)) {
+                    if !model.face(f).is_some_and(|f| scene.face_shown(f)) {
                         continue;
                     }
                     let pair = if a < b { (a, b) } else { (b, a) };

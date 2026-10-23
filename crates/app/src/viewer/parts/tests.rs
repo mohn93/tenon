@@ -270,6 +270,36 @@ fn a_part_on_a_hidden_tag_is_not_listed() {
 }
 
 #[test]
+fn a_hidden_part_is_not_listed_and_hidden_geometry_does_not_count_in_the_size() {
+    let (mut s, id) = one(&rect(1.0, 1.0), 1.0, DefinitionKind::Group, "Shed");
+    let def = MeshId::Definition(s.root().instance(id).unwrap().definition);
+    // A loose edge 10 m out, then hidden, leaves the size alone.
+    s.edit(def, |m| m.add_edge(p(0.0, 0.0, 0.0), p(10.0, 0.0, 0.0)))
+        .unwrap();
+    let long = s
+        .mesh(def)
+        .unwrap()
+        .edges()
+        .find(|(_, e)| {
+            e.v.iter()
+                .any(|v| s.mesh(def).unwrap().position(*v).unwrap().x > 5.0)
+        })
+        .unwrap()
+        .0;
+    close(list(&s)[0].size.unwrap(), [10.0, 1.0, 1.0]);
+    s.edit(def, |m| {
+        Ok(m.hide_entities(&[kernel::EntityId::Edge(long)], true).0)
+    })
+    .unwrap();
+    close(list(&s)[0].size.unwrap(), [1.0, 1.0, 1.0]);
+    s.edit(MeshId::Root, |m| {
+        Ok(m.hide_entities(&[kernel::EntityId::Instance(id)], true).0)
+    })
+    .unwrap();
+    assert!(list(&s).is_empty());
+}
+
+#[test]
 fn sizes_are_written_in_the_documents_units() {
     let size = [1.2, 0.6, 2.0];
     assert_eq!(size_text(size, &Units::default()), "1.2 m x 0.6 m x 2 m");

@@ -219,8 +219,8 @@ pub struct ModelGeometry {
 /// instance highlights everything it places. While an instance is open, edges and guides
 /// outside it are faded and its bounding box is outlined. Each face side gets its material's
 /// color, or else that of the nearest painted instance placing it, or else the default.
-/// Faces, edges and guides on hidden tags are left out, and instances on hidden tags with all
-/// they place (see `Scene::tag_shown`), but for the instances the open context is in.
+/// Faces, edges and guides on hidden tags or hidden themselves are left out, and instances on
+/// hidden tags or hidden themselves with all they place (see `Scene::instance_shown`), but for the instances the open context is in.
 ///
 /// This is `scene_base` with `Spans::flags` applied; the renderer keeps the two apart.
 pub fn scene_geometry(
@@ -614,7 +614,8 @@ struct MeshParts {
     faces: Vec<FacePart>,
     /// The ends of the hard edges (soft edges are not drawn).
     ends: Vec<DVec3>,
-    edges: Vec<(EdgeId, Option<TagId>, Range<usize>)>,
+    /// Each hard edge, with its tag, whether it is hidden itself and its ends in `ends`.
+    edges: Vec<(EdgeId, Option<TagId>, bool, Range<usize>)>,
 }
 
 struct FacePart {
@@ -626,6 +627,8 @@ struct FacePart {
     front: Option<Look>,
     back: Option<Look>,
     tag: Option<TagId>,
+    /// Whether the face is hidden itself.
+    hidden: bool,
 }
 
 impl MeshParts {
@@ -659,6 +662,7 @@ impl MeshParts {
                     .back
                     .map(|m| side_look(scene, layers, Some(m), DEFAULT_BACK)),
                 tag: face.tag,
+                hidden: face.hidden,
             });
         }
         let hard = model.edges().filter(|(_, e)| !e.soft).count();
@@ -668,7 +672,7 @@ impl MeshParts {
         for (id, edge) in model.edges().filter(|(_, e)| !e.soft) {
             let start = ends.len();
             ends.extend(edge.v.iter().filter_map(|v| model.position(*v)));
-            edges.push((id, edge.tag, start..ends.len()));
+            edges.push((id, edge.tag, edge.hidden, start..ends.len()));
         }
         MeshParts {
             corners,
@@ -874,7 +878,7 @@ impl Walk<'_> {
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
-            if !scene.tag_shown(face.tag) {
+            if face.hidden || !scene.tag_shown(face.tag) {
                 continue;
             }
             let start = base.faces.len();
@@ -996,8 +1000,8 @@ impl Walk<'_> {
             base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
-        for (eid, tag, ends) in &parts.edges {
-            if !scene.tag_shown(*tag) {
+        for (eid, tag, hidden, ends) in &parts.edges {
+            if *hidden || !scene.tag_shown(*tag) {
                 continue;
             }
             let start = base.edges.len();
@@ -1052,7 +1056,7 @@ impl Walk<'_> {
             FADED_GUIDE_COLOR
         };
         for (gid, guide) in model.guides() {
-            if !scene.tag_shown(guide.tag()) {
+            if guide.hidden() || !scene.tag_shown(guide.tag()) {
                 continue;
             }
             let (point, direction) = match guide.transformed(t) {

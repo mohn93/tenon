@@ -455,3 +455,168 @@ fn a_skp_export_keeps_hidden_flags_and_the_import_reads_them_back() {
         2
     );
 }
+
+// Hidden entities left out of views, output and intersect.
+
+fn ids(d: &Document, kind: &str) -> Vec<Value> {
+    let key = format!("{kind}s");
+    ask(d, json!({"type": "entities", "kinds": [kind]}))[key.as_str()]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].clone())
+        .collect()
+}
+
+/// A 2 x 2 x 1 box at the origin.
+fn boxed(d: &mut Document, lo: [f64; 3], hi: [f64; 3]) {
+    let out = run(
+        d,
+        json!({"type": "add_rectangle", "corner": lo, "opposite": [hi[0], hi[1], lo[2]]}),
+    )
+    .unwrap();
+    let base = created(&out, 'f')[0].clone();
+    let up = ask(d, json!({"type": "entity", "id": base}))["normal"][2]
+        .as_f64()
+        .unwrap()
+        > 0.0;
+    let height = hi[2] - lo[2];
+    run(
+        d,
+        json!({"type": "push_pull", "face": base, "distance": if up { height } else { -height }}),
+    )
+    .unwrap();
+}
+
+/// A component of the box at the origin placed twice (the second 4 m along x). Returns both
+/// instance ids.
+fn two_components(d: &mut Document) -> Vec<Value> {
+    boxed(d, [0.0; 3], [2.0, 2.0, 1.0]);
+    let all: Vec<Value> = ids(d, "edge").into_iter().chain(ids(d, "face")).collect();
+    run(
+        d,
+        json!({"type": "make_component", "ids": all, "name": "Part"}),
+    )
+    .unwrap();
+    let first = ids(d, "instance")[0].clone();
+    run(
+        d,
+        json!({"type": "copy", "ids": [first], "offset": [4, 0, 0]}),
+    )
+    .unwrap();
+    ids(d, "instance")
+}
+
+fn export_obj(d: &mut Document, name: &str) -> Result<String, (ErrorKind, String)> {
+    let path = scratch(name);
+    run(d, json!({"type": "export", "path": path.to_str().unwrap()}))?;
+    Ok(String::from_utf8(std::fs::read(&path).unwrap()).unwrap())
+}
+
+#[test]
+fn a_hidden_instance_is_left_out_of_mesh_exports_and_hidden_everything_exports_nothing() {
+    let mut d = doc();
+    let parts = two_components(&mut d);
+    let faces = |text: &str| text.lines().filter(|l| l.starts_with("f ")).count();
+    assert_eq!(faces(&export_obj(&mut d, "both.obj").unwrap()), 24);
+    run(&mut d, json!({"type": "hide", "ids": [parts[1]]})).unwrap();
+    assert_eq!(faces(&export_obj(&mut d, "one.obj").unwrap()), 12);
+    run(&mut d, json!({"type": "unhide_all"})).unwrap();
+    run(&mut d, json!({"type": "hide", "ids": [parts[0], parts[1]]})).unwrap();
+    let (_, message) = export_obj(&mut d, "none.obj").unwrap_err();
+    assert!(message.contains("hidden entities"), "{message}");
+}
+
+#[test]
+fn zoom_extents_and_print_extent_leave_out_hidden_entities() {
+    let mut d = doc();
+    boxed(&mut d, [0.0; 3], [2.0, 2.0, 1.0]);
+    let out = run(
+        &mut d,
+        json!({"type": "add_edge", "start": [10, 0, 0], "end": [20, 0, 0]}),
+    )
+    .unwrap();
+    let far = created(&out, 'e')[0].clone();
+    let max_x = |d: &Document| {
+        session::drawing::extent_points(d)
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::MIN, f64::max)
+    };
+    assert_eq!(max_x(&d), 20.0);
+    run(&mut d, json!({"type": "hide", "ids": [far]})).unwrap();
+    assert_eq!(max_x(&d), 2.0);
+    run(&mut d, json!({"type": "zoom_extents"})).unwrap();
+    let target = ask(&d, json!({"type": "camera"}))["target"][0]
+        .as_f64()
+        .unwrap();
+    assert!(target < 3.0, "the box alone is framed: {target}");
+}
+
+#[test]
+fn the_line_drawing_skips_hidden_edges_and_hidden_instances_and_they_hide_nothing() {
+    use session::drawing::line_drawing;
+    let mut d = doc();
+    let parts = two_components(&mut d);
+    run(
+        &mut d,
+        json!({"type": "add_edge", "start": [-2, 5, 0.5], "end": [8, 5, 0.5]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "set_camera", "eye": [1.0, -10.0, 0.5], "target": [1.0, 1.0, 0.5],
+               "projection": "parallel"}),
+    )
+    .unwrap();
+    let lines = |d: &Document| line_drawing(d, &d.camera, d.camera.viewport).unwrap().lines;
+    let row = d.camera.project(glam::DVec3::new(0.0, 5.0, 0.5)).unwrap().y;
+    let behind = |d: &Document| {
+        lines(d)
+            .iter()
+            .filter(|l| l.iter().all(|q| (q.y - row).abs() < 0.5) && l[0].distance(l[1]) > 5.0)
+            .count()
+    };
+    assert_eq!(behind(&d), 3, "the two boxes cut the edge in three pieces");
+    let before = lines(&d).len();
+    run(&mut d, json!({"type": "hide", "ids": [parts[0]]})).unwrap();
+    assert_eq!(behind(&d), 2, "a hidden instance cuts nothing");
+    assert!(lines(&d).len() < before);
+    run(&mut d, json!({"type": "hide", "ids": [parts[1]]})).unwrap();
+    assert_eq!(lines(&d).len(), 1, "only the loose edge is left");
+}
+
+#[test]
+fn intersect_leaves_out_hidden_faces() {
+    let mut d = doc();
+    boxed(&mut d, [0.0; 3], [2.0; 3]);
+    let a = ids(&d, "face");
+    boxed(&mut d, [1.0; 3], [3.0; 3]);
+    let b: Vec<Value> = ids(&d, "face")
+        .into_iter()
+        .filter(|f| !a.contains(f))
+        .collect();
+    run(&mut d, json!({"type": "hide", "ids": a})).unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "intersect_faces", "ids": b, "with": "model"}),
+    )
+    .unwrap();
+    let report = &out["intersect"];
+    assert_eq!(report["split_faces"].as_array().unwrap().len(), 0, "{out}");
+    assert_eq!(report["added_edges"].as_array().unwrap().len(), 0, "{out}");
+    // Shown again, the same call cuts.
+    run(&mut d, json!({"type": "unhide_all"})).unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "intersect_faces", "ids": b, "with": "model"}),
+    )
+    .unwrap();
+    assert!(
+        !out["intersect"]["split_faces"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{out}"
+    );
+}

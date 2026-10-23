@@ -380,6 +380,13 @@ have their own flag; geometry inside a definition is shared by every instance of
 clipboard and library items, groups made from or exploded into hidden entities (an exploded
 hidden instance leaves its contents hidden), split edges and `.skr` files keep the flag.
 
+A hidden entity is treated as one on a hidden tag (see Tags): not drawn (nor in `render_view`),
+not met by `pick`, not selected by a `select` box, not snapped to by `infer` or the tools, not
+hiding what is behind it, left out of `zoom_extents`, the hidden-line drawing, SVG, PDF and print,
+`intersect_faces` (as source or target), OBJ, STL and glTF exports, and not a part in the phone
+viewer; a hidden edge still bounds its faces. A hidden face inside a definition is hidden in
+every instance of it, and a hidden instance hides its whole subtree at any depth.
+
 | Command | Effect |
 |---|---|
 | `{"type": "hide", "ids": ["f8", "e3"]}` | Hides the edges, faces, instances and guides in `ids` (of the open context), as one undo step labelled `hide`; ones already hidden are ignored. Hidden entities leave the selection. Vertex ids are `invalid_input`, unknown ids `not_found`; dimensions, notes and section planes are left alone. The outcome's `changed` lists the ids hidden (`[]`, with no undo step, when there was nothing to hide). |

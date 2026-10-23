@@ -127,7 +127,10 @@ fn placements(scene: &Scene, cuts: bool) -> Vec<Placement<'_>> {
             planes: planes.clone(),
             bounds,
         });
-        for (_, instance) in model.instances().filter(|(_, i)| scene.tag_shown(i.tag)) {
+        for (_, instance) in model
+            .instances()
+            .filter(|(_, i)| !i.hidden && scene.tag_shown(i.tag))
+        {
             walk(
                 scene,
                 MeshId::Definition(instance.definition),
@@ -372,9 +375,7 @@ impl Occluders<'_> {
                     0.0,
                     reach,
                     |f, t| {
-                        part.model
-                            .face(f)
-                            .is_some_and(|f| self.scene.tag_shown(f.tag))
+                        part.model.face(f).is_some_and(|f| self.scene.face_shown(f))
                             && part.kept(from + dir * t)
                     },
                 )
@@ -452,7 +453,7 @@ pub fn line_drawing(
     };
     for part in &parts {
         for (_, edge) in part.model.edges() {
-            if edge.soft || !scene.tag_shown(edge.tag) {
+            if edge.soft || !scene.edge_shown(edge) {
                 continue;
             }
             let (Some(a), Some(b)) = (part.model.vertex(edge.v[0]), part.model.vertex(edge.v[1]))
@@ -476,7 +477,7 @@ pub fn line_drawing(
         let surface: Vec<[DVec3; 3]> = part
             .model
             .faces()
-            .filter(|(_, f)| scene.tag_shown(f.tag))
+            .filter(|(_, f)| scene.face_shown(f))
             .flat_map(|(id, _)| part.model.triangulate(id).unwrap_or_default())
             .map(|t| {
                 let [a, b, c] = t.map(|p| part.place.transform_point3(p));
@@ -545,7 +546,7 @@ pub fn extent_points(doc: &Document) -> Vec<DVec3> {
     let mut out = Vec::new();
     for part in &parts {
         let model = part.model;
-        for (_, edge) in model.edges().filter(|(_, e)| scene.tag_shown(e.tag)) {
+        for (_, edge) in model.edges().filter(|(_, e)| scene.edge_shown(e)) {
             let (Some(a), Some(b)) = (model.position(edge.v[0]), model.position(edge.v[1])) else {
                 continue;
             };
@@ -557,7 +558,7 @@ pub fn extent_points(doc: &Document) -> Vec<DVec3> {
                 out.extend([a, b]);
             }
         }
-        for (_, face) in model.faces().filter(|(_, f)| scene.tag_shown(f.tag)) {
+        for (_, face) in model.faces().filter(|(_, f)| scene.face_shown(f)) {
             out.extend(
                 face.outer
                     .iter()
@@ -570,7 +571,7 @@ pub fn extent_points(doc: &Document) -> Vec<DVec3> {
             let mirrored = part.place.matrix3.determinant() < 0.0;
             let surface: Vec<[DVec3; 3]> = model
                 .faces()
-                .filter(|(_, f)| scene.tag_shown(f.tag))
+                .filter(|(_, f)| scene.face_shown(f))
                 .flat_map(|(id, _)| model.triangulate(id).unwrap_or_default())
                 .map(|t| {
                     let [a, b, c] = t.map(|p| part.place.transform_point3(p));

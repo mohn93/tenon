@@ -3,6 +3,7 @@
 
 mod golden;
 mod headless;
+mod hide;
 mod perf;
 mod sections;
 mod snapshot;

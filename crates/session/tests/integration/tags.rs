@@ -838,5 +838,5 @@ fn the_export_message_names_hidden_tags_only_when_they_hid_a_face() {
     )
     .unwrap();
     let e = export(&mut d, "hidden-face.stl").unwrap_err();
-    assert!(e.1.contains("hidden tags hide the rest"), "{}", e.1);
+    assert!(e.1.contains("hide the rest"), "{}", e.1);
 }

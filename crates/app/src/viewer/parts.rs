@@ -37,15 +37,15 @@ impl Part {
     }
 }
 
-/// Every shown top-level instance of `scene`, in id order. Instances on hidden tags are not
-/// parts (they are not seen).
+/// Every shown top-level instance of `scene`, in id order. Instances on hidden tags or hidden
+/// themselves are not parts (they are not seen).
 pub fn list(scene: &Scene) -> Vec<Part> {
     let hidden = scene.hidden_tags();
     let root = scene.root();
     let mut counts: std::collections::BTreeMap<DefinitionId, usize> = Default::default();
     let mut parts = Vec::new();
     for (id, instance) in root.instances() {
-        if !scene.tag_shown(instance.tag) {
+        if instance.hidden || !scene.tag_shown(instance.tag) {
             continue;
         }
         let Some(definition) = scene.definition(instance.definition) else {
@@ -108,7 +108,7 @@ fn extent(
             continue;
         }
         for (_, inner) in mesh.instances() {
-            if scene.tag_shown(inner.tag) {
+            if !inner.hidden && scene.tag_shown(inner.tag) {
                 stack.push((inner.definition, place * inner.transform, depth + 1));
             }
         }

@@ -25,9 +25,9 @@ pub struct Triangle {
 
 impl Scene {
     /// Every face the scene shows, as triangles in root coordinates: the root's faces and,
-    /// placed by their transforms, the faces of every instance at any depth. Faces and
-    /// instances on hidden tags are left out (see `Scene::tag_shown`), with all they place. A component
-    /// placed twice gives its faces twice. Edges without faces give nothing. The order is
+    /// placed by their transforms, the faces of every instance at any depth. Hidden faces and
+    /// instances, and those on hidden tags, are left out (see `Scene::face_shown`), with all they
+    /// place. A component placed twice gives its faces twice. Edges without faces give nothing. The order is
     /// fixed: faces by id, then instances by id, depth first.
     pub fn triangles(&self) -> Vec<Triangle> {
         self.triangles_and_skipped().0
@@ -63,7 +63,7 @@ impl Scene {
         let mirrored = place.matrix3.determinant() < 0.0;
         let normal_map = place.matrix3.inverse().transpose();
         let smooth = model.smooth_normals();
-        for (fid, face) in model.faces().filter(|(_, f)| self.tag_shown(f.tag)) {
+        for (fid, face) in model.faces().filter(|(_, f)| self.face_shown(f)) {
             let normal = (normal_map * face.normal).normalize();
             let (front, back) = (face.front.or(inherited), face.back.or(inherited));
             let tris = model.shaded_triangles(fid, &smooth).unwrap_or_default();
@@ -84,7 +84,10 @@ impl Scene {
                 });
             }
         }
-        for (_, instance) in model.instances().filter(|(_, i)| self.tag_shown(i.tag)) {
+        for (_, instance) in model
+            .instances()
+            .filter(|(_, i)| !i.hidden && self.tag_shown(i.tag))
+        {
             self.collect_triangles(
                 MeshId::Definition(instance.definition),
                 place * instance.transform,

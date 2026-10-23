@@ -254,7 +254,7 @@ pub fn select_box(
     let world = |points: &[kernel::VertexId]| -> Vec<DVec3> {
         points.iter().filter_map(|v| m.position(*v)).collect()
     };
-    for (id, e) in m.edges().filter(|(_, e)| scenery.shows(e.tag)) {
+    for (id, e) in m.edges().filter(|(_, e)| scenery.shows_edge_of(e)) {
         // Only the part of the edge the planes keep is looked at.
         let ends = world(&e.v);
         let kept = match (cut.is_cut(), ends.as_slice()) {
@@ -285,7 +285,7 @@ pub fn select_box(
     };
     // Instances by their bounding boxes: inside when every corner is, touching when the box's
     // screen rectangle overlaps the selection box.
-    for (id, _) in m.instances().filter(|(_, i)| scenery.shows(i.tag)) {
+    for (id, _) in m.instances().filter(|(_, i)| scenery.shows_instance_of(i)) {
         let id = EntityId::Instance(id);
         let EntityId::Instance(instance) = id else {
             continue;
@@ -312,7 +312,7 @@ pub fn select_box(
             ids.push(id);
         }
     }
-    for (id, g) in m.guides().filter(|(_, g)| scenery.shows(g.tag())) {
+    for (id, g) in m.guides().filter(|(_, g)| scenery.shows_guide_of(g)) {
         let hit = match *g {
             Guide::Point { position, .. } => camera.project(position).is_some_and(inside),
             Guide::Line {
@@ -392,7 +392,7 @@ pub fn select_box(
         .map(|p| camera.project(p))
         .collect()
     };
-    for (id, f) in m.faces().filter(|(_, f)| scenery.shows(f.tag)) {
+    for (id, f) in m.faces().filter(|(_, f)| scenery.shows_face_of(f)) {
         if cut.cuts_away(&world(&f.outer)) {
             continue;
         }

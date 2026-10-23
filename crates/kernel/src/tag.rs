@@ -8,8 +8,8 @@ use glam::DVec3;
 
 use crate::edit::KernelError;
 use crate::ids::{EntityId, InstanceId, TagId, VertexId};
-use crate::model::Instance;
 use crate::model::{ChangeSet, Model};
+use crate::model::{Edge, Face, Guide, Instance};
 use crate::scene::{MeshId, Scene, SceneChange, Step, enclose, placed_box};
 
 /// The longest tag name, in characters.
@@ -71,27 +71,27 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
 
 /// Whether what is on `tag` (None: Untagged) shows while the tags `hidden` are hidden: Untagged
 /// always does. Every visibility check goes by this; an entity inside instances is hidden too
-/// when one of them is on a hidden tag (callers walking down skip such instances).
+/// when one of them is on a hidden tag (callers walking down skip such instances). An entity
+/// also has its own hidden flag (`Edge::hidden` and the like), checked beside this.
 pub fn tag_shown_among(hidden: &BTreeSet<TagId>, tag: Option<TagId>) -> bool {
     tag.is_none_or(|t| !hidden.contains(&t))
 }
 
 impl Model {
     /// Whether a vertex shows while the tags `hidden` are hidden: when some shown edge or
-    /// shown face uses it (a vertex has no tag of its own; one used by nothing shows).
+    /// shown face (not hidden itself either) uses it (a vertex has no tag of its own; one used by nothing shows).
     pub fn vertex_shown(&self, v: VertexId, hidden: &BTreeSet<TagId>) -> bool {
-        if hidden.is_empty() {
-            return true;
-        }
-        let shown = |tag| tag_shown_among(hidden, tag);
+        let shown = |tag, own: bool| !own && tag_shown_among(hidden, tag);
         let edges = self.edges_at(v);
         let mut faces = self.faces_at(v).peekable();
         (edges.is_empty() && faces.peek().is_none())
             || edges
                 .iter()
                 .filter_map(|e| self.edge(*e))
-                .any(|e| shown(e.tag))
-            || faces.filter_map(|f| self.face(f)).any(|f| shown(f.tag))
+                .any(|e| shown(e.tag, e.hidden))
+            || faces
+                .filter_map(|f| self.face(f))
+                .any(|f| shown(f.tag, f.hidden))
     }
 
     /// Puts edges, faces, instances, guides and annotations on `tag` (None: Untagged) as one
@@ -279,10 +279,45 @@ impl Scene {
         self.view_hidden = ids;
     }
 
-    /// Whether instance `id` (`instance`) of mesh `mesh` shows: it is not on a hidden tag and
-    /// not hidden for viewing. Every walk down the instances goes by this.
+    /// Whether instance `id` (`instance`) of mesh `mesh` shows: it is not hidden itself, not on
+    /// a hidden tag and not hidden for viewing. Every walk down the instances goes by this.
     pub fn instance_shown(&self, mesh: MeshId, id: InstanceId, instance: &Instance) -> bool {
-        self.tag_shown(instance.tag) && !(mesh == MeshId::Root && self.view_hidden.contains(&id))
+        !instance.hidden
+            && self.tag_shown(instance.tag)
+            && !(mesh == MeshId::Root && self.view_hidden.contains(&id))
+    }
+
+    /// Whether `face` shows: it is not hidden itself and not on a hidden tag. Instances
+    /// placing it are checked by [`Scene::instance_shown`].
+    pub fn face_shown(&self, face: &Face) -> bool {
+        !face.hidden && self.tag_shown(face.tag)
+    }
+
+    /// Whether `edge` shows: it is not hidden itself and not on a hidden tag. A hidden edge
+    /// still bounds its faces.
+    pub fn edge_shown(&self, edge: &Edge) -> bool {
+        !edge.hidden && self.tag_shown(edge.tag)
+    }
+
+    /// Whether `guide` shows: it is not hidden itself and not on a hidden tag.
+    pub fn guide_shown(&self, guide: &Guide) -> bool {
+        !guide.hidden() && self.tag_shown(guide.tag())
+    }
+
+    /// Whether mesh `mesh` or a definition it places holds an entity with its hidden flag set.
+    fn any_hidden_flag(&self, mesh: MeshId, seen: &mut BTreeSet<MeshId>) -> bool {
+        let Some(m) = self.mesh(mesh) else {
+            return false;
+        };
+        if !seen.insert(mesh) {
+            return false;
+        }
+        m.edges().any(|(_, e)| e.hidden)
+            || m.faces().any(|(_, f)| f.hidden)
+            || m.guides().any(|(_, g)| g.hidden())
+            || m.instances().any(|(_, i)| {
+                i.hidden || self.any_hidden_flag(MeshId::Definition(i.definition), seen)
+            })
     }
 
     /// The tags that are hidden.
@@ -297,17 +332,20 @@ impl Scene {
     /// edges, the corners of its shown faces and the shown parts of its shown instances. The
     /// instances along `open` (a path of open instances from this mesh down) count as shown
     /// whatever their tags, as an open instance stays drawn. None when it shows nothing. With
-    /// no tag hidden, `bounds`.
+    /// no tag hidden and nothing hidden itself, `bounds`.
     pub fn shown_bounds(&self, mesh: MeshId, open: &[InstanceId]) -> Option<[DVec3; 2]> {
-        if self.view_hidden.is_empty() && self.tags().all(|(_, t)| t.visible) {
+        if self.view_hidden.is_empty()
+            && self.tags().all(|(_, t)| t.visible)
+            && !self.any_hidden_flag(mesh, &mut BTreeSet::new())
+        {
             return self.bounds(mesh);
         }
         let m = self.mesh(mesh)?;
         let mut points: Vec<DVec3> = Vec::new();
-        for (_, e) in m.edges().filter(|(_, e)| self.tag_shown(e.tag)) {
+        for (_, e) in m.edges().filter(|(_, e)| self.edge_shown(e)) {
             points.extend(e.v.iter().filter_map(|v| m.position(*v)));
         }
-        for (_, f) in m.faces().filter(|(_, f)| self.tag_shown(f.tag)) {
+        for (_, f) in m.faces().filter(|(_, f)| self.face_shown(f)) {
             points.extend(f.outer.iter().filter_map(|v| m.position(*v)));
         }
         for (id, i) in m.instances() {
@@ -323,8 +361,8 @@ impl Scene {
         enclose(&points)
     }
 
-    /// Whether hidden tags hide a face that would otherwise be placed in the model (on a hidden
-    /// tag itself, or placed by an instance on one).
+    /// Whether hidden tags or hidden entities hide a face that would otherwise be placed in the
+    /// model (hidden or on a hidden tag itself, or placed by an instance that is).
     pub fn hides_faces(&self) -> bool {
         let mut memo = std::collections::HashMap::new();
         self.hides_faces_in(MeshId::Root, &mut memo)
@@ -342,10 +380,10 @@ impl Scene {
         }
         memo.insert(id, false);
         let Some(m) = self.mesh(id) else { return false };
-        let hides = m.faces().any(|(_, f)| !self.tag_shown(f.tag))
+        let hides = m.faces().any(|(_, f)| !self.face_shown(f))
             || m.instances().any(|(_, i): (_, &Instance)| {
                 let def = MeshId::Definition(i.definition);
-                if self.tag_shown(i.tag) {
+                if !i.hidden && self.tag_shown(i.tag) {
                     self.hides_faces_in(def, memo)
                 } else {
                     self.places_faces(def)

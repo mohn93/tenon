@@ -973,3 +973,159 @@ fn with_the_fill_off_the_cut_hides_nothing() {
     assert!(face_under_in(&on, &c, at).is_none());
     assert!(face_under_in(&off, &c, at).is_some());
 }
+
+/// Hides entities of `mesh` by their own flag.
+fn flag_hidden(s: &mut Scene, mesh: MeshId, ids: &[EntityId]) {
+    s.edit(mesh, |m| Ok(m.hide_entities(ids, true).0)).unwrap();
+}
+
+#[test]
+fn an_instance_hidden_by_its_flag_is_not_seen_picked_or_snapped_to_at_any_depth() {
+    let (mut s, i) = scene();
+    let c = camera(DVec3::ZERO);
+    let behind = c.eye + (p(3.5, 0.5, 0.5) - c.eye) * 1.2;
+    s.edit(MeshId::Root, |m| {
+        m.add_edge(behind, behind + p(0.5, 0.0, 0.0))
+    })
+    .unwrap();
+    let corner = p(4.0, 0.0, 1.0);
+    let top = p(3.5, 0.5, 1.0);
+    let down = Ray {
+        origin: p(3.5, 0.5, 10.0),
+        dir: DVec3::NEG_Z,
+    };
+    // Wrap the group in an outer group, so the box is one level down.
+    let (outer, _) = s
+        .make_group(MeshId::Root, &[], &[], &[i], DefinitionKind::Group, "")
+        .unwrap();
+    let outer_def = MeshId::Definition(s.root().instance(outer).unwrap().definition);
+    let inner = s.mesh(outer_def).unwrap().instances().next().unwrap().0;
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert_eq!(view.len(), 3, "root, outer and inner are parts");
+    assert!(!pick(&view, &down, Reach::Around { radius: 0.01 }).is_empty());
+    flag_hidden(&mut s, outer_def, &[EntityId::Instance(inner)]);
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert_eq!(view.len(), 2, "the hidden instance's box is left out");
+    let snap = infer_in(
+        &view,
+        &c,
+        px(&c, corner) + DVec2::new(3.0, 2.0),
+        &Guides::default(),
+        R,
+    );
+    assert!(!snap.point.abs_diff_eq(corner, 1e-6), "{snap:?}");
+    assert!(face_under_in(&view, &c, px(&c, top)).is_none());
+    assert!(pick(&view, &down, Reach::Around { radius: 0.01 }).is_empty());
+    // Its faces no longer hide the edge behind it.
+    let hit = infer_in(&view, &c, px(&c, behind), &Guides::default(), R);
+    assert_eq!(hit.kind, SnapKind::Endpoint);
+    // The same at the root: the outer group hidden hides everything below it.
+    s.edit(outer_def, |m| {
+        Ok(m.hide_entities(&[EntityId::Instance(inner)], false).0)
+    })
+    .unwrap();
+    flag_hidden(&mut s, MeshId::Root, &[EntityId::Instance(outer)]);
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert_eq!(view.len(), 1);
+    assert!(!boxed(&view, &c).contains(&EntityId::Instance(outer)));
+    assert_eq!(view.instance_box(outer), None);
+    // Opened, the hidden instance's own context is still seen.
+    let opened = Scenery::of(&s, &[outer]).unwrap();
+    assert_eq!(opened.part(0).owner, Owner::Open);
+}
+
+#[test]
+fn faces_edges_and_guides_hidden_by_their_flag_are_not_picked_or_snapped_to() {
+    let (mut s, i) = scene();
+    let d = s.root().instance(i).unwrap().definition;
+    let top = {
+        let m = &s.definition(d).unwrap().mesh;
+        m.faces()
+            .find(|(_, f)| f.normal.z.abs() > 0.5 && m.position(f.outer[0]).unwrap().z > 0.5)
+            .unwrap()
+            .0
+    };
+    let through_box = Ray {
+        origin: p(3.5, 0.5, 10.0),
+        dir: DVec3::NEG_Z,
+    };
+    let faces_met = |view: &Scenery| {
+        pick(view, &through_box, Reach::Around { radius: 0.0 })
+            .iter()
+            .map(|h| h.distance)
+            .collect::<Vec<f64>>()
+    };
+    s.edit(MeshId::Root, |m| {
+        m.add_guide(Guide::point(p(0.5, -4.0, 0.0)))
+    })
+    .unwrap();
+    let edge = s.root().edges().next().unwrap().0;
+    let guide = s.root().guides().next().unwrap().0;
+    let c = camera(DVec3::ZERO);
+    let (mid, end) = (p(0.5, -2.0, 0.0), p(1.0, -2.0, 0.0));
+    let guide_at = p(0.5, -4.0, 0.0);
+    let all = |_: Owner| true;
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert!(edge_under_in(&view, &c, px(&c, mid), R).is_some());
+    assert_eq!(faces_met(&view), vec![9.0, 10.0]);
+    flag_hidden(&mut s, MeshId::Definition(d), &[EntityId::Face(top)]);
+    flag_hidden(
+        &mut s,
+        MeshId::Root,
+        &[EntityId::Edge(edge), EntityId::Guide(guide)],
+    );
+    let view = Scenery::of(&s, &[]).unwrap();
+    assert!(edge_under_in(&view, &c, px(&c, mid), R).is_none());
+    assert!(guide_under_where(&view, &c, px(&c, guide_at), R, all).is_none());
+    assert!(view.guides().is_empty());
+    let snap = infer_in(
+        &view,
+        &c,
+        px(&c, end) + DVec2::new(2.0, 1.0),
+        &Guides::default(),
+        R,
+    );
+    assert_ne!(snap.kind, SnapKind::Endpoint, "its ends have no shown edge");
+    let boxed = boxed(&view, &c);
+    assert!(!boxed.contains(&EntityId::Edge(edge)));
+    assert!(!boxed.contains(&EntityId::Guide(guide)));
+    assert!(!boxed.contains(&EntityId::Face(top)));
+    assert_eq!(faces_met(&view), vec![10.0], "only the bottom face");
+    let (_, _, at) = face_under_in(&view, &c, px(&c, p(3.5, 0.5, 1.0))).unwrap();
+    assert!(at.z < 1.0 - 1e-6, "the top is passed through: {at}");
+}
+
+#[test]
+fn faces_whose_edges_are_all_hidden_by_flag_keep_their_corners_and_box() {
+    let (mut s, i) = scene();
+    let d = s.root().instance(i).unwrap().definition;
+    let edges: Vec<EntityId> = s
+        .definition(d)
+        .unwrap()
+        .mesh
+        .edges()
+        .map(|(e, _)| EntityId::Edge(e))
+        .collect();
+    flag_hidden(&mut s, MeshId::Definition(d), &edges);
+    let view = Scenery::of(&s, &[]).unwrap();
+    let c = camera(DVec3::ZERO);
+    let corner = p(4.0, 0.0, 1.0);
+    let hit = infer_in(
+        &view,
+        &c,
+        px(&c, corner) + DVec2::new(3.0, 2.0),
+        &Guides::default(),
+        R,
+    );
+    assert_eq!(
+        hit.kind,
+        SnapKind::Endpoint,
+        "the faces' corner still snaps"
+    );
+    assert!(hit.point.abs_diff_eq(corner, 1e-9), "{:?}", hit.point);
+    assert_eq!(
+        view.instance_box(i),
+        Some([p(3.0, 0.0, 0.0), p(4.0, 1.0, 1.0)])
+    );
+    assert!(boxed(&view, &c).contains(&EntityId::Instance(i)));
+}

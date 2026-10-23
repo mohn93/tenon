@@ -12,8 +12,8 @@ use std::sync::OnceLock;
 use glam::{DAffine3, DMat3, DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{
-    EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MeshId, Model, Scene, SectionPlane,
-    TagId, VertexId, tag_shown_among,
+    Edge, EdgeId, EntityId, Face, FaceId, Guide, GuideId, Instance, InstanceId, MeshId, Model,
+    Scene, SectionPlane, TagId, VertexId, tag_shown_among,
 };
 use session::{AnnotationShape, Camera, SectionShape};
 
@@ -224,14 +224,18 @@ impl Part<'_> {
         tag_shown_among(self.hidden, tag)
     }
 
-    /// Whether the face shows: it is not on a hidden tag.
+    /// Whether the face shows: it is not hidden itself and not on a hidden tag.
     pub fn shows_face(&self, f: FaceId) -> bool {
-        self.hidden.is_empty() || self.model.face(f).is_some_and(|f| self.shows(f.tag))
+        self.model
+            .face(f)
+            .is_some_and(|f| !f.hidden && self.shows(f.tag))
     }
 
-    /// Whether the edge shows: it is not on a hidden tag.
+    /// Whether the edge shows: it is not hidden itself and not on a hidden tag.
     pub fn shows_edge(&self, e: EdgeId) -> bool {
-        self.hidden.is_empty() || self.model.edge(e).is_some_and(|e| self.shows(e.tag))
+        self.model
+            .edge(e)
+            .is_some_and(|e| !e.hidden && self.shows(e.tag))
     }
 
     /// Whether the vertex shows: some edge or face using it does (see `Model::vertex_shown`).
@@ -443,7 +447,7 @@ impl Layout {
             .flat_map(|(k, part)| {
                 models[part.mesh]
                     .guides()
-                    .filter(|(_, g)| tag_shown_among(&hidden, g.tag()))
+                    .filter(|(_, g)| !g.hidden() && tag_shown_among(&hidden, g.tag()))
                     .map(move |(id, g)| (k, id, g.transformed(part.place)))
             })
             .collect();
@@ -813,6 +817,27 @@ impl<'a> Scenery<'a> {
         tag_shown_among(&self.layout.hidden, tag)
     }
 
+    /// Whether `edge` (of any part) shows: not hidden itself and not on a hidden tag. Picking,
+    /// box select and inference go by this and `Part::shows_edge`.
+    pub fn shows_edge_of(&self, edge: &Edge) -> bool {
+        !edge.hidden && self.shows(edge.tag)
+    }
+
+    /// Whether `face` (of any part) shows: not hidden itself and not on a hidden tag.
+    pub fn shows_face_of(&self, face: &Face) -> bool {
+        !face.hidden && self.shows(face.tag)
+    }
+
+    /// Whether `instance` shows: not hidden itself and not on a hidden tag.
+    pub fn shows_instance_of(&self, instance: &Instance) -> bool {
+        !instance.hidden && self.shows(instance.tag)
+    }
+
+    /// Whether `guide` shows: not hidden itself and not on a hidden tag.
+    pub fn shows_guide_of(&self, guide: &Guide) -> bool {
+        !guide.hidden() && self.shows(guide.tag())
+    }
+
     /// The open context's own mesh.
     pub fn open(&self) -> &'a Model {
         self.models[self.layout.parts[0].mesh]
@@ -942,7 +967,8 @@ fn collect<'a>(
     });
     for (iid, instance) in model.instances() {
         trail.path.push(iid);
-        let shown = tag_shown_among(hidden, instance.tag)
+        let shown = !instance.hidden
+            && tag_shown_among(hidden, instance.tag)
             && !(id == MeshId::Root && scene.view_hidden().contains(&iid));
         if !shown && !context.starts_with(&trail.path) {
             trail.path.pop();
