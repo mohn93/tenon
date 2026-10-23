@@ -2672,6 +2672,7 @@ impl State {
                 navigating,
             ),
             camera: &self.editor.doc().camera,
+            axes: self.editor.doc().drawing_axes_in_world().matrix3,
             start: (self.editor.untouched() && !self.start_dismissed && !self.editor.flying())
                 .then_some(StartCard {
                     recent: &self.recent_shown,

@@ -59,7 +59,9 @@ impl Document {
                     camera.fit(lo, hi);
                 }
             }
-            Command::StandardView { view } => camera.look_from(view),
+            Command::StandardView { view } => {
+                camera.look_from_in(view, self.drawing_axes_in_world().matrix3)
+            }
             Command::SetProjection { projection } => camera.projection = projection,
             _ => unreachable!("not a camera command"),
         }

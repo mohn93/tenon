@@ -532,6 +532,9 @@ pub struct View<'a> {
     pub cursor: egui::CursorIcon,
     /// The camera the orientation gizmo follows (its projection is `projection`).
     pub camera: &'a Camera,
+    /// The drawing axes' directions in world space as columns: the gizmo's ends are the
+    /// standard views along them.
+    pub axes: glam::DMat3,
     /// The card over an empty, unedited model; None: hidden.
     pub start: Option<StartCard<'a>>,
     /// What the system offers; the panels hide what is off.
@@ -747,7 +750,14 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
         start::start_card(ui, central, card, view.features.recent, actions);
     }
     if !view.flying {
-        viewport::gizmo(ui, central, view.camera, view.projection, actions);
+        viewport::gizmo(
+            ui,
+            central,
+            view.camera,
+            view.axes,
+            view.projection,
+            actions,
+        );
     }
     viewport::set_cursor(ui.ctx(), central, view.cursor);
     if let Some(settings) = &view.settings {

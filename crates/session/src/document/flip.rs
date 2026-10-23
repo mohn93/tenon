@@ -17,16 +17,6 @@ impl Document {
         }
     }
 
-    /// The current drawing axes as a frame in the open context's coordinates: its origin and
-    /// its x, y and z axes as columns. At the root these are the model axes; inside a group or
-    /// component the context's own axes (the identity).
-    fn drawing_frame(&self) -> DAffine3 {
-        match self.active() {
-            MeshId::Root => self.scene.axes().frame(),
-            MeshId::Definition(_) => DAffine3::IDENTITY,
-        }
-    }
-
     /// Gives the shared component instances among `ids` definitions of their own.
     pub(super) fn make_unique_changes(
         &mut self,
@@ -79,7 +69,7 @@ impl Document {
             .collect();
         let mirror = match frame {
             FlipFrame::Axes => self
-                .axes_mirror(&ids, axis.index(), self.drawing_frame())
+                .axes_mirror(&ids, axis.index(), self.drawing_axes())
                 .ok_or_else(|| invalid("nothing to flip"))?,
             FlipFrame::Own => self.own_mirror(&ids, axis.index())?,
         };

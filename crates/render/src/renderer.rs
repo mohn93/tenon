@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 
+use glam::DAffine3;
 use kernel::{EntityId, InstanceId, Scene};
-use session::{Camera, Lighting, SectionDisplay};
+use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
 
 use crate::annotations::{AnnotationLook, annotation_lines};
 use crate::grid::{
-    LineVertex, NIGHT_BACKGROUND, flat_axis_lines_in, flat_ground_lines_in, vertical_axis_lines_in,
+    LineVertex, NIGHT_BACKGROUND, flat_axis_lines_at, flat_ground_lines_at, vertical_axis_lines_at,
 };
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
@@ -487,11 +488,14 @@ pub struct Renderer {
     print: bool,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
-    /// The grid and the axes in the style's colors (see `set_style`); `flat_axes` is the X and
-    /// Y axes alone, for their wide copies.
+    /// The grid and the axes in the style's colors (see `set_style`) along the drawing axes
+    /// `axes` (see `set_axes`); `flat_axes` is the axes lying on the ground alone, for their
+    /// wide copies, `vertical_axis` the others (either may be none for axes that are moved).
     flat_ground: Mesh,
-    vertical_axis: Mesh,
-    flat_axes: Mesh,
+    vertical_axis: Option<Mesh>,
+    flat_axes: Option<Mesh>,
+    /// The drawing axes in world space, as of the last `set_model`.
+    axes: DAffine3,
     faces: Option<Mesh>,
     /// The fill and the outlines of the section cuts.
     cut_fill: Option<Mesh>,
@@ -986,7 +990,8 @@ impl Renderer {
             shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
         );
 
-        let [flat_ground, vertical_axis, flat_axes] = ground_meshes(device, &ViewStyle::CLASSIC);
+        let (flat_ground, vertical_axis, flat_axes) =
+            ground_meshes(device, &ViewStyle::CLASSIC, DAffine3::IDENTITY);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -1029,6 +1034,7 @@ impl Renderer {
             flat_ground,
             vertical_axis,
             flat_axes,
+            axes: DAffine3::IDENTITY,
             faces: None,
             cut_fill: None,
             cut_edges: None,
@@ -1080,6 +1086,7 @@ impl Renderer {
             self.glass_view,
             self.section_display,
         );
+        self.set_axes(world_drawing_axes(scene, context));
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
@@ -1115,6 +1122,18 @@ impl Renderer {
             self.caster_corners = base.casters;
         }
         self.caster_chunks = base.caster_chunks;
+    }
+
+    /// Draws the axes (and the grid's lines through the world origin) as the drawing axes
+    /// `axes` say, a frame in world space (see `session::world_drawing_axes`); the ground grid
+    /// stays on z = 0. Rebuilt only when they change.
+    fn set_axes(&mut self, axes: DAffine3) {
+        if axes == self.axes {
+            return;
+        }
+        self.axes = axes;
+        (self.flat_ground, self.vertical_axis, self.flat_axes) =
+            ground_meshes(&self.device, &self.style, axes);
     }
 
     /// Makes the bind group anew, after the textures or the shadow maps were.
@@ -1355,8 +1374,8 @@ impl Renderer {
             return;
         }
         if style.axes != self.style.axes || style.day_background() != self.style.day_background() {
-            [self.flat_ground, self.vertical_axis, self.flat_axes] =
-                ground_meshes(&self.device, &style);
+            (self.flat_ground, self.vertical_axis, self.flat_axes) =
+                ground_meshes(&self.device, &style, self.axes);
         }
         self.style = style;
         self.refresh_guides();
@@ -1503,18 +1522,22 @@ impl Renderer {
                         &self.flat_ground_pipeline,
                         Some(&self.flat_ground),
                     );
-                    if self.style.wide_axes {
-                        bind(&mut pass, &self.wide_flat_axes_pipeline, &self.flat_axes);
-                        pass.draw(0..self.flat_axes.count, 0..axis_copies);
+                    if self.style.wide_axes
+                        && let Some(flat) = &self.flat_axes
+                    {
+                        bind(&mut pass, &self.wide_flat_axes_pipeline, flat);
+                        pass.draw(0..flat.count, 0..axis_copies);
                     }
-                    draw(&mut pass, &self.ground_pipeline, Some(&self.vertical_axis));
-                    if self.style.wide_axes {
-                        bind(
-                            &mut pass,
-                            &self.wide_vertical_axis_pipeline,
-                            &self.vertical_axis,
-                        );
-                        pass.draw(0..self.vertical_axis.count, 0..axis_copies);
+                    draw(
+                        &mut pass,
+                        &self.ground_pipeline,
+                        self.vertical_axis.as_ref(),
+                    );
+                    if self.style.wide_axes
+                        && let Some(vertical) = &self.vertical_axis
+                    {
+                        bind(&mut pass, &self.wide_vertical_axis_pipeline, vertical);
+                        pass.draw(0..vertical.count, 0..axis_copies);
                     }
                 }
                 match (&self.faces, &self.glass) {
@@ -1633,16 +1656,33 @@ fn bind_group(
     })
 }
 
-/// The flat ground (grid and X and Y axes), the Z axis and the X and Y axes alone, in
-/// `style`'s axis colors, their negative halves faded toward its day background.
-fn ground_meshes(device: &wgpu::Device, style: &ViewStyle) -> [Mesh; 3] {
+/// The flat ground (the grid and the axes lying on it), the other axes and the flat axes alone,
+/// for the drawing axes `axes` in `style`'s axis colors, their negative halves faded toward its
+/// day background. With the world axes the flat axes are X and Y and the other one is Z.
+fn ground_meshes(
+    device: &wgpu::Device,
+    style: &ViewStyle,
+    axes: DAffine3,
+) -> (Mesh, Option<Mesh>, Option<Mesh>) {
     let (colors, toward) = (style.axes, style.day_background());
-    [
-        ("flat ground lines", flat_ground_lines_in(colors, toward)),
-        ("vertical axis", vertical_axis_lines_in(colors, toward)),
-        ("flat axes", flat_axis_lines_in(colors, toward)),
-    ]
-    .map(|(label, lines)| mesh(device, label, &lines).expect("the axes are never empty"))
+    (
+        mesh(
+            device,
+            "flat ground lines",
+            &flat_ground_lines_at(colors, toward, axes),
+        )
+        .expect("the grid is never empty"),
+        mesh(
+            device,
+            "vertical axis",
+            &vertical_axis_lines_at(colors, toward, axes),
+        ),
+        mesh(
+            device,
+            "flat axes",
+            &flat_axis_lines_at(colors, toward, axes),
+        ),
+    )
 }
 
 /// Uploads vertices, or None when there are none to draw.

@@ -1,6 +1,6 @@
 //! Rectangle geometry shared by `Command::AddRectangle` and the Rectangle tool.
 
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
 
 use crate::command::{CommandError, ErrorKind};
@@ -17,10 +17,19 @@ pub fn rectangle_axes(normal: DVec3) -> (DVec3, DVec3) {
     (u, normal.cross(u))
 }
 
+/// `rectangle_axes` for drawing axes `axes` (their directions as columns, as a drawing axes
+/// frame's `matrix3`): the sides follow them on the axes' planes, `u` is horizontal in the
+/// axes (perpendicular to the blue axis) when the plane is not.
+pub fn rectangle_axes_in(axes: DMat3, normal: DVec3) -> (DVec3, DVec3) {
+    let (u, v) = rectangle_axes(axes.transpose() * normal);
+    (axes * u, axes * v)
+}
+
 /// The four corners, in order, of the rectangle with opposite corners `corner` and `opposite`
-/// whose sides follow `rectangle_axes(normal)`. Without a normal, the corners must differ in
-/// exactly two coordinates and the rectangle lies in that axis plane.
+/// whose sides follow `rectangle_axes_in(axes, normal)`. Without a normal, the corners must
+/// differ in exactly two coordinates along `axes` and the rectangle lies in that axis plane.
 pub fn rectangle_corners(
+    axes: DMat3,
     corner: DVec3,
     opposite: DVec3,
     normal: Option<DVec3>,
@@ -32,7 +41,7 @@ pub fn rectangle_corners(
             unit_vector(n).ok_or_else(|| invalid("normal must be a finite, non-zero vector"))?
         }
         None => {
-            let flat: Vec<DVec3> = [DVec3::X, DVec3::Y, DVec3::Z]
+            let flat: Vec<DVec3> = [axes.x_axis, axes.y_axis, axes.z_axis]
                 .into_iter()
                 .filter(|axis| d.dot(*axis).abs() < LENGTH_TOL)
                 .collect();
@@ -49,7 +58,7 @@ pub fn rectangle_corners(
     if d.dot(normal).abs() > LENGTH_TOL {
         return Err(invalid("opposite must lie in the plane through corner"));
     }
-    let (u, v) = rectangle_axes(normal);
+    let (u, v) = rectangle_axes_in(axes, normal);
     let (du, dv) = (d.dot(u), d.dot(v));
     if du.abs() < LENGTH_TOL || dv.abs() < LENGTH_TOL {
         return Err(invalid("rectangle must have non-zero width and height"));
@@ -76,7 +85,13 @@ mod tests {
 
     #[test]
     fn corners_on_the_ground_without_a_normal() {
-        let c = rectangle_corners(DVec3::ZERO, DVec3::new(2.0, -3.0, 0.0), None).unwrap();
+        let c = rectangle_corners(
+            DMat3::IDENTITY,
+            DVec3::ZERO,
+            DVec3::new(2.0, -3.0, 0.0),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             c,
             [
@@ -91,10 +106,34 @@ mod tests {
     #[test]
     fn ambiguous_or_flat_rectangles_are_rejected() {
         let o = DVec3::ZERO;
-        assert!(rectangle_corners(o, DVec3::new(1.0, 1.0, 1.0), None).is_err());
-        assert!(rectangle_corners(o, DVec3::new(1.0, 0.0, 0.0), None).is_err());
-        assert!(rectangle_corners(o, DVec3::new(1.0, 1.0, 1.0), Some(DVec3::Z)).is_err());
-        assert!(rectangle_corners(o, DVec3::new(1.0, 0.0, 0.0), Some(DVec3::Z)).is_err());
-        assert!(rectangle_corners(o, DVec3::new(1.0, 1.0, 0.0), Some(DVec3::ZERO)).is_err());
+        assert!(rectangle_corners(DMat3::IDENTITY, o, DVec3::new(1.0, 1.0, 1.0), None).is_err());
+        assert!(rectangle_corners(DMat3::IDENTITY, o, DVec3::new(1.0, 0.0, 0.0), None).is_err());
+        assert!(
+            rectangle_corners(
+                DMat3::IDENTITY,
+                o,
+                DVec3::new(1.0, 1.0, 1.0),
+                Some(DVec3::Z)
+            )
+            .is_err()
+        );
+        assert!(
+            rectangle_corners(
+                DMat3::IDENTITY,
+                o,
+                DVec3::new(1.0, 0.0, 0.0),
+                Some(DVec3::Z)
+            )
+            .is_err()
+        );
+        assert!(
+            rectangle_corners(
+                DMat3::IDENTITY,
+                o,
+                DVec3::new(1.0, 1.0, 0.0),
+                Some(DVec3::ZERO)
+            )
+            .is_err()
+        );
     }
 }

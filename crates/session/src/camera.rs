@@ -1,5 +1,5 @@
 use glam::dcamera::rh::{proj::directx, view::look_at_mat4};
-use glam::{DAffine3, DMat4, DQuat, DVec2, DVec3, Mat4};
+use glam::{DAffine3, DMat3, DMat4, DQuat, DVec2, DVec3, Mat4};
 use kernel::PageView;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -507,9 +507,16 @@ impl Camera {
 
     /// Looks at the target from `view`'s direction, from the same distance.
     pub fn look_from(&mut self, view: StandardView) {
+        self.look_from_in(view, DMat3::IDENTITY);
+    }
+
+    /// Like `look_from`, with the view's directions turned by `axes` (the columns are the
+    /// red, green and blue axes in world space, as of a drawing axes frame's `matrix3`): Top
+    /// looks down the blue axis with the green axis up, and so on.
+    pub fn look_from_in(&mut self, view: StandardView, axes: DMat3) {
         let (from, up) = view.direction();
-        self.eye = self.target + from * self.distance();
-        self.up = up;
+        self.eye = self.target + axes * from * self.distance();
+        self.up = axes * up;
     }
 
     /// Keeps the view direction and moves the camera so the box `lo`..`hi` fits the view

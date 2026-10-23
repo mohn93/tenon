@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use glam::{DAffine3, DVec3};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -29,6 +30,12 @@ fn faded(c: [f32; 4], toward: [f32; 4]) -> [f32; 4] {
 
 /// Ground grid on z = 0 as line-list vertex pairs. Lines on the axes are omitted.
 pub fn grid_lines(half_extent: f32, spacing: f32) -> Vec<LineVertex> {
+    grid_lines_with(half_extent, spacing, false)
+}
+
+/// `grid_lines`, with the lines through the origin too when `through_origin` (for axes that
+/// are not the world's: the grid then has no axes to leave a gap for).
+fn grid_lines_with(half_extent: f32, spacing: f32, through_origin: bool) -> Vec<LineVertex> {
     assert!(spacing > 0.0 && half_extent >= spacing);
     let n = (half_extent / spacing).floor() as i32;
     let e = n as f32 * spacing;
@@ -36,8 +43,8 @@ pub fn grid_lines(half_extent: f32, spacing: f32) -> Vec<LineVertex> {
         pos: [x, y, 0.0],
         color: GRID_COLOR,
     };
-    let mut out = Vec::with_capacity(8 * n as usize);
-    for i in (-n..=n).filter(|&i| i != 0) {
+    let mut out = Vec::with_capacity(8 * n as usize + 4);
+    for i in (-n..=n).filter(|&i| through_origin || i != 0) {
         let o = i as f32 * spacing;
         out.extend([v(o, -e), v(o, e), v(-e, o), v(e, o)]);
     }
@@ -54,20 +61,35 @@ const CLASSIC_AXES: [[f32; 4]; 3] = [AXIS_X, AXIS_Y, AXIS_Z];
 
 /// The X, Y and Z axes from the origin in `colors`; negative halves mix 60% toward `toward`.
 pub fn axis_lines_in(length: f32, colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
-    let dirs = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    axis_lines_at(length, colors, toward, DAffine3::IDENTITY)
+}
+
+/// `axis_lines_in` for the drawing axes `frame` (origin and directions in world space): the
+/// segments run from the frame's origin along its x, y and z axes.
+pub fn axis_lines_at(
+    length: f32,
+    colors: [[f32; 4]; 3],
+    toward: [f32; 4],
+    frame: DAffine3,
+) -> Vec<LineVertex> {
+    let dirs = [DVec3::X, DVec3::Y, DVec3::Z];
+    let world = frame == DAffine3::IDENTITY;
+    let place = |p: DVec3| {
+        if world { p } else { frame.transform_point3(p) }
+            .as_vec3()
+            .to_array()
+    };
     let mut out = Vec::with_capacity(12);
     for (dir, color) in dirs.into_iter().zip(colors) {
         for (sign, c) in [(1.0, color), (-1.0, faded(color, toward))] {
-            let end = [
-                dir[0] * length * sign,
-                dir[1] * length * sign,
-                dir[2] * length * sign,
-            ];
             out.push(LineVertex {
-                pos: [0.0, 0.0, 0.0],
+                pos: place(DVec3::ZERO),
                 color: c,
             });
-            out.push(LineVertex { pos: end, color: c });
+            out.push(LineVertex {
+                pos: place(dir * f64::from(length) * sign),
+                color: c,
+            });
         }
     }
     out
@@ -81,15 +103,35 @@ pub fn flat_ground_lines() -> Vec<LineVertex> {
 
 /// `flat_ground_lines` with the axes in `colors`, their negative halves faded toward `toward`.
 pub fn flat_ground_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
-    let mut lines = grid_lines(100.0, 1.0);
-    lines.extend(flat_axis_lines_in(colors, toward));
+    flat_ground_lines_at(colors, toward, DAffine3::IDENTITY)
+}
+
+/// `flat_ground_lines_in` with the axes of the drawing axes `frame`: the grid stays on the
+/// world's z = 0 (its lines through the world origin are drawn when the axes are not the
+/// world's), and the axis segments lying on z = 0 are drawn with it.
+pub fn flat_ground_lines_at(
+    colors: [[f32; 4]; 3],
+    toward: [f32; 4],
+    frame: DAffine3,
+) -> Vec<LineVertex> {
+    let mut lines = grid_lines_with(100.0, 1.0, frame != DAffine3::IDENTITY);
+    lines.extend(flat_axis_lines_at(colors, toward, frame));
     lines
 }
 
 /// The X and Y axes alone, as in `flat_ground_lines_in`.
 pub fn flat_axis_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
+    flat_axis_lines_at(colors, toward, DAffine3::IDENTITY)
+}
+
+/// The axis segments of `frame` lying on z = 0, as in `flat_ground_lines_at`.
+pub fn flat_axis_lines_at(
+    colors: [[f32; 4]; 3],
+    toward: [f32; 4],
+    frame: DAffine3,
+) -> Vec<LineVertex> {
     // Axis segments come as (origin, end) pairs; keep the ones lying on z = 0.
-    axis_lines_in(1000.0, colors, toward)
+    axis_lines_at(1000.0, colors, toward, frame)
         .chunks(2)
         .filter(|seg| seg[1].pos[2] == 0.0)
         .flatten()
@@ -104,7 +146,16 @@ pub fn vertical_axis_lines() -> Vec<LineVertex> {
 
 /// `vertical_axis_lines` in `colors`, the negative half faded toward `toward`.
 pub fn vertical_axis_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVertex> {
-    axis_lines_in(1000.0, colors, toward)
+    vertical_axis_lines_at(colors, toward, DAffine3::IDENTITY)
+}
+
+/// The axis segments of `frame` not lying on z = 0, as in `vertical_axis_lines_in`.
+pub fn vertical_axis_lines_at(
+    colors: [[f32; 4]; 3],
+    toward: [f32; 4],
+    frame: DAffine3,
+) -> Vec<LineVertex> {
+    axis_lines_at(1000.0, colors, toward, frame)
         .chunks(2)
         .filter(|seg| seg[1].pos[2] != 0.0)
         .flatten()
@@ -219,5 +270,34 @@ mod tests {
         let neg_x = v.chunks(2).find(|s| s[1].pos == [-5.0, 0.0, 0.0]).unwrap();
         assert_ne!(neg_x[1].color, AXIS_X);
         assert!(v.chunks(2).all(|s| s[0].pos == [0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn moved_axes_start_at_their_origin_and_split_by_the_ground() {
+        // Red along world y, green along world -x, from (2, 3, 1): one meter up, so no axis
+        // lies flat on z = 0 but the blue one is the only one leaving the plane z = 1.
+        let frame = DAffine3::from_mat3_translation(
+            glam::DMat3::from_cols(DVec3::Y, -DVec3::X, DVec3::Z),
+            DVec3::new(2.0, 3.0, 1.0),
+        );
+        let lines = axis_lines_at(10.0, [AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0].pos, [2.0, 3.0, 1.0]);
+        assert_eq!(lines[1].pos, [2.0, 13.0, 1.0], "red runs along world y");
+        assert_eq!(lines[5].pos, [-8.0, 3.0, 1.0], "green runs along world -x");
+        let flat = flat_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        assert!(flat.is_empty());
+        assert_eq!(
+            vertical_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame).len(),
+            12
+        );
+        // The grid keeps its lines through the world origin when the axes are elsewhere.
+        let moved = flat_ground_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        let world = flat_ground_lines_in([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND);
+        // Four more vertices for the lines through the origin, eight fewer for the flat axes.
+        assert_eq!(moved.len() + 4, world.len());
+        // World axes: unchanged.
+        let id = flat_ground_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, DAffine3::IDENTITY);
+        assert_eq!(id, world);
     }
 }

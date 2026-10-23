@@ -30,7 +30,10 @@ impl SectionPlaneTool {
     /// The point and normal a click at `hit` places: the face under the cursor's normal or the
     /// ground's (or the locked axis), turned toward the camera.
     fn placement(&self, hit: &Inference, ctx: &ToolContext) -> (DVec3, DVec3) {
-        let normal = self.lock.map_or_else(|| plane_normal(hit, ctx), Axis::dir);
+        let normal = self.lock.map_or_else(
+            || plane_normal(hit, ctx),
+            |a| a.dir_in(ctx.scenery.axes().matrix3),
+        );
         let toward = ctx.camera.sight_origin(hit.point) - hit.point;
         let normal = if normal.dot(toward) < 0.0 {
             -normal
@@ -127,6 +130,7 @@ mod tests {
         model: Model,
         camera: Camera,
         selection: BTreeSet<EntityId>,
+        axes: glam::DAffine3,
     }
 
     impl Rig {
@@ -145,13 +149,14 @@ mod tests {
                 model,
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 selection: BTreeSet::new(),
+                axes: glam::DAffine3::IDENTITY,
             }
         }
 
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
             let ctx = ToolContext {
                 model: &self.model,
-                scenery: &Scenery::single(&self.model),
+                scenery: &Scenery::single(&self.model).with_axes(self.axes),
                 camera: &self.camera,
                 cursor: DVec2::ZERO,
                 pick_radius: 10.0,
@@ -231,6 +236,20 @@ mod tests {
         assert!((normal[0].abs() - 1.0).abs() < 1e-9 && normal[1].abs() < 1e-9);
         r.send(ToolEvent::Cancel);
         assert_eq!(r.tool.plane_lock(), None);
+    }
+
+    #[test]
+    fn an_axis_lock_follows_the_drawing_axes() {
+        let mut r = Rig::new();
+        // Red along world y.
+        r.axes = glam::DAffine3::from_mat3_translation(
+            glam::DMat3::from_cols(DVec3::Y, -DVec3::X, DVec3::Z),
+            DVec3::ZERO,
+        );
+        let hit = r.at(DVec3::new(1.0, 1.0, 0.0));
+        r.tool.lock_plane(Some(Axis::X));
+        let (_, normal, _) = placed(&r.send(ToolEvent::Click(hit)));
+        assert!((normal[1].abs() - 1.0).abs() < 1e-9 && normal[0].abs() < 1e-9);
     }
 
     #[test]

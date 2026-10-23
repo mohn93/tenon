@@ -279,9 +279,10 @@ impl Tool for RotateTool {
                     } else {
                         self.turn = Some(Turn {
                             center: hit.point,
-                            axis: self
-                                .plane
-                                .map_or_else(|| plane_normal(&hit, ctx), Axis::dir),
+                            axis: self.plane.map_or_else(
+                                || plane_normal(&hit, ctx),
+                                |a| a.dir_in(ctx.scenery.axes().matrix3),
+                            ),
                             outline: outline(ctx, &ids),
                             ids,
                             reference: None,
@@ -361,7 +362,7 @@ impl Tool for RotateTool {
             }
         } else if let (Some(axis), Some(at)) = (self.plane, self.hover) {
             let radius = PROTRACTOR * ctx.camera.eye_distance(at);
-            out.preview = circle(at, axis.dir(), radius, 24);
+            out.preview = circle(at, axis.dir_in(ctx.scenery.axes().matrix3), radius, 24);
         }
         out
     }
@@ -401,6 +402,7 @@ mod tests {
         camera: Camera,
         selection: BTreeSet<EntityId>,
         cursor: DVec2,
+        axes: glam::DAffine3,
     }
 
     impl Rig {
@@ -419,13 +421,14 @@ mod tests {
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 selection: selected.iter().map(|s| s.parse().unwrap()).collect(),
                 cursor: DVec2::ZERO,
+                axes: glam::DAffine3::IDENTITY,
             }
         }
 
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
             let ctx = ToolContext {
                 model: &self.model,
-                scenery: &crate::scenery::Scenery::single(&self.model),
+                scenery: &crate::scenery::Scenery::single(&self.model).with_axes(self.axes),
                 camera: &self.camera,
                 cursor: self.cursor,
                 pick_radius: 10.0,
@@ -556,6 +559,29 @@ mod tests {
         );
         r.send(ToolEvent::Cancel);
         assert_eq!(r.tool.plane_lock(), None);
+    }
+
+    #[test]
+    fn a_locked_plane_follows_the_drawing_axes() {
+        let mut r = Rig::new(&["f8"]);
+        // Red along world y, green along world -x.
+        r.axes = glam::DAffine3::from_mat3_translation(
+            glam::DMat3::from_cols(DVec3::Y, -DVec3::X, DVec3::Z),
+            DVec3::new(5.0, 5.0, 0.0),
+        );
+        assert!(r.tool.lock_plane(Some(Axis::X)));
+        let at = DVec3::new(1.0, 1.0, 0.0);
+        let out = r.hover(at);
+        // The protractor lies in the plane normal to red: world y.
+        assert_eq!(out.preview.len(), 24);
+        assert!(out.preview.iter().all(|[a, _]| (a.y - at.y).abs() < 1e-9));
+        r.click(DVec3::ZERO);
+        r.click(DVec3::new(0.0, 0.0, 1.0));
+        let out = r.click(DVec3::new(1.0, 0.0, 0.0));
+        let [Command::Rotate { axis, .. }] = &out.commands[..] else {
+            panic!("{:?}", out.commands);
+        };
+        assert_eq!(*axis, Some([0.0, 1.0, 0.0]));
     }
 
     #[test]

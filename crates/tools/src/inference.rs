@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 
-use glam::{DVec2, DVec3};
+use glam::{DMat3, DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{EdgeId, EntityId, FaceId, Guide, GuideId, Model, Shape, VertexId};
 use session::{Camera, Ray};
@@ -19,11 +19,13 @@ pub enum Axis {
 impl Axis {
     pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
 
-    pub fn dir(self) -> DVec3 {
+    /// The unit direction of the axis in drawing axes `axes` (their directions as columns, as
+    /// a frame's `matrix3`; `DMat3::IDENTITY` for the world axes).
+    pub fn dir_in(self, axes: DMat3) -> DVec3 {
         match self {
-            Axis::X => DVec3::X,
-            Axis::Y => DVec3::Y,
-            Axis::Z => DVec3::Z,
+            Axis::X => axes.x_axis,
+            Axis::Y => axes.y_axis,
+            Axis::Z => axes.z_axis,
         }
     }
 }
@@ -180,7 +182,7 @@ pub fn infer_detail(
     // Along a direction from the anchor. Direction lines are guides, so faces do not hide them.
     if let Some(anchor) = guides.anchor {
         let mut along: Option<(f64, Inference)> = None;
-        for (dir, kind) in directions(guides.reference) {
+        for (dir, kind) in directions(scenery.axes().matrix3, guides.reference) {
             let p = closest_on_line_to_ray(anchor, dir, &ray, false);
             if let Some(d) = screen_dist(p).filter(|d| *d <= radius_px)
                 && p.distance(anchor) > 0.0
@@ -278,7 +280,7 @@ fn snap_point(
             offer(middle, SnapKind::Midpoint, vec![(k, EntityId::Edge(e))]);
         }
     }
-    offer(DVec3::ZERO, SnapKind::Origin, Vec::new());
+    offer(scenery.axes().translation, SnapKind::Origin, Vec::new());
     let guides = scenery.guides();
     for &(k, id, g) in guides {
         if let Guide::Point { position, .. } = g {
@@ -543,15 +545,21 @@ fn apparent_crossing(
     )
 }
 
-/// Unit directions offered from the anchor: the three axes, plus, for a reference direction
-/// not along an axis, the direction itself (parallel) and two perpendiculars (one horizontal,
-/// one in the vertical plane through the reference) when they are not along an axis either.
-pub fn directions(reference: Option<DVec3>) -> Vec<(DVec3, SnapKind)> {
+/// Unit directions offered from the anchor: the three drawing axes `axes` (directions as
+/// columns; `DMat3::IDENTITY` for the world axes), plus, for a reference direction not along
+/// an axis, the direction itself (parallel) and two perpendiculars (one horizontal, one in the
+/// vertical plane through the reference; up is the blue axis) when they are not along an axis
+/// either.
+pub fn directions(axes: DMat3, reference: Option<DVec3>) -> Vec<(DVec3, SnapKind)> {
     let mut out: Vec<(DVec3, SnapKind)> = Axis::ALL
         .into_iter()
-        .map(|a| (a.dir(), SnapKind::Axis(a)))
+        .map(|a| (a.dir_in(axes), SnapKind::Axis(a)))
         .collect();
-    let along_axis = |d: DVec3| Axis::ALL.iter().any(|a| d.cross(a.dir()).length() < 1e-6);
+    let along_axis = |d: DVec3| {
+        Axis::ALL
+            .iter()
+            .any(|a| d.cross(a.dir_in(axes)).length() < 1e-6)
+    };
     let Some(r) = reference.and_then(|r| r.try_normalize()) else {
         return out;
     };
@@ -559,7 +567,7 @@ pub fn directions(reference: Option<DVec3>) -> Vec<(DVec3, SnapKind)> {
         return out;
     }
     out.push((r, SnapKind::Parallel));
-    let horizontal = r.cross(DVec3::Z).try_normalize();
+    let horizontal = r.cross(axes.z_axis).try_normalize();
     let upright = horizontal.and_then(|h| r.cross(h).try_normalize());
     for p in [horizontal, upright].into_iter().flatten() {
         if !along_axis(p) {
@@ -1421,13 +1429,85 @@ mod tests {
         assert!(hit.point.abs_diff_eq(across, 1e-6));
     }
 
+    /// A scene whose axes start at (2, 3, 0) with red along world y and green along world -x.
+    fn turned_scene() -> kernel::Scene {
+        let mut s = kernel::Scene::new();
+        let axes = kernel::Axes::new(DVec3::new(2.0, 3.0, 0.0), DVec3::Y, -DVec3::X).unwrap();
+        s.set_axes(axes);
+        s
+    }
+
+    #[test]
+    fn the_origin_snap_is_at_the_axes_origin() {
+        let (c, s) = (cam(), turned_scene());
+        let scenery = Scenery::of(&s, &[]).unwrap();
+        let near = DVec2::new(2.0, 2.0);
+        let hit = infer_in(
+            &scenery,
+            &c,
+            px(&c, DVec3::new(2.0, 3.0, 0.0)) + near,
+            &Guides::default(),
+            R,
+        );
+        assert_eq!(hit.kind, SnapKind::Origin);
+        assert!(hit.point.abs_diff_eq(DVec3::new(2.0, 3.0, 0.0), 1e-12));
+        let world = infer_in(
+            &scenery,
+            &c,
+            px(&c, DVec3::ZERO) + near,
+            &Guides::default(),
+            R,
+        );
+        assert_ne!(world.kind, SnapKind::Origin, "the world origin is no snap");
+    }
+
+    #[test]
+    fn axis_inference_follows_the_drawing_axes() {
+        let (c, s) = (cam(), turned_scene());
+        let scenery = Scenery::of(&s, &[]).unwrap();
+        let anchor = DVec3::new(1.0, 1.0, 0.0);
+        let g = guides(anchor, None, None);
+        // Red runs along world y.
+        let along_red = anchor + DVec3::Y * 3.0;
+        let hit = infer_in(&scenery, &c, px(&c, along_red), &g, R);
+        assert_eq!(hit.kind, SnapKind::Axis(Axis::X));
+        assert!(hit.point.abs_diff_eq(along_red, 1e-6));
+        // Green along world x.
+        let along_green = anchor + DVec3::X * 3.0;
+        let hit = infer_in(&scenery, &c, px(&c, along_green), &g, R);
+        assert_eq!(hit.kind, SnapKind::Axis(Axis::Y));
+        assert!(hit.point.abs_diff_eq(along_green, 1e-6));
+    }
+
+    #[test]
+    fn horizontal_perpendiculars_are_horizontal_in_the_axes() {
+        // Blue along world y (red along z, green along x).
+        let axes = DMat3::from_cols(DVec3::Z, DVec3::X, DVec3::Y);
+        let r = DVec3::new(1.0, 0.0, 1.0).normalize();
+        let out = directions(axes, Some(r));
+        assert_eq!(out[0], (DVec3::Z, SnapKind::Axis(Axis::X)));
+        assert_eq!(out[2], (DVec3::Y, SnapKind::Axis(Axis::Z)));
+        let across: Vec<DVec3> = out
+            .iter()
+            .filter(|(_, k)| *k == SnapKind::Perpendicular)
+            .map(|(d, _)| *d)
+            .collect();
+        assert!(
+            across.iter().any(|d| d.dot(axes.z_axis).abs() < 1e-9),
+            "one perpendicular is flat in the axes: {across:?}"
+        );
+    }
+
     #[test]
     fn a_reference_along_an_axis_adds_nothing() {
-        assert_eq!(directions(Some(DVec3::new(0.0, 3.0, 0.0))).len(), 3);
-        let tilted = directions(Some(DVec3::new(1.0, 1.0, 0.0)));
+        assert_eq!(
+            directions(DMat3::IDENTITY, Some(DVec3::new(0.0, 3.0, 0.0))).len(),
+            3
+        );
+        let tilted = directions(DMat3::IDENTITY, Some(DVec3::new(1.0, 1.0, 0.0)));
         // Parallel and the horizontal perpendicular; the other perpendicular is vertical (Z).
         assert_eq!(tilted.len(), 5);
-        assert_eq!(directions(None).len(), 3);
+        assert_eq!(directions(DMat3::IDENTITY, None).len(), 3);
     }
 
     #[test]
@@ -2496,9 +2576,13 @@ mod tests {
         fn directions(reference: Option<DVec3>) -> Vec<(DVec3, SnapKind)> {
             let mut out: Vec<(DVec3, SnapKind)> = Axis::ALL
                 .into_iter()
-                .map(|a| (a.dir(), SnapKind::Axis(a)))
+                .map(|a| (a.dir_in(glam::DMat3::IDENTITY), SnapKind::Axis(a)))
                 .collect();
-            let along_axis = |d: DVec3| Axis::ALL.iter().any(|a| d.cross(a.dir()).length() < 1e-6);
+            let along_axis = |d: DVec3| {
+                Axis::ALL
+                    .iter()
+                    .any(|a| d.cross(a.dir_in(glam::DMat3::IDENTITY)).length() < 1e-6)
+            };
             let Some(r) = reference.and_then(|r| r.try_normalize()) else {
                 return out;
             };

@@ -1,12 +1,47 @@
 //! The model axes and the axes of a group or component.
 
-use glam::DVec3;
-use kernel::{Axes, EntityId, Instance, MeshId, SceneChange};
+use glam::{DAffine3, DMat3, DVec3};
+use kernel::{Axes, EntityId, Instance, InstanceId, MeshId, Scene, SceneChange};
 
 use super::{Document, check_coordinates};
 use crate::command::{CommandError, ErrorKind};
 
+/// The drawing axes as a frame in world space, for what is seen from the open context
+/// `context`: the model axes at the root, inside a group or component that definition's own
+/// axes as the open instance places them (an orthonormal frame: a scaled or mirrored placement
+/// keeps its axes' directions, right-handed).
+pub fn world_drawing_axes(scene: &Scene, context: &[InstanceId]) -> DAffine3 {
+    if context.is_empty() {
+        return scene.axes().frame();
+    }
+    let Some((_, placed)) = scene.resolve(context) else {
+        return DAffine3::IDENTITY;
+    };
+    let m = placed.matrix3;
+    let x = m.x_axis.try_normalize().unwrap_or(DVec3::X);
+    let y = (m.y_axis - x * m.y_axis.dot(x))
+        .try_normalize()
+        .unwrap_or_else(|| x.any_orthonormal_vector());
+    DAffine3::from_mat3_translation(DMat3::from_cols(x, y, x.cross(y)), placed.translation)
+}
+
 impl Document {
+    /// The current drawing axes as a frame in the open context's coordinates (the coordinates
+    /// tools work in): its origin and its x, y and z axes as columns. At the root these are the
+    /// model axes; inside a group or component the context's own axes (the identity).
+    pub fn drawing_axes(&self) -> DAffine3 {
+        match self.active() {
+            MeshId::Root => self.scene.axes().frame(),
+            MeshId::Definition(_) => DAffine3::IDENTITY,
+        }
+    }
+
+    /// The current drawing axes as a frame in world space (see [`world_drawing_axes`]): what
+    /// the standard views and the drawn axis lines follow.
+    pub fn drawing_axes_in_world(&self) -> DAffine3 {
+        world_drawing_axes(&self.scene, &self.context)
+    }
+
     /// Moves the model axes at the root, or the open definition's axes inside a context.
     pub(super) fn set_axes_changes(
         &mut self,

@@ -533,7 +533,7 @@ impl Editor {
                 return false;
             };
             let dir = match hit.kind {
-                SnapKind::Axis(a) => Some(a.dir()),
+                SnapKind::Axis(a) => Some(a.dir_in(self.doc.drawing_axes().matrix3)),
                 SnapKind::Parallel | SnapKind::Perpendicular => {
                     (hit.point - anchor).try_normalize()
                 }
@@ -1139,7 +1139,7 @@ impl Editor {
                 }
                 let same = self.lock.is_some_and(|l| l.kind == SnapKind::Axis(axis));
                 self.lock = (!same).then_some(Lock {
-                    dir: axis.dir(),
+                    dir: axis.dir_in(self.doc.drawing_axes().matrix3),
                     kind: SnapKind::Axis(axis),
                 });
                 self.shift_lock = false;
@@ -3897,6 +3897,29 @@ mod tests {
         assert!(
             !e.key(EditorKey::Unlock),
             "the chain ended, so nothing is locked"
+        );
+    }
+
+    #[test]
+    fn arrow_keys_lock_the_drawing_axes() {
+        let mut e = editor();
+        // Red along world y, green along world -x.
+        e.execute(Command::SetAxes {
+            origin: [0.0, 0.0, 0.0],
+            x_axis: [0.0, 1.0, 0.0],
+            y_axis: [-1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        e.select_tool(ToolKind::Line);
+        click_at(&mut e, DVec3::new(1.0, 1.0, 0.0));
+        assert!(e.key(EditorKey::LockAxis(Axis::X)));
+        assert!(e.status().contains("Locked: red axis"));
+        click_at(&mut e, DVec3::new(3.0, 4.0, 0.0));
+        let [a, b] = edge_ends(&e)[0];
+        let near = |v: f64, w: f64| (v - w).abs() < 1e-9;
+        assert!(
+            near(a.x, b.x) && (a.y - b.y).abs() > 0.1,
+            "red runs along world y: {a} {b}"
         );
     }
 

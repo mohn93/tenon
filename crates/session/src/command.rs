@@ -31,8 +31,9 @@ pub enum Command {
         end: [f64; 3],
     },
     /// Draw a rectangle from one corner to the opposite one, as one undo step. Its sides follow
-    /// the world axes on axis planes. `normal` picks the plane; without it the corners must
-    /// differ in exactly two coordinates.
+    /// the drawing axes on axis planes (the model axes at the root, the open group's or
+    /// component's own axes inside it; the world axes unless moved). `normal` picks the plane;
+    /// without it the corners must differ in exactly two coordinates along the drawing axes.
     AddRectangle {
         #[schemars(with = "ModelPoint")]
         corner: [f64; 3],

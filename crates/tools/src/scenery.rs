@@ -385,6 +385,8 @@ pub struct Layout {
     /// Whether some placed mesh has an edge or face hidden by its own flag (when not, parts
     /// need not look at the flags).
     flagged: bool,
+    /// The drawing axes in the open context's coordinates (see `Scenery::axes`).
+    axes: DAffine3,
 }
 
 impl Layout {
@@ -426,6 +428,10 @@ impl Layout {
             })
             .collect();
         let mut layout = Layout::new(meshes, &models, parts, paths, cuts, hidden, strict_parts);
+        // The model's axes at the root; inside a group or component its own (the identity).
+        if context.is_empty() {
+            layout.axes = scene.axes().frame();
+        }
         // The section planes' squares, each mesh's side worked out once.
         let sides: Vec<f64> = layout
             .meshes
@@ -552,6 +558,7 @@ impl Layout {
                 .collect(),
             hidden,
             flagged: models.iter().any(|m| m.has_hidden_edge_or_face()),
+            axes: DAffine3::IDENTITY,
         }
     }
 
@@ -578,6 +585,8 @@ pub struct Scenery<'a> {
     /// Whether entities hidden by their own flag are seen too (Hidden Geometry): for picking
     /// and box select. Inference never reveals them (see [`Scenery::seen_strictly`]).
     reveal: bool,
+    /// The drawing axes in the open context's coordinates (the layout's, unless set).
+    axes: DAffine3,
 }
 
 /// The depths around a model point the cursor stands for: what lies in front of the point or
@@ -660,6 +669,7 @@ impl<'a> Scenery<'a> {
             fill: true,
             reveal: false,
             slab: None,
+            axes: DAffine3::IDENTITY,
             models: vec![model],
             layout: Cow::Owned(Layout::new(
                 vec![MeshId::Root],
@@ -678,6 +688,7 @@ impl<'a> Scenery<'a> {
     pub fn of(scene: &'a Scene, context: &[InstanceId]) -> Option<Self> {
         let layout = Layout::of(scene, context)?;
         Some(Scenery {
+            axes: layout.axes,
             models: layout.models(scene)?,
             layout: Cow::Owned(layout),
             slab: None,
@@ -693,6 +704,7 @@ impl<'a> Scenery<'a> {
     /// places is missing.
     pub fn view(layout: &'a Layout, scene: &'a Scene) -> Option<Self> {
         Some(Scenery {
+            axes: layout.axes,
             models: layout.models(scene)?,
             layout: Cow::Borrowed(layout),
             slab: None,
@@ -701,6 +713,19 @@ impl<'a> Scenery<'a> {
             fill: true,
             reveal: false,
         })
+    }
+
+    /// The drawing axes in the open context's coordinates: the frame (origin and x, y and z axes
+    /// as columns) that axis inference, the origin snap, locks and the tools' axis planes
+    /// follow. The model axes at the root; inside a group or component the identity.
+    pub fn axes(&self) -> DAffine3 {
+        self.axes
+    }
+
+    /// The same scenery with other drawing axes (see [`Scenery::axes`]).
+    pub fn with_axes(mut self, axes: DAffine3) -> Self {
+        self.axes = axes;
+        self
     }
 
     /// The same scenery seen only within `slab`: for a model point the cursor stands for.
@@ -727,6 +752,7 @@ impl<'a> Scenery<'a> {
     /// indices of parts, guides, annotations and sections mean the same in both.
     pub fn seen_strictly(&self) -> Scenery<'_> {
         Scenery {
+            axes: self.axes,
             models: self.models.clone(),
             layout: Cow::Borrowed(&*self.layout),
             slab: self.slab,

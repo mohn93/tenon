@@ -556,3 +556,130 @@ fn context_axes_keep_guides_dimensions_notes_and_section_planes_in_place() {
         assert!(near(to_world(&transform, *a), *b), "world {b:?}");
     }
 }
+
+/// The camera query's direction from the target to the eye and its up.
+fn look(d: &Document) -> ([f64; 3], [f64; 3]) {
+    let c = ask(d, json!({"type": "camera"}));
+    let (eye, target) = (vec3(&c["eye"]), vec3(&c["target"]));
+    let from: Vec<f64> = (0..3).map(|k| eye[k] - target[k]).collect();
+    let len = from.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let dir: [f64; 3] = std::array::from_fn(|k| from[k] / len);
+    (dir, vec3(&c["up"]))
+}
+
+fn standard_view(d: &mut Document, view: &str) {
+    run(d, json!({"type": "standard_view", "view": view})).unwrap();
+}
+
+#[test]
+fn standard_views_follow_the_model_axes() {
+    let mut d = doc();
+    // Red along world y, green along world -x, blue still up.
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [5, 5, 0], "x_axis": [0, 1, 0], "y_axis": [-1, 0, 0]}),
+    )
+    .unwrap();
+    standard_view(&mut d, "top");
+    let (dir, up) = look(&d);
+    assert!(near(dir, [0.0, 0.0, 1.0]), "{dir:?}");
+    assert!(near(up, [-1.0, 0.0, 0.0]), "top has green up: {up:?}");
+    // Front looks along +green: from the -green side, which is world +x.
+    standard_view(&mut d, "front");
+    let (dir, up) = look(&d);
+    assert!(near(dir, [1.0, 0.0, 0.0]), "{dir:?}");
+    assert!(near(up, [0.0, 0.0, 1.0]), "{up:?}");
+    standard_view(&mut d, "right");
+    assert!(near(look(&d).0, [0.0, 1.0, 0.0]));
+
+    // A blue axis lying along world y: top looks from there, front looks from -green.
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [0, 0, 0], "x_axis": [0, 0, 1], "y_axis": [1, 0, 0]}),
+    )
+    .unwrap();
+    standard_view(&mut d, "top");
+    let (dir, up) = look(&d);
+    assert!(near(dir, [0.0, 1.0, 0.0]), "{dir:?}");
+    assert!(near(up, [1.0, 0.0, 0.0]), "{up:?}");
+    standard_view(&mut d, "front");
+    let (dir, up) = look(&d);
+    assert!(near(dir, [-1.0, 0.0, 0.0]), "{dir:?}");
+    assert!(near(up, [0.0, 1.0, 0.0]), "{up:?}");
+
+    // World axes again: the views are the world's.
+    run(&mut d, json!({"type": "reset_axes"})).unwrap();
+    standard_view(&mut d, "front");
+    let (dir, up) = look(&d);
+    assert!(near(dir, [0.0, -1.0, 0.0]) && near(up, [0.0, 0.0, 1.0]));
+    standard_view(&mut d, "top");
+    assert!(near(look(&d).1, [0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn standard_views_inside_a_context_follow_the_context_axes() {
+    let mut d = doc();
+    let a = crate_at(&mut d, [0.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [a], "center": [0, 0, 0], "axis": [0, 0, 1], "angle": 90}),
+    )
+    .unwrap();
+    // The model axes are moved too; inside the crate they do not count.
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [0, 0, 0], "x_axis": [0, 0, 1], "y_axis": [1, 0, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "open_instance", "id": a})).unwrap();
+    standard_view(&mut d, "top");
+    let (dir, up) = look(&d);
+    assert!(near(dir, [0.0, 0.0, 1.0]), "{dir:?}");
+    // The crate's local y points along world -x.
+    assert!(near(up, [-1.0, 0.0, 0.0]), "{up:?}");
+    standard_view(&mut d, "right");
+    // Its local x points along world y.
+    assert!(near(look(&d).0, [0.0, 1.0, 0.0]));
+}
+
+#[test]
+fn rectangles_on_axis_planes_follow_the_drawing_axes() {
+    let mut d = doc();
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [0, 0, 0], "x_axis": [1, 1, 0], "y_axis": [-1, 1, 0]}),
+    )
+    .unwrap();
+    // The sides run along the red and green axes: a square turned 45 degrees.
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 0, 0], "normal": [0, 0, 1]}),
+    )
+    .unwrap();
+    let h = 2.0 * s;
+    let expect = [
+        [0.0, 0.0, 0.0],
+        [h * s, h * s, 0.0],
+        [2.0, 0.0, 0.0],
+        [h * s, -h * s, 0.0],
+    ];
+    let got = positions(&d);
+    assert!(
+        got.len() == 4 && expect.iter().all(|q| got.iter().any(|p| near(*p, *q))),
+        "{got:?} vs {expect:?}"
+    );
+    // Without a normal the corners differ in two drawing coordinates: (1, 1, 0) is along red
+    // only, so it is refused (one flat coordinate pair is not enough).
+    let mut other = doc();
+    run(
+        &mut other,
+        json!({"type": "set_axes", "origin": [0, 0, 0], "x_axis": [1, 1, 0], "y_axis": [-1, 1, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut other,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    )
+    .unwrap_err();
+}

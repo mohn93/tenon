@@ -414,7 +414,10 @@ fn the_gizmo_sits_in_the_views_top_right() {
 
 #[test]
 fn the_axis_ends_set_the_views_they_look_from() {
-    let ends = gizmo_ends(&Camera::new(DVec2::new(800.0, 600.0)));
+    let ends = gizmo_ends(
+        &Camera::new(DVec2::new(800.0, 600.0)),
+        glam::DMat3::IDENTITY,
+    );
     let end = |v: StandardView| *ends.iter().find(|e| e.0 == v).unwrap();
     for (pos, neg) in [
         (StandardView::Right, StandardView::Left),
@@ -434,6 +437,23 @@ fn the_axis_ends_set_the_views_they_look_from() {
         "+X on the right in the default view"
     );
     assert!(end(StandardView::Top).1.y < 0.0, "+Z up the screen");
+}
+
+#[test]
+fn the_axis_ends_follow_the_drawing_axes() {
+    let cam = Camera::new(DVec2::new(800.0, 600.0));
+    // Red along world y, green along world -x.
+    let axes = glam::DMat3::from_cols(glam::DVec3::Y, -glam::DVec3::X, glam::DVec3::Z);
+    let (world, turned) = (
+        gizmo_ends(&cam, glam::DMat3::IDENTITY),
+        gizmo_ends(&cam, axes),
+    );
+    let end = |ends: &[(StandardView, egui::Vec2, f32); 6], v: StandardView| {
+        ends.iter().find(|e| e.0 == v).unwrap().1
+    };
+    // The end that sets the Right view (red) is where the world's +Y end was.
+    assert!((end(&turned, StandardView::Right) - end(&world, StandardView::Back)).length() < 1e-3);
+    assert!((end(&turned, StandardView::Top) - end(&world, StandardView::Top)).length() < 1e-3);
 }
 
 #[test]

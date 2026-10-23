@@ -50,6 +50,7 @@ mod tags;
 mod text3d;
 
 pub use annotations::{dimension_label, dimension_value, note_label};
+pub use axes::world_drawing_axes;
 pub use files::ExportedBytes;
 pub use import::ImportOptions;
 pub use sections::SectionDisplay;
@@ -1263,6 +1264,7 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         check_coordinates(&[corner, opposite])?;
         let corners = rectangle_corners(
+            self.drawing_axes().matrix3,
             DVec3::from(corner),
             DVec3::from(opposite),
             normal.map(DVec3::from),

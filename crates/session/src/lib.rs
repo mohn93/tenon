@@ -47,6 +47,7 @@ pub use command::{
 pub use document::{
     Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES, SectionDisplay,
     check_coordinates, dimension_label, dimension_value, note_label, unit_vector,
+    world_drawing_axes,
 };
 pub use export::{ExportFormat, ExportReport};
 pub use import::{
@@ -62,7 +63,7 @@ pub use query::{
     NoteKind, OutlinerNode, OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo, SceneView,
     SectionPlaneInfo, TagInfo, TextureInfo, VertexInfo,
 };
-pub use rectangle::{rectangle_axes, rectangle_corners};
+pub use rectangle::{rectangle_axes, rectangle_axes_in, rectangle_corners};
 pub use rotate::rotation;
 pub use schema::ModelPoint;
 pub use section_shape::{MAX_SECTION_OUTLINES, MIN_SECTION_SIDE, SECTION_SIDE_SCALE, SectionShape};

@@ -10,7 +10,7 @@ use egui::{
     Color32, CornerRadius, CursorIcon, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Ui,
 };
 use egui::{Vec2, vec2};
-use glam::{DVec2, DVec3};
+use glam::{DMat3, DVec2, DVec3};
 use session::{Camera, Projection, StandardView};
 use tools::overlay::{HALO_PT, MARKER_PT, Rgba, Shape};
 use tools::{Label, ToolKind};
@@ -204,8 +204,9 @@ pub fn set_cursor(ctx: &egui::Context, view_rect: Rect, cursor: CursorIcon) {
 
 /// The gizmo's axis ends, each as the standard view that looks from it, its offset from the
 /// gizmo's centre in points (y down), and how far it points toward the viewer
-/// (`-dir.dot(forward)`): +X, -X, +Y, -Y, +Z, -Z.
-pub fn gizmo_ends(camera: &Camera) -> [(StandardView, Vec2, f32); 6] {
+/// (`-dir.dot(forward)`): +X, -X, +Y, -Y, +Z, -Z, along the drawing axes `axes` (their directions
+/// in world space as columns).
+pub fn gizmo_ends(camera: &Camera, axes: DMat3) -> [(StandardView, Vec2, f32); 6] {
     let (right, up, forward) = (camera.right(), camera.up(), camera.forward());
     [
         StandardView::Right,
@@ -216,7 +217,7 @@ pub fn gizmo_ends(camera: &Camera) -> [(StandardView, Vec2, f32); 6] {
         StandardView::Bottom,
     ]
     .map(|view| {
-        let dir: DVec3 = view.direction().0;
+        let dir: DVec3 = axes * view.direction().0;
         let offset = vec2(dir.dot(right) as f32, -dir.dot(up) as f32) * theme::GIZMO_AXIS;
         (view, offset, -dir.dot(forward) as f32)
     })
@@ -229,6 +230,7 @@ pub fn gizmo(
     ui: &Ui,
     view_rect: Rect,
     camera: &Camera,
+    axes: DMat3,
     projection: Projection,
     actions: &mut Vec<UiAction>,
 ) {
@@ -251,7 +253,7 @@ pub fn gizmo(
                 Color32::from_rgba_unmultiplied(r, g, b, 160),
             );
 
-            let mut ends = gizmo_ends(camera);
+            let mut ends = gizmo_ends(camera, axes);
             ends.sort_by(|a, b| a.2.total_cmp(&b.2));
             for (view, offset, _) in ends {
                 if offset.length() < theme::GIZMO_HIDE {

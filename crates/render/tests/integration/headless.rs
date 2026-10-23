@@ -1441,6 +1441,47 @@ fn styled_axes_take_their_colors_and_wide_axes_cover_more_pixels() {
 }
 
 #[test]
+fn the_axes_are_drawn_where_the_drawing_axes_are() {
+    if skip_on_warp("the moved axes pixel check") {
+        return;
+    }
+    let cam = camera();
+    let style = ViewStyle {
+        axes: [[1.0, 0.0, 1.0, 1.0]; 3],
+        ..ViewStyle::CLASSIC
+    };
+    let draw = |axes: Option<kernel::Axes>, context: &[InstanceId]| {
+        let screen = Offscreen::new()?;
+        let mut scene = Scene::from_root(Model::new());
+        if let Some(axes) = axes {
+            scene.set_axes(axes);
+        }
+        let mut renderer = screen.renderer();
+        renderer.set_scene(&scene, context, &BTreeSet::new());
+        renderer.set_style(style);
+        Some(screen.draw(&mut renderer, &cam, Viewport::full((W, H)), &[]))
+    };
+    // Red along world y from (2, -2, 0), green along world -x.
+    let moved = kernel::Axes::new(DVec3::new(2.0, -2.0, 0.0), DVec3::Y, -DVec3::X).unwrap();
+    let (Some(world), Some(turned)) = (draw(None, &[]), draw(Some(moved), &[])) else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    // On the new red axis, and on the old X axis.
+    let on_red = DVec3::new(2.0, 1.0, 0.0);
+    let on_world_x = DVec3::new(3.0, 0.0, 0.0);
+    assert!(!near(&world, &cam, on_red, magenta));
+    assert!(near(&world, &cam, on_world_x, magenta));
+    assert!(near(&turned, &cam, on_red, magenta), "the red axis moved");
+    assert!(
+        !near(&turned, &cam, on_world_x, magenta),
+        "nothing is left on the world's X axis"
+    );
+    // The axes' origin is on the new axes too, the world origin is not.
+    assert!(near(&turned, &cam, DVec3::new(2.0, -2.0, 0.0), magenta));
+}
+
+#[test]
 fn a_pushed_in_preview_tints_the_box_sides_it_lies_on_evenly() {
     if skip_on_warp("the preview tint check") {
         return;

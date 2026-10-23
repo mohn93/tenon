@@ -4,9 +4,9 @@
 //! rather than inside a face (a wall's foot) can start a rectangle on any face through it: the
 //! rectangle lies on the face the cursor moves across, as in SketchUp.
 
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
-use session::{Command, rectangle_axes, rectangle_corners};
+use session::{Command, rectangle_axes_in, rectangle_corners};
 
 use crate::inference::{Inference, SnapKind};
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
@@ -14,6 +14,8 @@ use crate::vcb::{format_length, parse_lengths, toward_cursor};
 
 #[derive(Clone, Debug, Default)]
 pub struct RectangleTool {
+    /// The drawing axes the last event saw (the sides follow them on axis planes).
+    axes: DMat3,
     /// First corner and the normal of the plane the rectangle lies in.
     start: Option<(DVec3, DVec3)>,
     /// The first corner was not inside a face: the plane follows the face under the cursor
@@ -30,11 +32,11 @@ impl RectangleTool {
     }
 
     /// The command for the rectangle from the first corner to `opposite`, if it has an area.
-    fn finish(&mut self, opposite: DVec3, out: &mut ToolOutput) {
+    fn finish(&mut self, opposite: DVec3, axes: DMat3, out: &mut ToolOutput) {
         let Some((corner, normal)) = self.start else {
             return;
         };
-        if rectangle_corners(corner, opposite, Some(normal)).is_ok() {
+        if rectangle_corners(axes, corner, opposite, Some(normal)).is_ok() {
             out.commands.push(Command::AddRectangle {
                 corner: corner.to_array(),
                 opposite: opposite.to_array(),
@@ -62,16 +64,17 @@ impl RectangleTool {
         }
     }
 
-    /// Width and height along the rectangle axes from the first corner to the cursor.
-    fn size(&self) -> Option<(f64, f64)> {
+    /// Width and height along the rectangle axes (on axis planes, the drawing axes `axes`) from
+    /// the first corner to the cursor.
+    fn size(&self, axes: DMat3) -> Option<(f64, f64)> {
         let ((corner, normal), hover) = (self.start?, self.hover?);
-        let (u, v) = rectangle_axes(normal);
+        let (u, v) = rectangle_axes_in(axes, normal);
         Some(((hover - corner).dot(u), (hover - corner).dot(v)))
     }
 }
 
 /// The plane a rectangle started at `hit` lies in: the face under the cursor if the point is
-/// on it, otherwise horizontal.
+/// on it, otherwise horizontal (the drawing axes' red-green plane).
 pub(crate) fn plane_normal(hit: &Inference, ctx: &ToolContext) -> DVec3 {
     hit.face
         .and_then(|id| ctx.model.face(id))
@@ -79,7 +82,7 @@ pub(crate) fn plane_normal(hit: &Inference, ctx: &ToolContext) -> DVec3 {
             let origin = ctx.model.position(f.outer[0]).unwrap();
             (hit.point - origin).dot(f.normal).abs() < LENGTH_TOL
         })
-        .map_or(DVec3::Z, |f| f.normal)
+        .map_or(ctx.scenery.axes().z_axis, |f| f.normal)
 }
 
 /// The cursor's point on the plane through `origin` with `normal`: the inferred point if it is
@@ -116,7 +119,7 @@ impl Tool for RectangleTool {
 
     fn measurement(&self) -> (&'static str, Option<String>) {
         let size = self
-            .size()
+            .size(self.axes)
             .map(|(w, h)| format!("{}, {}", format_length(w.abs()), format_length(h.abs())));
         ("Dimensions", size)
     }
@@ -136,6 +139,7 @@ impl Tool for RectangleTool {
 
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
+        self.axes = ctx.scenery.axes().matrix3;
         match event {
             ToolEvent::Move(hit) => {
                 self.follow(&hit, ctx);
@@ -153,7 +157,7 @@ impl Tool for RectangleTool {
                     self.follow(&hit, ctx);
                     let (corner, normal) = self.start.unwrap();
                     if let Some(p) = on_plane(corner, normal, &hit, ctx) {
-                        self.finish(p, &mut out);
+                        self.finish(p, self.axes, &mut out);
                     }
                 }
             },
@@ -161,10 +165,10 @@ impl Tool for RectangleTool {
                 (None, _) => out.message = Some("Click the first corner first".into()),
                 (Some((corner, normal)), Some(&[w, h])) => {
                     // Typed sizes extend toward the cursor; a negative size flips the side.
-                    let (u, v) = rectangle_axes(normal);
-                    let (sw, sh) = self.size().unwrap_or((0.0, 0.0));
+                    let (u, v) = rectangle_axes_in(self.axes, normal);
+                    let (sw, sh) = self.size(self.axes).unwrap_or((0.0, 0.0));
                     let (w, h) = (toward_cursor(sw, w), toward_cursor(sh, h));
-                    self.finish(corner + u * w + v * h, &mut out);
+                    self.finish(corner + u * w + v * h, self.axes, &mut out);
                     if self.start.is_some() {
                         out.message = Some("Width and height must not be zero".into());
                     }
@@ -180,7 +184,7 @@ impl Tool for RectangleTool {
             ToolEvent::Cancel => self.on_external_change(),
         }
         if let (Some((corner, normal)), Some(hover)) = (self.start, self.hover)
-            && let Ok(c) = rectangle_corners(corner, hover, Some(normal))
+            && let Ok(c) = rectangle_corners(self.axes, corner, hover, Some(normal))
         {
             out.preview = (0..4).map(|i| [c[i], c[(i + 1) % 4]]).collect();
         }
@@ -215,6 +219,7 @@ mod tests {
         model: Model,
         camera: Camera,
         cursor: DVec2,
+        axes: glam::DAffine3,
     }
 
     impl Rig {
@@ -224,13 +229,14 @@ mod tests {
                 model,
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 cursor: DVec2::ZERO,
+                axes: glam::DAffine3::IDENTITY,
             }
         }
 
         fn send(&mut self, event: ToolEvent) -> ToolOutput {
             let ctx = ToolContext {
                 model: &self.model,
-                scenery: &crate::scenery::Scenery::single(&self.model),
+                scenery: &crate::scenery::Scenery::single(&self.model).with_axes(self.axes),
                 camera: &self.camera,
                 cursor: self.cursor,
                 pick_radius: 10.0,
@@ -275,6 +281,38 @@ mod tests {
         );
         assert!(out.preview.is_empty());
         assert_eq!(r.tool.anchor(), None);
+    }
+
+    #[test]
+    fn the_sides_follow_the_drawing_axes_on_the_ground() {
+        let mut r = Rig::new(Model::new());
+        // Axes turned 45 degrees about z.
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        r.axes = glam::DAffine3::from_mat3_translation(
+            glam::DMat3::from_cols(DVec3::new(s, s, 0.0), DVec3::new(-s, s, 0.0), DVec3::Z),
+            DVec3::ZERO,
+        );
+        r.send(ToolEvent::Click(ground(0.0, 0.0)));
+        let moved = r.send(ToolEvent::Move(ground(2.0, 0.0)));
+        // A square of side sqrt 2 turned with the axes.
+        let corners: Vec<DVec3> = moved.preview.iter().map(|[a, _]| *a).collect();
+        let expect = [
+            DVec3::ZERO,
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::new(1.0, -1.0, 0.0),
+        ];
+        assert_eq!(corners.len(), 4);
+        assert!(
+            expect
+                .iter()
+                .all(|e| corners.iter().any(|c| c.abs_diff_eq(*e, 1e-9))),
+            "{corners:?}"
+        );
+        assert_eq!(
+            r.tool.measurement(),
+            ("Dimensions", Some("1.414 m, 1.414 m".to_string()))
+        );
     }
 
     #[test]
@@ -442,7 +480,7 @@ mod tests {
             face: None,
         };
         r.send(ToolEvent::Move(above));
-        let (w, h) = r.tool.size().unwrap();
+        let (w, h) = r.tool.size(DMat3::IDENTITY).unwrap();
         assert!((w - 2.0).abs() < 1e-6 && (h - 1.0).abs() < 1e-6);
     }
 }

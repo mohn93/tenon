@@ -57,12 +57,13 @@ impl Source {
     }
 
     /// The chain the selected edges form, if they form one in a plane. A straight chain has no
-    /// plane of its own: it takes its face's, else the ground's (or, upright, the view's).
+    /// plane of its own: it takes its face's, else the ground's (the drawing axes' red-green plane, or, upright, the view's).
     fn chain(
         model: &Model,
         selection: &BTreeSet<EntityId>,
         camera: &Camera,
         cursor: DVec2,
+        up: DVec3,
     ) -> Option<Source> {
         let edges: Vec<EdgeId> = selection
             .iter()
@@ -90,7 +91,7 @@ impl Source {
                     .first()
                     .and_then(|f| model.face(*f))
                     .map(|f| f.normal);
-                let base = face.unwrap_or(DVec3::Z);
+                let base = face.unwrap_or(up);
                 let view = camera.ray(cursor).dir;
                 let n = if base.cross(dir).length() < 1e-6 {
                     view
@@ -406,8 +407,14 @@ impl OffsetTool {
     /// What a press at the cursor would offset: the selected chain when the cursor is near it,
     /// else the face under the cursor. The point pressed is the second.
     fn pressed(ctx: &ToolContext) -> Option<(Source, DVec3)> {
-        let chain = Source::chain(ctx.model, ctx.selection, ctx.camera, ctx.cursor)
-            .filter(|c| c.near(ctx.camera, ctx.cursor, ctx.pick_radius));
+        let chain = Source::chain(
+            ctx.model,
+            ctx.selection,
+            ctx.camera,
+            ctx.cursor,
+            ctx.scenery.axes().z_axis,
+        )
+        .filter(|c| c.near(ctx.camera, ctx.cursor, ctx.pick_radius));
         if let Some(chain) = chain {
             let p = chain.plane_point(ctx.camera, ctx.cursor)?;
             return Some((chain, p));
@@ -480,9 +487,14 @@ impl Tool for OffsetTool {
                     }
                 }
                 None => {
-                    let over_chain =
-                        Source::chain(ctx.model, ctx.selection, ctx.camera, ctx.cursor)
-                            .is_some_and(|c| c.near(ctx.camera, ctx.cursor, ctx.pick_radius));
+                    let over_chain = Source::chain(
+                        ctx.model,
+                        ctx.selection,
+                        ctx.camera,
+                        ctx.cursor,
+                        ctx.scenery.axes().z_axis,
+                    )
+                    .is_some_and(|c| c.near(ctx.camera, ctx.cursor, ctx.pick_radius));
                     self.hovered = open_face_under(ctx).map(|(f, _)| f).filter(|_| !over_chain);
                 }
             },
