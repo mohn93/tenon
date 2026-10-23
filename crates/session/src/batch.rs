@@ -514,6 +514,10 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
     match command {
         Command::PushPull { face, .. } => f(Slot::One(face)),
         Command::OpenInstance { id } => f(Slot::One(id)),
+        Command::OrientFaces { id, ids } => {
+            f(Slot::One(id));
+            f(Slot::List(ids));
+        }
         Command::Erase { ids }
         | Command::Move { ids, .. }
         | Command::Copy { ids, .. }
@@ -525,6 +529,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::Explode { ids }
         | Command::Hide { ids }
         | Command::Unhide { ids }
+        | Command::ReverseFaces { ids }
         | Command::SoftenEdges { ids, .. }
         | Command::SoftenByAngle { ids, .. }
         | Command::IntersectFaces { ids, .. }

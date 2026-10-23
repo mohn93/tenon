@@ -18,6 +18,7 @@ mod index;
 mod intersect;
 mod materials;
 mod mesh;
+mod orient;
 mod pages;
 mod perf;
 mod push_pull;

@@ -22,6 +22,7 @@ mod material;
 mod mesh;
 mod model;
 pub mod offset;
+mod orient;
 mod page;
 mod push_pull;
 mod regions;
@@ -61,6 +62,7 @@ pub use import_tree::{
 pub use index::{Index, Shape, ray_hits_triangle};
 pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
+pub use orient::OrientReport;
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView};
 pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 pub use section::SectionPlane;

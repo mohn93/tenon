@@ -42,7 +42,7 @@ pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use clip::ClipOutline;
 pub use command::{
     AnchorInput, BatchError, Command, CommandError, ErrorKind, ExpectedStep, IntersectReport,
-    IntersectScope, Origin, Outcome, SelectMode, TextureSource,
+    IntersectScope, OrientOutcome, Origin, Outcome, SelectMode, TextureSource,
 };
 pub use document::{
     Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES, SectionDisplay,

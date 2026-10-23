@@ -489,6 +489,21 @@ pub enum Command {
     /// Show every hidden entity of the open context (not those inside its instances), as one
     /// undo step.
     UnhideAll {},
+    /// Turn each face in `ids` over, as one undo step (non-face ids are ignored; none to turn
+    /// is a success with no undo step). Faces keep their ids, and each side keeps its material
+    /// and texture look. The outcome's `changed` lists the faces turned.
+    ReverseFaces { ids: Vec<EntityId> },
+    /// Orient the faces connected to face `id` so they all agree with it, as one undo step:
+    /// breadth first across edges shared by exactly two faces (an edge of three or more
+    /// stops the walk), each neighbour turned over if it runs the shared edge the same way
+    /// round. With `ids` not empty only those faces are walked. A surface that cannot be
+    /// oriented (a Moebius strip) keeps the first orientation reached and counts the edges
+    /// left in disagreement. The outcome's `orient` lists the faces turned and the conflicts.
+    OrientFaces {
+        id: EntityId,
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
     /// Make edges of the open context soft (`soft`: true) or hard again, as one undo step: the
     /// edges in `ids` and the edges around the faces in `ids`. A soft edge is hidden and the
     /// faces on its sides are shaded as one smooth surface. Only an edge between exactly two
@@ -898,6 +913,15 @@ pub struct IntersectReport {
     pub created_faces: Vec<EntityId>,
 }
 
+/// What an `orient_faces` did.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OrientOutcome {
+    /// The faces turned over, in id order.
+    pub flipped: Vec<EntityId>,
+    /// Shared edges whose faces could not be made to agree.
+    pub conflicts: usize,
+}
+
 /// What a successful command changed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Outcome {
@@ -912,10 +936,13 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soften: Option<SoftenReport>,
+    /// What an `orient_faces` turned over; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orient: Option<OrientOutcome>,
     /// What an `intersect_faces` drew and split; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intersect: Option<IntersectReport>,
-    /// The ids a `hide`, `unhide`, `unhide_last` or `unhide_all` changed, in id order (empty
+    /// The ids a `hide`, `unhide`, `unhide_last`, `unhide_all` or `reverse_faces` changed, in id order (empty
     /// when it did nothing); absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed: Option<Vec<EntityId>>,

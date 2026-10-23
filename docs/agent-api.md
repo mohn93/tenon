@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last` and `unhide_all` (see Hide and unhide below), `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all` and `reverse_faces` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -111,7 +111,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -407,6 +407,17 @@ is set.
 A SketchUp file written by `export` keeps the flag on edges, faces, instances and guides; an
 imported SketchUp file's hidden edges, faces, groups, components and guides come in hidden
 (a hidden edge is no longer made soft; soft and smooth edges still are).
+
+### Reverse and orient faces
+
+| Command | Effect |
+|---|---|
+| `{"type": "reverse_faces", "ids": ["f8", "f9"]}` | Turns each face in `ids` over, as one undo step labelled `reverse_faces`. Faces keep their ids and each side keeps its material and texture look (front and back swap with the normal). Ids that are not faces are ignored; a face the open context does not hold is `not_found`. The outcome's `changed` lists the faces turned (`[]`, with no undo step, when there were none). |
+| `{"type": "orient_faces", "id": "f8", "ids": []}` | Makes the faces connected to face `id` agree with it, as one undo step labelled `orient_faces`. The walk is breadth first from `id` (in id order) across edges used by exactly two faces: a neighbour that runs the shared edge the same way round is turned over, so the two run it in opposite directions. An edge used by three or more faces is not crossed. With `ids` not empty only those faces (and `id`) are walked; empty or absent walks every connected face. A surface that cannot be oriented (a Moebius strip) keeps the first orientation reached. `id` and `ids` must be faces (else `invalid_input`) of the open context (else `not_found`). |
+
+`orient_faces` reports `"orient": {"flipped": ["f9"], "conflicts": 0}`: the faces turned over,
+in id order, and the shared edges whose faces were left in disagreement. Nothing to turn is a
+success with no undo step. Both commands take batch references.
 
 ### Intersect Faces
 

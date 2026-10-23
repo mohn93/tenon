@@ -14,7 +14,8 @@ use crate::batch::BatchCommand;
 use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{
-    BatchError, Command, CommandError, ErrorKind, IntersectReport, Origin, Outcome, SelectMode,
+    BatchError, Command, CommandError, ErrorKind, IntersectReport, OrientOutcome, Origin, Outcome,
+    SelectMode,
 };
 use crate::import::ImportReport;
 use crate::polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
@@ -38,6 +39,7 @@ mod import;
 mod intersect;
 mod library;
 mod materials;
+mod orient;
 mod placement;
 mod scenes;
 mod sections;
@@ -118,6 +120,8 @@ pub struct Document {
     intersect_report: Option<IntersectReport>,
     /// The ids the last hide or unhide edit changed, until its outcome takes them.
     hidden_changed: Option<Vec<EntityId>>,
+    /// What the last orient edit did, until its outcome takes it.
+    orient_report: Option<OrientOutcome>,
     /// The entities the most recent `hide` hid, for `unhide_last`; not saved, forgotten with
     /// the model. A failed atomic batch does not restore it: its ids are filtered to what is
     /// still hidden when used, so a rolled-back hide leaves nothing for `unhide_last` to show.
@@ -169,6 +173,7 @@ impl Document {
             soften_report: None,
             intersect_report: None,
             hidden_changed: None,
+            orient_report: None,
             last_hidden: Vec::new(),
             positioned: None,
             purged: None,
@@ -413,6 +418,7 @@ impl Document {
             outcome.soften = self.soften_report.take();
             outcome.intersect = self.intersect_report.take();
             outcome.changed = self.hidden_changed.take();
+            outcome.orient = self.orient_report.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.text_3d = self.text_report.take();
@@ -690,6 +696,8 @@ impl Document {
             | Command::Unhide { .. }
             | Command::UnhideLast {}
             | Command::UnhideAll {}
+            | Command::ReverseFaces { .. }
+            | Command::OrientFaces { .. }
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::IntersectFaces { .. }
@@ -913,6 +921,8 @@ impl Document {
             Command::Unhide { ids } => self.unhide_changes(ids),
             Command::UnhideLast {} => self.unhide_last_changes(),
             Command::UnhideAll {} => self.unhide_all_changes(),
+            Command::ReverseFaces { ids } => self.reverse_faces_changes(ids),
+            Command::OrientFaces { id, ids } => self.orient_faces_changes(*id, ids),
             Command::SoftenEdges { ids, soft } => self.soften_changes(ids, *soft),
             Command::SoftenByAngle { ids, max_angle_deg } => {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
@@ -1067,6 +1077,7 @@ impl Document {
                             soften: self.soften_report.take(),
                             intersect: self.intersect_report.take(),
                             changed: self.hidden_changed.take(),
+                            orient: self.orient_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
                             text_3d: self.text_report.take(),

@@ -26,6 +26,7 @@ mod lights;
 mod materials;
 mod modeling;
 mod offset;
+mod orient;
 mod outliner;
 mod perf;
 mod polygon;

@@ -508,7 +508,7 @@ pub fn describe() -> Value {
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, pdf?: {sheets, warnings} (export_pdf only), revision})",
-                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, intersect?: IntersectReport, changed?: [EntityId] (hide, unhide, unhide_last, unhide_all), positioned?: integer, purged?: integer, text_3d?: Text3dReport, material?: MaterialId (insert_library_item of a material), units?: Units, revision}: the Outcome plus revision",
+                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, intersect?: IntersectReport, changed?: [EntityId] (hide, unhide, unhide_last, unhide_all, reverse_faces), orient?: {flipped: [EntityId], conflicts: integer} (orient_faces), positioned?: integer, purged?: integer, text_3d?: Text3dReport, material?: MaterialId (insert_library_item of a material), units?: Units, revision}: the Outcome plus revision",
                 "params_schema": any_of_root(vec![
                     schema::<Command>(),
                     schema::<ScreenCommand>(),
