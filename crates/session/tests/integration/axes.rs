@@ -364,3 +364,195 @@ fn flip_follows_the_model_axes() {
         "{now:?}"
     );
 }
+
+#[test]
+fn a_context_frame_that_throws_an_instance_past_the_limit_is_refused() {
+    let mut d = doc();
+    let a = crate_at(&mut d, [0.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        json!({"type": "move", "ids": [a], "offset": [900000, 0, 0]}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "open_instance", "id": a})).unwrap();
+    let steps = depth(&d);
+    let before = positions(&d);
+    let err = run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [950000, 0, 0], "x_axis": [1, 0, 0], "y_axis": [0, 1, 0]}),
+    )
+    .unwrap_err();
+    assert_eq!(err.0, ErrorKind::InvalidInput);
+    assert_eq!(depth(&d), steps);
+    assert_eq!(positions(&d), before);
+    // The same frame is fine where the instance stays in range.
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [50000, 0, 0], "x_axis": [1, 0, 0], "y_axis": [0, 1, 0]}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_context_frame_that_throws_nested_content_past_the_limit_is_refused() {
+    let mut d = doc();
+    let inner = crate_at(&mut d, [0.0, 0.0, 0.0]);
+    let out = run(
+        &mut d,
+        json!({"type": "make_component", "ids": [inner], "name": "Holder"}),
+    )
+    .unwrap();
+    let holder = created(&out, 'i')[0].clone();
+    run(&mut d, json!({"type": "open_instance", "id": holder})).unwrap();
+    // A turned frame far away: the nested crate's box corners land beyond the limit.
+    let err = run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [999999, 999999, 0], "x_axis": [1, 1, 0], "y_axis": [-1, 1, 0]}),
+    )
+    .unwrap_err();
+    assert_eq!(err.0, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn zero_axis_vectors_say_so() {
+    let mut d = doc();
+    for (x, y) in [
+        (json!([0, 0, 0]), json!([0, 1, 0])),
+        (json!([1e300, 1e300, 0]), json!([0, 1, 0])),
+    ] {
+        let cmd: Command = serde_json::from_value(
+            json!({"type": "set_axes", "origin": [0, 0, 0], "x_axis": x, "y_axis": y}),
+        )
+        .unwrap();
+        let e = d.execute(cmd).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::InvalidInput);
+        assert!(e.message.contains("axis"), "{}", e.message);
+        assert!(!e.message.contains("endpoints"), "{}", e.message);
+    }
+}
+
+#[test]
+fn a_file_with_axes_beyond_the_limit_or_not_a_frame_is_refused() {
+    let mut d = doc();
+    crate_at(&mut d, [0.0, 0.0, 0.0]);
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [1, 2, 3], "x_axis": [0, 1, 0], "y_axis": [-1, 0, 0]}),
+    )
+    .unwrap();
+    let path = scratch("limit.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let edit = |f: &dyn Fn(&mut Value)| {
+        let mut document: Value = {
+            let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            serde_json::from_reader(zip.by_name("document.json").unwrap()).unwrap()
+        };
+        f(&mut document);
+        let out = scratch("edited.skr");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&out).unwrap());
+        use std::io::Write;
+        zip.start_file("document.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&serde_json::to_vec(&document).unwrap())
+            .unwrap();
+        zip.finish().unwrap();
+        out
+    };
+    let opens = |p: &PathBuf| {
+        let mut e = doc();
+        run(&mut e, json!({"type": "open", "path": p.to_str().unwrap()})).is_ok()
+    };
+    assert!(opens(&path));
+    assert!(!opens(&edit(
+        &|doc| doc["model"]["axes"]["origin"] = json!([2000000.0, 0.0, 0.0])
+    )));
+    assert!(!opens(&edit(
+        &|doc| doc["model"]["axes"]["x"] = json!([1.0, 1.0, 0.0])
+    )));
+}
+
+/// `p` placed by an instance's `transform` (nine matrix entries by column, then the translation).
+fn to_world(transform: &Value, p: [f64; 3]) -> [f64; 3] {
+    let t: Vec<f64> = serde_json::from_value(transform.clone()).unwrap();
+    std::array::from_fn(|k| t[k] * p[0] + t[3 + k] * p[1] + t[6 + k] * p[2] + t[9 + k])
+}
+
+#[test]
+fn context_axes_keep_guides_dimensions_notes_and_section_planes_in_place() {
+    let mut d = doc();
+    let a = crate_at(&mut d, [10.0, 0.0, 0.0]);
+    run(&mut d, json!({"type": "open_instance", "id": a})).unwrap();
+    let guide = created(
+        &run(
+            &mut d,
+            json!({"type": "add_guide_point", "position": [10.5, 0.5, 0.5]}),
+        )
+        .unwrap(),
+        'g',
+    )[0]
+    .clone();
+    let plane = created(
+        &run(
+            &mut d,
+            json!({"type": "add_section_plane", "point": [10.5, 0.25, 0.5], "normal": [1, 0, 0]}),
+        )
+        .unwrap(),
+        's',
+    )[0]
+    .clone();
+    let dim = created(
+        &run(
+            &mut d,
+            json!({"type": "add_dimension", "a": [10, 0, 0], "b": [11, 0, 0], "offset": [0, -1, 0]}),
+        )
+        .unwrap(),
+        'r',
+    )[0]
+    .clone();
+    let note = created(
+        &run(
+            &mut d,
+            json!({"type": "add_note", "anchor": [10, 1, 0], "position": [10, 2, 1], "text": "Door"}),
+        )
+        .unwrap(),
+        'n',
+    )[0]
+    .clone();
+    let entity = |d: &Document, id: &Value| ask(d, json!({"type": "entity", "id": id}));
+    let points = |d: &Document| -> Vec<[f64; 3]> {
+        vec![
+            vec3(&entity(d, &guide)["point"]),
+            vec3(&entity(d, &plane)["point"]),
+            vec3(&entity(d, &dim)["a"]["point"]),
+            vec3(&entity(d, &dim)["b"]["point"]),
+            vec3(&entity(d, &note)["anchor"]["point"]),
+            vec3(&entity(d, &note)["position"]),
+        ]
+    };
+    let before = points(&d);
+    let normal = vec3(&entity(&d, &plane)["normal"]);
+    run(
+        &mut d,
+        json!({"type": "set_axes", "origin": [10, 0, 0], "x_axis": [0, 1, 0], "y_axis": [-1, 0, 0]}),
+    )
+    .unwrap();
+    let after = points(&d);
+    // The frame's inverse takes (x, y, z) to (y, 10 - x, z).
+    for (b, a) in before.iter().zip(&after) {
+        assert!(near(*a, [b[1], 10.0 - b[0], b[2]]), "{b:?} -> {a:?}");
+    }
+    // The plane's normal turned with the frame: x became local -y.
+    assert!(
+        near(vec3(&entity(&d, &plane)["normal"]), [0.0, -1.0, 0.0]),
+        "{normal:?}"
+    );
+    run(&mut d, json!({"type": "close_instance"})).unwrap();
+    let transform = ask(&d, json!({"type": "entity", "id": a}))["transform"].clone();
+    for (b, a) in before.iter().zip(&after) {
+        assert!(near(to_world(&transform, *a), *b), "world {b:?}");
+    }
+}

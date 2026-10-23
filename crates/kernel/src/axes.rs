@@ -30,8 +30,12 @@ impl Axes {
         if !(origin.is_finite() && x_axis.is_finite() && y_axis.is_finite()) {
             return Err(KernelError::NotFinite);
         }
-        let x = x_axis.try_normalize().ok_or(KernelError::ZeroLength)?;
-        let y_unit = y_axis.try_normalize().ok_or(KernelError::ZeroLength)?;
+        let x = x_axis.try_normalize().ok_or(KernelError::BadAxes(
+            "x_axis must be a non-zero vector of a size that can be normalized",
+        ))?;
+        let y_unit = y_axis.try_normalize().ok_or(KernelError::BadAxes(
+            "y_axis must be a non-zero vector of a size that can be normalized",
+        ))?;
         let across = y_unit - x * y_unit.dot(x);
         if across.length() < 1e-9 {
             return Err(KernelError::BadAxes("x_axis and y_axis are parallel"));

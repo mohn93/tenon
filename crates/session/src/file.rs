@@ -581,6 +581,11 @@ fn check_coordinates(model: &SceneData) -> Result<(), String> {
     let meshes = std::iter::once(&model.root).chain(model.definitions.iter().map(|d| &d.mesh));
     let within = |xs: &[f64]| xs.iter().all(|x| x.abs() <= MAX_COORDINATE);
     let beyond = |what: String| format!("{what} is beyond +/-{MAX_COORDINATE} m");
+    if let Some(a) = &model.axes
+        && !within(&a.origin)
+    {
+        return Err(beyond("the axes' origin".to_string()));
+    }
     for mesh in meshes {
         let MeshData {
             vertices,
