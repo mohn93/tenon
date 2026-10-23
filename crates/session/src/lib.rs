@@ -71,5 +71,5 @@ pub use section_shape::{MAX_SECTION_OUTLINES, MIN_SECTION_SIDE, SECTION_SIDE_SCA
 pub use text3d::{SkippedCharacter, Text3dReport};
 pub use units::{
     LengthUnit, MAX_ANGLE_PRECISION, MAX_ANGLE_SNAP, MAX_LENGTH_SNAP, MAX_PRECISION,
-    MIN_LENGTH_SNAP, Units, format_angle, format_length, parse_angle, parse_length,
+    MIN_ANGLE_SNAP, MIN_LENGTH_SNAP, Units, format_angle, format_length, parse_angle, parse_length,
 };

@@ -25,6 +25,9 @@ pub const MIN_LENGTH_SNAP: f64 = 1e-6;
 /// The most `angle_snap` may be, in degrees.
 pub const MAX_ANGLE_SNAP: f64 = 90.0;
 
+/// The smallest nonzero `angle_snap`, in degrees.
+pub const MIN_ANGLE_SNAP: f64 = 0.01;
+
 /// The unit lengths are written and typed in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -161,9 +164,11 @@ impl Units {
                 "angle_precision must be from 0 to {MAX_ANGLE_PRECISION}"
             ));
         }
-        if !(self.angle_snap.is_finite() && (0.0..=MAX_ANGLE_SNAP).contains(&self.angle_snap)) {
+        let snap = self.angle_snap;
+        if !(snap.is_finite() && (snap == 0.0 || (MIN_ANGLE_SNAP..=MAX_ANGLE_SNAP).contains(&snap)))
+        {
             return Err(format!(
-                "angle_snap must be from 0 (free angles) to {MAX_ANGLE_SNAP} degrees"
+                "angle_snap must be 0 (free angles) or from {MIN_ANGLE_SNAP} to {MAX_ANGLE_SNAP} degrees"
             ));
         }
         Ok(())
@@ -631,6 +636,14 @@ mod tests {
                 ..ok
             },
             Units {
+                angle_snap: 1e-320,
+                ..ok
+            },
+            Units {
+                angle_snap: 0.005,
+                ..ok
+            },
+            Units {
                 angle_precision: 4,
                 ..ok
             },
@@ -653,6 +666,14 @@ mod tests {
         assert!(
             Units {
                 length_snap: MIN_LENGTH_SNAP,
+                ..ok
+            }
+            .check()
+            .is_ok()
+        );
+        assert!(
+            Units {
+                angle_snap: MIN_ANGLE_SNAP,
                 ..ok
             }
             .check()
