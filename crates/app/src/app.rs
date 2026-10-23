@@ -4314,7 +4314,10 @@ mod tests {
             let out = e.execute(serde_json::from_value(json).unwrap()).unwrap();
             serde_json::to_value(out).unwrap()
         };
-        let out = run(&mut e, serde_json::json!({"type": "add_style", "name": "Dark"}));
+        let out = run(
+            &mut e,
+            serde_json::json!({"type": "add_style", "name": "Dark"}),
+        );
         let y = out["changes"]["styles"][0].clone();
         let before = shown(&e);
         run(&mut e, serde_json::json!({"type": "set_style", "style": y}));
