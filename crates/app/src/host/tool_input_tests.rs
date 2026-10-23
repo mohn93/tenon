@@ -2338,3 +2338,49 @@ fn the_axes_tool_ignores_clicks_that_give_no_direction_and_escape_cancels() {
     let axes = ask(&mut e, json!({"type": "camera"}))["axes"].clone();
     assert!(near(&axes["origin"], [0.0, 0.0, 0.0]), "{axes}");
 }
+
+#[test]
+fn an_arrow_key_locks_the_axes_tools_red_axis() {
+    let mut e = editor();
+    tool(&mut e, "axes");
+    input(&mut e, json!([{"type": "click", "point": [0, 0, 0]}]));
+    let r = input(&mut e, json!([{"type": "key", "key": "right"}]));
+    assert_eq!(r["editor"]["lock"], "Locked: red axis");
+    // The click is off the red axis; the lock puts it on it.
+    input(&mut e, json!([{"type": "click", "point": [2, 3, 0]}]));
+    // The lock stays for the next click, which would then be in line with red: unlock.
+    input(&mut e, json!([{"type": "key", "key": "right"}]));
+    let r = input(&mut e, json!([{"type": "click", "point": [0, 5, 0]}]));
+    assert_eq!(ran(&r), ["set_axes"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["x_axis"], [1.0, 0.0, 0.0]), "{c}");
+    assert!(near(&c["y_axis"], [0.0, 1.0, 0.0]), "{c}");
+}
+
+#[test]
+fn the_axes_tool_in_an_opened_turned_group_emits_local_coordinates() {
+    let mut e = editor();
+    square(&mut e);
+    select_all(&mut e);
+    let ids = ask(&mut e, json!({"type": "selection"}))["ids"].clone();
+    let r = exec(&mut e, json!({"type": "make_group", "ids": ids}));
+    let group = created(&r, 'i')[0].clone();
+    exec(
+        &mut e,
+        json!({"type": "rotate", "ids": [group], "center": [0, 0, 0], "axis": [0, 0, 1], "angle": 90}),
+    );
+    exec(&mut e, json!({"type": "open_instance", "id": group}));
+    tool(&mut e, "axes");
+    input(&mut e, json!([{"type": "click", "point": [1, 1, 0]}]));
+    input(&mut e, json!([{"type": "click", "point": [1, 2, 0]}]));
+    let r = input(&mut e, json!([{"type": "click", "point": [0, 2, 0]}]));
+    assert_eq!(ran(&r), ["set_axes"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["origin"], [1.0, 1.0, 0.0]), "{c}");
+    assert!(near(&c["x_axis"], [0.0, 1.0, 0.0]), "{c}");
+    assert!(near(&c["y_axis"], [-1.0, 0.0, 0.0]), "{c}");
+    // The group's definition is re-origined: the root axes are untouched.
+    let axes = ask(&mut e, json!({"type": "camera"}))["axes"].clone();
+    assert!(near(&axes["origin"], [0.0, 0.0, 0.0]), "{axes}");
+    assert!(near(&axes["x"], [1.0, 0.0, 0.0]), "{axes}");
+}

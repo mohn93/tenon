@@ -3869,8 +3869,8 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 false
             }
-            // Right-clicking a selected section plane, or a selection with something to hide,
-            // reverse or intersect, opens the viewport menu.
+            // Right-clicking a selection (a section plane has its own entries), or anywhere
+            // while the model axes are moved (Reset Axes), opens the viewport menu.
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Right,

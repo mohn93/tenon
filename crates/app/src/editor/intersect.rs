@@ -47,8 +47,8 @@ impl Editor {
             .then_some(menu)
     }
 
-    /// Whether a right-click in the view opens the viewport menu: the selection has one, and the
-    /// window is not a viewer (which has no way to close it, and nothing in it to run).
+    /// Whether a right-click in the view opens the viewport menu: a selection or moved root axes give
+    /// it entries, and the window is not a viewer (which has no way to close it, and nothing in it to run).
     pub fn opens_viewport_menu(&self, read_only: bool) -> bool {
         !read_only && self.viewport_menu(egui::Pos2::ZERO, None).is_some()
     }

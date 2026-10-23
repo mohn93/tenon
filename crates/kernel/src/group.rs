@@ -394,7 +394,7 @@ impl Scene {
     }
 
     /// How many instances of each definition the meshes the root reaches hold.
-    fn placed_instance_counts(&self) -> BTreeMap<DefinitionId, usize> {
+    pub fn placed_instance_counts(&self) -> BTreeMap<DefinitionId, usize> {
         let mut counts = BTreeMap::new();
         let mut seen = BTreeSet::new();
         let mut pending = vec![MeshId::Root];

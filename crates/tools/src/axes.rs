@@ -115,8 +115,9 @@ impl Tool for AxesTool {
                     }
                     _ => {
                         let origin = self.points[0];
-                        // Red is known once two points are.
-                        let x = self.red().unwrap_or(DVec3::X);
+                        let x = self
+                            .red()
+                            .expect("two points are further apart than LENGTH_TOL");
                         match green_toward(origin, x, p) {
                             None => {
                                 out.message = Some(

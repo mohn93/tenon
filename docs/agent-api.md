@@ -1026,7 +1026,10 @@ Component's Red, Green and Blue (exactly one instance selected, `frame` `own`). 
 right-click menu has Make Unique, the same Flip Along entries and, at the root with moved axes
 (also with nothing selected), Reset Axes (`reset_axes`, "Axes reset"). Entity Info of a
 component instance shows its definition's instance count after "1 component" ("3 instances";
-`definitions` has it as `instances`). The phone viewer has none of these.
+`definitions` has it as `instances`). The viewport menu opens for any selection (the entries it
+shows depend on what is selected; a lone section plane keeps its own) and, with moved axes at the
+root, with nothing selected. Make Unique says "Made N components unique", N the selected
+instances that got a definition of their own. The phone viewer has none of these.
 
 ### Camera
 
@@ -1210,7 +1213,7 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
   Polygon, the center; Arc, the start, then the end; Push/Pull, where the face was clicked; Move,
   the base point; Rotate, the center, then where the angle starts; Scale, the point that stays
-  put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts; Dimension, the ends clicked (or the clicked edge's ends), or a circle's center; Text, the point the note points at, then where its text goes (none for a note fixed to the view). The Select tool is `active` with no points while its button is held (a
+  put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts; Axes, the origin, then the red point; Dimension, the ends clicked (or the clicked edge's ends), or a circle's center; Text, the point the note points at, then where its text goes (none for a note fixed to the view). The Select tool is `active` with no points while its button is held (a
   click or a box, both on screen); Erase, Paint and Follow Me are always `idle`.
 - `paint_material` is the material the Paint tool paints with (`null`: the default material);
   `import_units` is what one unit of an imported OBJ or STL file is in the window's import options
@@ -1344,6 +1347,11 @@ Events, run in order:
   else selected, or nothing, the message is "Select the path edges, then click the profile
   face" and nothing runs. It makes one `follow_me` command; a refusal (a profile too big for a
   turn, a bad path) shows the command's message and changes nothing. It takes no typed value.
+- **Axes** (`y`): `click` the new origin, `click` a point on the red axis, `click` a point on the
+  green side of the red-green plane; the third click makes one `set_axes` (in the open context's
+  coordinates). A click on the origin, or a third in line with red, runs nothing and says why
+  (`message`); arrow keys lock the inferred direction as for other tools; Escape starts again. It
+  takes no typed value.
 - **Dimension** (no key): `click` a point, `click` a second one, `move` to where the dimension
   line goes and `click`, or `type` the line's distance from the ends (on the cursor's side) once
   the cursor has moved off their line; it makes one `add_dimension`, each end the vertex

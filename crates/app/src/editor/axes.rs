@@ -2,52 +2,72 @@
 
 use std::collections::BTreeMap;
 
-use kernel::EntityId;
+use kernel::{DefinitionKind, EntityId};
 use session::{Command, FlipAxis, FlipFrame};
 
 use super::{Editor, Message};
 use crate::info::count;
 
 impl Editor {
-    /// Whether Make Unique has something to do: a selected instance whose definition has an
-    /// instance that is not selected too (one pass over the model's instances).
-    pub fn can_make_unique(&self) -> bool {
-        let mut selected: BTreeMap<_, usize> = BTreeMap::new();
+    /// How many selected component instances Make Unique would give a definition of their own:
+    /// those whose definition the root reaches placed more often than the selection holds it
+    /// (the kernel's rule). Kept for the revision, context and selection it was worked out for.
+    fn unique_candidates(&self) -> usize {
+        let key = (
+            self.doc.revision(),
+            self.doc.context().to_vec(),
+            self.doc.selection().clone(),
+        );
+        if let Some((r, c, s, n)) = &*self.unique_cache.borrow()
+            && (*r, c, s) == (key.0, &key.1, &key.2)
+        {
+            return *n;
+        }
         let m = self.doc.model();
+        let scene = self.doc.scene();
+        let mut selected: BTreeMap<_, usize> = BTreeMap::new();
         for id in self.doc.selection() {
             if let EntityId::Instance(i) = id
                 && let Some(i) = m.instance(*i)
+                && scene
+                    .definition(i.definition)
+                    .is_some_and(|d| d.kind == DefinitionKind::Component)
             {
                 *selected.entry(i.definition).or_default() += 1;
             }
         }
-        if selected.is_empty() {
-            return false;
-        }
-        let mut placed: BTreeMap<_, usize> = BTreeMap::new();
-        for (_, mesh) in self.doc.scene().meshes() {
-            for (_, i) in mesh.instances() {
-                if selected.contains_key(&i.definition) {
-                    *placed.entry(i.definition).or_default() += 1;
-                }
-            }
-        }
-        selected
-            .iter()
-            .any(|(d, n)| placed.get(d).copied().unwrap_or(0) > *n)
+        let n = if selected.is_empty() {
+            0
+        } else {
+            let placed = scene.placed_instance_counts();
+            selected
+                .iter()
+                .filter(|(d, n)| placed.get(d).copied().unwrap_or(0) > **n)
+                .map(|(_, n)| *n)
+                .sum()
+        };
+        *self.unique_cache.borrow_mut() = Some((key.0, key.1, key.2, n));
+        n
+    }
+
+    /// Whether Make Unique has something to do (`unique_candidates`).
+    pub fn can_make_unique(&self) -> bool {
+        self.unique_candidates() > 0
     }
 
     /// Gives the selected instances of shared definitions definitions of their own as one undo
-    /// step, and says how many: "Made 2 components unique" (what was made, not what was
-    /// selected), or "Nothing to make unique".
+    /// step, and says how many instances: "Made 2 components unique", or "Nothing to make
+    /// unique".
     pub fn make_unique(&mut self) -> bool {
+        self.reset_tool();
+        self.typed.clear();
         self.message = None;
-        if let Some(outcome) = self.run(Command::MakeUnique { ids: None }) {
-            let made = outcome.definitions.map_or(0, |d| d.len());
-            self.message = Some(Message::info(if made == 0 {
+        let candidates = self.unique_candidates();
+        if self.run(Command::MakeUnique { ids: None }).is_some() {
+            self.message = Some(Message::info(if candidates == 0 {
                 "Nothing to make unique".to_string()
             } else {
-                format!("Made {} unique", count(made, "component"))
+                format!("Made {} unique", count(candidates, "component"))
             }));
         }
         self.invalidate_hover();
@@ -203,6 +223,50 @@ mod tests {
         })
         .unwrap();
         assert!(e.can_make_unique());
+    }
+
+    #[test]
+    fn make_unique_counts_the_instances_it_made_unique() {
+        let mut e = editor();
+        let (first, copy) = two_boxes(&mut e);
+        let out = e
+            .execute(Command::Copy {
+                ids: vec![first],
+                offset: [0.0, 5.0, 0.0],
+                count: None,
+            })
+            .unwrap();
+        let third = *out.changes.created.first().unwrap();
+        select(&mut e, vec![copy, third]);
+        e.make_unique();
+        assert!(
+            e.status().ends_with("Made 2 components unique"),
+            "{}",
+            e.status()
+        );
+    }
+
+    #[test]
+    fn make_unique_follows_the_kernels_rule_for_unplaced_and_group_definitions() {
+        let mut e = editor();
+        let (first, copy) = two_boxes(&mut e);
+        // Box A is made of the copy and erased: its Box instance is no longer placed.
+        select(&mut e, vec![copy]);
+        e.execute(Command::MakeComponent {
+            ids: vec![copy],
+            name: "A".into(),
+        })
+        .unwrap();
+        let a = *e.doc().selection().first().unwrap();
+        e.execute(Command::Erase { ids: vec![a] }).unwrap();
+        select(&mut e, vec![first]);
+        assert!(!e.can_make_unique(), "the other Box instance is not placed");
+        e.make_unique();
+        assert!(
+            e.status().ends_with("Nothing to make unique"),
+            "{}",
+            e.status()
+        );
     }
 
     #[test]

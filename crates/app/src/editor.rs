@@ -116,6 +116,14 @@ fn shown_name(kind: DefinitionKind, name: &str) -> &str {
     }
 }
 
+/// What `Editor::unique_candidates` was worked out for, and its answer.
+type UniqueCache = (
+    u64,
+    Vec<InstanceId>,
+    std::collections::BTreeSet<EntityId>,
+    usize,
+);
+
 /// The parts of the model, with the document count and revision they were listed for.
 type PartsCache = RefCell<Option<(u64, u64, Rc<Vec<crate::viewer::parts::Part>>)>>;
 
@@ -253,6 +261,9 @@ pub struct Editor {
     layout: LayoutCache,
     /// Whether the open context has a hidden entity, by revision and context.
     hidden_cache: RefCell<Option<(u64, Vec<InstanceId>, bool)>>,
+    /// How many selected instances Make Unique would give a definition of their own, by
+    /// revision, open context and selection.
+    unique_cache: RefCell<Option<UniqueCache>>,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
@@ -365,6 +376,7 @@ impl Editor {
             navigated: false,
             layout: RefCell::new(None),
             hidden_cache: RefCell::new(None),
+            unique_cache: RefCell::new(None),
             typed: String::new(),
             message: None,
             flash: None,
