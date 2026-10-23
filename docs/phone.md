@@ -56,10 +56,15 @@ fragment (`#v1.<id>.<key>`). It:
    no cookies.
 2. Decrypts it with the key (a wrong key, a changed or cut-off blob is refused by the
    authentication tag) and opens the model read only.
-3. Removes the fragment (and any query) from the address bar and the history entry
-   (`history.replaceState`), so the key is not left in the browser's address, history or a
-   bookmark made afterwards. The key is never logged.
-4. Fits the model to the screen.
+3. Fits the model to the screen.
+
+Before any of that, as soon as the page's fragment starts `v1.` (valid or not), the fragment and
+any query are removed from the address bar and the history entry (`history.replaceState`), so
+the key is not left in the browser's address, history or a bookmark made afterwards, whatever
+happens next (a wrong key, an unreachable computer). The link is kept in memory only, so after a
+failure the link must be opened again. The key is never logged. Each request gives up after 20
+seconds without an answer or a next piece of the model ("Could not reach..."). Opening another
+share link in the same tab reloads the page, which starts the viewer for it.
 
 Errors are shown as a message instead of the viewer: "This link is damaged or expired" (the
 link is malformed, the key is wrong, the blob is damaged or too big, or the share has stopped),
@@ -69,8 +74,9 @@ network or the share stopped and the page was reloaded).
 The screen is the 3D view with a small top bar showing the model's name (the link carries no
 name, so it reads "Shared model"). There are no menus, tools, panels, status line or keyboard
 shortcuts, and the model cannot be changed: the session refuses every command that changes the
-model (editing, undo and redo, new, open, import, save), whatever asked, and only the Select
-tool can be chosen.
+model (editing, undo and redo, new, open, import) and saving, whatever asked, and only the
+Select tool can be chosen. Export commands are not refused (the viewer has no menu to start
+them).
 
 ### Touch
 
@@ -97,6 +103,6 @@ Run the desktop app, File > Open on Phone..., and open the shown URL in a phone'
 in a browser tab with a phone-sized window, device toolbar on, 375 x 812 at 3x). Check: the model
 appears fitted; the address bar loses the `#...` part; reloading the page then starts the
 editor, not the viewer; orbit, pan, pinch, tap and double tap work; no editing is reachable.
-After Stop in the sheet, a new request for the link says "This link is damaged or expired".
+After Stop in the sheet, opening the link again says "This link is damaged or expired".
 
 There is no agent API for sharing in this version.

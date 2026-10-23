@@ -175,6 +175,11 @@ impl Touches {
                     dragging = true;
                     self.last_tap = None;
                     out.push(Gesture::Anchor { at: start });
+                    // The slop is not part of the drag: the first delta starts where the
+                    // slop circle ends, so the view does not jump.
+                    let travelled = event.pos - start;
+                    let kept = travelled.length() - TAP_SLOP * self.scale;
+                    last = start + travelled.normalize() * (travelled.length() - kept);
                 }
                 if dragging && event.pos != last {
                     out.push(Gesture::Orbit {
@@ -312,7 +317,7 @@ mod tests {
                     at: p(100.0, 100.0)
                 },
                 Gesture::Orbit {
-                    delta: p(30.0, 0.0)
+                    delta: p(20.0, 0.0)
                 },
                 Gesture::Orbit {
                     delta: p(0.0, -10.0)
@@ -321,6 +326,18 @@ mod tests {
         );
         assert!(t.event(ev(Phase::End, 1, p(130.0, 90.0), 40)).is_empty());
         assert!(!t.active());
+    }
+
+    #[test]
+    fn the_first_orbit_delta_does_not_include_the_slop() {
+        let mut t = Touches::default();
+        t.event(ev(Phase::Start, 1, p(0.0, 0.0), 0));
+        let g = t.event(ev(Phase::Move, 1, p(0.0, 10.5), 5));
+        let [Gesture::Anchor { .. }, Gesture::Orbit { delta }] = g.as_slice() else {
+            panic!("{g:?}");
+        };
+        assert!((delta.length() - 0.5).abs() < 1e-9, "{delta:?}");
+        assert_eq!(delta.x, 0.0);
     }
 
     #[test]

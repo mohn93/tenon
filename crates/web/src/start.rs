@@ -146,7 +146,12 @@ fn guard_input(canvas: &HtmlCanvasElement) {
 /// (None: no share, the editor starts). The key is only ever in the fragment: the request is
 /// for the id alone. Once the model is decrypted the fragment is taken out of the address bar.
 async fn shared_model() -> Result<Option<SharedModel>, String> {
-    let link = match viewer::classify(&load::hash()) {
+    let start = viewer::classify(&load::hash());
+    // The key leaves the address bar and the history before any request, whatever follows.
+    if start.forgets_fragment() {
+        load::forget_fragment();
+    }
+    let link = match start {
         Start::Editor => return Ok(None),
         Start::Damaged => return Err(viewer::DAMAGED.to_string()),
         Start::Viewer(link) => link,
@@ -156,14 +161,28 @@ async fn shared_model() -> Result<Option<SharedModel>, String> {
         .map_err(|failure| failure.message().to_string())?;
     let bytes = session::share::open(&blob, &link.id, &link.key)
         .map_err(|_| viewer::DAMAGED.to_string())?;
-    load::forget_fragment();
     Ok(Some(SharedModel {
         name: viewer::MODEL_NAME.to_string(),
         bytes,
     }))
 }
 
+/// Opening another share link in this tab only changes its fragment: the page reloads, which
+/// then starts the viewer for it as for any new page.
+fn reload_on_new_share() {
+    let on_change = Closure::<dyn FnMut(Event)>::new(|_: Event| {
+        if matches!(viewer::classify(&load::hash()), Start::Editor) {
+            return;
+        }
+        let _ = window().location().reload();
+    });
+    let _ =
+        window().add_event_listener_with_callback("hashchange", on_change.as_ref().unchecked_ref());
+    on_change.forget();
+}
+
 async fn run() -> Result<(), String> {
+    reload_on_new_share();
     let model = shared_model().await?;
     let canvas = canvas()?;
     let context = gpu(&canvas).await?;

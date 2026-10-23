@@ -214,6 +214,11 @@ mod tests {
             at: DVec2::new(3.0, 3.0),
         });
         assert!(e.doc().selection().is_empty());
+        let mut whole = viewer();
+        whole.zoom_extents();
+        let (a, b) = (&e.doc().camera, &whole.doc().camera);
+        assert!(a.target.abs_diff_eq(b.target, 1e-6), "fits the whole model");
+        assert!((a.distance() - b.distance()).abs() < 1e-6);
     }
 
     #[test]

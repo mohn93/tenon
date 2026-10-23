@@ -1219,8 +1219,12 @@ impl State {
         let owned = self.touch_owned.contains(&id);
         match phase {
             touch::Phase::Start => {
-                if owned || self.sheet.is_some() || !self.in_view(p) || self.gui.wants_pointer_at(p)
-                {
+                if owned {
+                    // A start for a finger already down: its end was lost (a release outside
+                    // the window). The old touch is dropped, without a tap, and this one begins.
+                    self.touch(touch::Phase::Cancel, id, p);
+                }
+                if self.sheet.is_some() || !self.in_view(p) || self.gui.wants_pointer_at(p) {
                     return false;
                 }
                 self.touch_owned.push(id);
@@ -3665,7 +3669,12 @@ impl ApplicationHandler<AppEvent> for App {
                 let at = s.cursor;
                 s.touch(phase, MOUSE_TOUCH, at)
             }
-            WindowEvent::CursorLeft { .. } => s.editor.cursor_left(),
+            WindowEvent::CursorLeft { .. } => {
+                // The mouse button's release may happen outside the window and never arrive.
+                let at = s.cursor;
+                s.touch(touch::Phase::Cancel, MOUSE_TOUCH, at);
+                s.editor.cursor_left()
+            }
             // While flying, clicks do nothing to the model; without a grabbed pointer the left
             // button held in the view looks around.
             WindowEvent::MouseInput { state, button, .. } if s.editor.flying() => {

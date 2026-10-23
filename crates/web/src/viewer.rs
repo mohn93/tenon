@@ -8,9 +8,9 @@
 
 use session::share::{MAX_BLOB_BYTES, parse_fragment};
 
-/// What is said when the link is wrong, the model is not what the link names, or it has expired
+/// What is said when the link is wrong (the app's own text, so the two cannot differ), the model is not what the link names, or it has expired
 /// (the server no longer has it).
-pub const DAMAGED: &str = "This link is damaged or expired";
+pub const DAMAGED: &str = app::app::DAMAGED_LINK;
 
 /// What is said when the computer that shared the model cannot be reached.
 pub const UNREACHABLE: &str = "Could not reach the computer sharing this model";
@@ -27,6 +27,14 @@ pub enum Start {
     Damaged,
     /// The viewer, for this share.
     Viewer(Link),
+}
+
+impl Start {
+    /// Whether the fragment must leave the address bar before anything else happens: it holds
+    /// a key (or something shaped like one), valid or not.
+    pub fn forgets_fragment(&self) -> bool {
+        !matches!(self, Start::Editor)
+    }
 }
 
 /// Where a shared model is and what opens it. The key is never shown by `Debug`.
@@ -98,12 +106,27 @@ pub fn check_length(content_length: Option<u64>) -> Result<(), Failure> {
 }
 
 /// The body as it arrives, never holding more than the size cap whatever the response said.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Collector {
     bytes: Vec<u8>,
+    cap: u64,
+}
+
+impl Default for Collector {
+    fn default() -> Self {
+        Self::with_cap(MAX_BLOB_BYTES as u64)
+    }
 }
 
 impl Collector {
+    /// A collector that takes at most `cap` bytes.
+    pub fn with_cap(cap: u64) -> Self {
+        Self {
+            bytes: Vec::new(),
+            cap,
+        }
+    }
+
     /// Takes the next chunk; refused (and nothing kept of it) when it would pass the cap.
     pub fn extend(&mut self, chunk: &[u8]) -> Result<(), Failure> {
         if !self.fits(chunk.len() as u64) {
@@ -116,7 +139,7 @@ impl Collector {
     /// Whether a chunk of `len` bytes would still be within the cap: asked before the chunk is
     /// copied out of the browser.
     pub fn fits(&self, len: u64) -> bool {
-        (self.bytes.len() as u64).saturating_add(len) <= MAX_BLOB_BYTES as u64
+        (self.bytes.len() as u64).saturating_add(len) <= self.cap
     }
 
     pub fn into_bytes(self) -> Vec<u8> {
@@ -211,20 +234,32 @@ mod tests {
     }
 
     #[test]
-    fn the_collector_stops_at_the_cap_whatever_the_response_said() {
-        let mut c = Collector::default();
-        let chunk = vec![7u8; 64 * 1024 * 1024];
-        for _ in 0..4 {
-            assert!(c.fits(chunk.len() as u64));
-            c.extend(&chunk).unwrap();
-        }
-        // Exactly 256 MiB is kept; one more byte is refused and not kept.
+    fn the_collector_stops_at_its_cap_whatever_the_response_said() {
+        let mut c = Collector::with_cap(100);
+        c.extend(&[7u8; 60]).unwrap();
+        assert!(c.fits(40));
+        c.extend(&[7u8; 40]).unwrap();
         assert!(!c.fits(1));
         assert_eq!(c.extend(&[1]), Err(Failure::Damaged));
-        assert_eq!(c.into_bytes().len(), MAX_BLOB_BYTES);
-        let mut c = Collector::default();
+        assert_eq!(c.into_bytes().len(), 100);
+        let c = Collector::with_cap(10);
         assert!(!c.fits(u64::MAX));
-        assert_eq!(c.extend(&[]), Ok(()));
+        assert_eq!(Collector::default().cap, MAX_BLOB_BYTES as u64);
+    }
+
+    #[test]
+    fn a_share_fragment_is_taken_out_of_the_address_before_any_request() {
+        let share = seal(b"model").unwrap();
+        let good = format!("#{}", link_fragment(&share.id, &share.key));
+        assert!(classify(&good).forgets_fragment());
+        assert!(classify("#v1.x.y").forgets_fragment(), "damaged too");
+        assert!(!classify("#top").forgets_fragment());
+        assert!(!classify("").forgets_fragment());
+    }
+
+    #[test]
+    fn the_damaged_message_is_the_apps() {
+        assert_eq!(DAMAGED, app::app::DAMAGED_LINK);
     }
 
     #[test]
