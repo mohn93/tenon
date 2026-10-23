@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use glam::{DAffine3, DVec3};
 use kernel::geom::LENGTH_TOL;
-use kernel::intersect::{FaceShape, face_segments, face_shape};
+use kernel::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use kernel::{EntityId, FaceId, InstanceId, MAX_IMPORT_DEPTH, MeshId, Scene};
 
 use super::Document;
@@ -17,6 +17,10 @@ const MAX_PAIRS: usize = 200_000;
 const MAX_SEGMENTS: usize = 100_000;
 /// Most face box queries of the broad phase.
 const MAX_QUERIES: usize = 4_000_000;
+/// Most box comparisons between sources and placements.
+const MAX_COMPARES: usize = 100_000_000;
+/// Most edge visits summed over the narrow phase.
+const MAX_WORK: u64 = 100_000_000;
 
 const TOO_MANY: &str = "Too many faces cross to intersect at once";
 const TOO_MANY_PLACED: &str = "Too many groups and components to intersect at once";
@@ -29,6 +33,10 @@ struct Limits {
     segments: usize,
     /// Most bounding box queries of the broad phase, whether or not they find anything.
     queries: usize,
+    /// Most box comparisons of the broad phase over placements and grid cells.
+    compares: usize,
+    /// Most edge visits of the narrow phase (see `face_segments_cost`).
+    work: u64,
 }
 
 /// A mesh as placed in the root.
@@ -58,6 +66,8 @@ impl Document {
                 pairs: MAX_PAIRS,
                 segments: MAX_SEGMENTS,
                 queries: MAX_QUERIES,
+                compares: MAX_COMPARES,
+                work: MAX_WORK,
             },
         )
     }
@@ -111,13 +121,18 @@ impl Document {
                 }
             }
         }
-        for instance in &parts.instances {
-            let mut prefix = context_path.clone();
-            prefix.push(*instance);
-            for (index, p) in places.iter().enumerate() {
-                if p.path.starts_with(&prefix)
-                    && let Some(model) = scene.mesh(p.mesh)
-                {
+        // The selected instance each placement lies in, so a group is never crossed with itself.
+        let mut owner: Vec<Option<InstanceId>> = vec![None; places.len()];
+        for (index, p) in places.iter().enumerate() {
+            if !p.path.starts_with(context_path) {
+                continue;
+            }
+            let Some(&instance) = p.path.get(context_path.len()) else {
+                continue;
+            };
+            if selected.contains(&instance) {
+                owner[index] = Some(instance);
+                if let Some(model) = scene.mesh(p.mesh) {
                     sources.extend(
                         model
                             .faces()
@@ -128,34 +143,20 @@ impl Document {
             }
         }
 
-        // The selected instance each placement lies in, so a group is never crossed with itself.
-        let mut owner: Vec<Option<InstanceId>> = vec![None; places.len()];
-        for instance in &selected {
-            let mut prefix = context_path.clone();
-            prefix.push(*instance);
-            for (index, p) in places.iter().enumerate() {
-                if p.path.starts_with(&prefix) {
-                    owner[index] = Some(*instance);
-                }
-            }
-        }
-
-        let mut shapes: HashMap<Key, Option<FaceShape>> = HashMap::new();
-        let mut shape_of = |key: Key| -> Option<FaceShape> {
-            shapes
-                .entry(key)
-                .or_insert_with(|| {
-                    let p = &places[key.0];
-                    scene
-                        .mesh(p.mesh)
-                        .and_then(|m| face_shape(m, key.1, p.place))
-                })
-                .clone()
+        let make_shape = |key: Key| -> Option<FaceShape> {
+            let p = &places[key.0];
+            scene
+                .mesh(p.mesh)
+                .and_then(|m| face_shape(m, key.1, p.place))
         };
+        let mut shapes: HashMap<Key, Option<FaceShape>> = HashMap::new();
+        for &k in &sources {
+            shapes.insert(k, make_shape(k));
+        }
         let source_boxes: Vec<(Key, (DVec3, DVec3))> = sources
             .iter()
             .filter_map(|&k| {
-                let shape = shape_of(k)?;
+                let shape = shapes[&k].as_ref()?;
                 let b = bounds(shape.outer.iter().copied());
                 Some((k, b))
             })
@@ -192,16 +193,29 @@ impl Document {
         }
         let only_sources = with == IntersectScope::Selection;
 
-        // Broad phase: pairs whose boxes meet, each once.
+        // Broad phase: pairs whose boxes meet, each once. Placements are found through a grid
+        // over their boxes, and every box comparison counts against the budget.
+        let grid = BoxGrid::new(&targets.iter().map(|t| t.1).collect::<Vec<_>>());
+        let mut stamps = vec![0usize; targets.len()];
+        let mut compares = 0usize;
         let mut pairs: Vec<(Key, Key)> = Vec::new();
         let mut seen: HashSet<(Key, Key)> = HashSet::new();
         let mut queries = 0usize;
-        for (a, (lo, hi)) in &source_boxes {
+        for (epoch, (a, (lo, hi))) in source_boxes.iter().enumerate() {
             let a = *a;
-            for &(t, (wlo, whi)) in &targets {
-                if !(hi.cmpge(wlo).all() && lo.cmple(whi).all()) {
-                    continue;
-                }
+            let Some(mut near) = grid.near(
+                *lo,
+                *hi,
+                epoch + 1,
+                &mut stamps,
+                &mut compares,
+                limits.compares,
+            ) else {
+                return Err(too_many());
+            };
+            near.sort_unstable();
+            for ti in near {
+                let (t, _) = targets[ti];
                 queries += 1;
                 if queries > limits.queries {
                     return Err(too_many());
@@ -238,13 +252,23 @@ impl Document {
             }
         }
 
-        // Narrow phase, in world coordinates.
+        // Narrow phase, in world coordinates: each face's shape is made once.
+        for &(a, b) in &pairs {
+            for k in [a, b] {
+                shapes.entry(k).or_insert_with(|| make_shape(k));
+            }
+        }
         let mut world: Vec<(DVec3, DVec3)> = Vec::new();
+        let mut work = 0u64;
         for (a, b) in pairs {
-            let (Some(sa), Some(sb)) = (shape_of(a), shape_of(b)) else {
+            let (Some(Some(sa)), Some(Some(sb))) = (shapes.get(&a), shapes.get(&b)) else {
                 continue;
             };
-            world.extend(face_segments(&sa, &sb));
+            work = work.saturating_add(face_segments_cost(sa, sb));
+            if work > limits.work {
+                return Err(too_many());
+            }
+            world.extend(face_segments(sa, sb));
             if world.len() > limits.segments {
                 return Err(too_many());
             }
@@ -345,6 +369,145 @@ fn placements(
     Ok(walk.out)
 }
 
+/// A uniform grid over boxes, to find the ones meeting a box without testing them all.
+struct BoxGrid {
+    boxes: Vec<(DVec3, DVec3)>,
+    lo: DVec3,
+    size: DVec3,
+    dims: [usize; 3],
+    cells: Vec<Vec<u32>>,
+    /// Boxes too big for the cells: tested against every query.
+    big: Vec<u32>,
+}
+
+/// A box covering more cells than this is kept out of the grid.
+const MAX_BOX_CELLS: usize = 64;
+
+impl BoxGrid {
+    fn new(boxes: &[(DVec3, DVec3)]) -> BoxGrid {
+        let (lo, hi) = bounds(boxes.iter().flat_map(|b| [b.0, b.1]));
+        let n = boxes.len();
+        let mut grid = BoxGrid {
+            boxes: boxes.to_vec(),
+            lo: DVec3::ZERO,
+            size: DVec3::ONE,
+            dims: [1; 3],
+            cells: Vec::new(),
+            big: Vec::new(),
+        };
+        if n == 0 || !lo.is_finite() || !hi.is_finite() {
+            grid.cells = vec![Vec::new()];
+            grid.big = (0..n as u32).collect();
+            return grid;
+        }
+        let extent = hi - lo;
+        let top = extent.max_element().max(1e-9);
+        let live: Vec<usize> = (0..3).filter(|&i| extent[i] > top * 1e-6).collect();
+        let volume: f64 = live.iter().map(|&i| extent[i]).product();
+        let side = (volume / n as f64)
+            .powf(1.0 / live.len().max(1) as f64)
+            .max(1e-12);
+        let mut size = DVec3::ONE;
+        let mut dims = [1usize; 3];
+        for &i in &live {
+            dims[i] = ((extent[i] / side).ceil() as usize).clamp(1, 256);
+            size[i] = extent[i] / dims[i] as f64;
+        }
+        grid.lo = lo;
+        grid.size = size;
+        grid.dims = dims;
+        grid.cells = vec![Vec::new(); dims[0] * dims[1] * dims[2]];
+        for (i, (blo, bhi)) in boxes.iter().enumerate() {
+            let (c0, c1) = grid.range(*blo, *bhi);
+            let count: usize = (0..3).map(|k| c1[k] - c0[k] + 1).product();
+            if count > MAX_BOX_CELLS {
+                grid.big.push(i as u32);
+                continue;
+            }
+            for x in c0[0]..=c1[0] {
+                for y in c0[1]..=c1[1] {
+                    for z in c0[2]..=c1[2] {
+                        let at = grid.index([x, y, z]);
+                        grid.cells[at].push(i as u32);
+                    }
+                }
+            }
+        }
+        grid
+    }
+
+    fn index(&self, c: [usize; 3]) -> usize {
+        (c[0] * self.dims[1] + c[1]) * self.dims[2] + c[2]
+    }
+
+    /// The cells a box covers, clamped to the grid.
+    fn range(&self, blo: DVec3, bhi: DVec3) -> ([usize; 3], [usize; 3]) {
+        let cell = |p: DVec3| {
+            let mut c = [0usize; 3];
+            for i in 0..3 {
+                let t = ((p[i] - self.lo[i]) / self.size[i]).floor();
+                c[i] = if t.is_nan() {
+                    0
+                } else {
+                    (t.max(0.0) as usize).min(self.dims[i] - 1)
+                };
+            }
+            c
+        };
+        (cell(blo), cell(bhi))
+    }
+
+    /// The indices of the boxes meeting `lo`..`hi`. `stamps` marks the ones already seen (use a
+    /// new `epoch` per query); every cell and box looked at counts into `compares`. None when
+    /// that passes `limit`.
+    fn near(
+        &self,
+        lo: DVec3,
+        hi: DVec3,
+        epoch: usize,
+        stamps: &mut [usize],
+        compares: &mut usize,
+        limit: usize,
+    ) -> Option<Vec<usize>> {
+        let mut out = Vec::new();
+        let mut test = |i: u32, compares: &mut usize| -> bool {
+            *compares += 1;
+            let i = i as usize;
+            if stamps[i] == epoch {
+                return *compares <= limit;
+            }
+            stamps[i] = epoch;
+            let (blo, bhi) = self.boxes[i];
+            if hi.cmpge(blo).all() && lo.cmple(bhi).all() {
+                out.push(i);
+            }
+            *compares <= limit
+        };
+        for &i in &self.big {
+            if !test(i, compares) {
+                return None;
+            }
+        }
+        let (c0, c1) = self.range(lo, hi);
+        for x in c0[0]..=c1[0] {
+            for y in c0[1]..=c1[1] {
+                for z in c0[2]..=c1[2] {
+                    *compares += 1;
+                    if *compares > limit {
+                        return None;
+                    }
+                    for &i in &self.cells[self.index([x, y, z])] {
+                        if !test(i, compares) {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
 fn bounds(points: impl Iterator<Item = DVec3>) -> (DVec3, DVec3) {
     points.fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(lo, hi), p| {
         (lo.min(p), hi.max(p))
@@ -411,6 +574,8 @@ mod tests {
             pairs: MAX_PAIRS,
             segments: 3,
             queries: MAX_QUERIES,
+            compares: MAX_COMPARES,
+            work: MAX_WORK,
         };
         let e = d
             .intersect_with_limits(&faces, IntersectScope::Selection, limits)
@@ -422,6 +587,8 @@ mod tests {
             pairs: MAX_PAIRS,
             segments: MAX_SEGMENTS,
             queries: MAX_QUERIES,
+            compares: MAX_COMPARES,
+            work: MAX_WORK,
         };
         assert!(
             d.intersect_with_limits(&faces, IntersectScope::Selection, ok)
@@ -437,6 +604,8 @@ mod tests {
             pairs: 10,
             segments: MAX_SEGMENTS,
             queries: MAX_QUERIES,
+            compares: MAX_COMPARES,
+            work: MAX_WORK,
         };
         let e = d
             .intersect_with_limits(&faces, IntersectScope::Selection, limits)
@@ -460,10 +629,72 @@ mod tests {
             pairs: MAX_PAIRS,
             segments: MAX_SEGMENTS,
             queries: 2,
+            compares: MAX_COMPARES,
+            work: MAX_WORK,
         };
         let e = d
             .intersect_with_limits(&faces, IntersectScope::Selection, limits)
             .unwrap_err();
         assert_eq!(e.message, TOO_MANY);
+    }
+
+    #[test]
+    fn the_compare_and_work_limits_refuse() {
+        let (mut d, faces) = boxes();
+        let revision = d.revision();
+        let base = Limits {
+            pairs: MAX_PAIRS,
+            segments: MAX_SEGMENTS,
+            queries: MAX_QUERIES,
+            compares: MAX_COMPARES,
+            work: MAX_WORK,
+        };
+        for limits in [
+            Limits {
+                compares: 3,
+                ..base
+            },
+            Limits { work: 10, ..base },
+        ] {
+            let e = d
+                .intersect_with_limits(&faces, IntersectScope::Selection, limits)
+                .unwrap_err();
+            assert_eq!(e.message, TOO_MANY);
+            assert_eq!(d.revision(), revision);
+        }
+        assert!(
+            d.intersect_with_limits(&faces, IntersectScope::Selection, base)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_grid_finds_the_boxes_a_scan_would() {
+        let boxes: Vec<(DVec3, DVec3)> = (0..200)
+            .map(|i| {
+                let p = DVec3::new((i % 10) as f64, ((i / 10) % 10) as f64, (i / 100) as f64) * 2.0;
+                (p, p + DVec3::splat(1.5 + (i % 7) as f64))
+            })
+            .collect();
+        let grid = BoxGrid::new(&boxes);
+        let mut stamps = vec![0; boxes.len()];
+        let mut compares = 0;
+        for (epoch, (lo, hi)) in [
+            (DVec3::splat(3.0), DVec3::splat(5.0)),
+            (DVec3::splat(-5.0), DVec3::splat(100.0)),
+            (DVec3::splat(50.0), DVec3::splat(60.0)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut got = grid
+                .near(lo, hi, epoch + 1, &mut stamps, &mut compares, usize::MAX)
+                .unwrap();
+            got.sort_unstable();
+            let want: Vec<usize> = (0..boxes.len())
+                .filter(|&i| hi.cmpge(boxes[i].0).all() && lo.cmple(boxes[i].1).all())
+                .collect();
+            assert_eq!(got, want);
+        }
     }
 }

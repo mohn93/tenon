@@ -127,3 +127,58 @@ fn time_purging_many_unused_definitions() {
     assert_eq!(out.purged, Some(2000));
     assert!(took < Duration::from_secs(2), "purge took {took:?}");
 }
+
+#[test]
+#[ignore]
+fn time_intersecting_every_one_of_22500_placed_boxes() {
+    let mut d = Document::new(DVec2::new(800.0, 600.0));
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    );
+    run(&mut d, json!({"type": "select", "all": true}));
+    let faces = d.selection().iter().copied().collect::<Vec<_>>();
+    let base = faces
+        .iter()
+        .find(|id| matches!(id, kernel::EntityId::Face(_)))
+        .copied()
+        .unwrap();
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": base, "distance": 1}),
+    );
+    run(&mut d, json!({"type": "select", "all": true}));
+    let ids: Vec<_> = d.selection().iter().copied().collect();
+    run(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "box"}),
+    );
+    run(&mut d, json!({"type": "select", "all": true}));
+    let ids: Vec<_> = d.selection().iter().copied().collect();
+    run(
+        &mut d,
+        json!({"type": "copy", "ids": ids, "offset": [2, 0, 0], "count": 149}),
+    );
+    run(&mut d, json!({"type": "select", "all": true}));
+    let ids: Vec<_> = d.selection().iter().copied().collect();
+    run(
+        &mut d,
+        json!({"type": "copy", "ids": ids, "offset": [0, 2, 0], "count": 149}),
+    );
+    run(&mut d, json!({"type": "select", "all": true}));
+    assert_eq!(d.selection().len(), 22_500);
+    let (out, took) = timed(
+        "intersect 22,500 placed boxes, Select All, With Model",
+        || {
+            d.execute(
+                serde_json::from_value::<Command>(
+                    json!({"type": "intersect_faces", "with": "model"}),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        },
+    );
+    assert!(out.intersect.unwrap().added_edges.is_empty());
+    assert!(took < Duration::from_secs(1), "{took:?}");
+}

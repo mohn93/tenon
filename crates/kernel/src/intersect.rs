@@ -108,6 +108,21 @@ pub fn face_segments(a: &FaceShape, b: &FaceShape) -> Vec<(DVec3, DVec3)> {
         .collect()
 }
 
+/// An upper bound on the work `face_segments(a, b)` does, in edge visits: the product of the two
+/// faces' edge counts for coplanar faces (every boundary piece is tested against the other's
+/// loops), and for crossing planes the edges of both times the windows the common line can have
+/// (at most one more than the smaller edge count). Callers sum it to bound a whole command.
+pub fn face_segments_cost(a: &FaceShape, b: &FaceShape) -> u64 {
+    let edges =
+        |s: &FaceShape| (s.outer.len() + s.holes.iter().map(Vec::len).sum::<usize>()) as u64;
+    let (ea, eb) = (edges(a), edges(b));
+    if a.plane.same_as(&b.plane) {
+        ea.saturating_mul(eb)
+    } else {
+        (ea + eb).saturating_mul(ea.min(eb) + 1)
+    }
+}
+
 /// A face's loops in the 2D basis of a plane.
 struct Flat {
     outer: Vec<DVec2>,

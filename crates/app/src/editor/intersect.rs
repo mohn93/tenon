@@ -28,6 +28,12 @@ impl Editor {
         })
     }
 
+    /// Whether a right-click in the view opens the viewport menu: the selection has one, and the
+    /// window is not a viewer (which has no way to close it, and nothing in it to run).
+    pub fn opens_viewport_menu(&self, read_only: bool) -> bool {
+        !read_only && self.viewport_menu(egui::Pos2::ZERO).is_some()
+    }
+
     /// The menu to draw for the point it was opened at, clearing the point when the selection
     /// no longer has a menu, so it does not come back at the old place with a later selection.
     pub fn open_viewport_menu(&self, opened: &mut Option<egui::Pos2>) -> Option<ViewportMenu> {
@@ -264,5 +270,7 @@ mod tests {
             }),
             "a lone plane keeps its own menu"
         );
+        assert!(e.opens_viewport_menu(false));
+        assert!(!e.opens_viewport_menu(true), "a viewer never opens it");
     }
 }

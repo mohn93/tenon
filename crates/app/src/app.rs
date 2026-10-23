@@ -3812,11 +3812,7 @@ impl ApplicationHandler<AppEvent> for App {
                 state: ElementState::Released,
                 button: MouseButton::Right,
                 ..
-            } if s.pointer_in_view()
-                && s.editor
-                    .viewport_menu(egui::Pos2::ZERO)
-                    .is_some_and(|m| m.section.is_some() || !s.features.read_only) =>
-            {
+            } if s.pointer_in_view() && s.editor.opens_viewport_menu(s.features.read_only) => {
                 let ppp = f64::from(s.gui.pixels_per_point());
                 s.viewport_menu = Some(egui::pos2(
                     (s.cursor.x / ppp) as f32,

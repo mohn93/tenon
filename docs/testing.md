@@ -50,9 +50,16 @@ A new scene needs a test calling `check("<name>", &doc)` and its name in
 
 `crates/kernel/tests/integration/perf.rs` times big edits (copying 30 circles three and a hundred times,
 copying an exploded 1,800-face terrain, edits inside a 20,000-face imported group, exploding
-imported groups of 1,800 and 20,000 faces, softening and shading a 20,000-face terrain). Its tests are ignored by default;
+imported groups of 1,800 and 20,000 faces, softening and shading a 20,000-face terrain, intersecting two 20,000-face terrains and two 4,000-edge coplanar faces). Its tests are ignored by default;
 run them in release, where they also check loose upper bounds:
 
 ```
 cargo test --release -p kernel --test integration perf:: -- --ignored --nocapture
+```
+
+`crates/session/tests/integration/perf.rs` times saving and opening a big model, purging many definitions,
+and Intersect Faces over 22,500 placed boxes with Select All (With Model, about 0.1 s):
+
+```
+cargo test --release -p session --test integration perf:: -- --ignored --nocapture
 ```

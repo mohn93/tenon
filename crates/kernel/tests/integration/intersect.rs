@@ -1,6 +1,6 @@
 use glam::{DAffine3, DMat3, DVec3};
 use kernel::geom::{LENGTH_TOL, Plane};
-use kernel::intersect::{FaceShape, face_segments, face_shape};
+use kernel::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use kernel::{FaceId, Model};
 
 fn p(x: f64, y: f64, z: f64) -> DVec3 {
@@ -452,4 +452,39 @@ fn add_segments_merges_overlaps_and_splits_at_crossings() {
         m.faces()
             .all(|(id, _)| (m.area(id).unwrap() - 4.0).abs() < 1e-9)
     );
+}
+
+#[test]
+fn the_cost_estimate_grows_with_loop_sizes() {
+    // Coplanar: product of the edge counts.
+    let a = flat(0.0, 0.0, 2.0, 2.0, 0.0);
+    let b = flat(1.0, 1.0, 3.0, 3.0, 0.0);
+    assert_eq!(face_segments_cost(&a, &b), 16);
+    // Crossing planes: bounded by the edges of both times the possible windows.
+    let wall = shape(
+        &[
+            p(1.0, 0.0, -1.0),
+            p(1.0, 0.0, 1.0),
+            p(1.0, 2.0, 1.0),
+            p(1.0, 2.0, -1.0),
+        ],
+        &[],
+    );
+    assert_eq!(face_segments_cost(&a, &wall), 8 * 5);
+    // A face with a hole costs more than the same without.
+    let holed = shape(
+        &[
+            p(0.0, 0.0, 0.0),
+            p(4.0, 0.0, 0.0),
+            p(4.0, 4.0, 0.0),
+            p(0.0, 4.0, 0.0),
+        ],
+        &[&[
+            p(1.0, 1.0, 0.0),
+            p(1.0, 3.0, 0.0),
+            p(3.0, 3.0, 0.0),
+            p(3.0, 1.0, 0.0),
+        ]],
+    );
+    assert_eq!(face_segments_cost(&holed, &b), 8 * 4);
 }
