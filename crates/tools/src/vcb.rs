@@ -180,8 +180,8 @@ pub(crate) fn snap_distance_on_surface(
 pub(crate) fn on_surface(p: DVec3, q: DVec3, hit: &Inference, ctx: &ToolContext) -> DVec3 {
     let normal = match hit.kind {
         SnapKind::OnFace => hit.face.and_then(|f| ctx.model.face(f)).map(|f| f.normal),
-        // The ground is world z = 0: its normal in the context's own coordinates.
-        SnapKind::Ground => (ctx.to_world.matrix3.transpose() * DVec3::Z).try_normalize(),
+        // A ground hit lies on the open context's own z = 0.
+        SnapKind::Ground => Some(DVec3::Z),
         _ => None,
     };
     match normal {
@@ -235,9 +235,21 @@ mod tests {
         }
     }
 
-    /// The surface rule in a context turned a quarter about x, where the ground (world z = 0)
-    /// is the plane y = 0 and local +Z is not up.
-    fn ground_in_a_turned_context(from: DVec3, p: DVec3) -> DVec3 {
+    /// Ground hits the way a tool finds them: through inference with the camera in a context
+    /// turned by `to_world`, so they lie on the context's own z = 0.
+    fn ground_hits(to_world: glam::DAffine3, cursors: [glam::DVec2; 2]) -> [Inference; 2] {
+        let model = kernel::Model::new();
+        let camera =
+            session::Camera::new(glam::DVec2::new(800.0, 600.0)).placed(to_world.inverse());
+        cursors.map(|c| {
+            let hit = crate::inference::infer(&model, &camera, c, None, 10.0);
+            assert_eq!(hit.kind, SnapKind::Ground, "{hit:?}");
+            assert!(hit.point.z.abs() < 1e-9, "{hit:?}");
+            hit
+        })
+    }
+
+    fn round_between(to_world: glam::DAffine3, from: DVec3, hit: &Inference) -> DVec3 {
         let model = kernel::Model::new();
         let camera = session::Camera::new(glam::DVec2::new(800.0, 600.0));
         let units = Units {
@@ -252,7 +264,7 @@ mod tests {
             pick_radius: 10.0,
             drag_threshold: 4.0,
             scale_factor: 1.0,
-            to_world: glam::DAffine3::from_rotation_x(std::f64::consts::FRAC_PI_2),
+            to_world,
             quick_press: false,
             units,
             shift: false,
@@ -261,30 +273,43 @@ mod tests {
             sample: false,
             labels: &[],
         };
-        let hit = Inference {
-            point: p,
-            kind: SnapKind::Ground,
-            face: None,
-            locked: None,
-        };
-        snap_distance_on_surface(from, p, &hit, &ctx)
+        snap_distance_on_surface(from, hit.point, hit, &ctx)
     }
 
     #[test]
-    fn the_ground_is_world_up_in_a_turned_context() {
-        // Both points on the ground (local y = 0): the rounded point stays on it, so it is kept.
-        let p = DVec3::new(1.23, 0.0, 0.46);
-        let q = ground_in_a_turned_context(DVec3::ZERO, p);
-        assert!(q.y.abs() < 1e-9 && q != p, "{q:?}");
-        let length = q.length();
+    fn ground_hits_in_a_tilted_group_round_on_the_context_ground() {
+        // The ground a tool sees is the context's own z = 0, whatever way the context is turned.
+        let to_world = glam::DAffine3::from_rotation_x(0.4);
+        let [a, b] = ground_hits(
+            to_world,
+            [
+                glam::DVec2::new(300.0, 400.0),
+                glam::DVec2::new(520.0, 380.0),
+            ],
+        );
+        let q = round_between(to_world, a.point, &b);
+        assert!(q != b.point, "not rounded: {q:?}");
+        assert!(q.z.abs() < 1e-9, "{q:?}");
+        let length = q.distance(a.point);
         assert!(
             ((length / 0.1).round() * 0.1 - length).abs() < 1e-9,
             "{length}"
         );
-        // From a point off the ground the rounded point would leave it: the cursor point stays.
-        let from = DVec3::new(0.0, 1.0, 0.0);
-        let p = DVec3::new(2.0, 0.0, 0.77);
-        assert_eq!(ground_in_a_turned_context(from, p), p);
+    }
+
+    #[test]
+    fn ground_rounding_does_not_leave_the_context_ground() {
+        let to_world = glam::DAffine3::from_rotation_x(std::f64::consts::FRAC_PI_2);
+        let [_, b] = ground_hits(
+            to_world,
+            [
+                glam::DVec2::new(300.0, 400.0),
+                glam::DVec2::new(520.0, 380.0),
+            ],
+        );
+        // From a point off the ground the rounded point would leave it: the cursor stays.
+        let from = DVec3::new(0.0, 0.0, 1.0);
+        assert_eq!(round_between(to_world, from, &b), b.point);
     }
 
     #[test]
