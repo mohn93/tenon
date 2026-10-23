@@ -518,10 +518,15 @@ fn the_phone_sheet_says_why_there_is_no_share() {
 #[test]
 fn the_qr_is_drawn_with_a_quiet_zone_and_big_enough_modules() {
     use crate::ui::sheets::{qr_module_size, qr_rects};
-    for width in [21usize, 33, 41, 45, 57] {
-        let module = qr_module_size(width);
-        assert!(module >= 4.0, "{width}");
-        assert_eq!(module, module.floor());
+    for ppp in [1.0f32, 1.5, 2.0, 3.0] {
+        for width in [21usize, 33, 41, 45, 57] {
+            let px = qr_module_size(width, ppp) * ppp;
+            assert!(px >= 4.0 - 1e-3, "{width} at {ppp}: {px}");
+            assert!(
+                (px - px.round()).abs() < 1e-3,
+                "whole pixels: {width} at {ppp}: {px}"
+            );
+        }
     }
     // One dark module at the top-left corner sits 4 modules in from the edge.
     let mut modules = vec![false; 25];

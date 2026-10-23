@@ -21,7 +21,9 @@ local network. The web build and the phone viewer itself do not have this item.
   server, and anything else on the network, sees only the ciphertext. Anyone who gets the
   whole link (for example by seeing the QR code) can open the model while the share runs.
 - Traffic is plain HTTP on the local network; the encryption of the model is what protects it.
-- Limits: 16 connections at once, 10 seconds idle, request lines and headers capped at 8 KiB.
+- Limits: 16 connections at once, 10 seconds idle (no progress), 2 minutes at most per
+  connection, the request head (line and headers) capped at 8 KiB and the request line alone
+  at 2 KiB. Stopping the share also ends downloads in progress.
 
 ## When it runs
 
@@ -33,7 +35,9 @@ offers Share the new version, which makes a new link and code and stops the old 
 ## Requirements
 
 - The computer and the phone must be on the same Wi-Fi (or network) and the network must let
-  them talk to each other (guest networks often do not). With no network address the sheet
+  them talk to each other (guest networks often do not). The address in the link is the one
+  the computer would send from by default; with a VPN that routes everything, that may be an
+  address the phone cannot reach (turn the VPN off or use split tunnelling). With no network address the sheet
   says "Connect this computer to Wi-Fi to share". A firewall may ask to allow incoming
   connections the first time.
 - The viewer must be built: run `scripts/build-web.sh`. The app looks for the viewer in a

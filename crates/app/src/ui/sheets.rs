@@ -620,16 +620,19 @@ fn about_sheet(ui: &mut Ui, shadows_off: bool, actions: &mut Vec<UiAction>) {
 
 /// The quiet zone around a QR code, in modules (the standard's minimum).
 const QR_QUIET: usize = 4;
-/// The fewest points a QR module is drawn with.
-const QR_MIN_MODULE: f32 = 4.0;
+/// The fewest physical pixels a QR module is drawn with.
+const QR_MIN_MODULE_PX: f32 = 4.0;
 /// About how wide a QR code is drawn, in points.
 const QR_TARGET: f32 = 220.0;
 
-/// The size of one QR module in points: whole points, at least `QR_MIN_MODULE`.
-pub(super) fn qr_module_size(width: usize) -> f32 {
-    (QR_TARGET / (width + 2 * QR_QUIET) as f32)
+/// The size of one QR module in points: a whole number of physical pixels (at
+/// `pixels_per_point`), at least `QR_MIN_MODULE_PX`, so modules have sharp edges and scan.
+pub(super) fn qr_module_size(width: usize, pixels_per_point: f32) -> f32 {
+    let ppp = pixels_per_point.max(0.1);
+    let px = (QR_TARGET * ppp / (width + 2 * QR_QUIET) as f32)
         .floor()
-        .max(QR_MIN_MODULE)
+        .max(QR_MIN_MODULE_PX);
+    px / ppp
 }
 
 /// The dark modules of a `width` x `width` QR code as rectangles, the code's top-left corner
@@ -676,14 +679,18 @@ fn phone_sheet(ui: &mut Ui, view: &PhoneView, actions: &mut Vec<UiAction>) {
         PhoneView::Sharing(share) => {
             ui.label("Scan with the phone's camera. The phone must be on the same Wi-Fi.");
             ui.add_space(theme::GRID);
-            let module = qr_module_size(share.qr_width);
+            let ppp = ui.ctx().pixels_per_point();
+            let module = qr_module_size(share.qr_width, ppp);
             let side = (share.qr_width + 2 * QR_QUIET) as f32 * module;
             ui.vertical_centered(|ui| {
                 let (rect, _) =
                     ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::hover());
                 let painter = ui.painter();
                 painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
-                for r in qr_rects(rect.min, share.qr_width, &share.qr, module) {
+                // On a whole pixel, as every module's size is.
+                let snap = |v: f32| (v * ppp).round() / ppp;
+                let origin = egui::pos2(snap(rect.min.x), snap(rect.min.y));
+                for r in qr_rects(origin, share.qr_width, &share.qr, module) {
                     painter.rect_filled(r, 0.0, egui::Color32::BLACK);
                 }
             });

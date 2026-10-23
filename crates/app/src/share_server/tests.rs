@@ -551,3 +551,110 @@ fn a_missing_viewer_or_network_gives_the_sheets_words() {
     );
     assert_eq!(NO_NETWORK, "Connect this computer to Wi-Fi to share");
 }
+
+/// A server whose blob is 32 MiB (more than the sockets buffer), and the test's handle on it.
+fn big_blob(d: &Dir, tweak: impl FnOnce(&mut Config)) -> (Server, Arc<Vec<u8>>) {
+    let blob = Arc::new(vec![5u8; 32 << 20]);
+    let mut cfg = config(d);
+    cfg.blob = Arc::clone(&blob);
+    cfg.idle = Duration::from_secs(30);
+    tweak(&mut cfg);
+    (Server::start(cfg).unwrap(), blob)
+}
+
+fn blob_request(port: u16) -> TcpStream {
+    let mut c = connect(port);
+    c.write_all(format!("GET /s/{} HTTP/1.1\r\n\r\n", hex(&ID)).as_bytes())
+        .unwrap();
+    c
+}
+
+/// Reads until the connection ends; how many bytes came and how long it took.
+fn drain(c: &mut TcpStream, limit: Duration) -> (usize, Duration) {
+    let t = Instant::now();
+    let mut total = 0;
+    let mut buf = vec![0u8; 64 * 1024];
+    while t.elapsed() < limit {
+        match c.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => total += n,
+        }
+    }
+    (total, t.elapsed())
+}
+
+fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+    let t = Instant::now();
+    while !ok() {
+        assert!(t.elapsed() < Duration::from_secs(3), "{what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn stopping_cuts_off_a_blob_download_and_frees_the_blob() {
+    let d = viewer();
+    let (mut s, blob) = big_blob(&d, |_| {});
+    let mut c = blob_request(s.port());
+    let mut first = [0u8; 4096];
+    c.read_exact(&mut first).unwrap();
+    // The server is now blocked writing to a client that reads slowly.
+    std::thread::sleep(Duration::from_millis(300));
+    s.stop();
+    let (got, took) = drain(&mut c, Duration::from_secs(5));
+    assert!(
+        got < blob.len() / 2,
+        "the download went on after stop: {got} bytes"
+    );
+    assert!(took < Duration::from_secs(2), "{took:?}");
+    drop(s);
+    wait_for("the blob is released", || Arc::strong_count(&blob) == 1);
+}
+
+#[test]
+fn a_download_has_a_total_deadline() {
+    let d = viewer();
+    let (s, blob) = big_blob(&d, |c| c.response = Duration::from_millis(500));
+    let mut c = blob_request(s.port());
+    let mut first = [0u8; 4096];
+    c.read_exact(&mut first).unwrap();
+    // The client reads a little now and then, so it is never idle for long.
+    let t = Instant::now();
+    let mut buf = [0u8; 4096];
+    while Arc::strong_count(&blob) > 2 && t.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = c.set_read_timeout(Some(Duration::from_millis(10)));
+        let _ = c.read(&mut buf);
+    }
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    assert_eq!(s.downloads(), 0);
+}
+
+#[test]
+fn the_lifetime_ends_a_download_in_progress() {
+    let d = viewer();
+    let (s, blob) = big_blob(&d, |c| c.lifetime = Duration::from_millis(600));
+    let mut c = blob_request(s.port());
+    let mut first = [0u8; 4096];
+    c.read_exact(&mut first).unwrap();
+    // The connection thread lets go of the blob once the lifetime is up, though the client
+    // has not read it.
+    wait_for("the blob is released", || Arc::strong_count(&blob) == 2);
+    assert_eq!(s.downloads(), 0);
+}
+
+#[test]
+fn a_client_that_never_reads_the_refusal_does_not_stall_accepting() {
+    let d = viewer();
+    let mut cfg = config(&d);
+    cfg.max_connections = 1;
+    cfg.idle = Duration::from_secs(5);
+    let s = Server::start(cfg).unwrap();
+    let _held = connect(s.port());
+    std::thread::sleep(Duration::from_millis(100));
+    let t = Instant::now();
+    for _ in 0..20 {
+        let _c = connect(s.port());
+    }
+    assert!(t.elapsed() < Duration::from_secs(2));
+}

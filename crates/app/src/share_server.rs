@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 pub const LIFETIME: Duration = Duration::from_secs(30 * 60);
 /// Most connections served at once; more are answered 503.
 pub const MAX_CONNECTIONS: usize = 16;
+/// The most a connection lives in all.
+pub const RESPONSE: Duration = Duration::from_secs(120);
 /// How long a connection may sit idle (reading a request, or writing to a stalled reader).
 pub const IDLE: Duration = Duration::from_secs(10);
 /// The most a request's line and headers may take.
@@ -28,7 +30,7 @@ const MAX_HEAD: usize = 8 * 1024;
 /// The most a request line may take.
 const MAX_LINE: usize = 2 * 1024;
 /// How a file is streamed.
-const CHUNK: usize = 64 * 1024;
+const CHUNK: usize = 16 * 1024;
 /// How often waiting loops look at the stop flag.
 const TICK: Duration = Duration::from_millis(20);
 
@@ -42,13 +44,15 @@ pub struct Config {
     /// The viewer's files.
     pub dir: PathBuf,
     /// The blob served at `/s/<id>`.
-    pub blob: Vec<u8>,
+    pub blob: Arc<Vec<u8>>,
     /// The blob's id, 32 lowercase hex digits.
     pub id: String,
     /// How long the server runs at most.
     pub lifetime: Duration,
-    /// Idle timeout of a connection.
+    /// Idle timeout of a connection: no byte read or written for this long ends it.
     pub idle: Duration,
+    /// The most a connection lives in all, however slowly its client reads.
+    pub response: Duration,
     /// Most simultaneous connections.
     pub max_connections: usize,
 }
@@ -57,10 +61,11 @@ impl Config {
     pub fn new(dir: PathBuf, blob: Vec<u8>, id: [u8; 16]) -> Self {
         Self {
             dir,
-            blob,
+            blob: Arc::new(blob),
             id: hex(&id),
             lifetime: LIFETIME,
             idle: IDLE,
+            response: RESPONSE,
             max_connections: MAX_CONNECTIONS,
         }
     }
@@ -79,7 +84,72 @@ struct Shared {
     stop: AtomicBool,
     active: AtomicUsize,
     downloads: AtomicUsize,
+    started: Instant,
     config: Config,
+}
+
+impl Shared {
+    /// The server was stopped or its lifetime is over: connections end.
+    fn halted(&self) -> bool {
+        self.stop.load(Ordering::SeqCst) || self.started.elapsed() >= self.config.lifetime
+    }
+}
+
+/// A connection's output: every write checks the stop flag and lifetime, ends after the
+/// connection's total time (`deadline`) and after `idle` without progress, so a client that
+/// reads slowly (or not at all) cannot hold the server or the blob.
+struct Out<'a> {
+    stream: TcpStream,
+    shared: &'a Shared,
+    deadline: Instant,
+    idle: Duration,
+    progress: Instant,
+}
+
+impl<'a> Out<'a> {
+    fn new(stream: TcpStream, shared: &'a Shared, total: Duration, idle: Duration) -> Self {
+        let now = Instant::now();
+        Out {
+            stream,
+            shared,
+            deadline: now + total,
+            idle,
+            progress: now,
+        }
+    }
+}
+
+impl Write for Out<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            // Not `Interrupted`: `write_all` would retry it.
+            if self.shared.halted() {
+                return Err(ErrorKind::ConnectionAborted.into());
+            }
+            let now = Instant::now();
+            if now >= self.deadline || now.duration_since(self.progress) >= self.idle {
+                return Err(ErrorKind::TimedOut.into());
+            }
+            let left = self.deadline - now;
+            let _ = self.stream.set_write_timeout(Some(left.min(TICK * 5)));
+            match self.stream.write(buf) {
+                Ok(n) => {
+                    self.progress = Instant::now();
+                    return Ok(n);
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                    ) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 /// A running server. Dropping it stops it: the listener is closed before `drop` returns, and
@@ -97,13 +167,14 @@ impl Server {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
+        let started = Instant::now();
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             active: AtomicUsize::new(0),
             downloads: AtomicUsize::new(0),
+            started,
             config,
         });
-        let started = Instant::now();
         let thread = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
@@ -165,7 +236,7 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, started: Instant) {
                 }
                 if shared.active.fetch_add(1, Ordering::SeqCst) >= shared.config.max_connections {
                     shared.active.fetch_sub(1, Ordering::SeqCst);
-                    refuse(stream);
+                    refuse(stream, &shared);
                     continue;
                 }
                 let shared = Arc::clone(&shared);
@@ -197,14 +268,17 @@ impl Drop for Active {
 }
 
 /// Answers 503 and closes: all the connection slots are taken.
-fn refuse(mut stream: TcpStream) {
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
+fn refuse(stream: TcpStream, shared: &Shared) {
+    // Short, so a client that does not read cannot hold up accepting.
+    let short = Duration::from_millis(100);
+    let mut out = Out::new(stream, shared, short, short);
     let _ = send(
-        &mut stream,
+        &mut out,
         503,
         "Service Unavailable",
         &[],
-        b"Busy\n",
+        b"Busy
+",
         false,
     );
 }
@@ -224,7 +298,7 @@ fn read_head(stream: &mut TcpStream, shared: &Shared) -> Head {
     let mut buf: Vec<u8> = Vec::with_capacity(512);
     let mut chunk = [0u8; 1024];
     loop {
-        if shared.stop.load(Ordering::SeqCst) {
+        if shared.halted() {
             return Head::Gone;
         }
         let left = deadline.saturating_duration_since(Instant::now());
@@ -324,9 +398,9 @@ fn mime(path: &Path) -> &'static str {
     }
 }
 
-fn serve(mut stream: TcpStream, shared: &Shared) {
-    let _ = stream.set_write_timeout(Some(shared.config.idle));
-    let head = match read_head(&mut stream, shared) {
+fn serve(stream: TcpStream, shared: &Shared) {
+    let mut stream = Out::new(stream, shared, shared.config.response, shared.config.idle);
+    let head = match read_head(&mut stream.stream, shared) {
         Head::Ready(h) => h,
         Head::Bad(code, reason) => {
             let _ = send(&mut stream, code, reason, &[], reason.as_bytes(), false);
@@ -334,7 +408,7 @@ fn serve(mut stream: TcpStream, shared: &Shared) {
         }
         Head::Gone => return,
     };
-    let bad = |stream: &mut TcpStream| {
+    let bad = |stream: &mut Out| {
         let _ = send(stream, 400, "Bad Request", &[], b"Bad Request\n", false);
     };
     let first = head.split(|&b| b == b'\r').next().unwrap_or(&[]);
@@ -376,7 +450,7 @@ fn serve(mut stream: TcpStream, shared: &Shared) {
             );
         }
         Route::Blob => {
-            let sent = send(
+            let sent = send_stream(
                 &mut stream,
                 200,
                 "OK",
@@ -384,7 +458,8 @@ fn serve(mut stream: TcpStream, shared: &Shared) {
                     ("Content-Type", "application/octet-stream"),
                     ("Cache-Control", "no-store"),
                 ],
-                &cfg.blob,
+                &cfg.blob[..],
+                cfg.blob.len() as u64,
                 head_only,
             );
             if sent.is_ok() && !head_only {
@@ -415,20 +490,13 @@ fn serve(mut stream: TcpStream, shared: &Shared) {
                 );
                 return;
             }
-            let _ = send_file(
-                &mut stream,
-                shared,
-                file,
-                meta.len(),
-                mime(&path),
-                head_only,
-            );
+            let _ = send_file(&mut stream, file, meta.len(), mime(&path), head_only);
         }
     }
 }
 
 fn write_head(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     code: u16,
     reason: &str,
     extra: &[(&str, &str)],
@@ -450,7 +518,7 @@ fn write_head(
 
 /// A whole response held in memory (small bodies and the blob).
 fn send(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     code: u16,
     reason: &str,
     extra: &[(&str, &str)],
@@ -465,34 +533,26 @@ fn send(
     stream.flush()
 }
 
-/// A file's response, streamed in chunks; ends early if the server is stopped.
-fn send_file(
-    stream: &mut TcpStream,
-    shared: &Shared,
-    mut file: File,
+/// A response whose body is streamed in chunks from `body` (`length` bytes); each chunk is
+/// written through `Out`, which ends it when the server stops or the connection's time is up.
+fn send_stream(
+    stream: &mut impl Write,
+    code: u16,
+    reason: &str,
+    extra: &[(&str, &str)],
+    mut body: impl Read,
     length: u64,
-    content_type: &str,
     head_only: bool,
 ) -> std::io::Result<()> {
-    write_head(
-        stream,
-        200,
-        "OK",
-        &[("Content-Type", content_type)],
-        length,
-        false,
-    )?;
+    write_head(stream, code, reason, extra, length, false)?;
     if head_only {
         return stream.flush();
     }
     let mut buf = vec![0u8; CHUNK];
     let mut left = length;
     while left > 0 {
-        if shared.stop.load(Ordering::SeqCst) {
-            return Err(ErrorKind::Interrupted.into());
-        }
         let want = buf.len().min(left as usize);
-        let n = file.read(&mut buf[..want])?;
+        let n = body.read(&mut buf[..want])?;
         if n == 0 {
             break;
         }
@@ -500,6 +560,24 @@ fn send_file(
         left -= n as u64;
     }
     stream.flush()
+}
+
+fn send_file(
+    stream: &mut impl Write,
+    file: File,
+    length: u64,
+    content_type: &str,
+    head_only: bool,
+) -> std::io::Result<()> {
+    send_stream(
+        stream,
+        200,
+        "OK",
+        &[("Content-Type", content_type)],
+        file,
+        length,
+        head_only,
+    )
 }
 
 /// The address to put in the link among `candidates` (the addresses the computer could be
