@@ -23,6 +23,7 @@ mod rotate;
 mod schema;
 pub mod section_clip;
 mod section_shape;
+pub mod share;
 mod skp;
 mod skp_export;
 mod sniff;

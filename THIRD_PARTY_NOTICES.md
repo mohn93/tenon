@@ -287,3 +287,14 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 ```
+
+## Crates added for sharing a model with a phone (compiled into the app)
+
+These crates come from crates.io unmodified. Each is distributed under MIT OR Apache-2.0 (the
+licence texts ship in each crate's source package); copyright belongs to the crate authors.
+
+- chacha20poly1305 0.11.0, aead 0.6.1, chacha20 0.10.2, cipher 0.5.2, crypto-common 0.2.2,
+  inout 0.2.5, block-buffer 0.12.1, hybrid-array 0.4.15, poly1305 0.9.1, universal-hash 0.6.1,
+  cpufeatures 0.3.1, cmov 0.5.4, ctutils 0.4.3: RustCrypto Developers.
+- typenum 1.20.1: Paho Lurie-Gregg and Andre Bogus.
+- qrcode 0.14.1: kennytm.

@@ -32,6 +32,7 @@ mod scale;
 mod scenes;
 mod sections;
 mod selection;
+mod share;
 mod skp;
 mod skp_export;
 mod soften;
