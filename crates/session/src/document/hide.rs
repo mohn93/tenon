@@ -17,7 +17,7 @@ impl Document {
         if !changed.is_empty() {
             self.last_hidden = changed.clone();
         }
-        self.hidden_changed = Some(changed);
+        self.changed_entities = Some(changed);
         Ok(change)
     }
 
@@ -25,7 +25,7 @@ impl Document {
     pub(super) fn unhide_changes(&mut self, ids: &[EntityId]) -> Result<SceneChange, CommandError> {
         self.parts(ids)?;
         let (change, changed) = self.set_hidden(ids, false);
-        self.hidden_changed = Some(changed);
+        self.changed_entities = Some(changed);
         Ok(change)
     }
 
@@ -39,7 +39,7 @@ impl Document {
             .filter(|id| m.hidden_of(*id) == Some(true))
             .collect();
         let (change, changed) = self.set_hidden(&ids, false);
-        self.hidden_changed = Some(changed);
+        self.changed_entities = Some(changed);
         Ok(change)
     }
 
@@ -47,7 +47,7 @@ impl Document {
     pub(super) fn unhide_all_changes(&mut self) -> Result<SceneChange, CommandError> {
         let ids = self.model().hidden_entities();
         let (change, changed) = self.set_hidden(&ids, false);
-        self.hidden_changed = Some(changed);
+        self.changed_entities = Some(changed);
         Ok(change)
     }
 

@@ -118,8 +118,8 @@ pub struct Document {
     soften_report: Option<SoftenReport>,
     /// What the last intersect edit did, until its outcome takes it.
     intersect_report: Option<IntersectReport>,
-    /// The ids the last hide or unhide edit changed, until its outcome takes them.
-    hidden_changed: Option<Vec<EntityId>>,
+    /// The ids the last hide, unhide or reverse edit changed, until its outcome takes them.
+    changed_entities: Option<Vec<EntityId>>,
     /// What the last orient edit did, until its outcome takes it.
     orient_report: Option<OrientOutcome>,
     /// The entities the most recent `hide` hid, for `unhide_last`; not saved, forgotten with
@@ -172,7 +172,7 @@ impl Document {
             import_report: None,
             soften_report: None,
             intersect_report: None,
-            hidden_changed: None,
+            changed_entities: None,
             orient_report: None,
             last_hidden: Vec::new(),
             positioned: None,
@@ -417,7 +417,7 @@ impl Document {
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
             outcome.intersect = self.intersect_report.take();
-            outcome.changed = self.hidden_changed.take();
+            outcome.changed = self.changed_entities.take();
             outcome.orient = self.orient_report.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
@@ -1076,7 +1076,7 @@ impl Document {
                             export: None,
                             soften: self.soften_report.take(),
                             intersect: self.intersect_report.take(),
-                            changed: self.hidden_changed.take(),
+                            changed: self.changed_entities.take(),
                             orient: self.orient_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),

@@ -192,7 +192,7 @@ fn orient_faces_stays_in_the_open_context() {
     let mut d = doc();
     let faces = add_box(&mut d);
     run(&mut d, json!({"type": "select", "ids": faces})).unwrap();
-    let out = run(&mut d, json!({"type": "make_group", "ids": faces})).unwrap();
+    run(&mut d, json!({"type": "make_group", "ids": faces})).unwrap();
     // Faces inside the group are not in the root context.
     let (kind, _) = run(
         &mut d,
@@ -202,7 +202,6 @@ fn orient_faces_stays_in_the_open_context() {
     assert_eq!(kind, ErrorKind::NotFound);
     let (kind, _) = run(&mut d, json!({"type": "reverse_faces", "ids": [faces[0]]})).unwrap_err();
     assert_eq!(kind, ErrorKind::NotFound);
-    let _ = out;
 }
 
 #[test]

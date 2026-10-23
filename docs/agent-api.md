@@ -413,11 +413,12 @@ imported SketchUp file's hidden edges, faces, groups, components and guides come
 | Command | Effect |
 |---|---|
 | `{"type": "reverse_faces", "ids": ["f8", "f9"]}` | Turns each face in `ids` over, as one undo step labelled `reverse_faces`. Faces keep their ids and each side keeps its material and texture look (front and back swap with the normal). Ids that are not faces are ignored; a face the open context does not hold is `not_found`. The outcome's `changed` lists the faces turned (`[]`, with no undo step, when there were none). |
-| `{"type": "orient_faces", "id": "f8", "ids": []}` | Makes the faces connected to face `id` agree with it, as one undo step labelled `orient_faces`. The walk is breadth first from `id` (in id order) across edges used by exactly two faces: a neighbour that runs the shared edge the same way round is turned over, so the two run it in opposite directions. An edge used by three or more faces is not crossed. With `ids` not empty only those faces (and `id`) are walked; empty or absent walks every connected face. A surface that cannot be oriented (a Moebius strip) keeps the first orientation reached. `id` and `ids` must be faces (else `invalid_input`) of the open context (else `not_found`). |
+| `{"type": "orient_faces", "id": "f8", "ids": []}` | Makes the faces connected to face `id` agree with it, as one undo step labelled `orient_faces`. The walk is breadth first from `id` (neighbours in the order of each face's loops) across edges used by exactly two faces: a neighbour that runs the shared edge the same way round is turned over, so the two run it in opposite directions. An edge used by three or more faces is not crossed. With `ids` not empty only those faces (and `id`) are walked; empty or absent walks every connected face. A surface that cannot be oriented (a Moebius strip) keeps the first orientation reached. `id` and `ids` must be faces (else `invalid_input`) of the open context (else `not_found`). |
 
 `orient_faces` reports `"orient": {"flipped": ["f9"], "conflicts": 0}`: the faces turned over,
 in id order, and the shared edges whose faces were left in disagreement. Nothing to turn is a
-success with no undo step. Both commands take batch references.
+success with no undo step. Imported OBJ and STL meshes may keep T junctions (edges with three or more faces), where the walk
+stops. Both commands take batch references.
 
 ### Intersect Faces
 

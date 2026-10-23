@@ -942,8 +942,8 @@ pub struct Outcome {
     /// What an `intersect_faces` drew and split; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intersect: Option<IntersectReport>,
-    /// The ids a `hide`, `unhide`, `unhide_last`, `unhide_all` or `reverse_faces` changed, in id order (empty
-    /// when it did nothing); absent for other commands.
+    /// The ids a `hide`, `unhide`, `unhide_last`, `unhide_all` or `reverse_faces` changed, in
+    /// id order (empty when it did nothing); absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed: Option<Vec<EntityId>>,
     /// How many faces a `position_texture` changed; absent for other commands.

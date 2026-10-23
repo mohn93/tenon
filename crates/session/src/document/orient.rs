@@ -28,7 +28,7 @@ impl Document {
                 Ok(changes)
             })
             .expect("reversing cannot fail");
-        self.hidden_changed = Some(changed.into_iter().map(EntityId::Face).collect());
+        self.changed_entities = Some(changed.into_iter().map(EntityId::Face).collect());
         Ok(change)
     }
 

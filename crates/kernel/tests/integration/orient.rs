@@ -217,6 +217,25 @@ fn orient_stops_at_a_non_manifold_edge() {
         assert!(changes.is_empty(), "no edge has exactly two faces");
         assert!(report.flipped.is_empty());
     }
+
+    // A fourth face beyond the junction, turned over: the walk from the third face cannot reach it.
+    m.add_polygon(&[
+        p(1.0, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(2.0, 0.0, 1.0),
+        p(1.0, 0.0, 1.0),
+    ])
+    .unwrap();
+    let fourth = face_ids(&m).into_iter().find(|f| !ids.contains(f)).unwrap();
+    m.reverse_faces(&[fourth]);
+    let side = ids
+        .iter()
+        .copied()
+        .find(|f| m.face(*f).unwrap().normal.x.abs() > 0.5)
+        .unwrap();
+    let (changes, report) = m.orient_faces(side, &[]);
+    assert!(changes.is_empty());
+    assert!(report.flipped.is_empty());
 }
 
 /// A triangulated Moebius strip of `n` segments.
