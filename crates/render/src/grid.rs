@@ -124,6 +124,12 @@ pub fn flat_axis_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVe
     flat_axis_lines_at(colors, toward, DAffine3::IDENTITY)
 }
 
+/// Whether an axis segment lies on the ground, give or take what a moved origin's rounding
+/// leaves (a micron); such segments are drawn flat, at z = 0 exactly.
+fn is_flat(seg: &[LineVertex]) -> bool {
+    seg[1].pos[2].abs() < 1e-6
+}
+
 /// The axis segments of `frame` lying on z = 0, as in `flat_ground_lines_at`.
 pub fn flat_axis_lines_at(
     colors: [[f32; 4]; 3],
@@ -133,9 +139,12 @@ pub fn flat_axis_lines_at(
     // Axis segments come as (origin, end) pairs; keep the ones lying on z = 0.
     axis_lines_at(1000.0, colors, toward, frame)
         .chunks(2)
-        .filter(|seg| seg[1].pos[2] == 0.0)
+        .filter(|seg| is_flat(seg))
         .flatten()
-        .copied()
+        .map(|v| LineVertex {
+            pos: [v.pos[0], v.pos[1], 0.0],
+            ..*v
+        })
         .collect()
 }
 
@@ -157,7 +166,7 @@ pub fn vertical_axis_lines_at(
 ) -> Vec<LineVertex> {
     axis_lines_at(1000.0, colors, toward, frame)
         .chunks(2)
-        .filter(|seg| seg[1].pos[2] != 0.0)
+        .filter(|seg| !is_flat(seg))
         .flatten()
         .copied()
         .collect()
@@ -270,6 +279,16 @@ mod tests {
         let neg_x = v.chunks(2).find(|s| s[1].pos == [-5.0, 0.0, 0.0]).unwrap();
         assert_ne!(neg_x[1].color, AXIS_X);
         assert!(v.chunks(2).all(|s| s[0].pos == [0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn axes_a_hair_off_the_ground_still_lie_flat() {
+        let frame = DAffine3::from_translation(DVec3::new(2.0, 3.0, 1e-9));
+        let flat = flat_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        assert_eq!(flat.len(), 8);
+        assert!(flat.iter().all(|v| v.pos[2] == 0.0), "snapped to z = 0");
+        let vertical = vertical_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        assert_eq!(vertical.len(), 4);
     }
 
     #[test]
