@@ -349,35 +349,36 @@ fn unit_hash(key: u64) -> f32 {
     (z >> 40) as f32 / (1u64 << 24) as f32
 }
 
-/// The direction, in the mesh's coordinates, from the edge `a`-`b` into `face`: in its plane,
-/// across the edge, to the side the face lies on. None when the face has no loop along the edge.
-fn side_into_face(model: &Model, face: &FacePart, a: VertexId, b: VertexId) -> Option<DVec3> {
-    let f = model.face(face.id)?;
-    let loops = std::iter::once((&f.outer, false)).chain(f.holes.iter().map(|h| (h, true)));
+/// The direction from each side of `face`'s loops into the face, by the side's ends in order:
+/// in the face's plane, across the side, to the side the face lies on (mesh coordinates). One
+/// walk of the loops.
+fn sides_into_face(model: &Model, face: &kernel::Face) -> HashMap<(VertexId, VertexId), DVec3> {
+    let mut sides = HashMap::new();
+    let loops = std::iter::once((&face.outer, false)).chain(face.holes.iter().map(|h| (h, true)));
     for (corners, hole) in loops {
-        let points: Vec<DVec3> = corners
+        let Some(points) = corners
             .iter()
             .map(|v| model.position(*v))
-            .collect::<Option<_>>()?;
+            .collect::<Option<Vec<DVec3>>>()
+        else {
+            continue;
+        };
+        let n = points.len();
         // Turned about the face's normal one way or the other, whatever the loop's winding.
-        let turn: DVec3 = (0..points.len())
-            .map(|i| points[i].cross(points[(i + 1) % points.len()]))
-            .sum();
-        let wound = f.normal.dot(turn).signum();
-        for i in 0..corners.len() {
-            let (from, to) = (corners[i], corners[(i + 1) % corners.len()]);
-            if (from, to) != (a, b) && (from, to) != (b, a) {
-                continue;
+        let turn: DVec3 = (0..n).map(|i| points[i].cross(points[(i + 1) % n])).sum();
+        let wound = face.normal.dot(turn).signum();
+        // Inside an outer loop is on the left of a loop turning counter-clockwise about the
+        // normal; a hole's inside is outside it.
+        let toward = if hole { -wound } else { wound };
+        for i in 0..n {
+            let travel = points[(i + 1) % n] - points[i];
+            let (a, b) = (corners[i], corners[(i + 1) % n]);
+            if let Some(d) = (face.normal.cross(travel) * toward).try_normalize() {
+                sides.insert((a.min(b), a.max(b)), d);
             }
-            let travel = points[(i + 1) % points.len()] - points[i];
-            // Inside an outer loop is on the left of a loop turning counter-clockwise about the
-            // normal; a hole's inside is outside it.
-            let left = f.normal.cross(travel);
-            let toward = if hole { -wound } else { wound };
-            return (left * toward).try_normalize();
         }
     }
-    None
+    sides
 }
 
 /// What decides an edge's sketchy look: the mesh it lies in and its id, so the same on every
@@ -886,6 +887,9 @@ struct MeshParts {
     /// The faces along each of `edges` in id order; empty unless edges are colored by material
     /// or profiles are on.
     edge_faces: Vec<Vec<FaceId>>,
+    /// For each of `edge_faces`, the direction from the edge into that face (see
+    /// `sides_into_face`); empty unless profiles are on.
+    edge_sides: Vec<Vec<Option<DVec3>>>,
 }
 
 /// An edge a mesh draws.
@@ -950,6 +954,16 @@ impl MeshParts {
         let mut ends = Vec::with_capacity(2 * hard);
         let mut edges = Vec::with_capacity(hard);
         let mut along = Vec::new();
+        let mut across = Vec::new();
+        // Each face's sides, worked out once, when profiles are on (soft edges are kept).
+        let into: HashMap<FaceId, HashMap<(VertexId, VertexId), DVec3>> = if soft {
+            model
+                .faces()
+                .map(|(id, f)| (id, sides_into_face(model, f)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         // Soft edges are hidden, selected or not: the faces around them read as one surface.
         // With profiles on they are drawn where they are silhouettes, so they are kept.
         for (id, edge) in model.edges().filter(|(_, e)| soft || !e.soft) {
@@ -963,7 +977,17 @@ impl MeshParts {
                 soft: edge.soft,
             });
             if edge_faces {
-                along.push(model.faces_of_edge(id));
+                let faces = model.faces_of_edge(id);
+                if soft {
+                    let key = (edge.v[0].min(edge.v[1]), edge.v[0].max(edge.v[1]));
+                    across.push(
+                        faces
+                            .iter()
+                            .map(|f| into.get(f).and_then(|s| s.get(&key)).copied())
+                            .collect(),
+                    );
+                }
+                along.push(faces);
             }
         }
         MeshParts {
@@ -974,6 +998,7 @@ impl MeshParts {
             ends,
             edges,
             edge_faces: along,
+            edge_sides: across,
         }
     }
 }
@@ -1331,14 +1356,19 @@ impl Walk<'_> {
         if let Some(glows) = cut_glows.as_ref().or_else(|| self.glows.get(&glow_key)) {
             base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
-        // The faces of edge `k` that are drawn, in id order.
+        // The faces of edge `k` that are drawn, in id order, each with the direction from the
+        // edge into it (when profiles are on).
         let shown_faces = |k: usize| {
-            parts.edge_faces[k].iter().filter_map(move |id| {
-                let at = parts.faces.partition_point(|f| f.id < *id);
-                let face = parts.faces.get(at).filter(|f| f.id == *id)?;
-                let shown = (!face.hidden || hidden_geometry) && scene.tag_shown(face.tag);
-                shown.then_some(face)
-            })
+            parts.edge_faces[k]
+                .iter()
+                .enumerate()
+                .filter_map(move |(j, id)| {
+                    let at = parts.faces.partition_point(|f| f.id < *id);
+                    let face = parts.faces.get(at).filter(|f| f.id == *id)?;
+                    let shown = (!face.hidden || hidden_geometry) && scene.tag_shown(face.tag);
+                    let side = parts.edge_sides.get(k).and_then(|s| s[j]);
+                    shown.then_some((face, side))
+                })
         };
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
         for (k, edge) in parts.edges.iter().enumerate() {
@@ -1361,7 +1391,7 @@ impl Walk<'_> {
                         _ => edge_colors.color,
                     },
                     EdgeColorMode::ByMaterial => {
-                        let first = shown_faces(k).next();
+                        let first = shown_faces(k).next().map(|(face, _)| face);
                         // An unpainted face takes the look of the instance placing it, if that
                         // is painted.
                         let painted = first
@@ -1401,11 +1431,9 @@ impl Walk<'_> {
             }
             if edge_colors.extras {
                 let mut sides = [[0.0; 4]; 2];
-                if edge_colors.profiles
-                    && let Some(e) = model.edge(*eid)
-                {
+                if edge_colors.profiles {
                     let faces = shown_faces(k)
-                        .filter_map(|f| side_into_face(model, f, e.v[0], e.v[1]))
+                        .filter_map(|(_, side)| side)
                         .map(|d| (t.matrix3 * d).normalize_or_zero().as_vec3());
                     for (slot, d) in sides.iter_mut().zip(faces) {
                         *slot = [d.x, d.y, d.z, 1.0];

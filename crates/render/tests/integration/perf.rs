@@ -543,3 +543,39 @@ fn time_profile_edges() {
         "20 000 faces: no style upload {plain_upload:.3} s, orbit frame {plain:.3} s; profiles, sketchy and endpoints upload {upload:.3} s, orbit frame {styled:.3} s"
     );
 }
+
+/// Building a scene with profiles on, whose edges each need the direction into their faces: a
+/// face of thousands of corners must cost one walk of its loop, not one per edge. Ignored by default.
+#[test]
+#[ignore]
+fn time_profile_rebuild_of_a_long_loop() {
+    /// Large enough for a quadratic walk to show (about 0.6 s before the fix in release).
+    const CORNERS: usize = 4_000;
+    let corner = |k: usize| {
+        let a = std::f64::consts::TAU * (k % CORNERS) as f64 / CORNERS as f64;
+        glam::DVec3::new(5.0 * a.cos(), 5.0 * a.sin(), 0.0)
+    };
+    let mut model = kernel::Model::new();
+    let ring: Vec<glam::DVec3> = (0..CORNERS).map(corner).collect();
+    model.add_polygon(&ring).unwrap();
+    assert_eq!(model.faces().count(), 1, "the loop closes a face");
+    let scene = kernel::Scene::from_root(model);
+    let edges = kernel::EdgeStyle {
+        profiles: Some(4.0),
+        ..kernel::EdgeStyle::default()
+    };
+    let colors = render::scene::EdgeColors::new(&edges, glam::DAffine3::IDENTITY);
+    let t = Instant::now();
+    let base = render::scene::scene_base_styled(
+        &scene,
+        &[],
+        false,
+        render::scene::GlassView::default(),
+        session::SectionDisplay::default(),
+        &colors,
+    );
+    let took = t.elapsed().as_secs_f64();
+    eprintln!("{CORNERS} corner face, profiles on: {took:.3} s");
+    assert_eq!(base.edges.len(), 2 * CORNERS);
+    assert!(took < 0.1, "{took} s");
+}

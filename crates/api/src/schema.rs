@@ -60,8 +60,8 @@ pub fn batch_ref_schema() -> Value {
     })
 }
 
-/// Lets the `EntityId`, `MaterialId`, `DefinitionId` and `StyleId` definitions in `defs` also be batch references
-/// (`anyOf` the id or a `BatchRef`) and adds the `BatchRef` definition.
+/// Lets the `EntityId`, `MaterialId`, `DefinitionId` and `StyleId` definitions in `defs` also be
+/// batch references (`anyOf` the id or a `BatchRef`) and adds the `BatchRef` definition.
 pub fn with_batch_refs(defs: &mut Map<String, Value>) {
     for name in ["EntityId", "MaterialId", "DefinitionId", "StyleId"] {
         if let Some(def) = defs.get_mut(name) {

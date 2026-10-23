@@ -17,9 +17,10 @@ pub struct Printed {
 }
 
 /// Renders the current view of `doc` as `spec` says: one page per sheet, each tile drawn with
-/// the document's lighting, sun shadows, tag colors, chosen style's edges and section display on white paper (no ground grid or
-/// axes), nothing selected and no open group (the model is printed as it looks closed, without
-/// the fading around an open context). Pixels are composited over white and stored as RGB.
+/// the document's lighting, sun shadows, tag colors, chosen style's edges and section display on
+/// white paper (no ground grid or axes), nothing selected and no open group (the model is
+/// printed as it looks closed, without the fading around an open context). Pixels are composited
+/// over white and stored as RGB.
 pub fn render_pdf(
     snapshotter: &mut Snapshotter,
     doc: &Document,
