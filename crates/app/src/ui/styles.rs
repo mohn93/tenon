@@ -43,11 +43,11 @@ const FOG_GAP: f64 = 0.01;
 
 /// The color pickers' names: what their swatches are called.
 const COLOR_NAMES: [&str; 5] = [
-    "Edge colour",
-    "Background colour",
-    "Sky colour",
-    "Ground colour",
-    "Fog colour",
+    "Edge color",
+    "Background color",
+    "Sky color",
+    "Ground color",
+    "Fog color",
 ];
 
 fn rgb(c: [u8; 3]) -> Color32 {
@@ -151,7 +151,10 @@ pub(super) fn styles(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         name(ui, row, chosen.is_some_and(|c| c.id == row.id), actions);
     }
     let Some(row) = chosen else {
-        ui.label(RichText::new("Default draws the model as the app does").weak());
+        ui.add(
+            egui::Label::new(RichText::new("Default draws the model as the app does").weak())
+                .wrap(),
+        );
         return;
     };
     editor(ui, row, view.units, actions);
@@ -264,7 +267,7 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
                 send(edges_patch(|e| e.color_mode = Some(mode)));
             }
         }
-        if let Some(c) = color(ui, id, "Edge colour", s.edges.color) {
+        if let Some(c) = color(ui, id, "Edge color", s.edges.color) {
             send(edges_patch(|e| e.color = Some(c)));
         }
     });
@@ -325,8 +328,8 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
 
     widgets::section_header(ui, "Background");
     ui.horizontal(|ui| {
-        ui.label("Colour");
-        if let Some(c) = color(ui, id, "Background colour", s.background) {
+        ui.label("Color");
+        if let Some(c) = color(ui, id, "Background color", s.background) {
             send(StylePatch {
                 background: Some(c),
                 ..Default::default()
@@ -343,7 +346,7 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
             send(sky_patch(on.then_some(SKY_ON)));
         }
         if let Some(now) = s.sky
-            && let Some(c) = color(ui, id, "Sky colour", now)
+            && let Some(c) = color(ui, id, "Sky color", now)
         {
             send(sky_patch(Some(c)));
         }
@@ -362,7 +365,7 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
             });
         }
         ui.add_enabled_ui(on, |ui| {
-            if let Some(c) = color(ui, id, "Ground colour", now.color) {
+            if let Some(c) = color(ui, id, "Ground color", now.color) {
                 send(ground_patch(Ground { color: c, ..now }));
             }
         });
@@ -435,7 +438,7 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
                 }
             }
             if let FogColor::Rgb(now) = fog.color
-                && let Some(c) = color(ui, id, "Fog colour", now)
+                && let Some(c) = color(ui, id, "Fog color", now)
             {
                 send(fog_patch(Fog {
                     color: FogColor::Rgb(c),
@@ -453,6 +456,8 @@ fn color(ui: &mut Ui, style: StyleId, name: &str, shown: [u8; 3]) -> Option<[u8;
     let picking = ui
         .data(|d| d.get_temp::<Picking>(picking_key(name)))
         .filter(|p| p.style == style);
+    // Read before the popup, which takes the key when it closes.
+    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let mut color = picking.map_or(rgb(shown), |p| p.color);
     let swatch = widgets::swatch(ui, Fill::Color(color), name, false);
     let open = Popup::menu(&swatch)
@@ -465,7 +470,11 @@ fn color(ui: &mut Ui, style: StyleId, name: &str, shown: [u8; 3]) -> Option<[u8;
                 egui::color_picker::Alpha::Opaque,
             );
         });
-    if open.is_some() {
+    if open.is_some() && escaped {
+        // The popup closes after this frame: the pick is dropped now, as it is cancelled.
+        ui.data_mut(|d| d.remove::<Picking>(picking_key(name)));
+        None
+    } else if open.is_some() {
         let held = Picking {
             style,
             opened: picking.map_or(shown, |p| p.opened),
@@ -500,7 +509,9 @@ fn slider(
         .horizontal(|ui| {
             let label = ui.label(name);
             ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(40.0);
-            widgets::slider_row(ui, label.id, name, &mut value, range, step, value_box)
+            widgets::slider_row(ui, label.id, name, &mut value, range, step, |b| {
+                value_box(b).update_while_editing(false)
+            })
         })
         .inner;
     if response.dragged() {
@@ -531,6 +542,7 @@ fn length(
                     .range(range)
                     .clamp_existing_to_range(false)
                     .speed(0.1)
+                    .update_while_editing(false)
                     .custom_formatter(|v, _| format_length(v, &units))
                     .custom_parser(|text| parse_length(text, &units).ok()),
             );

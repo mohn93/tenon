@@ -210,6 +210,9 @@ impl Message {
 
 pub struct Editor {
     doc: Document,
+    /// For each style the Styles tab added: the style chosen before, which undoing the add
+    /// goes back to (the choice is a view setting and is not itself undone).
+    style_before_add: std::collections::BTreeMap<kernel::StyleId, Option<kernel::StyleId>>,
     nav: Navigation,
     /// The point a touch drag turns or pans about, found where it began (`touch`).
     touch_pivot: Option<DVec3>,
@@ -379,6 +382,7 @@ impl Editor {
             hidden_cache: RefCell::new(None),
             unique_cache: RefCell::new(None),
             typed: String::new(),
+            style_before_add: Default::default(),
             message: None,
             flash: None,
             recovered: Vec::new(),
@@ -1760,10 +1764,18 @@ impl Editor {
 
     pub fn undo(&mut self) -> bool {
         self.reset_tool();
+        let chosen = self.doc.style();
         self.run(Command::Undo {
             count: None,
             expect: None,
         });
+        // Undoing the add of the chosen style goes back to the style chosen before it.
+        if let Some(gone) = chosen
+            && self.doc.style().is_none()
+            && let Some(&before) = self.style_before_add.get(&gone)
+        {
+            self.choose_style(before);
+        }
         self.invalidate_hover();
         true
     }

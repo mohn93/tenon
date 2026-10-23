@@ -12,9 +12,13 @@ impl Editor {
         self.message = None;
         let newest = |e: &Editor| e.doc.scene().styles().map(|(id, _)| id).max();
         let before = newest(self);
+        let chosen = self.doc.style();
         self.run(Command::AddStyle { name: None, from });
         let after = newest(self);
         if after != before {
+            if let Some(new) = after {
+                self.style_before_add.insert(new, chosen);
+            }
             self.run_camera_command(Command::SetStyle { style: after });
         }
         true
@@ -187,5 +191,25 @@ mod tests {
         assert_eq!(e.doc().style(), None);
         // The agent's commands see the same.
         e.execute(Command::SetStyle { style: None }).unwrap();
+    }
+
+    #[test]
+    fn undoing_an_add_goes_back_to_the_style_chosen_before() {
+        let mut e = editor();
+        e.add_style(None);
+        let first = e.doc().style().unwrap();
+        e.add_style(Some(first));
+        let second = e.doc().style().unwrap();
+        assert_ne!(first, second);
+        e.undo();
+        assert_eq!(e.doc().style(), Some(first));
+        e.undo();
+        assert_eq!(e.doc().style(), None);
+        // From the default look it stays the default.
+        e.add_style(None);
+        e.choose_style(None);
+        e.add_style(None);
+        e.undo();
+        assert_eq!(e.doc().style(), None);
     }
 }

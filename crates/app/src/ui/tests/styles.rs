@@ -398,7 +398,7 @@ fn the_fog_distances_are_in_the_models_units() {
 }
 
 #[test]
-fn the_fog_colour_is_the_background_or_custom() {
+fn the_fog_color_is_the_background_or_custom() {
     let mut h = tall(styles_tab(Some(INKED)));
     let patch = |color| {
         change(
@@ -430,12 +430,12 @@ fn the_fog_colour_is_the_background_or_custom() {
     );
 }
 
-/// The popup id of the colour picker named `name`.
+/// The popup id of the color picker named `name`.
 fn picker(name: &str) -> egui::Id {
     egui::Id::new(("style-color", name)).with("popup")
 }
 
-/// Opens the picker of the swatch `name` and drags across its colour square.
+/// Opens the picker of the swatch `name` and drags across its color square.
 fn open_and_pick(h: &mut H, name: &str) {
     assert_eq!(click(h, name), [], "the picker opens");
     let area = h
@@ -455,7 +455,7 @@ fn open_and_pick(h: &mut H, name: &str) {
                 .then_some(r)
         })
         .next()
-        .expect("the colour square");
+        .expect("the color square");
     let (from, to) = (
         square.min + square.size() * 0.3,
         square.min + square.size() * 0.7,
@@ -484,13 +484,13 @@ fn open_and_pick(h: &mut H, name: &str) {
 }
 
 #[test]
-fn a_picked_colour_is_one_change_when_the_picker_closes() {
+fn a_picked_color_is_one_change_when_the_picker_closes() {
     let outside = |h: &H| h.state().central.center();
     for name in [
-        "Edge colour",
-        "Background colour",
-        "Sky colour",
-        "Ground colour",
+        "Edge color",
+        "Background color",
+        "Sky color",
+        "Ground color",
     ] {
         let mut h = tall(styles_tab(Some(INKED)));
         open_and_pick(&mut h, name);
@@ -502,9 +502,9 @@ fn a_picked_colour_is_one_change_when_the_picker_closes() {
             panic!("{name}: {actions:?}");
         };
         match name {
-            "Edge colour" => assert!(p.edges.as_ref().is_some_and(|e| e.color.is_some())),
-            "Background colour" => assert!(p.background.is_some()),
-            "Sky colour" => assert!(matches!(p.sky, Some(Some(_)))),
+            "Edge color" => assert!(p.edges.as_ref().is_some_and(|e| e.color.is_some())),
+            "Background color" => assert!(p.background.is_some()),
+            "Sky color" => assert!(matches!(p.sky, Some(Some(_)))),
             _ => assert!(
                 matches!(p.ground, Some(Some(g)) if g.opacity == 0.5 && !g.from_below && g.color != [90, 120, 80])
             ),
@@ -520,7 +520,7 @@ fn a_picked_colour_is_one_change_when_the_picker_closes() {
 }
 
 #[test]
-fn the_fog_colour_swatch_sets_a_custom_colour() {
+fn the_fog_color_swatch_sets_a_custom_color() {
     let mut f = styles_tab(Some(INKED));
     f.styles[1].settings.fog = Some(Fog {
         start: 10.0,
@@ -528,7 +528,7 @@ fn the_fog_colour_swatch_sets_a_custom_colour() {
         color: FogColor::Rgb([1, 2, 3]),
     });
     let mut h = tall(f);
-    open_and_pick(&mut h, "Fog colour");
+    open_and_pick(&mut h, "Fog color");
     let at = h.state().central.center();
     let mut actions = click_at(&mut h, at, egui::Modifiers::NONE);
     h.run_ok();
@@ -542,9 +542,9 @@ fn the_fog_colour_swatch_sets_a_custom_colour() {
 }
 
 #[test]
-fn a_picker_left_open_when_the_tab_closes_drops_its_colour() {
+fn a_picker_left_open_when_the_tab_closes_drops_its_color() {
     let mut h = tall(styles_tab(Some(INKED)));
-    open_and_pick(&mut h, "Background colour");
+    open_and_pick(&mut h, "Background color");
     h.state_mut().dock.tab = DockTab::Materials;
     h.run_ok();
     h.run_ok();
@@ -651,4 +651,82 @@ fn the_edge_effect_patch_turns_one_effect_over() {
         edge_effect_patch(&inked, EdgeEffect::Endpoints),
         edges(|e| e.endpoints = Some(None))
     );
+}
+
+#[test]
+fn typing_in_a_value_box_is_one_change_when_entered() {
+    let mut h = tall(styles_tab(Some(INKED)));
+    h.get_by_label("Fog end value").click();
+    h.run_ok();
+    for c in "35".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_ok();
+        assert_eq!(h.state_mut().take(), [], "nothing while typing {c}");
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    let actions = h.state_mut().take();
+    assert!(
+        matches!(actions.as_slice(),
+            [UiAction::ChangeStyle(INKED, StylePatch { fog: Some(Some(f)), .. })] if f.end == 35.0),
+        "{actions:?}"
+    );
+    // The same for a slider's box.
+    let mut h = tall(styles_tab(Some(INKED)));
+    h.get_by_label("Profile width value").click();
+    h.run_ok();
+    for c in "7".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_ok();
+        assert_eq!(h.state_mut().take(), [], "nothing while typing {c}");
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(h.state_mut().take().len(), 1);
+}
+
+#[test]
+fn escape_cancels_a_color_pick() {
+    let mut h = tall(styles_tab(Some(INKED)));
+    open_and_pick(&mut h, "Background color");
+    h.key_press(egui::Key::Escape);
+    h.run_ok();
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+}
+
+#[test]
+fn choosing_another_row_commits_an_open_pick() {
+    let mut h = tall(styles_tab(Some(INKED)));
+    open_and_pick(&mut h, "Background color");
+    let mut actions = click(&mut h, "Plain");
+    h.run_ok();
+    actions.extend(h.state_mut().take());
+    assert!(
+        matches!(actions.as_slice(), [
+            UiAction::ChangeStyle(INKED, StylePatch { background: Some(c), .. }),
+            UiAction::ChooseStyle(Some(PLAIN)),
+        ] | [
+            UiAction::ChooseStyle(Some(PLAIN)),
+            UiAction::ChangeStyle(INKED, StylePatch { background: Some(c), .. }),
+        ] if *c != [245, 245, 245]),
+        "{actions:?}"
+    );
+}
+
+#[test]
+fn the_default_note_wraps_inside_the_dock() {
+    // At the narrowest dock.
+    let mut f = styles_tab(None);
+    f.dock.width = *crate::ui::dock::DOCK_WIDTH.start();
+    let h = harness(f);
+    let note = h
+        .get_all_by_label_contains("Default draws")
+        .next()
+        .expect("the note")
+        .rect();
+    let row = rect_of(&h, "Default");
+    assert!(note.max.x <= row.max.x + 1.0, "{note:?} {row:?}");
+    assert!(note.height() > 20.0, "wrapped onto lines: {note:?}");
+    assert!(note.max.x <= SCREEN.x, "{note:?}");
 }
