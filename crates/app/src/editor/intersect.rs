@@ -1,6 +1,8 @@
 //! Edit > Intersect Faces and the viewport's right-click menu for faces and groups.
 
-use kernel::EntityId;
+use std::collections::HashMap;
+
+use kernel::{EntityId, FaceId};
 use session::{Command, IntersectScope};
 
 use super::{Editor, Message};
@@ -73,6 +75,13 @@ impl Editor {
         self.reset_tool();
         self.typed.clear();
         self.message = None;
+        let holes_before: HashMap<FaceId, usize> = self
+            .doc()
+            .model()
+            .faces()
+            .filter(|(_, f)| !f.holes.is_empty())
+            .map(|(id, f)| (id, f.holes.len()))
+            .collect();
         let out = self.run(Command::IntersectFaces {
             ids: Vec::new(),
             with: scope,
@@ -80,16 +89,14 @@ impl Editor {
         self.invalidate_hover();
         if let Some((report, changes)) = out.and_then(|o| o.intersect.map(|r| (r, o.changes))) {
             // A face the crossing only cut a hole in keeps its id, so it is not among the split
-            // faces: count the changed faces that have holes as well.
+            // faces: count the changed faces that have more holes than before as well.
             let holed = changes
                 .modified
                 .iter()
                 .filter(|id| match id {
-                    EntityId::Face(f) => self
-                        .doc()
-                        .model()
-                        .face(*f)
-                        .is_some_and(|face| !face.holes.is_empty()),
+                    EntityId::Face(f) => self.doc().model().face(*f).is_some_and(|face| {
+                        face.holes.len() > holes_before.get(f).copied().unwrap_or(0)
+                    }),
                     _ => false,
                 })
                 .count();
@@ -225,6 +232,59 @@ mod tests {
         let text = message(&e).unwrap();
         // The box is in a group, so only the floor changes: it keeps its id and gains a hole.
         assert!(text.ends_with("split 1 face"), "{text}");
+    }
+
+    #[test]
+    fn a_face_that_already_had_a_hole_is_not_counted_for_a_change_to_its_loop() {
+        let mut e = editor();
+        // A box in a group whose side runs along the side of a hole in the floor.
+        let out = e
+            .execute(Command::AddRectangle {
+                corner: [2.0, 1.5, -1.0],
+                opposite: [3.0, 2.5, -1.0],
+                normal: None,
+            })
+            .unwrap();
+        let face = *out
+            .changes
+            .created
+            .iter()
+            .find(|id| matches!(id, EntityId::Face(_)))
+            .unwrap();
+        let EntityId::Face(f) = face else {
+            unreachable!()
+        };
+        let up = e.doc().model().face(f).unwrap().normal.z.signum();
+        e.execute(Command::PushPull {
+            face,
+            distance: 2.0 * up,
+        })
+        .unwrap();
+        select_all(&mut e);
+        e.execute(Command::MakeGroup { ids: selected(&e) }).unwrap();
+        for (c, o) in [([0.0, 0.0], [6.0, 6.0]), ([1.0, 1.0], [2.0, 2.0])] {
+            e.execute(Command::AddRectangle {
+                corner: [c[0], c[1], 0.0],
+                opposite: [o[0], o[1], 0.0],
+                normal: None,
+            })
+            .unwrap();
+        }
+        let inner = e
+            .doc()
+            .model()
+            .faces()
+            .find(|(_, f)| f.holes.is_empty())
+            .unwrap()
+            .0;
+        e.execute(Command::Erase {
+            ids: vec![EntityId::Face(inner)],
+        })
+        .unwrap();
+        select_all(&mut e);
+        e.intersect_faces(IntersectScope::Model);
+        let text = message(&e).unwrap();
+        assert!(text.ends_with("split 0 faces"), "{text}");
     }
 
     #[test]
