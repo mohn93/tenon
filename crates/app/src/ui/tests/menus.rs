@@ -863,7 +863,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
             fill: false,
         },
         recent: vec!["/a/house.skr".into(), "/b/shed.skr".into()],
-        ..Default::default()
+        ..super::styles::styles_tab(Some(kernel::StyleId(2)))
     };
     assert_eq!(
         empty,
@@ -873,6 +873,13 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
     assert_eq!(empty, ids(&busy(Lighting::Night)), "also at night");
     let unique: std::collections::BTreeSet<_> = empty.iter().collect();
     assert_eq!(unique.len(), empty.len(), "ids are unique");
+    for id in [
+        "ToggleEdgeEffect(Profiles)",
+        "ToggleEdgeEffect(Sketchy)",
+        "ToggleEdgeEffect(Endpoints)",
+    ] {
+        assert!(empty.iter().any(|e| e == id), "{id}");
+    }
 }
 
 #[test]

@@ -8,7 +8,7 @@ use tools::ToolKind;
 
 use crate::shortcuts::Bound;
 use crate::ui::theme::ThemeChoice;
-use crate::ui::{FLY_HELP, LibrarySave, UiAction, View, step_name};
+use crate::ui::{EdgeEffect, FLY_HELP, LibrarySave, UiAction, View, step_name};
 
 /// The title of the native app menu (macOS), which holds Settings... and Quit.
 pub const APP_MENU: &str = "sketchup-alt";
@@ -384,6 +384,36 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
                 .entry()
         })
         .collect();
+    // The chosen style's edge effects; the default look has none to toggle.
+    let chosen = view
+        .style
+        .and_then(|id| view.styles.iter().find(|r| r.id == id))
+        .map(|r| r.settings.edges);
+    let edge_style: Vec<Entry> = [
+        (
+            "Profiles",
+            EdgeEffect::Profiles,
+            chosen.is_some_and(|e| e.profiles.is_some()),
+        ),
+        (
+            "Sketchy",
+            EdgeEffect::Sketchy,
+            chosen.is_some_and(|e| e.sketchy.is_some()),
+        ),
+        (
+            "Endpoints",
+            EdgeEffect::Endpoints,
+            chosen.is_some_and(|e| e.endpoints.is_some()),
+        ),
+    ]
+    .into_iter()
+    .map(|(label, effect, on)| {
+        Item::new(label, UiAction::ToggleEdgeEffect(effect))
+            .checked(on)
+            .enabled(chosen.is_some())
+            .entry()
+    })
+    .collect();
     let view_menu = vec![
         Entry::Submenu {
             label: "Theme",
@@ -422,6 +452,10 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         Item::new("Shadows", UiAction::SetShadowsOn(!view.shadows.on))
             .checked(view.shadows.on)
             .entry(),
+        Entry::Submenu {
+            label: "Edge Style",
+            entries: edge_style,
+        },
         Entry::Separator,
         Item::new("Add Scene", UiAction::AddScene).entry(),
         bound_item(

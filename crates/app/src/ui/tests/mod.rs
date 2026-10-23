@@ -19,6 +19,7 @@ mod shadows;
 mod sheets;
 mod start;
 mod status;
+mod styles;
 mod tags;
 mod viewer;
 mod viewport;
@@ -69,6 +70,8 @@ pub(super) struct Fixture {
     pub material: Option<MaterialId>,
     pub tags: Vec<TagRow>,
     pub color_by_tag: bool,
+    pub styles: Vec<super::StyleRow>,
+    pub style: Option<kernel::StyleId>,
     pub section_display: SectionDisplay,
     pub x_ray: bool,
     pub hidden_geometry: bool,
@@ -184,6 +187,8 @@ impl Default for Fixture {
             material: None,
             tags: Vec::new(),
             color_by_tag: false,
+            styles: Vec::new(),
+            style: None,
             section_display: SectionDisplay::default(),
             x_ray: false,
             hidden_geometry: false,
@@ -276,6 +281,8 @@ impl Fixture {
             material: self.material,
             tags: &self.tags,
             color_by_tag: self.color_by_tag,
+            styles: &self.styles,
+            style: self.style,
             section_display: self.section_display,
             x_ray: self.x_ray,
             hidden_geometry: self.hidden_geometry,

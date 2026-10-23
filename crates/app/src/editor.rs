@@ -48,6 +48,7 @@ pub use print::{PaperChoice, PrintJob, PrintOptions, PrintPurpose, PrintQueue};
 mod scenes;
 mod sections;
 mod soften;
+mod styles;
 mod tags;
 mod texture_position;
 mod viewer;

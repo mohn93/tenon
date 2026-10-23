@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use egui::{Panel, Ui};
-use kernel::{DefinitionId, EntityId, InstanceId, PageId, TagId, TexturePlacement};
+use kernel::{
+    DefinitionId, EntityId, InstanceId, PageId, StyleId, StyleSettings, TagId, TexturePlacement,
+};
 use session::{
     Camera, FlipAxis, FlipFrame, IntersectScope, LibraryKind, Lighting, MaterialId, OutlinerTable,
     Projection, SectionDisplay, StandardView, Units,
@@ -39,6 +41,7 @@ mod shadows;
 mod sheets;
 mod start;
 mod status;
+mod styles;
 mod tags;
 #[cfg(test)]
 mod tests;
@@ -52,6 +55,7 @@ pub use dock::DockTab;
 #[cfg(not(target_arch = "wasm32"))]
 pub use sheets::{PhoneShare, PhoneView};
 pub use sheets::{SHADOWS_OFF, Sheet};
+pub(crate) use styles::edge_effect_patch;
 pub(crate) mod widgets;
 
 /// What the user asked for through the panels this frame.
@@ -213,6 +217,16 @@ pub enum UiAction {
     SetTagVisible(TagId, bool),
     /// Put the selection on a tag (None: Untagged); Entity Info's Tag field.
     SetSelectionTag(Option<TagId>),
+    /// Add a style (a copy of this one, or the default settings) and choose it.
+    AddStyle(Option<StyleId>),
+    DeleteStyle(StyleId),
+    RenameStyle(StyleId, String),
+    /// Choose the style the view draws with (None: the default look).
+    ChooseStyle(Option<StyleId>),
+    /// Change parts of a style's settings: one `change_style`, one undo step.
+    ChangeStyle(StyleId, session::StylePatch),
+    /// View > Edge Style: turn one edge effect of the chosen style on or off.
+    ToggleEdgeEffect(EdgeEffect),
     /// Save the current view and tag visibility as a new scene, after the last one.
     AddScene,
     /// Store the current view and tag visibility in a scene again (the parts it stores).
@@ -438,6 +452,22 @@ pub struct TagRow {
     pub count: usize,
 }
 
+/// An edge effect View > Edge Style toggles on the chosen style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeEffect {
+    Profiles,
+    Sketchy,
+    Endpoints,
+}
+
+/// A style as the Styles tab lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StyleRow {
+    pub id: StyleId,
+    pub name: String,
+    pub settings: StyleSettings,
+}
+
 /// A scene as the scene tabs and the Scenes tab list it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneRow {
@@ -510,6 +540,10 @@ pub struct View<'a> {
     pub tags: &'a [TagRow],
     /// Whether faces are drawn in their tags' colors.
     pub color_by_tag: bool,
+    /// Every style, in the order they were made.
+    pub styles: &'a [StyleRow],
+    /// The style the view draws with (None: the default look).
+    pub style: Option<StyleId>,
     /// Whether section planes are drawn, cut and filled (checked in the View menu).
     pub section_display: SectionDisplay,
     /// Whether every face is drawn as glass (checked in the View menu).

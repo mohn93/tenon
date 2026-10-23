@@ -184,6 +184,14 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
                 ..Default::default()
             },
         ),
+        (
+            "the styles tab, Default chosen",
+            super::styles::styles_tab(None),
+        ),
+        (
+            "the styles tab, a style chosen",
+            super::styles::styles_tab(Some(kernel::StyleId(2))),
+        ),
         ("the scenes tab and scene tabs", super::scenes::scenes_tab()),
         (
             "entity info's tag field",

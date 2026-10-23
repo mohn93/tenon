@@ -7,7 +7,8 @@ use egui::{Id, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    UiAction, View, library, materials, outliner, right, scenes, shadows, tags, theme, widgets,
+    UiAction, View, library, materials, outliner, right, scenes, shadows, styles, tags, theme,
+    widgets,
 };
 
 /// The tab shown in the dock's top area.
@@ -20,6 +21,7 @@ pub enum DockTab {
     Tags,
     Scenes,
     Shadows,
+    Styles,
     Library,
 }
 
@@ -31,6 +33,7 @@ impl DockTab {
             DockTab::Tags => "Tags",
             DockTab::Scenes => "Scenes",
             DockTab::Shadows => "Shadows",
+            DockTab::Styles => "Styles",
             DockTab::Library => "Library",
         }
     }
@@ -178,6 +181,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             DockTab::Tags => tags::tags(ui, view, actions),
             DockTab::Scenes => scenes::scenes(ui, view, actions),
             DockTab::Shadows => shadows::shadows(ui, view, actions),
+            DockTab::Styles => styles::styles(ui, view, actions),
             DockTab::Library => library::library(ui, view, actions),
         });
     widgets::name_scroll_bars(ui.ctx(), top.id, tab.name());
@@ -187,12 +191,13 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
 }
 
 /// The tabs, in order.
-const TABS: [DockTab; 6] = [
+const TABS: [DockTab; 7] = [
     DockTab::EntityInfo,
     DockTab::Materials,
     DockTab::Tags,
     DockTab::Scenes,
     DockTab::Shadows,
+    DockTab::Styles,
     DockTab::Library,
 ];
 

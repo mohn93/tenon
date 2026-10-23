@@ -406,6 +406,7 @@ fn tabs_that_do_not_fit_wrap_into_balanced_justified_rows() {
         "Tags",
         "Scenes",
         "Shadows",
+        "Styles",
         "Library",
     ];
     let h = harness(Fixture::default());
@@ -416,21 +417,21 @@ fn tabs_that_do_not_fit_wrap_into_balanced_justified_rows() {
             .filter(|n| (rect_of(&h, n).min.y - row.0).abs() < 2.0)
             .count()
     };
-    assert_eq!([count(&rows[0]), count(&rows[1])], [3, 3]);
+    assert_eq!([count(&rows[0]), count(&rows[1])], [4, 3]);
     assert!((rows[0].2 - rows[1].2).abs() <= 1.0, "justified: {rows:?}");
     assert!((rows[0].1 - rows[1].1).abs() <= 1.0, "{rows:?}");
-    // Without the Library tab: three and two, both rows as wide as the dock.
+    // Without the Library tab: three and three, both rows as wide as the dock.
     let h = harness(Fixture {
         features: crate::platform::Features::WEB,
         ..Default::default()
     });
-    let five = &all[..5];
+    let five = &all[..6];
     let rows = tab_rows(&h, five);
     let count = |row: &(f32, f32, f32)| {
         five.iter()
             .filter(|n| (rect_of(&h, n).min.y - row.0).abs() < 2.0)
             .count()
     };
-    assert_eq!([count(&rows[0]), count(&rows[1])], [3, 2], "{rows:?}");
+    assert_eq!([count(&rows[0]), count(&rows[1])], [3, 3], "{rows:?}");
     assert!((rows[0].2 - rows[1].2).abs() <= 1.0, "justified: {rows:?}");
 }

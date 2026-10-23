@@ -52,7 +52,7 @@ use crate::ui::PhoneView;
 use crate::ui::theme::UiScale;
 use crate::ui::{
     Agents, DockTab, LibrarySave, LibraryView, MaterialRow, RecoverRow, RecoverView, SceneRow,
-    SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction, View,
+    SettingsView, Sheet, StartCard, StyleRow, TagRow, TexturePosition, TextureRow, UiAction, View,
 };
 use crate::ui::{ViewerPanel, ViewerView};
 use crate::ui::{theme, viewport};
@@ -2135,6 +2135,29 @@ impl State {
             UiAction::SetSelectionTag(tag) => {
                 self.editor.set_selection_tag(tag);
             }
+            UiAction::AddStyle(from) => {
+                self.editor.add_style(from);
+            }
+            UiAction::DeleteStyle(style) => {
+                self.editor.delete_style(style);
+            }
+            UiAction::RenameStyle(style, name) => {
+                self.editor.rename_style(style, name);
+            }
+            UiAction::ChooseStyle(style) => {
+                self.editor.choose_style(style);
+            }
+            UiAction::ChangeStyle(style, patch) => {
+                self.editor.change_style_settings(style, patch);
+            }
+            UiAction::ToggleEdgeEffect(effect) => {
+                if let (Some(style), Some(settings)) =
+                    (self.editor.doc().style(), self.editor.doc().chosen_style())
+                {
+                    let patch = crate::ui::edge_effect_patch(settings, effect);
+                    self.editor.change_style_settings(style, patch);
+                }
+            }
             UiAction::AddScene => {
                 self.editor.add_scene();
             }
@@ -2535,6 +2558,7 @@ impl State {
         // Built every frame: going to a scene selects it without a new revision, and there are
         // few of them.
         let scenes = scene_rows(self.editor.doc());
+        let styles = style_rows(self.editor.doc());
         let context: Vec<EntityId> = self
             .editor
             .doc()
@@ -2661,6 +2685,8 @@ impl State {
             material: self.editor.current_material(),
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
+            styles: &styles,
+            style: self.editor.doc().style(),
             section_display: self.editor.doc().section_display,
             x_ray: self.editor.doc().x_ray,
             hidden_geometry: self.editor.doc().hidden_geometry,
@@ -3143,6 +3169,18 @@ fn tag_rows(doc: &session::Document) -> Vec<TagRow> {
             color: t.color,
             visible: t.visible,
             count: scene.tag_count(id),
+        })
+        .collect()
+}
+
+/// The Styles tab's rows: every style, in the order they were made.
+fn style_rows(doc: &session::Document) -> Vec<StyleRow> {
+    doc.scene()
+        .styles()
+        .map(|(id, s)| StyleRow {
+            id,
+            name: s.name.clone(),
+            settings: s.settings,
         })
         .collect()
 }
@@ -4133,6 +4171,12 @@ mod tests {
             A::DeleteGuides,
             A::AddTag,
             A::AddScene,
+            A::AddStyle(None),
+            A::DeleteStyle(kernel::StyleId(1)),
+            A::RenameStyle(kernel::StyleId(1), String::new()),
+            A::ChooseStyle(None),
+            A::ChangeStyle(kernel::StyleId(1), session::StylePatch::default()),
+            A::ToggleEdgeEffect(crate::ui::EdgeEffect::Profiles),
         ] {
             assert!(!viewer_allows(&action), "{action:?}");
         }
