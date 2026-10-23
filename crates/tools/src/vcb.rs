@@ -307,9 +307,13 @@ mod tests {
                 glam::DVec2::new(520.0, 380.0),
             ],
         );
-        // From a point off the ground the rounded point would leave it: the cursor stays.
+        // From a point off the ground the rounded point would leave it: it must not (the
+        // ground normal is the context's +Z, not world up).
+        let mut hit = b;
+        hit.point = DVec3::new(1.23, 0.0, 0.0);
         let from = DVec3::new(0.0, 0.0, 1.0);
-        assert_eq!(round_between(to_world, from, &b), b.point);
+        let q = round_between(to_world, from, &hit);
+        assert!(q.z.abs() < 1e-9, "{q:?}");
     }
 
     #[test]
