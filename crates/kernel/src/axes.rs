@@ -129,14 +129,19 @@ impl Scene {
             let guides: Vec<_> = m.guides().map(|(id, _)| id).collect();
             let (dimensions, notes) = m.all_annotations();
             let sections = m.all_sections();
+            // Textures are projected in the definition's coordinates, so every face's placement
+            // takes up the move (as it does when an instance is exploded): a face with no paint
+            // of its own shows an instance's material through its own placement too.
+            let placed: Vec<_> = m.faces().map(|(id, f)| (id, f.texture, f.normal)).collect();
+            if placed
+                .iter()
+                .any(|(_, texture, normal)| TexturePlacement::carry(*texture, *normal, &inverse).1)
+            {
+                return Err(KernelError::BadAxes(
+                    "the new origin is too far from the content to keep its textures in place",
+                ));
+            }
             m.hold_dimensions(&dimensions);
-            // Textures are projected in the definition's coordinates, so each painted face's
-            // placement takes up the move (as it does when an instance is exploded).
-            let painted: Vec<_> = m
-                .faces()
-                .filter(|(_, f)| f.paint().iter().any(Option::is_some))
-                .map(|(id, f)| (id, f.texture, f.normal))
-                .collect();
             let mut c = match m.transform_vertices(&vertices, inverse) {
                 Ok(c) => c,
                 Err(e) => {
@@ -144,7 +149,7 @@ impl Scene {
                     return Err(e);
                 }
             };
-            for (id, texture, normal) in painted {
+            for (id, texture, normal) in placed {
                 m.set_texture(id, TexturePlacement::carried(texture, normal, &inverse));
             }
             c.ops.extend(m.take_changes().ops);

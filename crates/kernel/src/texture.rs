@@ -192,10 +192,20 @@ impl TexturePlacement {
         normal: DVec3,
         t: &DAffine3,
     ) -> Option<TexturePlacement> {
+        Self::carry(placement, normal, t).0
+    }
+
+    /// `carried`, and whether the placement it should have lies beyond what a placement holds
+    /// (so `carried` had to clamp it and the texture moves).
+    pub(crate) fn carry(
+        placement: Option<TexturePlacement>,
+        normal: DVec3,
+        t: &DAffine3,
+    ) -> (Option<TexturePlacement>, bool) {
         let p = placement.unwrap_or_default();
         let moved = t.transform_vector3(normal).normalize_or_zero();
         if moved == DVec3::ZERO {
-            return placement;
+            return (placement, false);
         }
         let (u, v) = texture_axes(normal);
         let (u2, v2) = texture_axes(moved);
@@ -204,19 +214,25 @@ impl TexturePlacement {
         let (a, b, c, d) = (lu.dot(u2), lv.dot(u2), lu.dot(v2), lv.dot(v2));
         let k = (a * d - b * c).abs().sqrt();
         if !(k.is_finite() && k > 0.0) {
-            return placement;
+            return (placement, false);
         }
         let turn = c.atan2(a);
         let shift = texture_position(moved, t.translation);
         let offset = shift + k * DVec2::from_angle(turn).rotate(DVec2::from(p.offset));
         let clamp_offset = |x: f64| x.clamp(-MAX_TEXTURE_OFFSET, MAX_TEXTURE_OFFSET);
         let clamp_scale = |s: f64| (s * k).clamp(MIN_TEXTURE_SCALE, MAX_TEXTURE_SCALE);
-        Some(TexturePlacement {
+        let beyond = offset.x.abs() > MAX_TEXTURE_OFFSET
+            || offset.y.abs() > MAX_TEXTURE_OFFSET
+            || p.scale
+                .iter()
+                .any(|s| !(MIN_TEXTURE_SCALE..=MAX_TEXTURE_SCALE).contains(&(s * k)));
+        let carried = Some(TexturePlacement {
             offset: [clamp_offset(offset.x) + 0.0, clamp_offset(offset.y) + 0.0],
             rotation_deg: normal_angle(p.rotation_deg + turn.to_degrees()),
             scale: p.scale.map(clamp_scale),
         })
-        .filter(|q| !q.is_default())
+        .filter(|q| !q.is_default());
+        (carried, beyond)
     }
 }
 

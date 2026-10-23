@@ -275,3 +275,44 @@ fn a_definition_axes_move_keeps_its_textures_in_place() {
         assert_eq!(s, before);
     }
 }
+
+#[test]
+fn a_definition_axes_move_keeps_the_textures_of_faces_that_show_an_instance_material() {
+    use kernel::Side;
+    let mut s = box_scene(p(4.0, 1.0, 0.0));
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (instance, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &faces,
+            &[],
+            DefinitionKind::Component,
+            "Plain faces",
+        )
+        .unwrap();
+    let definition = s.root().instance(instance).unwrap().definition;
+    let (mat, _) = s.add_material("Plain", [1, 2, 3]).unwrap();
+    s.paint(MeshId::Root, &[], &[instance], Side::Front, Some(mat))
+        .unwrap();
+    let shown = textured_points(&s, instance);
+    let before = s.clone();
+    let change = s
+        .reorigin_definition(definition, DAffine3::from_translation(p(0.3, 0.0, 0.0)))
+        .unwrap();
+    s.validate().unwrap();
+    assert_eq!(textured_points(&s, instance), shown);
+    s.apply(&change.inverse());
+    assert_eq!(s, before);
+}
+
+#[test]
+fn a_definition_axes_move_far_from_its_textures_is_refused() {
+    let (mut s, _, definition) = textured_group();
+    let before = s.clone();
+    let far = DAffine3::from_translation(p(2.0e6, 2.0e6, 0.0));
+    let e = s.reorigin_definition(definition, far).unwrap_err();
+    assert!(e.to_string().contains("texture"), "{e}");
+    assert_eq!(s, before);
+}
