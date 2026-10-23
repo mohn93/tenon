@@ -3,6 +3,7 @@ use crate::editor::{
     ImportAs, ImportOptions, ImportUnits, PaperChoice, PrintOptions, PrintPurpose, RenameTarget,
     UpAxis,
 };
+use crate::ui::{PhoneShare, PhoneView};
 use kernel::DefinitionKind;
 
 /// The Import Options sheet for /m/chair.obj with the default options.
@@ -421,4 +422,125 @@ fn the_print_sheet_cancels_and_clamps_a_resolution_out_of_range() {
             ..PrintOptions::default()
         })]
     );
+}
+
+fn phone_share() -> PhoneShare {
+    PhoneShare {
+        url: "http://192.168.1.20:50123/#v1.abc.def".into(),
+        qr_width: 21,
+        qr: vec![true; 21 * 21],
+        sent: 0,
+        seconds_left: 1781,
+        stale: false,
+    }
+}
+
+fn phone_fixture(share: PhoneShare) -> Fixture {
+    Fixture {
+        sheet: Some(Sheet::Phone {
+            view: PhoneView::Sharing(share),
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_phone_sheet_shows_the_link_status_and_time_left() {
+    let h = harness(phone_fixture(phone_share()));
+    let texts = drawn_texts(&h);
+    for want in [
+        "OPEN ON PHONE",
+        "http://192.168.1.20:50123/#v1.abc.def",
+        "Waiting for the phone",
+        "Stops in 29:41",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "{want}: {texts:?}");
+    }
+    assert!(h.query_by_label("Share the new version").is_none());
+}
+
+#[test]
+fn the_phone_sheet_counts_phones() {
+    for (sent, want) in [(1, "Sent to 1 phone"), (2, "Sent to 2 phones")] {
+        let h = harness(phone_fixture(PhoneShare {
+            sent,
+            ..phone_share()
+        }));
+        assert!(drawn_texts(&h).iter().any(|t| t == want), "{want}");
+    }
+}
+
+#[test]
+fn the_phone_sheet_stops_and_closes() {
+    let mut h = harness(phone_fixture(phone_share()));
+    assert_eq!(click(&mut h, "Stop"), [UiAction::StopSharing]);
+    let mut h = harness(phone_fixture(phone_share()));
+    h.key_press(egui::Key::Escape);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), [UiAction::CloseSheet]);
+}
+
+#[test]
+fn the_phone_sheet_offers_the_new_version_when_stale() {
+    let mut h = harness(phone_fixture(PhoneShare {
+        stale: true,
+        ..phone_share()
+    }));
+    assert_eq!(
+        click(&mut h, "Share the new version"),
+        [UiAction::ShareNewVersion]
+    );
+}
+
+#[test]
+fn the_phone_sheet_has_a_copy_button() {
+    let mut h = harness(phone_fixture(phone_share()));
+    assert_eq!(click(&mut h, "Copy"), []);
+}
+
+#[test]
+fn the_phone_sheet_says_why_there_is_no_share() {
+    let mut h = harness(Fixture {
+        sheet: Some(Sheet::Phone {
+            view: PhoneView::Unavailable("Connect this computer to Wi-Fi to share".into()),
+        }),
+        ..Default::default()
+    });
+    assert!(
+        drawn_texts(&h)
+            .iter()
+            .any(|t| t == "Connect this computer to Wi-Fi to share")
+    );
+    assert!(h.query_by_label("Stop").is_none());
+    assert_eq!(click(&mut h, "Close"), [UiAction::CloseSheet]);
+}
+
+#[test]
+fn the_qr_is_drawn_with_a_quiet_zone_and_big_enough_modules() {
+    use crate::ui::sheets::{qr_module_size, qr_rects};
+    for width in [21usize, 33, 41, 45, 57] {
+        let module = qr_module_size(width);
+        assert!(module >= 4.0, "{width}");
+        assert_eq!(module, module.floor());
+    }
+    // One dark module at the top-left corner sits 4 modules in from the edge.
+    let mut modules = vec![false; 25];
+    modules[0] = true;
+    modules[24] = true;
+    let origin = egui::pos2(10.0, 20.0);
+    let rects = qr_rects(origin, 5, &modules, 4.0);
+    assert_eq!(rects.len(), 2);
+    assert_eq!(rects[0].min, egui::pos2(10.0 + 16.0, 20.0 + 16.0));
+    assert_eq!(rects[0].size(), egui::vec2(4.0, 4.0));
+    assert_eq!(rects[1].min, egui::pos2(10.0 + 32.0, 20.0 + 32.0));
+    // The code with its quiet zone is (5 + 8) modules wide.
+    assert!(rects.iter().all(|r| r.max.x <= 10.0 + 13.0 * 4.0 - 16.0));
+}
+
+#[test]
+fn the_clock_reads_minutes_and_seconds() {
+    use crate::ui::sheets::clock;
+    assert_eq!(clock(1800), "30:00");
+    assert_eq!(clock(61), "1:01");
+    assert_eq!(clock(0), "0:00");
 }

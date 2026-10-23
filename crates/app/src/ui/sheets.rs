@@ -86,6 +86,36 @@ pub enum Sheet {
         purpose: PrintPurpose,
         spec: PrintOptions,
     },
+    /// File > Open on Phone: the QR code and link of the share, or why there is none.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Phone { view: PhoneView },
+}
+
+/// What the Open on Phone sheet shows; the window refreshes it every frame while it is open.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub enum PhoneView {
+    /// A share is being served.
+    Sharing(PhoneShare),
+    /// No share could be made: what to tell the user.
+    Unavailable(String),
+}
+
+/// A share being served.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PhoneShare {
+    /// The link, `http://<address>:<port>/#<fragment>`.
+    pub url: String,
+    /// The QR code's modules per side, and the modules row by row (true: dark), without the
+    /// quiet zone.
+    pub qr_width: usize,
+    pub qr: Vec<bool>,
+    /// How many phones fetched the model.
+    pub sent: usize,
+    /// Seconds until the share stops by itself.
+    pub seconds_left: u64,
+    /// The model changed after it was shared.
+    pub stale: bool,
 }
 
 /// A sheet's width, in points.
@@ -144,6 +174,7 @@ impl Values {
             Sheet::OverwriteLibrary { .. } | Sheet::DeleteLibraryItem { .. } => Values::Nothing,
             Sheet::Print { spec, .. } => Values::Print(*spec),
             Sheet::Export { .. } => Values::Choice(0),
+            Sheet::Phone { .. } => Values::Nothing,
         }
     }
 }
@@ -247,6 +278,9 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                 }
                 (Sheet::Print { purpose, .. }, Values::Print(spec)) => {
                     print_sheet(ui, *purpose, spec, actions);
+                }
+                (Sheet::Phone { view }, Values::Nothing) => {
+                    phone_sheet(ui, view, actions);
                 }
                 // `Values::of` matches each sheet with its values.
                 _ => {}
@@ -582,6 +616,104 @@ fn about_sheet(ui: &mut Ui, shadows_off: bool, actions: &mut Vec<UiAction>) {
             }
         });
     });
+}
+
+/// The quiet zone around a QR code, in modules (the standard's minimum).
+const QR_QUIET: usize = 4;
+/// The fewest points a QR module is drawn with.
+const QR_MIN_MODULE: f32 = 4.0;
+/// About how wide a QR code is drawn, in points.
+const QR_TARGET: f32 = 220.0;
+
+/// The size of one QR module in points: whole points, at least `QR_MIN_MODULE`.
+pub(super) fn qr_module_size(width: usize) -> f32 {
+    (QR_TARGET / (width + 2 * QR_QUIET) as f32)
+        .floor()
+        .max(QR_MIN_MODULE)
+}
+
+/// The dark modules of a `width` x `width` QR code as rectangles, the code's top-left corner
+/// (quiet zone included) at `origin`, each module `module` points square.
+pub(super) fn qr_rects(
+    origin: egui::Pos2,
+    width: usize,
+    modules: &[bool],
+    module: f32,
+) -> Vec<egui::Rect> {
+    let at = |n: usize| (n + QR_QUIET) as f32 * module;
+    modules
+        .iter()
+        .enumerate()
+        .filter(|(i, dark)| **dark && *i < width * width)
+        .map(|(i, _)| {
+            let min = origin + egui::vec2(at(i % width), at(i / width));
+            egui::Rect::from_min_size(min, egui::Vec2::splat(module))
+        })
+        .collect()
+}
+
+/// `seconds` as `m:ss`.
+pub(super) fn clock(seconds: u64) -> String {
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// File > Open on Phone: the QR code (black on white with a quiet zone) and the link with a
+/// Copy button, whether a phone has fetched the model, the time left and Stop. A model changed
+/// since the share offers to share the new version.
+fn phone_sheet(ui: &mut Ui, view: &PhoneView, actions: &mut Vec<UiAction>) {
+    widgets::section_header(ui, "Open on Phone");
+    ui.add_space(theme::GRID);
+    match view {
+        PhoneView::Unavailable(why) => {
+            ui.label(why);
+            ui.add_space(theme::GRID * 2.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Close").clicked() {
+                    actions.push(UiAction::CloseSheet);
+                }
+            });
+        }
+        PhoneView::Sharing(share) => {
+            ui.label("Scan with the phone's camera. The phone must be on the same Wi-Fi.");
+            ui.add_space(theme::GRID);
+            let module = qr_module_size(share.qr_width);
+            let side = (share.qr_width + 2 * QR_QUIET) as f32 * module;
+            ui.vertical_centered(|ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::hover());
+                let painter = ui.painter();
+                painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
+                for r in qr_rects(rect.min, share.qr_width, &share.qr, module) {
+                    painter.rect_filled(r, 0.0, egui::Color32::BLACK);
+                }
+            });
+            ui.add_space(theme::GRID);
+            ui.label(&share.url);
+            if ui.button("Copy").clicked() {
+                ui.ctx().copy_text(share.url.clone());
+            }
+            ui.add_space(theme::GRID);
+            ui.label(match share.sent {
+                0 => "Waiting for the phone".to_string(),
+                1 => "Sent to 1 phone".to_string(),
+                n => format!("Sent to {n} phones"),
+            });
+            ui.label(format!("Stops in {}", clock(share.seconds_left)));
+            if share.stale {
+                ui.add_space(theme::GRID);
+                ui.label("The model changed after it was shared.");
+                if ui.button("Share the new version").clicked() {
+                    actions.push(UiAction::ShareNewVersion);
+                }
+            }
+            ui.add_space(theme::GRID * 2.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Stop").clicked() {
+                    actions.push(UiAction::StopSharing);
+                }
+            });
+        }
+    }
 }
 
 /// What the status line and About say when the adapter cannot draw light shadows.

@@ -56,6 +56,8 @@ pub struct Features {
     /// Paste arrives as an event from the system (`AppEvent::Paste`) after the key press,
     /// rather than the key press reading the clipboard.
     pub paste_by_event: bool,
+    /// File > Open on Phone: a local-network server for the phone viewer (desktops only).
+    pub share: bool,
 }
 
 impl Features {
@@ -69,6 +71,7 @@ impl Features {
         in_app_dialogs: false,
         quit: true,
         paste_by_event: false,
+        share: true,
     };
 
     /// Only what a browser tab offers: files as bytes, nothing that needs folders or processes.
@@ -81,6 +84,7 @@ impl Features {
         in_app_dialogs: true,
         quit: false,
         paste_by_event: true,
+        share: false,
     };
 }
 

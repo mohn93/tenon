@@ -35,6 +35,8 @@ pub mod recovery;
 #[cfg(target_arch = "wasm32")]
 #[path = "recovery_off.rs"]
 pub mod recovery;
+#[cfg(not(target_arch = "wasm32"))]
+mod share_server;
 pub mod shortcuts;
 mod ui;
 #[cfg(windows)]

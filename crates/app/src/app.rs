@@ -46,6 +46,8 @@ use crate::platform::{Features, Platform, UnsavedChoice};
 use crate::prefs::{self, Prefs};
 use crate::recovery::{self, Session};
 use crate::shortcuts::{self, Bound};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ui::PhoneView;
 use crate::ui::theme::UiScale;
 use crate::ui::{
     Agents, DockTab, LibrarySave, LibraryView, MaterialRow, RecoverRow, RecoverView, SceneRow,
@@ -815,6 +817,9 @@ struct State {
     settings_open: bool,
     /// The sheet open over the window: keys and native menu items (but Quit) wait while it is.
     sheet: Option<Sheet>,
+    /// The share the Open on Phone sheet serves; there is one only while that sheet is open.
+    #[cfg(not(target_arch = "wasm32"))]
+    share: Option<crate::share_server::Sharing>,
     /// What the open sheet was opened over, so its confirm acts only if it still applies.
     sheet_origin: SheetOrigin,
     /// What the 3D Text sheet last placed, which it opens with next (this session only).
@@ -1105,6 +1110,8 @@ impl State {
             shortcuts_window: false,
             settings_open: false,
             sheet: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            share: None,
             sheet_origin: SheetOrigin::default(),
             text_3d: default_text_3d(),
             recovered_seen: 0,
@@ -1538,6 +1545,69 @@ impl State {
         self.sync_fly_cursor();
     }
 
+    /// What the model is now, for telling whether a share is stale: the open documents' count
+    /// and the document's revision.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn model_stamp(&self) -> (u64, u64) {
+        (self.editor.documents(), self.editor.doc().revision())
+    }
+
+    /// Seals the model as it is (without marking it saved) and serves it, replacing any share
+    /// (the old server stops first); what the sheet shows for the result.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_share(&mut self) -> PhoneView {
+        self.share = None;
+        let stamp = self.model_stamp();
+        let bytes = match self.editor.doc().encode_bytes() {
+            Ok(b) => b,
+            Err(e) => return PhoneView::Unavailable(e.message),
+        };
+        match crate::share_server::Sharing::begin_here(&bytes, stamp) {
+            Ok(share) => {
+                let view = PhoneView::Sharing(share.view(stamp));
+                self.share = Some(share);
+                view
+            }
+            Err(why) => PhoneView::Unavailable(why),
+        }
+    }
+
+    /// Once a frame: the share lives only while the Open on Phone sheet is open, and the sheet
+    /// shows its current state (phones served, time left, a changed model). A share that ended
+    /// by itself says so.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh_share(&mut self) {
+        let open = matches!(self.sheet, Some(Sheet::Phone { .. }));
+        if !open {
+            self.share = None;
+            return;
+        }
+        let stamp = self.model_stamp();
+        let view = match &self.share {
+            Some(s) if s.running() => PhoneView::Sharing(s.view(stamp)),
+            Some(_) => {
+                self.share = None;
+                PhoneView::Unavailable(
+                    "Sharing stopped after 30 minutes. Choose File > Open on Phone to share again."
+                        .into(),
+                )
+            }
+            None => return,
+        };
+        self.sheet = Some(Sheet::Phone { view });
+    }
+
+    /// Whether the open sheet shows a share's time left, which moves every second.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn share_ticks(&self) -> bool {
+        self.share.is_some() && matches!(self.sheet, Some(Sheet::Phone { .. }))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn share_ticks(&self) -> bool {
+        false
+    }
+
     /// Takes the open sheet for its confirm action, when `kind` says it is the sheet the action
     /// belongs to (otherwise it stays open and this is None). A sheet that no longer applies
     /// (`sheet_applies`) is closed with a message instead.
@@ -1567,6 +1637,7 @@ impl State {
                     | Sheet::DeleteLibraryItem { .. }
                     | Sheet::Unsaved { .. }
                     | Sheet::About { .. }
+                    | Sheet::Phone { .. }
             )
         }) && self.editor.documents() != self.sheet_origin.document
         {
@@ -1674,6 +1745,10 @@ impl State {
                 }
             }
             UiAction::CloseSheet => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if matches!(self.sheet, Some(Sheet::Phone { .. })) {
+                    self.share = None;
+                }
                 // The unsaved-changes question closed any other way is a Cancel.
                 if matches!(self.sheet, Some(Sheet::Unsaved { .. })) {
                     self.sheet = None;
@@ -1967,6 +2042,29 @@ impl State {
             UiAction::ShowAbout => self.open_sheet(Sheet::About {
                 shadows_off: !self.shadows,
             }),
+            #[cfg(not(target_arch = "wasm32"))]
+            UiAction::OpenOnPhone => {
+                if self.features.share {
+                    let view = self.start_share();
+                    self.open_sheet(Sheet::Phone { view });
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            UiAction::ShareNewVersion => {
+                if matches!(self.sheet, Some(Sheet::Phone { .. })) {
+                    let view = self.start_share();
+                    self.sheet = Some(Sheet::Phone { view });
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            UiAction::StopSharing => {
+                self.share = None;
+                if matches!(self.sheet, Some(Sheet::Phone { .. })) {
+                    self.sheet = None;
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            UiAction::OpenOnPhone | UiAction::ShareNewVersion | UiAction::StopSharing => {}
             UiAction::UnsavedAnswer(choice) => {
                 if matches!(self.sheet, Some(Sheet::Unsaved { .. })) {
                     self.sheet = None;
@@ -2305,6 +2403,8 @@ impl State {
             self.open_sheet(sheet);
         }
         self.drop_outlived_sheet();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_share();
         let rename = self.editor.rename_target();
         let component = rename
             .as_ref()
@@ -2508,6 +2608,10 @@ impl State {
         if lines.is_some() {
             self.repaint_at = Some(earliest(self.repaint_at, now + Duration::from_secs(1)));
         }
+        // The share's time left moves.
+        if self.share_ticks() {
+            self.repaint_at = Some(earliest(self.repaint_at, now + Duration::from_secs(1)));
+        }
         if self.editor.hover_deferred() {
             self.repaint_at = Some(earliest(self.repaint_at, now + HOVER_SETTLE));
         }
@@ -2687,6 +2791,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
             | Sheet::DeleteLibraryItem { .. }
             | Sheet::Unsaved { .. }
             | Sheet::About { .. }
+            | Sheet::Phone { .. }
     ) {
         return Ok(());
     }
@@ -2716,6 +2821,7 @@ fn sheet_applies(sheet: &Sheet, origin: &SheetOrigin, editor: &Editor) -> Result
         | Sheet::DiscardRecovered { .. }
         | Sheet::Unsaved { .. }
         | Sheet::About { .. }
+        | Sheet::Phone { .. }
         | Sheet::DeleteLibraryItem { .. } => Ok(()),
         Sheet::SaveToLibrary { save, .. } | Sheet::OverwriteLibrary { save, .. } => {
             let doc = editor.doc();
@@ -2907,6 +3013,8 @@ fn action_allowed_with_sheet(action: &UiAction) -> bool {
             | UiAction::ConfirmNote(_)
             | UiAction::Confirm3dText(_)
             | UiAction::UnsavedAnswer(_)
+            | UiAction::ShareNewVersion
+            | UiAction::StopSharing
             | UiAction::Quit
     )
 }
@@ -3183,6 +3291,11 @@ impl ApplicationHandler<AppEvent> for App {
         // The session's lock goes with the window either way.
         if let Some(s) = self.state.as_mut() {
             s.autosave_at_exit();
+            // The share's server stops with the app.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                s.share = None;
+            }
         }
     }
 

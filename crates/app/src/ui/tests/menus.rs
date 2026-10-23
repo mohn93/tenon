@@ -12,6 +12,7 @@ fn the_file_menu_reports_its_items() {
         ("Import...", UiAction::ImportFile),
         ("Export...", UiAction::ExportFile),
         ("Export PDF...", UiAction::ExportPdf),
+        ("Open on Phone...", UiAction::OpenOnPhone),
         ("Print...", UiAction::Print),
     ] {
         let mut h = harness(Fixture::default());
@@ -59,6 +60,7 @@ fn the_file_menu_leaves_out_what_the_system_does_not_offer() {
         "Export PDF...",
         "Save Model to Library...",
         "Print...",
+        "Open on Phone...",
         "Quit",
     ] {
         assert!(all.iter().any(|l| l == gone), "{gone} is in the desktop's");

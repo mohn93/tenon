@@ -46,6 +46,8 @@ pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
 pub use dock::DockTab;
+#[cfg(not(target_arch = "wasm32"))]
+pub use sheets::{PhoneShare, PhoneView};
 pub use sheets::{SHADOWS_OFF, Sheet};
 pub(crate) mod widgets;
 
@@ -204,6 +206,13 @@ pub enum UiAction {
     ShowShortcuts(bool),
     /// Open the About sheet.
     ShowAbout,
+    /// File > Open on Phone: share a copy of the model on the local network and open the sheet
+    /// with its QR code.
+    OpenOnPhone,
+    /// The Open on Phone sheet's Share the new version: seal the model as it is now.
+    ShareNewVersion,
+    /// The Open on Phone sheet's Stop: stop sharing and close the sheet.
+    StopSharing,
     /// Answer the unsaved-changes sheet.
     UnsavedAnswer(crate::platform::UnsavedChoice),
     /// Open or close the Soften Edges window.

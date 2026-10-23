@@ -127,6 +127,10 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .entry(),
         );
     }
+    if features.share {
+        file.push(Entry::Separator);
+        file.push(Item::new("Open on Phone...", UiAction::OpenOnPhone).entry());
+    }
     if features.print {
         file.push(Entry::Separator);
         file.push(Item::new("Print...", UiAction::Print).entry());
