@@ -509,37 +509,53 @@ fn sketchy_extension_lengthens_both_ends() {
     assert!(grown_left >= 6, "the left end moved out: {a:?} {b:?}");
 }
 
+/// An edge 1 m above the ground, clear of the red axis and of the grid seen edge-on, which some
+/// software adapters draw dark and wide.
+fn raised_edge() -> Scene {
+    let mut m = Model::new();
+    m.add_edge(DVec3::new(-1.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 1.0))
+        .unwrap();
+    Scene::from_root(m)
+}
+
 #[test]
 fn endpoints_mark_each_end_and_not_the_middle() {
-    let camera = edge_camera();
-    let Some(plain) = shoot(&one_edge(), None, &camera) else {
+    let camera = camera([0.0, -6.0, 1.0], [0.0, 0.0, 1.0], Projection::Parallel);
+    let Some(plain) = shoot(&raised_edge(), None, &camera) else {
         return;
     };
     let marked = style(EdgeStyle {
         endpoints: Some(12.0),
         ..EdgeStyle::default()
     });
-    let with = shoot(&one_edge(), Some(&marked), &camera).unwrap();
-    // The edge is the row with the longest dark run (the blue axis is dark in every row on
-    // some adapters).
-    let (y, line) = (2..H)
-        .filter_map(|y| {
-            let longest = plain.row_runs(y).into_iter().max_by_key(|r| r.len())?;
-            Some((y, longest))
-        })
-        .max_by_key(|(_, r)| r.len())
-        .expect("the edge");
-    // 3 px wide marks grow upward from the line: rows y-2 and y-1 turn dark near the ends only.
+    let with = shoot(&raised_edge(), Some(&marked), &camera).unwrap();
+    // The edge's rows are those with a dark run across the middle of the view (the red axis
+    // runs from the middle to the right, the blue axis down the middle); the line can be one or
+    // two pixels thick.
+    let across = |y: u32| {
+        plain
+            .row_runs(y)
+            .into_iter()
+            .find(|r| r.contains(&(W / 2 - 5)) && r.contains(&(W / 2 + 5)))
+    };
+    let rows: Vec<u32> = (2..H - 2).filter(|&y| across(y).is_some()).collect();
+    let (top, bottom) = (rows[0], rows[rows.len() - 1]);
+    let line = across(top).expect("the edge");
+    // 3 px wide marks widen the line near its ends: rows just outside it turn dark there only.
     // A mark is darkness the plain render does not have (the blue axis crosses the middle).
-    let above = |s: &Shot, x: u32| s.dark(x, y - 1) || s.dark(x, y - 2);
-    let mark = |x: u32| above(&with, x) && !above(&plain, x);
+    let beside = |s: &Shot, x: u32| {
+        [top - 2, top - 1, bottom + 1, bottom + 2]
+            .iter()
+            .any(|&r| s.dark(x, r))
+    };
+    let mark = |x: u32| beside(&with, x) && !beside(&plain, x);
     let near_left = line.start + 4;
     let near_right = line.end - 5;
     let quarter = (3 * line.start + line.end) / 4;
     assert!(mark(near_left), "left mark");
     assert!(mark(near_right), "right mark");
     assert!(!mark(quarter), "no mark along the edge");
-    assert!(!above(&plain, near_left), "no marks without endpoints");
+    assert!(!beside(&plain, near_left), "no marks without endpoints");
 }
 
 // ---- the effects in use ----
