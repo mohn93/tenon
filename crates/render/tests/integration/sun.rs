@@ -346,6 +346,29 @@ fn the_map_is_drawn_again_only_when_the_sun_or_the_casters_change() {
 }
 
 #[test]
+fn the_sun_casters_are_held_only_while_the_sun_shades() {
+    let Some(mut snap) = gpu() else { return };
+    let d = one_box();
+    // Without a sun, nothing is uploaded for it, however the model changes.
+    shoot(&mut snap, &d, None, Lighting::Day);
+    assert_eq!(snap.sun_caster_bytes(), 0);
+    // Turning the sun on after the scene was prepared still shades and shadows.
+    let lit = sun(west(), 0.8, 0.45);
+    snap.set_sun(Some(lit));
+    let shot = snap.capture_prepared(&d.camera, Lighting::Day, W, H).unwrap();
+    assert!(snap.sun_caster_bytes() > 0);
+    assert_eq!(snap.sun_maps_drawn(), 1);
+    let reference = shoot(&mut snap, &d, Some(lit), Lighting::Day);
+    assert_eq!(shot, reference.pixels);
+    // Turning it off drops them; on again draws the map again.
+    snap.set_sun(None);
+    assert_eq!(snap.sun_caster_bytes(), 0);
+    let again = shoot(&mut snap, &d, Some(lit), Lighting::Day);
+    assert_eq!(again.pixels, reference.pixels);
+    assert_eq!(snap.sun_maps_drawn(), 2);
+}
+
+#[test]
 fn night_and_no_sun_draw_no_map_and_night_ignores_the_sun() {
     let Some(mut snap) = gpu() else { return };
     let d = one_box();

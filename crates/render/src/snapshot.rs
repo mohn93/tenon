@@ -97,6 +97,11 @@ impl Snapshotter {
         self.renderer.sun_maps_drawn()
     }
 
+    /// The bytes the sun's casters hold on the GPU (see `Renderer::sun_caster_bytes`).
+    pub fn sun_caster_bytes(&self) -> u64 {
+        self.renderer.sun_caster_bytes()
+    }
+
     /// The bytes the prepared scene's edges hold for edge effects (see
     /// `Renderer::edge_extra_bytes`).
     pub fn edge_extra_bytes(&self) -> u64 {

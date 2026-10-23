@@ -643,6 +643,10 @@ pub struct Renderer {
     /// the bytes and so the hash; only a 64-bit hash collision could miss a change.
     sun_count: u32,
     sun_hash: u64,
+    /// The casters of the last `set_model`, kept on the CPU for a sun that is off.
+    sun_pending: Vec<[f32; 3]>,
+    /// Whether `sun_casters` holds `sun_pending` (or the sun is off and holds nothing).
+    sun_synced: bool,
     sun_casters: Option<wgpu::Buffer>,
     sun_bounds: Option<(Vec3, Vec3)>,
     sun_generation: u64,
@@ -1323,6 +1327,8 @@ impl Renderer {
             sun_map: None,
             sun_sampler,
             sun_placeholder,
+            sun_pending: Vec::new(),
+            sun_synced: false,
             sun_casters: None,
             sun_count: 0,
             sun_hash: 0,
@@ -1434,25 +1440,42 @@ impl Renderer {
             self.caster_corners = base.casters;
         }
         self.caster_chunks = base.caster_chunks;
-        // The same for the sun's map.
+        // The sun's map keeps what casts for it (see `sync_sun_casters`).
+        self.sun_pending = base.sun_casters;
+        self.sun_synced = false;
+        if self.sun.is_some() {
+            self.sync_sun_casters();
+        }
+    }
+
+    /// Uploads the sun's casters, and makes the map draw again when they differ from the last
+    /// ones, as the shadow casters are. Done only while sun shading is on, so a model without
+    /// it pays no hash and holds no buffer; the casters of the last `set_model` wait in
+    /// `sun_pending` for a sun.
+    fn sync_sun_casters(&mut self) {
+        if self.sun_synced {
+            return;
+        }
+        self.sun_synced = true;
+        let casters = &self.sun_pending;
         let hash = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            bytemuck::cast_slice::<_, u8>(&base.sun_casters).hash(&mut hasher);
+            bytemuck::cast_slice::<_, u8>(casters).hash(&mut hasher);
             hasher.finish()
         };
-        let count = base.sun_casters.len() as u32;
+        let count = casters.len() as u32;
         if (count, hash) != (self.sun_count, self.sun_hash) {
             self.sun_generation += 1;
-            self.sun_casters = (!base.sun_casters.is_empty()).then(|| {
+            self.sun_casters = (!casters.is_empty()).then(|| {
                 self.device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("sun casters"),
-                        contents: bytemuck::cast_slice(&base.sun_casters),
+                        contents: bytemuck::cast_slice(casters),
                         usage: wgpu::BufferUsages::VERTEX,
                     })
             });
-            self.sun_bounds = base.sun_casters.iter().map(|&p| Vec3::from(p)).fold(
+            self.sun_bounds = casters.iter().map(|&p| Vec3::from(p)).fold(
                 None,
                 |bounds: Option<(Vec3, Vec3)>, p| {
                     Some(bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))))
@@ -1582,6 +1605,16 @@ impl Renderer {
     /// headlight; None shades by the headlight. Night ignores it.
     pub fn set_sun(&mut self, sun: Option<SunLight>) {
         self.sun = sun;
+        if sun.is_some() {
+            self.sync_sun_casters();
+        } else if self.sun_count != 0 {
+            // No sun, no casters: they are made again from `sun_pending` if one comes back.
+            self.sun_casters = None;
+            self.sun_bounds = None;
+            self.sun_count = 0;
+            self.sun_hash = 0;
+            self.sun_synced = false;
+        }
     }
 
     /// How many times the sun's shadow map has been drawn since the renderer was made: once per
@@ -1832,6 +1865,11 @@ impl Renderer {
             .as_ref()
             .and_then(|m| m.extras.as_ref())
             .map_or(0, |b| b.size())
+    }
+
+    /// The bytes the sun's casters hold on the GPU: 0 while sun shading is off.
+    pub fn sun_caster_bytes(&self) -> u64 {
+        self.sun_casters.as_ref().map_or(0, |b| b.size())
     }
 
     /// Sets what the chosen style asks of edges in `lighting` (profiles, sketchy edges,
