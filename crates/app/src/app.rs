@@ -2708,6 +2708,7 @@ impl State {
             model_name: &self.model_name,
             recent: &self.prefs.recent,
             sheet: self.sheet.as_ref(),
+            units: self.editor.doc().units(),
             rename: rename.as_ref(),
             settings: self.settings_open.then_some(SettingsView {
                 ui_scale: self.prefs.ui_scale,

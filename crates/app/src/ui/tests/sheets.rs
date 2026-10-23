@@ -298,6 +298,37 @@ fn text_3d_fixture(text: &str) -> Fixture {
 }
 
 #[test]
+fn the_3d_text_sheet_shows_and_reads_sizes_in_the_model_unit() {
+    use session::{LengthUnit, Units};
+    let mut fixture = text_3d_fixture("Plan");
+    fixture.units = Units {
+        length: LengthUnit::Centimeters,
+        ..Units::default()
+    };
+    let mut h = harness(fixture);
+    assert!(drawn_texts(&h).iter().any(|t| t == "30 cm"));
+    assert!(drawn_texts(&h).iter().any(|t| t == "5 cm"));
+    // A bare number is centimeters; the sheet still reports meters.
+    h.get_by_label("Height").click();
+    h.run_ok();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.run_ok();
+    h.event(egui::Event::Text("50".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    assert_eq!(
+        click(&mut h, "Place"),
+        [UiAction::Confirm3dText(tools::TextSpec {
+            text: "Plan".into(),
+            height: 0.5,
+            depth: 0.05,
+            filled: true,
+        })]
+    );
+}
+
+#[test]
 fn the_3d_text_sheet_reports_the_text_and_its_sizes() {
     let mut h = harness(text_3d_fixture(""));
     assert!(h.query_by_label("3D Text").is_some(), "the title");

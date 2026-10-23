@@ -112,9 +112,9 @@ fn the_model_tab_sets_the_models_units() {
         texts.iter().any(|t| t.contains("saved in the model")),
         "the tab says where the units are kept: {texts:?}"
     );
-    assert_eq!(click(&mut h, "Units"), []);
+    assert_eq!(click(&mut h, "Format"), []);
     assert_eq!(
-        click(&mut h, "Feet and inches"),
+        click(&mut h, "Architectural"),
         [UiAction::SetUnits(Units {
             length: LengthUnit::FeetInches,
             precision: 3,
@@ -141,6 +141,115 @@ fn the_model_tab_sets_the_models_units() {
         [UiAction::SetUnits(Units {
             length: LengthUnit::FeetInches,
             precision: 6,
+            ..Units::default()
+        })]
+    );
+}
+
+#[test]
+fn the_model_tab_offers_formats_units_and_snapping() {
+    use session::{LengthUnit, Units};
+    let with = |units: Units| {
+        let mut h = harness(Fixture {
+            settings: Some(SettingsView {
+                units,
+                ..settings_fixture().settings.unwrap()
+            }),
+            ..Default::default()
+        });
+        model_tab(&mut h);
+        h
+    };
+    // Decimal shows the unit; Engineering and Architectural do not.
+    let mut h = with(Units::default());
+    assert!(h.query_by_label("Unit").is_some());
+    assert_eq!(click(&mut h, "Unit"), []);
+    assert_eq!(
+        click(&mut h, "Centimeters"),
+        [UiAction::SetUnits(Units {
+            length: LengthUnit::Centimeters,
+            ..Units::default()
+        })]
+    );
+    let mut h = with(Units {
+        length: LengthUnit::Feet,
+        ..Units::default()
+    });
+    assert!(h.query_by_label("Unit").is_none());
+    assert!(drawn_texts(&h).iter().any(|t| t == "Engineering"));
+    assert_eq!(click(&mut h, "Format"), []);
+    assert_eq!(
+        click(&mut h, "Decimal"),
+        [UiAction::SetUnits(Units::default())]
+    );
+    // Snapping: the boxes turn it on with a round step, and off with 0.
+    let mut h = with(Units::default());
+    assert_eq!(
+        click(&mut h, "Length snapping"),
+        [UiAction::SetUnits(Units {
+            length_snap: 0.1,
+            ..Units::default()
+        })]
+    );
+    let mut h = with(Units {
+        angle_snap: 0.0,
+        ..Units::default()
+    });
+    assert_eq!(
+        click(&mut h, "Angle snapping"),
+        [UiAction::SetUnits(Units::default())]
+    );
+    let mut h = with(Units::default());
+    assert_eq!(
+        click(&mut h, "Angle snapping"),
+        [UiAction::SetUnits(Units {
+            angle_snap: 0.0,
+            ..Units::default()
+        })]
+    );
+    // Angle precision.
+    let mut h = with(Units::default());
+    assert_eq!(click(&mut h, "Angle precision"), []);
+    assert_eq!(
+        click(&mut h, "0.00"),
+        [UiAction::SetUnits(Units {
+            angle_precision: 2,
+            ..Units::default()
+        })]
+    );
+}
+
+#[test]
+fn the_snapping_values_are_typed_in_the_model_unit_and_degrees() {
+    use session::{LengthUnit, Units};
+    let mut h = harness(Fixture {
+        settings: Some(SettingsView {
+            units: Units {
+                length: LengthUnit::FeetInches,
+                length_snap: 0.0254,
+                ..Units::default()
+            },
+            ..settings_fixture().settings.unwrap()
+        }),
+        ..Default::default()
+    });
+    model_tab(&mut h);
+    assert!(drawn_texts(&h).iter().any(|t| t == "15°"));
+    // A bare number is inches in feet and inches.
+    h.get_by_label("Length snapping value").click();
+    h.run_ok();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.run_ok();
+    h.event(egui::Event::Text("6".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Enter);
+    h.run_ok();
+    let got = h.state_mut().take();
+    assert_eq!(
+        got,
+        [UiAction::SetUnits(Units {
+            length: LengthUnit::FeetInches,
+            length_snap: 0.0254 * 6.0,
             ..Units::default()
         })]
     );

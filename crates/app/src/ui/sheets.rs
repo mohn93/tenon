@@ -8,8 +8,8 @@ use egui::{Id, Modal, RichText, Ui};
 
 use egui::text::{CCursor, CCursorRange};
 use kernel::{DefinitionKind, MAX_NOTE_CHARS, MAX_NOTE_LINES, TagId};
-use session::MAX_COORDINATE;
 use session::text3d::MIN_TEXT_HEIGHT;
+use session::{MAX_COORDINATE, Units, format_length, parse_length};
 use tools::{NoteRequest, TextSpec};
 
 use super::{LibrarySave, UiAction, theme, widgets};
@@ -181,7 +181,7 @@ impl Values {
 
 /// Draws `sheet` over the window. Escape, a click on the backdrop and Cancel report
 /// `CloseSheet`; the confirm button reports the sheet's confirm action.
-pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
+pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, units: Units, actions: &mut Vec<UiAction>) {
     let id = sheet_id();
     let held = ui
         .data(|d| d.get_temp::<Editing>(id))
@@ -245,7 +245,7 @@ pub(super) fn sheet(ui: &mut Ui, sheet: &Sheet, actions: &mut Vec<UiAction>) {
                     note_sheet(ui, request, automatic.as_deref(), text, fresh, actions);
                 }
                 (Sheet::Text3d { .. }, Values::Text3d(spec)) => {
-                    text_3d_sheet(ui, spec, fresh, actions);
+                    text_3d_sheet(ui, spec, fresh, &units, actions);
                 }
                 (Sheet::SaveToLibrary { save, .. }, Values::Name(name)) => {
                     let title = match save {
@@ -800,7 +800,13 @@ fn note_sheet(
 /// only) and whether it is filled, then Cancel and Place, which reports `Confirm3dText` (a
 /// depth of 0 for text that is not filled). Text that is blank or over the length or line
 /// limits is not taken, and the sheet says why.
-fn text_3d_sheet(ui: &mut Ui, spec: &mut TextSpec, fresh: bool, actions: &mut Vec<UiAction>) {
+fn text_3d_sheet(
+    ui: &mut Ui,
+    spec: &mut TextSpec,
+    fresh: bool,
+    units: &Units,
+    actions: &mut Vec<UiAction>,
+) {
     let t = theme::tokens(ui.ctx().theme());
     widgets::section_header(ui, "3D Text");
     ui.add_space(theme::GRID);
@@ -839,8 +845,8 @@ fn text_3d_sheet(ui: &mut Ui, spec: &mut TextSpec, fresh: bool, actions: &mut Ve
                 egui::DragValue::new(&mut spec.height)
                     .range(MIN_TEXT_HEIGHT..=MAX_COORDINATE)
                     .speed(0.01)
-                    .max_decimals(3)
-                    .suffix(" m"),
+                    .custom_formatter(|v, _| format_length(v, units))
+                    .custom_parser(|text| parse_length(text, units).ok()),
             )
             .labelled_by(label.id);
             ui.end_row();
@@ -850,8 +856,8 @@ fn text_3d_sheet(ui: &mut Ui, spec: &mut TextSpec, fresh: bool, actions: &mut Ve
                 egui::DragValue::new(&mut spec.depth)
                     .range(0.0..=MAX_COORDINATE)
                     .speed(0.01)
-                    .max_decimals(3)
-                    .suffix(" m"),
+                    .custom_formatter(|v, _| format_length(v, units))
+                    .custom_parser(|text| parse_length(text, units).ok()),
             )
             .labelled_by(label.id);
             ui.end_row();

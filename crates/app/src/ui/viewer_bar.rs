@@ -134,7 +134,7 @@ pub(super) fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egu
     }
 
     match view.sheet {
-        Some(sheet) => sheets::sheet(ui, sheet, actions),
+        Some(sheet) => sheets::sheet(ui, sheet, view.units, actions),
         None => sheets::forget(ui),
     }
     central

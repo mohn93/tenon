@@ -123,6 +123,8 @@ pub(super) struct Fixture {
     pub model_name: String,
     /// The sheet open over the window.
     pub sheet: Option<Sheet>,
+    /// The model's display units.
+    pub units: session::Units,
     /// The viewer's list over the view.
     pub viewer_panel: Option<super::ViewerPanel>,
     pub part_rows: Vec<crate::viewer::parts::PartRow>,
@@ -224,6 +226,7 @@ impl Default for Fixture {
             features: crate::platform::Features::ALL,
             model_name: "Shared model".into(),
             sheet: None,
+            units: session::Units::default(),
             viewer_panel: None,
             part_rows: Vec::new(),
             part_card: None,
@@ -317,6 +320,7 @@ impl Fixture {
                 can_keep: self.can_keep,
             },
             sheet: self.sheet.as_ref(),
+            units: self.units,
             rename: self.rename.as_ref(),
             settings: self.settings,
             library: LibraryView {

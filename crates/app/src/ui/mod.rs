@@ -580,6 +580,8 @@ pub struct View<'a> {
     pub viewer: ViewerView<'a>,
     /// The sheet open over the window, if any.
     pub sheet: Option<&'a Sheet>,
+    /// The model's display units, which the sheets' lengths follow.
+    pub units: Units,
     /// The Library tab's folder and items.
     pub library: LibraryView<'a>,
     /// The one selected component instance, which Save to Library saves.
@@ -806,7 +808,7 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     // Last, over everything else.
     match view.sheet {
-        Some(sheet) => sheets::sheet(ui, sheet, actions),
+        Some(sheet) => sheets::sheet(ui, sheet, view.units, actions),
         None => sheets::forget(ui),
     }
     central

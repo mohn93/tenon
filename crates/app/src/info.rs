@@ -2,12 +2,7 @@
 
 use glam::{DAffine3, DMat3, DQuat};
 use kernel::{CurveKind, DefinitionKind, Dimension, EdgeId, EntityId, Guide, Model, Note};
-use session::{AnnotationShape, Document, Units, note_label};
-
-/// Entity Info still shows meters (it follows the model units from the next step on).
-fn format_length(meters: f64) -> String {
-    session::format_length(meters, &Units::default())
-}
+use session::{AnnotationShape, Document, Units, format_angle, format_length, note_label};
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
 /// the radius, segments, angle and length of a whole curve (a circle or arc), the direction
@@ -17,7 +12,7 @@ fn format_length(meters: f64) -> String {
 /// which.
 pub fn entity_info(doc: &Document) -> Vec<String> {
     let mut lines = editing(doc).into_iter().collect::<Vec<_>>();
-    lines.extend(selection_info(doc));
+    lines.extend(selection_info(doc, &doc.units()));
     lines
 }
 
@@ -34,7 +29,7 @@ fn editing(doc: &Document) -> Option<String> {
     })
 }
 
-fn selection_info(doc: &Document) -> Vec<String> {
+fn selection_info(doc: &Document, units: &Units) -> Vec<String> {
     let m = doc.model();
     let (mut edges, mut faces, mut instances) = (Vec::new(), Vec::new(), Vec::new());
     let mut guides = Vec::new();
@@ -68,7 +63,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
         &sections[..],
         annotations,
     ) {
-        return section_info(doc, *s);
+        return section_info(doc, *s, units);
     }
     if annotations == 1
         && edges.is_empty()
@@ -89,7 +84,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
         annotations,
     ) {
         let xyz = |v: glam::DVec3| v.to_array().map(number).join(", ");
-        let place = |v: glam::DVec3| v.to_array().map(format_length).join(", ");
+        let place = |v: glam::DVec3| v.to_array().map(|c| format_length(c, units)).join(", ");
         return match m.guide(*g) {
             Some(Guide::Line {
                 point, direction, ..
@@ -116,7 +111,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
     if instances.is_empty()
         && faces.is_empty()
         && others == 0
-        && let Some(lines) = curve_info(m, &edges)
+        && let Some(lines) = curve_info(m, &edges, units)
     {
         return lines;
     }
@@ -133,7 +128,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
             }
             _ => vec!["1 group".into()],
         };
-        lines.extend(instance.map_or_else(Vec::new, |i| placement(i.transform)));
+        lines.extend(instance.map_or_else(Vec::new, |i| placement(i.transform, units)));
         if let Some(material) = instance.and_then(|i| i.material) {
             lines.push(format!("Material: {}", material_name(doc, Some(material))));
         }
@@ -143,7 +138,7 @@ fn selection_info(doc: &Document) -> Vec<String> {
         ([], []) if instances.is_empty() && others == 0 => vec!["Nothing selected".into()],
         ([e], []) if instances.is_empty() && others == 0 => vec![
             "1 edge".into(),
-            format!("Length: {}", format_length(edge_length(m, *e))),
+            format!("Length: {}", format_length(edge_length(m, *e), units)),
         ],
         ([], [f]) if instances.is_empty() && others == 0 => {
             let face = m.face(*f).unwrap();
@@ -186,12 +181,16 @@ fn selection_info(doc: &Document) -> Vec<String> {
 
 /// A single section plane: "Section Plane", whether it is the open context's active plane,
 /// its point and its unit normal (the side it points to is kept).
-fn section_info(doc: &Document, id: kernel::SectionId) -> Vec<String> {
+fn section_info(doc: &Document, id: kernel::SectionId, units: &Units) -> Vec<String> {
     let m = doc.model();
     let Some(plane) = m.section(id) else {
         return Vec::new();
     };
-    let place = plane.point.to_array().map(format_length).join(", ");
+    let place = plane
+        .point
+        .to_array()
+        .map(|c| format_length(c, units))
+        .join(", ");
     let n = plane.normal.to_array().map(number);
     vec![
         "Section Plane".into(),
@@ -262,7 +261,7 @@ fn material_name(doc: &Document, material: Option<kernel::MaterialId>) -> String
 
 /// "1 circle" (or arc, curve or polygon) with its radius, angle, segments (a polygon's sides)
 /// and length when `edges` are exactly the edges of one curve.
-fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
+fn curve_info(m: &Model, edges: &[EdgeId], units: &Units) -> Option<Vec<String>> {
     let curve = m.curve_of(*edges.first()?)?;
     let mut mine = curve.edges.clone();
     mine.sort();
@@ -276,9 +275,12 @@ fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
         CurveKind::Polygon => "1 polygon".to_string(),
     }];
     if let Some(c) = curve.circle {
-        lines.push(format!("Radius: {}", format_length(c.radius)));
+        lines.push(format!("Radius: {}", format_length(c.radius, units)));
         if !curve.closed {
-            lines.push(format!("Angle: {}°", number(c.angle.to_degrees())));
+            lines.push(format!(
+                "Angle: {}",
+                format_angle(c.angle.to_degrees(), units)
+            ));
         }
     }
     if curve.kind() == CurveKind::Polygon {
@@ -286,18 +288,18 @@ fn curve_info(m: &Model, edges: &[EdgeId]) -> Option<Vec<String>> {
     } else {
         lines.push(format!("Segments: {}", curve.segments));
     }
-    lines.push(format!("Length: {}", format_length(curve.length)));
+    lines.push(format!("Length: {}", format_length(curve.length, units)));
     Some(lines)
 }
 
 /// The rotation line of a placement and, when it is not a pure rotation, a line with its
 /// scale along its own axes ("Scale: 2, 1, 1"; a mirror shows a negative x).
-fn placement(t: DAffine3) -> Vec<String> {
+fn placement(t: DAffine3, units: &Units) -> Vec<String> {
     let m = t.matrix3;
     let lengths = [m.x_axis.length(), m.y_axis.length(), m.z_axis.length()];
     let mirror = m.determinant() < 0.0;
     if !mirror && lengths.iter().all(|l| (l - 1.0).abs() < 1e-9) {
-        return rotation(m).into_iter().collect();
+        return rotation(m, units).into_iter().collect();
     }
     let sign = if mirror { -1.0 } else { 1.0 };
     let scale = [sign * lengths[0], lengths[1], lengths[2]];
@@ -306,7 +308,7 @@ fn placement(t: DAffine3) -> Vec<String> {
         m.y_axis / scale[1],
         m.z_axis / scale[2],
     );
-    let mut lines: Vec<String> = rotation(turn).into_iter().collect();
+    let mut lines: Vec<String> = rotation(turn, units).into_iter().collect();
     let s = scale.map(number);
     lines.push(format!("Scale: {}, {}, {}", s[0], s[1], s[2]));
     lines
@@ -314,20 +316,20 @@ fn placement(t: DAffine3) -> Vec<String> {
 
 /// "Rotation: 30° about 0, 0, 1" for a turned placement (the turn of at most 180 degrees,
 /// counter-clockwise looking down the axis); None when it is not turned.
-fn rotation(m: DMat3) -> Option<String> {
+fn rotation(m: DMat3, units: &Units) -> Option<String> {
     let (mut axis, angle) = DQuat::from_mat3(&m).to_axis_angle();
     let mut degrees = angle.to_degrees();
     if degrees > 180.0 {
         degrees = 360.0 - degrees;
         axis = -axis;
     }
-    if number(degrees) == "0" {
+    if format_angle(degrees, units) == format_angle(0.0, units) {
         return None;
     }
     let a = axis.to_array().map(number);
     Some(format!(
-        "Rotation: {}° about {}, {}, {}",
-        number(degrees),
+        "Rotation: {} about {}, {}, {}",
+        format_angle(degrees, units),
         a[0],
         a[1],
         a[2]
@@ -496,6 +498,48 @@ mod tests {
     }
 
     #[test]
+    fn lengths_coordinates_and_angles_follow_the_model_units() {
+        let set = |d: &mut Document, length, angle_precision| {
+            d.execute(Command::SetUnits {
+                length: Some(length),
+                precision: None,
+                length_snap: None,
+                angle_precision: Some(angle_precision),
+                angle_snap: None,
+            })
+            .unwrap();
+        };
+        let mut d = Document::new(DVec2::new(800.0, 600.0));
+        d.execute(Command::AddArc {
+            center: Some([0.0, 0.0, 0.0]),
+            start: [1.0, 0.0, 0.0],
+            angle: Some(22.5),
+            end: None,
+            through: None,
+            bulge: None,
+            normal: None,
+            segments: Some(3),
+        })
+        .unwrap();
+        let edges: Vec<EntityId> = d.model().edges().map(|(e, _)| EntityId::Edge(e)).collect();
+        d.execute(Command::Select {
+            ids: edges,
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        set(&mut d, session::LengthUnit::Centimeters, 2);
+        let lines = entity_info(&d);
+        assert_eq!(lines[1], "Radius: 100 cm");
+        assert_eq!(lines[2], "Angle: 22.5°");
+        set(&mut d, session::LengthUnit::FeetInches, 0);
+        let lines = entity_info(&d);
+        assert_eq!(lines[1], "Radius: 3' 3 3/8\"");
+        assert_eq!(lines[2], "Angle: 23°");
+        assert!(lines[4].starts_with("Length: 1' 3"), "{lines:?}");
+    }
+
+    #[test]
     fn describes_a_polygon_by_its_sides() {
         let mut m = Model::new();
         let corners: Vec<glam::DVec3> = (0..6)
@@ -508,7 +552,7 @@ mod tests {
         let mut edges: Vec<EdgeId> = m.edges().map(|(e, _)| e).collect();
         edges.sort();
         assert_eq!(
-            curve_info(&m, &edges).unwrap(),
+            curve_info(&m, &edges, &Units::default()).unwrap(),
             ["1 polygon", "Radius: 2 m", "Sides: 6", "Length: 12 m"]
         );
     }

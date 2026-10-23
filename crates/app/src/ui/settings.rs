@@ -5,7 +5,7 @@
 //! memory.
 
 use egui::{Button, Id, Ui};
-use session::{LengthUnit, Units};
+use session::{LengthUnit, Units, format_angle, format_length, parse_angle, parse_length};
 
 use super::theme::{ThemeChoice, UiScale};
 use super::{SettingsView, UiAction, View, widgets};
@@ -223,14 +223,52 @@ fn library_folder(ui: &mut Ui, library: Option<&std::path::Path>, actions: &mut 
 /// The height of the Model tab's precision list, in points.
 const PRECISION_LIST_HEIGHT: f32 = 260.0;
 
-/// The units the Model tab offers, with their names.
-const LENGTH_UNITS: [(LengthUnit, &str); 5] = [
+/// The units a Decimal format offers on the Model tab, with their names.
+const DECIMAL_UNITS: [(LengthUnit, &str); 4] = [
     (LengthUnit::Meters, "Meters"),
     (LengthUnit::Centimeters, "Centimeters"),
     (LengthUnit::Millimeters, "Millimeters"),
     (LengthUnit::Inches, "Inches"),
-    (LengthUnit::FeetInches, "Feet and inches"),
 ];
+
+/// The formats the Model tab offers: Decimal (a unit of the list above), Architectural (feet
+/// and inches) and Engineering (decimal feet).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Decimal,
+    Architectural,
+    Engineering,
+}
+
+impl Format {
+    const ALL: [(Format, &'static str); 3] = [
+        (Format::Decimal, "Decimal"),
+        (Format::Architectural, "Architectural"),
+        (Format::Engineering, "Engineering"),
+    ];
+
+    fn of(length: LengthUnit) -> Format {
+        match length {
+            LengthUnit::FeetInches => Format::Architectural,
+            LengthUnit::Feet => Format::Engineering,
+            _ => Format::Decimal,
+        }
+    }
+}
+
+/// The length snapping a freshly ticked box starts with, in meters: a round step of the unit.
+fn default_length_snap(length: LengthUnit) -> f64 {
+    match length {
+        LengthUnit::Meters => 0.1,
+        LengthUnit::Centimeters => 0.01,
+        LengthUnit::Millimeters => 0.001,
+        LengthUnit::Inches | LengthUnit::FeetInches => 0.0254,
+        LengthUnit::Feet => 0.3048,
+    }
+}
+
+/// The angle snapping a freshly ticked box starts with, in degrees.
+const DEFAULT_ANGLE_SNAP: f64 = 15.0;
 
 /// How the Model tab names `precision` for `length`: the decimals shown ("0.00"), or for feet
 /// and inches the finest fraction of an inch ("1/16\"").
@@ -243,31 +281,93 @@ fn precision_text(length: LengthUnit, precision: u8) -> String {
     }
 }
 
-/// The open model's display units: the unit and the precision dimension and note labels are
-/// written in, each a drop-down. They are the model's, saved with it, and a change is an undo
-/// step; the tab says so.
+/// A single-line box whose text is kept while it has focus and reported (once) when Enter or
+/// a click elsewhere ends the edit; unfocused it shows `current`. None until then.
+fn committed_text(
+    ui: &mut Ui,
+    id: Id,
+    label: &str,
+    current: &str,
+    enabled: bool,
+) -> Option<String> {
+    let mut text = if ui.memory(|m| m.has_focus(id)) {
+        ui.data(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| current.to_string())
+    } else {
+        current.to_string()
+    };
+    let response = ui.add_enabled(
+        enabled,
+        egui::TextEdit::singleline(&mut text)
+            .id(id)
+            .desired_width(90.0),
+    );
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, enabled, label);
+        info.current_text_value = Some(text.clone());
+        info
+    });
+    if response.lost_focus() {
+        ui.data_mut(|d| d.remove_temp::<String>(id));
+        return (text != current).then_some(text);
+    }
+    if response.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text));
+    }
+    None
+}
+
+/// The open model's display units: the format (decimal, architectural or engineering), the
+/// unit of a decimal format, the precision, the length and angle snapping and the angle
+/// precision. They are the model's, saved with it, and each change is an undo step; the tab
+/// says so.
 fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
     let mut chosen = units;
+    let format = Format::of(units.length);
     egui::Grid::new("settings-model")
         .num_columns(2)
         .show(ui, |ui| {
-            let label = ui.label("Units");
-            let name = |l: LengthUnit| {
-                LENGTH_UNITS
-                    .iter()
-                    .find(|(u, _)| *u == l)
-                    .map_or("", |(_, n)| n)
-            };
-            egui::ComboBox::from_id_salt("settings-units")
-                .selected_text(name(units.length))
+            let label = ui.label("Format");
+            let mut picked = format;
+            egui::ComboBox::from_id_salt("settings-format")
+                .selected_text(
+                    Format::ALL
+                        .iter()
+                        .find(|(f, _)| *f == format)
+                        .map_or("", |(_, n)| n),
+                )
                 .show_ui(ui, |ui| {
-                    for (unit, text) in LENGTH_UNITS {
-                        ui.selectable_value(&mut chosen.length, unit, text);
+                    for (f, text) in Format::ALL {
+                        ui.selectable_value(&mut picked, f, text);
                     }
                 })
                 .response
                 .labelled_by(label.id);
+            if picked != format {
+                chosen.length = match picked {
+                    Format::Decimal => LengthUnit::Meters,
+                    Format::Architectural => LengthUnit::FeetInches,
+                    Format::Engineering => LengthUnit::Feet,
+                };
+            }
             ui.end_row();
+            if format == Format::Decimal {
+                let label = ui.label("Unit");
+                let name = DECIMAL_UNITS
+                    .iter()
+                    .find(|(u, _)| *u == units.length)
+                    .map_or("", |(_, n)| n);
+                egui::ComboBox::from_id_salt("settings-units")
+                    .selected_text(name)
+                    .show_ui(ui, |ui| {
+                        for (unit, text) in DECIMAL_UNITS {
+                            ui.selectable_value(&mut chosen.length, unit, text);
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                ui.end_row();
+            }
             let label = ui.label("Precision");
             // Tall enough that all seven precisions show without scrolling.
             egui::ComboBox::from_id_salt("settings-precision")
@@ -282,11 +382,73 @@ fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
                 .response
                 .labelled_by(label.id);
             ui.end_row();
+            // Length snapping: a box to turn it on and a length in the model's unit.
+            let mut on = units.length_snap > 0.0;
+            if ui.checkbox(&mut on, "Length snapping").changed() {
+                chosen.length_snap = if on {
+                    default_length_snap(units.length)
+                } else {
+                    0.0
+                };
+            }
+            let shown = if on {
+                format_length(units.length_snap, &units)
+            } else {
+                String::new()
+            };
+            if let Some(text) = committed_text(
+                ui,
+                Id::new("settings-length-snap"),
+                "Length snapping value",
+                &shown,
+                on,
+            ) {
+                match parse_length(&text, &units) {
+                    Ok(m) if m > 0.0 && m <= session::MAX_LENGTH_SNAP => chosen.length_snap = m,
+                    _ => {}
+                }
+            }
+            ui.end_row();
+            let label = ui.label("Angle precision");
+            egui::ComboBox::from_id_salt("settings-angle-precision")
+                .selected_text(precision_text(LengthUnit::Meters, units.angle_precision))
+                .show_ui(ui, |ui| {
+                    for p in 0..=session::MAX_ANGLE_PRECISION {
+                        let text = precision_text(LengthUnit::Meters, p);
+                        ui.selectable_value(&mut chosen.angle_precision, p, text);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            ui.end_row();
+            let mut on = units.angle_snap > 0.0;
+            if ui.checkbox(&mut on, "Angle snapping").changed() {
+                chosen.angle_snap = if on { DEFAULT_ANGLE_SNAP } else { 0.0 };
+            }
+            let shown = if on {
+                format_angle(units.angle_snap, &units)
+            } else {
+                String::new()
+            };
+            if let Some(text) = committed_text(
+                ui,
+                Id::new("settings-angle-snap"),
+                "Angle snapping value",
+                &shown,
+                on,
+            ) {
+                match parse_angle(&text) {
+                    Ok(d) if d > 0.0 && d <= session::MAX_ANGLE_SNAP => chosen.angle_snap = d,
+                    _ => {}
+                }
+            }
+            ui.end_row();
         });
     ui.label(
         egui::RichText::new(
-            "Dimensions and notes are labelled in these units. They are saved in the model, \
-             not in the preferences, and changing them can be undone.",
+            "Dimensions, notes and tools use these units, and typed lengths are read in them. \
+             Snapping rounds what the cursor measures; typed values are never rounded. They are \
+             saved in the model, not in the preferences, and changing them can be undone.",
         )
         .weak(),
     );
