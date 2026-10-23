@@ -355,7 +355,9 @@ fn the_sun_casters_are_held_only_while_the_sun_shades() {
     // Turning the sun on after the scene was prepared still shades and shadows.
     let lit = sun(west(), 0.8, 0.45);
     snap.set_sun(Some(lit));
-    let shot = snap.capture_prepared(&d.camera, Lighting::Day, W, H).unwrap();
+    let shot = snap
+        .capture_prepared(&d.camera, Lighting::Day, W, H)
+        .unwrap();
     assert!(snap.sun_caster_bytes() > 0);
     assert_eq!(snap.sun_maps_drawn(), 1);
     let reference = shoot(&mut snap, &d, Some(lit), Lighting::Day);
