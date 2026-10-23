@@ -1414,8 +1414,9 @@ impl Editor {
     }
 
     /// Changes the shadow date, time, levels or ground toggle through `set_shadows` (no undo
-    /// step); a value it refuses shows its message. False if there is nothing to change.
+    /// step); a value it refuses shows its message. False if the settings did not change.
     pub fn set_shadows(&mut self, change: &crate::ui::ShadowChange) -> bool {
+        let before = self.doc.shadows;
         self.run_camera_command(Command::SetShadows {
             on: None,
             date: change.date.clone(),
@@ -1424,7 +1425,7 @@ impl Editor {
             dark: change.dark.map(i64::from),
             on_ground: change.on_ground,
         });
-        true
+        self.doc.shadows != before
     }
 
     /// Moves the model on the Earth through `set_location`: one undo step, unless it is where
@@ -4715,6 +4716,12 @@ mod tests {
         });
         assert_eq!(e.doc().shadows, s);
         assert_eq!(e.message_kind(), Some(MessageKind::Error));
+        // The same values again change nothing.
+        let same = ShadowChange {
+            light: Some(70),
+            ..Default::default()
+        };
+        assert!(!e.set_shadows(&same));
     }
 
     #[test]

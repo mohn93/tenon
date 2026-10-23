@@ -203,8 +203,9 @@ const TAB_GAP: f32 = 4.0;
 const TAB_PAD_MIN: f32 = 4.0;
 
 /// The tabs across the dock's width: each its name's width and an equal share of what is left
-/// (at the narrowest dock little is). Where they do not fit in one row even so, they wrap onto
-/// the next. A tab other than `shown` clicked becomes `chosen`.
+/// (at the narrowest dock little is). Where they do not fit in one row even so, they go over
+/// two balanced rows (3 and 3, or 3 and 2), each justified to the dock's width. A tab other
+/// than `shown` clicked becomes `chosen`.
 fn tab_row(ui: &mut Ui, shown: DockTab, tabs: &[DockTab], chosen: &mut DockTab) {
     let names: Vec<f32> = tabs
         .iter()
@@ -220,31 +221,32 @@ fn tab_row(ui: &mut Ui, shown: DockTab, tabs: &[DockTab], chosen: &mut DockTab) 
                 .x
         })
         .collect();
-    let gaps = TAB_GAP * (tabs.len() - 1) as f32;
-    let share = (ui.available_width() - gaps - names.iter().sum::<f32>()) / tabs.len() as f32;
-    let wrapped = share < 2.0 * TAB_PAD_MIN;
-    let add = |ui: &mut Ui| {
-        ui.spacing_mut().item_spacing.x = TAB_GAP;
-        ui.spacing_mut().button_padding.x = if wrapped {
-            TAB_PAD_MIN
-        } else {
-            (share / 2.0).clamp(0.0, 8.0)
-        };
-        for (&tab, name) in tabs.iter().zip(&names) {
-            let on = shown == tab;
-            let mut button = egui::Button::selectable(on, tab.name()).truncate();
-            if !wrapped {
-                button = button.min_size(Vec2::new((name + share.max(0.0)).floor(), 0.0));
-            }
-            if ui.add(button).clicked() && !on {
-                *chosen = tab;
-            }
-        }
+    let gaps = |n: usize| TAB_GAP * (n - 1) as f32;
+    let share = |names: &[f32], width: f32| {
+        (width - gaps(names.len()) - names.iter().sum::<f32>()) / names.len() as f32
     };
-    if wrapped {
-        ui.horizontal_wrapped(add);
+    let width = ui.available_width();
+    let rows = if share(&names, width) < 2.0 * TAB_PAD_MIN {
+        2
     } else {
-        ui.horizontal(add);
+        1
+    };
+    let first = tabs.len().div_ceil(rows);
+    for (row_tabs, row_names) in tabs.chunks(first).zip(names.chunks(first)) {
+        let share = share(row_names, width);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = TAB_GAP;
+            ui.spacing_mut().button_padding.x = (share / 2.0).clamp(0.0, 8.0);
+            for (&tab, name) in row_tabs.iter().zip(row_names) {
+                let on = shown == tab;
+                let button = egui::Button::selectable(on, tab.name())
+                    .truncate()
+                    .min_size(Vec2::new((name + share.max(0.0)).floor(), 0.0));
+                if ui.add(button).clicked() && !on {
+                    *chosen = tab;
+                }
+            }
+        });
     }
 }
 

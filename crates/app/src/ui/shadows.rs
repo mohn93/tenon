@@ -4,11 +4,11 @@
 //! entered or left, one undo step per edit.
 
 use egui::text::{CCursor, CCursorRange};
-use egui::{Color32, Id, RichText, Ui};
+use egui::{Id, RichText, Ui};
 use kernel::{Location, Shadows};
 
-use super::widgets;
 use super::{ShadowChange, UiAction, View};
+use super::{theme, widgets};
 
 /// The slider's steps for the time of day, in minutes.
 const TIME_STEP: u16 = 15;
@@ -60,16 +60,31 @@ fn date_text(year: u16, month: u8, day: u8) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// How a text field's edit ended.
+enum Edit {
+    /// Still being typed in, or not touched.
+    None,
+    /// Ended with the text it showed, or with Escape.
+    Same,
+    /// Ended with another text.
+    Entered(String),
+}
+
 /// A text field named `name` for the value `shown`: what is typed lives in egui's memory while
 /// the field has focus, and is returned once, when Enter or leaving the field ends the edit
-/// with a changed text (Escape keeps the value). The text is selected as the field takes focus.
-fn text_field(ui: &mut Ui, name: &str, shown: &str, width: f32) -> Option<String> {
+/// (Escape keeps the value). The text is selected as the field takes focus.
+fn text_field(ui: &mut Ui, name: &str, shown: &str, width: f32) -> Edit {
     let key = Id::new(("shadows-text", name));
-    let mut text = ui
+    let field = Id::new(("shadows-field", name));
+    // Text kept from a field that has since lost focus without an edit ending (it went with
+    // its tab) is stale.
+    let typed = ui
         .data(|d| d.get_temp::<String>(key))
-        .unwrap_or_else(|| shown.to_owned());
+        .filter(|_| ui.memory(|m| m.has_focus(field) || m.had_focus_last_frame(field)));
+    let kept = typed.is_some();
+    let mut text = typed.unwrap_or_else(|| shown.to_owned());
     let output = egui::TextEdit::singleline(&mut text)
-        .id(Id::new(("shadows-field", name)))
+        .id(field)
         .desired_width(width)
         .show(ui);
     let edit = &output.response.response;
@@ -84,19 +99,26 @@ fn text_field(ui: &mut Ui, name: &str, shown: &str, width: f32) -> Option<String
         state.cursor.set_char_range(Some(all));
         state.store(ui.ctx(), edit.id);
     }
-    if edit.lost_focus() {
-        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        ui.data_mut(|d| d.remove::<String>(key));
-        return (!escaped && text != shown).then_some(text);
-    }
     if edit.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, text));
+        return Edit::None;
     }
-    None
+    // Not focused: the text is dropped, committed when the field just lost focus.
+    ui.data_mut(|d| d.remove::<String>(key));
+    if !kept || !edit.lost_focus() {
+        return Edit::None;
+    }
+    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if escaped || text == shown {
+        Edit::Same
+    } else {
+        Edit::Entered(text)
+    }
 }
 
 /// The Shadows tab (the tab is its title); the dock's top area scrolls it.
 pub(super) fn shadows(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
+    forget_gone(ui, view);
     let s = view.shadows;
     let mut on = s.on;
     if ui
@@ -143,6 +165,8 @@ fn time_row(ui: &mut Ui, s: &Shadows, actions: &mut Vec<UiAction>) {
             .add(
                 egui::Slider::new(&mut minutes, 0..=LAST_TIME)
                     .step_by(f64::from(TIME_STEP))
+                    // A time between the steps stays as it is until the slider is moved.
+                    .clamping(egui::SliderClamping::Never)
                     .show_value(false),
             )
             .labelled_by(label.id);
@@ -152,7 +176,7 @@ fn time_row(ui: &mut Ui, s: &Shadows, actions: &mut Vec<UiAction>) {
                 ..Default::default()
             }));
         }
-        if let Some(text) = text_field(ui, "Time of day", &time_text(s.minutes), 50.0) {
+        if let Edit::Entered(text) = text_field(ui, "Time of day", &time_text(s.minutes), 50.0) {
             actions.push(UiAction::SetShadows(ShadowChange {
                 time: Some(text),
                 ..Default::default()
@@ -184,20 +208,21 @@ fn date_row(ui: &mut Ui, s: &Shadows, actions: &mut Vec<UiAction>) {
     });
     ui.horizontal(|ui| {
         ui.label("Year");
-        if let Some(text) = text_field(ui, "Year value", &s.year.to_string(), 50.0) {
-            // The day stays, held to the new year's month (Feb 29). Text that is no year goes
-            // to the command as typed, which refuses it.
-            let date = match text.trim().parse::<u16>() {
+        match text_field(ui, "Year value", &s.year.to_string(), 50.0) {
+            Edit::Entered(text) => match text.trim().parse::<u16>() {
+                // The day stays, held to the new year's month (Feb 29).
                 Ok(year) => {
                     let day = s.day.min(Shadows::days_in_month(year, s.month));
-                    date_text(year, s.month, day.max(1))
+                    clear_error(ui);
+                    actions.push(UiAction::SetShadows(ShadowChange {
+                        date: Some(date_text(year, s.month, day.max(1))),
+                        ..Default::default()
+                    }));
                 }
-                Err(_) => format!("{}-{:02}-{:02}", text.trim(), s.month, s.day),
-            };
-            actions.push(UiAction::SetShadows(ShadowChange {
-                date: Some(date),
-                ..Default::default()
-            }));
+                Err(_) => set_error(ui, "Year must be a number".into()),
+            },
+            Edit::Same => clear_error(ui),
+            Edit::None => {}
         }
     });
 }
@@ -223,9 +248,32 @@ fn level_row(
     });
 }
 
-/// The egui memory key of the message about a location field that is no number.
+/// The egui memory key of the message about a field that is no number.
 fn error_key() -> Id {
-    Id::new("shadows-location-error")
+    Id::new("shadows-number-error")
+}
+
+/// The egui memory key of the document count (`View::documents`) the tab last drew.
+fn document_key() -> Id {
+    Id::new("shadows-documents")
+}
+
+fn set_error(ui: &Ui, why: String) {
+    ui.data_mut(|d| d.insert_temp(error_key(), why));
+}
+
+fn clear_error(ui: &Ui) {
+    ui.data_mut(|d| d.remove::<String>(error_key()));
+}
+
+/// Drops the message when the model was replaced (after new or open it is about another
+/// model's field).
+fn forget_gone(ui: &Ui, view: &View) {
+    let seen = ui.data(|d| d.get_temp::<u64>(document_key()));
+    ui.data_mut(|d| d.insert_temp(document_key(), view.documents));
+    if seen.is_some_and(|n| n != view.documents) {
+        clear_error(ui);
+    }
 }
 
 /// The four location fields. Entering a number sets the whole location (one undo step); text
@@ -243,25 +291,23 @@ fn location(ui: &mut Ui, now: Location, actions: &mut Vec<UiAction>) {
         ui.horizontal(|ui| {
             ui.label(name);
             let field = format!("{name} value");
-            let Some(text) = text_field(ui, &field, &value.to_string(), 80.0) else {
-                return;
-            };
-            match text.trim().parse::<f64>() {
-                Ok(number) => {
-                    let mut next = now;
-                    set(&mut next, number);
-                    ui.data_mut(|d| d.remove::<String>(error_key()));
-                    actions.push(UiAction::SetLocation(next));
-                }
-                Err(_) => {
-                    let why = format!("{name} must be a number");
-                    ui.data_mut(|d| d.insert_temp(error_key(), why));
-                }
+            match text_field(ui, &field, &value.to_string(), 80.0) {
+                Edit::Entered(text) => match text.trim().parse::<f64>() {
+                    Ok(number) => {
+                        let mut next = now;
+                        set(&mut next, number);
+                        clear_error(ui);
+                        actions.push(UiAction::SetLocation(next));
+                    }
+                    Err(_) => set_error(ui, format!("{name} must be a number")),
+                },
+                Edit::Same => clear_error(ui),
+                Edit::None => {}
             }
         });
     }
     if let Some(why) = ui.data(|d| d.get_temp::<String>(error_key())) {
-        ui.label(RichText::new(why).color(Color32::from_rgb(200, 60, 50)));
+        ui.label(RichText::new(why).color(theme::tokens(ui.ctx().theme()).danger));
     }
     ui.label(
         RichText::new("North angle is clockwise from the green axis; UTC offset is in hours.")

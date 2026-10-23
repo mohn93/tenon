@@ -282,3 +282,155 @@ fn dates_and_times_read_as_the_panel_shows_them() {
     assert_eq!(time_text(13 * 60 + 30), "13:30");
     assert_eq!(time_text(5), "00:05");
 }
+
+#[test]
+fn a_time_off_the_quarter_hours_is_shown_and_not_rewritten() {
+    let odd = Fixture {
+        shadows: Shadows {
+            minutes: 13 * 60 + 37,
+            ..Default::default()
+        },
+        ..shadows_tab()
+    };
+    let mut h = tall(odd);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), [], "no input, no change");
+    assert_eq!(
+        h.get_by_label("Time of day")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("13:37")
+    );
+    // Typing a time off the steps sets exactly that time.
+    let mut h = tall(shadows_tab());
+    assert_eq!(
+        type_into(&mut h, "Time of day", 0, "09:10", egui::Key::Enter),
+        [change(|c| c.time = Some("09:10".into()))]
+    );
+}
+
+#[test]
+fn no_slider_changes_what_it_shows_without_input() {
+    let odd = Fixture {
+        shadows: Shadows {
+            minutes: 5,
+            month: 2,
+            day: 29,
+            year: 2024,
+            light: 3,
+            dark: 99,
+            ..Default::default()
+        },
+        ..shadows_tab()
+    };
+    let mut h = tall(odd);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+}
+
+#[test]
+fn a_year_that_is_no_number_says_so() {
+    let mut h = tall(shadows_tab());
+    assert_eq!(
+        type_into(&mut h, "Year value", 0, "abc", egui::Key::Enter),
+        []
+    );
+    h.get_by_label("Year must be a number");
+}
+
+#[test]
+fn the_number_message_goes_on_escape_and_with_the_document() {
+    let mut h = tall(shadows_tab());
+    type_into(&mut h, "Latitude value", 0, "north", egui::Key::Enter);
+    h.get_by_label("Latitude must be a number");
+    h.state_mut().documents += 1;
+    h.run_ok();
+    assert!(h.query_by_label("Latitude must be a number").is_none());
+    type_into(&mut h, "Latitude value", 0, "north", egui::Key::Enter);
+    h.get_by_label("Latitude must be a number");
+    // Entering the shown text again ends the edit and clears the message.
+    type_into(&mut h, "Latitude value", 0, "40.0167", egui::Key::Enter);
+    assert!(h.query_by_label("Latitude must be a number").is_none());
+    type_into(&mut h, "Longitude value", 0, "west", egui::Key::Enter);
+    h.get_by_label("Longitude must be a number");
+    type_into(&mut h, "Latitude value", 0, "5", egui::Key::Escape);
+    assert!(h.query_by_label("Longitude must be a number").is_none());
+}
+
+#[test]
+fn text_left_in_a_field_when_it_goes_is_forgotten() {
+    let mut h = tall(shadows_tab());
+    h.get_by_label("Latitude value").click();
+    h.run_ok();
+    h.event(egui::Event::Text("12".into()));
+    h.run_ok();
+    // The tab changes while the field has text typed in it.
+    h.state_mut().dock.tab = DockTab::Materials;
+    h.run_ok();
+    h.state_mut().dock.tab = DockTab::Shadows;
+    h.run_ok();
+    assert_eq!(
+        h.get_by_label("Latitude value")
+            .accesskit_node()
+            .value()
+            .as_deref(),
+        Some("40.0167")
+    );
+}
+
+/// The distinct rows of the tab buttons named `names`: each row's (top, left, right).
+fn tab_rows(h: &H, names: &[&str]) -> Vec<(f32, f32, f32)> {
+    let mut rows: Vec<(f32, f32, f32)> = Vec::new();
+    for name in names {
+        let r = rect_of(h, name);
+        match rows
+            .iter_mut()
+            .find(|(top, ..)| (*top - r.min.y).abs() < 2.0)
+        {
+            Some(row) => {
+                row.1 = row.1.min(r.min.x);
+                row.2 = row.2.max(r.max.x);
+            }
+            None => rows.push((r.min.y, r.min.x, r.max.x)),
+        }
+    }
+    rows
+}
+
+#[test]
+fn tabs_that_do_not_fit_wrap_into_balanced_justified_rows() {
+    let all = [
+        "Entity Info",
+        "Materials",
+        "Tags",
+        "Scenes",
+        "Shadows",
+        "Library",
+    ];
+    let h = harness(Fixture::default());
+    let rows = tab_rows(&h, &all);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let count = |row: &(f32, f32, f32)| {
+        all.iter()
+            .filter(|n| (rect_of(&h, n).min.y - row.0).abs() < 2.0)
+            .count()
+    };
+    assert_eq!([count(&rows[0]), count(&rows[1])], [3, 3]);
+    assert!((rows[0].2 - rows[1].2).abs() <= 1.0, "justified: {rows:?}");
+    assert!((rows[0].1 - rows[1].1).abs() <= 1.0, "{rows:?}");
+    // Without the Library tab: three and two, both rows as wide as the dock.
+    let h = harness(Fixture {
+        features: crate::platform::Features::WEB,
+        ..Default::default()
+    });
+    let five = &all[..5];
+    let rows = tab_rows(&h, five);
+    let count = |row: &(f32, f32, f32)| {
+        five.iter()
+            .filter(|n| (rect_of(&h, n).min.y - row.0).abs() < 2.0)
+            .count()
+    };
+    assert_eq!([count(&rows[0]), count(&rows[1])], [3, 2], "{rows:?}");
+    assert!((rows[0].2 - rows[1].2).abs() <= 1.0, "justified: {rows:?}");
+}
