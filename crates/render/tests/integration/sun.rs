@@ -377,11 +377,15 @@ fn the_ground_shows_no_shadow_to_a_camera_below_it() {
     let Some(mut snap) = gpu() else { return };
     let mut d = one_box();
     look(&mut d, [3.0, -4.0, -3.0], [1.0, 0.75, 0.0]);
+    // Compared with the same view without the sun: a grid line may cross the sampled pixel.
+    let plain = shoot(&mut snap, &d, None, Lighting::Day);
     let shot = shoot(&mut snap, &d, Some(sun(west(), 0.8, 0.45)), Lighting::Day);
+    let at = [2.5, 0.75, 0.0];
     assert!(
-        close(shot.at([2.5, 0.75, 0.0]), background(), 2),
-        "{:?}",
-        shot.at([2.5, 0.75, 0.0])
+        close(shot.at(at), plain.at(at), 2),
+        "{:?} {:?}",
+        shot.at(at),
+        plain.at(at)
     );
 }
 
