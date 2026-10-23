@@ -15,6 +15,7 @@ mod recover;
 mod scenes;
 mod sections;
 mod settings;
+mod shadows;
 mod sheets;
 mod start;
 mod status;
@@ -71,6 +72,8 @@ pub(super) struct Fixture {
     pub section_display: SectionDisplay,
     pub x_ray: bool,
     pub hidden_geometry: bool,
+    pub shadows: kernel::Shadows,
+    pub location: kernel::Location,
     pub viewport_menu: Option<ViewportMenu>,
     pub scenes: Vec<SceneRow>,
     /// How many times the document was replaced.
@@ -182,6 +185,8 @@ impl Default for Fixture {
             section_display: SectionDisplay::default(),
             x_ray: false,
             hidden_geometry: false,
+            shadows: kernel::Shadows::default(),
+            location: kernel::Location::DEFAULT,
             viewport_menu: None,
             scenes: Vec::new(),
             documents: 0,
@@ -271,6 +276,8 @@ impl Fixture {
             section_display: self.section_display,
             x_ray: self.x_ray,
             hidden_geometry: self.hidden_geometry,
+            shadows: self.shadows,
+            location: self.location,
             viewport_menu: self.viewport_menu,
             scenes: &self.scenes,
             documents: self.documents,

@@ -35,6 +35,7 @@ mod right;
 mod scene_tabs;
 mod scenes;
 mod settings;
+mod shadows;
 mod sheets;
 mod start;
 mod status;
@@ -189,6 +190,12 @@ pub enum UiAction {
     SetXRay(bool),
     /// View > Hidden Geometry: draw hidden entities ghosted and let them be picked.
     SetHiddenGeometry(bool),
+    /// View > Shadows and the Shadows tab's On toggle: sun shadows on or off.
+    SetShadowsOn(bool),
+    /// The Shadows tab's date, time, levels and ground toggle.
+    SetShadows(ShadowChange),
+    /// The Shadows tab's location fields: the whole location, one undo step.
+    SetLocation(kernel::Location),
     /// Edit > Reverse Faces: turn the selected faces over.
     ReverseFaces,
     /// Orient Faces: make the faces joined to the face (None: the lowest-id selected face) agree
@@ -340,6 +347,17 @@ pub enum UiAction {
     ConfirmSaveToLibrary(String),
     /// The overwrite sheet's Replace.
     ConfirmOverwriteLibrary,
+}
+
+/// What the Shadows tab changes of the shadow settings besides On: each field as `set_shadows`
+/// takes it ("YYYY-MM-DD", "HH:MM", percentages); None leaves it as it is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShadowChange {
+    pub date: Option<String>,
+    pub time: Option<String>,
+    pub light: Option<u8>,
+    pub dark: Option<u8>,
+    pub on_ground: Option<bool>,
 }
 
 /// What a library save stores.
@@ -498,6 +516,10 @@ pub struct View<'a> {
     pub x_ray: bool,
     /// Whether hidden entities are drawn ghosted and can be picked (checked in the View menu).
     pub hidden_geometry: bool,
+    /// The sun shadow settings (the Shadows tab, checked in the View menu).
+    pub shadows: kernel::Shadows,
+    /// Where the model stands (the Shadows tab's Location fields).
+    pub location: kernel::Location,
     /// The viewport's right-click menu, while it is open.
     pub viewport_menu: Option<ViewportMenu>,
     /// Every scene, in order: the scene tabs show while there is one.

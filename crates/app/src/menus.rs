@@ -415,6 +415,9 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         )
         .checked(view.hidden_geometry)
         .entry(),
+        Item::new("Shadows", UiAction::SetShadowsOn(!view.shadows.on))
+            .checked(view.shadows.on)
+            .entry(),
         Entry::Separator,
         Item::new("Add Scene", UiAction::AddScene).entry(),
         bound_item(
@@ -584,6 +587,7 @@ pub fn item_id(action: &UiAction) -> String {
         UiAction::SetSectionFill(_) => "ToggleSectionFill".into(),
         UiAction::SetXRay(_) => "ToggleXRay".into(),
         UiAction::SetHiddenGeometry(_) => "ToggleHiddenGeometry".into(),
+        UiAction::SetShadowsOn(_) => "ToggleShadows".into(),
         _ => format!("{action:?}"),
     }
 }

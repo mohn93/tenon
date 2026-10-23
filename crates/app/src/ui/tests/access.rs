@@ -174,6 +174,16 @@ fn fixtures() -> Vec<(&'static str, Fixture)> {
     let mut all = vec![
         ("the default", Fixture::default()),
         ("the tags tab", super::tags::tags_tab()),
+        (
+            "the shadows tab",
+            Fixture {
+                dock: DockLayout {
+                    tab: DockTab::Shadows,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
         ("the scenes tab and scene tabs", super::scenes::scenes_tab()),
         (
             "entity info's tag field",

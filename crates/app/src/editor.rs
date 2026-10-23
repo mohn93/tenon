@@ -1397,6 +1397,52 @@ impl Editor {
         true
     }
 
+    /// Turns the sun shadows on or off; the tool's operation goes on. False if they already are.
+    pub fn set_shadows_on(&mut self, on: bool) -> bool {
+        if self.doc.shadows.on == on {
+            return false;
+        }
+        self.run_camera_command(Command::SetShadows {
+            on: Some(on),
+            date: None,
+            time: None,
+            light: None,
+            dark: None,
+            on_ground: None,
+        });
+        true
+    }
+
+    /// Changes the shadow date, time, levels or ground toggle through `set_shadows` (no undo
+    /// step); a value it refuses shows its message. False if there is nothing to change.
+    pub fn set_shadows(&mut self, change: &crate::ui::ShadowChange) -> bool {
+        self.run_camera_command(Command::SetShadows {
+            on: None,
+            date: change.date.clone(),
+            time: change.time.clone(),
+            light: change.light.map(i64::from),
+            dark: change.dark.map(i64::from),
+            on_ground: change.on_ground,
+        });
+        true
+    }
+
+    /// Moves the model on the Earth through `set_location`: one undo step, unless it is where
+    /// it already is. A location it refuses shows its message.
+    pub fn set_location(&mut self, location: kernel::Location) -> bool {
+        if self.doc.scene().location() == location {
+            return false;
+        }
+        self.message = None;
+        self.run(Command::SetLocation {
+            latitude: Some(location.latitude),
+            longitude: Some(location.longitude),
+            north_angle: Some(location.north_angle),
+            utc_offset: Some(location.utc_offset),
+        });
+        true
+    }
+
     /// Runs a camera command; the tool's operation and typed text stay. True if the camera or
     /// the status message changed (only a camera change can change the hover).
     fn run_camera_command(&mut self, command: Command) -> bool {
@@ -4637,6 +4683,62 @@ mod tests {
         assert_eq!(stats(&e).0, before.0 - 1, "undo skips the lighting");
         assert_eq!(e.doc().lighting, Lighting::Night);
         assert!(e.set_lighting(Lighting::Day));
+    }
+
+    #[test]
+    fn shadow_settings_come_from_the_editor_and_are_not_edits() {
+        use crate::ui::ShadowChange;
+        let mut e = editor();
+        let revision = e.doc().revision();
+        assert!(e.set_shadows_on(true));
+        assert!(e.doc().shadows.on);
+        assert!(!e.set_shadows_on(true), "already on");
+        e.set_shadows(&ShadowChange {
+            date: Some("2026-06-21".into()),
+            time: Some("16:45".into()),
+            light: Some(70),
+            dark: Some(30),
+            on_ground: Some(false),
+        });
+        let s = e.doc().shadows;
+        assert_eq!(
+            (s.month, s.day, s.minutes, s.light, s.dark, s.on_ground),
+            (6, 21, 16 * 60 + 45, 70, 30, false)
+        );
+        assert_eq!(e.doc().revision(), revision);
+        assert!(!e.doc().is_modified());
+        assert_eq!(e.doc().undo_label(), None, "no undo step");
+        // A value the command refuses shows its message and changes nothing.
+        e.set_shadows(&ShadowChange {
+            time: Some("25:00".into()),
+            ..Default::default()
+        });
+        assert_eq!(e.doc().shadows, s);
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+    }
+
+    #[test]
+    fn the_location_is_one_undo_step() {
+        let mut e = editor();
+        let london = kernel::Location {
+            latitude: 51.5,
+            longitude: -0.12,
+            north_angle: 10.0,
+            utc_offset: 0.0,
+        };
+        assert!(e.set_location(london));
+        assert_eq!(e.doc().scene().location(), london);
+        assert_eq!(e.doc().undo_label(), Some("set_location"));
+        assert!(!e.set_location(london), "where it already is");
+        e.undo();
+        assert_eq!(e.doc().scene().location(), kernel::Location::DEFAULT);
+        // Out of range: refused with the command's message, nothing changes.
+        assert!(e.set_location(kernel::Location {
+            latitude: 95.0,
+            ..london
+        }));
+        assert_eq!(e.doc().scene().location(), kernel::Location::DEFAULT);
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
     }
 
     #[test]

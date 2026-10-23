@@ -2017,6 +2017,15 @@ impl State {
             UiAction::SetLighting(mode) => {
                 self.editor.set_lighting(mode);
             }
+            UiAction::SetShadowsOn(on) => {
+                self.editor.set_shadows_on(on);
+            }
+            UiAction::SetShadows(change) => {
+                self.editor.set_shadows(&change);
+            }
+            UiAction::SetLocation(location) => {
+                self.editor.set_location(location);
+            }
             UiAction::ChooseMaterial(material) => {
                 self.editor.choose_material(material);
             }
@@ -2655,6 +2664,8 @@ impl State {
             section_display: self.editor.doc().section_display,
             x_ray: self.editor.doc().x_ray,
             hidden_geometry: self.editor.doc().hidden_geometry,
+            shadows: self.editor.doc().shadows,
+            location: self.editor.doc().scene().location(),
             viewport_menu,
             scenes: &scenes,
             documents: self.editor.documents(),

@@ -52,23 +52,36 @@ fn names_shown(h: &H) -> Vec<&'static str> {
         .collect()
 }
 
+/// Whether tab `b` comes after tab `a` in reading order: to its right on the same row, or on a
+/// row below (the tabs wrap when they do not fit in one).
+fn follows(a: Rect, b: Rect) -> bool {
+    a.max.x <= b.min.x || a.max.y <= b.min.y
+}
+
 #[test]
 fn the_library_tab_follows_scenes_and_is_chosen_by_a_click() {
     let mut h = harness(Fixture::default());
     assert_eq!(click(&mut h, "Library"), [UiAction::SetDock(library_tab())]);
     let h = harness(library());
     assert_eq!(is_on(&h, "Library"), Some(true));
-    assert!(rect_of(&h, "Scenes").max.x <= rect_of(&h, "Library").min.x);
+    assert!(follows(rect_of(&h, "Scenes"), rect_of(&h, "Library")));
 }
 
 #[test]
 fn every_tab_stays_reachable_in_the_smallest_window() {
     let mut h = harness_sized(Fixture::default(), Vec2::new(960.0, 640.0));
-    let tabs = ["Entity Info", "Materials", "Tags", "Scenes", "Library"];
+    let tabs = [
+        "Entity Info",
+        "Materials",
+        "Tags",
+        "Scenes",
+        "Shadows",
+        "Library",
+    ];
     let rects: Vec<Rect> = tabs.iter().map(|t| rect_of(&h, t)).collect();
     let dock = h.state().central.max.x;
     for pair in rects.windows(2) {
-        assert!(pair[0].max.x <= pair[1].min.x, "{rects:?}");
+        assert!(follows(pair[0], pair[1]), "{rects:?}");
     }
     assert!(rects.iter().all(|r| r.min.x >= dock), "{rects:?} in {dock}");
     assert_eq!(click(&mut h, "Library"), [UiAction::SetDock(library_tab())]);
