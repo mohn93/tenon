@@ -376,3 +376,80 @@ fn crossing_triangles_meet_along_a_segment() {
     assert!(segs[0].0.z.abs() < 1e-9 && segs[0].1.z.abs() < 1e-9);
     assert!(segs[0].0.distance(segs[0].1) > 0.1);
 }
+
+fn square_at(lo: f64, hi: f64) -> [DVec3; 4] {
+    [
+        p(lo, lo, 0.0),
+        p(hi, lo, 0.0),
+        p(hi, hi, 0.0),
+        p(lo, hi, 0.0),
+    ]
+}
+
+#[test]
+fn coplanar_faces_with_holes_on_both_give_the_outlines_inside_the_other() {
+    // b's outline (16) lies in a's area; a's hole outline (8) lies in b's area; b's hole
+    // lies inside a's hole, so its outline (4) is in no area.
+    let (ah, bh) = (square_at(2.0, 4.0), square_at(2.5, 3.5));
+    let a = shape(&square_at(0.0, 6.0), &[&ah]);
+    let b = shape(&square_at(1.0, 5.0), &[&bh]);
+    for segs in [face_segments(&a, &b), face_segments(&b, &a)] {
+        assert!((length(&segs) - 24.0).abs() < 1e-9, "{segs:?}");
+    }
+}
+
+#[test]
+fn narrow_coplanar_faces_touching_give_nothing() {
+    let w = 2.0 * LENGTH_TOL;
+    let a = flat(0.0, 0.0, 2.0, w, 0.0);
+    assert!(face_segments(&a, &flat(0.0, w, 2.0, 2.0 * w, 0.0)).is_empty());
+    // Overlapping instead of touching: the shared strip's outline is found.
+    let segs = face_segments(&a, &flat(0.0, 0.5 * w, 2.0, 1.5 * w, 0.0));
+    assert!(length(&segs) >= 4.0 - 1e-9, "{segs:?}");
+}
+
+#[test]
+fn a_mirrored_face_crosses_a_skewed_one() {
+    let (m, id) = model_with_quad(quad(2.0));
+    // x -> 1 - x: the face spans x in -1..1.
+    let t = DAffine3 {
+        matrix3: DMat3::from_diagonal(p(-1.0, 1.0, 1.0)),
+        translation: p(1.0, 0.0, 0.0),
+    };
+    let s = face_shape(&m, id, t).unwrap();
+    let skew = shape(
+        &[
+            p(-2.0, 0.5, -1.0),
+            p(2.0, 0.5, -1.0),
+            p(2.0, 1.5, 1.0),
+            p(-2.0, 1.5, 1.0),
+        ],
+        &[],
+    );
+    for (a, b) in [(&s, &skew), (&skew, &s)] {
+        let (u, v) = only(&face_segments(a, b));
+        near(u, p(-1.0, 1.0, 0.0));
+        near(v, p(1.0, 1.0, 0.0));
+    }
+}
+
+#[test]
+fn add_segments_merges_overlaps_and_splits_at_crossings() {
+    let (mut m, _) = model_with_quad(quad(4.0));
+    m.add_segments(&[
+        (p(0.0, 2.0, 0.0), p(3.0, 2.0, 0.0)),
+        (p(1.0, 2.0, 0.0), p(4.0, 2.0, 0.0)),
+        (p(2.0, 0.0, 0.0), p(2.0, 4.0, 0.0)),
+    ])
+    .unwrap();
+    m.validate().unwrap();
+    // The corners, the four edge midpoints, the centre, and the ends (1,2) and (3,2) of the
+    // overlapping segments.
+    assert_eq!(m.vertices().count(), 11);
+    assert_eq!(m.edges().count(), 14);
+    assert_eq!(m.faces().count(), 4);
+    assert!(
+        m.faces()
+            .all(|(id, _)| (m.area(id).unwrap() - 4.0).abs() < 1e-9)
+    );
+}

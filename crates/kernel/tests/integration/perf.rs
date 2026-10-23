@@ -337,3 +337,37 @@ fn time_intersecting_two_overlapping_terrains() {
     assert!(drew < Duration::from_secs(60), "drawing took {drew:?}");
     b.validate().unwrap();
 }
+
+/// A comb of `n` teeth (4n edges) in z = 0, teeth 1 m wide with 1 m gaps, shifted by `(dx, dy)`.
+fn comb(n: usize, dx: f64, dy: f64) -> kernel::intersect::FaceShape {
+    let at = |x: f64, y: f64| DVec3::new(x + dx, y + dy, 0.0);
+    let mut outer = vec![at(0.0, 0.0), at(2.0 * n as f64 - 1.0, 0.0)];
+    for i in (0..n).rev() {
+        let x = 2.0 * i as f64;
+        outer.push(at(x + 1.0, 3.0));
+        outer.push(at(x, 3.0));
+        if i > 0 {
+            outer.push(at(x, 1.0));
+            outer.push(at(x - 1.0, 1.0));
+        }
+    }
+    kernel::intersect::FaceShape {
+        plane: kernel::geom::Plane::through(DVec3::ZERO, DVec3::Z),
+        outer,
+        holes: vec![],
+    }
+}
+
+#[test]
+#[ignore]
+fn time_intersecting_two_coplanar_combs() {
+    let a = comb(1_000, 0.0, 0.0);
+    let b = comb(1_000, 0.5, 0.5);
+    assert_eq!(a.outer.len(), 4_000);
+    let (segs, took) = timed("two coplanar 4,000 edge combs", || {
+        kernel::intersect::face_segments(&a, &b)
+    });
+    eprintln!("{} segments", segs.len());
+    assert!(!segs.is_empty());
+    assert!(took < Duration::from_secs(1), "took {took:?}");
+}
