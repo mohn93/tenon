@@ -320,6 +320,30 @@ pub enum Command {
     /// Replace instances by their geometry, which merges with what it touches. Instances and
     /// guides inside them come out as instances and guides. What comes out becomes the selection.
     Explode { ids: Vec<EntityId> },
+    /// Give the component instances in `ids` (default: the selection; other entities are
+    /// ignored) whose definition has other instances, in any context, a definition of their
+    /// own, as one undo step. All the selected instances of one definition share one new copy,
+    /// named like the old one with `#N` (the smallest N of 2 or more no definition has).
+    /// Groups, sole instances and nested components are left alone (a copy shares the
+    /// components inside it, and copies the groups). The outcome's `definitions` lists the new
+    /// ones; with nothing to do it is empty and no undo step is made.
+    MakeUnique {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
+    /// Mirror `ids` (default: the selection) as one undo step; faces keep facing out and
+    /// instances may become mirrored. `frame` `axes` (default): about the plane through the
+    /// center of the selection's box in the current drawing axes, normal to the `axis` of
+    /// those axes (`red` x, `green` y, `blue` z). `own`: `ids` is exactly one instance,
+    /// mirrored about its own center along its own `axis`, and stays where it is. The outcome's
+    /// `changed` lists the ids flipped.
+    Flip {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        axis: FlipAxis,
+        #[serde(default)]
+        frame: FlipFrame,
+    },
     /// Edit the definition an instance of the open context places: its entities become the
     /// ones commands and queries see, in its own coordinates. Clears the selection. Not
     /// recorded in undo history.
@@ -876,6 +900,37 @@ pub enum AnchorInput {
     Point([f64; 3]),
 }
 
+/// The axis `Command::Flip` mirrors along, by its colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FlipAxis {
+    Red,
+    Green,
+    Blue,
+}
+
+impl FlipAxis {
+    /// The axis' index: x 0, y 1, z 2.
+    pub fn index(self) -> usize {
+        match self {
+            FlipAxis::Red => 0,
+            FlipAxis::Green => 1,
+            FlipAxis::Blue => 2,
+        }
+    }
+}
+
+/// Whose axes `Command::Flip` mirrors along.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FlipFrame {
+    /// The current drawing axes.
+    #[default]
+    Axes,
+    /// The one selected instance's own axes.
+    Own,
+}
+
 /// How `Command::Select` combines `ids` with the current selection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -953,6 +1008,10 @@ pub struct Outcome {
     /// other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged: Option<usize>,
+    /// The definitions a `make_unique` made, in order (empty when it did nothing); absent for
+    /// other commands. Batch commands can refer to them as `$N:dI`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definitions: Option<Vec<DefinitionId>>,
     /// What an `add_3d_text` made and left out; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_3d: Option<Text3dReport>,

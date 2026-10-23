@@ -744,3 +744,137 @@ fn copying_or_erasing_instances_of_a_missing_mesh_is_refused_without_a_panic() {
     assert!(s.erase_instances(missing, &[group]).is_empty());
     assert_eq!(s, before);
 }
+
+/// A component "Chair" placed twice, holding one instance of a box made as `inner_kind`.
+fn two_chairs(inner_kind: DefinitionKind) -> (Scene, [InstanceId; 2]) {
+    let mut s = box_scene(DVec3::ZERO);
+    let (inner, _) = group_all(&mut s, inner_kind);
+    let (chair, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[inner],
+            DefinitionKind::Component,
+            "Chair",
+        )
+        .unwrap();
+    s.copy_instances(MeshId::Root, &[chair], p(5.0, 0.0, 0.0), 1)
+        .unwrap();
+    let ids: Vec<InstanceId> = s.root().instances().map(|(i, _)| i).collect();
+    (s, [ids[0], ids[1]])
+}
+
+#[test]
+fn make_unique_gives_the_instance_a_copy_with_nested_groups_copied() {
+    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    let shared = definition_of(&s, a);
+    let inner_before = s
+        .definition(shared)
+        .unwrap()
+        .mesh
+        .instances()
+        .next()
+        .unwrap()
+        .1
+        .definition;
+    let before = s.clone();
+    let (made, change) = s.make_unique(MeshId::Root, &[b]).unwrap();
+    s.validate().unwrap();
+    assert_eq!(made.len(), 1);
+    assert_eq!(definition_of(&s, a), shared);
+    assert_eq!(definition_of(&s, b), made[0]);
+    assert_eq!(s.definition(made[0]).unwrap().name, "Chair#2");
+    assert_eq!(
+        s.definition(made[0]).unwrap().kind,
+        DefinitionKind::Component
+    );
+    let inner_after = s
+        .definition(made[0])
+        .unwrap()
+        .mesh
+        .instances()
+        .next()
+        .unwrap()
+        .1
+        .definition;
+    assert_ne!(inner_after, inner_before, "a nested group is copied");
+    assert_eq!(s.instance_count(shared), 1);
+    // Nothing else changed: the first chair and its group are as they were.
+    assert_eq!(
+        s.definition(shared).unwrap().mesh,
+        before.definition(shared).unwrap().mesh
+    );
+    assert_eq!(
+        s.root().instance(b).unwrap().transform,
+        before.root().instance(b).unwrap().transform
+    );
+    s.apply(&change.inverse());
+    s.validate().unwrap();
+    assert_eq!(s.definitions().count(), before.definitions().count());
+    assert_eq!(definition_of(&s, b), shared);
+    assert!(s.definition(made[0]).is_none());
+}
+
+#[test]
+fn make_unique_shares_nested_components() {
+    let (mut s, [_, b]) = two_chairs(DefinitionKind::Component);
+    let shared = definition_of(&s, b);
+    let inner = s
+        .definition(shared)
+        .unwrap()
+        .mesh
+        .instances()
+        .next()
+        .unwrap()
+        .1
+        .definition;
+    let (made, _) = s.make_unique(MeshId::Root, &[b]).unwrap();
+    let copied = s
+        .definition(made[0])
+        .unwrap()
+        .mesh
+        .instances()
+        .next()
+        .unwrap()
+        .1
+        .definition;
+    assert_eq!(copied, inner);
+    assert_eq!(s.instance_count(inner), 2);
+}
+
+#[test]
+fn make_unique_makes_one_copy_for_all_selected_instances_of_a_definition() {
+    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    let (made, _) = s.make_unique(MeshId::Root, &[a, b, a]).unwrap();
+    assert_eq!(made.len(), 1);
+    assert_eq!(definition_of(&s, a), definition_of(&s, b));
+    assert_eq!(s.instance_count(made[0]), 2);
+}
+
+#[test]
+fn make_unique_leaves_groups_and_sole_instances_alone() {
+    let mut s = box_scene(DVec3::ZERO);
+    let (g, _) = group_all(&mut s, DefinitionKind::Group);
+    let before = s.clone();
+    let (made, change) = s.make_unique(MeshId::Root, &[g]).unwrap();
+    assert!(made.is_empty());
+    assert!(change.is_empty());
+    assert_eq!(s.definitions().count(), before.definitions().count());
+    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    s.erase_instances(MeshId::Root, &[a]);
+    let (made, change) = s.make_unique(MeshId::Root, &[b]).unwrap();
+    assert!(made.is_empty() && change.is_empty());
+}
+
+#[test]
+fn unique_names_count_up_from_two_and_drop_a_trailing_number() {
+    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    assert_eq!(s.unique_name("Chair"), "Chair#2");
+    assert_eq!(s.unique_name("Chair#7"), "Chair#2");
+    assert_eq!(s.unique_name("Chair #"), "Chair ##2");
+    s.make_unique(MeshId::Root, &[b]).unwrap();
+    assert_eq!(s.unique_name("Chair"), "Chair#3");
+    assert_eq!(s.unique_name("Chair#2"), "Chair#3");
+    let _ = a;
+}

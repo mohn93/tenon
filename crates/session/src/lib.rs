@@ -41,8 +41,8 @@ pub use camera::{Camera, Lighting, Projection, Projector, Ray, StandardView};
 pub use circle::{DEFAULT_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS, circle_points};
 pub use clip::ClipOutline;
 pub use command::{
-    AnchorInput, BatchError, Command, CommandError, ErrorKind, ExpectedStep, IntersectReport,
-    IntersectScope, OrientOutcome, Origin, Outcome, SelectMode, TextureSource,
+    AnchorInput, BatchError, Command, CommandError, ErrorKind, ExpectedStep, FlipAxis, FlipFrame,
+    IntersectReport, IntersectScope, OrientOutcome, Origin, Outcome, SelectMode, TextureSource,
 };
 pub use document::{
     Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES, SectionDisplay,

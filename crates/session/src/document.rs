@@ -32,6 +32,7 @@ mod annotations;
 mod camera;
 mod clip;
 mod files;
+mod flip;
 mod follow_me;
 mod groups;
 mod hide;
@@ -130,6 +131,8 @@ pub struct Document {
     positioned: Option<usize>,
     /// How many definitions the last `purge_definitions` removed, until its outcome takes it.
     purged: Option<usize>,
+    /// The definitions the last `make_unique` made, until its outcome takes them.
+    made_definitions: Option<Vec<DefinitionId>>,
     /// What the last `add_3d_text` made, until its outcome takes it.
     text_report: Option<Text3dReport>,
     /// The material an `insert_library_item` of a material added or reused, for its outcome.
@@ -177,6 +180,7 @@ impl Document {
             last_hidden: Vec::new(),
             positioned: None,
             purged: None,
+            made_definitions: None,
             text_report: None,
             library_material: None,
             token: clip::new_token(),
@@ -421,6 +425,7 @@ impl Document {
             outcome.orient = self.orient_report.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
+            outcome.definitions = self.made_definitions.take();
             outcome.text_3d = self.text_report.take();
             outcome.material = self.library_material.take();
             return Ok(outcome);
@@ -676,6 +681,8 @@ impl Document {
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
+            | Command::MakeUnique { .. }
+            | Command::Flip { .. }
             | Command::RenameDefinition { .. }
             | Command::PurgeDefinitions {}
             | Command::AddMaterial { .. }
@@ -837,6 +844,8 @@ impl Document {
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
+            Command::MakeUnique { ids } => self.make_unique_changes(ids),
+            Command::Flip { ids, axis, frame } => self.flip_changes(ids, *axis, *frame),
             Command::RenameDefinition { definition, name } => {
                 self.rename_changes(*definition, name)
             }
@@ -1080,6 +1089,7 @@ impl Document {
                             orient: self.orient_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
+                            definitions: self.made_definitions.take(),
                             text_3d: self.text_report.take(),
                             material: self.library_material.take(),
                             units: (self.units != units_then).then_some(self.units),

@@ -1,6 +1,6 @@
 //! Making groups and components out of geometry.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec3};
 
@@ -186,7 +186,7 @@ impl Scene {
         for i in inner {
             let definition = match self.definition(i.definition).map(|d| d.kind) {
                 Some(DefinitionKind::Group) if survives => {
-                    let (d, made) = self.duplicate(i.definition);
+                    let (d, made) = self.duplicate(i.definition, None);
                     copied = SceneChange::join([copied, made]);
                     d
                 }
@@ -263,7 +263,7 @@ impl Scene {
             for original in &originals {
                 let definition = match self.definition(original.definition).map(|d| d.kind) {
                     Some(DefinitionKind::Group) => {
-                        let (d, made) = self.duplicate(original.definition);
+                        let (d, made) = self.duplicate(original.definition, None);
                         steps = SceneChange::join([steps, made]);
                         d
                     }
@@ -287,11 +287,55 @@ impl Scene {
         Ok(SceneChange::join([steps, placed]))
     }
 
+    /// Gives the component instances among `instances` of mesh `parent` whose definition has
+    /// other instances (in any mesh) a definition of their own: all the instances of one
+    /// definition share one new copy, named by `unique_name`. Groups and sole instances stay
+    /// as they are. Returns the new definitions, in the order of the old ones' ids.
+    pub fn make_unique(
+        &mut self,
+        parent: MeshId,
+        instances: &[InstanceId],
+    ) -> Result<(Vec<DefinitionId>, SceneChange), KernelError> {
+        let mesh = self.mesh(parent).ok_or(KernelError::DefinitionNotFound)?;
+        let mut shared: BTreeMap<DefinitionId, Vec<InstanceId>> = BTreeMap::new();
+        for id in instances.iter().collect::<BTreeSet<_>>() {
+            if let Some(i) = mesh.instance(*id)
+                && self
+                    .definition(i.definition)
+                    .is_some_and(|d| d.kind == DefinitionKind::Component)
+                && self.instance_count(i.definition) > 1
+            {
+                shared.entry(i.definition).or_default().push(*id);
+            }
+        }
+        let mut made = Vec::new();
+        let mut changes = Vec::new();
+        for (old, ids) in shared {
+            let name = self.unique_name(&self.definition(old).expect("counted").name);
+            let (new, change) = self.duplicate(old, Some(&name));
+            made.push(new);
+            changes.push(change);
+            let moved = self.edit(parent, |m| {
+                for id in ids {
+                    let mut i = m.remove_instance(id);
+                    i.definition = new;
+                    m.insert_instance_as(id, i);
+                }
+                Ok(m.take_changes())
+            })?;
+            changes.push(moved);
+        }
+        Ok((made, SceneChange::join(changes)))
+    }
+
     /// A new group definition holding a copy of `id`'s geometry, guides, section planes (the
     /// active one stays active) and annotations, with new ids; groups inside it are copied too, components inside are placed again.
-    fn duplicate(&mut self, id: DefinitionId) -> (DefinitionId, SceneChange) {
+    fn duplicate(&mut self, id: DefinitionId, name: Option<&str>) -> (DefinitionId, SceneChange) {
         let original = self.definition(id).expect("copy of a missing definition");
-        let (name, kind) = (original.name.clone(), original.kind);
+        let (name, kind) = (
+            name.map_or_else(|| original.name.clone(), str::to_string),
+            original.kind,
+        );
         let stencil = whole(&original.mesh);
         let children: Vec<Instance> = original.mesh.instances().map(|(_, i)| i.clone()).collect();
         let guides: Vec<Guide> = original.mesh.guides().map(|(_, g)| *g).collect();
@@ -314,7 +358,7 @@ impl Scene {
         for child in children {
             let definition = match self.definition(child.definition).map(|d| d.kind) {
                 Some(DefinitionKind::Group) => {
-                    let (d, made) = self.duplicate(child.definition);
+                    let (d, made) = self.duplicate(child.definition, None);
                     change = SceneChange::join([change, made]);
                     d
                 }

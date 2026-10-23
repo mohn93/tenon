@@ -508,7 +508,7 @@ pub fn describe() -> Value {
         "methods": {
             "execute": {
                 "params": "Command, ScreenCommand (select by a box on screen) or EditorCommand (EditorCommand result: {editor: EditorState, pdf?: {sheets, warnings} (export_pdf only), revision})",
-                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, intersect?: IntersectReport, changed?: [EntityId] (hide, unhide, unhide_last, unhide_all, reverse_faces), orient?: {flipped: [EntityId], conflicts: integer} (orient_faces), positioned?: integer, purged?: integer, text_3d?: Text3dReport, material?: MaterialId (insert_library_item of a material), units?: Units, revision}: the Outcome plus revision",
+                "result": "{changes: ChangeSummary, import?: ImportReport, export?: ExportReport, soften?: SoftenReport, intersect?: IntersectReport, changed?: [EntityId] (hide, unhide, unhide_last, unhide_all, reverse_faces, flip), orient?: {flipped: [EntityId], conflicts: integer} (orient_faces), positioned?: integer, purged?: integer, definitions?: [DefinitionId] (make_unique), text_3d?: Text3dReport, material?: MaterialId (insert_library_item of a material), units?: Units, revision}: the Outcome plus revision",
                 "params_schema": any_of_root(vec![
                     schema::<Command>(),
                     schema::<ScreenCommand>(),
@@ -519,7 +519,7 @@ pub fn describe() -> Value {
             "batch": {
                 "params": "{commands: [Command], atomic?: bool}",
                 "result": "{outcomes: [Outcome], changes: ChangeSummary, revision}: changes is the net effect of the whole batch",
-                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\"; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
+                "notes": "atomic: one undo step, all-or-nothing; undo/redo not allowed; an id may be a BatchRef to ids an earlier command of the batch made (\"$0:f0\", \"$0:d0\" for a definition make_unique made; a bad one is -32602 before anything runs, one past what was made fails its command with invalid_input)",
                 "params_schema": batch_params_schema(),
                 "result_schema": schema::<BatchResult>(),
             },

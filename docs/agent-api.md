@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all` and `reverse_faces` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -106,7 +106,7 @@ Unknown fields in commands, queries and params are rejected with `-32602` (a typ
 of silently doing nothing), and so are params given by position (an array).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `scale`, `offset`, `follow_me`, `make_group`,
-`make_component`, `explode`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
+`make_component`, `explode`, `make_unique`, `flip`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_dimension`,
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
@@ -143,6 +143,8 @@ Modeling commands, each one undo step:
 | `{"type": "make_group", "ids": ["e2", "f8", "i4"]}` | Moves edges, faces (with their edges), instances, guides, dimensions and notes (keeping their ids) into a new group definition and places one instance of it where they were; the instance becomes the selection. Edges that still bound a face left behind stay outside too. An annotation anchored to a vertex that goes inside stays anchored to it; one anchored to a vertex left outside anchors to where that vertex is, and a radial dimension whose circle stays outside keeps it as a fixed circle. Screen notes stay in the root. Vertex ids are `invalid_input`, and so are ids naming only guides and annotations. |
 | `{"type": "make_component", "ids": ["f8"], "name": "Chair"}` | Like `make_group`, but makes a named component: its copies share the definition, so editing one edits them all. An empty name is `invalid_input`. |
 | `{"type": "explode", "ids": ["i4"]}` | Replaces instances by their geometry, which merges with what it touches; instances, guides, dimensions and notes inside come out as such (with new ids; annotations stay anchored to their vertices, placed by the instance's transform). What comes out becomes the selection. Ids that are not instances are `invalid_input`, and so is an instance whose geometry, guides or annotations would land beyond the coordinate limit (naming it). |
+| `{"type": "make_unique", "ids": ["i4"]}` | Gives shared component instances a definition of their own (`Chair#2`); see Make Unique and Flip Along below. `ids` defaults to the selection. The outcome's `definitions` lists the new definitions |
+| `{"type": "flip", "ids": ["i4"], "axis": "red", "frame": "axes"}` | Mirrors the selection about the center of its box along the red, green or blue axis (`frame` `own`: one instance, along its own axis); see Make Unique and Flip Along below |
 | `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in; pushed in exactly as far as a parallel face that holds it (the back of a wall), it cuts an opening through. A face whose neighbors all run along the normal, like a box top, moves and stretches them; moved back flush with the surface around it (a recess or bump pushed back), it closes up and the seams heal. When the face is extruded, its sides along a curve get a moved copy on the cap that is a curve of its own, and the swept edges between two sides of one curve are soft (`"soft": true`), so a pulled circle is a cylinder with a smooth side. |
 
 `{"type": "select", "ids": ["f8"], "mode": "replace"}` changes the selection (edges, faces,
@@ -267,11 +269,11 @@ predicting them:
 ], "atomic": true}
 ```
 
-A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsm])(0|[1-9][0-9]*|\*)|\*)$`:
+A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmd])(0|[1-9][0-9]*|\*)|\*)$`:
 
 - `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
   face, `i` instance, `g` guide, `r` dimension, `n` note, `s` section plane from its `changes.created` (lowest id
-  first, which is the order they were made), or `m` material from its `changes.materials`.
+  first, which is the order they were made), `m` material from its `changes.materials`, or `d` definition from its `definitions` (a `make_unique` outcome).
 - `"$N:K*"` is all ids of that kind command N made, `"$N:*"` every edge, face, instance, guide,
   dimension, note and section plane it created (not vertices, which most commands refuse; `"$N:v*"` gives those; not materials).
   `*` references are allowed only in id lists (`ids`, and `path` of `open_path` and `follow_me`), where they
@@ -282,8 +284,8 @@ A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsm])(0|[1-9
 References are read only in a command's top-level `ids`, `face`, `id` and `material`, in
 `path` of `open_path` and `follow_me`, in `a` and `b` of `add_dimension`, `edge` of
 `add_edge_dimension` and `add_radial_dimension`, `anchor` of `add_note`, `note` of
-`change_note` and `plane` of `flip_section_plane` and `activate_section_plane`. Any other string, such as a name or a file path, stays as written even
-when it looks like a reference. `material` takes only `m` references, the other fields only
+`change_note`, `plane` of `flip_section_plane` and `activate_section_plane`, and `definition` of `rename_definition`. Any other string, such as a name or a file path, stays as written even
+when it looks like a reference. `material` takes only `m` references, `definition` only `d` references, the other fields only
 entity references; whether the entity suits the command (a face for `push_pull`) is checked by
 the command, as for a written id. Tag ids (`tag`, `move_to`) and scene ids (`scene`) take no
 references: a `$` string there is not a tag or scene id and fails the batch's parsing.
@@ -946,10 +948,30 @@ opens it (`open_path` with its whole path); the Model row at the top goes back t
 (`open_path` with `[]`; nothing when already there).
 
 `{"type": "rename_definition", "definition": "d5", "name": "Chair"}` renames a definition (one undo
-step; a component's name must not be empty; an unknown definition is `not_found`).
+step; a component's name must not be empty; an unknown definition is `not_found`; `definition` may be a `$N:dI` reference to a definition an earlier `make_unique` of the batch made).
 `{"type": "purge_definitions"}` removes every definition no instance places, such as a component
 whose last instance was erased, and what only it placed (one undo step). The outcome's `purged`
 counts the definitions removed, nested ones included (0 when nothing was unused).
+
+#### Make Unique and Flip Along
+
+`{"type": "make_unique", "ids": ["i4", "i9"]}` gives the component instances in `ids` (default,
+also when empty: the selection; other entities are ignored) whose definition has other
+instances, in any context, a definition of their own, as one undo step. All the listed instances
+of one definition share one new copy, named like the old one with `#N` in place of any trailing
+`#<digits>` (`Chair`, `Chair#2`, `Chair#3`; N is the smallest of 2 or more no definition's name
+is). The copy is deep for groups inside it and shares the components inside it. Groups and
+instances that are the only ones of their definition stay as they are. The outcome's
+`definitions` lists the new definitions (empty, with no undo step, when there was nothing to do);
+a batch refers to them as `$N:d0`.
+
+`{"type": "flip", "ids": ["f8", "i4"], "axis": "red"}` mirrors `ids` (default: the selection) as
+one undo step, `axis` being `red`, `green` or `blue` (x, y, z). `frame` `axes` (the default)
+mirrors about the plane through the center of the box around the selection, measured in the
+current drawing axes (the open context's own axes), normal to that axis; faces keep facing out,
+and instances become mirrored (negative determinant). `frame` `own` takes exactly one instance
+(else `invalid_input`) and mirrors it about its own center along its own axis (a column of its
+transform), leaving it where it was. The outcome's `changed` lists the flipped ids.
 
 ### Camera
 

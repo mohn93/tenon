@@ -397,6 +397,19 @@ impl Scene {
             .count()
     }
 
+    /// A name for a copy of the definition named `name`: `name` without a trailing `#<digits>`,
+    /// then `#N`, the smallest N of 2 or more that no definition's name already is.
+    pub fn unique_name(&self, name: &str) -> String {
+        let base = match name.rsplit_once('#') {
+            Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
+            _ => name,
+        };
+        (2..)
+            .map(|n| format!("{base}#{n}"))
+            .find(|candidate| self.definitions().all(|(_, d)| d.name != *candidate))
+            .expect("some name is free")
+    }
+
     /// Runs one kernel edit on a mesh and returns it as a scene change. New entities get ids
     /// unique across the scene. Panics if the mesh does not exist.
     pub fn edit(

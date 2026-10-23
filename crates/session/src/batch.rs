@@ -1,8 +1,8 @@
 //! Batch commands that refer to ids made by earlier commands of the same batch.
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
-//! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`) in command N's
-//! outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
+//! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`, `d` from the
+//! outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
 //! dimension, note and section plane command N created (not vertices: `"$N:v*"` names
 //! those). `*` references expand in place in id lists only.
 //!
@@ -12,8 +12,8 @@
 use std::fmt;
 
 use kernel::{
-    DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId, SectionId,
-    VertexId,
+    DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
+    SectionId, VertexId,
 };
 use serde_json::Value;
 
@@ -38,6 +38,7 @@ pub enum RefKind {
     Note,
     Section,
     Material,
+    Definition,
 }
 
 impl RefKind {
@@ -52,6 +53,7 @@ impl RefKind {
             'n' => RefKind::Note,
             's' => RefKind::Section,
             'm' => RefKind::Material,
+            'd' => RefKind::Definition,
             _ => return None,
         })
     }
@@ -67,6 +69,7 @@ impl RefKind {
             RefKind::Note => 'n',
             RefKind::Section => 's',
             RefKind::Material => 'm',
+            RefKind::Definition => 'd',
         }
     }
 
@@ -91,6 +94,8 @@ impl RefKind {
             RefKind::Section => "section planes",
             RefKind::Material if one => "material",
             RefKind::Material => "materials",
+            RefKind::Definition if one => "definition",
+            RefKind::Definition => "definitions",
         }
     }
 
@@ -133,7 +138,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsm])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmd])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -210,6 +215,16 @@ impl BatchRef {
         }
     }
 
+    /// The definition this reference stands for.
+    fn definition(&self, done: &[Outcome]) -> Result<DefinitionId, CommandError> {
+        let made = self
+            .outcome(done)?
+            .definitions
+            .as_deref()
+            .unwrap_or_default();
+        Ok(self.pick(made, RefKind::Definition)?[0])
+    }
+
     /// The material this reference stands for.
     fn material(&self, done: &[Outcome]) -> Result<MaterialId, CommandError> {
         let materials = &self.outcome(done)?.changes.materials;
@@ -250,6 +265,7 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
         || matches!(
             (key, command_type),
             ("item", Some("save_to_library"))
+                | ("definition", Some("rename_definition"))
                 | ("path", Some("open_path" | "follow_me"))
                 | ("a" | "b", Some("add_dimension"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
@@ -279,6 +295,8 @@ impl BatchCommand {
                 }
                 let material = if key == "material" {
                     Want::Material
+                } else if key == "definition" {
+                    Want::Definition
                 } else if key == "item" {
                     Want::Either
                 } else {
@@ -330,6 +348,7 @@ impl BatchCommand {
                 Slot::List(ids) => ids.iter().filter(|id| is_stand_in(id)).count(),
                 Slot::One(id) => usize::from(is_stand_in(id)),
                 Slot::Material(m) => usize::from(m.0 >= STAND_IN_BASE),
+                Slot::Definition(d) => usize::from(d.0 >= STAND_IN_BASE),
                 Slot::Item(r) => usize::from(is_stand_in_ref(r)),
             }
         });
@@ -369,6 +388,7 @@ impl BatchCommand {
                 Slot::List(ids) => self.resolve_list(ids, done),
                 Slot::One(id) => self.resolve_one(id, done),
                 Slot::Material(m) => self.resolve_material(m, done),
+                Slot::Definition(d) => self.resolve_definition(d, done),
                 Slot::Item(r) => self.resolve_item(r, done),
             };
             if let Err(e) = result {
@@ -413,6 +433,17 @@ impl BatchCommand {
         }
     }
 
+    fn resolve_definition(
+        &self,
+        d: &mut DefinitionId,
+        done: &[Outcome],
+    ) -> Result<(), CommandError> {
+        if d.0 >= STAND_IN_BASE {
+            *d = self.reference(d.0).definition(done)?;
+        }
+        Ok(())
+    }
+
     fn resolve_material(&self, m: &mut MaterialId, done: &[Outcome]) -> Result<(), CommandError> {
         if m.0 >= STAND_IN_BASE {
             *m = self.reference(m.0).material(done)?;
@@ -426,6 +457,7 @@ impl BatchCommand {
 enum Want {
     Entity,
     Material,
+    Definition,
     Either,
 }
 
@@ -442,6 +474,7 @@ fn replace(
     if !text.starts_with('$') {
         let literal = match want {
             Want::Material => text.parse::<MaterialId>().map(|m| m.0).ok(),
+            Want::Definition => text.parse::<DefinitionId>().map(|d| d.0).ok(),
             Want::Entity => text.parse::<EntityId>().map(|id| number(&id)).ok(),
             Want::Either => text.parse::<LibraryRef>().ok().map(|r| match r {
                 LibraryRef::Entity(id) => number(&id),
@@ -458,14 +491,28 @@ fn replace(
         return Err(format!("{text:?} must refer to an earlier command"));
     }
     let is_material = r.kind == Some(RefKind::Material);
+    let is_definition = r.kind == Some(RefKind::Definition);
     if want == Want::Material && !is_material {
         return Err(format!("{text:?} is not a material"));
+    }
+    if want == Want::Definition && !is_definition {
+        return Err(format!("{text:?} is not a definition"));
     }
     if want == Want::Entity && is_material {
         return Err(format!("{text:?} is a material, not an entity"));
     }
-    if r.index.is_none() && is_material {
-        return Err(format!("{text:?} must name one material"));
+    if want != Want::Definition && is_definition {
+        return Err(format!("{text:?} is a definition, not an entity"));
+    }
+    if r.index.is_none() && (is_material || is_definition) {
+        return Err(format!(
+            "{text:?} must name one {}",
+            if is_material {
+                "material"
+            } else {
+                "definition"
+            }
+        ));
     }
     if r.index.is_none() && !in_list {
         return Err(format!("{text:?} can only be used in a list of ids"));
@@ -504,6 +551,7 @@ enum Slot<'a> {
     List(&'a mut Vec<EntityId>),
     One(&'a mut EntityId),
     Material(&'a mut MaterialId),
+    Definition(&'a mut DefinitionId),
     /// An instance or a material (`save_to_library`'s `item`).
     Item(&'a mut LibraryRef),
 }
@@ -514,6 +562,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
     match command {
         Command::PushPull { face, .. } => f(Slot::One(face)),
         Command::OpenInstance { id } => f(Slot::One(id)),
+        Command::RenameDefinition { definition, .. } => f(Slot::Definition(definition)),
         Command::OrientFaces { id, ids } => {
             f(Slot::One(id));
             f(Slot::List(ids));
@@ -527,6 +576,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::MakeGroup { ids }
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }
+        | Command::MakeUnique { ids }
+        | Command::Flip { ids, .. }
         | Command::Hide { ids }
         | Command::Unhide { ids }
         | Command::ReverseFaces { ids }
@@ -589,7 +640,6 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::Add3dText { .. }
         | Command::SetUnits { .. }
         | Command::CloseInstance {}
-        | Command::RenameDefinition { .. }
         | Command::PurgeDefinitions {}
         | Command::UnhideLast {}
         | Command::UnhideAll {}
