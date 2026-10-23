@@ -790,3 +790,41 @@ fn at_most_a_thousand_plane_outlines_are_drawn_and_the_rest_still_cut() {
     );
     assert_eq!(b.sections.len(), session::MAX_SECTION_OUTLINES);
 }
+
+#[test]
+fn a_ghost_placement_is_not_cut_or_filled_whichever_placement_is_walked_first() {
+    let ghosts = render::scene::GlassView {
+        x_ray: false,
+        hidden_geometry: true,
+    };
+    let fill_area = |d: &Document| {
+        let b = scene_base_shown(
+            d.scene(),
+            d.context(),
+            false,
+            ghosts,
+            SectionDisplay::default(),
+        );
+        (
+            triangle_area(&b.cut_fill),
+            length(&b.cut_edges),
+            b.sections.len(),
+        )
+    };
+    // The copy hidden: the ghost is walked second; the original hidden: first.
+    for hide_copy in [true, false] {
+        let (mut d, copy) = cut_component_twice();
+        let first = d
+            .model()
+            .instances()
+            .map(|(id, _)| EntityId::Instance(id))
+            .find(|e| *e != copy)
+            .unwrap();
+        let hidden = if hide_copy { copy } else { first };
+        run(&mut d, Command::Hide { ids: vec![hidden] });
+        let (area, edges, planes) = fill_area(&d);
+        assert!((area - 1.5).abs() < 1e-5, "one fill, not a ghost's: {area}");
+        assert!((edges - 5.0).abs() < 1e-5, "one outline: {edges}");
+        assert_eq!(planes, 1, "a ghost's plane square is left out");
+    }
+}

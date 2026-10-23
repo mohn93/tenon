@@ -834,12 +834,14 @@ struct Walk<'a> {
     planes: Vec<SectionPlane>,
     /// What a mesh's own active plane cuts out of it, in the mesh's coordinates, by the mesh
     /// and the plane: a mesh placed many times, cut by no plane but its own, is cut once.
-    cuts: HashMap<(MeshId, [u64; 6]), Cut>,
+    /// (A ghost placement has its own, which stays empty: ghosts are not cut.)
+    cuts: HashMap<(MeshId, [u64; 6], bool), Cut>,
     /// The side of the square each mesh's section planes are drawn with.
     sides: HashMap<MeshId, f64>,
     /// What each mesh's own faces glow with, by the material it inherits, once worked out: one
     /// glow for an instance's mesh, one per connected group of glowing faces for the root's.
-    glows: HashMap<(MeshId, Option<MaterialId>), Vec<Glow>>,
+    /// (Ghost placements have their own, which give no light.)
+    glows: HashMap<(MeshId, Option<MaterialId>, bool), Vec<Glow>>,
     /// Instances from the root down to the mesh being walked.
     path: Vec<InstanceId>,
     base: SceneBase,
@@ -870,7 +872,7 @@ impl Walk<'_> {
         let mirrored = t.matrix3.determinant() < 0.0;
         let front = side_look(self.scene, self.layers, inherited, DEFAULT_FRONT);
         let back = side_look(self.scene, self.layers, inherited, DEFAULT_BACK);
-        let glow_key = (id, inherited);
+        let glow_key = (id, inherited, self.ghost);
         let scene = self.scene;
         let color_by_tag = self.color_by_tag;
         let GlassView {
@@ -903,7 +905,7 @@ impl Walk<'_> {
             let bits = [
                 p.point.x, p.point.y, p.point.z, p.normal.x, p.normal.y, p.normal.z,
             ];
-            (id, bits.map(f64::to_bits))
+            (id, bits.map(f64::to_bits), ghost_mesh)
         });
         let collect_local = cache_key.is_some_and(|k| !self.cuts.contains_key(&k));
         // The mesh's glow, when it has to be worked out (in its own coordinates). A placement
@@ -1138,7 +1140,7 @@ impl Walk<'_> {
             FADED_ANNOTATION_COLOR
         };
         for (did, d) in model.dimensions() {
-            if !scene.tag_shown(d.tag()) {
+            if ghost_mesh || !scene.tag_shown(d.tag()) {
                 continue;
             }
             let Some(shape) = AnnotationShape::of(model, EntityId::Dimension(did)) else {
@@ -1154,7 +1156,7 @@ impl Walk<'_> {
         }
         for (nid, n) in model.notes() {
             // Screen notes are the window's alone.
-            if !scene.tag_shown(n.tag()) || matches!(n, kernel::Note::Screen { .. }) {
+            if ghost_mesh || !scene.tag_shown(n.tag()) || matches!(n, kernel::Note::Screen { .. }) {
                 continue;
             }
             let Some(shape) = AnnotationShape::of(model, EntityId::Note(nid)) else {
@@ -1168,7 +1170,9 @@ impl Walk<'_> {
                 color,
             });
         }
-        if let Some(side) = side {
+        // Annotations and section squares are left out of ghosts (their labels are the
+        // window's, which draws strictly).
+        if let Some(side) = side.filter(|_| !ghost_mesh) {
             for (sid, plane) in model.sections() {
                 if !scene.tag_shown(plane.tag()) {
                     continue;

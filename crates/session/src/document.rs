@@ -515,13 +515,7 @@ impl Document {
             Command::SetHiddenGeometry { on } => {
                 self.hidden_geometry = on;
                 // Turned off, hidden entities leave the selection again.
-                let keep: BTreeSet<EntityId> = self
-                    .selection
-                    .iter()
-                    .copied()
-                    .filter(|id| !self.is_unselectable(*id))
-                    .collect();
-                self.selection = keep;
+                self.prune_hidden_selection();
                 Ok(Outcome::default())
             }
             Command::SetSectionDisplay { planes, cuts, fill } => {

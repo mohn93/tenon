@@ -314,3 +314,38 @@ fn glass_and_ghosts_show_in_a_capture_and_off_changes_nothing() {
     assert_ne!(ghost, plain, "fainter than the face");
     assert_eq!(capture(&s, GlassView::default()), empty, "off again");
 }
+
+/// The component's square painted with a lamp, so each placement is one light.
+fn lamp_scene() -> (Scene, Vec<InstanceId>) {
+    let (mut s, def, ids) = scene();
+    let (lamp, _) = s
+        .add_material_from(kernel::Material {
+            name: "Lamp".into(),
+            color: [255, 255, 255],
+            opacity: 1.0,
+            texture: None,
+            emission: 2.0,
+        })
+        .unwrap();
+    let face = s.mesh(def).unwrap().faces().next().unwrap().0;
+    s.paint(def, &[face], &[], kernel::Side::Front, Some(lamp))
+        .unwrap();
+    (s, ids)
+}
+
+#[test]
+fn a_ghost_gives_no_light_and_a_shown_placement_of_its_mesh_keeps_its_own() {
+    let (mut s, ids) = lamp_scene();
+    assert_eq!(shown_with(&s, &[], GHOSTS).lights.len(), 2);
+    // The hidden placement walked first, then last: the shown one lights either way.
+    for hidden in [ids[0], ids[1]] {
+        hide(&mut s, MeshId::Root, &[EntityId::Instance(hidden)]);
+        assert_eq!(scene_base(&s, &[]).lights.len(), 1, "off: the shown lamp");
+        let on = shown_with(&s, &[], GHOSTS);
+        assert_eq!(on.lights.len(), 1, "on: the ghost gives none");
+        s.edit(MeshId::Root, |m| {
+            Ok(m.hide_entities(&[EntityId::Instance(hidden)], false).0)
+        })
+        .unwrap();
+    }
+}

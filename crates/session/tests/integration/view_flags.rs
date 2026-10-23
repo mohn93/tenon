@@ -176,3 +176,25 @@ fn hidden_entities_can_be_selected_while_hidden_geometry_is_on() {
     run(&mut d, json!({"type": "set_hidden_geometry", "on": false}));
     assert_eq!(selected(&d), json!([]));
 }
+
+#[test]
+fn going_to_a_scene_with_hidden_geometry_off_prunes_the_selection() {
+    let mut d = doc();
+    let created = square(&mut d);
+    let face = created
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone();
+    let out = run(&mut d, json!({"type": "add_scene", "name": "Plain"}));
+    let plain = out["changes"]["scenes"][0].clone();
+    run(&mut d, json!({"type": "set_hidden_geometry", "on": true}));
+    run(&mut d, json!({"type": "hide", "ids": [face]}));
+    run(&mut d, json!({"type": "select", "ids": [face]}));
+    let selected = |d: &Document| ask(d, json!({"type": "selection"}))["ids"].clone();
+    assert_eq!(selected(&d), json!([face]));
+    // The scene changes no tag, so it is no undo step, but the flag goes off.
+    run(&mut d, json!({"type": "go_to_scene", "scene": plain}));
+    assert_eq!(camera(&d)["hidden_geometry"], false);
+    assert_eq!(selected(&d), json!([]));
+}

@@ -1,5 +1,7 @@
 //! Hiding and showing edges, faces, instances and guides.
 
+use std::collections::BTreeSet;
+
 use kernel::{EntityId, SceneChange};
 
 use super::Document;
@@ -59,6 +61,18 @@ impl Document {
             })
             .expect("hiding cannot fail");
         (change, changed)
+    }
+
+    /// Drops from the selection what it may not hold: hidden entities, once Hidden Geometry is
+    /// off.
+    pub(super) fn prune_hidden_selection(&mut self) {
+        let keep: BTreeSet<EntityId> = self
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| !self.is_unselectable(*id))
+            .collect();
+        self.selection = keep;
     }
 
     /// Whether the selection may not hold `id`: it is hidden (and Hidden Geometry, which lets

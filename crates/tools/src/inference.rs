@@ -422,8 +422,14 @@ pub fn guide_under_where(
             (d <= radius_px).then_some((d, (owner, id, g, p)))
         })
         .collect();
-    let strict = scenery.seen_strictly();
-    let sight = Sight::new(&strict, camera);
+    let strict;
+    let strict = if scenery.reveals_hidden() {
+        strict = scenery.seen_strictly();
+        &strict
+    } else {
+        scenery
+    };
+    let sight = Sight::new(strict, camera);
     nearest_visible(candidates, |&(.., p)| sight.sees(p))
         .map(|(_, (owner, id, g, _))| (owner, id, g))
 }
@@ -631,8 +637,14 @@ pub fn edge_under_where(
             (d <= radius_px).then_some((d, (owner, id, a, b, p)))
         })
         .collect();
-    let strict = scenery.seen_strictly();
-    let sight = Sight::new(&strict, camera);
+    let strict;
+    let strict = if scenery.reveals_hidden() {
+        strict = scenery.seen_strictly();
+        &strict
+    } else {
+        scenery
+    };
+    let sight = Sight::new(strict, camera);
     nearest_visible(candidates, |&(.., p)| sight.sees(p))
         .map(|(_, (owner, id, a, b, _))| (owner, id, a, b))
 }

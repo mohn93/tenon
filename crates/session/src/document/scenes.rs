@@ -219,6 +219,8 @@ impl Document {
             self.color_by_tag = v.color_by_tag;
             self.x_ray = v.x_ray;
             self.hidden_geometry = v.hidden_geometry;
+            // A scene with it off drops hidden entities from the selection, as turning it off.
+            self.prune_hidden_selection();
         }
         self.selected_scene = Some(id);
         Ok(SceneChange::join(changes))
