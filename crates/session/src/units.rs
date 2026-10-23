@@ -52,18 +52,57 @@ pub enum LengthUnit {
 pub struct Units {
     pub length: LengthUnit,
     pub precision: u8,
-    #[serde(default, skip_serializing_if = "is_zero")]
+    #[serde(default)]
     pub length_snap: f64,
+    #[serde(default = "default_angle_precision")]
+    pub angle_precision: u8,
+    #[serde(default = "default_angle_snap")]
+    pub angle_snap: f64,
+}
+
+/// [`Units`] as the file stores them: the settings added after version 12 are left out
+/// while they are the defaults, so files of default-snapping units read as before.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StoredUnits {
+    length: LengthUnit,
+    precision: u8,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    length_snap: f64,
     #[serde(
         default = "default_angle_precision",
         skip_serializing_if = "is_default_angle_precision"
     )]
-    pub angle_precision: u8,
+    angle_precision: u8,
     #[serde(
         default = "default_angle_snap",
         skip_serializing_if = "is_default_angle_snap"
     )]
-    pub angle_snap: f64,
+    angle_snap: f64,
+}
+
+impl From<Units> for StoredUnits {
+    fn from(u: Units) -> Self {
+        StoredUnits {
+            length: u.length,
+            precision: u.precision,
+            length_snap: u.length_snap,
+            angle_precision: u.angle_precision,
+            angle_snap: u.angle_snap,
+        }
+    }
+}
+
+impl From<StoredUnits> for Units {
+    fn from(u: StoredUnits) -> Self {
+        Units {
+            length: u.length,
+            precision: u.precision,
+            length_snap: u.length_snap,
+            angle_precision: u.angle_precision,
+            angle_snap: u.angle_snap,
+        }
+    }
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -175,50 +214,73 @@ pub fn parse_length(text: &str, units: &Units) -> Result<f64, String> {
     let meters = match s.split_once('\'') {
         Some((feet, inches)) => {
             let feet = quantity(feet).ok_or_else(bad)?;
-            let inches = inches.trim();
-            // `3'-6"`: a dash after the foot mark only separates.
-            let inches = inches.strip_prefix('-').unwrap_or(inches).trim();
-            let inches = inches
-                .strip_suffix('"')
-                .or_else(|| inches.strip_suffix("in"))
-                .or_else(|| inches.strip_suffix("IN"))
-                .unwrap_or(inches)
-                .trim();
-            let inches = if inches.is_empty() {
-                0.0
-            } else {
-                quantity(inches).ok_or_else(bad)?
-            };
-            feet * FOOT + inches * INCH
+            feet * FOOT + inches_after_feet(inches, true).ok_or_else(bad)? * INCH
         }
         None => {
             let split = s
                 .find(|c: char| c.is_alphabetic() || c == '"')
                 .unwrap_or(s.len());
             let (value, suffix) = s.split_at(split);
-            let scale = match suffix.trim().to_ascii_lowercase().as_str() {
-                "" => match units.length {
-                    LengthUnit::Meters => 1.0,
-                    LengthUnit::Centimeters => 0.01,
-                    LengthUnit::Millimeters => 0.001,
-                    LengthUnit::Inches | LengthUnit::FeetInches => INCH,
-                    LengthUnit::Feet => FOOT,
-                },
-                "m" => 1.0,
-                "cm" => 0.01,
-                "mm" => 0.001,
-                "in" | "\"" => INCH,
-                "ft" => FOOT,
-                _ => return Err(bad()),
-            };
-            quantity(value).ok_or_else(bad)? * scale
+            let suffix = suffix.trim().to_ascii_lowercase();
+            match (suffix.as_str(), suffix.strip_prefix("ft")) {
+                // Feet then inches in words: `3ft 6in`.
+                (_, Some(inches)) if !inches.trim().is_empty() => {
+                    let inches = inches_after_feet(inches, false).ok_or_else(bad)?;
+                    quantity(value).ok_or_else(bad)? * FOOT + inches * INCH
+                }
+                _ => {
+                    let scale = match suffix.as_str() {
+                        "" => match units.length {
+                            LengthUnit::Meters => 1.0,
+                            LengthUnit::Centimeters => 0.01,
+                            LengthUnit::Millimeters => 0.001,
+                            LengthUnit::Inches | LengthUnit::FeetInches => INCH,
+                            LengthUnit::Feet => FOOT,
+                        },
+                        "m" => 1.0,
+                        "cm" => 0.01,
+                        "mm" => 0.001,
+                        "in" | "\"" => INCH,
+                        "ft" => FOOT,
+                        _ => return Err(bad()),
+                    };
+                    quantity(value).ok_or_else(bad)? * scale
+                }
+            }
         }
     };
     if meters.is_finite() {
-        Ok(sign * meters)
+        // `-0` is 0, not a negative zero.
+        Ok(if meters == 0.0 { 0.0 } else { sign * meters })
     } else {
         Err(bad())
     }
+}
+
+/// The inches after a foot mark or `ft`, as a number: `6`, `6"`, `6 1/2in`. With `mark` (a
+/// `'` came first) they may be empty (`3'`) and may follow a separating dash (`3'-6"`, but
+/// not a dash alone); after `ft` they need an `in` or `"`.
+fn inches_after_feet(text: &str, mark: bool) -> Option<f64> {
+    let text = text.trim();
+    let (dashed, text) = match text.strip_prefix('-') {
+        Some(rest) if mark => (true, rest.trim()),
+        _ => (false, text),
+    };
+    let (inch_mark, text) = match text.strip_suffix('"') {
+        Some(rest) => (true, rest),
+        None => {
+            let lower = text.to_ascii_lowercase();
+            match lower.strip_suffix("in") {
+                Some(rest) => (true, &text[..rest.len()]),
+                None => (false, text),
+            }
+        }
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return (mark && !dashed && !inch_mark).then_some(0.0);
+    }
+    (mark || inch_mark).then(|| quantity(text)).flatten()
 }
 
 /// Parses a typed angle in degrees: "90", "-45", "22.5", optionally ending in "°" or "deg".
@@ -243,22 +305,22 @@ pub fn parse_angle(text: &str) -> Result<f64, String> {
 /// A non-negative number, a fraction `1/2`, or a mixed number `6 1/2` or `6-1/2`.
 fn quantity(s: &str) -> Option<f64> {
     let s = s.trim();
-    if let Some((whole, fraction)) = s.split_once([' ', '-']) {
+    if let Some((whole, part)) = s.split_once([' ', '-']) {
         let whole = whole.trim();
-        let fraction = fraction.trim();
-        return (fraction.contains('/') && whole.chars().all(|c| c.is_ascii_digit()))
-            .then(|| Some(number(whole)? + proper_fraction(fraction)?))
+        let part = part.trim();
+        return (part.contains('/') && whole.chars().all(|c| c.is_ascii_digit()))
+            .then(|| Some(number(whole)? + fraction(part)?))
             .flatten();
     }
     if s.contains('/') {
-        proper_fraction(s)
+        fraction(s)
     } else {
         number(s)
     }
 }
 
-/// `n/d` with whole numbers and `d` not zero.
-fn proper_fraction(s: &str) -> Option<f64> {
+/// `n/d` with whole numbers and `d` not zero (`3/2` is allowed).
+fn fraction(s: &str) -> Option<f64> {
     let (n, d) = s.split_once('/')?;
     fn whole(t: &str) -> Option<f64> {
         (!t.is_empty() && t.chars().all(|c| c.is_ascii_digit())).then(|| t.parse().ok())?
@@ -585,13 +647,21 @@ mod tests {
     }
 
     #[test]
-    fn defaults_serialize_as_before() {
-        let json = serde_json::to_value(Units::default()).unwrap();
+    fn the_api_reports_every_field_and_the_file_skips_defaults() {
+        let all = serde_json::to_value(Units::default()).unwrap();
         assert_eq!(
-            json,
+            all,
+            serde_json::json!({"length": "meters", "precision": 3, "length_snap": 0.0,
+                "angle_precision": 1, "angle_snap": 15.0})
+        );
+        let stored = |u: Units| serde_json::to_value(StoredUnits::from(u)).unwrap();
+        assert_eq!(
+            stored(Units::default()),
             serde_json::json!({"length": "meters", "precision": 3})
         );
-        let old: Units = serde_json::from_str(r#"{"length":"inches","precision":2}"#).unwrap();
+        let old: StoredUnits =
+            serde_json::from_str(r#"{"length":"inches","precision":2}"#).unwrap();
+        let old = Units::from(old);
         assert_eq!(old.angle_snap, 15.0);
         assert_eq!(old.angle_precision, 1);
         assert_eq!(old.length_snap, 0.0);
@@ -601,13 +671,64 @@ mod tests {
             angle_precision: 2,
             ..Units::default()
         };
-        let json = serde_json::to_value(new).unwrap();
+        let json = stored(new);
         assert_eq!(
             json,
             serde_json::json!({"length": "meters", "precision": 3, "length_snap": 0.05,
                 "angle_precision": 2, "angle_snap": 0.0})
         );
-        assert_eq!(serde_json::from_value::<Units>(json).unwrap(), new);
+        assert_eq!(
+            Units::from(serde_json::from_value::<StoredUnits>(json).unwrap()),
+            new
+        );
+        assert!(
+            serde_json::from_str::<StoredUnits>(r#"{"length":"meters","precision":3,"x":1}"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn suffix_case_dangling_separators_and_zero() {
+        let d = Units::default();
+        let want = (3.0 * 12.0 + 6.0) * 0.0254;
+        for text in [
+            "3'6 In",
+            "3'6IN",
+            "3' 6 in",
+            "3ft 6in",
+            "3 ft 6 in",
+            "3FT 6 In",
+            "3ft6in",
+            "3 ft 6\"",
+        ] {
+            let got = parse_length(text, &d).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            assert!(near(got, want), "{text:?}: {got}");
+        }
+        assert!(near(
+            parse_length("3ft 6 1/2in", &d).unwrap(),
+            (36.0 + 6.5) * 0.0254
+        ));
+        assert!(near(parse_length("-3ft 6in", &d).unwrap(), -want));
+        assert!(near(parse_length("3ft", &d).unwrap(), 3.0 * 0.3048));
+        for bad in [
+            "3'-",
+            "3'-\"",
+            "3' -",
+            "3ft 6",
+            "3ft 6m",
+            "3ft 6ft",
+            "3ft in",
+            "3in 6ft",
+            "3ft 6in 2in",
+        ] {
+            assert!(parse_length(bad, &d).is_err(), "{bad:?}");
+        }
+        for zero in ["-0", "-0m", "-0'", "-0.0 cm"] {
+            let got = parse_length(zero, &d).unwrap();
+            assert!(got == 0.0 && got.is_sign_positive(), "{zero:?}");
+        }
+        assert!(near(parse_length("3/2\"", &d).unwrap(), 1.5 * 0.0254));
+        assert!(near(parse_length("1 3/2\"", &d).unwrap(), 2.5 * 0.0254));
     }
 
     #[test]

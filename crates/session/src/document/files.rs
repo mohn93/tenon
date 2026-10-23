@@ -236,6 +236,10 @@ impl Document {
             camera.fit(lo, hi);
         }
         self.replace(fresh.scene, camera);
+        // The file's unit, when it names one, is the model's display length unit.
+        if let Some(unit) = built.notes.unit {
+            self.units.length = crate::skp::display_length(unit);
+        }
         self.lighting = Lighting::Day;
         self.color_by_tag = false;
         self.x_ray = false;

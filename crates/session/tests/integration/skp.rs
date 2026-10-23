@@ -2476,3 +2476,36 @@ fn a_file_without_a_unit_leaves_the_display_units_alone() {
     let (d, _) = import(&fixture("cupboard.skp"));
     assert_eq!(d.units(), session::Units::default());
 }
+
+#[test]
+fn opening_a_legacy_file_sets_the_display_unit_too() {
+    use session::LengthUnit::*;
+    for (unit, want) in [(0, FeetInches), (1, Feet), (2, Millimeters)] {
+        let mut d = doc();
+        // A model with other units open is replaced, units included.
+        run(
+            &mut d,
+            json!({"type": "set_units", "length": "centimeters"}),
+        )
+        .unwrap();
+        run(
+            &mut d,
+            json!({"type": "open", "path": cupboard_in_unit(unit), "discard": true}),
+        )
+        .unwrap();
+        assert_eq!(d.units().length, want, "unit {unit}");
+        assert_eq!(d.units().precision, session::Units::default().precision);
+    }
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "set_units", "length": "centimeters"}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "open", "path": fixture("cupboard.skp"), "discard": true}),
+    )
+    .unwrap();
+    assert_eq!(d.units(), session::Units::default());
+}

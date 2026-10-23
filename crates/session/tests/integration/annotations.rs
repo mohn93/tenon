@@ -442,7 +442,8 @@ fn notes_show_their_text_or_their_anchors_coordinates_in_the_display_units() {
     assert_eq!(entity(&d, &auto)["label"], "(200 cm, 100 cm, 0 cm)");
     assert_eq!(
         ask(&d, json!({"type": "units"})),
-        json!({"type": "units", "length": "centimeters", "precision": 0})
+        json!({"type": "units", "length": "centimeters", "precision": 0, "length_snap": 0.0,
+            "angle_precision": 1, "angle_snap": 15.0})
     );
     run(
         &mut d,
@@ -1303,12 +1304,17 @@ fn a_fixed_circle_inside_a_group_is_checked_when_the_group_is_scaled() {
     assert_eq!((kind, ids), (ErrorKind::InvalidInput, vec![group.clone()]));
 }
 
+fn full(length: &str, precision: u8) -> Value {
+    json!({"length": length, "precision": precision, "length_snap": 0.0,
+        "angle_precision": 1, "angle_snap": 15.0})
+}
+
 #[test]
 fn outcomes_and_events_carry_the_display_units_they_set() {
     let mut d = doc();
     let start = d.revision();
     let out = run(&mut d, json!({"type": "set_units", "length": "inches"})).unwrap();
-    assert_eq!(out["units"], json!({"length": "inches", "precision": 3}));
+    assert_eq!(out["units"], full("inches", 3));
     let out = run(
         &mut d,
         json!({"type": "add_note", "anchor": [0, 0, 0], "position": [1, 1, 1]}),
@@ -1316,9 +1322,9 @@ fn outcomes_and_events_carry_the_display_units_they_set() {
     .unwrap();
     assert!(out.get("units").is_none(), "{out}");
     let out = run(&mut d, json!({"type": "undo", "count": 2})).unwrap();
-    assert_eq!(out["units"], json!({"length": "meters", "precision": 3}));
+    assert_eq!(out["units"], full("meters", 3));
     let out = run(&mut d, json!({"type": "redo"})).unwrap();
-    assert_eq!(out["units"], json!({"length": "inches", "precision": 3}));
+    assert_eq!(out["units"], full("inches", 3));
     let events = ask(&d, json!({"type": "events", "since": start}))["events"].clone();
     let set: Vec<Value> = events
         .as_array()
@@ -1329,11 +1335,11 @@ fn outcomes_and_events_carry_the_display_units_they_set() {
     assert_eq!(
         set,
         vec![
-            json!({"length": "inches", "precision": 3}),
+            full("inches", 3),
             Value::Null,
             Value::Null,
-            json!({"length": "meters", "precision": 3}),
-            json!({"length": "inches", "precision": 3}),
+            full("meters", 3),
+            full("inches", 3),
         ]
     );
     // In an atomic batch, the command that set them says so.
@@ -1610,4 +1616,35 @@ fn files_with_missing_new_unit_fields_open_with_the_defaults_and_bad_ones_are_re
     .unwrap_err();
     assert_eq!(kind, ErrorKind::File);
     assert!(message.contains("angle_snap"), "{message}");
+}
+
+#[test]
+fn the_api_always_reports_every_unit_field() {
+    let mut d = doc();
+    let all = |v: &Value| {
+        for k in [
+            "length",
+            "precision",
+            "length_snap",
+            "angle_precision",
+            "angle_snap",
+        ] {
+            assert!(v.get(k).is_some(), "{k} missing in {v}");
+        }
+    };
+    let q = ask(&d, json!({"type": "units"}));
+    all(&q);
+    assert_eq!(q["angle_snap"], 15.0);
+    assert_eq!(q["angle_precision"], 1);
+    assert_eq!(q["length_snap"], 0.0);
+    let out = run(&mut d, json!({"type": "set_units", "length": "inches"})).unwrap();
+    all(&out["units"]);
+    let out = run(&mut d, json!({"type": "undo"})).unwrap();
+    all(&out["units"]);
+    let (events, _) = d.events_since(0);
+    let with_units: Vec<_> = events.iter().filter_map(|e| e.units).collect();
+    assert!(!with_units.is_empty());
+    for u in with_units {
+        all(&serde_json::to_value(u).unwrap());
+    }
 }

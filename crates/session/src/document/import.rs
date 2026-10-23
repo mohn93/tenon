@@ -32,7 +32,7 @@ pub(super) type Built = (Option<InstanceId>, TreeReport, SceneChange);
 /// A SketchUp file read and built into the scene.
 pub(super) struct BuiltSkp {
     tree: ImportTree,
-    notes: SkpNotes,
+    pub(super) notes: SkpNotes,
     /// The wrapper placed, when the tree was built into one.
     instance: Option<InstanceId>,
     built: TreeReport,

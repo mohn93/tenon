@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::camera::{Camera, Lighting, Projection};
 use crate::document::{MAX_COORDINATE, SectionDisplay};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
-use crate::units::Units;
+use crate::units::{StoredUnits, Units};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
@@ -85,7 +85,7 @@ struct Stored {
     camera: StoredCamera,
     /// The display units; absent for the default (meters, 3 decimals) and before version 12.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    units: Option<Units>,
+    units: Option<StoredUnits>,
     model: SceneData,
 }
 
@@ -335,7 +335,7 @@ pub(crate) fn write_bytes(
             section_cuts: section.cuts,
             section_fill: section.fill,
         },
-        units: (units != Units::default()).then_some(units),
+        units: (units != Units::default()).then(|| StoredUnits::from(units)),
         model,
     };
     let json = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
@@ -502,7 +502,7 @@ fn read_archive<R: Read + Seek>(
         .shadows
         .check()
         .map_err(|e| format!("the camera view: {e}"))?;
-    let units = stored.units.unwrap_or_default();
+    let units = stored.units.map(Units::from).unwrap_or_default();
     units
         .check()
         .map_err(|e| format!("the display units: {e}"))?;
