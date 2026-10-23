@@ -107,6 +107,18 @@ mod tests {
     }
 
     #[test]
+    fn opening_bytes_forgets_what_was_chosen_before_a_style_was_added() {
+        let mut e = editor();
+        let bytes = e.encode_model().expect("encoded");
+        e.add_style(None);
+        assert!(!e.style_before_add.is_empty());
+        let before = e.documents();
+        assert!(e.open_bytes("kept.skr", &bytes));
+        assert!(e.style_before_add.is_empty());
+        assert_eq!(e.documents(), before + 1);
+    }
+
+    #[test]
     fn adding_a_style_chooses_it_in_one_undo_step() {
         let mut e = editor();
         assert!(e.add_style(None));

@@ -382,6 +382,23 @@ mod tests {
     }
 
     #[test]
+    fn a_viewer_opening_a_model_with_hidden_geometry_on_picks_only_what_it_draws() {
+        let mut maker = Editor::new(DVec2::new(800.0, 600.0), 2.0);
+        add_group(&mut maker, 1.0);
+        maker.select_all();
+        assert!(maker.hide_selection());
+        assert!(maker.set_hidden_geometry(true));
+        let bytes = maker.encode_model().expect("encoded");
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 2.0);
+        e.set_read_only(true);
+        assert!(e.open_bytes("shared.skr", &bytes));
+        assert!(!e.doc().hidden_geometry, "the viewer draws no hidden geometry");
+        let at = e.doc().camera.project(DVec3::new(2.0, 2.0, 0.0)).unwrap();
+        e.touch(Gesture::Tap { at });
+        assert_eq!(selected_instances(&e), 0, "a hidden group is not picked");
+    }
+
+    #[test]
     fn a_tap_selects_the_part_and_a_tap_on_nothing_clears_it() {
         let mut e = viewer();
         let at = square_center(&e);

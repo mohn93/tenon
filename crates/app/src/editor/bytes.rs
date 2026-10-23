@@ -14,8 +14,12 @@ impl Editor {
         self.measure = None;
         let opened = match self.doc.open_bytes(name, bytes, true) {
             Ok(report) => {
-                self.documents += 1;
+                self.document_replaced();
                 self.material = None;
+                if self.doc.is_read_only() {
+                    // A viewer draws no hidden geometry, so it must not pick any either.
+                    self.set_hidden_geometry(false);
+                }
                 if let Some(report) = report {
                     self.message = Some(Message::info(format!(
                         "Opened {name}{}",

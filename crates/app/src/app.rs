@@ -180,7 +180,7 @@ type Drawn = (u64, BTreeSet<EntityId>, Vec<InstanceId>);
 
 /// What the window shows that a request can change: the model (its revision), the selection,
 /// the open context, the camera, the lighting, coloring by tag, the section display, X-ray,
-/// Hidden Geometry, the chosen style, the shadow settings and the location (the sun's inputs)
+/// Hidden Geometry, the chosen style, the selected scene, the shadow settings and the location (the sun's inputs)
 /// and the editor's state.
 type Shown = (
     u64,
@@ -194,6 +194,7 @@ type Shown = (
         bool,
         bool,
         Option<kernel::StyleId>,
+        Option<kernel::PageId>,
         kernel::Shadows,
         kernel::Location,
     ),
@@ -215,6 +216,7 @@ fn shown(editor: &Editor) -> Shown {
             doc.x_ray,
             doc.hidden_geometry,
             doc.style(),
+            doc.selected_scene(),
             doc.shadows,
             doc.scene().location(),
         ),
@@ -4322,6 +4324,32 @@ mod tests {
         let before = shown(&e);
         run(&mut e, serde_json::json!({"type": "set_style", "style": y}));
         assert!(e.doc().style().is_some());
+        assert_ne!(shown(&e), before);
+    }
+
+    #[test]
+    fn a_request_that_only_goes_to_a_scene_still_shows() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        let mut run = |e: &mut Editor, command: session::Command| {
+            e.execute(command).unwrap();
+        };
+        let add = |e: &mut Editor, run: &mut dyn FnMut(&mut Editor, session::Command)| {
+            run(
+                e,
+                session::Command::AddScene {
+                    name: None,
+                    camera: false,
+                    tags: false,
+                },
+            );
+            e.doc().selected_scene().unwrap()
+        };
+        let first = add(&mut e, &mut run);
+        let second = add(&mut e, &mut run);
+        assert_ne!(first, second);
+        let before = shown(&e);
+        run(&mut e, session::Command::GoToScene { scene: first });
+        assert_eq!(e.doc().selected_scene(), Some(first));
         assert_ne!(shown(&e), before);
     }
 

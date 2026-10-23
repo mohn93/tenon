@@ -130,4 +130,30 @@ mod tests {
         e.undo();
         assert_eq!(e.doc().units(), Units::default());
     }
+
+    #[test]
+    fn snaps_below_their_minimums_are_refused_with_the_commands_message() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        for (units, text) in [
+            (
+                Units {
+                    length_snap: 1e-7,
+                    ..Units::default()
+                },
+                "length_snap must be 0",
+            ),
+            (
+                Units {
+                    angle_snap: 0.001,
+                    ..Units::default()
+                },
+                "angle_snap must be 0",
+            ),
+        ] {
+            assert!(!e.set_units(units));
+            assert_eq!(e.doc().units(), Units::default());
+            let status = e.status();
+            assert!(status.contains(text), "{status}");
+        }
+    }
 }
