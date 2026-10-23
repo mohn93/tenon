@@ -11,3 +11,4 @@ mod snapshot;
 mod styles;
 mod sun;
 mod tags;
+mod webgl2;
