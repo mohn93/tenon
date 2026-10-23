@@ -3,6 +3,7 @@
 //! A typed length before the click sets the eye height. Once the camera is placed the editor
 //! switches to the Look Around tool. The tool only sends camera commands.
 
+use crate::inference::SnapKind;
 use glam::DVec3;
 use session::{Command, DEFAULT_EYE_HEIGHT};
 
@@ -63,6 +64,25 @@ impl PositionCameraTool {
     }
 }
 
+/// Where a press stands: the point hit, or for a click on the sky where the cursor's ray
+/// meets the world's ground (z = 0); None when it never does (looking up).
+fn stand_point(hit: &crate::inference::Inference, ctx: &ToolContext) -> Option<DVec3> {
+    if hit.kind != SnapKind::Free {
+        return Some(hit.point);
+    }
+    let ray = ctx.camera.ray(ctx.cursor);
+    let origin = ctx.to_world.transform_point3(ray.origin);
+    let dir = ctx.to_world.transform_vector3(ray.dir);
+    if dir.z >= -1e-9 {
+        return None;
+    }
+    let t = -origin.z / dir.z;
+    if t <= 0.0 {
+        return None;
+    }
+    Some(ctx.to_world.inverse().transform_point3(origin + dir * t))
+}
+
 impl Tool for PositionCameraTool {
     fn name(&self) -> &'static str {
         "Position Camera"
@@ -93,10 +113,13 @@ impl Tool for PositionCameraTool {
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
-            ToolEvent::Click(hit) => {
-                self.standing = Some(hit.point);
-                self.drag_start.arm(ctx.cursor);
-            }
+            ToolEvent::Click(hit) => match stand_point(&hit, ctx) {
+                Some(p) => {
+                    self.standing = Some(p);
+                    self.drag_start.arm(ctx.cursor);
+                }
+                None => out.message = Some("Click on the model or the ground".into()),
+            },
             ToolEvent::Move(hit) => {
                 if let Some(a) = self.standing {
                     out.preview = vec![[a, hit.point]];
@@ -161,6 +184,33 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_sky_stands_where_the_ray_meets_the_ground() {
+        let mut r = rig();
+        // On the line of sight from the eye to the origin, in the air.
+        let sky = r.camera.eye * 0.5;
+        r.click(sky);
+        let out = r.release(sky);
+        match only(&out) {
+            Command::PositionCamera { point, .. } => {
+                assert!(DVec3::from_array(*point).length() < 1e-6, "{point:?}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_sky_of_a_view_looking_up_places_nothing() {
+        let mut r = rig();
+        r.camera.eye = DVec3::new(0.0, -10.0, 1.7);
+        r.camera.target = DVec3::new(0.0, 0.0, 6.0);
+        let sky = DVec3::new(0.0, -5.0, 4.0);
+        let out = r.click(sky);
+        assert!(out.message.is_some(), "{:?}", out.message);
+        let out = r.release(sky);
+        assert!(out.commands.is_empty() && out.next_tool.is_none());
+    }
+
+    #[test]
     fn a_drag_stands_at_the_press_looking_at_the_release() {
         let mut r = rig();
         let (a, b) = (DVec3::new(0.0, 0.0, 0.0), DVec3::new(4.0, 5.0, 0.0));
@@ -215,7 +265,9 @@ mod tests {
         let mut r = rig();
         r.to_world = DAffine3::from_translation(DVec3::new(10.0, 0.0, 5.0));
         let (a, b) = (DVec3::new(1.0, 1.0, 1.0), DVec3::new(1.0, 4.0, 1.0));
-        r.click(a);
+        // On the model (a vertex), not the sky.
+        let hit = r.at(a, SnapKind::Endpoint, None);
+        r.send(ToolEvent::Click(hit));
         match only(&r.release(b)) {
             Command::PositionCamera { point, look_at, .. } => {
                 assert_eq!(*point, [11.0, 1.0, 6.0]);

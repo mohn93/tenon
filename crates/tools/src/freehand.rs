@@ -46,7 +46,7 @@ impl Stroke {
         let gap = if end {
             1e-9
         } else {
-            self.tolerance / TOLERANCE_PX / 2.0
+            self.tolerance / (TOLERANCE_PX * 2.0)
         };
         if last.distance(p) <= gap {
             if end && self.samples.len() > 1 {
@@ -191,7 +191,7 @@ impl Tool for FreehandTool {
                 self.stroke = Some(Stroke {
                     origin: hit.point,
                     normal: plane_normal(&hit, ctx),
-                    tolerance: TOLERANCE_PX * ctx.camera.pixel_size(hit.point),
+                    tolerance: TOLERANCE_PX * ctx.scale_factor * ctx.camera.pixel_size(hit.point),
                     curve: !ctx.shift,
                     samples: vec![hit.point],
                     press: ctx.cursor,
@@ -478,6 +478,22 @@ mod tests {
             "{}",
             points.len()
         );
+    }
+
+    #[test]
+    fn the_tolerance_is_in_logical_pixels() {
+        let bump = |scale: f64| {
+            let mut r = rig();
+            r.scale_factor = scale;
+            // A bump 3 physical pixels high: kept at scale 1 (tolerance 2 px), within the
+            // tolerance at scale 2 (2 logical = 4 physical px).
+            let h = 3.0 * r.camera.pixel_size(p(0.0, 0.0));
+            let mut path = line(p(0.0, 0.0), p(0.5, h), 10);
+            path.extend(line(p(0.5, h), p(1.0, 0.0), 10));
+            curve(&stroke(&mut r, &path)).0.len()
+        };
+        assert_eq!(bump(1.0), 3);
+        assert_eq!(bump(2.0), 2);
     }
 
     #[test]

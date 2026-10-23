@@ -285,6 +285,7 @@ impl Bound {
     /// Which of `GROUPS` the binding is listed under.
     pub fn group(self) -> &'static str {
         match self {
+            Bound::Tool(ToolKind::LookAround | ToolKind::PositionCamera) => "Camera",
             Bound::Tool(_) => "Tools",
             Bound::NewModel
             | Bound::OpenFile
@@ -381,6 +382,14 @@ mod tests {
         for (i, l) in labels.iter().enumerate() {
             assert!(!labels[i + 1..].contains(l), "{l} twice");
         }
+    }
+
+    #[test]
+    fn the_camera_tools_are_listed_under_camera() {
+        for kind in [ToolKind::LookAround, ToolKind::PositionCamera] {
+            assert_eq!(Bound::Tool(kind).group(), "Camera", "{kind:?}");
+        }
+        assert_eq!(Bound::Tool(ToolKind::Line).group(), "Tools");
     }
 
     #[test]

@@ -449,3 +449,43 @@ fn add_curve_closed_collinear_points_are_refused() {
     assert_eq!(e.0, ErrorKind::InvalidInput);
     assert!(entities(&d, "edge").is_empty());
 }
+
+#[test]
+fn a_pentagram_inside_a_faces_opening_fills_every_region() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [20, 20, 0]}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [2, 2, 0], "opposite": [18, 18, 0]}),
+    )
+    .unwrap();
+    let inner = entities(&d, "face")
+        .into_iter()
+        .find(|f| (f["area"].as_f64().unwrap() - 256.0).abs() < 1e-6)
+        .expect("the inner face");
+    run(
+        &mut d,
+        json!({"type": "erase", "ids": [inner["id"].clone()]}),
+    )
+    .unwrap();
+    assert_eq!(entities(&d, "face").len(), 1, "only the ring is left");
+    let star: Vec<[f64; 3]> = [0usize, 2, 4, 1, 3]
+        .iter()
+        .map(|k| {
+            let a = std::f64::consts::TAU * *k as f64 / 5.0 + std::f64::consts::FRAC_PI_2;
+            [10.0 + 7.0 * a.cos(), 10.0 + 7.0 * a.sin(), 0.0]
+        })
+        .collect();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": star, "closed": true, "curve": false}),
+    )
+    .unwrap();
+    // The batch draws every side before faces form (draw_segments' documented rule), so the five
+    // tips and the middle are all faces: the ring plus six regions.
+    assert_eq!(entities(&d, "face").len(), 7);
+}
