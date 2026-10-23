@@ -5,6 +5,7 @@ use glam::{DAffine3, DMat3, DVec3};
 use crate::edit::KernelError;
 use crate::ids::DefinitionId;
 use crate::scene::{MeshId, Scene, SceneChange, Step};
+use crate::texture::TexturePlacement;
 
 /// An origin and three perpendicular unit axes, right-handed (`z = x cross y`), in the
 /// coordinates of the root. The world axes are the default.
@@ -129,6 +130,13 @@ impl Scene {
             let (dimensions, notes) = m.all_annotations();
             let sections = m.all_sections();
             m.hold_dimensions(&dimensions);
+            // Textures are projected in the definition's coordinates, so each painted face's
+            // placement takes up the move (as it does when an instance is exploded).
+            let painted: Vec<_> = m
+                .faces()
+                .filter(|(_, f)| f.paint().iter().any(Option::is_some))
+                .map(|(id, f)| (id, f.texture, f.normal))
+                .collect();
             let mut c = match m.transform_vertices(&vertices, inverse) {
                 Ok(c) => c,
                 Err(e) => {
@@ -136,6 +144,10 @@ impl Scene {
                     return Err(e);
                 }
             };
+            for (id, texture, normal) in painted {
+                m.set_texture(id, TexturePlacement::carried(texture, normal, &inverse));
+            }
+            c.ops.extend(m.take_changes().ops);
             c.ops.extend(m.transform_instances(&instances, inverse).ops);
             c.ops.extend(m.transform_guides(&guides, inverse).ops);
             c.ops

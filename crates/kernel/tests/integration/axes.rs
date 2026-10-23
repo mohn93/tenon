@@ -1,5 +1,7 @@
 use glam::{DAffine3, DQuat, DVec3};
-use kernel::{Axes, DefinitionKind, EntityId, InstanceId, KernelError, MeshId, Model, Scene};
+use kernel::{
+    Axes, DefinitionId, DefinitionKind, EntityId, InstanceId, KernelError, MeshId, Model, Scene,
+};
 
 fn p(x: f64, y: f64, z: f64) -> DVec3 {
     DVec3::new(x, y, z)
@@ -183,4 +185,93 @@ fn a_definition_axes_move_without_moving_anything_in_the_world() {
         s.reorigin_definition(chair_def, DAffine3::from_scale(p(2.0, 1.0, 1.0)))
             .is_err()
     );
+}
+
+/// Every painted face vertex of the definition: its position as the instance places it and
+/// where the texture shows there.
+fn textured_points(s: &Scene, instance: InstanceId) -> Vec<([i64; 3], [i64; 2])> {
+    let placed = s.root().instance(instance).unwrap();
+    let mesh = &s.definition(placed.definition).unwrap().mesh;
+    let mut out = Vec::new();
+    for (_, f) in mesh.faces() {
+        for &v in &f.outer {
+            let q = mesh.position(v).unwrap();
+            let world = placed.transform.transform_point3(q);
+            let shown = f.texture_position(q);
+            out.push((
+                [world.x, world.y, world.z].map(|c| (c * 1e6).round() as i64),
+                [shown.x, shown.y].map(|c| (c * 1e6).round() as i64),
+            ));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A group of the 2 x 3 x 1 box plus a sloped triangle, every face painted and given a texture
+/// placement.
+fn textured_group() -> (Scene, InstanceId, DefinitionId) {
+    use kernel::{PlacementEdit, Side};
+    let mut s = box_scene(p(4.0, 1.0, 0.0));
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&[p(10.0, 0.0, 0.0), p(12.0, 0.0, 0.0), p(10.0, 2.0, 1.5)])
+    })
+    .unwrap();
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (instance, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &faces,
+            &[],
+            DefinitionKind::Component,
+            "Tiled",
+        )
+        .unwrap();
+    let definition = s.root().instance(instance).unwrap().definition;
+    let (mat, _) = s.add_material("Plain", [1, 2, 3]).unwrap();
+    let inside: Vec<_> = s
+        .definition(definition)
+        .unwrap()
+        .mesh
+        .faces()
+        .map(|(id, _)| id)
+        .collect();
+    s.edit(MeshId::Definition(definition), |m| {
+        let mut c = m.paint_faces(&inside, Side::Front, Some(mat));
+        let edit = PlacementEdit {
+            offset: Some([0.3, -0.2]),
+            rotation_deg: Some(25.0),
+            rotate_by: None,
+            scale: Some([1.5, 0.8]),
+            reset: false,
+        };
+        c.ops.extend(m.position_texture(&inside, edit)?.0.ops);
+        Ok(c)
+    })
+    .unwrap();
+    (s, instance, definition)
+}
+
+#[test]
+fn a_definition_axes_move_keeps_its_textures_in_place() {
+    let (mut s, instance, definition) = textured_group();
+    s.validate().unwrap();
+    let before = s.clone();
+    let shown = textured_points(&s, instance);
+    // A turned frame and a plain shift.
+    for frame in [
+        DAffine3::from_rotation_translation(
+            DQuat::from_axis_angle(p(1.0, 2.0, 3.0).normalize(), 0.9),
+            p(4.5, 1.5, 0.25),
+        ),
+        DAffine3::from_translation(p(0.3, 0.0, 0.0)),
+    ] {
+        let change = s.reorigin_definition(definition, frame).unwrap();
+        s.validate().unwrap();
+        assert_eq!(textured_points(&s, instance), shown);
+        s.apply(&change.inverse());
+        assert_eq!(s, before);
+    }
 }
