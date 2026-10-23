@@ -288,7 +288,20 @@ impl Scene {
     /// Whether instance `id` (`instance`) of mesh `mesh` shows: it is not hidden itself, not on
     /// a hidden tag and not hidden for viewing. Every walk down the instances goes by this.
     pub fn instance_shown(&self, mesh: MeshId, id: InstanceId, instance: &Instance) -> bool {
-        self.placed_instance_shown(instance)
+        self.instance_shown_with(mesh, id, instance, false)
+    }
+
+    /// `instance_shown`, with an instance hidden by its own flag counting as shown when
+    /// `reveal` (Hidden Geometry): hidden tags and the viewing isolation still hide it.
+    pub fn instance_shown_with(
+        &self,
+        mesh: MeshId,
+        id: InstanceId,
+        instance: &Instance,
+        reveal: bool,
+    ) -> bool {
+        (reveal || !instance.hidden)
+            && self.tag_shown(instance.tag)
             && !(mesh == MeshId::Root && self.view_hidden.contains(&id))
     }
 

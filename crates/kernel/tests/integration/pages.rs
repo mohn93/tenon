@@ -14,6 +14,8 @@ fn view(x: f64) -> PageView {
         parallel: false,
         night: false,
         color_by_tag: false,
+        x_ray: false,
+        hidden_geometry: false,
     }
 }
 

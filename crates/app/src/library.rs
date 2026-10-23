@@ -246,6 +246,7 @@ fn make_from(snapshotter: &mut Snapshotter, item: &session::LibraryContent) -> O
     camera.fit(lo, hi);
     snapshotter.set_print_mode(true);
     snapshotter.set_color_by_tag(false);
+    snapshotter.set_glass_view(render::scene::GlassView::default());
     snapshotter.set_section_display(Default::default());
     let pixels = snapshotter.capture(
         &item.scene,

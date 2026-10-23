@@ -55,6 +55,8 @@ impl Document {
         ViewLook {
             lighting: self.lighting,
             color_by_tag: self.color_by_tag,
+            x_ray: self.x_ray,
+            hidden_geometry: self.hidden_geometry,
             section: self.section_display,
             units: self.units,
         }
@@ -78,6 +80,8 @@ impl Document {
         self.replace(Scene::new(), camera);
         self.lighting = Lighting::Day;
         self.color_by_tag = false;
+        self.x_ray = false;
+        self.hidden_geometry = false;
         self.section_display = SectionDisplay::default();
         self.path = None;
         self.library_info = None;
@@ -114,6 +118,8 @@ impl Document {
         self.units = opened.units;
         self.lighting = c.lighting;
         self.color_by_tag = c.color_by_tag;
+        self.x_ray = c.x_ray;
+        self.hidden_geometry = c.hidden_geometry;
         self.section_display = SectionDisplay {
             planes: c.section_planes,
             cuts: c.section_cuts,
@@ -229,6 +235,8 @@ impl Document {
         self.replace(fresh.scene, camera);
         self.lighting = Lighting::Day;
         self.color_by_tag = false;
+        self.x_ray = false;
+        self.hidden_geometry = false;
         self.section_display = SectionDisplay::default();
         self.path = None;
         self.library_info = None;

@@ -35,6 +35,12 @@ pub struct PageView {
     /// Faces drawn in their tags' colors.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub color_by_tag: bool,
+    /// Every shown face drawn as glass.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub x_ray: bool,
+    /// Entities hidden by their own flag drawn ghosted and open to picking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_geometry: bool,
 }
 
 /// A saved scene. `view: None` leaves the camera and view settings alone when the page is gone

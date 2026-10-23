@@ -2049,7 +2049,7 @@ impl Editor {
         let camera = self.local_camera();
         let layout = self.layout();
         let slab = self.point_slab(&camera);
-        let scenery = seen_within(scenery_in(&layout, &self.doc), slab);
+        let scenery = seen_within(picking_scenery_in(&layout, &self.doc), slab);
         let ctx = ToolContext {
             model: self.doc.model(),
             scenery: &scenery,
@@ -2274,7 +2274,7 @@ impl Editor {
         let camera = self.local_camera();
         let layout = self.layout();
         let slab = self.point_slab(&camera);
-        let scenery = seen_within(scenery_in(&layout, &self.doc), slab);
+        let scenery = seen_within(picking_scenery_in(&layout, &self.doc), slab);
         let guides = Guides {
             anchor,
             reference: self.reference,
@@ -2359,6 +2359,12 @@ fn scenery_in<'a>(layout: &'a Layout, doc: &'a Document) -> Scenery<'a> {
         .or_else(|| Scenery::of(doc.scene(), doc.context()))
         .expect("the open context exists")
         .section_display(doc.section_display)
+}
+
+/// `scenery_in`, with entities hidden by their own flag seen too while Hidden Geometry is on:
+/// what tools pick from (inference goes by what is seen strictly, whatever this reveals).
+fn picking_scenery_in<'a>(layout: &'a Layout, doc: &'a Document) -> Scenery<'a> {
+    scenery_in(layout, doc).reveal_hidden(doc.hidden_geometry)
 }
 
 /// `scenery`, seen only within `slab` when there is one.
@@ -4089,6 +4095,28 @@ mod tests {
             QueryResult::Instance(info) => DVec3::from(info.bounds.unwrap().max),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_hidden_face_is_clicked_only_while_hidden_geometry_is_on() {
+        let mut e = editor();
+        e.select_tool(ToolKind::Line);
+        square(&mut e);
+        let face = EntityId::Face(e.doc().model().faces().next().unwrap().0);
+        e.execute(Command::Hide { ids: vec![face] }).unwrap();
+        e.select_tool(ToolKind::Select);
+        let middle = DVec3::new(2.0, 2.0, 0.0);
+        click_at(&mut e, middle);
+        assert!(e.doc().selection().is_empty(), "hidden, it is not picked");
+        e.execute(Command::SetHiddenGeometry { on: true }).unwrap();
+        click_at(&mut e, middle);
+        assert_eq!(
+            e.doc().selection().iter().copied().collect::<Vec<_>>(),
+            [face],
+            "revealed, it is"
+        );
+        e.execute(Command::SetHiddenGeometry { on: false }).unwrap();
+        assert!(e.doc().selection().is_empty());
     }
 
     #[test]

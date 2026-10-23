@@ -199,6 +199,12 @@ pub const SELECTED_EDGE_COLOR: [f32; 4] = [0.10, 0.35, 0.95, 1.0];
 
 /// Edges outside the open instance, while one is open.
 pub const FADED_EDGE_COLOR: [f32; 4] = [0.62, 0.62, 0.62, 1.0];
+/// Edges and guides hidden by their own flag, drawn while Hidden Geometry is on.
+pub const GHOST_EDGE_COLOR: [f32; 4] = [0.78, 0.78, 0.80, 1.0];
+/// The opacity of a face hidden by its own flag while Hidden Geometry is on.
+pub const GHOST_FACE_ALPHA: f32 = 0.25;
+/// The opacity every shown face is drawn at in X-ray (a more transparent side keeps its own).
+pub const X_RAY_ALPHA: f32 = 0.5;
 /// The box around the open instance.
 pub const CONTEXT_BOX_COLOR: [f32; 4] = [0.45, 0.45, 0.45, 1.0];
 
@@ -499,7 +505,24 @@ pub fn scene_base(scene: &Scene, context: &[InstanceId]) -> SceneBase {
 /// sides; other faces keep their material's color, without textures. Edges keep their colors,
 /// and lights and shadows stay as the materials make them.
 pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool) -> SceneBase {
-    scene_base_shown(scene, context, color_by_tag, SectionDisplay::default())
+    scene_base_shown(
+        scene,
+        context,
+        color_by_tag,
+        GlassView::default(),
+        SectionDisplay::default(),
+    )
+}
+
+/// The view settings that change how faces and hidden entities are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlassView {
+    /// Every shown face is drawn as glass, at [`X_RAY_ALPHA`] on both sides.
+    pub x_ray: bool,
+    /// Faces, edges, guides and instances hidden by their own flag are drawn ghosted (faces
+    /// at [`GHOST_FACE_ALPHA`], edges and guides in [`GHOST_EDGE_COLOR`]); hidden tags still
+    /// hide. Ghosts cast no shadow, give no light and are not cut by section planes.
+    pub hidden_geometry: bool,
 }
 
 /// `scene_base_with`, with the section planes shown as `section` says. A placement is cut by
@@ -508,11 +531,13 @@ pub fn scene_base_with(scene: &Scene, context: &[InstanceId], color_by_tag: bool
 /// the placement's surface, `cut_edges` hold the outline and, with `section.fill`, `cut_fill`
 /// the closed cuts' fill. Clipped faces cast shadows only where they remain. The plane
 /// entities are listed in `sections` when `section.planes`. Lights from glowing faces are
-/// those of the whole faces, cut or not.
+/// those of the whole faces, cut or not. With `glass.x_ray` every shown face is glass; with
+/// `glass.hidden_geometry` hidden entities are drawn ghosted.
 pub fn scene_base_shown(
     scene: &Scene,
     context: &[InstanceId],
     color_by_tag: bool,
+    glass: GlassView,
     section: SectionDisplay,
 ) -> SceneBase {
     let layers = layers(scene);
@@ -525,6 +550,8 @@ pub fn scene_base_shown(
         parts: &parts,
         glowing: scene.materials().any(|(_, m)| m.glows()),
         color_by_tag,
+        glass,
+        ghost: false,
         display: section,
         planes: Vec::new(),
         cuts: HashMap::new(),
@@ -795,6 +822,11 @@ struct Walk<'a> {
     glowing: bool,
     /// Faces are drawn in their tags' colors (see `scene_base_with`).
     color_by_tag: bool,
+    /// X-ray and Hidden Geometry.
+    glass: GlassView,
+    /// Whether the mesh being walked is placed by an instance hidden by its own flag (drawn
+    /// ghosted, as Hidden Geometry is on).
+    ghost: bool,
     /// How section planes are shown.
     display: SectionDisplay,
     /// The active section planes of the meshes from the root down to the one being walked, in
@@ -841,6 +873,11 @@ impl Walk<'_> {
         let glow_key = (id, inherited);
         let scene = self.scene;
         let color_by_tag = self.color_by_tag;
+        let GlassView {
+            x_ray,
+            hidden_geometry,
+        } = self.glass;
+        let ghost_mesh = self.ghost;
         let display = self.display;
         let mut pushed_plane = false;
         // The mesh's own active plane in its own coordinates.
@@ -879,9 +916,10 @@ impl Walk<'_> {
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
-            if face.hidden || !scene.tag_shown(face.tag) {
+            if (face.hidden && !hidden_geometry) || !scene.tag_shown(face.tag) {
                 continue;
             }
+            let ghost = ghost_mesh || face.hidden;
             let start = base.faces.len();
             // Lights and shadows go by the materials; what is drawn may go by the tag.
             let front = face.front.unwrap_or(front);
@@ -895,12 +933,20 @@ impl Walk<'_> {
             } else {
                 (front, back)
             };
+            let alpha = if ghost {
+                GHOST_FACE_ALPHA
+            } else if x_ray {
+                X_RAY_ALPHA
+            } else {
+                1.0
+            };
+            let alpha = [drawn_front.alpha.min(alpha), drawn_back.alpha.min(alpha)];
             let corner = |(p, n, uv): (DVec3, DVec3, [f32; 4])| BaseFaceVertex {
                 pos: p.as_vec3().to_array(),
                 normal: (normal_map * n).normalize().as_vec3().to_array(),
                 front: drawn_front.color,
                 back: drawn_back.color,
-                alpha: [drawn_front.alpha, drawn_back.alpha],
+                alpha,
                 uv,
                 layer: [drawn_front.layer(), drawn_back.layer()],
                 glow: [drawn_front.glow(), drawn_back.glow()],
@@ -911,10 +957,10 @@ impl Walk<'_> {
             let (positions, _) = parts.positions[range].as_chunks::<3>();
             let (emission, glow_color) = face_glow(&front, &back);
             // A lamp's glowing shade does not hide its own light.
-            let casts = emission <= 0.0;
+            let casts = emission <= 0.0 && !ghost;
             let mut face_glow = Glow::default();
             for ((&[a, b, c], &[na, nb, nc]), &uvs) in tris.iter().zip(normals).zip(positions) {
-                if glow.is_some() {
+                if glow.is_some() && !ghost {
                     face_glow.add_triangle([a, b, c], emission, glow_color);
                 }
                 let [ua, ub, uc] = both_uv(&drawn_front, &drawn_back, uvs);
@@ -932,9 +978,10 @@ impl Walk<'_> {
                     }
                 };
                 if cutting {
-                    if collect_local {
+                    // A ghost is no part of the surface a plane cuts.
+                    if !ghost && collect_local {
                         surface.push([a, b, c]);
-                    } else if cache_key.is_none() {
+                    } else if !ghost && cache_key.is_none() {
                         surface.push(tri.map(|c| c.0));
                     }
                     let attributes = tri.map(|(p, n, uv)| (p, (n, uv)));
@@ -1002,9 +1049,14 @@ impl Walk<'_> {
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
         for (eid, tag, hidden, ends) in &parts.edges {
-            if *hidden || !scene.tag_shown(*tag) {
+            if (*hidden && !hidden_geometry) || !scene.tag_shown(*tag) {
                 continue;
             }
+            let color = if ghost_mesh || *hidden {
+                GHOST_EDGE_COLOR
+            } else {
+                color
+            };
             let start = base.edges.len();
             let ends = &parts.ends[ends.clone()];
             if cutting {
@@ -1057,9 +1109,14 @@ impl Walk<'_> {
             FADED_GUIDE_COLOR
         };
         for (gid, guide) in model.guides() {
-            if guide.hidden() || !scene.tag_shown(guide.tag()) {
+            if (guide.hidden() && !hidden_geometry) || !scene.tag_shown(guide.tag()) {
                 continue;
             }
+            let color = if ghost_mesh || guide.hidden() {
+                GHOST_EDGE_COLOR
+            } else {
+                color
+            };
             let (point, direction) = match guide.transformed(t) {
                 Guide::Line {
                     point, direction, ..
@@ -1139,9 +1196,17 @@ impl Walk<'_> {
         for (iid, instance) in model.instances() {
             // A hidden instance hides all it places, but for the one being edited (or holding
             // it), which stays drawn.
-            if !self.scene.instance_shown(id, iid, instance) && !self.on_context_path(iid) {
+            let on_context = self.on_context_path(iid);
+            if !self
+                .scene
+                .instance_shown_with(id, iid, instance, hidden_geometry)
+                && !on_context
+            {
                 continue;
             }
+            // With Hidden Geometry on, one hidden by its own flag is drawn ghosted.
+            let was_ghost = self.ghost;
+            self.ghost |= instance.hidden && !on_context;
             let start = (
                 self.base.faces.len(),
                 self.base.edges.len(),
@@ -1157,6 +1222,7 @@ impl Walk<'_> {
                 instance.tag.or(inherited_tag),
             );
             self.path.pop();
+            self.ghost = was_ghost;
             if open {
                 let placed = Ranges {
                     faces: start.0..self.base.faces.len(),

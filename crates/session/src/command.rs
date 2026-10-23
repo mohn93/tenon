@@ -765,6 +765,15 @@ pub enum Command {
     /// its material's color (textures are not shown while on); one inside a tagged group or
     /// component takes the nearest such instance's tag. A view setting like `set_lighting`.
     SetColorByTag { on: bool },
+    /// Draw every shown face as glass (`on`), alpha 0.5 on both sides (a face already more
+    /// transparent keeps its alpha), so edges behind faces show. Picking is unchanged. A view
+    /// setting like `set_lighting`; print, PDF, SVG and the line drawing ignore it.
+    SetXRay { on: bool },
+    /// Draw entities hidden by their own flag ghosted (`on`) and let them be picked, box
+    /// selected and selected, so they can be unhidden; inference still ignores them and
+    /// hidden tags stay hidden. A view setting like `set_lighting`; print, PDF, SVG and the
+    /// line drawing ignore it.
+    SetHiddenGeometry { on: bool },
 }
 
 impl Command {
@@ -804,6 +813,8 @@ impl Command {
                 | Command::SetProjection { .. }
                 | Command::SetLighting { .. }
                 | Command::SetColorByTag { .. }
+                | Command::SetXRay { .. }
+                | Command::SetHiddenGeometry { .. }
                 | Command::SetSectionDisplay { .. }
         )
     }

@@ -5,6 +5,7 @@ use session::print::{PrintSpec, decorate, layout};
 use session::{CommandError, Document, ErrorKind};
 
 use crate::Snapshotter;
+use crate::scene::GlassView;
 
 /// What printing made.
 pub struct Printed {
@@ -36,6 +37,8 @@ fn render_sheets(
 ) -> Result<Printed, CommandError> {
     let layout = layout(doc, &doc.camera, spec)?;
     snapshotter.set_color_by_tag(doc.color_by_tag);
+    // A print shows what is shown, glass or ghosts being views' alone.
+    snapshotter.set_glass_view(GlassView::default());
     snapshotter.set_section_display(doc.section_display);
     snapshotter.prepare(doc.scene(), &[], &Default::default());
     let mut pdf = Pdf::new();

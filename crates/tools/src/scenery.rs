@@ -216,6 +216,8 @@ pub struct Part<'s> {
     hidden: &'s BTreeSet<TagId>,
     /// Whether some edge or face of the layout is hidden by its own flag.
     flagged: bool,
+    /// Whether entities hidden by their own flag count as shown (see `Scenery::reveal`).
+    reveal: bool,
     /// The active section planes cutting the part (its own mesh's and its ancestors'), in the
     /// open context's coordinates; empty when cuts are not applied.
     cuts: &'s [SectionPlane],
@@ -229,16 +231,17 @@ impl Part<'_> {
     /// Whether nothing can hide an edge or face of the part: no tag is hidden and no entity
     /// is hidden itself.
     fn all_shown(&self) -> bool {
-        self.hidden.is_empty() && !self.flagged
+        self.hidden.is_empty() && (!self.flagged || self.reveal)
     }
 
-    /// Whether the face shows: it is not hidden itself and not on a hidden tag.
+    /// Whether the face shows: it is not hidden itself (unless hidden entities are revealed)
+    /// and not on a hidden tag.
     pub fn shows_face(&self, f: FaceId) -> bool {
         self.all_shown()
             || self
                 .model
                 .face(f)
-                .is_some_and(|f| !f.hidden && self.shows(f.tag))
+                .is_some_and(|f| (self.reveal || !f.hidden) && self.shows(f.tag))
     }
 
     /// Whether the edge shows: it is not hidden itself and not on a hidden tag.
@@ -247,12 +250,12 @@ impl Part<'_> {
             || self
                 .model
                 .edge(e)
-                .is_some_and(|e| !e.hidden && self.shows(e.tag))
+                .is_some_and(|e| (self.reveal || !e.hidden) && self.shows(e.tag))
     }
 
     /// Whether the vertex shows: some edge or face using it does (see `Model::vertex_shown`).
     pub fn shows_vertex(&self, v: VertexId) -> bool {
-        self.all_shown() || self.model.vertex_shown(v, self.hidden, false)
+        self.all_shown() || self.model.vertex_shown(v, self.hidden, self.reveal)
     }
 }
 
@@ -328,6 +331,9 @@ impl Deref for Part<'_> {
     }
 }
 
+/// The box around what an instance places, once worked out (None when it places nothing).
+type InstanceBox = Option<[DVec3; 2]>;
+
 /// Where every mesh of a scene is placed, seen from an open context: all that tools need to
 /// know about the parts but the meshes themselves. It borrows nothing, so it can be kept while
 /// the scene and the open context stay the same, and the scene looked at through it
@@ -341,17 +347,29 @@ pub struct Layout {
     /// Each part's path: the instances from the root down to the one placing it (empty for
     /// the root).
     paths: Vec<Vec<InstanceId>>,
-    /// Every guide of every part, placed in the open context's coordinates, with the index of
-    /// the part it comes from, in part and id order.
+    /// How many of the parts are seen when nothing hidden is revealed: those not under an
+    /// instance hidden by its own flag come first, the others (placed after them, in walk
+    /// order) only when revealed.
+    strict_parts: usize,
+    /// Every guide of the first `strict_parts` parts that is not hidden itself, placed in the
+    /// open context's coordinates, with the index of the part it comes from, in part and id
+    /// order.
     guides: Vec<(usize, GuideId, Guide)>,
+    /// The guides on shown tags the strict view leaves out: hidden themselves or in a part
+    /// under a hidden instance; as `guides`.
+    hidden_guides: Vec<(usize, GuideId, Guide)>,
     /// Every dimension and note of every part not on a hidden tag, placed in the open
     /// context's coordinates (a screen note as it is), with the index of the part it comes
-    /// from, in part order, dimensions before notes, each in id order.
+    /// from, in part order, dimensions before notes, each in id order. The first
+    /// `strict_annotations` are those of the strict parts.
     annotations: Vec<(usize, EntityId, AnnotationShape)>,
+    strict_annotations: usize,
     /// Every section plane of every part not on a hidden tag, as the outline square the plane
     /// is drawn with, placed in the open context's coordinates, with the index of the part it
     /// comes from, in part and id order; at most `session::MAX_SECTION_OUTLINES`.
     sections: Vec<(usize, EntityId, SectionShape)>,
+    /// How many of the `sections` are those of the strict parts.
+    strict_sections: usize,
     /// The active section planes cutting each part (its own mesh's and its ancestors'), in the
     /// open context's coordinates.
     cuts: Vec<Vec<SectionPlane>>,
@@ -359,8 +377,9 @@ pub struct Layout {
     cutting: bool,
     /// What each part's planes fill, once asked for (see `Scenery::fill_hit`).
     fills: Vec<OnceLock<Vec<PlaneFill>>>,
-    /// The instances of the open context, by id, each with its box once asked for.
-    boxes: Vec<(InstanceId, OnceLock<Option<[DVec3; 2]>>)>,
+    /// The instances of the open context, by id, each with its box once asked for (the box
+    /// of what is seen strictly, and of what is seen with hidden entities revealed).
+    boxes: Vec<(InstanceId, [OnceLock<InstanceBox>; 2])>,
     /// The tags hidden: what is on them is not seen.
     hidden: BTreeSet<TagId>,
     /// Whether some placed mesh has an edge or face hidden by its own flag (when not, parts
@@ -384,8 +403,10 @@ impl Layout {
             &mut Trail::default(),
             &mut found,
         );
-        // The open mesh first, then the others in walk order.
-        found.sort_by_key(|f| f.owner != Owner::Open);
+        // The open mesh first, then the others in walk order, those under a hidden instance
+        // last (the open mesh is never one).
+        found.sort_by_key(|f| (f.ghost, f.owner != Owner::Open));
+        let strict_parts = found.iter().filter(|f| !f.ghost).count();
         let mut slots: HashMap<MeshId, usize> = HashMap::new();
         let mut meshes = Vec::new();
         let mut models = Vec::new();
@@ -404,7 +425,7 @@ impl Layout {
                 (mesh, f.place, f.owner)
             })
             .collect();
-        let mut layout = Layout::new(meshes, &models, parts, paths, cuts, hidden);
+        let mut layout = Layout::new(meshes, &models, parts, paths, cuts, hidden, strict_parts);
         // The section planes' squares, each mesh's side worked out once.
         let sides: Vec<f64> = layout
             .meshes
@@ -428,11 +449,17 @@ impl Layout {
             })
             .take(session::MAX_SECTION_OUTLINES)
             .collect();
+        layout.strict_sections = layout
+            .sections
+            .iter()
+            .take_while(|(k, ..)| *k < strict_parts)
+            .count();
         Some(layout)
     }
 
     /// A layout of `parts` (each the index of its mesh in `meshes`, its placement and its
     /// owner) reached by `paths`, with the tags `hidden`; `models` are the meshes themselves.
+    /// Only the first `strict_parts` are seen unless hidden entities are revealed.
     fn new(
         meshes: Vec<MeshId>,
         models: &[&Model],
@@ -440,6 +467,7 @@ impl Layout {
         paths: Vec<Vec<InstanceId>>,
         cuts: Vec<Vec<SectionPlane>>,
         hidden: BTreeSet<TagId>,
+        strict_parts: usize,
     ) -> Layout {
         let boxes: Vec<Option<[DVec3; 2]>> = models.iter().map(|m| mesh_box(m)).collect();
         let parts: Vec<Placed> = parts
@@ -456,17 +484,23 @@ impl Layout {
                 }
             })
             .collect();
-        let guides = parts
+        let (guides, hidden_guides): (Vec<_>, Vec<_>) = parts
             .iter()
             .enumerate()
             .flat_map(|(k, part)| {
                 models[part.mesh]
                     .guides()
-                    .filter(|(_, g)| !g.hidden() && tag_shown_among(&hidden, g.tag()))
-                    .map(move |(id, g)| (k, id, g.transformed(part.place)))
+                    .filter(|(_, g)| tag_shown_among(&hidden, g.tag()))
+                    .map(move |(id, g)| (k, id, g.transformed(part.place), g.hidden()))
             })
-            .collect();
-        let annotations = parts
+            .partition(|(k, _, _, own)| *k < strict_parts && !own);
+        let strip = |v: Vec<(usize, GuideId, Guide, bool)>| {
+            v.into_iter()
+                .map(|(k, id, g, _)| (k, id, g))
+                .collect::<Vec<_>>()
+        };
+        let (guides, hidden_guides) = (strip(guides), strip(hidden_guides));
+        let annotations: Vec<(usize, EntityId, AnnotationShape)> = parts
             .iter()
             .enumerate()
             .flat_map(|(k, part)| {
@@ -494,19 +528,27 @@ impl Layout {
             .collect();
         instances.sort();
         instances.dedup();
+        let strict_annotations = annotations
+            .iter()
+            .take_while(|(k, ..)| *k < strict_parts)
+            .count();
         Layout {
             meshes,
             parts,
             paths,
+            strict_parts,
             guides,
+            hidden_guides,
             annotations,
+            strict_annotations,
             sections: Vec::new(),
+            strict_sections: 0,
             cutting: cuts.iter().any(|c| !c.is_empty()),
             fills: cuts.iter().map(|_| OnceLock::new()).collect(),
             cuts,
             boxes: instances
                 .into_iter()
-                .map(|i| (i, OnceLock::new()))
+                .map(|i| (i, [OnceLock::new(), OnceLock::new()]))
                 .collect(),
             hidden,
             flagged: models.iter().any(|m| m.has_hidden_edge_or_face()),
@@ -533,6 +575,9 @@ pub struct Scenery<'a> {
     planes: bool,
     /// Whether the section cuts are filled (the fill hides what lies behind it).
     fill: bool,
+    /// Whether entities hidden by their own flag are seen too (Hidden Geometry): for picking
+    /// and box select. Inference never reveals them (see [`Scenery::seen_strictly`]).
+    reveal: bool,
 }
 
 /// The depths around a model point the cursor stands for: what lies in front of the point or
@@ -613,6 +658,7 @@ impl<'a> Scenery<'a> {
             cuts: true,
             planes: true,
             fill: true,
+            reveal: false,
             slab: None,
             models: vec![model],
             layout: Cow::Owned(Layout::new(
@@ -622,6 +668,7 @@ impl<'a> Scenery<'a> {
                 vec![Vec::new()],
                 cuts,
                 BTreeSet::new(),
+                1,
             )),
         }
     }
@@ -637,6 +684,7 @@ impl<'a> Scenery<'a> {
             cuts: true,
             planes: true,
             fill: true,
+            reveal: false,
         })
     }
 
@@ -651,6 +699,7 @@ impl<'a> Scenery<'a> {
             cuts: true,
             planes: true,
             fill: true,
+            reveal: false,
         })
     }
 
@@ -658,6 +707,34 @@ impl<'a> Scenery<'a> {
     pub fn within(mut self, slab: Slab) -> Self {
         self.slab = Some(slab);
         self
+    }
+
+    /// The same scenery with entities hidden by their own flag seen too (`on`: Hidden
+    /// Geometry) or not (the default): for picking and box select. Inference goes by
+    /// [`Scenery::seen_strictly`] whatever this says. Hidden tags stay hidden.
+    pub fn reveal_hidden(mut self, on: bool) -> Self {
+        self.reveal = on;
+        self
+    }
+
+    /// Whether entities hidden by their own flag are seen (see [`Scenery::reveal_hidden`]).
+    pub fn reveals_hidden(&self) -> bool {
+        self.reveal
+    }
+
+    /// This scenery without revealing hidden entities, borrowing it: what inference and the
+    /// occlusion of picks go by. Its parts are the first of this one's, in the same order, so
+    /// indices of parts, guides, annotations and sections mean the same in both.
+    pub fn seen_strictly(&self) -> Scenery<'_> {
+        Scenery {
+            models: self.models.clone(),
+            layout: Cow::Borrowed(&*self.layout),
+            slab: self.slab,
+            cuts: self.cuts,
+            planes: self.planes,
+            fill: self.fill,
+            reveal: false,
+        }
     }
 
     /// The same scenery with the active section planes cutting (the default) or not
@@ -686,7 +763,11 @@ impl<'a> Scenery<'a> {
             return None;
         }
         let mut best: Option<f64> = None;
-        for (k, planes) in self.layout.cuts.iter().enumerate() {
+        // Fills are those of what is seen strictly, so that revealing hides nothing more.
+        for (k, planes) in self.layout.cuts[..self.layout.strict_parts]
+            .iter()
+            .enumerate()
+        {
             if planes.is_empty() {
                 continue;
             }
@@ -750,6 +831,7 @@ impl<'a> Scenery<'a> {
             placed,
             hidden: &self.layout.hidden,
             flagged: self.layout.flagged,
+            reveal: false,
             cuts: &self.layout.cuts[k],
         }
     }
@@ -759,14 +841,24 @@ impl<'a> Scenery<'a> {
         self.slab
     }
 
+    /// How many parts are seen: all, or with hidden entities not revealed, those not under an
+    /// instance hidden by its own flag.
+    fn seen_parts(&self) -> usize {
+        if self.reveal {
+            self.layout.parts.len()
+        } else {
+            self.layout.strict_parts
+        }
+    }
+
     /// How many meshes are placed.
     pub fn len(&self) -> usize {
-        self.layout.parts.len()
+        self.seen_parts()
     }
 
     /// Never true: the open context's mesh is always there.
     pub fn is_empty(&self) -> bool {
-        self.layout.parts.is_empty()
+        self.seen_parts() == 0
     }
 
     /// The planes cutting the `k`th part, none when cuts are off.
@@ -778,10 +870,12 @@ impl<'a> Scenery<'a> {
     /// with, placed in the open context's coordinates, with the index of the part it comes
     /// from (the plane's id is an `EntityId::Section` in that part's mesh).
     pub fn sections(&self) -> &[(usize, EntityId, SectionShape)] {
-        if self.planes {
+        if !self.planes {
+            &[]
+        } else if self.reveal {
             &self.layout.sections
         } else {
-            &[]
+            &self.layout.sections[..self.layout.strict_sections]
         }
     }
 
@@ -793,14 +887,14 @@ impl<'a> Scenery<'a> {
             placed,
             hidden: &self.layout.hidden,
             flagged: self.layout.flagged,
+            reveal: self.reveal,
             cuts: self.cuts_of(k),
         }
     }
 
     /// Every placed mesh, the open context's first.
     pub fn parts(&self) -> impl ExactSizeIterator<Item = Part<'_>> + '_ {
-        self.layout
-            .parts
+        self.layout.parts[..self.seen_parts()]
             .iter()
             .enumerate()
             .map(|(k, placed)| Part {
@@ -808,6 +902,7 @@ impl<'a> Scenery<'a> {
                 placed,
                 hidden: &self.layout.hidden,
                 flagged: self.layout.flagged,
+                reveal: self.reveal,
                 cuts: self.cuts_of(k),
             })
     }
@@ -818,17 +913,34 @@ impl<'a> Scenery<'a> {
         &self.layout.paths[k]
     }
 
-    /// Every guide of every part, placed in the open context's coordinates, with the index of
-    /// the part it comes from, in part and id order.
+    /// Every guide of every part seen strictly, placed in the open context's coordinates, with
+    /// the index of the part it comes from, in part and id order. Guides hidden by their own
+    /// flag are not among them even when hidden entities are revealed (see
+    /// [`Scenery::pick_guides`]).
     pub fn guides(&self) -> &[(usize, GuideId, Guide)] {
         &self.layout.guides
+    }
+
+    /// The guides picking can meet: `guides`, and with hidden entities revealed also those
+    /// hidden by their own flag or placed by a hidden instance.
+    pub fn pick_guides(&self) -> impl Iterator<Item = &(usize, GuideId, Guide)> + '_ {
+        let hidden: &[_] = if self.reveal {
+            &self.layout.hidden_guides
+        } else {
+            &[]
+        };
+        self.layout.guides.iter().chain(hidden)
     }
 
     /// Every dimension and note of every part, placed in the open context's coordinates (a
     /// screen note as it is), with the index of the part it comes from. Those on hidden tags
     /// are left out.
     pub fn annotations(&self) -> &[(usize, EntityId, AnnotationShape)] {
-        &self.layout.annotations
+        if self.reveal {
+            &self.layout.annotations
+        } else {
+            &self.layout.annotations[..self.layout.strict_annotations]
+        }
     }
 
     /// Whether what is on `tag` (None: Untagged) shows.
@@ -836,25 +948,25 @@ impl<'a> Scenery<'a> {
         tag_shown_among(&self.layout.hidden, tag)
     }
 
-    /// Whether `edge` (of any part) shows: not hidden itself and not on a hidden tag. Picking,
-    /// box select and inference go by this and `Part::shows_edge`.
+    /// Whether `edge` (of any part) shows: not hidden itself (unless revealed) and not on a
+    /// hidden tag. Picking, box select and inference go by this and `Part::shows_edge`.
     pub fn shows_edge_of(&self, edge: &Edge) -> bool {
-        !edge.hidden && self.shows(edge.tag)
+        (self.reveal || !edge.hidden) && self.shows(edge.tag)
     }
 
     /// Whether `face` (of any part) shows: not hidden itself and not on a hidden tag.
     pub fn shows_face_of(&self, face: &Face) -> bool {
-        !face.hidden && self.shows(face.tag)
+        (self.reveal || !face.hidden) && self.shows(face.tag)
     }
 
     /// Whether `instance` shows: not hidden itself and not on a hidden tag.
     pub fn shows_instance_of(&self, instance: &Instance) -> bool {
-        !instance.hidden && self.shows(instance.tag)
+        (self.reveal || !instance.hidden) && self.shows(instance.tag)
     }
 
     /// Whether `guide` shows: not hidden itself and not on a hidden tag.
     pub fn shows_guide_of(&self, guide: &Guide) -> bool {
-        !guide.hidden() && self.shows(guide.tag())
+        (self.reveal || !guide.hidden()) && self.shows(guide.tag())
     }
 
     /// The open context's own mesh.
@@ -865,7 +977,7 @@ impl<'a> Scenery<'a> {
     /// True when an instance is open (there is geometry outside the open context or the root
     /// is not what is open).
     pub fn inside_instance(&self) -> bool {
-        self.layout.parts.iter().any(|p| p.owner == Owner::Outside)
+        self.parts().any(|p| p.owner == Owner::Outside)
     }
 
     /// The box around what an instance of the open context places, in the open context's
@@ -913,7 +1025,7 @@ impl<'a> Scenery<'a> {
             .boxes
             .binary_search_by_key(&id, |(i, _)| *i)
             .ok()?;
-        *self.layout.boxes[k].1.get_or_init(|| {
+        *self.layout.boxes[k].1[usize::from(self.reveal)].get_or_init(|| {
             let mut points = self
                 .parts()
                 .filter(|p| p.owner == Owner::Instance(id))
@@ -940,6 +1052,8 @@ struct Found<'a> {
     path: Vec<InstanceId>,
     /// The active section planes cutting it, in the open context's coordinates.
     cuts: Vec<SectionPlane>,
+    /// Whether an instance hidden by its own flag places it (at any depth).
+    ghost: bool,
 }
 
 /// Where `collect` has got to: the instances from the root down to the mesh being added, and
@@ -949,11 +1063,14 @@ struct Found<'a> {
 struct Trail {
     path: Vec<InstanceId>,
     cuts: Vec<SectionPlane>,
+    /// Whether an instance on the path is hidden by its own flag.
+    ghost: bool,
 }
 
 /// Adds the mesh `id`, placed by `place` (into the open context's coordinates) and reached by
 /// `trail`, and everything it places, each with its owner. Instances on the tags `hidden` are
-/// left out with all they place, unless the open context is in them.
+/// left out with all they place, unless the open context is in them; instances hidden by
+/// their own flag are added as ghosts.
 fn collect<'a>(
     scene: &'a Scene,
     hidden: &BTreeSet<TagId>,
@@ -983,16 +1100,20 @@ fn collect<'a>(
         owner,
         path: trail.path.clone(),
         cuts: trail.cuts.clone(),
+        ghost: trail.ghost,
     });
     for (iid, instance) in model.instances() {
         trail.path.push(iid);
-        let shown = !instance.hidden
-            && tag_shown_among(hidden, instance.tag)
+        let on_context = context.starts_with(&trail.path);
+        let shown = tag_shown_among(hidden, instance.tag)
             && !(id == MeshId::Root && scene.view_hidden().contains(&iid));
-        if !shown && !context.starts_with(&trail.path) {
+        if !(shown || on_context) {
             trail.path.pop();
             continue;
         }
+        // An instance hidden by its own flag is kept as a ghost: seen only when revealed.
+        let was_ghost = trail.ghost;
+        trail.ghost |= instance.hidden && !on_context;
         collect(
             scene,
             hidden,
@@ -1002,6 +1123,7 @@ fn collect<'a>(
             trail,
             found,
         );
+        trail.ghost = was_ghost;
         trail.path.pop();
     }
     if plane.is_some() {

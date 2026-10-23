@@ -472,6 +472,8 @@ pub struct SceneView {
     pub projection: Projection,
     pub lighting: Lighting,
     pub color_by_tag: bool,
+    pub x_ray: bool,
+    pub hidden_geometry: bool,
 }
 
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
@@ -507,7 +509,8 @@ pub enum QueryResult {
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
     /// whole view's height); `lighting` is `day` or `night`; `color_by_tag` is whether faces
-    /// are drawn in their tags' colors.
+    /// are drawn in their tags' colors; `x_ray` whether every shown face is drawn as glass;
+    /// `hidden_geometry` whether hidden entities are drawn ghosted and can be picked.
     Camera {
         eye: [f64; 3],
         target: [f64; 3],
@@ -517,6 +520,8 @@ pub enum QueryResult {
         view_height: f64,
         lighting: Lighting,
         color_by_tag: bool,
+        x_ray: bool,
+        hidden_geometry: bool,
     },
     /// Counts for the open context, plus the number of definitions.
     Stats {

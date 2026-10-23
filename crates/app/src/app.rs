@@ -179,7 +179,8 @@ const HOVER_SETTLE: Duration = Duration::from_millis(50);
 type Drawn = (u64, BTreeSet<EntityId>, Vec<InstanceId>);
 
 /// What the window shows that a request can change: the model (its revision), the selection,
-/// the open context, the camera, the lighting, coloring by tag, the section display and the editor's state.
+/// the open context, the camera, the lighting, coloring by tag, the section display, X-ray,
+/// Hidden Geometry and the editor's state.
 type Shown = (
     u64,
     BTreeSet<EntityId>,
@@ -188,6 +189,8 @@ type Shown = (
     Lighting,
     bool,
     session::SectionDisplay,
+    bool,
+    bool,
     EditorState,
 );
 
@@ -202,6 +205,8 @@ fn shown(editor: &Editor) -> Shown {
         doc.lighting,
         doc.color_by_tag,
         doc.section_display,
+        doc.x_ray,
+        doc.hidden_geometry,
         editor_state(editor),
     )
 }
@@ -2692,6 +2697,10 @@ impl State {
         let recolored = self.renderer.set_color_by_tag(doc.color_by_tag);
         // So do the section display settings.
         let recolored = self.renderer.set_section_display(doc.section_display) || recolored;
+        let recolored = self.renderer.set_glass_view(render::scene::GlassView {
+            x_ray: doc.x_ray,
+            hidden_geometry: doc.hidden_geometry,
+        }) || recolored;
         if update == SceneUpdate::Model || recolored {
             self.renderer.set_model(doc.scene(), doc.context());
         }

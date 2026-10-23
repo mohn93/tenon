@@ -79,6 +79,11 @@ pub struct Document {
     pub lighting: Lighting,
     /// Faces are drawn in their tags' colors; saved with the camera.
     pub color_by_tag: bool,
+    /// Every shown face is drawn as glass; saved with the camera.
+    pub x_ray: bool,
+    /// Entities hidden by their own flag are drawn ghosted and can be picked; saved with the
+    /// camera.
+    pub hidden_geometry: bool,
     /// Whether section planes are drawn, cut and filled; saved with the camera.
     pub section_display: SectionDisplay,
     /// How labels write lengths; saved with the model, changed by undo steps.
@@ -143,6 +148,8 @@ impl Document {
             camera: Camera::new(viewport),
             lighting: Lighting::Day,
             color_by_tag: false,
+            x_ray: false,
+            hidden_geometry: false,
             section_display: SectionDisplay::default(),
             units: Units::default(),
             selection: BTreeSet::new(),
@@ -499,6 +506,22 @@ impl Document {
             }
             Command::SetColorByTag { on } => {
                 self.color_by_tag = on;
+                Ok(Outcome::default())
+            }
+            Command::SetXRay { on } => {
+                self.x_ray = on;
+                Ok(Outcome::default())
+            }
+            Command::SetHiddenGeometry { on } => {
+                self.hidden_geometry = on;
+                // Turned off, hidden entities leave the selection again.
+                let keep: BTreeSet<EntityId> = self
+                    .selection
+                    .iter()
+                    .copied()
+                    .filter(|id| !self.is_unselectable(*id))
+                    .collect();
+                self.selection = keep;
                 Ok(Outcome::default())
             }
             Command::SetSectionDisplay { planes, cuts, fill } => {
@@ -962,6 +985,8 @@ impl Document {
             | Command::SetProjection { .. }
             | Command::SetLighting { .. }
             | Command::SetColorByTag { .. }
+            | Command::SetXRay { .. }
+            | Command::SetHiddenGeometry { .. }
             | Command::SetSectionDisplay { .. }
             | Command::Select { .. }
             | Command::OpenInstance { .. }
@@ -1023,6 +1048,7 @@ impl Document {
         let camera_before = self.camera.clone();
         let lighting_before = self.lighting;
         let color_by_tag_before = self.color_by_tag;
+        let (x_ray_before, hidden_geometry_before) = (self.x_ray, self.hidden_geometry);
         let section_display_before = self.section_display;
         let selected_scene_before = self.selected_scene;
         let selection_before = self.selection.clone();
@@ -1082,6 +1108,8 @@ impl Document {
                     self.camera = camera_before;
                     self.lighting = lighting_before;
                     self.color_by_tag = color_by_tag_before;
+                    self.x_ray = x_ray_before;
+                    self.hidden_geometry = hidden_geometry_before;
                     self.section_display = section_display_before;
                     self.selected_scene = selected_scene_before;
                     self.selection = selection_before;
@@ -2007,6 +2035,8 @@ impl Document {
                 view_height: self.camera.view_height(),
                 lighting: self.lighting,
                 color_by_tag: self.color_by_tag,
+                x_ray: self.x_ray,
+                hidden_geometry: self.hidden_geometry,
             },
             Query::Stats {} => QueryResult::Stats {
                 vertices: m.vertices().count(),

@@ -189,8 +189,15 @@ impl Camera {
     }
 
     /// The view a scene stores: this camera (its `up` field, the field of view and the
-    /// projection), lit by `lighting`, its faces colored by tag or not.
-    pub fn page_view(&self, lighting: Lighting, color_by_tag: bool) -> PageView {
+    /// projection), lit by `lighting`, its faces colored by tag or not, drawn as glass or not
+    /// (`x_ray`), with hidden entities ghosted or not (`hidden_geometry`).
+    pub fn page_view(
+        &self,
+        lighting: Lighting,
+        color_by_tag: bool,
+        x_ray: bool,
+        hidden_geometry: bool,
+    ) -> PageView {
         PageView {
             eye: self.eye.to_array(),
             target: self.target.to_array(),
@@ -199,6 +206,8 @@ impl Camera {
             parallel: self.is_parallel(),
             night: lighting == Lighting::Night,
             color_by_tag,
+            x_ray,
+            hidden_geometry,
         }
     }
 

@@ -18,7 +18,12 @@ impl Document {
 
     /// The view a scene stores now: the camera, lighting and color by tag.
     fn current_view(&self) -> PageView {
-        self.camera.page_view(self.lighting, self.color_by_tag)
+        self.camera.page_view(
+            self.lighting,
+            self.color_by_tag,
+            self.x_ray,
+            self.hidden_geometry,
+        )
     }
 
     /// The current view to store, refused (`invalid_input`) when the eye or target is beyond
@@ -180,7 +185,7 @@ impl Document {
                         unit_vector(up).unwrap_or(camera.up)
                     };
                 }
-                Some((camera, v.night, v.color_by_tag))
+                Some((camera, v))
             }
             None => None,
         };
@@ -204,14 +209,16 @@ impl Document {
                 );
             }
         }
-        if let Some((camera, night, color_by_tag)) = view {
+        if let Some((camera, v)) = view {
             self.camera = camera;
-            self.lighting = if night {
+            self.lighting = if v.night {
                 Lighting::Night
             } else {
                 Lighting::Day
             };
-            self.color_by_tag = color_by_tag;
+            self.color_by_tag = v.color_by_tag;
+            self.x_ray = v.x_ray;
+            self.hidden_geometry = v.hidden_geometry;
         }
         self.selected_scene = Some(id);
         Ok(SceneChange::join(changes))
@@ -254,6 +261,8 @@ impl Document {
                     Lighting::Day
                 },
                 color_by_tag: v.color_by_tag,
+                x_ray: v.x_ray,
+                hidden_geometry: v.hidden_geometry,
             }),
             hidden_tags: page.tags.as_ref().map(|t| t.iter().copied().collect()),
             revision: self.revision,

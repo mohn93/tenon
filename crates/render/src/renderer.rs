@@ -11,8 +11,8 @@ use crate::grid::{
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{
-    BaseFaceVertex, CasterChunk, Ranges, Spans, scene_base_shown, shown_annotations, shown_guides,
-    shown_sections,
+    BaseFaceVertex, CasterChunk, GlassView, Ranges, Spans, scene_base_shown, shown_annotations,
+    shown_guides, shown_sections,
 };
 use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
@@ -477,6 +477,8 @@ pub struct Renderer {
     /// Faces drawn in their tags' colors, as of the last `set_color_by_tag` (see
     /// `scene::scene_base_with`).
     color_by_tag: bool,
+    /// X-ray and Hidden Geometry, as of the last `set_glass_view`.
+    glass_view: GlassView,
     /// How section planes are shown, as of the last `set_section_display`.
     section_display: SectionDisplay,
     /// How the frames look, as of the last `set_style`.
@@ -1019,6 +1021,7 @@ impl Renderer {
             caster_generation: 0,
             lighting: Lighting::Day,
             color_by_tag: false,
+            glass_view: GlassView::default(),
             section_display: SectionDisplay::default(),
             style: ViewStyle::CLASSIC,
             print: false,
@@ -1070,7 +1073,13 @@ impl Renderer {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
             self.rebind();
         }
-        let base = scene_base_shown(scene, context, self.color_by_tag, self.section_display);
+        let base = scene_base_shown(
+            scene,
+            context,
+            self.color_by_tag,
+            self.glass_view,
+            self.section_display,
+        );
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
@@ -1181,6 +1190,15 @@ impl Renderer {
     pub fn set_color_by_tag(&mut self, on: bool) -> bool {
         let changed = self.color_by_tag != on;
         self.color_by_tag = on;
+        changed
+    }
+
+    /// Draws faces as glass (`x_ray`) and hidden entities ghosted (`hidden_geometry`) from the
+    /// next `set_model` on. True when that changes what is drawn, so the model must be set
+    /// again.
+    pub fn set_glass_view(&mut self, view: GlassView) -> bool {
+        let changed = self.glass_view != view;
+        self.glass_view = view;
         changed
     }
 

@@ -124,7 +124,7 @@ pub fn pick(scenery: &Scenery, ray: &Ray, reach: Reach) -> Vec<Hit> {
             offer(EntityId::Edge(e), k, point);
         }
     }
-    for &(k, id, g) in scenery.guides() {
+    for &(k, id, g) in scenery.pick_guides() {
         let point = match g {
             Guide::Point { position, .. } => position,
             Guide::Line {

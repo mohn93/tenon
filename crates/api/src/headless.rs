@@ -94,6 +94,10 @@ impl Host for HeadlessHost {
         let doc = &self.doc;
         self.snapshotter.as_mut().and_then(|s| {
             s.set_color_by_tag(doc.color_by_tag);
+            s.set_glass_view(render::scene::GlassView {
+                x_ray: doc.x_ray,
+                hidden_geometry: doc.hidden_geometry,
+            });
             s.set_section_display(doc.section_display);
             s.capture(
                 doc.scene(),

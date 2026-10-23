@@ -86,7 +86,7 @@ Queries:
 | `{"type": "curve", "id": "e3"}` | the curve (circle or arc) edge `e3` is part of; see Curves below |
 | `{"type": "stats"}` | counts for the open context (plus the number of definitions) and revision |
 | `{"type": "history"}` | `undo_depth` and `redo_depth`, and the steps as labels, next first: `undo` (what `undo` would undo, then the step before it) and `redo` (what `redo` would redo first). A step's label is the `type` of the command that made it (`add_edge`, `push_pull`); an atomic batch is labeled by its edit commands' type when they share one, else `batch`. Window edits are labeled the same way. Plus `undo_origins` and `redo_origins`, who made each step in the same order: `user` (in the window) or `agent` (through the API); and `revision` |
-| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`; see Camera below |
+| `{"type": "camera"}` | the view: `eye`, `target`, `up`, `fov_y_deg`, `projection`, `view_height`, `lighting`, `color_by_tag`, `x_ray`, `hidden_geometry`; see Camera below |
 | `{"type": "selection"}` | the selected edge, face, instance, guide, dimension, note and section plane ids, plus `revision` |
 | `{"type": "definitions"}` | every group and component definition: `id`, `name`, `kind`, how many `instances` place it, `edges`, `faces` |
 | `{"type": "materials"}` | every material: `id`, `name`, `color`, `opacity`, `emission`, its `texture` if it has one, and how many `faces` and `instances` in the whole model are painted with it; see Materials below |
@@ -113,7 +113,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `deactivate_section`, `set_section_display`, `add_material`,
 `change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
-`set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
+`set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
 Entity ids are strings: `v12` (vertex), `e3` (edge), `f7` (face), `i4` (instance of a group or
 component), `g9` (guide line or guide point), `r5` (dimension), `n6` (note), `s8` (section plane). Definitions are `d5`, materials `m6`, tags `t7`, scenes `p8`. Ids are unique across the whole model, including inside
@@ -384,7 +384,9 @@ A hidden entity is treated as one on a hidden tag (see Tags): not drawn (nor in 
 not met by `pick`, not selected by a `select` box, not snapped to by `infer` or the tools, not
 hiding what is behind it, left out of `zoom_extents`, the hidden-line drawing, SVG, PDF and print,
 `intersect_faces` (as source or target), OBJ, STL and glTF exports, and not a part in the phone
-viewer; a hidden edge still bounds its faces. A hidden face inside a definition is hidden in
+viewer; a hidden edge still bounds its faces. Hidden Geometry (`set_hidden_geometry`) draws them
+ghosted and lets picking and box select reach them, but never snapping, and hidden tags stay
+hidden. A hidden face inside a definition is hidden in
 every instance of it, and a hidden instance hides its whole subtree at any depth.
 
 | Command | Effect |
@@ -394,7 +396,9 @@ every instance of it, and a hidden instance hides its whole subtree at any depth
 | `{"type": "unhide_last"}` | Shows what the most recent `hide` of this session hid that is in the open context and still hidden (so nothing after an undo of that hide, or from another context), as one undo step labelled `unhide_last`. The memory of the last hide is not saved and `new` and `open` clear it. |
 | `{"type": "unhide_all"}` | Shows every hidden entity of the open context (not those inside its instances), as one undo step labelled `unhide_all`. |
 
-Doing nothing is a success with an empty `changed` and no undo step. A hidden entity is not
+Doing nothing is a success with an empty `changed` and no undo step. Unless Hidden Geometry is
+on (`set_hidden_geometry`), which draws hidden entities ghosted and lets them be picked and
+selected, a hidden entity is not
 selected: `select` skips hidden ids, and a `hide` or an undo that hides a selected entity drops
 it from the selection. In the `outliner`, a node's `hidden` is true for a hidden instance as well as one on a hidden
 tag (or under one), and `own_hidden` (absent when false) is true when the instance's own flag
@@ -824,7 +828,7 @@ SketchUp file (2021 or newer) adds its scenes (see Import).
 
 | Command | Effect |
 |---|---|
-| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting` and `color_by_tag`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. A camera whose eye or target is beyond +/-1e6 m (window navigation can go that far) is not stored: `invalid_input` ("the camera is beyond +/-1000000 m: a scene cannot store it"); move the view closer first. |
+| `{"type": "add_scene", "name": "Front", "camera": true, "tags": true}` | Adds a scene after the last one, as one undo step. It stores the current view (camera, projection, `lighting`, `color_by_tag`, `x_ray` and `hidden_geometry`) unless `camera` is false, and which tags are hidden unless `tags` is false (both default true). Without `name` it is called `Scene 1` (the lowest number no scene's name has). A name must not be blank, must have at most 256 characters and must differ from every other scene's (case counts; `invalid_input`). The new id is the outcome's `changes.scenes`, e.g. `["p40"]`, and it becomes the selected scene. A camera whose eye or target is beyond +/-1e6 m (window navigation can go that far) is not stored: `invalid_input` ("the camera is beyond +/-1000000 m: a scene cannot store it"); move the view closer first. |
 | `{"type": "update_scene", "scene": "p40", "camera": true, "tags": false}` | Stores the current view and hidden tags in the scene again, as one undo step. An absent `camera` or `tags` stores that part again if the scene stores it; true starts storing it, false stops. Storing what it already stores is no step. Storing the camera beyond +/-1e6 m is refused as for `add_scene`. In the window, Update on a scene that stores neither part says so in the status and changes nothing. |
 | `{"type": "change_scene", "scene": "p40", "name": "Back", "camera": false, "tags": true}` | Renames a scene (name rules as for `add_scene`) and chooses what it stores, as one undo step (none when nothing changes). Each of `name`, `camera` and `tags` is optional, but at least one is needed (`invalid_input`). `camera` or `tags` false stops storing that part; true stores it from the current view or tag visibility only if the scene does not store it yet. A part that stays stored keeps exactly what was stored (unlike `update_scene`, which stores it again). Starting to store the camera beyond +/-1e6 m is refused as for `add_scene`. |
 | `{"type": "move_scene", "scene": "p40", "index": 0}` | Moves a scene to `index` in the order (0: first), as one undo step. An index past the last scene is `invalid_input`. |
@@ -849,7 +853,7 @@ whatever instance is open; `go_to_scene` leaves the open instance open.
 `{"scenes": [{"id": "p40", "name": "Front", "camera": true, "tags": true, "selected": true}], "revision": 12}`.
 `{"type": "scene", "scene": "p40"}` gives the stored view in the `camera` query's terms (without
 `view_height`) and the hidden tag ids:
-`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false}, "hidden_tags": ["t31"], "revision": 12}`.
+`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false}, "hidden_tags": ["t31"], "revision": 12}`.
 
 ### Groups and components
 
@@ -949,7 +953,7 @@ fails with `invalid_input` and leaves the camera as it was.
 
 ```
 {"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
- "projection": "perspective", "view_height": 10.11, "lighting": "day", "color_by_tag": false}
+ "projection": "perspective", "view_height": 10.11, "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false}
 ```
 
 - `up` is the direction pointing up the screen: always `[0,0,1]`, except in a view straight down
@@ -962,6 +966,9 @@ fails with `invalid_input` and leaves the camera as it was.
   distances in front of and behind the target, including geometry behind the eye.
 - `lighting` is `day` or `night` (see Lights).
 - `color_by_tag` is whether faces are drawn in their tags' colors (`set_color_by_tag`; see Tags).
+- `x_ray` is whether every shown face is drawn as glass (`set_x_ray`).
+- `hidden_geometry` is whether entities hidden by their own flag are drawn ghosted and can be
+  picked (`set_hidden_geometry`; see Hide and unhide).
 
 | Command | Effect |
 |---|---|
@@ -974,6 +981,8 @@ fails with `invalid_input` and leaves the camera as it was.
 | `{"type": "set_projection", "projection": "parallel"}` | Switches between `perspective` and `parallel`, keeping the eye, target and `view_height`. |
 | `{"type": "set_lighting", "mode": "night"}` | Lights the view by `day` or by `night` (see Lights). Like the camera commands it is not an undo step and does not change the revision; it is saved with the camera, and a failed atomic batch puts it back. |
 | `{"type": "set_color_by_tag", "on": true}` | Draws faces in their tags' colors, or (`false`) by their materials (see Tags). A view setting like `set_lighting`. |
+| `{"type": "set_x_ray", "on": true}` | X-ray: every shown face is drawn as glass, opacity 0.5 on both sides (a side more transparent already keeps its own), so edges behind faces show. Picking, snapping and shadows are unchanged, and hidden entities stay hidden. A view setting like `set_lighting` (no undo step, not a change to the revision, put back by a failed atomic batch, saved with the camera and stored by scenes); print, PDF, SVG, the line drawing and library thumbnails ignore it. |
+| `{"type": "set_hidden_geometry", "on": true}` | Hidden Geometry: entities hidden by their own flag (see Hide and unhide) are drawn ghosted (faces as glass at opacity 0.25 in their material's color, edges and guides in light grey; they cast no shadow and give no light) and can be picked, box selected and selected, so they can be unhidden. Inference and the tools' snaps still ignore them, and entities on hidden tags stay hidden. Turning it off drops hidden entities from the selection. A view setting like `set_x_ray`; print, PDF, SVG, the line drawing and thumbnails ignore it. |
 
 In the window, the Camera menu has Zoom Extents (Shift+Z; holding the keys zooms once), the
 standard views, the two projections and Night Lighting (checked at night; `set_lighting`); it
@@ -1322,11 +1331,11 @@ and older files open without glow; version 6 and older files open without textur
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 of view, up, projection, `lighting` when it is `night`: a file without it opens lit by day,
-and `new` starts by day, and `"color_by_tag": true` when faces are colored by tag) and the model with every id, edges with their curve and soft flag, `"hidden": true` on each hidden edge, face, instance and guide (schema 14, written only when something is hidden; a file without hidden entities is written as before),
+and `new` starts by day, `"color_by_tag": true` when faces are colored by tag, and `"x_ray"` and `"hidden_geometry": true` when on, which need schema 14 as hidden entities do) and the model with every id, edges with their curve and soft flag, `"hidden": true` on each hidden edge, face, instance and guide (schema 14, written only when something is hidden; a file without hidden entities is written as before),
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
 hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
 one's id, name, `view` when it stores one (`eye`, `target`, `up`, `fov_y` in radians, and
-`parallel`, `night` and `color_by_tag` when true), and `tags`, the tag ids it hides, when it
+`parallel`, `night`, `color_by_tag`, `x_ray` and `hidden_geometry` when true), and `tags`, the tag ids it hides, when it
 stores tag visibility), each mesh's `dimensions` and `notes` (see Dimensions and notes; absent
 when none), and the display `units` (absent when the default). Each texture's image is stored in the archive as
 the file it was read from, `textures/m31.png` (or `.jpg`), and the material's `texture` in

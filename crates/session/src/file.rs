@@ -96,6 +96,12 @@ pub(crate) struct StoredCamera {
     pub lighting: Lighting,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub color_by_tag: bool,
+    /// Faces drawn as glass and hidden entities drawn ghosted, written only when on (they
+    /// need version 14).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub x_ray: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_geometry: bool,
     /// The section display settings, written only when off; files before version 13 show
     /// planes, apply cuts and fill them.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -123,6 +129,8 @@ fn is_day(lighting: &Lighting) -> bool {
 pub(crate) struct ViewLook {
     pub lighting: Lighting,
     pub color_by_tag: bool,
+    pub x_ray: bool,
+    pub hidden_geometry: bool,
     pub section: SectionDisplay,
     pub units: Units,
 }
@@ -188,6 +196,8 @@ pub(crate) fn write_bytes(
     let ViewLook {
         lighting,
         color_by_tag,
+        x_ray,
+        hidden_geometry,
         section,
         units,
     } = look;
@@ -228,15 +238,22 @@ pub(crate) fn write_bytes(
         .chain(model.definitions.iter().map(|d| &d.mesh))
         .any(|m| !m.sections.is_empty())
         || section != SectionDisplay::default();
-    // Every hidden flag lives in the mesh data, so a model with none writes what it always did.
-    let hidden = std::iter::once(&model.root)
-        .chain(model.definitions.iter().map(|d| &d.mesh))
-        .any(|m| {
-            m.edges.iter().any(|e| e.hidden)
-                || m.faces.iter().any(|f| f.hidden)
-                || m.instances.iter().any(|i| i.hidden)
-                || m.guides.iter().any(|g| g.hidden)
-        });
+    // Every hidden flag lives in the mesh data, and the view flags in the camera and scenes,
+    // so a model with none of them writes what it always did.
+    let hidden = x_ray
+        || hidden_geometry
+        || model
+            .pages
+            .iter()
+            .any(|p| p.view.is_some_and(|v| v.x_ray || v.hidden_geometry))
+        || std::iter::once(&model.root)
+            .chain(model.definitions.iter().map(|d| &d.mesh))
+            .any(|m| {
+                m.edges.iter().any(|e| e.hidden)
+                    || m.faces.iter().any(|f| f.hidden)
+                    || m.instances.iter().any(|i| i.hidden)
+                    || m.guides.iter().any(|g| g.hidden)
+            });
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -282,6 +299,8 @@ pub(crate) fn write_bytes(
             projection: camera.projection,
             lighting,
             color_by_tag,
+            x_ray,
+            hidden_geometry,
             section_planes: section.planes,
             section_cuts: section.cuts,
             section_fill: section.fill,
@@ -666,6 +685,8 @@ mod tests {
             parallel: false,
             night: false,
             color_by_tag: false,
+            x_ray: false,
+            hidden_geometry: false,
         };
         let page = kernel::Page {
             name: "Far".into(),
@@ -680,6 +701,8 @@ mod tests {
         let look = ViewLook {
             lighting: Lighting::Day,
             color_by_tag: false,
+            x_ray: false,
+            hidden_geometry: false,
             section: SectionDisplay::default(),
             units: Units::default(),
         };

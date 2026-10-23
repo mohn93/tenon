@@ -1233,6 +1233,8 @@ fn page_view(
         parallel: !def.perspective,
         night: false,
         color_by_tag: false,
+        x_ray: false,
+        hidden_geometry: false,
     })
 }
 

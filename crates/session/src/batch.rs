@@ -615,7 +615,9 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::StandardView { .. }
         | Command::SetProjection { .. }
         | Command::SetLighting { .. }
-        | Command::SetColorByTag { .. } => {}
+        | Command::SetColorByTag { .. }
+        | Command::SetXRay { .. }
+        | Command::SetHiddenGeometry { .. } => {}
     }
 }
 

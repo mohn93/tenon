@@ -146,6 +146,14 @@ pub fn infer_detail(
     guides: &Guides,
     radius_px: f64,
 ) -> (Inference, Involved) {
+    // Inference never snaps to what is hidden, whether or not picking reveals it.
+    let strict;
+    let scenery = if scenery.reveals_hidden() {
+        strict = scenery.seen_strictly();
+        &strict
+    } else {
+        scenery
+    };
     let ray = camera.ray(cursor);
     let face_hit = nearest_face_part(scenery, &ray);
     let face = face_hit.and_then(|(k, f, _)| (scenery.part(k).owner == Owner::Open).then_some(f));
@@ -398,8 +406,7 @@ pub fn guide_under_where(
     let projector = camera.projector();
     // Guides are few, so they are scanned, not indexed.
     let candidates = scenery
-        .guides()
-        .iter()
+        .pick_guides()
         .filter_map(|&(part, id, g)| {
             let owner = scenery.part(part).owner;
             if !keep(owner) {
@@ -415,7 +422,8 @@ pub fn guide_under_where(
             (d <= radius_px).then_some((d, (owner, id, g, p)))
         })
         .collect();
-    let sight = Sight::new(scenery, camera);
+    let strict = scenery.seen_strictly();
+    let sight = Sight::new(&strict, camera);
     nearest_visible(candidates, |&(.., p)| sight.sees(p))
         .map(|(_, (owner, id, g, _))| (owner, id, g))
 }
@@ -583,11 +591,21 @@ pub fn edge_under_in(
     cursor: DVec2,
     radius_px: f64,
 ) -> Option<(Owner, EdgeId, DVec3, DVec3)> {
+    // Inference goes by this, so it never meets a hidden edge: that is `edge_under_where`.
+    let strict;
+    let scenery = if scenery.reveals_hidden() {
+        strict = scenery.seen_strictly();
+        &strict
+    } else {
+        scenery
+    };
     edge_under_where(scenery, camera, cursor, radius_px, |_| true)
 }
 
-/// Like `edge_under_in`, but only edges whose owner passes `keep` compete. Visibility is still
-/// tested against every part, so an edge hidden behind other geometry is not found.
+/// Like `edge_under_in`, but only edges whose owner passes `keep` compete, and with hidden
+/// entities revealed in `scenery`, edges hidden by their own flag compete too (picking).
+/// Visibility is still tested against every part seen strictly, so an edge hidden behind other
+/// geometry is not found.
 pub fn edge_under_where(
     scenery: &Scenery,
     camera: &Camera,
@@ -613,7 +631,8 @@ pub fn edge_under_where(
             (d <= radius_px).then_some((d, (owner, id, a, b, p)))
         })
         .collect();
-    let sight = Sight::new(scenery, camera);
+    let strict = scenery.seen_strictly();
+    let sight = Sight::new(&strict, camera);
     nearest_visible(candidates, |&(.., p)| sight.sees(p))
         .map(|(_, (owner, id, a, b, _))| (owner, id, a, b))
 }

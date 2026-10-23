@@ -8,8 +8,8 @@ use kernel::{
 use session::{AnchorInput, Camera, Command, Ray};
 use tools::{
     DimensionTool, Guides, Label, NoteRequest, Owner, Reach, Scenery, SnapKind, TextTool, Tool,
-    ToolContext, ToolEvent, ToolOutput, annotation_under_where, edge_under_in, face_under_in,
-    guide_under_where, infer_in, label_under, pick, select_box,
+    ToolContext, ToolEvent, ToolOutput, annotation_under_where, edge_under_in, edge_under_where,
+    face_under_in, guide_under_where, infer_detail, infer_in, label_under, pick, select_box,
 };
 
 const R: f64 = 10.0;
@@ -1128,4 +1128,107 @@ fn faces_whose_edges_are_all_hidden_by_flag_keep_their_corners_and_box() {
         Some([p(3.0, 0.0, 0.0), p(4.0, 1.0, 1.0)])
     );
     assert!(boxed(&view, &c).contains(&EntityId::Instance(i)));
+}
+
+#[test]
+fn revealed_hidden_entities_are_picked_and_box_selected_but_never_inferred() {
+    let (mut s, i) = scene();
+    let d = s.root().instance(i).unwrap().definition;
+    let top = {
+        let m = &s.definition(d).unwrap().mesh;
+        m.faces()
+            .find(|(_, f)| f.normal.z.abs() > 0.5 && m.position(f.outer[0]).unwrap().z > 0.5)
+            .unwrap()
+            .0
+    };
+    s.edit(MeshId::Root, |m| {
+        m.add_guide(Guide::point(p(0.5, -4.0, 0.0)))
+    })
+    .unwrap();
+    let edge = s.root().edges().next().unwrap().0;
+    let guide = s.root().guides().next().unwrap().0;
+    flag_hidden(&mut s, MeshId::Definition(d), &[EntityId::Face(top)]);
+    flag_hidden(
+        &mut s,
+        MeshId::Root,
+        &[EntityId::Edge(edge), EntityId::Guide(guide)],
+    );
+    let c = camera(DVec3::ZERO);
+    let (mid, end) = (p(0.5, -2.0, 0.0), p(1.0, -2.0, 0.0));
+    let guide_at = p(0.5, -4.0, 0.0);
+    let all = |_: Owner| true;
+    let strict = Scenery::of(&s, &[]).unwrap();
+    let view = Scenery::of(&s, &[]).unwrap().reveal_hidden(true);
+    assert!(view.reveals_hidden() && !strict.reveals_hidden());
+    // Picking meets them.
+    assert!(edge_under_where(&strict, &c, px(&c, mid), R, all).is_none());
+    assert!(edge_under_where(&view, &c, px(&c, mid), R, all).is_some());
+    assert!(guide_under_where(&strict, &c, px(&c, guide_at), R, all).is_none());
+    assert!(guide_under_where(&view, &c, px(&c, guide_at), R, all).is_some());
+    let (_, _, at) = face_under_in(&strict, &c, px(&c, p(3.5, 0.5, 1.0))).unwrap();
+    assert!(at.z < 1.0 - 1e-6, "the top is passed through");
+    let (_, _, at) = face_under_in(&view, &c, px(&c, p(3.5, 0.5, 1.0))).unwrap();
+    assert!((at.z - 1.0).abs() < 1e-6, "the revealed top is met: {at}");
+    let down = Ray {
+        origin: p(0.5, -2.0, 10.0),
+        dir: DVec3::NEG_Z,
+    };
+    assert!(pick(&strict, &down, Reach::Around { radius: 0.01 }).is_empty());
+    assert!(!pick(&view, &down, Reach::Around { radius: 0.01 }).is_empty());
+    let boxed_view = boxed(&view, &c);
+    assert!(boxed_view.contains(&EntityId::Edge(edge)));
+    assert!(boxed_view.contains(&EntityId::Guide(guide)));
+    let boxed_strict = boxed(&strict, &c);
+    assert!(!boxed_strict.contains(&EntityId::Edge(edge)));
+    assert!(!boxed_strict.contains(&EntityId::Guide(guide)));
+    // Inference ignores them whatever picking reveals: the revealed scenery snaps as the
+    // strict one does, and finds no edge under the cursor.
+    let near_end = px(&c, end) + DVec2::new(2.0, 1.0);
+    let snap = infer_in(&view, &c, near_end, &Guides::default(), R);
+    assert_eq!(snap, infer_in(&strict, &c, near_end, &Guides::default(), R));
+    assert_ne!(snap.kind, SnapKind::Endpoint);
+    assert!(edge_under_in(&view, &c, px(&c, mid), R).is_none());
+    let (hit, _) = infer_detail(&view, &c, px(&c, guide_at), &Guides::default(), R);
+    assert_ne!(hit.kind, SnapKind::Endpoint, "{hit:?}");
+}
+
+#[test]
+fn a_revealed_hidden_instance_is_picked_and_its_parts_follow_the_strict_ones() {
+    let (mut s, i) = scene();
+    flag_hidden(&mut s, MeshId::Root, &[EntityId::Instance(i)]);
+    let c = camera(DVec3::ZERO);
+    let top = p(3.5, 0.5, 1.0);
+    let strict = Scenery::of(&s, &[]).unwrap();
+    let view = Scenery::of(&s, &[]).unwrap().reveal_hidden(true);
+    assert_eq!(strict.len(), 1);
+    assert_eq!(view.len(), 2, "the hidden group is a part when revealed");
+    assert_eq!(view.part(0).owner, strict.part(0).owner, "the root first");
+    assert_eq!(view.part(1).owner, Owner::Instance(i));
+    assert_eq!(strict.instance_box(i), None);
+    assert_eq!(
+        view.instance_box(i),
+        Some([p(3.0, 0.0, 0.0), p(4.0, 1.0, 1.0)])
+    );
+    assert!(boxed(&view, &c).contains(&EntityId::Instance(i)));
+    assert!(!boxed(&strict, &c).contains(&EntityId::Instance(i)));
+    let down = Ray {
+        origin: p(3.5, 0.5, 10.0),
+        dir: DVec3::NEG_Z,
+    };
+    let hits = pick(&view, &down, Reach::Around { radius: 0.01 });
+    assert!(hits.iter().any(|h| h.part == 1), "{hits:?}");
+    assert!(face_under_in(&view, &c, px(&c, top)).is_some());
+    assert!(face_under_in(&strict, &c, px(&c, top)).is_none());
+    // The strict view of the revealing scenery has the strict parts only.
+    let again = view.seen_strictly();
+    assert_eq!(again.len(), 1);
+    assert!(!again.reveals_hidden());
+    // A hidden tag stays hidden when revealed.
+    let tag = add_tag(&mut s, "Gone");
+    s.set_tags(MeshId::Root, &[EntityId::Instance(i)], Some(tag))
+        .unwrap();
+    hide(&mut s, tag);
+    let view = Scenery::of(&s, &[]).unwrap().reveal_hidden(true);
+    assert_eq!(view.len(), 1);
+    assert!(face_under_in(&view, &c, px(&c, top)).is_none());
 }

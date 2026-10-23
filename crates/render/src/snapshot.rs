@@ -6,6 +6,7 @@ use kernel::{EntityId, InstanceId, Scene};
 use session::{Camera, Lighting, SectionDisplay};
 
 use crate::Renderer;
+use crate::scene::GlassView;
 
 /// Renders models to memory with its own offscreen renderer.
 pub struct Snapshotter {
@@ -61,6 +62,12 @@ impl Snapshotter {
     /// Colors faces by tag (or by material, the default) in the captures from now on.
     pub fn set_color_by_tag(&mut self, on: bool) {
         self.renderer.set_color_by_tag(on);
+    }
+
+    /// Draws faces as glass and hidden entities ghosted in the captures from now on (the
+    /// default draws neither).
+    pub fn set_glass_view(&mut self, view: GlassView) {
+        self.renderer.set_glass_view(view);
     }
 
     /// Captures from now on as printed pages (or, off, as views): white paper without the

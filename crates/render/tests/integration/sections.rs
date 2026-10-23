@@ -28,7 +28,13 @@ fn cut_box() -> Document {
 }
 
 fn base(d: &Document, display: SectionDisplay) -> SceneBase {
-    scene_base_shown(d.scene(), d.context(), false, display)
+    scene_base_shown(
+        d.scene(),
+        d.context(),
+        false,
+        render::scene::GlassView::default(),
+        display,
+    )
 }
 
 fn triangle_area(v: &[render::grid::LineVertex]) -> f64 {
@@ -775,6 +781,12 @@ fn at_most_a_thousand_plane_outlines_are_drawn_and_the_rest_still_cut() {
         Ok(change)
     })
     .unwrap();
-    let b = scene_base_shown(&s, &[], false, SectionDisplay::default());
+    let b = scene_base_shown(
+        &s,
+        &[],
+        false,
+        render::scene::GlassView::default(),
+        SectionDisplay::default(),
+    );
     assert_eq!(b.sections.len(), session::MAX_SECTION_OUTLINES);
 }

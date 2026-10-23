@@ -251,6 +251,10 @@ impl Host for AppHost<'_> {
         let doc = self.editor.doc();
         let snapshotter = self.offscreen.get()?;
         snapshotter.set_color_by_tag(doc.color_by_tag);
+        snapshotter.set_glass_view(render::scene::GlassView {
+            x_ray: doc.x_ray,
+            hidden_geometry: doc.hidden_geometry,
+        });
         snapshotter.set_section_display(doc.section_display);
         snapshotter.capture(
             doc.scene(),

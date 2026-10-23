@@ -64,6 +64,6 @@ impl Document {
     /// Whether the selection may not hold `id`: it is hidden (and Hidden Geometry, which lets
     /// hidden entities be picked, is off).
     pub(super) fn is_unselectable(&self, id: EntityId) -> bool {
-        self.model().hidden_of(id) == Some(true)
+        !self.hidden_geometry && self.model().hidden_of(id) == Some(true)
     }
 }

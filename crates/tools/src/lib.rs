@@ -34,8 +34,8 @@ pub use erase::EraseTool;
 pub use follow_me::FollowMeTool;
 pub use inference::{
     Axis, Guides, Inference, Involved, Lock, SnapKind, annotation_under_where, edge_under,
-    edge_under_in, face_under, face_under_in, guide_under_where, infer, infer_detail, infer_in,
-    infer_with, label_under,
+    edge_under_in, edge_under_where, face_under, face_under_in, guide_under_where, infer,
+    infer_detail, infer_in, infer_with, label_under,
 };
 pub use line::LineTool;
 pub use move_tool::MoveTool;

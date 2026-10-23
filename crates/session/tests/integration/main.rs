@@ -45,3 +45,4 @@ mod text3d;
 mod texture_position;
 mod textures;
 mod transform;
+mod view_flags;
