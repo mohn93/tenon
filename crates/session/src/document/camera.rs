@@ -1,11 +1,13 @@
-//! Camera commands: placing, orbiting, panning, zooming, zoom extents, standard views and
-//! projection, looking around and positioning the camera. None is an undo step or changes the revision.
+//! Camera commands: placing, orbiting, panning, zooming, zoom extents, standard views,
+//! projection, looking around and positioning the camera. None is an undo step or changes the
+//! revision.
 
 use glam::{DQuat, DVec3};
 use kernel::MeshId;
 
 use super::{Document, check_coordinates, unit_vector};
 use crate::camera::{Camera, Projection, UP, VERTICAL_TOLERANCE, ZOOM_STEP};
+use crate::command::{Command, CommandError, ErrorKind};
 
 /// The most the view tilts up or down in `look_around`, in degrees.
 const LOOK_PITCH_LIMIT: f64 = 89.0;
@@ -13,7 +15,6 @@ const LOOK_PITCH_LIMIT: f64 = 89.0;
 const DEFAULT_EYE_HEIGHT: f64 = 1.676;
 const MIN_EYE_HEIGHT: f64 = 0.01;
 const MAX_EYE_HEIGHT: f64 = 10_000.0;
-use crate::command::{Command, CommandError, ErrorKind};
 
 impl Document {
     /// The camera a camera command would leave, after checking it: the eye and target stay

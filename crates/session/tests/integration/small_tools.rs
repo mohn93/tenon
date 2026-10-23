@@ -154,16 +154,15 @@ fn rotated_rectangle_is_a_face_toward_the_width_point() {
     assert_eq!(entities(&d, "edge").len(), 4);
     let verts = entities(&d, "vertex");
     let got: Vec<DVec3> = verts.iter().map(|v| vec3(&v["position"])).collect();
-    let want = [
-        DVec3::new(0.0, 0.0, 0.0),
-        DVec3::new(2.0, 2.0, 0.0),
-        DVec3::new(1.0, 3.0, 0.0),
-        DVec3::new(-1.0, 1.0, 0.0),
-    ];
-    // Width is the distance from (-0.5,1.5) to the line y = x: sqrt2 / ... = 1/sqrt2 * 2.
+    // The width is the distance from (-0.5, 1.5) to the line y = x.
     let w = DVec3::new(-0.5, 1.5, 0.0).distance(DVec3::new(0.5, 0.5, 0.0));
     let n = DVec3::new(-1.0, 1.0, 0.0).normalize() * w;
-    let want = [want[0], want[1], DVec3::new(2.0, 2.0, 0.0) + n, n];
+    let want = [
+        DVec3::ZERO,
+        DVec3::new(2.0, 2.0, 0.0),
+        DVec3::new(2.0, 2.0, 0.0) + n,
+        n,
+    ];
     assert_eq!(got.len(), 4);
     for w in want {
         assert!(got.iter().any(|g| g.abs_diff_eq(w, 1e-9)), "{w} in {got:?}");
@@ -241,7 +240,7 @@ fn look_around_turns_about_the_eye() {
     // Counter-clockwise from above: +Y turns to -X.
     let fwd = (target - eye).normalize();
     assert!(fwd.abs_diff_eq(DVec3::new(-1.0, 0.0, 0.0), 1e-9), "{fwd}");
-    assert!((target - eye).length() - (t0 - eye0).length() < 1e-9);
+    assert!(((target - eye).length() - (t0 - eye0).length()).abs() < 1e-9);
     assert!(up.abs_diff_eq(DVec3::Z, 1e-9));
     run(&mut d, json!({"type": "look_around", "pitch": 30})).unwrap();
     let (eye, target, _) = view(&d);
@@ -398,4 +397,55 @@ fn the_new_commands_classify_correctly() {
         assert_eq!(c.is_camera(), camera);
         assert_eq!(c.changes_model(), !camera);
     }
+}
+
+/// A smooth open path of `n` points: a circle's arc, three quarters round.
+fn smooth_path(n: usize) -> Vec<[f64; 3]> {
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64 * std::f64::consts::TAU * 0.75;
+            [t.cos() * 5.0, t.sin() * 5.0, 0.0]
+        })
+        .collect()
+}
+
+#[test]
+fn add_curve_draws_two_thousand_points_quickly() {
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": smooth_path(2000)}),
+    )
+    .unwrap();
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    let edges = entities(&d, "edge");
+    assert_eq!(edges.len(), 1999);
+    assert!(edges.iter().all(|e| e["curve"] == edges[0]["curve"]));
+}
+
+#[test]
+#[ignore = "release-mode timing"]
+fn add_curve_draws_ten_thousand_points_in_a_second() {
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": smooth_path(10_000)}),
+    )
+    .unwrap();
+    assert!(start.elapsed().as_secs_f64() < 1.0, "{:?}", start.elapsed());
+    assert_eq!(entities(&d, "edge").len(), 9999);
+}
+
+#[test]
+fn add_curve_closed_collinear_points_are_refused() {
+    let mut d = doc();
+    let e = run(
+        &mut d,
+        json!({"type": "add_curve", "points": [[0, 0, 0], [1, 0, 0], [2, 0, 0]], "closed": true}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(entities(&d, "edge").is_empty());
 }

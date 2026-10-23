@@ -61,9 +61,8 @@ impl Model {
             let part = match l.curve {
                 Some(polygon) => self.add_curve(&l.points, l.closed, polygon)?,
                 None => {
-                    for (a, b) in l.sides() {
-                        self.draw_segment(a, b);
-                    }
+                    let segments: Vec<(DVec3, DVec3)> = l.sides().collect();
+                    self.draw_segments(&segments);
                     self.take_changes()
                 }
             };

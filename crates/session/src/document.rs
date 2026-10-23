@@ -1356,6 +1356,12 @@ impl Document {
                 format!("the polyline needs at least {least} distinct points"),
             ));
         }
+        if closed && kernel::offset::plane_normal(&path).is_none() {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "a closed polyline needs points that do not lie on one line",
+            ));
+        }
         let line = Polyline {
             points: path,
             closed,

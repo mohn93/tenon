@@ -92,9 +92,10 @@ impl Model {
         for i in 0..sides {
             check_segment(points[i], points[(i + 1) % n])?;
         }
-        for i in 0..sides {
-            self.draw_segment(points[i], points[(i + 1) % n]);
-        }
+        let segments: Vec<(DVec3, DVec3)> = (0..sides)
+            .map(|i| (points[i], points[(i + 1) % n]))
+            .collect();
+        self.draw_segments(&segments);
         // A straight polyline never becomes a curve: do not spend an id on it.
         if !closed && corners(points, false).is_empty() {
             return Ok(self.take_changes());
