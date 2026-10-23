@@ -35,6 +35,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The restored target cache can fill the runner's disk; drop preinstalled SDKs we never use.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       # Mesa lavapipe is the software Vulkan adapter wgpu finds; the libraries are the runtime
       # set of the window app. Keep in step with scripts/linux.Dockerfile.
       - name: Install system packages
