@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use kernel::{EntityId, InstanceId, Scene};
+use kernel::{EntityId, InstanceId, Scene, StyleSettings};
 use session::{Camera, Lighting, SectionDisplay};
 
 use crate::Renderer;
@@ -69,6 +69,14 @@ impl Snapshotter {
     /// default draws neither).
     pub fn set_glass_view(&mut self, view: GlassView) {
         self.renderer.set_glass_view(view);
+    }
+
+    /// Draws the captures from now on in the model's chosen style (None, the default, is the
+    /// plain look): its edge colors, and by day its background, sky, ground and fog (a print
+    /// keeps the edge colors only). Takes effect with the next [`Snapshotter::capture`] or
+    /// [`Snapshotter::prepare`].
+    pub fn set_model_style(&mut self, style: Option<&StyleSettings>) {
+        self.renderer.set_model_style(style);
     }
 
     /// Captures from now on as printed pages (or, off, as views): white paper without the

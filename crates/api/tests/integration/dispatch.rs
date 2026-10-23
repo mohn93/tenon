@@ -588,6 +588,50 @@ fn render_view_takes_the_lighting_without_changing_the_documents() {
 }
 
 #[test]
+fn render_view_draws_with_the_chosen_style() {
+    let mut h = HeadlessHost::new();
+    let added = call(&mut h, "execute", json!({"type": "add_style"}));
+    let id = added["result"]["changes"]["styles"][0].clone();
+    assert!(id.is_string(), "{added}");
+    let change =
+        json!({"type": "change_style", "style": id, "settings": {"background": [10, 200, 30]}});
+    call(&mut h, "execute", change);
+    call(&mut h, "execute", json!({"type": "set_style", "style": id}));
+    let level = json!({"eye": [0, -6, 1.5], "target": [0, 0, 1.5]});
+    let styled = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level}),
+    );
+    if styled["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    assert_eq!(first_pixel(&styled), [10, 200, 30]);
+    // Night ignores the style's background.
+    let night = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level, "lighting": "night"}),
+    );
+    let [r, g, b, _] = render::grid::NIGHT_BACKGROUND.map(|x| (x * 255.0).round() as u8);
+    assert_eq!(first_pixel(&night), [r, g, b]);
+    // Choosing nothing brings back the classic background.
+    call(
+        &mut h,
+        "execute",
+        json!({"type": "set_style", "style": null}),
+    );
+    let plain = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level}),
+    );
+    let [r, g, b, _] = render::grid::BACKGROUND.map(|x| (x * 255.0).round() as u8);
+    assert_eq!(first_pixel(&plain), [r, g, b]);
+}
+
+#[test]
 fn misspelled_params_are_invalid_params() {
     let mut h = HeadlessHost::new();
     let r = call(

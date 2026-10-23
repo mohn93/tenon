@@ -900,7 +900,14 @@ Settings (the shape `styles` returns; defaults in brackets):
 - `ground`: null [off] or `{"color": [r, g, b], "opacity": 0 to 1, "from_below": bool}`.
 - `fog`: null [off] or `{"start": m, "end": m, "color": "background" or {"rgb": [r, g, b]}}` with 0 <= `start` < `end`.
 
-In `change_style` the parts left out of `settings` stay as they are; `edges` merges field by field, and a null turns `profiles`, `sketchy`, `endpoints`, `sky`, `ground` or `fog` off. Renders (`render_view`, snapshots, raster print) will draw with the chosen style; the line drawing, SVG and vector PDF ignore styles.
+In `change_style` the parts left out of `settings` stay as they are; `edges` merges field by field, and a null turns `profiles`, `sketchy`, `endpoints`, `sky`, `ground` or `fog` off. Renders (`render_view`, snapshots, raster print) draw with the chosen style; the line drawing, SVG, vector PDF and library thumbnails ignore styles.
+
+What a render does with the settings (profiles, sketchy edges, endpoints and `show_edges` follow in a later step):
+
+- Edge colour: `fixed` draws ordinary edges in `color`; `by_material` takes the front colour of the edge's first shown face (the average colour of a textured material; a face unpainted by itself and by the instance placing it, and an edge on no face, keep `color`); `by_axis` takes the red, green or blue axis colour for an edge within 1 degree of a current drawing axis and `color` for the others. Selected, hovered, hidden-ghost, faded-context and section edges keep their colours.
+- Background, sky, ground (day only; night keeps the night background and ignores them): the background replaces the app theme's. Each pixel looks along its view ray; above the horizon the sky blends from the background at the horizon to `sky` toward the zenith (by the square root of the ray's height), below it `ground.color` is mixed over the background by `opacity`. From below the ground (eye under z = 0) the ground fills the half of the view above the horizon, and only with `from_below`. A parallel view uses the rays of a perspective view with its field of view, so its horizon is a straight line across the screen. The grid and axes draw over it as usual.
+- Fog (also by night, toward the night background for `"background"`): faces, edges, guides, annotations and section cuts fade toward the fog colour by smoothstep(`start`, `end`) of the distance from the eye (the depth along the view in a parallel view), fully beyond `end`. Selected and hovered edges, the grid, the axes and tool overlays are not fogged.
+- A print (raster) keeps the edge colours and draws white paper without the background, sky, ground and fog.
 
 Style commands that change the list are undo steps, change the revision, mark the model modified and list the style in `changes.styles`. `{"type": "styles"}` gives `{"styles": [{"id": "y41", "name": "Blueprint", "settings": {...}}], "revision": 12}`; the `camera` query's `style` (and a scene's `view.style`) says which is chosen. A chosen style that stops existing (its `add_style` undone, or it deleted) draws as none while it does not exist, and is chosen again if it comes back.
 

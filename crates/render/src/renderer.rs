@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use glam::{DAffine3, Mat4, Vec3};
-use kernel::{EntityId, InstanceId, Scene};
+use kernel::{EntityId, FogColor, InstanceId, Scene, StyleSettings};
 use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
 
@@ -12,8 +12,8 @@ use crate::grid::{
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{
-    BaseFaceVertex, CasterChunk, GlassView, Ranges, Spans, scene_base_shown, shown_annotations,
-    shown_guides, shown_sections,
+    BaseFaceVertex, CasterChunk, EdgeColors, GlassView, Ranges, Spans, scene_base_styled,
+    shown_annotations, shown_guides, shown_sections,
 };
 use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
@@ -194,6 +194,24 @@ struct LightingUniforms {
     /// x: the direct light a face square-on to the sun adds; y: the light a face in shadow
     /// keeps; z: the world size of a map texel; w: the world depth the map spans.
     sun_levels: [f32; 4],
+    /// xyz: the camera's position; w: 1 in a perspective view, 0 in a parallel one.
+    cam_pos: [f32; 4],
+    /// xyz: the unit direction the camera looks along.
+    cam_forward: [f32; 4],
+    /// xyz: the offsets of the screen's right and up edges from the view direction (see
+    /// `view_ray` in scene.wgsl).
+    cam_right: [f32; 4],
+    cam_up: [f32; 4],
+    /// x: 1 when the canvas is drawn from the model's style; y: 1 when the eye is below the
+    /// ground; z: 1 when the ground is drawn seen from below.
+    canvas: [f32; 4],
+    /// rgb: the sky's color; w: 1 when the style has a sky.
+    sky: [f32; 4],
+    /// rgb: the ground's color; w: its opacity, 0 without a ground.
+    ground: [f32; 4],
+    /// x: where the fog starts; y: where it is complete; z: 1 when there is fog.
+    fog: [f32; 4],
+    fog_color: [f32; 4],
     /// World to the sun map's clip space.
     sun_view_proj: [f32; 16],
     lights: [LightUniform; MAX_LIGHTS],
@@ -207,11 +225,12 @@ impl LightingUniforms {
         shadow_slots: &[Option<usize>],
         mode: Lighting,
         style: &ViewStyle,
+        model: Option<&StyleSettings>,
         view: (u32, u32),
     ) -> Self {
         let mut uniforms = Self {
             mode: [0.0; 4],
-            background: background(mode, style),
+            background: background(mode, style, model),
             selected_edge: [0.0; 4],
             selected_face: [0.0; 4],
             lines: [0.0; 4],
@@ -222,6 +241,15 @@ impl LightingUniforms {
             wide: [0.0; 4],
             sun: [0.0; 4],
             sun_levels: [0.0; 4],
+            cam_pos: [0.0; 4],
+            cam_forward: [0.0; 4],
+            cam_right: [0.0; 4],
+            cam_up: [0.0; 4],
+            canvas: [0.0; 4],
+            sky: [0.0; 4],
+            ground: [0.0; 4],
+            fog: [0.0; 4],
+            fog_color: [0.0; 4],
             sun_view_proj: Mat4::IDENTITY.to_cols_array(),
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
@@ -252,8 +280,58 @@ impl LightingUniforms {
         ];
         uniforms.canvas_top = style.day_canvas[0];
         uniforms.canvas_bottom = style.day_canvas[1];
+        if let Some(model) = model {
+            uniforms.set_model_style(model, mode);
+        }
         uniforms
     }
+
+    /// The model style's sky, ground and fog. By night the style's background, sky and ground
+    /// are ignored (the night background and no canvas of the style's), but fog still falls,
+    /// toward the night background or its own color.
+    fn set_model_style(&mut self, model: &StyleSettings, mode: Lighting) {
+        if mode == Lighting::Day {
+            self.canvas[0] = 1.0;
+            if let Some(sky) = model.sky {
+                let [r, g, b, _] = rgb(sky);
+                self.sky = [r, g, b, 1.0];
+            }
+            if let Some(ground) = &model.ground {
+                let [r, g, b, _] = rgb(ground.color);
+                self.ground = [r, g, b, ground.opacity];
+                self.canvas[2] = if ground.from_below { 1.0 } else { 0.0 };
+            }
+        }
+        if let Some(fog) = &model.fog {
+            let color = match fog.color {
+                FogColor::Background => self.background,
+                FogColor::Rgb(c) => rgb(c),
+            };
+            self.fog = [fog.start, fog.end, 1.0, 0.0];
+            self.fog_color = color;
+        }
+    }
+
+    /// The camera's place and view rays, for the fog's distances and the canvas's sky and
+    /// ground.
+    fn set_camera(&mut self, camera: &Camera) {
+        let (eye, forward) = (camera.eye.as_vec3(), camera.forward().as_vec3());
+        let half = (camera.fov_y * 0.5).tan();
+        let right = camera.right() * half * camera.aspect();
+        let up = camera.up() * half;
+        let w = if camera.is_parallel() { 0.0 } else { 1.0 };
+        self.cam_pos = [eye.x, eye.y, eye.z, w];
+        self.cam_forward = [forward.x, forward.y, forward.z, 0.0];
+        let (right, up) = (right.as_vec3(), up.as_vec3());
+        self.cam_right = [right.x, right.y, right.z, 0.0];
+        self.cam_up = [up.x, up.y, up.z, 0.0];
+        self.canvas[1] = if camera.eye.z < 0.0 { 1.0 } else { 0.0 };
+    }
+}
+
+/// An RGB color in bytes as the shaders read it: 0 to 1 with full alpha.
+fn rgb([r, g, b]: [u8; 3]) -> [f32; 4] {
+    [r, g, b, 255u8].map(|c| f32::from(c) / 255.0)
 }
 
 /// The sun lighting a frame: the sun, and the map fitted to the casters when it has shadows.
@@ -283,10 +361,11 @@ impl LightingUniforms {
     }
 }
 
-/// The color the target is cleared to.
-fn background(mode: Lighting, style: &ViewStyle) -> [f32; 4] {
+/// The color the target is cleared to: by day the model style's background if it has one, else
+/// the theme's; by night the night background.
+fn background(mode: Lighting, style: &ViewStyle, model: Option<&StyleSettings>) -> [f32; 4] {
     match mode {
-        Lighting::Day => style.day_background(),
+        Lighting::Day => model.map_or_else(|| style.day_background(), |m| rgb(m.background)),
         Lighting::Night => NIGHT_BACKGROUND,
     }
 }
@@ -543,6 +622,9 @@ pub struct Renderer {
     section_display: SectionDisplay,
     /// How the frames look, as of the last `set_style`.
     style: ViewStyle,
+    /// The model's chosen style, as of the last `set_model_style`; None draws the default look
+    /// with the theme's background.
+    model_style: Option<StyleSettings>,
     /// Printing: white paper, no canvas gradient, ground grid or axes.
     print: bool,
     /// The scene's lights, as of the last `set_model`.
@@ -1103,8 +1185,12 @@ impl Renderer {
             (&sun_placeholder, &sun_sampler),
         );
 
-        let (flat_ground, vertical_axis, flat_axes) =
-            ground_meshes(device, &ViewStyle::CLASSIC, DAffine3::IDENTITY);
+        let (flat_ground, vertical_axis, flat_axes) = ground_meshes(
+            device,
+            &ViewStyle::CLASSIC,
+            ViewStyle::CLASSIC.day_background(),
+            DAffine3::IDENTITY,
+        );
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -1153,6 +1239,7 @@ impl Renderer {
             glass_view: GlassView::default(),
             section_display: SectionDisplay::default(),
             style: ViewStyle::CLASSIC,
+            model_style: None,
             print: false,
             lights: Vec::new(),
             flat_ground,
@@ -1203,14 +1290,20 @@ impl Renderer {
             self.textures = TextureArray::new(&self.device, &self.queue, scene);
             self.rebind();
         }
-        let base = scene_base_shown(
+        let axes = world_drawing_axes(scene, context);
+        let edge_colors = self
+            .model_style
+            .as_ref()
+            .map_or_else(EdgeColors::default, |s| EdgeColors::new(&s.edges, axes));
+        let base = scene_base_styled(
             scene,
             context,
             self.color_by_tag,
             self.glass_view,
             self.section_display,
+            &edge_colors,
         );
-        self.set_axes(world_drawing_axes(scene, context));
+        self.set_axes(axes);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
         self.edges = flagged_mesh(&self.device, "edges", &base.edges);
@@ -1283,8 +1376,12 @@ impl Renderer {
             return;
         }
         self.axes = axes;
-        (self.flat_ground, self.vertical_axis, self.flat_axes) =
-            ground_meshes(&self.device, &self.style, axes);
+        (self.flat_ground, self.vertical_axis, self.flat_axes) = ground_meshes(
+            &self.device,
+            &self.style,
+            self.day_toward(&self.style),
+            axes,
+        );
     }
 
     /// Makes the bind group anew, after the textures or the shadow maps were.
@@ -1589,12 +1686,45 @@ impl Renderer {
         if style == self.style {
             return;
         }
-        if style.axes != self.style.axes || style.day_background() != self.style.day_background() {
+        if style.axes != self.style.axes
+            || (self.model_style.is_none() && style.day_background() != self.style.day_background())
+        {
             (self.flat_ground, self.vertical_axis, self.flat_axes) =
-                ground_meshes(&self.device, &style, self.axes);
+                ground_meshes(&self.device, &style, self.day_toward(&style), self.axes);
         }
         self.style = style;
         self.refresh_guides();
+    }
+
+    /// Draws the frames from now on in the model's chosen style: its background, sky, ground
+    /// and fog (not by night, nor in a print, which ignores them but for edge settings) and edge
+    /// colors; None, the default, draws the theme's look. True when that changes what the model
+    /// is drawn like, so it must be set again (`set_model`).
+    pub fn set_model_style(&mut self, style: Option<&StyleSettings>) -> bool {
+        let style = style.copied();
+        if style == self.model_style {
+            return false;
+        }
+        let edge_look = |s: &Option<StyleSettings>| s.map(|s| (s.edges.color_mode, s.edges.color));
+        let recolored = edge_look(&style) != edge_look(&self.model_style);
+        let toward = self.day_toward_with(&self.style, style.as_ref());
+        let moved = toward != self.day_toward(&self.style);
+        self.model_style = style;
+        if moved {
+            (self.flat_ground, self.vertical_axis, self.flat_axes) =
+                ground_meshes(&self.device, &self.style, toward, self.axes);
+        }
+        recolored
+    }
+
+    /// What the negative axes fade toward by day: the model style's background, else the
+    /// theme's.
+    fn day_toward(&self, style: &ViewStyle) -> [f32; 4] {
+        self.day_toward_with(style, self.model_style.as_ref())
+    }
+
+    fn day_toward_with(&self, style: &ViewStyle, model: Option<&StyleSettings>) -> [f32; 4] {
+        background(Lighting::Day, style, model)
     }
 
     /// Draws grid, axes, model and `overlay` (line pairs drawn on top of everything) over the
@@ -1634,13 +1764,17 @@ impl Renderer {
         let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
         let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
         let sun = self.sun_frame(&mut encoder);
+        // A print is white paper: the style's background, sky, ground and fog stay out of it.
+        let canvas_style = self.model_style.filter(|_| !self.print);
         let mut lighting = LightingUniforms::new(
             &used,
             &shadow_slots,
             self.lighting,
             &self.style,
+            canvas_style.as_ref(),
             (viewport.width, viewport.height),
         );
+        lighting.set_camera(camera);
         if let Some(sun) = &sun {
             lighting.set_sun(sun);
         }
@@ -1688,7 +1822,7 @@ impl Renderer {
         let [r, g, b, a] = if self.print {
             [1.0; 4]
         } else {
-            background(self.lighting, &self.style).map(f64::from)
+            background(self.lighting, &self.style, canvas_style.as_ref()).map(f64::from)
         };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1722,7 +1856,11 @@ impl Renderer {
                 pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
-                if !self.print && self.lighting == Lighting::Day && self.style.has_gradient() {
+                let canvas = match &canvas_style {
+                    Some(m) => m.sky.is_some() || m.ground.is_some(),
+                    None => self.style.has_gradient(),
+                };
+                if !self.print && self.lighting == Lighting::Day && canvas {
                     pass.set_pipeline(&self.canvas_pipeline);
                     pass.draw(0..3, 0..1);
                 }
@@ -1904,14 +2042,15 @@ fn bind_group(
 }
 
 /// The flat ground (the grid and the axes lying on it), the other axes and the flat axes alone,
-/// for the drawing axes `axes` in `style`'s axis colors, their negative halves faded toward its
-/// day background. With the world axes the flat axes are X and Y and the other one is Z.
+/// for the drawing axes `axes` in `style`'s axis colors, their negative halves faded toward the
+/// day background `toward`. With the world axes the flat axes are X and Y and the other one is Z.
 fn ground_meshes(
     device: &wgpu::Device,
     style: &ViewStyle,
+    toward: [f32; 4],
     axes: DAffine3,
 ) -> (Mesh, Option<Mesh>, Option<Mesh>) {
-    let (colors, toward) = (style.axes, style.day_background());
+    let colors = style.axes;
     (
         mesh(
             device,

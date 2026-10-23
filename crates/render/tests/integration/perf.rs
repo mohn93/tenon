@@ -448,3 +448,48 @@ fn time_sun_shadow_renders() {
         mean(&sweeping)
     );
 }
+
+/// Frames of a model of 20 000 faces with a style's sky, ground and fog on, against the same
+/// frames without a style: the canvas pass and the fog's per-fragment distance are all it adds.
+#[test]
+#[ignore]
+fn time_styled_renders() {
+    let d = box_grid(58);
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let style = kernel::StyleSettings {
+        sky: Some([70, 130, 220]),
+        ground: Some(kernel::Ground {
+            color: [120, 150, 90],
+            opacity: 0.6,
+            from_below: false,
+        }),
+        fog: Some(kernel::Fog {
+            start: 20.0,
+            end: 120.0,
+            color: kernel::FogColor::Background,
+        }),
+        ..kernel::StyleSettings::default()
+    };
+    // Steady frames of a prepared scene; the style changes no edge colors, so the scene stays.
+    let mut capture = |style: Option<&kernel::StyleSettings>| {
+        snap.set_model_style(style);
+        snap.prepare(d.scene(), d.context(), d.selection());
+        let t = Instant::now();
+        snap.capture_prepared(&d.camera, Lighting::Day, 1400, 900)
+            .expect("capture");
+        t.elapsed().as_secs_f64()
+    };
+    capture(None);
+    let plain: Vec<f64> = (0..10).map(|_| capture(None)).collect();
+    capture(Some(&style));
+    let styled: Vec<f64> = (0..10).map(|_| capture(Some(&style))).collect();
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    eprintln!(
+        "20 000 faces: no style {:.3} s, sky, ground and fog {:.3} s",
+        mean(&plain),
+        mean(&styled)
+    );
+}

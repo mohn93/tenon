@@ -124,6 +124,7 @@ fn check(name: &str, doc: &Document) {
     }
     snap.set_section_display(doc.section_display);
     snap.set_sun(render::SunLight::of(doc));
+    snap.set_model_style(doc.chosen_style());
     let actual = snap
         .capture(
             doc.scene(),
@@ -249,7 +250,7 @@ pub(crate) fn top_face(doc: &Document, z: f64) -> EntityId {
     EntityId::Face(id)
 }
 
-fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> MaterialId {
+pub(crate) fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> MaterialId {
     let outcome = run(
         doc,
         Command::AddMaterial {
@@ -751,7 +752,7 @@ fn golden_section_plane_in_a_group_cuts_only_the_group() {
 
 /// A 16 x 16 pixel PNG in four quadrants, red top left, yellow top right, green bottom left and
 /// blue bottom right, with a white line along its top and left edges; returns its path.
-fn quadrants_png() -> PathBuf {
+pub(crate) fn quadrants_png() -> PathBuf {
     let path = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("golden-textures-{}", std::process::id()))
         .join("quadrants.png");
@@ -1094,6 +1095,86 @@ fn golden_sun_shadow() {
     check("sun_shadow", &d);
 }
 
+/// Adds a style with `patch`, chooses it and returns nothing else: the document draws with it.
+fn choose_style(doc: &mut Document, patch: session::StylePatch) {
+    let id = run(
+        doc,
+        Command::AddStyle {
+            name: None,
+            from: None,
+        },
+    )
+    .changes
+    .styles[0];
+    run(
+        doc,
+        Command::ChangeStyle {
+            style: id,
+            name: None,
+            settings: Some(patch),
+        },
+    );
+    run(doc, Command::SetStyle { style: Some(id) });
+}
+
+/// A row of boxes receding from the camera, under a sky, a translucent ground and fog in the
+/// background color: the far boxes melt into the haze.
+#[test]
+fn golden_style_sky_ground_fog() {
+    let mut d = doc();
+    for k in 0..5 {
+        add_box(&mut d, [0.0, 4.0 * k as f64]);
+    }
+    choose_style(
+        &mut d,
+        session::StylePatch {
+            background: Some([225, 232, 238]),
+            sky: Some(Some([70, 130, 220])),
+            ground: Some(Some(kernel::Ground {
+                color: [120, 150, 90],
+                opacity: 0.6,
+                from_below: false,
+            })),
+            fog: Some(Some(kernel::Fog {
+                start: 6.0,
+                end: 22.0,
+                color: kernel::FogColor::Background,
+            })),
+            ..Default::default()
+        },
+    );
+    look(&mut d, [3.5, -5.0, 1.6], [0.8, 8.0, 1.2]);
+    check("style_sky_ground_fog", &d);
+}
+
+/// A box whose edges take the axis colors: red along x, green along y, blue along z, and the
+/// fixed color (orange) for a diagonal.
+#[test]
+fn golden_style_edges_by_axis() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    run(
+        &mut d,
+        Command::AddEdge {
+            start: [3.0, 0.0, 0.0],
+            end: [4.5, 1.5, 0.0],
+        },
+    );
+    choose_style(
+        &mut d,
+        session::StylePatch {
+            edges: Some(session::EdgesPatch {
+                color_mode: Some(kernel::EdgeColorMode::ByAxis),
+                color: Some([230, 120, 20]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    look(&mut d, [5.0, -4.5, 3.5], [1.0, 0.75, 0.4]);
+    check("style_edges_by_axis", &d);
+}
+
 /// Every stored golden image belongs to a test here, so stale ones do not pile up.
 #[test]
 fn every_golden_image_has_a_test() {
@@ -1118,6 +1199,8 @@ fn every_golden_image_has_a_test() {
         "sun_shadow",
         "section_cut",
         "section_group",
+        "style_sky_ground_fog",
+        "style_edges_by_axis",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

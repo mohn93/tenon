@@ -15,13 +15,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
-    DimensionId, EdgeId, EntityId, FaceId, Guide, GuideId, InstanceId, MaterialId, MeshId, Model,
-    NoteId, Scene, SectionId, SectionPlane, TagId, VertexId, back_texture_position,
+    DimensionId, EdgeColorMode, EdgeId, EdgeStyle, EntityId, FaceId, Guide, GuideId, InstanceId,
+    MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId, VertexId,
+    back_texture_position,
 };
 use session::{AnnotationShape, SectionDisplay, SectionShape};
 
 use crate::annotations::{ANNOTATION_COLOR, AnnotationLook, FADED_ANNOTATION_COLOR};
-use crate::grid::LineVertex;
+use crate::grid::{AXIS_X, AXIS_Y, AXIS_Z, LineVertex};
 use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
 use crate::sections::{
@@ -99,6 +100,8 @@ struct Look {
     alpha: f32,
     texture: Option<(u32, DVec2)>,
     emission: f32,
+    /// The material the side is painted with, for edges colored by material.
+    material: Option<MaterialId>,
 }
 
 /// The array layer of each textured material (see `texture::layers`).
@@ -116,6 +119,7 @@ fn side_look(
         alpha: 1.0,
         texture: None,
         emission: 0.0,
+        material: None,
     };
     let Some((id, m)) = material.and_then(|id| Some((id, scene.material(id)?))) else {
         return plain;
@@ -129,6 +133,7 @@ fn side_look(
             .zip(layers.get(&id))
             .map(|(t, &layer)| (layer, DVec2::new(t.width, t.height))),
         emission: m.emission,
+        material: Some(id),
     }
 }
 
@@ -141,6 +146,7 @@ fn tag_colored(scene: &Scene, tag: Option<TagId>, material: Look) -> Look {
             alpha: 1.0,
             texture: None,
             emission: 0.0,
+            material: None,
         },
         None => Look {
             texture: None,
@@ -195,6 +201,60 @@ fn both_uv(front: &Look, back: &Look, positions: [DVec2; 3]) -> [[f32; 4]; 3] {
 }
 
 pub const EDGE_COLOR: [f32; 4] = [0.08, 0.08, 0.08, 1.0];
+
+/// How far, in degrees, an edge may stray from a drawing axis and still take its color when
+/// edges are colored by axis.
+pub const AXIS_EDGE_TOLERANCE_DEG: f64 = 1.0;
+
+/// How ordinary edges inside the open context are colored (see `kernel::EdgeColorMode`):
+/// the default is today's near-black. Selection, hover, ghost, faded-context and section colors
+/// do not depend on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeColors {
+    pub mode: EdgeColorMode,
+    /// The color of every edge when fixed, and of edges the other modes find no color for.
+    pub color: [f32; 4],
+    /// The current drawing axes' directions in world space.
+    axes: [DVec3; 3],
+}
+
+impl EdgeColors {
+    /// The colors a style's edge settings ask for, along the drawing axes `axes` (a frame in
+    /// world space, see `session::world_drawing_axes`).
+    pub fn new(style: &EdgeStyle, axes: DAffine3) -> Self {
+        let [r, g, b] = style.color.map(|c| f32::from(c) / 255.0);
+        let m = axes.matrix3;
+        EdgeColors {
+            mode: style.color_mode,
+            color: [r, g, b, 1.0],
+            axes: [m.x_axis, m.y_axis, m.z_axis].map(|a| a.try_normalize().unwrap_or(DVec3::ZERO)),
+        }
+    }
+
+    /// The color of an edge from `a` to `b` (root coordinates) along a drawing axis, else the
+    /// fixed color.
+    fn along_axes(&self, a: DVec3, b: DVec3) -> [f32; 4] {
+        let Some(dir) = (b - a).try_normalize() else {
+            return self.color;
+        };
+        let least = AXIS_EDGE_TOLERANCE_DEG.to_radians().cos();
+        [AXIS_X, AXIS_Y, AXIS_Z]
+            .into_iter()
+            .zip(self.axes)
+            .find(|(_, axis)| axis.dot(dir).abs() >= least)
+            .map_or(self.color, |(color, _)| color)
+    }
+}
+
+impl Default for EdgeColors {
+    fn default() -> Self {
+        EdgeColors {
+            mode: EdgeColorMode::Fixed,
+            color: EDGE_COLOR,
+            axes: [DVec3::X, DVec3::Y, DVec3::Z],
+        }
+    }
+}
 /// Selected edges and guides. scene.wgsl repeats it as `SELECTED_EDGE`.
 pub const SELECTED_EDGE_COLOR: [f32; 4] = [0.10, 0.35, 0.95, 1.0];
 
@@ -544,8 +604,28 @@ pub fn scene_base_shown(
     glass: GlassView,
     section: SectionDisplay,
 ) -> SceneBase {
+    scene_base_styled(
+        scene,
+        context,
+        color_by_tag,
+        glass,
+        section,
+        &EdgeColors::default(),
+    )
+}
+
+/// `scene_base_shown`, with ordinary edges colored as `edge_colors` says.
+pub fn scene_base_styled(
+    scene: &Scene,
+    context: &[InstanceId],
+    color_by_tag: bool,
+    glass: GlassView,
+    section: SectionDisplay,
+    edge_colors: &EdgeColors,
+) -> SceneBase {
     let layers = layers(scene);
-    let parts = placed_parts(scene, &layers);
+    let by_material = edge_colors.mode == EdgeColorMode::ByMaterial;
+    let parts = placed_parts(scene, &layers, by_material);
     let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
     let mut walk = Walk {
         scene,
@@ -553,6 +633,12 @@ pub fn scene_base_shown(
         layers: &layers,
         parts: &parts,
         glowing: scene.materials().any(|(_, m)| m.glows()),
+        edge_colors: *edge_colors,
+        texture_averages: if by_material {
+            texture_averages(scene)
+        } else {
+            HashMap::new()
+        },
         color_by_tag,
         glass,
         ghost: false,
@@ -633,6 +719,28 @@ fn mix_corner(a: (DVec3, [f32; 4]), b: (DVec3, [f32; 4]), t: f64) -> (DVec3, [f3
     )
 }
 
+/// The average color of each textured material's image (sRGB, 0 to 1), by material.
+fn texture_averages(scene: &Scene) -> HashMap<MaterialId, [f32; 3]> {
+    scene
+        .materials()
+        .filter_map(|(id, m)| {
+            let image = &m.texture.as_ref()?.image;
+            let pixels = image.pixels.as_chunks::<4>().0;
+            if pixels.is_empty() {
+                return None;
+            }
+            let mut sum = [0u64; 3];
+            for p in pixels {
+                for k in 0..3 {
+                    sum[k] += u64::from(p[k]);
+                }
+            }
+            let n = pixels.len() as f32 * 255.0;
+            Some((id, sum.map(|c| c as f32 / n)))
+        })
+        .collect()
+}
+
 /// What a mesh draws wherever it is placed, in its own coordinates.
 struct MeshParts {
     /// The triangles of every face, three corners each, wound counter-clockwise around the
@@ -648,6 +756,8 @@ struct MeshParts {
     ends: Vec<DVec3>,
     /// Each hard edge, with its tag, whether it is hidden itself and its ends in `ends`.
     edges: Vec<(EdgeId, Option<TagId>, bool, Range<usize>)>,
+    /// The faces along each of `edges` in id order; empty unless edges are colored by material.
+    edge_faces: Vec<Vec<FaceId>>,
 }
 
 struct FacePart {
@@ -664,7 +774,7 @@ struct FacePart {
 }
 
 impl MeshParts {
-    fn of(scene: &Scene, layers: &Layers, model: &Model) -> Self {
+    fn of(scene: &Scene, layers: &Layers, model: &Model, edge_faces: bool) -> Self {
         // A face of n loop corners and h holes has n + 2h - 2 triangles.
         let (mut face_count, mut triangles) = (0, 0);
         for (_, f) in model.faces() {
@@ -700,11 +810,15 @@ impl MeshParts {
         let hard = model.edges().filter(|(_, e)| !e.soft).count();
         let mut ends = Vec::with_capacity(2 * hard);
         let mut edges = Vec::with_capacity(hard);
+        let mut along = Vec::new();
         // Soft edges are hidden, selected or not: the faces around them read as one surface.
         for (id, edge) in model.edges().filter(|(_, e)| !e.soft) {
             let start = ends.len();
             ends.extend(edge.v.iter().filter_map(|v| model.position(*v)));
             edges.push((id, edge.tag, edge.hidden, start..ends.len()));
+            if edge_faces {
+                along.push(model.faces_of_edge(id));
+            }
         }
         MeshParts {
             corners,
@@ -713,6 +827,7 @@ impl MeshParts {
             faces,
             ends,
             edges,
+            edge_faces: along,
         }
     }
 }
@@ -723,9 +838,10 @@ const PARALLEL_FACES: usize = 1000;
 /// Most threads that work out mesh parts.
 const MAX_THREADS: usize = 8;
 
-/// The parts of every mesh placed from the root, the root included. With many faces, the meshes
+/// The parts of every mesh placed from the root, the root included (with each edge's faces when
+/// `edge_faces`). With many faces, the meshes
 /// are shared out among a few threads; the parts are the same either way.
-fn placed_parts(scene: &Scene, layers: &Layers) -> HashMap<MeshId, MeshParts> {
+fn placed_parts(scene: &Scene, layers: &Layers, edge_faces: bool) -> HashMap<MeshId, MeshParts> {
     let mut meshes = vec![MeshId::Root];
     let mut seen = HashSet::from([MeshId::Root]);
     let mut k = 0;
@@ -752,7 +868,7 @@ fn placed_parts(scene: &Scene, layers: &Layers) -> HashMap<MeshId, MeshParts> {
     if faces < PARALLEL_FACES || threads < 2 {
         return models
             .into_iter()
-            .map(|(id, m)| (id, MeshParts::of(scene, layers, m)))
+            .map(|(id, m)| (id, MeshParts::of(scene, layers, m, edge_faces)))
             .collect();
     }
     // Each thread takes the next mesh nobody has taken, so big meshes do not hold one up.
@@ -760,7 +876,7 @@ fn placed_parts(scene: &Scene, layers: &Layers) -> HashMap<MeshId, MeshParts> {
     let work = || {
         let mut done = Vec::new();
         while let Some(&(id, m)) = models.get(next.fetch_add(1, Ordering::Relaxed)) {
-            done.push((id, MeshParts::of(scene, layers, m)));
+            done.push((id, MeshParts::of(scene, layers, m, edge_faces)));
         }
         done
     };
@@ -824,6 +940,11 @@ struct Walk<'a> {
     parts: &'a HashMap<MeshId, MeshParts>,
     /// Whether any material glows; when none does, lights are not looked for.
     glowing: bool,
+    /// How ordinary edges are colored.
+    edge_colors: EdgeColors,
+    /// The average color of each textured material, worked out when edges are colored by
+    /// material.
+    texture_averages: HashMap<MaterialId, [f32; 3]>,
     /// Faces are drawn in their tags' colors (see `scene_base_with`).
     color_by_tag: bool,
     /// X-ray and Hidden Geometry.
@@ -884,6 +1005,7 @@ impl Walk<'_> {
             hidden_geometry,
         } = self.glass;
         let ghost_mesh = self.ghost;
+        let edge_colors = self.edge_colors;
         let display = self.display;
         let mut pushed_plane = false;
         // The mesh's own active plane in its own coordinates.
@@ -1059,17 +1181,52 @@ impl Walk<'_> {
             base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
-        for (eid, tag, hidden, ends) in &parts.edges {
+        for (k, (eid, tag, hidden, ends)) in parts.edges.iter().enumerate() {
             if (*hidden && !hidden_geometry) || !scene.tag_shown(*tag) {
                 continue;
             }
+            let ends = &parts.ends[ends.clone()];
             let color = if ghost_mesh || *hidden {
                 GHOST_EDGE_COLOR
+            } else if !inside {
+                FADED_EDGE_COLOR
             } else {
-                color
+                match edge_colors.mode {
+                    EdgeColorMode::Fixed => edge_colors.color,
+                    EdgeColorMode::ByAxis => match ends {
+                        [a, b] => {
+                            edge_colors.along_axes(t.transform_point3(*a), t.transform_point3(*b))
+                        }
+                        _ => edge_colors.color,
+                    },
+                    EdgeColorMode::ByMaterial => {
+                        let first = parts.edge_faces[k].iter().find_map(|id| {
+                            let at = parts.faces.partition_point(|f| f.id < *id);
+                            let face = parts.faces.get(at).filter(|f| f.id == *id)?;
+                            let shown =
+                                (!face.hidden || hidden_geometry) && scene.tag_shown(face.tag);
+                            shown.then_some(face)
+                        });
+                        // An unpainted face takes the look of the instance placing it, if that
+                        // is painted.
+                        let painted = first
+                            .and_then(|f| f.front.or_else(|| inherited.is_some().then_some(front)));
+                        match painted {
+                            Some(look) => {
+                                let [r, g, b] = look
+                                    .texture
+                                    .and(look.material)
+                                    .and_then(|m| self.texture_averages.get(&m))
+                                    .copied()
+                                    .unwrap_or(look.color);
+                                [r, g, b, 1.0]
+                            }
+                            None => edge_colors.color,
+                        }
+                    }
+                }
             };
             let start = base.edges.len();
-            let ends = &parts.ends[ends.clone()];
             if cutting {
                 // The ends of an edge come in a pair.
                 if let [a, b] = ends

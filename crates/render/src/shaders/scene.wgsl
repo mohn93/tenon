@@ -53,6 +53,24 @@ struct Lighting {
     // x: the direct light a face square-on to the sun adds; y: the light a face in shadow keeps;
     // z: the world size of a map texel; w: the world depth the map spans.
     sun_levels: vec4<f32>,
+    // xyz: the camera's position; w: 1 in a perspective view, 0 in a parallel one.
+    cam_pos: vec4<f32>,
+    // xyz: the unit direction the camera looks along.
+    cam_forward: vec4<f32>,
+    // xyz: the screen's right edge's offset from the view direction, and its up edge's, for the
+    // view ray of a pixel (see `view_ray`).
+    cam_right: vec4<f32>,
+    cam_up: vec4<f32>,
+    // x: 1 when the canvas is drawn from the model's style; y: 1 when the eye is below the
+    // ground; z: 1 when the ground is drawn seen from below.
+    canvas: vec4<f32>,
+    // rgb: the sky's color; w: 1 when the style has a sky.
+    sky: vec4<f32>,
+    // rgb: the ground's color; w: its opacity, 0 without a ground.
+    ground: vec4<f32>,
+    // x: where the fog starts; y: where it is complete; z: 1 when there is fog.
+    fog: vec4<f32>,
+    fog_color: vec4<f32>,
     // World to the sun map's clip space.
     sun_view_proj: mat4x4<f32>,
     lights: array<Light, MAX_LIGHTS>,
@@ -65,10 +83,34 @@ fn faded_line(color: vec4<f32>, fade: f32) -> vec4<f32> {
     return vec4<f32>(mix(color.rgb, lighting.background.rgb, fade), color.a);
 }
 
+// How far `p` is from the eye: the distance in a perspective view, the depth along the view
+// direction in a parallel one.
+fn eye_distance(p: vec3<f32>) -> f32 {
+    let from_eye = p - lighting.cam_pos.xyz;
+    return select(dot(from_eye, lighting.cam_forward.xyz), length(from_eye), lighting.cam_pos.w > 0.5);
+}
+
+// `color` faded toward the fog color from `d` away; unchanged without fog.
+fn fogged(color: vec3<f32>, d: f32) -> vec3<f32> {
+    if lighting.fog.z < 0.5 {
+        return color;
+    }
+    return mix(color, lighting.fog_color.rgb, smoothstep(lighting.fog.x, lighting.fog.y, d));
+}
+
 struct LineOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) color: vec4<f32>,
+    // How far the point is from the eye, for the fog; 0 where lines are not fogged.
+    @location(1) dist: f32,
 };
+
+// The same line, not fogged (the grid, the axes and tool overlays).
+fn no_fog(line: LineOut) -> LineOut {
+    var out = line;
+    out.dist = 0.0;
+    return out;
+}
 
 // Depth is reversed (1 = near, 0 = far), so scaling clip z by more than 1 pulls a line slightly
 // toward the camera and by less than 1 pushes it away, by a fixed fraction of its distance.
@@ -82,6 +124,7 @@ fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
     let z = clip.z * (1.0 + offset * u.depth_offset.x) + offset * u.depth_offset.y;
     out.pos = vec4<f32>(clip.xy, z, clip.w);
     out.color = color;
+    out.dist = eye_distance(pos);
     return out;
 }
 
@@ -97,7 +140,7 @@ fn vs_edge(
     @location(2) selected: f32,
     @location(3) hovered: f32,
 ) -> LineOut {
-    return line_vertex(
+    let out = line_vertex(
         pos,
         select(
             select(faded_line(color, lighting.lines.x), lighting.selected_edge, selected > 0.5),
@@ -106,6 +149,11 @@ fn vs_edge(
         ),
         1.0005,
     );
+    // Selected and hovered edges stay as they are in the fog.
+    if selected > 0.5 || hovered > 0.5 {
+        return no_fog(out);
+    }
+    return out;
 }
 
 // Selected and hovered edges drawn again, offset across (even instances) and up (odd ones) by
@@ -128,7 +176,7 @@ fn vs_edge_wide(
         out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
         return out;
     }
-    return wide_copy(out, k, lighting.wide.x);
+    return wide_copy(no_fog(out), k, lighting.wide.x);
 }
 
 // Copy `k` of a wide line: moved across (even k) or up (odd k) by `step` pixels per pair.
@@ -177,13 +225,13 @@ fn vs_guide(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineO
 // Grid and axes: drawn under faces lying on the ground; faded as far as the lighting says.
 @vertex
 fn vs_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
-    return line_vertex(pos, faded_line(color, lighting.lines.y), 0.998);
+    return no_fog(line_vertex(pos, faded_line(color, lighting.lines.y), 0.998));
 }
 
 // The flat ground grid, drawn without depth testing before everything else; faded like the axes.
 @vertex
 fn vs_flat_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
-    return line_vertex(pos, faded_line(color, lighting.lines.y), 1.0);
+    return no_fog(line_vertex(pos, faded_line(color, lighting.lines.y), 1.0));
 }
 
 // Wide copies of the flat X and Y axes (as `vs_flat_ground`) and of the Z axis (as
@@ -195,7 +243,7 @@ fn vs_flat_ground_wide(
     @builtin(instance_index) k: u32,
 ) -> LineOut {
     return wide_copy(
-        line_vertex(pos, faded_line(color, lighting.lines.y), 1.0),
+        no_fog(line_vertex(pos, faded_line(color, lighting.lines.y), 1.0)),
         k,
         lighting.wide.y,
     );
@@ -208,7 +256,7 @@ fn vs_ground_wide(
     @builtin(instance_index) k: u32,
 ) -> LineOut {
     return wide_copy(
-        line_vertex(pos, faded_line(color, lighting.lines.y), 0.998),
+        no_fog(line_vertex(pos, faded_line(color, lighting.lines.y), 0.998)),
         k,
         lighting.wide.y,
     );
@@ -217,18 +265,20 @@ fn vs_ground_wide(
 // Tool previews and inference markers: drawn without depth testing.
 @vertex
 fn vs_overlay(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
-    return line_vertex(pos, color, 1.0);
+    return no_fog(line_vertex(pos, color, 1.0));
 }
 
 @fragment
 fn fs_line(in: LineOut) -> @location(0) vec4<f32> {
-    return in.color;
+    return vec4<f32>(fogged(in.color.rgb, in.dist), in.color.a);
 }
 
 struct CanvasOut {
     @builtin(position) pos: vec4<f32>,
     // 0 at the view's top, 1 at its bottom.
     @location(0) down: f32,
+    // The pixel's place on the screen, -1 to 1 (up and right are positive).
+    @location(1) ndc: vec2<f32>,
 };
 
 // One triangle covering the view, at the far plane.
@@ -238,11 +288,45 @@ fn vs_canvas(@builtin(vertex_index) i: u32) -> CanvasOut {
     var out: CanvasOut;
     out.pos = vec4<f32>(xy, 0.0, 1.0);
     out.down = (1.0 - xy.y) * 0.5;
+    out.ndc = xy;
     return out;
+}
+
+// The direction a pixel looks in: the view direction plus the pixel's offset across the screen.
+// A parallel view uses the same rays as a perspective one with its field of view, so its
+// horizon too is a straight line across the screen.
+fn view_ray(ndc: vec2<f32>) -> vec3<f32> {
+    return normalize(
+        lighting.cam_forward.xyz + ndc.x * lighting.cam_right.xyz + ndc.y * lighting.cam_up.xyz,
+    );
+}
+
+// The canvas of a model style: the background, with the sky above the horizon (the background at
+// the horizon, the sky color toward the zenith) and the ground below it, mixed over by its
+// opacity. From below the ground, the ground is the half of the view above the horizon, and only
+// when it is drawn from below.
+fn styled_canvas(ndc: vec2<f32>) -> vec3<f32> {
+    let background = lighting.background.rgb;
+    let up = view_ray(ndc).z;
+    var base = background;
+    if lighting.sky.w > 0.5 && up > 0.0 {
+        base = mix(background, lighting.sky.rgb, sqrt(min(up, 1.0)));
+    }
+    let below = lighting.canvas.y > 0.5;
+    let above_ground_seen = (up < 0.0);
+    let below_ground_seen = (up > 0.0 && lighting.canvas.z > 0.5);
+    let seen = select(above_ground_seen, below_ground_seen, below);
+    if lighting.ground.w > 0.0 && seen {
+        return mix(base, lighting.ground.rgb, lighting.ground.w);
+    }
+    return base;
 }
 
 @fragment
 fn fs_canvas(in: CanvasOut) -> @location(0) vec4<f32> {
+    if lighting.canvas.x > 0.5 {
+        return vec4<f32>(styled_canvas(in.ndc), 1.0);
+    }
     return mix(lighting.canvas_top, lighting.canvas_bottom, in.down);
 }
 
@@ -399,7 +483,7 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
 // Opaque faces.
 @fragment
 fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(face_color(in, front), 1.0);
+    return vec4<f32>(fogged(face_color(in, front), eye_distance(in.world)), 1.0);
 }
 
 // The opaque side of a face whose other side is see-through: drawn with the opaque faces, the
@@ -410,7 +494,7 @@ fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @locat
     if select(in.alpha.y, in.alpha.x, front) < 1.0 {
         discard;
     }
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(fogged(color, eye_distance(in.world)), 1.0);
 }
 
 // See-through sides, blended over everything opaque (back to front, without writing depth).
@@ -422,7 +506,7 @@ fn fs_glass(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec
     if alpha >= 1.0 {
         discard;
     }
-    return vec4<f32>(color, mix(alpha, 1.0, 0.4 * in.selected));
+    return vec4<f32>(fogged(color, eye_distance(in.world)), mix(alpha, 1.0, 0.4 * in.selected));
 }
 
 struct PreviewOut {

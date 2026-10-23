@@ -248,8 +248,9 @@ fn make_from(snapshotter: &mut Snapshotter, item: &session::LibraryContent) -> O
     snapshotter.set_color_by_tag(false);
     snapshotter.set_glass_view(render::scene::GlassView::default());
     snapshotter.set_section_display(Default::default());
-    // Thumbnails show the part alone, not the model's sun.
+    // Thumbnails show the part alone, not the model's sun or style.
     snapshotter.set_sun(None);
+    snapshotter.set_model_style(None);
     let pixels = snapshotter.capture(
         &item.scene,
         &[],

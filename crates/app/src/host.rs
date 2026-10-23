@@ -257,6 +257,7 @@ impl Host for AppHost<'_> {
         });
         snapshotter.set_section_display(doc.section_display);
         snapshotter.set_sun(render::SunLight::of(doc));
+        snapshotter.set_model_style(doc.chosen_style());
         snapshotter.capture(
             doc.scene(),
             doc.context(),

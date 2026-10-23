@@ -100,6 +100,7 @@ impl Host for HeadlessHost {
             });
             s.set_section_display(doc.section_display);
             s.set_sun(render::SunLight::of(doc));
+            s.set_model_style(doc.chosen_style());
             s.capture(
                 doc.scene(),
                 doc.context(),

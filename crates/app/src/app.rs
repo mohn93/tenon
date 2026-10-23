@@ -2766,6 +2766,8 @@ impl State {
         );
         // Coloring by tag changes how faces are colored, not the revision.
         let recolored = self.renderer.set_color_by_tag(doc.color_by_tag);
+        // The chosen style's edge colors do too, and its background reaches the canvas.
+        let recolored = self.renderer.set_model_style(doc.chosen_style()) || recolored;
         // So do the section display settings.
         let recolored = self.renderer.set_section_display(doc.section_display) || recolored;
         let recolored = self.renderer.set_glass_view(render::scene::GlassView {

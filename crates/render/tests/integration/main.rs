@@ -7,5 +7,6 @@ mod hide;
 mod perf;
 mod sections;
 mod snapshot;
+mod styles;
 mod sun;
 mod tags;
