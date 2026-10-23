@@ -5,6 +5,7 @@ mod golden;
 mod headless;
 mod hide;
 mod perf;
+mod profiles;
 mod sections;
 mod snapshot;
 mod styles;

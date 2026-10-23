@@ -12,8 +12,8 @@ use crate::grid::{
 use crate::guides::{GuideShape, guide_lines};
 use crate::lights::{Light, MAX_LIGHTS, strongest};
 use crate::scene::{
-    BaseFaceVertex, CasterChunk, EdgeColors, GlassView, Ranges, Spans, scene_base_styled,
-    shown_annotations, shown_guides, shown_sections,
+    BaseFaceVertex, CasterChunk, EdgeColors, EdgeExtra, GlassView, Ranges, Spans,
+    scene_base_styled, shown_annotations, shown_guides, shown_sections,
 };
 use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
@@ -39,6 +39,11 @@ const PREVIEW_ATTRIBS: [wgpu::VertexAttribute; 3] =
 /// The hover flag of a face or edge vertex, from a third vertex buffer (1 hovered, 0 not).
 const FACE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![9 => Float32];
 const EDGE_HOVER_ATTRIBS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![3 => Float32];
+/// What an edge vertex carries for the edge effects, from a fourth vertex buffer (see
+/// `scene::EdgeExtra`).
+const EDGE_EXTRA_ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+    4 => Float32x3, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4
+];
 
 /// The limits the renderer asks of a device: the defaults, with room for a cube shadow map per
 /// shadowed light (six array layers each) where the adapter has it.
@@ -186,8 +191,16 @@ struct LightingUniforms {
     /// Hovered edges and guides. Zero without a hover.
     hover_edge: [f32; 4],
     /// The step in pixels between the copies of a wide edge (x, see `vs_edge_wide`), of a wide
-    /// axis (y) and of a section cut edge (z, see `vs_cut_edge_wide`).
+    /// axis (y), of a section cut edge (z, see `vs_cut_edge_wide`) and of a profile (w, see
+    /// `vs_edge_profile_wide`).
     wide: [f32; 4],
+    /// x: 1 when profiles are on; y: 1 when edges that are not profiles are shown; z: the
+    /// sketchy jitter in pixels; w: the sketchy extension in pixels.
+    edge_fx: [f32; 4],
+    /// x: the length in pixels of an endpoint mark; y: the step between the copies of a mark,
+    /// z: how many steps they span; w: how many steps the copies of a profile span (their step
+    /// is `wide.w`).
+    edge_fx2: [f32; 4],
     /// xyz: the unit vector toward the sun; w: 0 without sun shading, 1 with it, 2 with its
     /// shadow map too.
     sun: [f32; 4],
@@ -239,6 +252,8 @@ impl LightingUniforms {
             hover_face: [0.0; 4],
             hover_edge: [0.0; 4],
             wide: [0.0; 4],
+            edge_fx: [0.0, 1.0, 0.0, 0.0],
+            edge_fx2: [0.0; 4],
             sun: [0.0; 4],
             sun_levels: [0.0; 4],
             cam_pos: [0.0; 4],
@@ -403,6 +418,8 @@ pub struct PreviewVertex {
 const WIDE_EDGE_PT: f32 = 2.0;
 /// Section cut edges, in points: twice the width of selected edges.
 const CUT_EDGE_PT: f32 = 2.0 * WIDE_EDGE_PT;
+/// The marks at the ends of edges, in points, where the style has endpoints.
+const ENDPOINT_WIDTH_PT: f32 = 3.0;
 /// The axes, in points, where the style widens them.
 const WIDE_AXIS_PT: f32 = 1.5;
 
@@ -462,6 +479,9 @@ struct Mesh {
     count: u32,
     flags: Option<wgpu::Buffer>,
     hover: Option<wgpu::Buffer>,
+    /// For model edges, what the edge effects need per vertex (zero: every edge is drawn as it
+    /// is).
+    extras: Option<wgpu::Buffer>,
 }
 
 /// The triangles of `faces` with a see-through side, drawn after everything opaque.
@@ -569,6 +589,10 @@ pub struct Renderer {
     edge_pipeline: wgpu::RenderPipeline,
     /// Selected and hovered edges again, across and up, when the style widens them.
     wide_edge_pipeline: wgpu::RenderPipeline,
+    /// Profiles again, across and up, as wide as the style says.
+    profile_edge_pipeline: wgpu::RenderPipeline,
+    /// The marks at the ends of edges, where the style has endpoints.
+    endpoint_pipeline: wgpu::RenderPipeline,
     /// The day canvas's gradient, when the style has one.
     canvas_pipeline: wgpu::RenderPipeline,
     /// The ground's sun shadows, multiplied over the background.
@@ -689,6 +713,7 @@ pub struct Renderer {
 }
 
 /// How a pipeline uses the depth buffer.
+#[derive(Clone, Copy)]
 struct DepthUse {
     write: bool,
     compare: wgpu::CompareFunction,
@@ -836,10 +861,16 @@ impl Renderer {
             Some(flag_layout.clone()),
             Some(hover_layout(&FACE_HOVER_ATTRIBS)),
         ];
+        let extra_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<EdgeExtra>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &EDGE_EXTRA_ATTRIBS,
+        };
         let flagged_lines = [
             Some(line_layout),
             Some(flag_layout),
             Some(hover_layout(&EDGE_HOVER_ATTRIBS)),
+            Some(extra_layout),
         ];
         let tested = DepthUse {
             write: true,
@@ -999,6 +1030,30 @@ impl Renderer {
                 write: true,
                 compare: wgpu::CompareFunction::GreaterEqual,
             },
+            None,
+        );
+        // Profiles again, offset across and up (see `vs_edge_profile_wide`), and the marks at
+        // the ends of edges (see `vs_edge_endpoint`).
+        let edge_depth = DepthUse {
+            write: true,
+            compare: wgpu::CompareFunction::GreaterEqual,
+        };
+        let profile_edge_pipeline = pipeline(
+            "profile edges",
+            "vs_edge_profile_wide",
+            "fs_line",
+            &flagged_lines,
+            lines,
+            edge_depth,
+            None,
+        );
+        let endpoint_pipeline = pipeline(
+            "edge endpoints",
+            "vs_edge_endpoint",
+            "fs_line",
+            &flagged_lines,
+            lines,
+            edge_depth,
             None,
         );
         // The day canvas's gradient, under everything.
@@ -1215,6 +1270,8 @@ impl Renderer {
             glass_pipeline,
             edge_pipeline,
             wide_edge_pipeline,
+            profile_edge_pipeline,
+            endpoint_pipeline,
             canvas_pipeline,
             sun_ground_pipeline,
             guide_pipeline,
@@ -1317,7 +1374,7 @@ impl Renderer {
         self.set_axes(axes);
         self.faces = flagged_mesh(&self.device, "faces", &base.faces);
         self.glass = Glass::new(&self.device, &base.faces, &base.glass());
-        self.edges = flagged_mesh(&self.device, "edges", &base.edges);
+        self.edges = edge_mesh(&self.device, &base.edges, &base.edge_extras);
         self.cut_fill = mesh(&self.device, "cut fill", &base.cut_fill);
         self.cut_edges = mesh(&self.device, "cut edges", &base.cut_edges);
         self.spans = base.spans;
@@ -1667,6 +1724,7 @@ impl Renderer {
                 count: 0,
                 flags: None,
                 hover: None,
+                extras: None,
             });
         }
         if let Some(preview) = &mut self.preview {
@@ -1716,7 +1774,19 @@ impl Renderer {
         if style == self.model_style {
             return false;
         }
-        let edge_look = |s: &Option<StyleSettings>| s.map(|s| (s.edges.color_mode, s.edges.color));
+        // What the scene is built from: the colors, and whether edges carry profile data, soft
+        // edges and the flags that hide or move them (the sizes are uniforms).
+        let edge_look = |s: &Option<StyleSettings>| {
+            s.map(|s| {
+                let colors = EdgeColors::new(&s.edges, glam::DAffine3::IDENTITY);
+                (
+                    s.edges.color_mode,
+                    s.edges.color,
+                    colors.extras,
+                    colors.profiles,
+                )
+            })
+        };
         let recolored = edge_look(&style) != edge_look(&self.model_style);
         let toward = self.day_toward_with(&self.style, style.as_ref());
         let moved = toward != self.day_toward(&self.style);
@@ -1726,6 +1796,40 @@ impl Renderer {
                 ground_meshes(&self.device, &self.style, toward, self.axes);
         }
         recolored
+    }
+
+    /// Sets what the chosen style asks of edges in `lighting` (profiles, sketchy edges,
+    /// endpoints, hidden edges; sizes in logical pixels, `scale` physical ones to each).
+    /// Returns how many instances to draw of the profile copies and of the endpoint marks, 0
+    /// for none.
+    fn set_edge_effects(&self, lighting: &mut LightingUniforms, scale: f32) -> (u32, u32) {
+        let Some(edges) = self.model_style.map(|s| s.edges) else {
+            return (0, 0);
+        };
+        lighting.edge_fx[1] = if edges.show_edges { 1.0 } else { 0.0 };
+        let (mut profile_copies, mut endpoint_copies) = (0, 0);
+        // The copies of a profile and of a mark are centered on the line: each drawn at its
+        // offset, from -width / 2 to width / 2, across and up.
+        if let Some(width) = edges.profiles {
+            let (shifted, step) = spread(width * scale);
+            lighting.edge_fx[0] = 1.0;
+            lighting.wide[3] = step;
+            lighting.edge_fx2[3] = (shifted / 2) as f32;
+            profile_copies = shifted + 2;
+        }
+        if let Some(sketchy) = edges.sketchy {
+            lighting.edge_fx[2] = sketchy.jitter * scale;
+            lighting.edge_fx[3] = sketchy.extension * scale;
+        }
+        if let Some(length) = edges.endpoints {
+            let (shifted, step) = spread(ENDPOINT_WIDTH_PT * scale);
+            lighting.edge_fx2[0] = length * scale;
+            lighting.edge_fx2[1] = step;
+            lighting.edge_fx2[2] = (shifted / 2) as f32;
+            // Two ends, each with a copy per offset, across and up.
+            endpoint_copies = 2 * (shifted + 2);
+        }
+        (profile_copies, endpoint_copies)
     }
 
     /// What the negative axes fade toward by day: the model style's background, else the
@@ -1801,6 +1905,8 @@ impl Renderer {
         // Cut edges are twice as wide as the selected edges would be.
         let (cut_copies, cut_step) = spread(CUT_EDGE_PT * self.pixels_per_point);
         lighting.wide[2] = cut_step;
+        let ppp = self.pixels_per_point;
+        let (profile_copies, endpoint_copies) = self.set_edge_effects(&mut lighting, ppp);
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
         // The ground shows the sun's shadows unless the camera looks up at it from below.
@@ -1884,6 +1990,9 @@ impl Renderer {
                     if let Some(hover) = &mesh.hover {
                         pass.set_vertex_buffer(2, hover.slice(..));
                     }
+                    if let Some(extras) = &mesh.extras {
+                        pass.set_vertex_buffer(3, extras.slice(..));
+                    }
                 };
                 let draw = |pass: &mut wgpu::RenderPass, pipeline, mesh: Option<&Mesh>| {
                     if let Some(mesh) = mesh {
@@ -1947,6 +2056,18 @@ impl Renderer {
                 {
                     bind(&mut pass, &self.wide_edge_pipeline, edges);
                     pass.draw(0..edges.count, 0..wide_copies);
+                }
+                if profile_copies > 0
+                    && let Some(edges) = &self.edges
+                {
+                    bind(&mut pass, &self.profile_edge_pipeline, edges);
+                    pass.draw(0..edges.count, 0..profile_copies);
+                }
+                if endpoint_copies > 0
+                    && let Some(edges) = &self.edges
+                {
+                    bind(&mut pass, &self.endpoint_pipeline, edges);
+                    pass.draw(0..edges.count, 0..endpoint_copies);
                 }
                 draw(&mut pass, &self.cut_fill_pipeline, self.cut_fill.as_ref());
                 if let Some(cuts) = &self.cut_edges {
@@ -2097,6 +2218,7 @@ fn mesh<T: bytemuck::Pod>(device: &wgpu::Device, label: &str, vertices: &[T]) ->
         count: vertices.len() as u32,
         flags: None,
         hover: None,
+        extras: None,
     })
 }
 
@@ -2118,6 +2240,27 @@ fn flagged_mesh<T: bytemuck::Pod>(
     };
     mesh.flags = Some(flags());
     mesh.hover = Some(flags());
+    Some(mesh)
+}
+
+/// `flagged_mesh` of model edges, with a fourth buffer holding `extras` (or zeros, which draw
+/// every edge as it is, when there are none).
+fn edge_mesh(device: &wgpu::Device, vertices: &[LineVertex], extras: &[EdgeExtra]) -> Option<Mesh> {
+    let mut mesh = flagged_mesh(device, "edges", vertices)?;
+    mesh.extras = Some(if extras.is_empty() {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("edge extras"),
+            size: (vertices.len() * std::mem::size_of::<EdgeExtra>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        })
+    } else {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("edge extras"),
+            contents: bytemuck::cast_slice(extras),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    });
     Some(mesh)
 }
 

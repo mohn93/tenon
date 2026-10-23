@@ -1175,6 +1175,42 @@ fn golden_style_edges_by_axis() {
     check("style_edges_by_axis", &d);
 }
 
+/// A box and a cylinder with profiles, sketchy edges and endpoints: the silhouettes are heavy,
+/// the cylinder's soft edges show only where it turns away, and each edge wanders and overshoots
+/// its corners with a short mark at both ends.
+#[test]
+fn golden_style_profiles_sketchy() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let circle = run(
+        &mut d,
+        Command::AddCircle {
+            center: [4.0, 0.7, 0.0],
+            radius: 0.8,
+            normal: None,
+            segments: Some(16),
+        },
+    );
+    raise(&mut d, created_face(&circle), 1.4);
+    choose_style(
+        &mut d,
+        session::StylePatch {
+            edges: Some(session::EdgesPatch {
+                profiles: Some(Some(4.0)),
+                sketchy: Some(Some(kernel::Sketchy {
+                    jitter: 2.0,
+                    extension: 10.0,
+                })),
+                endpoints: Some(Some(8.0)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    look(&mut d, [2.6, -7.5, 3.6], [2.4, 0.7, 0.6]);
+    check("style_profiles_sketchy", &d);
+}
+
 /// Every stored golden image belongs to a test here, so stale ones do not pile up.
 #[test]
 fn every_golden_image_has_a_test() {
@@ -1201,6 +1237,7 @@ fn every_golden_image_has_a_test() {
         "section_group",
         "style_sky_ground_fog",
         "style_edges_by_axis",
+        "style_profiles_sketchy",
     ];
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let mut stored: Vec<String> = std::fs::read_dir(&dir)

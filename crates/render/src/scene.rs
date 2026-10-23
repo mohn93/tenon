@@ -216,6 +216,12 @@ pub struct EdgeColors {
     pub color: [f32; 4],
     /// The current drawing axes' directions in world space.
     axes: [DVec3; 3],
+    /// Whether every edge vertex carries what the vertex shader needs for profiles, sketchy
+    /// edges, endpoints and hidden edges (see `EdgeExtra`).
+    pub extras: bool,
+    /// Whether soft edges are drawn too (they are, as silhouettes, where profiles are on) and
+    /// each edge carries its faces' normals.
+    pub profiles: bool,
 }
 
 impl EdgeColors {
@@ -228,6 +234,11 @@ impl EdgeColors {
             mode: style.color_mode,
             color: [r, g, b, 1.0],
             axes: [m.x_axis, m.y_axis, m.z_axis].map(|a| a.try_normalize().unwrap_or(DVec3::ZERO)),
+            profiles: style.profiles.is_some(),
+            extras: style.profiles.is_some()
+                || style.sketchy.is_some()
+                || style.endpoints.is_some()
+                || !style.show_edges,
         }
     }
 
@@ -252,6 +263,8 @@ impl Default for EdgeColors {
             mode: EdgeColorMode::Fixed,
             color: EDGE_COLOR,
             axes: [DVec3::X, DVec3::Y, DVec3::Z],
+            extras: false,
+            profiles: false,
         }
     }
 }
@@ -301,6 +314,51 @@ pub fn scene_geometry(
     base.with_flags(&flags)
 }
 
+/// What an edge vertex carries besides its position and color when edges are drawn with
+/// profiles, sketchy lines, endpoints or hidden (see `EdgeColors::extras`): one per vertex of
+/// `SceneBase::edges`, both vertices of an edge alike but for `other` and the order of the
+/// extensions. scene.wgsl reads it as the `EdgeVertex` inputs.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct EdgeExtra {
+    /// The edge's other end.
+    pub other: [f32; 3],
+    /// The unit normals of the edge's first two shown faces in world space, with w 1; w 0
+    /// where the edge has no such face. Zero unless profiles are on.
+    pub normal_a: [f32; 4],
+    pub normal_b: [f32; 4],
+    /// x: 0 for an edge drawn as it is (the open instance's box), 1 for an ordinary edge, 2 for
+    /// a soft one (drawn only as a profile); y: the edge's jitter, -1 to 1 (the same for both
+    /// ends: the edge moves as one); z: how far this end's extension goes, 0 to 1; w: the
+    /// other end's.
+    pub meta: [f32; 4],
+}
+
+/// The least a sketchy edge's end is extended, as a share of the style's extension.
+const EXTENSION_LEAST: f32 = 0.3;
+
+/// A number from 0 to 1 that only `key` decides (the 24 high bits of a mixed hash).
+fn unit_hash(key: u64) -> f32 {
+    // splitmix64's finalizer.
+    let mut z = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// What decides an edge's sketchy look: the mesh it lies in and its id, so the same on every
+/// frame and every build.
+fn sketch_of(mesh: MeshId, edge: EdgeId) -> (f32, [f32; 2]) {
+    let mesh = match mesh {
+        MeshId::Root => 0,
+        MeshId::Definition(d) => d.0.wrapping_add(1),
+    };
+    let key = mesh.rotate_left(32) ^ edge.0.wrapping_mul(0xA24B_AED4_963E_E407);
+    let ext = |end: u64| EXTENSION_LEAST + (1.0 - EXTENSION_LEAST) * unit_hash(key ^ (end + 1));
+    (2.0 * unit_hash(key) - 1.0, [ext(0), ext(1)])
+}
+
 /// The scene placed for one open context with nothing selected (see `scene_geometry`).
 #[derive(Debug, Default, PartialEq)]
 pub struct SceneBase {
@@ -308,6 +366,9 @@ pub struct SceneBase {
     /// Edges in EDGE_COLOR inside the open instance and FADED_EDGE_COLOR outside it, then the
     /// open instance's box.
     pub edges: Vec<LineVertex>,
+    /// What each of `edges` carries besides (see `EdgeExtra`); empty unless edges are drawn
+    /// with effects (`EdgeColors::extras`).
+    pub edge_extras: Vec<EdgeExtra>,
     pub guides: Vec<GuideShape>,
     /// Dimensions and leader notes (screen notes have no lines), in ANNOTATION_COLOR inside
     /// the open instance and FADED_ANNOTATION_COLOR outside it.
@@ -625,7 +686,12 @@ pub fn scene_base_styled(
 ) -> SceneBase {
     let layers = layers(scene);
     let by_material = edge_colors.mode == EdgeColorMode::ByMaterial;
-    let parts = placed_parts(scene, &layers, by_material);
+    let parts = placed_parts(
+        scene,
+        &layers,
+        by_material || edge_colors.profiles,
+        edge_colors.profiles,
+    );
     let (faces, edges) = drawn_count(scene, &parts, MeshId::Root, &mut HashMap::new());
     let mut walk = Walk {
         scene,
@@ -651,6 +717,11 @@ pub fn scene_base_styled(
         base: SceneBase {
             faces: Vec::with_capacity(faces),
             edges: Vec::with_capacity(edges + 2 * BOX_EDGES.len()),
+            edge_extras: Vec::with_capacity(if edge_colors.extras {
+                edges + 2 * BOX_EDGES.len()
+            } else {
+                0
+            }),
             ..SceneBase::default()
         },
     };
@@ -674,6 +745,10 @@ pub fn scene_base_styled(
                     pos: corner(k),
                     color: CONTEXT_BOX_COLOR,
                 });
+                if edge_colors.extras {
+                    // Drawn as it is, whatever the edge settings.
+                    base.edge_extras.push(EdgeExtra::default());
+                }
             }
         }
     }
@@ -769,16 +844,32 @@ struct MeshParts {
     /// `kernel::Face::texture_position`).
     positions: Vec<DVec2>,
     faces: Vec<FacePart>,
-    /// The ends of the hard edges (soft edges are not drawn).
+    /// The ends of the hard edges, and of the soft ones when profiles are on (otherwise soft
+    /// edges are not drawn).
     ends: Vec<DVec3>,
-    /// Each hard edge, with its tag, whether it is hidden itself and its ends in `ends`.
-    edges: Vec<(EdgeId, Option<TagId>, bool, Range<usize>)>,
-    /// The faces along each of `edges` in id order; empty unless edges are colored by material.
+    /// Each of those edges, with its tag, whether it is hidden itself, its ends in `ends` and
+    /// whether it is soft.
+    edges: Vec<EdgePart>,
+    /// The faces along each of `edges` in id order; empty unless edges are colored by material
+    /// or profiles are on.
     edge_faces: Vec<Vec<FaceId>>,
+}
+
+/// An edge a mesh draws.
+struct EdgePart {
+    id: EdgeId,
+    tag: Option<TagId>,
+    /// Whether the edge is hidden itself.
+    hidden: bool,
+    /// Its ends in `MeshParts::ends`.
+    ends: Range<usize>,
+    soft: bool,
 }
 
 struct FacePart {
     id: FaceId,
+    /// The face's normal in the mesh's coordinates.
+    normal: DVec3,
     /// The face's triangle corners in `MeshParts::corners`, `normals` and `positions`.
     corners: Range<usize>,
     /// The looks of the sides painted on the face itself; unpainted sides take the look of
@@ -791,7 +882,7 @@ struct FacePart {
 }
 
 impl MeshParts {
-    fn of(scene: &Scene, layers: &Layers, model: &Model, edge_faces: bool) -> Self {
+    fn of(scene: &Scene, layers: &Layers, model: &Model, edge_faces: bool, soft: bool) -> Self {
         // A face of n loop corners and h holes has n + 2h - 2 triangles.
         let (mut face_count, mut triangles) = (0, 0);
         for (_, f) in model.faces() {
@@ -813,6 +904,7 @@ impl MeshParts {
             }
             faces.push(FacePart {
                 id,
+                normal: face.normal,
                 corners: start..corners.len(),
                 front: face
                     .front
@@ -824,15 +916,22 @@ impl MeshParts {
                 hidden: face.hidden,
             });
         }
-        let hard = model.edges().filter(|(_, e)| !e.soft).count();
+        let hard = model.edges().filter(|(_, e)| soft || !e.soft).count();
         let mut ends = Vec::with_capacity(2 * hard);
         let mut edges = Vec::with_capacity(hard);
         let mut along = Vec::new();
         // Soft edges are hidden, selected or not: the faces around them read as one surface.
-        for (id, edge) in model.edges().filter(|(_, e)| !e.soft) {
+        // With profiles on they are drawn where they are silhouettes, so they are kept.
+        for (id, edge) in model.edges().filter(|(_, e)| soft || !e.soft) {
             let start = ends.len();
             ends.extend(edge.v.iter().filter_map(|v| model.position(*v)));
-            edges.push((id, edge.tag, edge.hidden, start..ends.len()));
+            edges.push(EdgePart {
+                id,
+                tag: edge.tag,
+                hidden: edge.hidden,
+                ends: start..ends.len(),
+                soft: edge.soft,
+            });
             if edge_faces {
                 along.push(model.faces_of_edge(id));
             }
@@ -856,9 +955,14 @@ const PARALLEL_FACES: usize = 1000;
 const MAX_THREADS: usize = 8;
 
 /// The parts of every mesh placed from the root, the root included (with each edge's faces when
-/// `edge_faces`). With many faces, the meshes
+/// `edge_faces`, and the soft edges when `soft`). With many faces, the meshes
 /// are shared out among a few threads; the parts are the same either way.
-fn placed_parts(scene: &Scene, layers: &Layers, edge_faces: bool) -> HashMap<MeshId, MeshParts> {
+fn placed_parts(
+    scene: &Scene,
+    layers: &Layers,
+    edge_faces: bool,
+    soft: bool,
+) -> HashMap<MeshId, MeshParts> {
     let mut meshes = vec![MeshId::Root];
     let mut seen = HashSet::from([MeshId::Root]);
     let mut k = 0;
@@ -885,7 +989,7 @@ fn placed_parts(scene: &Scene, layers: &Layers, edge_faces: bool) -> HashMap<Mes
     if faces < PARALLEL_FACES || threads < 2 {
         return models
             .into_iter()
-            .map(|(id, m)| (id, MeshParts::of(scene, layers, m, edge_faces)))
+            .map(|(id, m)| (id, MeshParts::of(scene, layers, m, edge_faces, soft)))
             .collect();
     }
     // Each thread takes the next mesh nobody has taken, so big meshes do not hold one up.
@@ -893,7 +997,7 @@ fn placed_parts(scene: &Scene, layers: &Layers, edge_faces: bool) -> HashMap<Mes
     let work = || {
         let mut done = Vec::new();
         while let Some(&(id, m)) = models.get(next.fetch_add(1, Ordering::Relaxed)) {
-            done.push((id, MeshParts::of(scene, layers, m, edge_faces)));
+            done.push((id, MeshParts::of(scene, layers, m, edge_faces, soft)));
         }
         done
     };
@@ -1197,12 +1301,22 @@ impl Walk<'_> {
         if let Some(glows) = cut_glows.as_ref().or_else(|| self.glows.get(&glow_key)) {
             base.lights.extend(glows.iter().filter_map(|g| g.placed(t)));
         }
+        // The faces of edge `k` that are drawn, in id order.
+        let shown_faces = |k: usize| {
+            parts.edge_faces[k].iter().filter_map(move |id| {
+                let at = parts.faces.partition_point(|f| f.id < *id);
+                let face = parts.faces.get(at).filter(|f| f.id == *id)?;
+                let shown = (!face.hidden || hidden_geometry) && scene.tag_shown(face.tag);
+                shown.then_some(face)
+            })
+        };
         let color = if inside { EDGE_COLOR } else { FADED_EDGE_COLOR };
-        for (k, (eid, tag, hidden, ends)) in parts.edges.iter().enumerate() {
+        for (k, edge) in parts.edges.iter().enumerate() {
+            let (eid, tag, hidden, soft) = (&edge.id, &edge.tag, &edge.hidden, &edge.soft);
             if (*hidden && !hidden_geometry) || !scene.tag_shown(*tag) {
                 continue;
             }
-            let ends = &parts.ends[ends.clone()];
+            let ends = &parts.ends[edge.ends.clone()];
             let color = if ghost_mesh || *hidden {
                 GHOST_EDGE_COLOR
             } else if !inside {
@@ -1217,13 +1331,7 @@ impl Walk<'_> {
                         _ => edge_colors.color,
                     },
                     EdgeColorMode::ByMaterial => {
-                        let first = parts.edge_faces[k].iter().find_map(|id| {
-                            let at = parts.faces.partition_point(|f| f.id < *id);
-                            let face = parts.faces.get(at).filter(|f| f.id == *id)?;
-                            let shown =
-                                (!face.hidden || hidden_geometry) && scene.tag_shown(face.tag);
-                            shown.then_some(face)
-                        });
+                        let first = shown_faces(k).next();
                         // An unpainted face takes the look of the instance placing it, if that
                         // is painted.
                         let painted = first
@@ -1261,7 +1369,33 @@ impl Walk<'_> {
                     color,
                 }));
             }
-            if open {
+            if edge_colors.extras {
+                let mut normals = [[0.0; 4]; 2];
+                if edge_colors.profiles {
+                    for (slot, face) in normals.iter_mut().zip(shown_faces(k)) {
+                        let n = (normal_map * face.normal).normalize_or_zero().as_vec3();
+                        *slot = [n.x, n.y, n.z, 1.0];
+                    }
+                }
+                let (jitter, [ext_a, ext_b]) = sketch_of(id, *eid);
+                let placed = start..base.edges.len();
+                if let [a, b] = base.edges[placed.clone()] {
+                    for (other, own, far) in [(b.pos, ext_a, ext_b), (a.pos, ext_b, ext_a)] {
+                        base.edge_extras.push(EdgeExtra {
+                            other,
+                            normal_a: normals[0],
+                            normal_b: normals[1],
+                            meta: [if *soft { 2.0 } else { 1.0 }, jitter, own, far],
+                        });
+                    }
+                } else {
+                    // Keeps the list level with the vertices.
+                    base.edge_extras
+                        .extend(placed.map(|_| EdgeExtra::default()));
+                }
+            }
+            // Soft edges are not selectable: they have no span.
+            if open && !*soft {
                 base.spans.edges.push((*eid, start..base.edges.len()));
             }
         }

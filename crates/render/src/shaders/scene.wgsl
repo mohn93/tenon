@@ -44,9 +44,16 @@ struct Lighting {
     hover_face: vec4<f32>,
     // Hovered edges and guides.
     hover_edge: vec4<f32>,
-    // The step in pixels between the copies of a wide edge (x), of a wide axis (y) and of a section
-    // cut edge (z).
+    // The step in pixels between the copies of a wide edge (x), of a wide axis (y), of a section
+    // cut edge (z) and of a profile (w).
     wide: vec4<f32>,
+    // x: 1 when profiles are on; y: 1 when edges that are not profiles are shown; z: how far,
+    // in pixels, a sketchy edge may be displaced across; w: how far an end may be extended.
+    edge_fx: vec4<f32>,
+    // x: the length in pixels of an endpoint mark, 0 without endpoints; y: the step in pixels
+    // between the copies of a mark, z: how many steps they span; w: how many steps the copies
+    // of a profile span (their step is `wide.w`).
+    edge_fx2: vec4<f32>,
     // xyz: the unit vector toward the sun; w: 0 without sun shading, 1 with it, 2 with its shadow
     // map too.
     sun: vec4<f32>,
@@ -129,41 +136,125 @@ fn no_fog(line: LineOut) -> LineOut {
 // z is not clamped: vertices behind the camera must keep a positive z so near-plane clipping works.
 // Parallel depth is linear, so there the line moves by (depth_scale - 1) eye-to-target distances
 // wherever it is.
-fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
-    var out: LineOut;
+fn biased_clip(pos: vec3<f32>, depth_scale: f32) -> vec4<f32> {
     let clip = u.view_proj * vec4<f32>(pos, 1.0);
     let offset = depth_scale - 1.0;
     let z = clip.z * (1.0 + offset * u.depth_offset.x) + offset * u.depth_offset.y;
-    out.pos = vec4<f32>(clip.xy, z, clip.w);
+    return vec4<f32>(clip.xy, z, clip.w);
+}
+
+fn line_vertex(pos: vec3<f32>, color: vec4<f32>, depth_scale: f32) -> LineOut {
+    var out: LineOut;
+    out.pos = biased_clip(pos, depth_scale);
     out.color = color;
     out.world = pos;
     out.fogged = 1.0;
     return out;
 }
 
-// Model edges: pulled toward the camera by 0.05% of clip depth, enough to win against the faces
-// they bound at this depth precision without showing through faces in front of them. A
-// selected edge (flag 1, from the second vertex buffer) is drawn in the style's selected-edge
-// color; the others fade toward the background as far as the lighting says. A hovered edge
-// (flag 1, from the third vertex buffer) is drawn in the hover color.
-@vertex
-fn vs_edge(
+// A model edge vertex: its place and color, the selection and hover flags, and what the edge
+// effects need (see `EdgeExtra` in scene.rs).
+struct EdgeVertex {
     @location(0) pos: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) selected: f32,
     @location(3) hovered: f32,
-) -> LineOut {
-    let out = line_vertex(
-        pos,
-        select(
-            select(faded_line(color, lighting.lines.x), lighting.selected_edge, selected > 0.5),
-            lighting.hover_edge,
-            hovered > 0.5,
-        ),
-        1.0005,
+    // The edge's other end.
+    @location(4) other: vec3<f32>,
+    // The normals of the edge's first two faces (w 1), w 0 where it has none.
+    @location(5) normal_a: vec4<f32>,
+    @location(6) normal_b: vec4<f32>,
+    // x: 0 for an edge drawn as it is, 1 for an ordinary edge, 2 for a soft one; y: its jitter;
+    // z: the extension of this end; w: the extension of the other end.
+    @location(7) sketch: vec4<f32>,
+};
+
+// Whether the edge is a silhouette: its faces are not both toward the eye or both away from it
+// (or it has fewer than two faces). The same wherever along the edge it is asked, so the edge
+// is a profile in whole or not at all.
+fn edge_is_profile(v: EdgeVertex) -> bool {
+    if lighting.edge_fx.x < 0.5 || v.sketch.x < 0.5 {
+        return false;
+    }
+    if v.normal_a.w < 0.5 || v.normal_b.w < 0.5 {
+        return true;
+    }
+    let middle = 0.5 * (v.pos + v.other);
+    let toward_eye = select(u.eye.xyz, u.eye.xyz - middle, u.eye.w > 0.5);
+    return (dot(v.normal_a.xyz, toward_eye) > 0.0) != (dot(v.normal_b.xyz, toward_eye) > 0.0);
+}
+
+// Whether the edge is drawn at all: profiles always are, selected and hovered edges too, the rest
+// when the style shows edges; soft edges are only silhouettes.
+fn edge_drawn(v: EdgeVertex, profile: bool) -> bool {
+    if v.sketch.x < 0.5 || profile || v.selected > 0.5 || v.hovered > 0.5 {
+        return true;
+    }
+    return v.sketch.x < 1.5 && lighting.edge_fx.y > 0.5;
+}
+
+// The edge's two ends in clip space, this vertex's first, as the sketchy style displaces them:
+// the whole edge across its direction by its jitter, each end out along it by its extension
+// (both in pixels, so the same on any screen size). An edge drawn as it is, or with an end
+// behind the eye, stays where it is.
+fn sketched_ends(v: EdgeVertex, vertex: u32, depth_scale: f32) -> array<vec4<f32>, 2> {
+    let own = biased_clip(v.pos, depth_scale);
+    let far = biased_clip(v.other, depth_scale);
+    if v.sketch.x < 0.5 || lighting.edge_fx.z + lighting.edge_fx.w <= 0.0
+        || own.w <= 0.0001 || far.w <= 0.0001 {
+        return array<vec4<f32>, 2>(own, far);
+    }
+    let half = 0.5 * lighting.lines.zw;
+    let p_own = own.xy / own.w * half;
+    let p_far = far.xy / far.w * half;
+    let along = p_far - p_own;
+    let length_px = length(along);
+    if length_px < 0.001 {
+        return array<vec4<f32>, 2>(own, far);
+    }
+    let toward = along / length_px;
+    // Across is the same side for both ends: turned from the direction first to second.
+    let first_to_second = select(-toward, toward, vertex % 2u == 0u);
+    let across = vec2<f32>(-first_to_second.y, first_to_second.x) * (v.sketch.y * lighting.edge_fx.z);
+    let moved_from = p_own + across - toward * (v.sketch.z * lighting.edge_fx.w);
+    let moved_to = p_far + across + toward * (v.sketch.w * lighting.edge_fx.w);
+    return array<vec4<f32>, 2>(
+        vec4<f32>(moved_from / half * own.w, own.zw),
+        vec4<f32>(moved_to / half * far.w, far.zw),
     );
+}
+
+// Moves a line out of the view, so that nothing of it is drawn.
+fn hidden_line(line: LineOut) -> LineOut {
+    var out = line;
+    out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+    return out;
+}
+
+// The edge's color: selected, hovered or its own faded toward the background.
+fn edge_color(v: EdgeVertex) -> vec4<f32> {
+    return select(
+        select(faded_line(v.color, lighting.lines.x), lighting.selected_edge, v.selected > 0.5),
+        lighting.hover_edge,
+        v.hovered > 0.5,
+    );
+}
+
+// Model edges: pulled toward the camera by 0.05% of clip depth, enough to win against the faces
+// they bound at this depth precision without showing through faces in front of them. A
+// selected edge (flag 1, from the second vertex buffer) is drawn in the style's selected-edge
+// color; the others fade toward the background as far as the lighting says. A hovered edge
+// (flag 1, from the third vertex buffer) is drawn in the hover color. The style's edge effects
+// (the fourth buffer) hide the edges it does not show and sketch the rest.
+@vertex
+fn vs_edge(v: EdgeVertex, @builtin(vertex_index) vertex: u32) -> LineOut {
+    var out = line_vertex(v.pos, edge_color(v), 1.0005);
+    if !edge_drawn(v, edge_is_profile(v)) {
+        return hidden_line(out);
+    }
+    out.pos = sketched_ends(v, vertex, 1.0005)[0];
     // Selected and hovered edges stay as they are in the fog.
-    if selected > 0.5 || hovered > 0.5 {
+    if v.selected > 0.5 || v.hovered > 0.5 {
         return no_fog(out);
     }
     return out;
@@ -173,33 +264,87 @@ fn vs_edge(
 // `lighting.wide.x` pixels per pair, so they read as wide as the instances span; the other
 // edges are moved outside the view and clipped away.
 @vertex
-fn vs_edge_wide(
-    @location(0) pos: vec3<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) selected: f32,
-    @location(3) hovered: f32,
-    @builtin(instance_index) k: u32,
-) -> LineOut {
+fn vs_edge_wide(v: EdgeVertex, @builtin(vertex_index) vertex: u32, @builtin(instance_index) k: u32) -> LineOut {
     var out = line_vertex(
-        pos,
-        select(lighting.selected_edge, lighting.hover_edge, hovered > 0.5),
+        v.pos,
+        select(lighting.selected_edge, lighting.hover_edge, v.hovered > 0.5),
         1.0005,
     );
-    if selected < 0.5 && hovered < 0.5 {
-        out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
-        return out;
+    if v.selected < 0.5 && v.hovered < 0.5 {
+        return hidden_line(out);
     }
+    out.pos = sketched_ends(v, vertex, 1.0005)[0];
     return wide_copy(no_fog(out), k, lighting.wide.x);
+}
+
+// Profiles drawn again around the line, `lighting.wide.w` pixels apart, across (even instances)
+// and up (odd ones); the other edges are clipped away.
+@vertex
+fn vs_edge_profile_wide(v: EdgeVertex, @builtin(vertex_index) vertex: u32, @builtin(instance_index) k: u32) -> LineOut {
+    var out = line_vertex(v.pos, edge_color(v), 1.0005);
+    if !edge_is_profile(v) {
+        return hidden_line(out);
+    }
+    out.pos = sketched_ends(v, vertex, 1.0005)[0];
+    if v.selected > 0.5 || v.hovered > 0.5 {
+        out = no_fog(out);
+    }
+    return centered_copy(out, k % 2u == 0u, k / 2u, lighting.edge_fx2.w, lighting.wide.w);
+}
+
+// A short mark along the edge at each of its ends, `lighting.edge_fx2.x` pixels long (at most
+// the edge), drawn as lines. Instance k marks the first end (even) or the second (odd), in copy
+// k / 4 of the copies `lighting.edge_fx2.y` pixels apart around the mark (see `centered_copy`),
+// across (k / 2 even) or up (odd), that make it as wide as the instances span. The marks of the
+// edges that are not drawn are clipped away.
+@vertex
+fn vs_edge_endpoint(v: EdgeVertex, @builtin(vertex_index) vertex: u32, @builtin(instance_index) k: u32) -> LineOut {
+    var out = line_vertex(v.pos, edge_color(v), 1.0005);
+    if !edge_drawn(v, edge_is_profile(v)) || v.sketch.x < 0.5 {
+        return hidden_line(out);
+    }
+    let ends = sketched_ends(v, vertex, 1.0005);
+    // This vertex is the edge's first end when its index is even.
+    let marks_own_end = (vertex % 2u == 0u) == (k % 2u == 0u);
+    let anchor = select(ends[1], ends[0], marks_own_end);
+    let beyond = select(ends[0], ends[1], marks_own_end);
+    if anchor.w <= 0.0001 || beyond.w <= 0.0001 {
+        return hidden_line(out);
+    }
+    let half = 0.5 * lighting.lines.zw;
+    let p_own = anchor.xy / anchor.w * half;
+    let along = beyond.xy / beyond.w * half - p_own;
+    if length(along) < 0.001 {
+        return hidden_line(out);
+    }
+    let reach = min(lighting.edge_fx2.x, length(along));
+    // The mark is drawn from its end (the pair's first vertex) to its tip (the second).
+    let at = select(p_own + normalize(along) * reach, p_own, vertex % 2u == 0u);
+    out.pos = vec4<f32>(at / half * anchor.w, anchor.zw);
+    if v.selected > 0.5 || v.hovered > 0.5 {
+        out = no_fog(out);
+    }
+    return centered_copy(out, (k / 2u) % 2u == 0u, k / 4u, lighting.edge_fx2.z, lighting.edge_fx2.y);
 }
 
 // Copy `k` of a wide line: moved across (even k) or up (odd k) by `step` pixels per pair.
 fn wide_copy(line: LineOut, k: u32, step: f32) -> LineOut {
+    return pixel_shift(line, k % 2u == 0u, step * f32(k / 2u + 1u));
+}
+
+// The line moved across (or up) by `pixels`.
+fn pixel_shift(line: LineOut, across: bool, pixels: f32) -> LineOut {
     var out = line;
-    let pixels = step * f32(k / 2u + 1u);
-    let shift = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), k % 2u == 0u) * pixels
+    let shift = select(vec2<f32>(0.0, 2.0), vec2<f32>(2.0, 0.0), across) * pixels
         / lighting.lines.zw;
     out.pos = vec4<f32>(out.pos.xy + shift * out.pos.w, out.pos.zw);
     return out;
+}
+
+// Copy `j` (0 to `span`) of a line, `step` pixels apart, across or up, around the line itself:
+// all together as wide as the copies span.
+fn centered_copy(line: LineOut, across: bool, j: u32, span: f32, step: f32) -> LineOut {
+    return pixel_shift(line, across, (f32(j) - 0.5 * span) * step);
 }
 
 // The fill of closed section cuts: pulled toward the camera a little less than the cut edges

@@ -493,3 +493,53 @@ fn time_styled_renders() {
         mean(&styled)
     );
 }
+
+/// Orbit frames of a model of 20 000 faces with profiles, sketchy edges and endpoints on, against
+/// the same frames without a style, from one upload each: the profile test runs in the vertex
+/// shader, so turning the view costs no rebuild. Also the upload with the edge data.
+#[test]
+#[ignore]
+fn time_profile_edges() {
+    let d = box_grid(58);
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let style = kernel::StyleSettings {
+        edges: kernel::EdgeStyle {
+            profiles: Some(4.0),
+            sketchy: Some(kernel::Sketchy {
+                jitter: 2.0,
+                extension: 8.0,
+            }),
+            endpoints: Some(8.0),
+            ..kernel::EdgeStyle::default()
+        },
+        ..kernel::StyleSettings::default()
+    };
+    let mut orbit = |style: Option<&kernel::StyleSettings>| {
+        snap.set_model_style(style);
+        let t = Instant::now();
+        snap.prepare(d.scene(), d.context(), d.selection());
+        let upload = t.elapsed().as_secs_f64();
+        let mut camera = d.camera.clone();
+        let frames: Vec<f64> = (0..10)
+            .map(|k| {
+                let turn = glam::DMat3::from_rotation_z(0.1 * f64::from(k));
+                camera.eye = camera.target + turn * (d.camera.eye - d.camera.target);
+                let t = Instant::now();
+                snap.capture_prepared(&camera, Lighting::Day, 1400, 900)
+                    .expect("capture");
+                t.elapsed().as_secs_f64()
+            })
+            .collect();
+        (upload, frames.iter().sum::<f64>() / frames.len() as f64)
+    };
+    orbit(None);
+    let (plain_upload, plain) = orbit(None);
+    orbit(Some(&style));
+    let (upload, styled) = orbit(Some(&style));
+    eprintln!(
+        "20 000 faces: no style upload {plain_upload:.3} s, orbit frame {plain:.3} s; profiles, sketchy and endpoints upload {upload:.3} s, orbit frame {styled:.3} s"
+    );
+}
