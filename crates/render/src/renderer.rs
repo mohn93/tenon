@@ -523,7 +523,8 @@ pub struct Renderer {
     sun_placeholder: wgpu::TextureView,
     /// The sun casters as of the last `set_model`: how many corners, a hash of them (so a change
     /// is found without keeping a copy), their vertex buffer (None when there are none), their
-    /// bounds, and a count of their changes, as for the lamps' casters.
+    /// bounds, and a count of their changes, as for the lamps' casters. A moved caster changes
+    /// the bytes and so the hash; only a 64-bit hash collision could miss a change.
     sun_count: u32,
     sun_hash: u64,
     sun_casters: Option<wgpu::Buffer>,

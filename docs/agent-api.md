@@ -242,22 +242,25 @@ extension is matched ignoring case. With `--api-root` the folder, `save_to_libra
 must `place_library_item`'s.
 
 The window keeps the library folder in its preferences (Settings > Files > Library folder:
-Choose..., Clear) and lists it in the Library dock tab, after Scenes. With no folder the tab says
-"Choose a library folder". Otherwise it has a search field (a case-insensitive part of the name),
-a kind filter (All, Components, Materials, Models) and a grid of tiles, a thumbnail and a name
-each. The list is made again when the tab is shown, after a save or a delete, and when the window
-gains focus (no folder watching). Thumbnails are made lazily for the tiles in view, at most two a
-frame, 128 x 128 pixels, in an iso view fitted to the item on white paper, kept in memory by file
-and modification time; a material's is its color or texture, and an item that cannot be drawn
-shows an icon; one that is over the clip limits shows the icon with the reason as its hover text and cannot be placed, inserted or opened from the tab. The thumbnail is made again when the file's time or size changes. A click on a component or model tile is `place_library_item`; a click on a
-material tile is `insert_library_item` and the material becomes `set_paint_material`'s. The tile's
-context menu has Insert (`insert_library_item` at the open context's origin), Open (`open` with
-the file, asking about unsaved changes first) and Delete from Library (after a confirmation the
-file is removed, only when it is a regular `.skr` file directly in the folder and not a link).
-Saving asks for a name in a sheet and writes `<folder>/<name>.skr` as `save_to_library` does
-(characters a file name may not hold become `_`; an existing file asks before it is replaced):
-Entity Info's Save to Library for one selected component instance, the Materials panel's Save to
-Library for the chosen material, the context bar's Save Component to Library button, and File > Save Model to Library.... They need a folder.
+Choose..., Clear) and lists it in the Library dock tab, after Shadows. With no folder the tab says
+"Choose a library folder". Otherwise it has a search field (a case-insensitive part of the name), a
+kind filter (All, Components, Materials, Models) and a grid of tiles, a thumbnail and a name each.
+The list is made again when the tab is shown, after a save or a delete, and when the window gains
+focus (no folder watching). Thumbnails are made lazily for the tiles in view, at most two a frame,
+128 x 128 pixels, in an iso view fitted to the item on white paper, kept in memory by file and
+modification time; a material's is its color or texture, and an item that cannot be drawn shows an
+icon; one that is over the clip limits shows the icon with the reason as its hover text and cannot
+be placed, inserted or opened from the tab. The thumbnail is made again when the file's time or size
+changes. A click on a component or model tile is `place_library_item`; a click on a material tile is
+`insert_library_item` and the material becomes `set_paint_material`'s. The tile's context menu has
+Insert (`insert_library_item` at the open context's origin), Open (`open` with the file, asking
+about unsaved changes first) and Delete from Library (after a confirmation the file is removed, only
+when it is a regular `.skr` file directly in the folder and not a link). Saving asks for a name in a
+sheet and writes `<folder>/<name>.skr` as `save_to_library` does (characters a file name may not
+hold become `_`; an existing file asks before it is replaced): Entity Info's Save to Library for one
+selected component instance, the Materials panel's Save to Library for the chosen material, the
+context bar's Save Component to Library button, and File > Save Model to Library.... They need a
+folder.
 
 ### References inside a batch
 
