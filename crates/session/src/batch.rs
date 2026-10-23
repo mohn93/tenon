@@ -525,6 +525,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::Explode { ids }
         | Command::SoftenEdges { ids, .. }
         | Command::SoftenByAngle { ids, .. }
+        | Command::IntersectFaces { ids, .. }
         | Command::PositionTexture { ids, .. }
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),

@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -111,7 +111,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -369,6 +369,26 @@ In the window, Edit > Soften Edges... opens a small window with an angle (0 to 1
 `"soft": false`, both on the selected edges and faces, or on the whole open context when nothing
 is selected; the status line says how many edges changed. With only edges selected, Entity Info
 shows a Soft checkbox that softens or hardens them.
+
+### Intersect Faces
+
+| Command | Effect |
+|---|---|
+| `{"type": "intersect_faces", "ids": ["f7", "i4"], "with": "model"}` | Draws the edges where the faces in `ids` cross other faces, as one undo step labelled `intersect_faces`. `ids` are faces and instances of the open context (faces of a group or component count, through its placement); when empty or absent the selection is used. `with` is `model` (default: every shown face of the model, in groups and components at any depth, hidden tags and hidden instances left out, section cuts ignored), `selection` (the given faces and instances against each other only) or `context` (the faces of the open context's own mesh only, not those in groups). Nothing to intersect (no faces or instances) is `invalid_input` ("Select the faces or groups to intersect"); vertex ids are `invalid_input` and unknown ids `not_found`. |
+
+New edges always go into the open context, in its coordinates, and split the faces of the open
+context they cross as drawing an edge does. Groups and components are never modified, even when
+their faces are the ones crossed: open one to cut it. Coplanar faces give the boundary of each
+that lies inside the other; faces that only touch, and edges that already exist, add nothing.
+At most 200,000 face pairs (after a bounding box test) and 100,000 segments are handled at once,
+beyond that the command is `invalid_input` ("Too many faces cross to intersect at once") and
+changes nothing.
+
+The outcome reports `"intersect": {"added_edges": [ids], "split_faces": [ids], "created_faces": [ids]}`:
+the edges made (the halves of an edge it cut included), the faces that existed before and were
+split (they no longer exist), and the faces the splits made. All can be batch references
+(`$0:e*`, `$0:f*` name the made edges and faces). No crossings is a success with empty lists and
+no undo step.
 
 ### Guides
 

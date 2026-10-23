@@ -18,6 +18,7 @@ mod groups;
 mod guides;
 mod history_origin;
 mod import;
+mod intersect;
 mod isolate;
 mod library;
 mod lights;

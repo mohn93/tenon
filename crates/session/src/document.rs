@@ -13,7 +13,9 @@ use crate::arc::{DEFAULT_ARC_SEGMENTS, arc_points, arc_spec};
 use crate::batch::BatchCommand;
 use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
-use crate::command::{BatchError, Command, CommandError, ErrorKind, Origin, Outcome, SelectMode};
+use crate::command::{
+    BatchError, Command, CommandError, ErrorKind, IntersectReport, Origin, Outcome, SelectMode,
+};
 use crate::import::ImportReport;
 use crate::polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 use crate::query::{
@@ -32,6 +34,7 @@ mod files;
 mod follow_me;
 mod groups;
 mod import;
+mod intersect;
 mod library;
 mod materials;
 mod placement;
@@ -105,6 +108,8 @@ pub struct Document {
     import_report: Option<ImportReport>,
     /// What the last soften edit did, until its outcome takes it.
     soften_report: Option<SoftenReport>,
+    /// What the last intersect edit did, until its outcome takes it.
+    intersect_report: Option<IntersectReport>,
     /// How many faces the last `position_texture` changed, until its outcome takes it.
     positioned: Option<usize>,
     /// How many definitions the last `purge_definitions` removed, until its outcome takes it.
@@ -148,6 +153,7 @@ impl Document {
             staged_import: None,
             import_report: None,
             soften_report: None,
+            intersect_report: None,
             positioned: None,
             purged: None,
             text_report: None,
@@ -389,6 +395,7 @@ impl Document {
             let mut outcome = self.record(label.into(), changes, units);
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
+            outcome.intersect = self.intersect_report.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.text_3d = self.text_report.take();
@@ -650,6 +657,7 @@ impl Document {
             | Command::GoToScene { .. }
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
+            | Command::IntersectFaces { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -869,6 +877,7 @@ impl Document {
             Command::SoftenByAngle { ids, max_angle_deg } => {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
             }
+            Command::IntersectFaces { ids, with } => self.intersect_faces_changes(ids, *with),
             Command::PositionTexture {
                 ids,
                 offset,
@@ -1013,6 +1022,7 @@ impl Document {
                             import: self.import_report.take(),
                             export: None,
                             soften: self.soften_report.take(),
+                            intersect: self.intersect_report.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
                             text_3d: self.text_report.take(),

@@ -488,6 +488,19 @@ pub enum Command {
         ids: Vec<EntityId>,
         max_angle_deg: f64,
     },
+    /// Draw the edges where the faces in `ids` (or, when empty, the selection) cross other
+    /// faces, as one undo step labelled `intersect_faces`: faces of selected groups and
+    /// components count, through their placements. `with` picks what they cross: `model`
+    /// (default) every shown face of the model, `selection` only each other, `context` the
+    /// faces of the open context's own mesh. New edges go into the open context, and split
+    /// the faces of the open context they cross; groups and components are never modified.
+    /// No crossings is a success with an empty `intersect` report and no undo step.
+    IntersectFaces {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        with: IntersectScope,
+    },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's
@@ -835,6 +848,30 @@ pub enum SelectMode {
     Toggle,
 }
 
+/// What `intersect_faces` crosses the faces with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntersectScope {
+    /// Every shown face of the model, in groups and components too.
+    #[default]
+    Model,
+    /// Only the selected faces and instances among themselves.
+    Selection,
+    /// The faces of the open context's own mesh.
+    Context,
+}
+
+/// What an `intersect_faces` did: ids that exist after it, usable as batch references.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct IntersectReport {
+    /// Edges the command made (the pieces of an edge it cut included).
+    pub added_edges: Vec<EntityId>,
+    /// Faces that existed before and were split; they no longer exist.
+    pub split_faces: Vec<EntityId>,
+    /// The faces the splits made.
+    pub created_faces: Vec<EntityId>,
+}
+
 /// What a successful command changed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Outcome {
@@ -849,6 +886,9 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soften: Option<SoftenReport>,
+    /// What an `intersect_faces` drew and split; absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intersect: Option<IntersectReport>,
     /// How many faces a `position_texture` changed; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub positioned: Option<usize>,

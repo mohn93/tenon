@@ -240,6 +240,7 @@ fn describe_lists_methods_and_schemas() {
         "position_texture",
         "soften_edges",
         "soften_by_angle",
+        "intersect_faces",
         "paste",
         "new",
         "open",
@@ -785,6 +786,55 @@ fn soften_over_json_rpc() {
         json!({"type": "soften_edges", "ids": [face]}),
     );
     assert_eq!(r["error"]["code"], codes::INVALID_PARAMS);
+}
+
+#[test]
+fn intersect_faces_over_json_rpc() {
+    let mut h = HeadlessHost::new();
+    // A rectangle pierced by a wall through its middle.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [4, 4, 0]}),
+    );
+    let floor = created_face(&r);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [-1, 2, -1], "opposite": [5, 2, 1],
+            "normal": [0, 1, 0]}),
+    );
+    let wall = created_face(&r);
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "intersect_faces", "ids": [wall], "with": "model"}),
+    );
+    let report = &r["result"]["intersect"];
+    assert_eq!(report["split_faces"], json!([floor]), "{r}");
+    assert_eq!(report["created_faces"].as_array().unwrap().len(), 2, "{r}");
+    assert!(!report["added_edges"].as_array().unwrap().is_empty());
+    // Nothing left to cross: a success with an empty report.
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "intersect_faces", "ids": [wall]}),
+    );
+    assert_eq!(
+        r["result"]["intersect"],
+        json!({"added_edges": [], "split_faces": [], "created_faces": []})
+    );
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "intersect_faces", "ids": [wall], "with": "everything"}),
+    );
+    assert_eq!(r["error"]["code"], codes::INVALID_PARAMS, "{r}");
+    let r = call(&mut h, "execute", json!({"type": "select", "ids": []}));
+    assert!(r.get("error").is_none());
+    let r = call(&mut h, "execute", json!({"type": "intersect_faces"}));
+    assert_eq!(r["error"]["code"], codes::COMMAND_FAILED, "{r}");
+    assert_eq!(r["error"]["data"]["kind"], "invalid_input", "{r}");
 }
 
 #[test]
