@@ -316,3 +316,71 @@ fn a_definition_axes_move_far_from_its_textures_is_refused() {
     assert!(e.to_string().contains("texture"), "{e}");
     assert_eq!(s, before);
 }
+
+/// A group of one wall facing the diagonal (so a shift along the wall can pass 1e6 while every
+/// coordinate stays within it), with or without a texture placement on the wall.
+fn diagonal_wall_group(placed: bool) -> (Scene, DefinitionId) {
+    use kernel::PlacementEdit;
+    let mut s = Scene::new();
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&[
+            p(0.0, 0.0, 0.0),
+            p(2.0, 2.0, 0.0),
+            p(2.0, 2.0, 2.0),
+            p(0.0, 0.0, 2.0),
+        ])
+    })
+    .unwrap();
+    let edges: Vec<_> = s.root().edges().map(|(id, _)| id).collect();
+    let faces: Vec<_> = s.root().faces().map(|(id, _)| id).collect();
+    let (instance, _) = s
+        .make_group(
+            MeshId::Root,
+            &edges,
+            &faces,
+            &[],
+            DefinitionKind::Group,
+            "Wall",
+        )
+        .unwrap();
+    let definition = s.root().instance(instance).unwrap().definition;
+    if placed {
+        let inside: Vec<_> = s
+            .definition(definition)
+            .unwrap()
+            .mesh
+            .faces()
+            .map(|(id, _)| id)
+            .collect();
+        s.edit(MeshId::Definition(definition), |m| {
+            let edit = PlacementEdit {
+                offset: Some([0.3, -0.2]),
+                rotation_deg: None,
+                rotate_by: None,
+                scale: None,
+                reset: false,
+            };
+            Ok(m.position_texture(&inside, edit)?.0)
+        })
+        .unwrap();
+    }
+    (s, definition)
+}
+
+#[test]
+fn a_far_axes_move_is_kept_when_no_face_has_a_texture_placement() {
+    let (mut s, definition) = diagonal_wall_group(false);
+    let far = DAffine3::from_translation(p(9.0e5, 9.0e5, 0.0));
+    s.reorigin_definition(definition, far).unwrap();
+    s.validate().unwrap();
+}
+
+#[test]
+fn a_far_axes_move_is_refused_when_a_placed_texture_would_clamp() {
+    let (mut s, definition) = diagonal_wall_group(true);
+    let before = s.clone();
+    let far = DAffine3::from_translation(p(9.0e5, 9.0e5, 0.0));
+    let e = s.reorigin_definition(definition, far).unwrap_err();
+    assert!(e.to_string().contains("texture"), "{e}");
+    assert_eq!(s, before);
+}

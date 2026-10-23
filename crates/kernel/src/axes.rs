@@ -131,11 +131,14 @@ impl Scene {
             let sections = m.all_sections();
             // Textures are projected in the definition's coordinates, so every face's placement
             // takes up the move (as it does when an instance is exploded): a face with no paint
-            // of its own shows an instance's material through its own placement too.
+            // of its own shows an instance's material through its own placement too. A move
+            // that would clamp the placement of a face that has one is refused; a face with none
+            // keeps none then.
             let placed: Vec<_> = m.faces().map(|(id, f)| (id, f.texture, f.normal)).collect();
+            let clamps = |texture, normal| TexturePlacement::carry(texture, normal, &inverse).1;
             if placed
                 .iter()
-                .any(|(_, texture, normal)| TexturePlacement::carry(*texture, *normal, &inverse).1)
+                .any(|(_, texture, normal)| texture.is_some() && clamps(*texture, *normal))
             {
                 return Err(KernelError::BadAxes(
                     "the new origin is too far from the content to keep its textures in place",
@@ -150,6 +153,9 @@ impl Scene {
                 }
             };
             for (id, texture, normal) in placed {
+                if texture.is_none() && clamps(texture, normal) {
+                    continue;
+                }
                 m.set_texture(id, TexturePlacement::carried(texture, normal, &inverse));
             }
             c.ops.extend(m.take_changes().ops);

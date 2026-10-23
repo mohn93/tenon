@@ -1043,7 +1043,7 @@ Inside an open group or component they become that definition's own origin and a
 the open context's coordinates: its geometry, guides, dimensions, notes, section planes and
 nested instances move by the new frame's inverse, and every instance of it, in every context,
 is placed by its transform times the frame, so nothing moves in the model (every face keeps its texture where it is, its placement carried, also a face that shows an instance material) and the open context
-stays open; a frame that would put anything of it, or an instance placing it, beyond the coordinate limit, or that would carry a texture placement beyond its limits (offset 1e6, the scale range; "the new origin is too far from the content to keep its textures in place"), is `invalid_input` and changes nothing. `{"type": "reset_axes"}` puts the model axes back to the world axes (one undo step;
+stays open; a frame that would put anything of it, or an instance placing it, beyond the coordinate limit, or that would carry the texture placement of a face that has one beyond its limits (offset 1e6, the scale range; faces with no placement are not checked; "the new origin is too far from the content to keep its textures in place"), is `invalid_input` and changes nothing. `{"type": "reset_axes"}` puts the model axes back to the world axes (one undo step;
 nothing to change makes none); inside a context it does nothing.
 
 The current drawing axes (the model axes at the root; inside an open group or component its own
