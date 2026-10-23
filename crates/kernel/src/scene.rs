@@ -101,7 +101,9 @@ pub enum Step {
     ChangePage(PageId, Page, Page),
     /// A page moved from the first index in the page order to the second.
     MovePage(PageId, usize, usize),
+    /// A style added.
     AddStyle(StyleId, Style),
+    /// A style removed.
     RemoveStyle(StyleId, Style),
     /// A style's name or settings changed from the first to the second.
     ChangeStyle(StyleId, Style, Style),

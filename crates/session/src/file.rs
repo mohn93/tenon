@@ -2,7 +2,7 @@
 //! format name, a schema version, the camera and the model with every id, and the texture
 //! images as the files they were read from (`textures/m<id>.png` or `.jpg`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -229,6 +229,15 @@ pub(crate) fn write_bytes(
         units,
     } = look;
     let mut model = scene.to_data();
+    // A view can only choose a style the written model has (a clip or library item of part of
+    // a model has none), so the others are dropped and such files are written as before.
+    let known: BTreeSet<u64> = model.styles.iter().map(|s| s.id).collect();
+    let style = style.filter(|s| known.contains(&s.0));
+    for v in model.pages.iter_mut().filter_map(|p| p.view.as_mut()) {
+        if v.style.is_some_and(|s| !known.contains(&s.0)) {
+            v.style = None;
+        }
+    }
     // Materials sharing an image share its entry, so the file reads back within the texture
     // pixel budget, which counts each entry once.
     let mut entries: HashMap<*const TextureImage, String> = HashMap::new();

@@ -202,28 +202,46 @@ fn change_style_with_nothing_to_do_or_a_bad_value_is_refused_or_free() {
     )
     .unwrap();
     assert_eq!(ask(&d, json!({"type": "history"}))["undo_depth"], depth);
-    for bad in [
-        json!({"edges": {"profiles": 1.0}}),
-        json!({"edges": {"profiles": 11.0}}),
-        json!({"edges": {"sketchy": {"jitter": 11.0, "extension": 0.0}}}),
-        json!({"edges": {"sketchy": {"jitter": 1.0, "extension": 31.0}}}),
-        json!({"edges": {"endpoints": 1.0}}),
-        json!({"edges": {"endpoints": 31.0}}),
-        json!({"ground": {"color": [0, 0, 0], "opacity": 1.5, "from_below": false}}),
-        json!({"fog": {"start": 10.0, "end": 5.0, "color": "background"}}),
-        json!({"fog": {"start": -1.0, "end": 5.0, "color": "background"}}),
-        json!({"background": [0, 0, 256]}),
+    for (bad, why) in [
+        (json!({"edges": {"profiles": 1.0}}), "profile width"),
+        (json!({"edges": {"profiles": 11.0}}), "profile width"),
+        (
+            json!({"edges": {"sketchy": {"jitter": 11.0, "extension": 0.0}}}),
+            "sketchy jitter",
+        ),
+        (
+            json!({"edges": {"sketchy": {"jitter": 1.0, "extension": 31.0}}}),
+            "sketchy extension",
+        ),
+        (json!({"edges": {"endpoints": 1.0}}), "endpoint length"),
+        (json!({"edges": {"endpoints": 31.0}}), "endpoint length"),
+        (
+            json!({"ground": {"color": [0, 0, 0], "opacity": 1.5, "from_below": false}}),
+            "ground opacity",
+        ),
+        (
+            json!({"fog": {"start": 10.0, "end": 5.0, "color": "background"}}),
+            "fog",
+        ),
+        (
+            json!({"fog": {"start": -1.0, "end": 5.0, "color": "background"}}),
+            "fog",
+        ),
     ] {
-        let cmd: Result<Command, _> =
-            serde_json::from_value(json!({"type": "change_style", "style": a, "settings": bad}));
-        match cmd {
-            Err(_) => {}
-            Ok(c) => {
-                let e = Document::execute(&mut d, c).unwrap_err();
-                assert_eq!(e.kind, ErrorKind::InvalidInput, "{bad}");
-            }
-        }
+        let cmd: Command =
+            serde_json::from_value(json!({"type": "change_style", "style": a, "settings": bad}))
+                .unwrap();
+        let e = Document::execute(&mut d, cmd).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::InvalidInput, "{bad}");
+        assert!(e.message.contains(why), "{bad}: {}", e.message);
     }
+    // A colour channel past 255 is not a colour at all.
+    assert!(
+        serde_json::from_value::<Command>(
+            json!({"type": "change_style", "style": a, "settings": {"background": [0, 0, 256]}})
+        )
+        .is_err()
+    );
     let e = run(
         &mut d,
         json!({"type": "change_style", "style": a, "name": "B"}),
@@ -459,4 +477,103 @@ fn an_atomic_batch_that_fails_restores_the_chosen_style() {
     .collect();
     assert!(d.execute_batch(commands, true).is_err());
     assert_eq!(chosen(&d), Value::Null);
+}
+
+/// A rectangle's edge and face ids.
+fn rectangle(d: &mut Document) -> Vec<kernel::EntityId> {
+    run(
+        d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [1, 1, 0]}),
+    )
+    .unwrap();
+    let m = d.model();
+    m.edges()
+        .map(|(id, _)| kernel::EntityId::Edge(id))
+        .chain(m.faces().map(|(id, _)| kernel::EntityId::Face(id)))
+        .collect()
+}
+
+#[test]
+fn copy_and_paste_work_with_a_style_chosen() {
+    let mut d = doc();
+    let a = add_style(&mut d, json!({"name": "A"}));
+    let ids = rectangle(&mut d);
+    run(&mut d, json!({"type": "set_style", "style": a})).unwrap();
+    let text = d.clip(&ids).unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "paste", "clip": text, "at": [5, 0, 0]}),
+    )
+    .unwrap();
+    assert!(!out["changes"]["created"].as_array().unwrap().is_empty());
+    assert_eq!(chosen(&d), json!(a));
+}
+
+#[test]
+fn library_items_save_and_insert_with_a_style_chosen() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-styles-lib-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut d = doc();
+    let a = add_style(&mut d, json!({"name": "A"}));
+    let ids = rectangle(&mut d);
+    let group = run(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Part"}),
+    )
+    .unwrap()["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i.as_str().unwrap().starts_with('i'))
+        .unwrap()
+        .clone();
+    let mat = run(
+        &mut d,
+        json!({"type": "add_material", "name": "Red", "color": [255, 0, 0]}),
+    )
+    .unwrap()["changes"]["materials"][0]
+        .clone();
+    run(&mut d, json!({"type": "set_style", "style": a})).unwrap();
+    let component = dir.join("c.skr");
+    let material = dir.join("m.skr");
+    let model = dir.join("model.skr");
+    for (path, params) in [
+        (&component, json!({"kind": "component", "item": group})),
+        (&material, json!({"kind": "material", "item": mat})),
+        (&model, json!({"kind": "model"})),
+    ] {
+        let mut c = json!({"type": "save_to_library", "path": path.to_str().unwrap()});
+        c.as_object_mut()
+            .unwrap()
+            .extend(params.as_object().unwrap().clone());
+        run(&mut d, c).unwrap();
+    }
+    // Items made of part of the model carry no style, so they are written as before.
+    for path in [&component, &material] {
+        let doc = stored(path);
+        assert!(doc["camera"].get("style").is_none(), "{path:?}");
+        assert!(doc["schema_version"].as_u64().unwrap() < 18, "{path:?}");
+        let mut other = self::doc();
+        run(
+            &mut other,
+            json!({"type": "insert_library_item", "path": path.to_str().unwrap()}),
+        )
+        .unwrap();
+    }
+    // The whole model keeps its styles and the choice.
+    assert_eq!(stored(&model)["camera"]["style"], json!(a));
+    let mut other = self::doc();
+    run(
+        &mut other,
+        json!({"type": "open", "path": model.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(chosen(&other), json!(a));
+    run(
+        &mut doc(),
+        json!({"type": "insert_library_item", "path": model.to_str().unwrap()}),
+    )
+    .unwrap();
 }

@@ -246,10 +246,7 @@ fn a_page_cannot_choose_a_missing_style() {
         view: Some(view(Some(StyleId(77)))),
         tags: None,
     };
-    assert!(matches!(
-        s.add_page(page),
-        Err(KernelError::Page(_) | KernelError::StyleNotFound)
-    ));
+    assert_eq!(s.add_page(page), Err(KernelError::StyleNotFound));
 }
 
 #[test]
