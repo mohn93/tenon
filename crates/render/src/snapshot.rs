@@ -97,6 +97,12 @@ impl Snapshotter {
         self.renderer.sun_maps_drawn()
     }
 
+    /// The bytes the prepared scene's edges hold for edge effects (see
+    /// `Renderer::edge_extra_bytes`).
+    pub fn edge_extra_bytes(&self) -> u64 {
+        self.renderer.edge_extra_bytes()
+    }
+
     /// Shows section planes and cuts as `display` says in the captures from now on.
     pub fn set_section_display(&mut self, display: SectionDisplay) {
         self.renderer.set_section_display(display);

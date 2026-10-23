@@ -479,8 +479,7 @@ struct Mesh {
     count: u32,
     flags: Option<wgpu::Buffer>,
     hover: Option<wgpu::Buffer>,
-    /// For model edges, what the edge effects need per vertex (zero: every edge is drawn as it
-    /// is).
+    /// For model edges, what the edge effects need per vertex; None when no effect is on.
     extras: Option<wgpu::Buffer>,
 }
 
@@ -589,6 +588,9 @@ pub struct Renderer {
     edge_pipeline: wgpu::RenderPipeline,
     /// Selected and hovered edges again, across and up, when the style widens them.
     wide_edge_pipeline: wgpu::RenderPipeline,
+    /// The same two for edges that carry data for the edge effects (see `scene::EdgeExtra`).
+    edge_fx_pipeline: wgpu::RenderPipeline,
+    wide_edge_fx_pipeline: wgpu::RenderPipeline,
     /// Profiles again, across and up, as wide as the style says.
     profile_edge_pipeline: wgpu::RenderPipeline,
     /// The marks at the ends of edges, where the style has endpoints.
@@ -866,6 +868,11 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &EDGE_EXTRA_ATTRIBS,
         };
+        let plain_lines = [
+            Some(line_layout.clone()),
+            Some(flag_layout.clone()),
+            Some(hover_layout(&EDGE_HOVER_ATTRIBS)),
+        ];
         let flagged_lines = [
             Some(line_layout),
             Some(flag_layout),
@@ -1011,7 +1018,7 @@ impl Renderer {
             "edges",
             "vs_edge",
             "fs_line",
-            &flagged_lines,
+            &plain_lines,
             lines,
             DepthUse {
                 write: true,
@@ -1024,7 +1031,7 @@ impl Renderer {
             "wide edges",
             "vs_edge_wide",
             "fs_line",
-            &flagged_lines,
+            &plain_lines,
             lines,
             DepthUse {
                 write: true,
@@ -1038,6 +1045,24 @@ impl Renderer {
             write: true,
             compare: wgpu::CompareFunction::GreaterEqual,
         };
+        let edge_fx_pipeline = pipeline(
+            "edges with effects",
+            "vs_edge_fx",
+            "fs_line",
+            &flagged_lines,
+            lines,
+            edge_depth,
+            None,
+        );
+        let wide_edge_fx_pipeline = pipeline(
+            "wide edges with effects",
+            "vs_edge_wide_fx",
+            "fs_line",
+            &flagged_lines,
+            lines,
+            edge_depth,
+            None,
+        );
         let profile_edge_pipeline = pipeline(
             "profile edges",
             "vs_edge_profile_wide",
@@ -1270,6 +1295,8 @@ impl Renderer {
             glass_pipeline,
             edge_pipeline,
             wide_edge_pipeline,
+            edge_fx_pipeline,
+            wide_edge_fx_pipeline,
             profile_edge_pipeline,
             endpoint_pipeline,
             canvas_pipeline,
@@ -1798,6 +1825,15 @@ impl Renderer {
         recolored
     }
 
+    /// The bytes held for the edge effects' per-vertex data: 0 when no edge effect is on, which
+    /// draws edges from the plain buffers alone.
+    pub fn edge_extra_bytes(&self) -> u64 {
+        self.edges
+            .as_ref()
+            .and_then(|m| m.extras.as_ref())
+            .map_or(0, |b| b.size())
+    }
+
     /// Sets what the chosen style asks of edges in `lighting` (profiles, sketchy edges,
     /// endpoints, hidden edges; sizes in logical pixels, `scale` physical ones to each).
     /// Returns how many instances to draw of the profile copies and of the endpoint marks, 0
@@ -2048,22 +2084,31 @@ impl Renderer {
                     }
                     (faces, _) => draw(&mut pass, &self.face_pipeline, faces.as_ref()),
                 }
-                draw(&mut pass, &self.edge_pipeline, self.edges.as_ref());
+                // Edges with effects come with their data buffer; the others draw as ever.
+                let with_effects = self.edges.as_ref().is_some_and(|m| m.extras.is_some());
+                let (edge_pipeline, wide_pipeline) = if with_effects {
+                    (&self.edge_fx_pipeline, &self.wide_edge_fx_pipeline)
+                } else {
+                    (&self.edge_pipeline, &self.wide_edge_pipeline)
+                };
+                draw(&mut pass, edge_pipeline, self.edges.as_ref());
                 let edges_hovered = !self.hover_ranges.edges.is_empty();
                 if self.style.wide_selected_edges
                     && (self.edges_selected || edges_hovered)
                     && let Some(edges) = &self.edges
                 {
-                    bind(&mut pass, &self.wide_edge_pipeline, edges);
+                    bind(&mut pass, wide_pipeline, edges);
                     pass.draw(0..edges.count, 0..wide_copies);
                 }
-                if profile_copies > 0
+                if with_effects
+                    && profile_copies > 0
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, &self.profile_edge_pipeline, edges);
                     pass.draw(0..edges.count, 0..profile_copies);
                 }
-                if endpoint_copies > 0
+                if with_effects
+                    && endpoint_copies > 0
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, &self.endpoint_pipeline, edges);
@@ -2243,24 +2288,19 @@ fn flagged_mesh<T: bytemuck::Pod>(
     Some(mesh)
 }
 
-/// `flagged_mesh` of model edges, with a fourth buffer holding `extras` (or zeros, which draw
-/// every edge as it is, when there are none).
+/// `flagged_mesh` of model edges, with a fourth buffer holding `extras` when there are any (with
+/// none, no edge effect is on and nothing more is held).
 fn edge_mesh(device: &wgpu::Device, vertices: &[LineVertex], extras: &[EdgeExtra]) -> Option<Mesh> {
     let mut mesh = flagged_mesh(device, "edges", vertices)?;
-    mesh.extras = Some(if extras.is_empty() {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge extras"),
-            size: (vertices.len() * std::mem::size_of::<EdgeExtra>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: false,
-        })
-    } else {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("edge extras"),
-            contents: bytemuck::cast_slice(extras),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    });
+    if !extras.is_empty() {
+        mesh.extras = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("edge extras"),
+                contents: bytemuck::cast_slice(extras),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        );
+    }
     Some(mesh)
 }
 

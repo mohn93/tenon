@@ -161,36 +161,45 @@ struct EdgeVertex {
     @location(3) hovered: f32,
     // The edge's other end.
     @location(4) other: vec3<f32>,
-    // The normals of the edge's first two faces (w 1), w 0 where it has none.
-    @location(5) normal_a: vec4<f32>,
-    @location(6) normal_b: vec4<f32>,
+    // The directions from the edge into its first two faces (w 1), w 0 where it has none.
+    @location(5) side_a: vec4<f32>,
+    @location(6) side_b: vec4<f32>,
     // x: 0 for an edge drawn as it is, 1 for an ordinary edge, 2 for a soft one; y: its jitter;
     // z: the extension of this end; w: the extension of the other end.
     @location(7) sketch: vec4<f32>,
 };
 
-// Whether the edge is a silhouette: its faces are not both toward the eye or both away from it
-// (or it has fewer than two faces). The same wherever along the edge it is asked, so the edge
-// is a profile in whole or not at all.
+// Whether the edge is a silhouette: seen from the eye, its two faces lie on the same side of
+// the edge (or it has fewer than two faces). This does not depend on which way the faces point.
+// The same wherever along the edge it is asked, so the edge is a profile in whole or not at all.
 fn edge_is_profile(v: EdgeVertex) -> bool {
     if lighting.edge_fx.x < 0.5 || v.sketch.x < 0.5 {
         return false;
     }
-    if v.normal_a.w < 0.5 || v.normal_b.w < 0.5 {
+    if v.side_a.w < 0.5 || v.side_b.w < 0.5 {
         return true;
     }
     let middle = 0.5 * (v.pos + v.other);
     let toward_eye = select(u.eye.xyz, u.eye.xyz - middle, u.eye.w > 0.5);
-    return (dot(v.normal_a.xyz, toward_eye) > 0.0) != (dot(v.normal_b.xyz, toward_eye) > 0.0);
+    // Which side of the edge each face lies on in the view: the sign of the triple product with
+    // the edge's direction.
+    let along = v.other - v.pos;
+    let side_a = dot(cross(toward_eye, v.side_a.xyz), along);
+    let side_b = dot(cross(toward_eye, v.side_b.xyz), along);
+    return side_a * side_b >= 0.0;
 }
 
 // Whether the edge is drawn at all: profiles always are, selected and hovered edges too, the rest
 // when the style shows edges; soft edges are only silhouettes.
 fn edge_drawn(v: EdgeVertex, profile: bool) -> bool {
-    if v.sketch.x < 0.5 || profile || v.selected > 0.5 || v.hovered > 0.5 {
+    if v.sketch.x < 0.5 {
         return true;
     }
-    return v.sketch.x < 1.5 && lighting.edge_fx.y > 0.5;
+    // A soft edge is a silhouette or nothing, selected (with the instance holding it) or not.
+    if v.sketch.x > 1.5 {
+        return profile;
+    }
+    return profile || v.selected > 0.5 || v.hovered > 0.5 || lighting.edge_fx.y > 0.5;
 }
 
 // The edge's two ends in clip space, this vertex's first, as the sketchy style displaces them:
@@ -244,17 +253,25 @@ fn edge_color(v: EdgeVertex) -> vec4<f32> {
 // they bound at this depth precision without showing through faces in front of them. A
 // selected edge (flag 1, from the second vertex buffer) is drawn in the style's selected-edge
 // color; the others fade toward the background as far as the lighting says. A hovered edge
-// (flag 1, from the third vertex buffer) is drawn in the hover color. The style's edge effects
-// (the fourth buffer) hide the edges it does not show and sketch the rest.
+// (flag 1, from the third vertex buffer) is drawn in the hover color.
 @vertex
-fn vs_edge(v: EdgeVertex, @builtin(vertex_index) vertex: u32) -> LineOut {
-    var out = line_vertex(v.pos, edge_color(v), 1.0005);
-    if !edge_drawn(v, edge_is_profile(v)) {
-        return hidden_line(out);
-    }
-    out.pos = sketched_ends(v, vertex, 1.0005)[0];
+fn vs_edge(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) selected: f32,
+    @location(3) hovered: f32,
+) -> LineOut {
+    let out = line_vertex(
+        pos,
+        select(
+            select(faded_line(color, lighting.lines.x), lighting.selected_edge, selected > 0.5),
+            lighting.hover_edge,
+            hovered > 0.5,
+        ),
+        1.0005,
+    );
     // Selected and hovered edges stay as they are in the fog.
-    if v.selected > 0.5 || v.hovered > 0.5 {
+    if selected > 0.5 || hovered > 0.5 {
         return no_fog(out);
     }
     return out;
@@ -264,13 +281,49 @@ fn vs_edge(v: EdgeVertex, @builtin(vertex_index) vertex: u32) -> LineOut {
 // `lighting.wide.x` pixels per pair, so they read as wide as the instances span; the other
 // edges are moved outside the view and clipped away.
 @vertex
-fn vs_edge_wide(v: EdgeVertex, @builtin(vertex_index) vertex: u32, @builtin(instance_index) k: u32) -> LineOut {
+fn vs_edge_wide(
+    @location(0) pos: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) selected: f32,
+    @location(3) hovered: f32,
+    @builtin(instance_index) k: u32,
+) -> LineOut {
+    var out = line_vertex(
+        pos,
+        select(lighting.selected_edge, lighting.hover_edge, hovered > 0.5),
+        1.0005,
+    );
+    if selected < 0.5 && hovered < 0.5 {
+        out.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+        return out;
+    }
+    return wide_copy(no_fog(out), k, lighting.wide.x);
+}
+
+// `vs_edge` with the style's edge effects (the fourth buffer): the edges it does not show are
+// hidden and the rest sketched.
+@vertex
+fn vs_edge_fx(v: EdgeVertex, @builtin(vertex_index) vertex: u32) -> LineOut {
+    var out = line_vertex(v.pos, edge_color(v), 1.0005);
+    if !edge_drawn(v, edge_is_profile(v)) {
+        return hidden_line(out);
+    }
+    out.pos = sketched_ends(v, vertex, 1.0005)[0];
+    if v.selected > 0.5 || v.hovered > 0.5 {
+        return no_fog(out);
+    }
+    return out;
+}
+
+// `vs_edge_wide` with the edge effects: only the selected and hovered edges that are drawn.
+@vertex
+fn vs_edge_wide_fx(v: EdgeVertex, @builtin(vertex_index) vertex: u32, @builtin(instance_index) k: u32) -> LineOut {
     var out = line_vertex(
         v.pos,
         select(lighting.selected_edge, lighting.hover_edge, v.hovered > 0.5),
         1.0005,
     );
-    if v.selected < 0.5 && v.hovered < 0.5 {
+    if (v.selected < 0.5 && v.hovered < 0.5) || !edge_drawn(v, edge_is_profile(v)) {
         return hidden_line(out);
     }
     out.pos = sketched_ends(v, vertex, 1.0005)[0];

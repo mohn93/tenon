@@ -323,10 +323,12 @@ pub fn scene_geometry(
 pub struct EdgeExtra {
     /// The edge's other end.
     pub other: [f32; 3],
-    /// The unit normals of the edge's first two shown faces in world space, with w 1; w 0
-    /// where the edge has no such face. Zero unless profiles are on.
-    pub normal_a: [f32; 4],
-    pub normal_b: [f32; 4],
+    /// The unit directions from the edge into its first two shown faces in world space (in the
+    /// face's plane, across the edge), with w 1; w 0 where the edge has no such face. Zero
+    /// unless profiles are on. Unlike a normal, a direction says nothing of which way the face
+    /// points, so a silhouette is found whichever way faces were drawn.
+    pub side_a: [f32; 4],
+    pub side_b: [f32; 4],
     /// x: 0 for an edge drawn as it is (the open instance's box), 1 for an ordinary edge, 2 for
     /// a soft one (drawn only as a profile); y: the edge's jitter, -1 to 1 (the same for both
     /// ends: the edge moves as one); z: how far this end's extension goes, 0 to 1; w: the
@@ -345,6 +347,37 @@ fn unit_hash(key: u64) -> f32 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^= z >> 31;
     (z >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// The direction, in the mesh's coordinates, from the edge `a`-`b` into `face`: in its plane,
+/// across the edge, to the side the face lies on. None when the face has no loop along the edge.
+fn side_into_face(model: &Model, face: &FacePart, a: VertexId, b: VertexId) -> Option<DVec3> {
+    let f = model.face(face.id)?;
+    let loops = std::iter::once((&f.outer, false)).chain(f.holes.iter().map(|h| (h, true)));
+    for (corners, hole) in loops {
+        let points: Vec<DVec3> = corners
+            .iter()
+            .map(|v| model.position(*v))
+            .collect::<Option<_>>()?;
+        // Turned about the face's normal one way or the other, whatever the loop's winding.
+        let turn: DVec3 = (0..points.len())
+            .map(|i| points[i].cross(points[(i + 1) % points.len()]))
+            .sum();
+        let wound = f.normal.dot(turn).signum();
+        for i in 0..corners.len() {
+            let (from, to) = (corners[i], corners[(i + 1) % corners.len()]);
+            if (from, to) != (a, b) && (from, to) != (b, a) {
+                continue;
+            }
+            let travel = points[(i + 1) % points.len()] - points[i];
+            // Inside an outer loop is on the left of a loop turning counter-clockwise about the
+            // normal; a hole's inside is outside it.
+            let left = f.normal.cross(travel);
+            let toward = if hole { -wound } else { wound };
+            return (left * toward).try_normalize();
+        }
+    }
+    None
 }
 
 /// What decides an edge's sketchy look: the mesh it lies in and its id, so the same on every
@@ -868,8 +901,6 @@ struct EdgePart {
 
 struct FacePart {
     id: FaceId,
-    /// The face's normal in the mesh's coordinates.
-    normal: DVec3,
     /// The face's triangle corners in `MeshParts::corners`, `normals` and `positions`.
     corners: Range<usize>,
     /// The looks of the sides painted on the face itself; unpainted sides take the look of
@@ -904,7 +935,6 @@ impl MeshParts {
             }
             faces.push(FacePart {
                 id,
-                normal: face.normal,
                 corners: start..corners.len(),
                 front: face
                     .front
@@ -1370,11 +1400,15 @@ impl Walk<'_> {
                 }));
             }
             if edge_colors.extras {
-                let mut normals = [[0.0; 4]; 2];
-                if edge_colors.profiles {
-                    for (slot, face) in normals.iter_mut().zip(shown_faces(k)) {
-                        let n = (normal_map * face.normal).normalize_or_zero().as_vec3();
-                        *slot = [n.x, n.y, n.z, 1.0];
+                let mut sides = [[0.0; 4]; 2];
+                if edge_colors.profiles
+                    && let Some(e) = model.edge(*eid)
+                {
+                    let faces = shown_faces(k)
+                        .filter_map(|f| side_into_face(model, f, e.v[0], e.v[1]))
+                        .map(|d| (t.matrix3 * d).normalize_or_zero().as_vec3());
+                    for (slot, d) in sides.iter_mut().zip(faces) {
+                        *slot = [d.x, d.y, d.z, 1.0];
                     }
                 }
                 let (jitter, [ext_a, ext_b]) = sketch_of(id, *eid);
@@ -1383,8 +1417,8 @@ impl Walk<'_> {
                     for (other, own, far) in [(b.pos, ext_a, ext_b), (a.pos, ext_b, ext_a)] {
                         base.edge_extras.push(EdgeExtra {
                             other,
-                            normal_a: normals[0],
-                            normal_b: normals[1],
+                            side_a: sides[0],
+                            side_b: sides[1],
                             meta: [if *soft { 2.0 } else { 1.0 }, jitter, own, far],
                         });
                     }
