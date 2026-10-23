@@ -52,6 +52,7 @@ mod text3d;
 
 pub use annotations::{dimension_label, dimension_value, note_label};
 pub use axes::world_drawing_axes;
+pub use camera::{DEFAULT_EYE_HEIGHT, MAX_EYE_HEIGHT, MIN_EYE_HEIGHT};
 pub use files::ExportedBytes;
 pub use import::ImportOptions;
 pub use sections::SectionDisplay;

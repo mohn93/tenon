@@ -40,13 +40,17 @@ fn toolbar_buttons() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
-/// The tools the rail holds: all but the three the window does not show yet (M14e registers
+/// The tools the rail holds: all but the five the window does not show yet (M14e registers
 /// them in its window task).
 fn rail_tools() -> impl Iterator<Item = ToolKind> {
     ToolKind::ALL.into_iter().filter(|k| {
         !matches!(
             k,
-            ToolKind::Freehand | ToolKind::RotatedRectangle | ToolKind::Protractor
+            ToolKind::Freehand
+                | ToolKind::RotatedRectangle
+                | ToolKind::Protractor
+                | ToolKind::LookAround
+                | ToolKind::PositionCamera
         )
     })
 }

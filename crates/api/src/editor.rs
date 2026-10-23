@@ -34,6 +34,8 @@ pub enum ToolName {
     Paint,
     SectionPlane,
     Axes,
+    LookAround,
+    PositionCamera,
 }
 
 impl From<ToolKind> for ToolName {
@@ -61,6 +63,8 @@ impl From<ToolKind> for ToolName {
             ToolKind::Paint => ToolName::Paint,
             ToolKind::SectionPlane => ToolName::SectionPlane,
             ToolKind::Axes => ToolName::Axes,
+            ToolKind::LookAround => ToolName::LookAround,
+            ToolKind::PositionCamera => ToolName::PositionCamera,
         }
     }
 }
@@ -90,6 +94,8 @@ impl From<ToolName> for ToolKind {
             ToolName::Paint => ToolKind::Paint,
             ToolName::SectionPlane => ToolKind::SectionPlane,
             ToolName::Axes => ToolKind::Axes,
+            ToolName::LookAround => ToolKind::LookAround,
+            ToolName::PositionCamera => ToolKind::PositionCamera,
         }
     }
 }

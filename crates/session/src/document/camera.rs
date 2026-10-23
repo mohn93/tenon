@@ -12,9 +12,9 @@ use crate::command::{Command, CommandError, ErrorKind};
 /// The most the view tilts up or down in `look_around`, in degrees.
 const LOOK_PITCH_LIMIT: f64 = 89.0;
 /// The eye height `position_camera` stands at by default: 5'6", in meters.
-const DEFAULT_EYE_HEIGHT: f64 = 1.676;
-const MIN_EYE_HEIGHT: f64 = 0.01;
-const MAX_EYE_HEIGHT: f64 = 10_000.0;
+pub const DEFAULT_EYE_HEIGHT: f64 = 1.676;
+pub const MIN_EYE_HEIGHT: f64 = 0.01;
+pub const MAX_EYE_HEIGHT: f64 = 10_000.0;
 
 impl Document {
     /// The camera a camera command would leave, after checking it: the eye and target stay

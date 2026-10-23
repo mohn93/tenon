@@ -18,10 +18,12 @@ use crate::follow_me::FollowMeTool;
 use crate::freehand::FreehandTool;
 use crate::inference::{Axis, Inference};
 use crate::line::LineTool;
+use crate::look_around::LookAroundTool;
 use crate::move_tool::MoveTool;
 use crate::offset::OffsetTool;
 use crate::paint::PaintTool;
 use crate::polygon::PolygonTool;
+use crate::position_camera::PositionCameraTool;
 use crate::protractor::ProtractorTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
@@ -106,6 +108,9 @@ pub struct ToolOutput {
     pub sampled: Option<Option<MaterialId>>,
     /// A note whose text the window should ask for (its note sheet).
     pub note: Option<NoteRequest>,
+    /// The tool to switch to now that this one is done (Position Camera hands over to Look
+    /// Around, as in SketchUp). Applied only once the commands ran.
+    pub next_tool: Option<ToolKind>,
 }
 
 /// A note whose text is asked for: one the Text tool is placing (its text then goes back to
@@ -228,6 +233,8 @@ pub struct Remembered {
     pub pull_distance: Option<f64>,
     /// The last Offset distance, which a double-click on a face repeats.
     pub offset_distance: Option<f64>,
+    /// The eye height Position Camera stands at (None: the default, 5'6").
+    pub eye_height: Option<f64>,
 }
 
 impl Default for Remembered {
@@ -239,6 +246,7 @@ impl Default for Remembered {
             arc_segments: DEFAULT_ARC_SEGMENTS,
             pull_distance: None,
             offset_distance: None,
+            eye_height: None,
         }
     }
 }
@@ -267,11 +275,13 @@ pub enum ToolKind {
     Paint,
     SectionPlane,
     Axes,
+    LookAround,
+    PositionCamera,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 22] = [
+    pub const ALL: [ToolKind; 24] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -294,6 +304,8 @@ impl ToolKind {
         ToolKind::Paint,
         ToolKind::SectionPlane,
         ToolKind::Axes,
+        ToolKind::LookAround,
+        ToolKind::PositionCamera,
     ];
 
     /// The tool with default settings.
@@ -329,6 +341,8 @@ impl ToolKind {
             ToolKind::Paint => Box::new(PaintTool::new()),
             ToolKind::SectionPlane => Box::new(SectionPlaneTool::new()),
             ToolKind::Axes => Box::new(AxesTool::new()),
+            ToolKind::LookAround => Box::new(LookAroundTool::new()),
+            ToolKind::PositionCamera => Box::new(PositionCameraTool::with_eye_height(r.eye_height)),
         }
     }
 
@@ -357,6 +371,8 @@ impl ToolKind {
             ToolKind::Paint => "Paint",
             ToolKind::SectionPlane => "Section Plane",
             ToolKind::Axes => "Axes",
+            ToolKind::LookAround => "Look Around",
+            ToolKind::PositionCamera => "Position Camera",
         }
     }
 
@@ -386,6 +402,8 @@ impl ToolKind {
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',
             ToolKind::Axes => 'y',
+            ToolKind::LookAround => 'w',
+            ToolKind::PositionCamera => 'h',
         })
     }
 

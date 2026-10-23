@@ -2147,7 +2147,26 @@ impl Editor {
         let mut undone = false;
         let mut pasted = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
+        let next_tool = out.next_tool;
+        let to_world = self.doc.context_transform();
         for command in out.commands {
+            // The camera tools think in the open context's coordinates, the camera commands in
+            // the world's (the turn of a look stays about the world's vertical).
+            let command = match command {
+                Command::PositionCamera {
+                    point,
+                    eye_height,
+                    look_at,
+                } if to_world != DAffine3::IDENTITY => {
+                    let world = |p: [f64; 3]| to_world.transform_point3(DVec3::from(p)).to_array();
+                    Command::PositionCamera {
+                        point: world(point),
+                        eye_height,
+                        look_at: look_at.map(world),
+                    }
+                }
+                c => c,
+            };
             let is_undo = matches!(command, Command::Undo { .. });
             let is_copy = matches!(
                 command,
@@ -2208,6 +2227,9 @@ impl Editor {
         }
         self.preview = out.preview;
         self.solid = out.solid;
+        if let Some(kind) = next_tool {
+            self.select_tool(kind);
+        }
         pasted
     }
 
@@ -2390,7 +2412,18 @@ impl Editor {
         self.within = within;
         self.preview = out.preview;
         self.solid = out.solid;
-        changed
+        // A tool that turns the view as the cursor moves (Look Around's drag) asks for it in
+        // its move: only view commands are taken here, and the hover is worked out again
+        // for the new view.
+        let turns = out.commands.into_iter().filter(Command::is_camera);
+        let mut turned = false;
+        for command in turns {
+            turned |= self.run(command).is_some();
+        }
+        if turned {
+            self.invalidate_hover();
+        }
+        changed || turned
     }
 
     /// Where geometry placed by instance `i` of the open context lies: in a group or in a

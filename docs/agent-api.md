@@ -1219,11 +1219,12 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 
 - `tool` is `select`, `line`, `rectangle`, `rotated_rectangle`, `circle`, `polygon`, `arc`,
   `freehand`, `push_pull`, `move`, `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`,
-  `protractor`, `dimension`, `text`, `erase`, `paint`, `section_plane` or `axes`. The editor starts in the Select tool.
+  `protractor`, `dimension`, `text`, `erase`, `paint`, `section_plane`, `axes`, `look_around` or
+  `position_camera`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
-  Polygon, the center; Arc, the start, then the end; Freehand, the press point; Rotated Rectangle, the first corner, then the end of the first side; Protractor, the center, then the baseline click; Push/Pull, where the face was clicked; Move,
+  Polygon, the center; Arc, the start, then the end; Freehand, the press point; Rotated Rectangle, the first corner, then the end of the first side; Protractor, the center, then the baseline click; Position Camera, the press point; Look Around is always `idle`; Push/Pull, where the face was clicked; Move,
   the base point; Rotate, the center, then where the angle starts; Scale, the point that stays
   put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts; Axes, the origin, then the red point; Dimension, the ends clicked (or the clicked edge's ends), or a circle's center; Text, the point the note points at, then where its text goes (none for a note fixed to the view). The Select tool is `active` with no points while its button is held (a
   click or a box, both on screen); Erase, Paint and Follow Me are always `idle`.
@@ -1400,6 +1401,18 @@ Events, run in order:
   turning the way the guide did), until another click. A `ctrl` key switches guide creation off
   (the angle is reported in `message` instead) and on again. Clicking the center again as the
   baseline is refused with a message; `cancel` drops the measurement and the plane lock.
+- **Look Around** (key `w`): a `drag` turns the view about the eye, one `look_around` command per
+  pointer move: 0.0025 radian per pixel, as Fly Mode's look (dragging right turns right, down looks
+  down). `type` a length sets the eye height above the face straight below the eye (the highest
+  shown face, through groups and components), else above z = 0: one `position_camera` at that point
+  keeping the heading (level; the eye keeps its x and y). Lengths from 0.01 to 10,000 m; anything
+  else is refused with a message. No model change and no undo step.
+- **Position Camera** (key `h`): `click` a point to stand there (one `position_camera`, eye
+  height 1.676 m unless typed), or `drag` from A to B to stand at A looking toward B (`look_at`
+  B, its height ignored). `type` a length before the click sets the eye height, which the tool
+  keeps for the session (it is the tool's measurement). Once the camera is placed the active tool
+  becomes Look Around. A point inside an open group or component is turned into world coordinates
+  for the command. `cancel` drops the press. No model change and no undo step.
 - **Dimension** (no key): `click` a point, `click` a second one, `move` to where the dimension
   line goes and `click`, or `type` the line's distance from the ends (on the cursor's side) once
   the cursor has moved off their line; it makes one `add_dimension`, each end the vertex

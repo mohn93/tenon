@@ -182,7 +182,9 @@ pub fn cursor_icon(tool: ToolKind, pasting: bool, hovering: bool, navigating: bo
         | ToolKind::Dimension
         | ToolKind::Text
         | ToolKind::SectionPlane
+        | ToolKind::PositionCamera
         | ToolKind::Axes => CursorIcon::Crosshair,
+        ToolKind::LookAround => CursorIcon::Grab,
         ToolKind::Move => CursorIcon::Move,
         ToolKind::PushPull => CursorIcon::ResizeVertical,
         ToolKind::Paint | ToolKind::Erase if hovering => CursorIcon::PointingHand,

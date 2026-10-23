@@ -46,9 +46,9 @@ pub use command::{
     IntersectReport, IntersectScope, OrientOutcome, Origin, Outcome, SelectMode, TextureSource,
 };
 pub use document::{
-    Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES, SectionDisplay,
-    check_coordinates, dimension_label, dimension_value, note_label, unit_vector,
-    world_drawing_axes,
+    DEFAULT_EYE_HEIGHT, Document, ExportedBytes, ImportOptions, MAX_COORDINATE, MAX_COPIES,
+    MAX_EYE_HEIGHT, MIN_EYE_HEIGHT, SectionDisplay, check_coordinates, dimension_label,
+    dimension_value, note_label, unit_vector, world_drawing_axes,
 };
 pub use export::{ExportFormat, ExportReport};
 pub use import::{

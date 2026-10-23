@@ -2483,3 +2483,52 @@ fn the_protractor_places_guides_by_click_angle_and_slope() {
     assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
     assert_eq!(r["editor"]["message"], "Angle: 45°", "{r}");
 }
+
+#[test]
+fn position_camera_stands_by_click_or_drag_then_look_around_turns_the_view() {
+    let mut e = editor();
+    tool(&mut e, "position_camera");
+    let r = input(&mut e, json!([{"type": "type", "text": "1.5"}]));
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    let revision = e.doc().revision();
+    let r = input(
+        &mut e,
+        json!([{"type": "drag", "points": [[2, 3, 0], [2, 10, 0]]}]),
+    );
+    assert_eq!(ran(&r), ["position_camera"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["point"], [2.0, 3.0, 0.0]), "{c}");
+    assert!(near(&c["look_at"], [2.0, 10.0, 0.0]), "{c}");
+    assert_eq!(c["eye_height"], 1.5, "{c}");
+    assert_eq!(e.tool_kind(), tools::ToolKind::LookAround);
+    assert_eq!(e.doc().revision(), revision, "no model change");
+    let (eye, forward) = (e.doc().camera.eye, e.doc().camera.forward());
+    assert!((eye - DVec3::new(2.0, 3.0, 1.5)).length() < 1e-9, "{eye}");
+    assert!(forward.y > 0.99, "{forward}");
+
+    // Dragging to the right turns the view right, one command per move.
+    let r = input(
+        &mut e,
+        json!([{"type": "drag", "pixels": [[400, 300], [440, 300], [480, 300]]}]),
+    );
+    assert_eq!(ran(&r), ["look_around", "look_around"], "{r}");
+    let turned = e.doc().camera.forward();
+    assert!(
+        turned.x > 0.1 && (e.doc().camera.eye - eye).length() < 1e-9,
+        "{turned}"
+    );
+
+    // A typed height stands under the eye.
+    let r = input(&mut e, json!([{"type": "type", "text": "2"}]));
+    assert_eq!(ran(&r), ["position_camera"], "{r}");
+    assert!((e.doc().camera.eye - DVec3::new(2.0, 3.0, 2.0)).length() < 1e-9);
+    assert!(
+        (e.doc().camera.forward().x - turned.x).abs() < 1e-6,
+        "heading kept"
+    );
+
+    // The eye height typed is remembered when the tool is chosen again.
+    tool(&mut e, "position_camera");
+    let r = input(&mut e, json!([{"type": "move", "pixel": [400, 300]}]));
+    assert_eq!(r["editor"]["measurement"], "1.5 m", "{r}");
+}

@@ -59,6 +59,9 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Text => ph::TEXT_T,
         ToolKind::SectionPlane => ph::SQUARE_HALF,
         ToolKind::Axes => ph::CROSSHAIR_SIMPLE,
+        // Stand-ins until the window registers the camera tools (their own glyphs come then).
+        ToolKind::LookAround => ph::CROSSHAIR_SIMPLE,
+        ToolKind::PositionCamera => ph::CROSSHAIR_SIMPLE,
     }
 }
 
