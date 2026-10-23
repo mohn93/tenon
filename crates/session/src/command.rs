@@ -246,15 +246,24 @@ pub enum Command {
         #[serde(default)]
         fill: Option<bool>,
     },
-    /// Set the model's display units, which dimension and note labels are written in, as one
-    /// undo step; absent fields stay as they are. `precision` is the decimals kept (0 to 6),
-    /// or for `feet_inches` the finest fraction of an inch, 1/2^precision (6: 1/64). Saved
-    /// with the model.
+    /// Set the model's display units, which lengths and angles are written and typed in and
+    /// the tools snap to, as one undo step; absent fields stay as they are. `precision` is
+    /// the decimals kept (0 to 6), or for `feet_inches` the finest fraction of an inch,
+    /// 1/2^precision (6: 1/64). `length_snap` (meters, 0 = off, up to 1000) rounds lengths
+    /// taken from the cursor; `angle_precision` is the decimals of an angle (0 to 3);
+    /// `angle_snap` (degrees, 0 = free, up to 90) is the step angles from the cursor round
+    /// to. Saved with the model.
     SetUnits {
         #[serde(default)]
         length: Option<LengthUnit>,
         #[serde(default)]
         precision: Option<u8>,
+        #[serde(default)]
+        length_snap: Option<f64>,
+        #[serde(default)]
+        angle_precision: Option<u8>,
+        #[serde(default)]
+        angle_snap: Option<f64>,
     },
     /// Erase edges, faces, instances, guides, dimensions, notes and section planes as one undo
     /// step. An erased edge

@@ -330,7 +330,7 @@ fn the_axes_schema_stays_15_without_either() {
     let path = scratch("axes.skr");
     save(&mut d, &path);
     assert_eq!(stored(&path)["schema_version"], 15);
-    assert_eq!(session::file::SCHEMA_VERSION, 16);
+    assert_eq!(session::file::SHADOWS_SCHEMA_VERSION, 16);
 }
 
 #[test]

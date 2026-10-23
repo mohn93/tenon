@@ -33,6 +33,7 @@ use crate::camera::Projection;
 use crate::command::{CommandError, ErrorKind};
 use crate::import::{MAX_IMPORT_MATERIALS, MAX_IMPORT_POINTS};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, dimensions, texture_from_bytes};
+use crate::units::LengthUnit;
 use crate::{Document, MAX_COORDINATE};
 
 /// Meters per inch, SketchUp's internal unit.
@@ -68,6 +69,8 @@ const MAX_NAME: usize = 240;
 /// What reading a SketchUp file found besides the tree, for the import report.
 #[derive(Debug, Default)]
 pub(crate) struct SkpNotes {
+    /// The unit the file says the model is in, when the reader gives one.
+    pub unit: Option<skp::LengthUnit>,
     /// Faces in the file's root and the definitions it places.
     pub polygons: usize,
     /// Faces whose outer loop could not be read.
@@ -244,6 +247,19 @@ impl SkpNotes {
     }
 }
 
+/// The display length unit for a SketchUp model unit. The reader gives SketchUp's unit but
+/// not its length format, so inches map to `feet_inches` (architectural), the format most
+/// inch models use.
+pub(crate) fn display_length(unit: skp::LengthUnit) -> LengthUnit {
+    match unit {
+        skp::LengthUnit::Inches => LengthUnit::FeetInches,
+        skp::LengthUnit::Feet => LengthUnit::Feet,
+        skp::LengthUnit::Millimetres => LengthUnit::Millimeters,
+        skp::LengthUnit::Centimetres => LengthUnit::Centimeters,
+        skp::LengthUnit::Metres => LengthUnit::Meters,
+    }
+}
+
 /// Reads a SketchUp file's bytes into an import tree whose positions are meters times
 /// `scale`, adding the materials its faces and instances use and its layers (as tags) to
 /// `document`'s scene (listed in the notes, so a caller can take them out again: see
@@ -266,6 +282,7 @@ pub(crate) fn read_skp(
     let container = Container::open(&src).map_err(|e| file_error(e.to_string()))?;
     let (model, index, stats) = read_file(&src, &container)?;
     let mut notes = SkpNotes {
+        unit: index.unit,
         lost_entities: stats.as_ref().map_or(0, |s| saturate(s.lost_entities)),
         faces_short: stats
             .as_ref()

@@ -8,7 +8,7 @@ use glam::DVec2;
 use kernel::EntityId;
 use serde_json::{Value, json};
 use session::{
-    BatchCommand, Command, Document, ErrorKind, LengthUnit, Query, Units, format_length_in,
+    BatchCommand, Command, Document, ErrorKind, LengthUnit, Query, Units, format_length,
 };
 
 fn doc() -> Document {
@@ -126,7 +126,11 @@ fn vertex_at(d: &Document, p: [f64; 3]) -> String {
 }
 
 fn units(length: LengthUnit, precision: u8) -> Units {
-    Units { length, precision }
+    Units {
+        length,
+        precision,
+        ..Units::default()
+    }
 }
 
 #[test]
@@ -180,7 +184,7 @@ fn lengths_are_written_in_every_unit_and_precision() {
     ];
     for (meters, units, expected) in table {
         assert_eq!(
-            format_length_in(*meters, units),
+            format_length(*meters, units),
             *expected,
             "{meters} m in {units:?}"
         );
@@ -531,6 +535,9 @@ fn an_atomic_batch_that_fails_puts_the_units_back_and_one_that_works_is_one_step
         Command::SetUnits {
             length: Some(LengthUnit::Inches),
             precision: None,
+            length_snap: None,
+            angle_precision: None,
+            angle_snap: None,
         },
         serde_json::from_value(json!({"type": "erase", "ids": ["e999"]})).unwrap(),
     ];
@@ -540,6 +547,9 @@ fn an_atomic_batch_that_fails_puts_the_units_back_and_one_that_works_is_one_step
         Command::SetUnits {
             length: Some(LengthUnit::Inches),
             precision: Some(2),
+            length_snap: None,
+            angle_precision: None,
+            angle_snap: None,
         },
         serde_json::from_value(
             json!({"type": "add_note", "anchor": [0, 0, 0], "position": [1, 1, 1]}),
@@ -1147,7 +1157,7 @@ fn files_with_broken_annotations_are_refused_clearly() {
     // A newer schema is refused as before.
     let newer = scratch("newer.skr");
     std::fs::copy(&path, &newer).unwrap();
-    edit_file(&newer, |doc| doc["schema_version"] = json!(17));
+    edit_file(&newer, |doc| doc["schema_version"] = json!(18));
     let (_, message, _) = open(&newer);
     assert!(message.contains("newer"), "{message}");
 }
@@ -1436,4 +1446,168 @@ fn a_dimension_frozen_near_the_limit_still_saves_and_opens() {
     )
     .unwrap();
     assert_eq!(entity(&e, &r)["radius"], 1.0);
+}
+
+#[test]
+fn set_units_takes_the_snapping_and_angle_settings_in_one_undo_step() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "set_units", "length": "feet", "precision": 2, "length_snap": 0.0254,
+            "angle_precision": 2, "angle_snap": 5}),
+    )
+    .unwrap();
+    let want = Units {
+        length: LengthUnit::Feet,
+        precision: 2,
+        length_snap: 0.0254,
+        angle_precision: 2,
+        angle_snap: 5.0,
+    };
+    assert_eq!(d.units(), want);
+    assert_eq!(out["units"]["angle_snap"], 5.0);
+    assert_eq!(ask(&d, json!({"type": "units"}))["length"], "feet");
+    // Absent fields stay.
+    run(&mut d, json!({"type": "set_units", "angle_snap": 0})).unwrap();
+    assert_eq!(
+        d.units(),
+        Units {
+            angle_snap: 0.0,
+            ..want
+        }
+    );
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(d.units(), want);
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(d.units(), Units::default());
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(d.units(), want);
+}
+
+#[test]
+fn set_units_refuses_settings_out_of_range_and_changes_nothing() {
+    let mut d = doc();
+    for bad in [
+        json!({"length_snap": -0.1}),
+        json!({"length_snap": 1000.5}),
+        json!({"angle_precision": 4}),
+        json!({"angle_snap": 91}),
+        json!({"angle_snap": -1}),
+        json!({"precision": 3, "angle_snap": 120}),
+    ] {
+        let mut command = json!({"type": "set_units"});
+        command
+            .as_object_mut()
+            .unwrap()
+            .extend(bad.as_object().unwrap().clone());
+        let (kind, message, _) = run(&mut d, command).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput, "{bad}");
+        assert!(
+            message.contains("length_snap") || message.contains("angle"),
+            "{message}"
+        );
+    }
+    assert_eq!(d.units(), Units::default());
+}
+
+fn save_units(d: &mut Document, name: &str) -> PathBuf {
+    let path = scratch(name);
+    run(d, json!({"type": "save", "path": path.to_str().unwrap()})).unwrap();
+    path
+}
+
+#[test]
+fn schema_17_is_written_only_for_the_new_unit_settings() {
+    let mut d = doc();
+    rectangle(&mut d);
+    let plain = save_units(&mut d, "units-plain.skr");
+    assert_eq!(
+        stored(&plain)["schema_version"],
+        session::file::OPAQUE_SCHEMA_VERSION
+    );
+    assert!(stored(&plain).get("units").is_none());
+    // Non-default units an older build reads keep schema 12 and the old two fields.
+    run(
+        &mut d,
+        json!({"type": "set_units", "length": "inches", "precision": 2}),
+    )
+    .unwrap();
+    let old = save_units(&mut d, "units-old.skr");
+    assert_eq!(stored(&old)["schema_version"], 12);
+    assert_eq!(
+        stored(&old)["units"],
+        json!({"length": "inches", "precision": 2})
+    );
+    // Each new setting needs 17, and reads back.
+    for (set, expect) in [
+        (
+            json!({"length": "feet", "precision": 3}),
+            json!({"length": "feet", "precision": 3}),
+        ),
+        (
+            json!({"length": "meters", "length_snap": 0.05}),
+            json!({"length": "meters", "precision": 2, "length_snap": 0.05}),
+        ),
+        (
+            json!({"length_snap": 0, "angle_precision": 0}),
+            json!({"length": "meters", "precision": 2, "angle_precision": 0}),
+        ),
+        (
+            json!({"angle_precision": 1, "angle_snap": 0}),
+            json!({"length": "meters", "precision": 2, "angle_snap": 0.0}),
+        ),
+    ] {
+        let mut d = doc();
+        rectangle(&mut d);
+        let mut command = json!({"type": "set_units", "precision": 2});
+        command
+            .as_object_mut()
+            .unwrap()
+            .extend(set.as_object().unwrap().clone());
+        run(&mut d, command).unwrap();
+        let path = save_units(&mut d, "units-17.skr");
+        let file = stored(&path);
+        assert_eq!(file["schema_version"], 17, "{set}");
+        let mut expect = expect;
+        if expect.get("precision").is_none() {
+            expect["precision"] = json!(2);
+        }
+        assert_eq!(file["units"], expect, "{set}");
+        let mut e = doc();
+        run(
+            &mut e,
+            json!({"type": "open", "path": path.to_str().unwrap()}),
+        )
+        .unwrap();
+        assert_eq!(e.units(), d.units());
+    }
+}
+
+#[test]
+fn files_with_missing_new_unit_fields_open_with_the_defaults_and_bad_ones_are_refused() {
+    let mut d = doc();
+    rectangle(&mut d);
+    run(
+        &mut d,
+        json!({"type": "set_units", "length": "centimeters", "precision": 1}),
+    )
+    .unwrap();
+    let path = save_units(&mut d, "units-missing.skr");
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(e.units().angle_snap, 15.0);
+    assert_eq!(e.units().angle_precision, 1);
+    assert_eq!(e.units().length_snap, 0.0);
+    edit_file(&path, |v| v["units"]["angle_snap"] = json!(200.0));
+    let (kind, message, _) = run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::File);
+    assert!(message.contains("angle_snap"), "{message}");
 }

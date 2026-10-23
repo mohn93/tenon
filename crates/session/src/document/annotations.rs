@@ -9,7 +9,7 @@ use kernel::{
 use super::{Document, check_coordinates};
 use crate::command::{AnchorInput, CommandError, ErrorKind};
 use crate::query::{AnchorInfo, DimensionInfo, DimensionKind, NoteInfo, NoteKind};
-use crate::units::{LengthUnit, Units, check_precision, format_length_in};
+use crate::units::{LengthUnit, Units, format_length};
 
 impl Document {
     /// The model's display units, which dimension and note labels are written in.
@@ -26,17 +26,29 @@ impl Document {
         &mut self,
         length: Option<LengthUnit>,
         precision: Option<u8>,
+        length_snap: Option<f64>,
+        angle_precision: Option<u8>,
+        angle_snap: Option<f64>,
     ) -> Result<SceneChange, CommandError> {
-        if length.is_none() && precision.is_none() {
-            return Err(invalid("give length, precision or both"));
+        if length.is_none()
+            && precision.is_none()
+            && length_snap.is_none()
+            && angle_precision.is_none()
+            && angle_snap.is_none()
+        {
+            return Err(invalid(
+                "give length, precision, length_snap, angle_precision or angle_snap",
+            ));
         }
-        if let Some(p) = precision {
-            check_precision(p).map_err(|e| invalid(&e))?;
-        }
-        self.units = Units {
+        let units = Units {
             length: length.unwrap_or(self.units.length),
             precision: precision.unwrap_or(self.units.precision),
+            length_snap: length_snap.unwrap_or(self.units.length_snap),
+            angle_precision: angle_precision.unwrap_or(self.units.angle_precision),
+            angle_snap: angle_snap.unwrap_or(self.units.angle_snap),
         };
+        units.check().map_err(|e| invalid(&e))?;
+        self.units = units;
         // The units are the document's; `execute` records their change with the step.
         Ok(SceneChange::default())
     }
@@ -382,7 +394,7 @@ pub fn dimension_value(model: &Model, id: DimensionId) -> Option<f64> {
 /// A dimension's label in `units`: the length ("1.5 m"), or for a radial dimension "R 1.5 m"
 /// (radius) or "Ø 3 m" (diameter).
 pub fn dimension_label(model: &Model, id: DimensionId, units: &Units) -> Option<String> {
-    let value = format_length_in(dimension_value(model, id)?, units);
+    let value = format_length(dimension_value(model, id)?, units);
     Some(match model.dimension(id)? {
         Dimension::Linear { .. } => value,
         Dimension::Radial {
@@ -401,7 +413,7 @@ pub fn note_label(model: &Model, id: NoteId, units: &Units, to_world: DAffine3) 
         return Some(text.to_string());
     }
     let p = to_world.transform_point3(model.note_point(id)?);
-    let [x, y, z] = p.to_array().map(|c| format_length_in(c, units));
+    let [x, y, z] = p.to_array().map(|c| format_length(c, units));
     Some(format!("({x}, {y}, {z})"))
 }
 

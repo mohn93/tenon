@@ -4,7 +4,7 @@
 
 use glam::DVec3;
 use kernel::{EntityId, Note};
-use session::{Command, Units, format_length_in};
+use session::{Command, Units, format_length};
 use tools::{NoteRequest, ToolEvent};
 
 use super::Editor;
@@ -62,7 +62,7 @@ impl Editor {
     fn coordinates(&self, point: DVec3) -> String {
         let p = self.doc.context_transform().transform_point3(point);
         let units = self.doc.units();
-        let [x, y, z] = p.to_array().map(|c| format_length_in(c, &units));
+        let [x, y, z] = p.to_array().map(|c| format_length(c, &units));
         format!("({x}, {y}, {z})")
     }
 
@@ -101,6 +101,9 @@ impl Editor {
         self.run(Command::SetUnits {
             length: Some(units.length),
             precision: Some(units.precision),
+            length_snap: Some(units.length_snap),
+            angle_precision: Some(units.angle_precision),
+            angle_snap: Some(units.angle_snap),
         });
         self.doc.units() == units
     }
@@ -118,6 +121,7 @@ mod tests {
         let inches = Units {
             length: LengthUnit::Inches,
             precision: 2,
+            ..Units::default()
         };
         assert!(e.set_units(inches));
         assert!(!e.set_units(inches), "already so");

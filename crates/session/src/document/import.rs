@@ -16,8 +16,9 @@ use crate::import::{
     ImportAs, ImportFormat, ImportReport, MAX_CONTEXT_IMPORT_FACES, MAX_IMPORT_BYTES,
     MAX_IMPORT_MATERIALS, MAX_MTL_BYTES, ReadMesh, UpAxis, read_mtl, read_obj, read_stl,
 };
-use crate::skp::{SkpNotes, read_skp, remove_added, remove_materials};
+use crate::skp::{SkpNotes, display_length, read_skp, remove_added, remove_materials};
 use crate::sniff;
+use crate::units::Units;
 
 /// The name of an imported definition whose file name gives none.
 const IMPORT_NAME: &str = "Import";
@@ -205,6 +206,13 @@ impl Document {
     ) -> Result<SceneChange, CommandError> {
         let mesh = self.active();
         let (kind, name) = (wrapper_kind(place), import_name(Path::new(path)));
+        // A file imported into an empty model in the default units sets the display length
+        // unit to the file's; anywhere else the model's units stay.
+        let fresh = self.units == Units::default()
+            && self
+                .scene
+                .meshes()
+                .all(|(_, m)| m.edges().next().is_none() && m.instances().next().is_none());
         let b = self.build_skp(path, bytes, scale, |scene, tree| {
             scene
                 .import_tree(mesh, tree, kind, &name)
@@ -220,7 +228,13 @@ impl Document {
         report.definition = definition;
         let added = SceneChange::join(b.kept.into_iter().map(|(_, c)| c));
         let change = SceneChange::join([added, b.tags_and_scenes, b.change]);
-        self.place_import(mesh, instance, change, report, place, root_faces)
+        let unit = b.notes.unit;
+        let changed = self.place_import(mesh, instance, change, report, place, root_faces)?;
+        if let Some(unit) = unit.filter(|_| fresh) {
+            // `execute` records the units change with the step, so undo restores them.
+            self.units.length = display_length(unit);
+        }
+        Ok(changed)
     }
 
     /// Reads a SketchUp file's `bytes` (from `path`, named in messages) and builds its tree

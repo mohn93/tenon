@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use glam::{DAffine3, DVec3};
 use kernel::{DefinitionId, DefinitionKind, InstanceId, MeshId, Scene, TagId};
-use session::{Units, format_length_in};
+use session::{Units, format_length};
 
 /// One part: a top-level group or component instance.
 #[derive(Clone, Debug, PartialEq)]
@@ -120,7 +120,7 @@ fn extent(
 
 /// "1.2 m x 0.6 m x 2 m": width, depth and height in the document's units.
 pub fn size_text(size: [f64; 3], units: &Units) -> String {
-    size.map(|v| format_length_in(v, units)).join(" x ")
+    size.map(|v| format_length(v, units)).join(" x ")
 }
 
 /// A row of the parts list: a group, or every instance of one component together.

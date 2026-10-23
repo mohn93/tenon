@@ -2,7 +2,7 @@
 //! tap again to start over. Points snap as inference does, but within a finger's reach.
 
 use glam::DVec3;
-use session::{Units, format_length_in};
+use session::{Units, format_length};
 use tools::SnapKind;
 
 /// How far, in logical pixels, a tap may be from a vertex or edge and still snap to it: a
@@ -69,7 +69,7 @@ impl Measure {
         match (self.first, self.second) {
             (None, _) => "Tap the first point".into(),
             (Some(_), None) => "Tap the second point".into(),
-            (Some(_), Some(_)) => format_length_in(self.distance().expect("both points"), units),
+            (Some(_), Some(_)) => format_length(self.distance().expect("both points"), units),
         }
     }
 }
@@ -108,11 +108,13 @@ mod tests {
         let cm = Units {
             length: LengthUnit::Centimeters,
             precision: 1,
+            ..Units::default()
         };
         assert_eq!(m.text(&cm), "200 cm");
         let inches = Units {
             length: LengthUnit::Inches,
             precision: 2,
+            ..Units::default()
         };
         assert_eq!(m.text(&inches), "78.74\"");
     }

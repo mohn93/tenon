@@ -2412,3 +2412,67 @@ fn corpus_tutorial_scenes() {
         assert!(scene_list(&d).is_empty(), "{year}");
     }
 }
+
+/// The legacy cupboard with the model's unit rewritten (0 inches, 1 feet, 2 mm, 3 cm, 4 m).
+fn cupboard_in_unit(unit: u32) -> String {
+    let key: Vec<u8> = "LengthUnit"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let mut bytes = std::fs::read(fixture("legacy/cupboard_v2017.skp")).unwrap();
+    let at = bytes
+        .windows(key.len())
+        .position(|w| w == key.as_slice())
+        .expect("the legacy file names its length unit")
+        + key.len();
+    assert_eq!(bytes[at], 0x04);
+    bytes[at + 1..at + 5].copy_from_slice(&unit.to_le_bytes());
+    write(&format!("unit-{unit}.skp"), &bytes)
+}
+
+#[test]
+fn a_legacy_file_sets_the_display_unit_of_an_empty_model_and_undo_takes_it_back() {
+    use session::LengthUnit::*;
+    // SketchUp's unit maps to the display length; inches are taken as architectural.
+    for (unit, want) in [
+        (0, FeetInches),
+        (1, Feet),
+        (2, Millimeters),
+        (3, Centimeters),
+        (4, Meters),
+    ] {
+        let (d, _) = import(&cupboard_in_unit(unit));
+        assert_eq!(d.units().length, want, "unit {unit}");
+        assert_eq!(d.units().precision, session::Units::default().precision);
+    }
+    let path = cupboard_in_unit(0);
+    let (mut d, _) = import(&path);
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert_eq!(d.units(), session::Units::default());
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(d.units().length, FeetInches);
+
+    // A model that has geometry, or units already chosen, keeps its own.
+    let mut busy = doc();
+    run(
+        &mut busy,
+        json!({"type": "add_edge", "start": [0, 0, 0], "end": [1, 0, 0]}),
+    )
+    .unwrap();
+    run(&mut busy, json!({"type": "import", "path": path})).unwrap();
+    assert_eq!(busy.units(), session::Units::default());
+    let mut chosen = doc();
+    run(
+        &mut chosen,
+        json!({"type": "set_units", "length": "centimeters"}),
+    )
+    .unwrap();
+    run(&mut chosen, json!({"type": "import", "path": path})).unwrap();
+    assert_eq!(chosen.units().length, Centimeters);
+}
+
+#[test]
+fn a_file_without_a_unit_leaves_the_display_units_alone() {
+    let (d, _) = import(&fixture("cupboard.skp"));
+    assert_eq!(d.units(), session::Units::default());
+}

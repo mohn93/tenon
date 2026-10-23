@@ -69,4 +69,7 @@ pub use rotate::rotation;
 pub use schema::ModelPoint;
 pub use section_shape::{MAX_SECTION_OUTLINES, MIN_SECTION_SIDE, SECTION_SIDE_SCALE, SectionShape};
 pub use text3d::{SkippedCharacter, Text3dReport};
-pub use units::{LengthUnit, MAX_PRECISION, Units, format_length_in};
+pub use units::{
+    LengthUnit, MAX_ANGLE_PRECISION, MAX_ANGLE_SNAP, MAX_LENGTH_SNAP, MAX_PRECISION, Units,
+    format_angle, format_length, parse_angle, parse_length,
+};

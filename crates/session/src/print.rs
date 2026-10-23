@@ -9,7 +9,7 @@ use crate::command::{CommandError, ErrorKind};
 use crate::document::Document;
 use crate::drawing::{LabelAnchor, annotation_labels, extent_points};
 use crate::pdf::{PageBuilder, text_width_mm};
-use crate::units::{LengthUnit, Units, format_length_in};
+use crate::units::{LengthUnit, Units, format_length};
 
 /// Blank border of every sheet, in millimetres.
 pub const MARGIN_MM: f64 = 10.0;
@@ -476,7 +476,7 @@ fn exact(
                     length_mm: bar_mm,
                     height_mm: BAR_HEIGHT_MM,
                     zero_label: "0".to_string(),
-                    end_label: format_length_in(bar_m, &units),
+                    end_label: format_length(bar_m, &units),
                     scale_label: scale_label.clone(),
                 }),
                 footer: tiled.then(|| format!("Sheet {},{} of {rows} x {cols}", r + 1, c + 1)),

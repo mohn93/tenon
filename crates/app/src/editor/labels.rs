@@ -185,6 +185,9 @@ mod tests {
         e.execute(Command::SetUnits {
             length: Some(session::LengthUnit::Millimeters),
             precision: None,
+            length_snap: None,
+            angle_precision: None,
+            angle_snap: None,
         })
         .unwrap();
         assert_eq!(labels(&mut e)[0].text, "2000 mm");
@@ -313,6 +316,9 @@ mod tests {
         e.execute(Command::SetUnits {
             length: None,
             precision: Some(2),
+            length_snap: None,
+            angle_precision: None,
+            angle_snap: None,
         })
         .unwrap();
         assert!(matches!(click(&mut e)[..], [EntityId::Face(_)]));

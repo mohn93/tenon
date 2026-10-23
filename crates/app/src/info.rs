@@ -747,6 +747,9 @@ mod tests {
         d.execute(Command::SetUnits {
             length: Some(session::LengthUnit::Centimeters),
             precision: None,
+            length_snap: None,
+            angle_precision: None,
+            angle_snap: None,
         })
         .unwrap();
         assert_eq!(

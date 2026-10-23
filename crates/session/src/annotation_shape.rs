@@ -5,7 +5,7 @@ use glam::{DAffine3, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{Circle, Dimension, EntityId, Model, Note};
 
-use crate::units::{Units, format_length_in};
+use crate::units::{Units, format_length};
 
 /// An annotation placed in some coordinates (a mesh's own, or another by `transformed`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,7 +173,7 @@ impl AnnotationShape {
     /// group measures what is drawn, not its own coordinates. None for notes.
     pub fn dimension_label(&self, units: &Units) -> Option<String> {
         match *self {
-            AnnotationShape::Linear { a, b, .. } => Some(format_length_in(a.distance(b), units)),
+            AnnotationShape::Linear { a, b, .. } => Some(format_length(a.distance(b), units)),
             AnnotationShape::Radial {
                 circle, diameter, ..
             } => {
@@ -183,7 +183,7 @@ impl AnnotationShape {
                     circle.radius
                 };
                 let prefix = if diameter { "Ø" } else { "R" };
-                Some(format!("{prefix} {}", format_length_in(value, units)))
+                Some(format!("{prefix} {}", format_length(value, units)))
             }
             AnnotationShape::Leader { .. } | AnnotationShape::Screen { .. } => None,
         }

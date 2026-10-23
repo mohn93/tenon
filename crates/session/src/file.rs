@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::camera::{Camera, Lighting, Projection};
 use crate::document::{MAX_COORDINATE, SectionDisplay};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
-use crate::units::{Units, check_precision};
+use crate::units::Units;
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
@@ -31,10 +31,15 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
 /// and display units, version 13 section planes and the section display settings, and
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
-/// model axes, and version 16 the location and sun shadow settings; older files still open (untagged before version 10, without scenes before version 11, without
-/// annotations and in the default units before version 12, without section planes and with
-/// the default section display before version 13).
-pub const SCHEMA_VERSION: u32 = 16;
+/// model axes, version 16 the location and sun shadow settings, and version 17 decimal feet
+/// and the length and angle snapping settings of the display units; older files still open
+/// (untagged before version 10, without scenes before version 11, without annotations and in
+/// the default units before version 12, without section planes and with the default section
+/// display before version 13).
+pub const SCHEMA_VERSION: u32 = 17;
+/// The version written when the location or the shadow settings are not the defaults but the
+/// display units are readable by version 16.
+pub const SHADOWS_SCHEMA_VERSION: u32 = 16;
 /// The version written when the model axes are not the world axes but the location and the
 /// shadow settings are the defaults.
 pub const AXES_SCHEMA_VERSION: u32 = 15;
@@ -288,8 +293,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if shaded {
+        schema_version: if units.needs_snap_schema() {
             SCHEMA_VERSION
+        } else if shaded {
+            SHADOWS_SCHEMA_VERSION
         } else if model.axes.is_some() {
             AXES_SCHEMA_VERSION
         } else if hidden {
@@ -496,7 +503,9 @@ fn read_archive<R: Read + Seek>(
         .check()
         .map_err(|e| format!("the camera view: {e}"))?;
     let units = stored.units.unwrap_or_default();
-    check_precision(units.precision).map_err(|e| format!("the display units: {e}"))?;
+    units
+        .check()
+        .map_err(|e| format!("the display units: {e}"))?;
     // Refuse before decoding anything: each decode can take far more memory than its entry.
     if stored
         .model

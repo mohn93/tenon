@@ -117,7 +117,8 @@ fn the_model_tab_sets_the_models_units() {
         click(&mut h, "Feet and inches"),
         [UiAction::SetUnits(Units {
             length: LengthUnit::FeetInches,
-            precision: 3
+            precision: 3,
+            ..Units::default()
         })]
     );
     // Feet and inches name their precision as a fraction of an inch.
@@ -126,6 +127,7 @@ fn the_model_tab_sets_the_models_units() {
             units: Units {
                 length: LengthUnit::FeetInches,
                 precision: 3,
+                ..Units::default()
             },
             ..settings_fixture().settings.unwrap()
         }),
@@ -138,7 +140,8 @@ fn the_model_tab_sets_the_models_units() {
         click(&mut h, "1/64\""),
         [UiAction::SetUnits(Units {
             length: LengthUnit::FeetInches,
-            precision: 6
+            precision: 6,
+            ..Units::default()
         })]
     );
 }

@@ -306,16 +306,19 @@ fn sizes_are_written_in_the_documents_units() {
     let cm = Units {
         length: LengthUnit::Centimeters,
         precision: 1,
+        ..Units::default()
     };
     assert_eq!(size_text(size, &cm), "120 cm x 60 cm x 200 cm");
     let mm = Units {
         length: LengthUnit::Millimeters,
         precision: 0,
+        ..Units::default()
     };
     assert_eq!(size_text(size, &mm), "1200 mm x 600 mm x 2000 mm");
     let inches = Units {
         length: LengthUnit::Inches,
         precision: 2,
+        ..Units::default()
     };
     assert_eq!(
         size_text([0.0254, 0.0508, 0.0762], &inches),
@@ -324,6 +327,7 @@ fn sizes_are_written_in_the_documents_units() {
     let ft = Units {
         length: LengthUnit::FeetInches,
         precision: 4,
+        ..Units::default()
     };
     assert_eq!(size_text([0.3048, 0.0254, 0.6096], &ft), "1' x 1\" x 2'");
 }
