@@ -633,6 +633,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddCircle { .. }
         | Command::AddPolygon { .. }
         | Command::AddArc { .. }
+        | Command::AddCurve { .. }
+        | Command::AddRotatedRectangle { .. }
         | Command::AddGuideLine { .. }
         | Command::AddGuidePoint { .. }
         | Command::DeleteGuides {}
@@ -674,6 +676,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::ZoomExtents {}
         | Command::StandardView { .. }
         | Command::SetProjection { .. }
+        | Command::LookAround { .. }
+        | Command::PositionCamera { .. }
         | Command::SetLighting { .. }
         | Command::SetColorByTag { .. }
         | Command::SetXRay { .. }

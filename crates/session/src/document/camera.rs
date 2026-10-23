@@ -1,11 +1,18 @@
 //! Camera commands: placing, orbiting, panning, zooming, zoom extents, standard views and
-//! projection. None is an undo step or changes the revision.
+//! projection, looking around and positioning the camera. None is an undo step or changes the revision.
 
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 use kernel::MeshId;
 
 use super::{Document, check_coordinates, unit_vector};
 use crate::camera::{Camera, Projection, UP, VERTICAL_TOLERANCE, ZOOM_STEP};
+
+/// The most the view tilts up or down in `look_around`, in degrees.
+const LOOK_PITCH_LIMIT: f64 = 89.0;
+/// The eye height `position_camera` stands at by default: 5'6", in meters.
+const DEFAULT_EYE_HEIGHT: f64 = 1.676;
+const MIN_EYE_HEIGHT: f64 = 0.01;
+const MAX_EYE_HEIGHT: f64 = 10_000.0;
 use crate::command::{Command, CommandError, ErrorKind};
 
 impl Document {
@@ -63,6 +70,48 @@ impl Document {
                 camera.look_from_in(view, self.drawing_axes_in_world().matrix3)
             }
             Command::SetProjection { projection } => camera.projection = projection,
+            Command::LookAround { yaw, pitch } => {
+                finite(&[yaw, pitch], "yaw and pitch")?;
+                let limit = LOOK_PITCH_LIMIT.to_radians();
+                let pitch = (camera.forward().z.clamp(-1.0, 1.0).asin() + pitch.to_radians())
+                    .clamp(-limit, limit);
+                let heading = DQuat::from_axis_angle(UP, yaw.to_radians()) * heading(&camera);
+                let (eye, distance) = (camera.eye, camera.distance());
+                set_view(&mut camera, eye, heading, pitch, distance);
+            }
+            Command::PositionCamera {
+                point,
+                eye_height,
+                look_at,
+            } => {
+                check_coordinates(&[point])?;
+                let height = eye_height.unwrap_or(DEFAULT_EYE_HEIGHT);
+                if !(MIN_EYE_HEIGHT..=MAX_EYE_HEIGHT).contains(&height) {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        format!(
+                            "eye_height must be between {MIN_EYE_HEIGHT} and {MAX_EYE_HEIGHT} m"
+                        ),
+                    ));
+                }
+                let eye = DVec3::from(point) + UP * height;
+                let (heading, distance) = match look_at {
+                    Some(p) => {
+                        check_coordinates(&[p])?;
+                        let flat = DVec3::new(p[0] - eye.x, p[1] - eye.y, 0.0);
+                        let Some(h) = flat.try_normalize().filter(|_| flat.length() >= 1e-6) else {
+                            return Err(CommandError::new(
+                                ErrorKind::InvalidInput,
+                                "look_at must lie away from the point, not straight above or below it",
+                            ));
+                        };
+                        (h, flat.length().max(0.01))
+                    }
+                    None => (heading(&camera), camera.distance()),
+                };
+                camera.projection = Projection::Perspective;
+                set_view(&mut camera, eye, heading, 0.0, distance);
+            }
             _ => unreachable!("not a camera command"),
         }
         check_coordinates(&[camera.eye.to_array(), camera.target.to_array()]).map_err(|_| {
@@ -122,6 +171,28 @@ impl Document {
         }
         Ok(camera)
     }
+}
+
+/// The horizontal direction the view faces: its forward direction without the height, or in a
+/// vertical view the screen's up (what a look toward the horizon from there would face).
+fn heading(camera: &Camera) -> DVec3 {
+    let forward = camera.forward();
+    let flat = DVec3::new(forward.x, forward.y, 0.0);
+    if let Some(h) = flat.try_normalize().filter(|_| flat.length() > 1e-6) {
+        return h;
+    }
+    let up = DVec3::new(camera.up.x, camera.up.y, 0.0);
+    let up = up.try_normalize().unwrap_or(DVec3::Y);
+    if forward.z < 0.0 { up } else { -up }
+}
+
+/// Points `camera` from `eye` along `heading` (horizontal, unit) tilted `pitch` radians up,
+/// with its target `distance` ahead and `UP` up.
+fn set_view(camera: &mut Camera, eye: DVec3, heading: DVec3, pitch: f64, distance: f64) {
+    let forward = heading * pitch.cos() + UP * pitch.sin();
+    camera.eye = eye;
+    camera.target = eye + forward * distance;
+    camera.up = UP;
 }
 
 fn finite(values: &[f64], what: &str) -> Result<(), CommandError> {

@@ -42,6 +42,7 @@ mod shadows;
 mod share;
 mod skp;
 mod skp_export;
+mod small_tools;
 mod soften;
 mod sun;
 mod tags;

@@ -103,6 +103,31 @@ pub enum Command {
         #[serde(default)]
         segments: Option<u32>,
     },
+    /// Draw the polyline through `points` (2 to 10,000; consecutive duplicates are dropped), as
+    /// one undo step, with the rules of `add_edge` (faces form when it closes a loop). With
+    /// `closed` the last point joins the first (3 distinct points at least). With `curve`
+    /// (default true) its edges form one curve, as an arc's do (a straight polyline gets none);
+    /// without it they are plain edges.
+    AddCurve {
+        #[schemars(with = "Vec<ModelPoint>")]
+        points: Vec<[f64; 3]>,
+        #[serde(default)]
+        closed: bool,
+        #[serde(default)]
+        curve: Option<bool>,
+    },
+    /// Draw a rectangle at any angle, as one undo step: its first side runs from `corner` to
+    /// `edge_end`, its width is the distance from `width_point` to the line of that side, and
+    /// it lies in the plane through the side and `width_point`, on the side of `width_point`.
+    /// A zero side, or a `width_point` on the side's line, is refused.
+    AddRotatedRectangle {
+        #[schemars(with = "ModelPoint")]
+        corner: [f64; 3],
+        #[schemars(with = "ModelPoint")]
+        edge_end: [f64; 3],
+        #[schemars(with = "ModelPoint")]
+        width_point: [f64; 3],
+    },
     /// Move a face along its normal by `distance` meters (negative: against the normal),
     /// extruding new sides or stretching the faces around it.
     PushPull { face: EntityId, distance: f64 },
@@ -817,6 +842,27 @@ pub enum Command {
     /// Switch between perspective and parallel projection. The view height at the target
     /// stays the same.
     SetProjection { projection: Projection },
+    /// Turn the view about the eye: `yaw` degrees about the vertical (counter-clockwise seen
+    /// from above), then `pitch` degrees raising the view (negative lowers it). The view's
+    /// pitch stays within -89 and 89 degrees.
+    LookAround {
+        #[serde(default)]
+        yaw: f64,
+        #[serde(default)]
+        pitch: f64,
+    },
+    /// Stand at `point` with the eye `eye_height` meters above it (0.01 to 10,000, default
+    /// 1.676, 5'6"), looking level toward `look_at` (its height is ignored) or, without it,
+    /// along the current horizontal heading. Switches to perspective.
+    PositionCamera {
+        #[schemars(with = "ModelPoint")]
+        point: [f64; 3],
+        #[serde(default)]
+        eye_height: Option<f64>,
+        #[serde(default)]
+        #[schemars(with = "Option<ModelPoint>")]
+        look_at: Option<[f64; 3]>,
+    },
     /// Light the view by `day` (a headlight and ambient light, glowing faces adding theirs) or
     /// by `night` (both dimmed, a dark background: glowing faces light the scene). A view
     /// setting like the camera's: saved with the model, but not an undo step and not a change
@@ -910,6 +956,8 @@ impl Command {
                 | Command::ZoomExtents {}
                 | Command::StandardView { .. }
                 | Command::SetProjection { .. }
+                | Command::LookAround { .. }
+                | Command::PositionCamera { .. }
                 | Command::SetLighting { .. }
                 | Command::SetColorByTag { .. }
                 | Command::SetXRay { .. }

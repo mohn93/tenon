@@ -59,6 +59,9 @@ pub use sections::SectionDisplay;
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
 
+/// The most points `add_curve` takes.
+pub const MAX_CURVE_POINTS: usize = 10_000;
+
 /// Most copies one `copy` or `rotate` command may make.
 pub const MAX_COPIES: u32 = 1000;
 
@@ -513,7 +516,9 @@ impl Document {
             | Command::Zoom { .. }
             | Command::ZoomExtents {}
             | Command::StandardView { .. }
-            | Command::SetProjection { .. } => {
+            | Command::SetProjection { .. }
+            | Command::LookAround { .. }
+            | Command::PositionCamera { .. } => {
                 self.camera = self.moved_camera(&command)?;
                 Ok(Outcome::default())
             }
@@ -679,6 +684,8 @@ impl Document {
             | Command::AddCircle { .. }
             | Command::AddPolygon { .. }
             | Command::AddArc { .. }
+            | Command::AddCurve { .. }
+            | Command::AddRotatedRectangle { .. }
             | Command::AddGuideLine { .. }
             | Command::AddGuidePoint { .. }
             | Command::DeleteGuides {}
@@ -796,6 +803,16 @@ impl Document {
                     self.add_arc_changes(center, start, angle, normal, *segments)
                 })
             }
+            Command::AddCurve {
+                points,
+                closed,
+                curve,
+            } => self.add_curve_changes(points, *closed, curve.unwrap_or(true)),
+            Command::AddRotatedRectangle {
+                corner,
+                edge_end,
+                width_point,
+            } => self.add_rotated_rectangle_changes(*corner, *edge_end, *width_point),
             Command::AddGuideLine { point, direction } => {
                 self.add_guide_line_changes(*point, *direction)
             }
@@ -1035,6 +1052,8 @@ impl Document {
             | Command::ZoomExtents {}
             | Command::StandardView { .. }
             | Command::SetProjection { .. }
+            | Command::LookAround { .. }
+            | Command::PositionCamera { .. }
             | Command::SetLighting { .. }
             | Command::SetColorByTag { .. }
             | Command::SetXRay { .. }
@@ -1301,6 +1320,79 @@ impl Document {
             DVec3::from(opposite),
             normal.map(DVec3::from),
         )?;
+        check_coordinates(&corners.map(|c| c.to_array()))?;
+        self.edit_mesh(|m| m.add_polygon(&corners))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    fn add_curve_changes(
+        &mut self,
+        points: &[[f64; 3]],
+        closed: bool,
+        curve: bool,
+    ) -> Result<SceneChange, CommandError> {
+        if points.len() > MAX_CURVE_POINTS {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("a curve takes at most {MAX_CURVE_POINTS} points"),
+            ));
+        }
+        check_coordinates(points)?;
+        let tol = kernel::geom::LENGTH_TOL;
+        let mut path: Vec<DVec3> = Vec::with_capacity(points.len());
+        for p in points.iter().copied().map(DVec3::from) {
+            if path.last().is_none_or(|q| q.distance(p) >= tol) {
+                path.push(p);
+            }
+        }
+        // The last point of a closed path may repeat the first.
+        if closed && path.len() > 1 && path[0].distance(path[path.len() - 1]) < tol {
+            path.pop();
+        }
+        let least = if closed { 3 } else { 2 };
+        if path.len() < least {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!("the polyline needs at least {least} distinct points"),
+            ));
+        }
+        let line = Polyline {
+            points: path,
+            closed,
+            curve: curve.then_some(false),
+        };
+        self.edit_mesh(|m| m.add_polylines(&[line]))
+            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    fn add_rotated_rectangle_changes(
+        &mut self,
+        corner: [f64; 3],
+        edge_end: [f64; 3],
+        width_point: [f64; 3],
+    ) -> Result<SceneChange, CommandError> {
+        check_coordinates(&[corner, edge_end, width_point])?;
+        let (a, b, w) = (
+            DVec3::from(corner),
+            DVec3::from(edge_end),
+            DVec3::from(width_point),
+        );
+        let tol = kernel::geom::LENGTH_TOL;
+        let side = b - a;
+        if side.length() < tol {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "the first side of a rectangle needs two distinct points",
+            ));
+        }
+        let across = (w - a).reject_from(side);
+        if across.length() < tol {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                "width_point must not lie on the line of the first side",
+            ));
+        }
+        let corners = [a, b, b + across, a + across];
         check_coordinates(&corners.map(|c| c.to_array()))?;
         self.edit_mesh(|m| m.add_polygon(&corners))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
