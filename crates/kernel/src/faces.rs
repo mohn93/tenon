@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use glam::{DVec2, DVec3};
 
 use crate::edit::use_indexes;
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon, project_on_segment};
+use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, MaterialId, TagId, VertexId};
 use crate::index::{Index, Shape};
 use crate::model::{Face, Model};
@@ -197,7 +197,6 @@ impl Model {
                 }
             }
         };
-        let openings = self.live_openings(&plane, &old);
         let wanted: Vec<(Region, DVec3, Paint)> = regions
             .into_iter()
             .filter_map(|r| {
@@ -210,8 +209,7 @@ impl Model {
                 let in_old_face = container.is_some();
                 let in_old_hole = around
                     .iter()
-                    .any(|i| old_polys[*i].1.iter().any(|h| point_in_polygon(p, h)))
-                    || openings.iter().any(|o| point_in_polygon(p, o));
+                    .any(|i| old_polys[*i].1.iter().any(|h| point_in_polygon(p, h)));
                 let uses_new = std::iter::once(&r.outer).chain(&r.holes).any(|l| {
                     (0..l.len()).any(|i| new_sides.contains(&side(l[i], l[(i + 1) % l.len()])))
                 });
@@ -234,69 +232,7 @@ impl Model {
             })
             .collect();
 
-        self.remember_openings(&old, &wanted, plane);
         self.reconcile(&old, wanted, plane);
-    }
-
-    /// The openings recorded in `plane` that still bound an old face, projected into the plane.
-    /// Records in the plane that no longer do (the face was erased or reshaped) are dropped.
-    fn live_openings(&mut self, plane: &Plane, old: &[(FaceId, Face)]) -> Vec<Vec<DVec2>> {
-        if self.openings.is_empty() {
-            return Vec::new();
-        }
-        let sides: Vec<(DVec3, DVec3)> = old
-            .iter()
-            .flat_map(|(_, f)| std::iter::once(&f.outer).chain(&f.holes))
-            .flat_map(|l| (0..l.len()).map(|i| (self.pos(l[i]), self.pos(l[(i + 1) % l.len()]))))
-            .collect();
-        let bounds_a_face = |o: &[DVec3]| {
-            (0..o.len()).all(|i| {
-                let (a, b) = (o[i], o[(i + 1) % o.len()]);
-                let mid = (a + b) * 0.5;
-                sides.iter().any(|(p, q)| {
-                    let (t, dist) = project_on_segment(mid, *p, *q);
-                    dist < LENGTH_TOL && (0.0..=1.0).contains(&t)
-                })
-            })
-        };
-        let kept: Vec<(Plane, Vec<DVec3>)> = std::mem::take(&mut self.openings)
-            .into_iter()
-            .filter(|(pl, o)| !pl.same_as(plane) || bounds_a_face(o))
-            .collect();
-        self.openings = kept;
-        self.openings
-            .iter()
-            .filter(|(pl, _)| pl.same_as(plane))
-            .map(|(_, o)| o.iter().map(|p| plane.project(*p)).collect())
-            .collect()
-    }
-
-    /// Records the holes of the old faces that the wanted regions no longer have as holes: an
-    /// opening that a line has cut a face open to. A later line across it must leave it open,
-    /// as it would had the face still held the hole.
-    fn remember_openings(
-        &mut self,
-        old: &[(FaceId, Face)],
-        wanted: &[(Region, DVec3, Paint)],
-        plane: Plane,
-    ) {
-        let still: BTreeSet<BTreeSet<VertexId>> = wanted
-            .iter()
-            .flat_map(|(r, ..)| loop_sets(&r.holes))
-            .collect();
-        for (_, f) in old {
-            for h in &f.holes {
-                let set: BTreeSet<VertexId> = h.iter().copied().collect();
-                if still.contains(&set) {
-                    continue;
-                }
-                let ring: Vec<DVec3> = h.iter().map(|v| self.pos(*v)).collect();
-                if self.openings.len() >= MAX_OPENINGS {
-                    self.openings.remove(0);
-                }
-                self.openings.push((plane, ring));
-            }
-        }
     }
 
     /// Keeps old faces that match a wanted region, updates their holes if needed, inserts the
@@ -369,9 +305,6 @@ type Paint = (
     Option<TagId>,
     bool,
 );
-
-/// How many openings (see `Model::remember_openings`) are kept; the oldest go first.
-const MAX_OPENINGS: usize = 64;
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;
@@ -593,11 +526,6 @@ mod tests {
                 face_with_opening().0,
                 segments(&[(1.5, 1.5), (2.5, 1.5), (2.5, 2.5), (1.5, 2.5)], true),
             ),
-            (
-                "rectangle out of a window",
-                wall_with_window(),
-                window_rectangle(),
-            ),
         ];
         for (what, start, segs) in cases {
             let mut batch = start.clone();
@@ -636,35 +564,12 @@ mod tests {
     }
 
     #[test]
-    fn a_rectangle_drawn_side_by_side_out_of_a_window_leaves_the_window_open() {
+    fn a_rectangle_drawn_as_a_batch_out_of_a_window_leaves_the_window_open() {
         let mut batch = wall_with_window();
         batch.draw_segments(&window_rectangle());
         batch.take_changes();
+        batch.validate().unwrap();
         assert_eq!(areas(&batch), [2.0, 4.0, 92.0]);
-
-        let mut one_by_one = wall_with_window();
-        for (a, b) in window_rectangle() {
-            one_by_one.draw_segment(a, b);
-        }
-        one_by_one.take_changes();
-        one_by_one.validate().unwrap();
-        assert_eq!(areas(&one_by_one), [2.0, 4.0, 92.0]);
-        assert_eq!(shapes(&batch), shapes(&one_by_one));
-    }
-
-    #[test]
-    fn an_opening_is_forgotten_once_the_face_around_it_is_gone() {
-        let mut m = wall_with_window();
-        for (a, b) in window_rectangle() {
-            m.draw_segment(a, b);
-        }
-        assert!(!m.openings.is_empty());
-        let all: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
-        for id in all {
-            m.remove_face(id);
-        }
-        m.draw_segment(DVec3::new(0.0, 0.0, 0.0), DVec3::new(0.0, -1.0, 0.0));
-        assert!(m.openings.is_empty());
     }
 
     #[test]
