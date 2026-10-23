@@ -382,7 +382,12 @@ their faces are the ones crossed: open one to cut it. Coplanar faces give the bo
 that lies inside the other; faces that only touch, and edges that already exist, add nothing.
 At most 200,000 face pairs (after a bounding box test) and 100,000 segments are handled at once,
 beyond that the command is `invalid_input` ("Too many faces cross to intersect at once") and
-changes nothing.
+changes nothing. A selected group or component is crossed with the rest of the model, never
+with its own faces or the parts nested inside it. More than 100,000 placed groups and components
+(`model` scope), or nesting past the import depth, is `invalid_input` ("Too many groups and
+components to intersect at once", "Groups and components are nested too deeply to intersect"); so
+is an open group whose placement flattens space ("The open group is flat and cannot be
+intersected inside").
 
 The outcome reports `"intersect": {"added_edges": [ids], "split_faces": [ids], "created_faces": [ids]}`:
 the edges made (the halves of an edge it cut included), the faces that existed before and were

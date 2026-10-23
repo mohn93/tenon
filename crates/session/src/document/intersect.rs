@@ -15,14 +15,20 @@ use crate::command::{CommandError, ErrorKind, IntersectReport, IntersectScope};
 const MAX_PAIRS: usize = 200_000;
 /// Most segments drawn at once.
 const MAX_SEGMENTS: usize = 100_000;
+/// Most face box queries of the broad phase.
+const MAX_QUERIES: usize = 4_000_000;
 
 const TOO_MANY: &str = "Too many faces cross to intersect at once";
+const TOO_MANY_PLACED: &str = "Too many groups and components to intersect at once";
+const TOO_DEEP: &str = "Groups and components are nested too deeply to intersect";
 
 /// What bounds one run.
 #[derive(Clone, Copy)]
 struct Limits {
     pairs: usize,
     segments: usize,
+    /// Most bounding box queries of the broad phase, whether or not they find anything.
+    queries: usize,
 }
 
 /// A mesh as placed in the root.
@@ -51,6 +57,7 @@ impl Document {
             Limits {
                 pairs: MAX_PAIRS,
                 segments: MAX_SEGMENTS,
+                queries: MAX_QUERIES,
             },
         )
     }
@@ -80,7 +87,8 @@ impl Document {
 
         let scene = &self.scene;
         let too_many = || CommandError::new(ErrorKind::InvalidInput, TOO_MANY);
-        let places = placements(scene, &self.context).ok_or_else(too_many)?;
+        let selected: BTreeSet<InstanceId> = parts.instances.iter().copied().collect();
+        let places = placements(scene, &self.context, with, &selected)?;
         let context_path = &self.context;
         let context = places
             .iter()
@@ -89,7 +97,7 @@ impl Document {
         let Some(to_local) = places[context].back else {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
-                "the open group is flat and cannot be intersected inside",
+                "The open group is flat and cannot be intersected inside",
             ));
         };
 
@@ -120,13 +128,17 @@ impl Document {
             }
         }
 
-        let source_places: BTreeSet<usize> = sources.iter().map(|k| k.0).collect();
-        let targets: Vec<usize> = match with {
-            IntersectScope::Model => (0..places.len()).collect(),
-            IntersectScope::Selection => source_places.iter().copied().collect(),
-            IntersectScope::Context => vec![context],
-        };
-        let only_sources = with == IntersectScope::Selection;
+        // The selected instance each placement lies in, so a group is never crossed with itself.
+        let mut owner: Vec<Option<InstanceId>> = vec![None; places.len()];
+        for instance in &selected {
+            let mut prefix = context_path.clone();
+            prefix.push(*instance);
+            for (index, p) in places.iter().enumerate() {
+                if p.path.starts_with(&prefix) {
+                    owner[index] = Some(*instance);
+                }
+            }
+        }
 
         let mut shapes: HashMap<Key, Option<FaceShape>> = HashMap::new();
         let mut shape_of = |key: Key| -> Option<FaceShape> {
@@ -140,24 +152,76 @@ impl Document {
                 })
                 .clone()
         };
+        let source_boxes: Vec<(Key, (DVec3, DVec3))> = sources
+            .iter()
+            .filter_map(|&k| {
+                let shape = shape_of(k)?;
+                let b = bounds(shape.outer.iter().copied());
+                Some((k, b))
+            })
+            .collect();
+        let pad = DVec3::splat(LENGTH_TOL);
+        let all = source_boxes.iter().fold(
+            (DVec3::INFINITY, DVec3::NEG_INFINITY),
+            |(lo, hi), (_, (l, h))| (lo.min(*l), hi.max(*h)),
+        );
+        let (all_lo, all_hi) = (all.0 - pad, all.1 + pad);
+
+        // The placements whose box meets the sources' box, with that box in the root.
+        let mut mesh_boxes: HashMap<MeshId, Option<(DVec3, DVec3)>> = HashMap::new();
+        let source_places: BTreeSet<usize> = sources.iter().map(|k| k.0).collect();
+        let candidates: Vec<usize> = match with {
+            IntersectScope::Model => (0..places.len()).collect(),
+            IntersectScope::Selection => source_places.iter().copied().collect(),
+            IntersectScope::Context => vec![context],
+        };
+        let mut targets: Vec<(usize, (DVec3, DVec3))> = Vec::new();
+        for t in candidates {
+            let p = &places[t];
+            let local = *mesh_boxes.entry(p.mesh).or_insert_with(|| {
+                let model = scene.mesh(p.mesh)?;
+                model.faces().next()?;
+                let b = bounds(model.vertices().map(|(_, v)| v.pos));
+                b.0.is_finite().then_some(b)
+            });
+            let Some((lo, hi)) = local else { continue };
+            let (wlo, whi) = box_through(p.place, lo, hi);
+            if (wlo - pad).cmple(all_hi).all() && (whi + pad).cmpge(all_lo).all() {
+                targets.push((t, (wlo - pad, whi + pad)));
+            }
+        }
+        let only_sources = with == IntersectScope::Selection;
 
         // Broad phase: pairs whose boxes meet, each once.
         let mut pairs: Vec<(Key, Key)> = Vec::new();
         let mut seen: HashSet<(Key, Key)> = HashSet::new();
-        for &a in &sources {
-            let Some(shape) = shape_of(a) else { continue };
-            let (lo, hi) = bounds(shape.outer.iter().copied());
-            for &t in &targets {
+        let mut queries = 0usize;
+        for (a, (lo, hi)) in &source_boxes {
+            let a = *a;
+            for &(t, (wlo, whi)) in &targets {
+                if !(hi.cmpge(wlo).all() && lo.cmple(whi).all()) {
+                    continue;
+                }
+                queries += 1;
+                if queries > limits.queries {
+                    return Err(too_many());
+                }
                 let target = &places[t];
                 let Some(back) = target.back else { continue };
                 let Some(model) = scene.mesh(target.mesh) else {
                     continue;
                 };
-                let (blo, bhi) = box_through(back, lo, hi);
-                let pad = DVec3::splat(LENGTH_TOL);
+                let (blo, bhi) = box_through(back, *lo, *hi);
                 for f in model.faces_near_box(blo - pad, bhi + pad) {
                     let b = (t, f);
                     if a == b || (only_sources && !sources.contains(&b)) {
+                        continue;
+                    }
+                    // Faces of one placement (other than the open context) or of one selected
+                    // instance never cross each other.
+                    if (a.0 == t && t != context)
+                        || (owner[a.0].is_some() && owner[a.0] == owner[t])
+                    {
                         continue;
                     }
                     if !model.face(f).is_some_and(|f| scene.tag_shown(f.tag)) {
@@ -210,54 +274,75 @@ impl Document {
     }
 }
 
-/// Every placement of every mesh shown from the root, parents first, and the path to the open
-/// context (shown or not). None when there are too many.
-fn placements(scene: &Scene, context: &[InstanceId]) -> Option<Vec<Placement>> {
-    fn walk(
-        scene: &Scene,
-        context: &[InstanceId],
-        path: Vec<InstanceId>,
-        mesh: MeshId,
-        place: DAffine3,
-        out: &mut Vec<Placement>,
-    ) -> Option<()> {
-        if out.len() as u64 >= MAX_CLIP_INSTANCES || path.len() > MAX_IMPORT_DEPTH {
-            return None;
-        }
-        let model = scene.mesh(mesh)?;
-        let back = (place.matrix3.determinant().abs() > 1e-18).then(|| place.inverse());
-        out.push(Placement {
-            path: path.clone(),
-            mesh,
-            place,
-            back,
-        });
-        for (id, instance) in model.instances() {
-            let mut next = path.clone();
-            next.push(id);
-            if scene.instance_shown(mesh, id, instance) || context.starts_with(&next) {
-                walk(
-                    scene,
-                    context,
-                    next,
-                    MeshId::Definition(instance.definition),
-                    place * instance.transform,
-                    out,
-                )?;
-            }
-        }
-        Some(())
+/// The placements `with` needs, parents first: for `model` every mesh shown from the root; for
+/// the others the open context and what the selected instances `selected` place. The open
+/// context is always there, shown or not.
+fn placements(
+    scene: &Scene,
+    context: &[InstanceId],
+    with: IntersectScope,
+    selected: &BTreeSet<InstanceId>,
+) -> Result<Vec<Placement>, CommandError> {
+    struct Walk<'a> {
+        scene: &'a Scene,
+        context: &'a [InstanceId],
+        out: Vec<Placement>,
     }
-    let mut out = Vec::new();
-    walk(
+    impl Walk<'_> {
+        fn go(
+            &mut self,
+            path: Vec<InstanceId>,
+            mesh: MeshId,
+            place: DAffine3,
+            only: Option<&BTreeSet<InstanceId>>,
+        ) -> Result<(), CommandError> {
+            if self.out.len() as u64 >= MAX_CLIP_INSTANCES {
+                return Err(CommandError::new(ErrorKind::InvalidInput, TOO_MANY_PLACED));
+            }
+            if path.len() > MAX_IMPORT_DEPTH {
+                return Err(CommandError::new(ErrorKind::InvalidInput, TOO_DEEP));
+            }
+            let Some(model) = self.scene.mesh(mesh) else {
+                return Ok(());
+            };
+            let back = (place.matrix3.determinant().abs() > 1e-18).then(|| place.inverse());
+            self.out.push(Placement {
+                path: path.clone(),
+                mesh,
+                place,
+                back,
+            });
+            for (id, instance) in model.instances() {
+                if only.is_some_and(|o| !o.contains(&id)) {
+                    continue;
+                }
+                let mut next = path.clone();
+                next.push(id);
+                if self.scene.instance_shown(mesh, id, instance) || self.context.starts_with(&next)
+                {
+                    self.go(
+                        next,
+                        MeshId::Definition(instance.definition),
+                        place * instance.transform,
+                        None,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+    }
+    let mut walk = Walk {
         scene,
         context,
-        Vec::new(),
-        MeshId::Root,
-        DAffine3::IDENTITY,
-        &mut out,
-    )?;
-    Some(out)
+        out: Vec::new(),
+    };
+    if with == IntersectScope::Model {
+        walk.go(Vec::new(), MeshId::Root, DAffine3::IDENTITY, None)?;
+    } else {
+        let (mesh, place) = scene.resolve(context).expect("the open context exists");
+        walk.go(context.to_vec(), mesh, place, Some(selected))?;
+    }
+    Ok(walk.out)
 }
 
 fn bounds(points: impl Iterator<Item = DVec3>) -> (DVec3, DVec3) {
@@ -325,6 +410,7 @@ mod tests {
         let limits = Limits {
             pairs: MAX_PAIRS,
             segments: 3,
+            queries: MAX_QUERIES,
         };
         let e = d
             .intersect_with_limits(&faces, IntersectScope::Selection, limits)
@@ -335,10 +421,49 @@ mod tests {
         let ok = Limits {
             pairs: MAX_PAIRS,
             segments: MAX_SEGMENTS,
+            queries: MAX_QUERIES,
         };
         assert!(
             d.intersect_with_limits(&faces, IntersectScope::Selection, ok)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn the_pair_limit_refuses_and_changes_nothing() {
+        let (mut d, faces) = boxes();
+        let revision = d.revision();
+        let limits = Limits {
+            pairs: 10,
+            segments: MAX_SEGMENTS,
+            queries: MAX_QUERIES,
+        };
+        let e = d
+            .intersect_with_limits(&faces, IntersectScope::Selection, limits)
+            .unwrap_err();
+        assert_eq!(e.message, TOO_MANY);
+        assert_eq!(d.revision(), revision);
+        let ok = Limits {
+            pairs: MAX_PAIRS,
+            ..limits
+        };
+        assert!(
+            d.intersect_with_limits(&faces, IntersectScope::Selection, ok)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_query_limit_refuses() {
+        let (mut d, faces) = boxes();
+        let limits = Limits {
+            pairs: MAX_PAIRS,
+            segments: MAX_SEGMENTS,
+            queries: 2,
+        };
+        let e = d
+            .intersect_with_limits(&faces, IntersectScope::Selection, limits)
+            .unwrap_err();
+        assert_eq!(e.message, TOO_MANY);
     }
 }

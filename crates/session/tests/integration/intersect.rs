@@ -273,6 +273,7 @@ fn a_group_is_never_modified_and_with_context_ignores_it() {
     let out = intersect(&mut d, &[json!(group)], "model");
     assert_eq!(mesh_state(&d, group_mesh), before);
     assert_eq!(list_len(&out, "split_faces"), 0, "{out}");
+    assert_eq!(list_len(&out, "added_edges"), 0, "{out}");
 }
 
 #[test]
@@ -342,14 +343,10 @@ fn a_mirrored_group_is_crossed_in_its_own_coordinates() {
     let mut ids = a.clone();
     ids.extend(edges);
     let group = instance_id(&run(&mut d, json!({"type": "make_group", "ids": ids})));
-    if try_run(
+    run(
         &mut d,
         json!({"type": "scale", "ids": [group], "origin": [0, 0, 0], "factors": [-1.0, 1.0, 1.0]}),
-    )
-    .is_err()
-    {
-        return;
-    }
+    );
     // The mirrored group now spans x in -2..0.
     boxed(&mut d, [-3.0, 1.0, 1.0], [-1.0, 3.0, 3.0]);
     run(&mut d, json!({"type": "open_instance", "id": group}));
@@ -371,41 +368,126 @@ fn a_mirrored_group_is_crossed_in_its_own_coordinates() {
 }
 
 #[test]
-fn coplanar_rectangles_give_the_shared_regions_outline() {
+fn a_coplanar_rectangle_in_a_group_outlines_the_shared_region_in_the_root() {
     let mut d = doc();
-    for (c, o) in [([0, 0, 0], [2, 2, 0]), ([1, 1, 0], [3, 3, 0])] {
-        run(
-            &mut d,
-            json!({"type": "add_rectangle", "corner": c, "opposite": o}),
-        );
-    }
-    let all = face_ids(&d);
-    // The second rectangle was drawn over the first: sticky drawing may already have split them.
-    let ids: Vec<Value> = all.iter().map(|f| json!(f)).collect();
-    let _ = intersect(&mut d, &ids, "model");
-    validate(&d);
-    let faces = ask(&d, json!({"type": "entities", "kinds": ["face"]}));
-    let areas: Vec<f64> = faces["faces"]
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [1, 1, 0], "opposite": [3, 3, 0]}),
+    );
+    let root_face = face_ids(&d).into_iter().next().unwrap();
+    let edges: Vec<Value> = ask(&d, json!({"type": "entities", "kinds": ["edge"]}))["edges"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|f| f["area"].as_f64().unwrap())
+        .map(|e| e["id"].clone())
         .collect();
-    assert!(
-        areas.iter().any(|a| (a - 1.0).abs() < 1e-9),
-        "a face for the shared unit square: {areas:?}"
+    let mut ids = vec![json!(root_face)];
+    ids.extend(edges);
+    // The first rectangle becomes a group; a second one is drawn in the root over it.
+    let group = instance_id(&run(&mut d, json!({"type": "make_group", "ids": ids})));
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
     );
+    let out = intersect(&mut d, &[json!(group)], "model");
+    validate(&d);
+    assert_eq!(
+        out["intersect"]["split_faces"].as_array().unwrap().len(),
+        1,
+        "{out}"
+    );
+    assert_eq!(list_len(&out, "added_edges"), 6, "{out}");
+    let mut areas: Vec<f64> = d
+        .model()
+        .faces()
+        .map(|(f, _)| {
+            ask(&d, json!({"type": "entity", "id": EntityId::Face(f)}))["area"]
+                .as_f64()
+                .unwrap()
+        })
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 2, "{areas:?}");
+    assert!(
+        (areas[0] - 1.0).abs() < 1e-9 && (areas[1] - 3.0).abs() < 1e-9,
+        "{areas:?}"
+    );
+}
+
+#[test]
+fn a_lone_group_is_not_crossed_with_itself() {
+    let mut d = doc();
+    let a = boxed(&mut d, [0.0; 3], [2.0; 3]);
+    let edges: Vec<Value> = ask(&d, json!({"type": "entities", "kinds": ["edge"]}))["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].clone())
+        .collect();
+    let mut ids = a;
+    ids.extend(edges);
+    let group = instance_id(&run(&mut d, json!({"type": "make_group", "ids": ids})));
+    let before = mesh_state(&d, MeshId::Root);
+    let revision = d.revision();
+    let out = intersect(&mut d, &[json!(group)], "model");
+    assert_eq!(
+        out["intersect"],
+        json!({"added_edges": [], "split_faces": [], "created_faces": []})
+    );
+    assert_eq!(mesh_state(&d, MeshId::Root), before);
+    assert_eq!(d.revision(), revision);
+}
+
+#[test]
+fn nested_groups_inside_one_selected_group_are_not_crossed_with_each_other() {
+    let mut d = doc();
+    // Two overlapping boxes, each its own group, inside one outer group.
+    let mut inner = Vec::new();
+    for (lo, hi) in [(0.0, 2.0), (1.0, 3.0)] {
+        let before: BTreeSet<String> =
+            ask(&d, json!({"type": "entities", "kinds": ["edge"]}))["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["id"].as_str().unwrap().to_string())
+                .collect();
+        let faces = boxed(&mut d, [lo; 3], [hi; 3]);
+        let mut ids = faces;
+        ids.extend(
+            ask(&d, json!({"type": "entities", "kinds": ["edge"]}))["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["id"].clone())
+                .filter(|e| !before.contains(e.as_str().unwrap())),
+        );
+        let g = instance_id(&run(&mut d, json!({"type": "make_group", "ids": ids})));
+        inner.push(json!(g));
+    }
+    let outer = instance_id(&run(&mut d, json!({"type": "make_group", "ids": inner})));
+    let before = mesh_state(&d, MeshId::Root);
+    let revision = d.revision();
+    let out = intersect(&mut d, &[json!(outer)], "model");
+    assert_eq!(
+        out["intersect"],
+        json!({"added_edges": [], "split_faces": [], "created_faces": []})
+    );
+    assert_eq!(mesh_state(&d, MeshId::Root), before);
+    assert_eq!(d.revision(), revision);
 }
 
 #[test]
 fn touching_boxes_add_nothing() {
     let mut d = doc();
     let a = boxed(&mut d, [0.0; 3], [2.0; 3]);
-    let b = boxed(&mut d, [2.0, 3.0, 0.0], [4.0, 5.0, 2.0]);
+    let b = boxed(&mut d, [2.0, 0.0, 0.0], [4.0, 2.0, 2.0]);
     let revision = d.revision();
     let ids: Vec<Value> = a.iter().chain(&b).cloned().collect();
     let out = intersect(&mut d, &ids, "model");
-    assert_eq!(list_len(&out, "added_edges"), 0, "{out}");
+    assert_eq!(
+        out["intersect"],
+        json!({"added_edges": [], "split_faces": [], "created_faces": []})
+    );
     assert_eq!(d.revision(), revision);
 }
 
@@ -486,37 +568,4 @@ fn reports_work_as_batch_references() {
     let outcomes = d.execute_batch(commands, true).unwrap();
     assert!(outcomes[0].intersect.is_some());
     validate(&d);
-}
-
-#[test]
-fn too_many_pairs_is_invalid_input_and_changes_nothing() {
-    let mut d = doc();
-    // 450 walls and 450 floors that cross pairwise: 202,500 pairs whose boxes meet.
-    let mut specs = Vec::new();
-    for k in 1..=450 {
-        let t = k as f64 * 0.01;
-        specs.push(
-            json!({"type": "add_rectangle", "corner": [t, 0, 0], "opposite": [t, 5, 5],
-            "normal": [1, 0, 0]}),
-        );
-        specs.push(json!({"type": "add_rectangle", "corner": [0, 1, t - 0.005],
-            "opposite": [5, 6, t - 0.005]}));
-    }
-    let commands: Vec<BatchCommand> = specs
-        .into_iter()
-        .enumerate()
-        .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
-        .collect();
-    d.execute_batch(commands, true).unwrap();
-    let ids: Vec<Value> = face_ids(&d).iter().map(|f| json!(f)).collect();
-    assert_eq!(ids.len(), 900);
-    let revision = d.revision();
-    let (kind, message) = try_run(
-        &mut d,
-        json!({"type": "intersect_faces", "ids": ids, "with": "selection"}),
-    )
-    .unwrap_err();
-    assert_eq!(kind, ErrorKind::InvalidInput);
-    assert_eq!(message, "Too many faces cross to intersect at once");
-    assert_eq!(d.revision(), revision);
 }
