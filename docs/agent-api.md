@@ -1451,13 +1451,14 @@ scenes (`add_scene`, `update_scene`; `go_to_scene` restores them; a scene's `vie
 `shadows`), and `new` starts with the defaults.
 
 `{"type": "sun"}` returns the sun at the settings' date and time whether or not `on` is set:
-`{"type": "sun", "direction": [-0.421, -0.774, 0.472], "azimuth": 208.75, "elevation": 28.17,
+`{"type": "sun", "direction": [-0.424, -0.773, 0.472], "azimuth": 208.754, "elevation": 28.174,
 "up": true}`. `direction` is the unit vector from the model towards the sun, in the model's
 x, y, z (z up; true north is the green axis turned clockwise by `north_angle`), `azimuth` is
 degrees clockwise from true north (0 to 360), `elevation` degrees above the horizon (negative
 at night; geometric, with no refraction) and `up` is whether the sun is above the horizon. The
-position is NOAA's simplified solar calculation (fractional year, equation of time,
-declination, true solar time, hour angle), within 0.5 degrees of the NOAA calculator.
+position is the NOAA solar calculator's algorithm (Julian century of the instant in UTC,
+equation of center, apparent longitude, corrected obliquity, equation of time, hour angle),
+within 0.05 degrees of the NOAA calculator's geometric elevation and azimuth.
 
 ### Files
 

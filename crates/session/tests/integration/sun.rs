@@ -1,9 +1,11 @@
-//! The sun: NOAA's simplified algorithm against the full NOAA solar calculator algorithm
-//! (Meeus: Julian day, geometric mean longitude, equation of center, nutation-corrected
-//! obliquity), computed independently with a script for each case below and rounded to 0.001
-//! degrees. The simplified Fourier series is good to about 0.2 degrees; the tests allow 0.5.
-//! The reference script's arguments are (year, month, day, local minutes, latitude, longitude,
-//! UTC offset).
+//! The sun against the NOAA solar calculator's algorithm (Meeus: Julian day, geometric mean
+//! longitude, equation of center, nutation-corrected obliquity, equation of time), computed
+//! independently by a script (not this crate's code) for every case below and rounded to
+//! 0.001 degrees; the tests allow 0.05 (the 0.001 rounding, and the script's acos form of the
+//! azimuth against the atan2 form here). Elevation is geometric, without refraction. The
+//! script's arguments are (year, month, day, local minutes, latitude, longitude, UTC offset).
+//! The Newfoundland case is the review's own NOAA calculator value (47.56 N, 52.71 W, UTC-3:30,
+//! 2026-06-21 14:00: elevation 56.445, azimuth 234.377).
 
 use kernel::{Location, Shadows};
 use session::sun::{day_of_year, sun};
@@ -37,14 +39,14 @@ fn apart(a: f64, b: f64) -> f64 {
 fn check(label: &str, s: Shadows, l: Location, elevation: f64, azimuth: f64) {
     let got = sun(&s, &l);
     assert!(
-        (got.elevation - elevation).abs() < 0.5,
+        (got.elevation - elevation).abs() < 0.05,
         "{label}: elevation {} vs {elevation}",
         got.elevation
     );
     // Near the zenith the azimuth is ill-defined and hardly matters.
     if elevation.abs() < 85.0 {
         assert!(
-            apart(got.azimuth, azimuth) < 0.5,
+            apart(got.azimuth, azimuth) < 0.05,
             "{label}: azimuth {} vs {azimuth}",
             got.azimuth
         );
@@ -146,11 +148,52 @@ fn a_fractional_utc_offset() {
         0.593,
         90.473,
     );
-    // A negative fractional offset moves the sun as the clock does: an hour later on the
-    // clock is 15 degrees of hour angle.
+    // Negative fractional offsets.
+    check(
+        "newfoundland -3.5",
+        at(2026, 6, 21, 14 * 60),
+        place(47.56, -52.71, -3.5),
+        56.445,
+        234.377,
+    );
+    check(
+        "marquesas -9.5",
+        at(2026, 9, 5, 1000),
+        place(-9.0, -139.5, -9.5),
+        15.260,
+        279.300,
+    );
+    // A quarter hour on the offset is a quarter hour of hour angle.
     let a = sun(&at(2026, 4, 10, 600), &place(19.0, 72.0, 5.5));
     let b = sun(&at(2026, 4, 10, 600), &place(19.0, 72.0, 5.25));
-    assert!(a.elevation != b.elevation);
+    assert!((a.azimuth - b.azimuth).abs() > 1.0);
+}
+
+#[test]
+fn a_table_of_scattered_dates_places_and_offsets() {
+    // (year, month, day, local minutes, latitude, longitude, UTC offset, elevation, azimuth)
+    let table = [
+        (2026, 3, 20, 1020, 0.2, -176.5, -12.0, 13.306, 270.196),
+        (2006, 10, 23, 1335, 3.796, -91.103, 1.0, 36.449, 252.587),
+        (2018, 12, 3, 1348, -7.036, -12.017, 5.75, 29.216, 248.513),
+        (2025, 2, 9, 457, 51.914, -66.363, 1.0, -45.929, 42.977),
+        (2023, 11, 21, 1057, -49.042, 18.48, 1.0, 14.126, 255.702),
+        (2010, 1, 21, 143, -52.776, -58.656, -9.5, 31.788, 81.082),
+        (2017, 4, 28, 782, -13.485, 176.556, 9.0, 26.544, 293.683),
+        (2038, 2, 28, 1312, 26.164, -139.849, 14.0, -60.045, 303.115),
+        (2040, 11, 12, 371, 51.079, 88.921, 9.0, -38.076, 69.311),
+        (2032, 11, 7, 554, -6.636, -101.452, 1.0, -55.324, 132.059),
+        (2032, 5, 4, 248, 44.538, -147.767, 1.0, 18.241, 274.899),
+    ];
+    for (y, mo, d, min, lat, lon, tz, el, az) in table {
+        check(
+            &format!("{y}-{mo}-{d} {min}"),
+            at(y, mo, d, min),
+            place(lat, lon, tz),
+            el,
+            az,
+        );
+    }
 }
 
 #[test]

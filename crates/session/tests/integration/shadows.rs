@@ -97,8 +97,8 @@ fn the_defaults_are_sketchups() {
     // The sun at 13:30 on 8 November in Boulder: low in the south-southwest.
     let sun = ask(&d, json!({"type": "sun"}));
     assert_eq!(sun["up"], true);
-    assert!((sun["elevation"].as_f64().unwrap() - 28.17).abs() < 0.5);
-    assert!((sun["azimuth"].as_f64().unwrap() - 208.75).abs() < 0.5);
+    assert!((sun["elevation"].as_f64().unwrap() - 28.174).abs() < 0.05);
+    assert!((sun["azimuth"].as_f64().unwrap() - 208.754).abs() < 0.05);
     let dir: Vec<f64> = sun["direction"]
         .as_array()
         .unwrap()
@@ -184,8 +184,8 @@ fn the_sun_follows_the_settings_and_the_location() {
         json!({"type": "set_location", "latitude": 0.0, "longitude": 0.0, "utc_offset": 0.0}),
     );
     let sun = ask(&d, json!({"type": "sun"}));
-    assert!((sun["elevation"].as_f64().unwrap() - 88.14).abs() < 0.5);
-    // North a quarter turn clockwise from the green axis: the morning sun (east) is at +y...
+    assert!((sun["elevation"].as_f64().unwrap() - 88.141).abs() < 0.05);
+    // North a quarter turn clockwise from the green axis puts north at +x and east at -y.
     ok(
         &mut d,
         json!({"type": "set_location", "latitude": 40.0, "north_angle": 90.0}),
@@ -200,8 +200,7 @@ fn the_sun_follows_the_settings_and_the_location() {
 fn set_location_is_one_named_undo_step_and_changes_only_given_fields() {
     let mut d = doc();
     let before = depth(&d);
-    let out = ok(&mut d, json!({"type": "set_location", "latitude": 51.5}));
-    let _ = out;
+    ok(&mut d, json!({"type": "set_location", "latitude": 51.5}));
     let location = ask(&d, json!({"type": "location"}));
     assert_eq!(location["latitude"], 51.5);
     assert_eq!(location["longitude"], -105.2833);

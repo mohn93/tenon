@@ -106,19 +106,19 @@ impl Shadows {
     pub fn check(&self) -> Result<(), String> {
         if !SHADOW_YEARS.contains(&self.year) {
             return Err(format!(
-                "a shadow date's year must be from {} to {}",
+                "the shadow date's year must be from {} to {}",
                 SHADOW_YEARS.start(),
                 SHADOW_YEARS.end()
             ));
         }
         if self.day == 0 || self.day > Shadows::days_in_month(self.year, self.month) {
             return Err(format!(
-                "{:04}-{:02}-{:02} is not a date",
+                "the shadow date {:04}-{:02}-{:02} is not a date",
                 self.year, self.month, self.day
             ));
         }
         if self.minutes >= 24 * 60 {
-            return Err("a shadow time must be within a day (00:00 to 23:59)".into());
+            return Err("the shadow time must be within a day (00:00 to 23:59)".into());
         }
         if self.light > 100 || self.dark > 100 {
             return Err("light and dark must be from 0 to 100".into());
@@ -173,7 +173,7 @@ pub(crate) fn check_view(v: &PageView) -> Result<(), String> {
     if v.up.iter().all(|x| *x == 0.0) {
         return Err("a scene's up direction must not be zero".into());
     }
-    v.shadows.check().map_err(|e| format!("a scene's {e}"))?;
+    v.shadows.check()?;
     Ok(())
 }
 

@@ -494,7 +494,7 @@ fn read_archive<R: Read + Seek>(
         .camera
         .shadows
         .check()
-        .map_err(|e| format!("the camera's {e}"))?;
+        .map_err(|e| format!("the camera view: {e}"))?;
     let units = stored.units.unwrap_or_default();
     check_precision(units.precision).map_err(|e| format!("the display units: {e}"))?;
     // Refuse before decoding anything: each decode can take far more memory than its entry.
