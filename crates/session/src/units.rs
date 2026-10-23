@@ -19,6 +19,9 @@ pub const MAX_ANGLE_PRECISION: u8 = 3;
 /// The most `length_snap` may be, in meters.
 pub const MAX_LENGTH_SNAP: f64 = 1000.0;
 
+/// The smallest nonzero `length_snap`, in meters (a micrometer).
+pub const MIN_LENGTH_SNAP: f64 = 1e-6;
+
 /// The most `angle_snap` may be, in degrees.
 pub const MAX_ANGLE_SNAP: f64 = 90.0;
 
@@ -145,9 +148,12 @@ impl Units {
                 "precision must be from 0 to {MAX_PRECISION} (for feet_inches: fractions down to 1/64 inch)"
             ));
         }
-        if !(self.length_snap.is_finite() && (0.0..=MAX_LENGTH_SNAP).contains(&self.length_snap)) {
+        let snap = self.length_snap;
+        if !(snap.is_finite()
+            && (snap == 0.0 || (MIN_LENGTH_SNAP..=MAX_LENGTH_SNAP).contains(&snap)))
+        {
             return Err(format!(
-                "length_snap must be from 0 (off) to {MAX_LENGTH_SNAP} meters"
+                "length_snap must be 0 (off) or from {MIN_LENGTH_SNAP} to {MAX_LENGTH_SNAP} meters"
             ));
         }
         if self.angle_precision > MAX_ANGLE_PRECISION {
@@ -617,6 +623,14 @@ mod tests {
                 ..ok
             },
             Units {
+                length_snap: 1e-320,
+                ..ok
+            },
+            Units {
+                length_snap: 1e-7,
+                ..ok
+            },
+            Units {
                 angle_precision: 4,
                 ..ok
             },
@@ -636,6 +650,14 @@ mod tests {
         for b in bad {
             assert!(b.check().is_err(), "{b:?}");
         }
+        assert!(
+            Units {
+                length_snap: MIN_LENGTH_SNAP,
+                ..ok
+            }
+            .check()
+            .is_ok()
+        );
         let edge = Units {
             length_snap: 1000.0,
             angle_snap: 90.0,

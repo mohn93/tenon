@@ -282,7 +282,7 @@ fn precision_text(length: LengthUnit, precision: u8) -> String {
 }
 
 /// A single-line box whose text is kept while it has focus and reported (once) when Enter or
-/// a click elsewhere ends the edit; unfocused it shows `current`. None until then.
+/// a click elsewhere ends the edit (Escape discards it); unfocused it shows `current`. None until then.
 fn committed_text(
     ui: &mut Ui,
     id: Id,
@@ -308,8 +308,9 @@ fn committed_text(
         info
     });
     if response.lost_focus() {
+        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
         ui.data_mut(|d| d.remove_temp::<String>(id));
-        return (text != current).then_some(text);
+        return (text != current && !escaped).then_some(text);
     }
     if response.has_focus() {
         ui.data_mut(|d| d.insert_temp(id, text));
@@ -324,6 +325,12 @@ fn committed_text(
 fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
     let mut chosen = units;
     let format = Format::of(units.length);
+    // The snapping values show every digit they have, not the display precision.
+    let full = Units {
+        precision: session::MAX_PRECISION,
+        angle_precision: session::MAX_ANGLE_PRECISION,
+        ..units
+    };
     egui::Grid::new("settings-model")
         .num_columns(2)
         .show(ui, |ui| {
@@ -392,7 +399,7 @@ fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
                 };
             }
             let shown = if on {
-                format_length(units.length_snap, &units)
+                format_length(units.length_snap, &full)
             } else {
                 String::new()
             };
@@ -426,7 +433,7 @@ fn model(ui: &mut Ui, units: Units, actions: &mut Vec<UiAction>) {
                 chosen.angle_snap = if on { DEFAULT_ANGLE_SNAP } else { 0.0 };
             }
             let shown = if on {
-                format_angle(units.angle_snap, &units)
+                format_angle(units.angle_snap, &full)
             } else {
                 String::new()
             };

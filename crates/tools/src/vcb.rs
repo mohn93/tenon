@@ -180,7 +180,7 @@ pub(crate) fn snap_distance_on_surface(
 pub(crate) fn on_surface(p: DVec3, q: DVec3, hit: &Inference, ctx: &ToolContext) -> DVec3 {
     let normal = match hit.kind {
         SnapKind::OnFace => hit.face.and_then(|f| ctx.model.face(f)).map(|f| f.normal),
-        SnapKind::Ground => Some(ctx.scenery.axes().z_axis),
+        SnapKind::Ground => Some(DVec3::Z),
         _ => None,
     };
     match normal {

@@ -453,3 +453,27 @@ fn rectangles_round_along_moved_drawing_axes() {
     r.mv(u * 1.13 + v * 0.62);
     assert_eq!(measured(&r), "1.25 m, 0.5 m");
 }
+
+#[test]
+fn the_ground_is_the_world_ground_under_tilted_drawing_axes() {
+    let tilt = glam::DAffine3::from_rotation_x(30f64.to_radians());
+    // From the ground it is rounded, though the axes' z is tilted.
+    let mut r = rig(ToolKind::Line, snapping(0.25));
+    r.axes = tilt;
+    r.click(DVec3::new(1.0, 0.0, 0.0));
+    let out = r.click(DVec3::new(1.0, 1.13, 0.0));
+    let end = edge_end(&out);
+    assert!(
+        (end.y - 1.25).abs() < 1e-12 && end.z.abs() < 1e-12,
+        "{end:?}"
+    );
+    // From above the ground the end never sinks off the ground.
+    let mut r = rig(ToolKind::Line, snapping(0.25));
+    r.axes = tilt;
+    let n = tilt.matrix3 * DVec3::Z;
+    let p = DVec3::new(0.0, 1.0, 0.0);
+    let p = p - n * p.dot(n);
+    r.click(DVec3::new(0.0, 0.0, 3.0));
+    let out = r.click(DVec3::new(p.x, p.y, 0.0));
+    assert!(edge_end(&out).z.abs() < 1e-12, "{:?}", edge_end(&out));
+}

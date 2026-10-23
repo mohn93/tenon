@@ -255,6 +255,39 @@ fn the_snapping_values_are_typed_in_the_model_unit_and_degrees() {
     );
 }
 
+#[test]
+fn the_snapping_boxes_show_full_precision_and_escape_discards() {
+    use session::Units;
+    let units = Units {
+        precision: 0,
+        angle_precision: 0,
+        length_snap: 0.1,
+        angle_snap: 7.5,
+        ..Units::default()
+    };
+    let mut h = harness(Fixture {
+        settings: Some(SettingsView {
+            units,
+            ..settings_fixture().settings.unwrap()
+        }),
+        ..Default::default()
+    });
+    model_tab(&mut h);
+    let texts = drawn_texts(&h);
+    assert!(texts.iter().any(|t| t == "0.1 m"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "7.5°"), "{texts:?}");
+    // Typing a value and pressing Escape changes nothing.
+    h.get_by_label("Length snapping value").click();
+    h.run_ok();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.run_ok();
+    h.event(egui::Event::Text("2".into()));
+    h.run_ok();
+    h.key_press(egui::Key::Escape);
+    h.run_ok();
+    assert_eq!(h.state_mut().take(), []);
+}
+
 /// Clicks the Settings window's Model tab (the breadcrumb and the outliner's root share its
 /// name): the one in the row of tabs.
 fn model_tab(h: &mut H) {
