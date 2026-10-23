@@ -288,6 +288,15 @@ pub trait Platform {
     /// `AppEvent::Error` saying why it could not be opened.
     fn open_recent(&self, _id: &str) {}
 
+    /// Whether the open model can be kept for the Recent list (it is not kept yet, and the
+    /// person has to ask: a kept model is readable by any page served at the viewer's address).
+    fn can_keep_open_model(&self) -> bool {
+        false
+    }
+
+    /// Keeps the open model for the Recent list.
+    fn keep_open_model(&self) {}
+
     /// Removes the kept model `id` from the Recent list.
     fn delete_recent(&self, _id: &str) {}
 }

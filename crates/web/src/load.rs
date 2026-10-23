@@ -15,8 +15,22 @@ use web_sys::{
 use crate::files::window;
 use crate::viewer::{Collector, Failure, check_length};
 
-/// The page's `location.hash` ("" when it has none or the browser will not say).
+/// The name of the global `index.html` leaves a share link in once it has taken the link out of
+/// the address bar (before the module downloaded).
+const LINK_GLOBAL: &str = "__sketchupAltLink";
+
+/// The page's share link: the one `index.html` took out of the address bar (read once, then
+/// forgotten), else `location.hash` ("" when it has none or the browser will not say).
 pub fn hash() -> String {
+    let global = js_sys::global();
+    let name = JsValue::from_str(LINK_GLOBAL);
+    if let Some(link) = Reflect::get(&global, &name)
+        .ok()
+        .and_then(|v| v.as_string())
+    {
+        let _ = Reflect::delete_property(&global, &name);
+        return link;
+    }
     window().location().hash().unwrap_or_default()
 }
 

@@ -212,11 +212,11 @@ fn reload_on_new_share() {
 async fn run() -> Result<(), String> {
     reload_on_new_share();
     let shared = shared_model().await?;
-    // Only the viewer keeps models; the model just opened is the newest of them.
+    // Only the viewer lists models; the one just opened is offered, kept only if the person asks.
     let (model, recent) = match shared {
         Some((model, record)) => {
             let recent = recent_list();
-            recent.borrow_mut().keep(record);
+            recent.borrow_mut().offer(record);
             (Some(model), Some(recent))
         }
         None => (None, None),

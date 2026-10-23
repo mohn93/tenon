@@ -21,6 +21,13 @@
   <div id="problem" hidden></div>
   <noscript>sketchup-alt needs JavaScript.</noscript>
   <script type="module">
+    // A share link holds its key in the fragment: take it out of the address bar and the
+    // history entry now, before the (large) module downloads, and hand it to the module through
+    // a global it reads once and deletes. Never log it.
+    if (location.hash.startsWith("#v1.")) {
+      globalThis.__sketchupAltLink = location.hash;
+      history.replaceState(null, "", location.pathname);
+    }
     import init from "./web.js";
     init().catch((e) => {
       const problem = document.getElementById("problem");

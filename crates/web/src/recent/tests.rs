@@ -362,3 +362,74 @@ fn the_not_saved_note_goes_when_a_kept_model_opens() {
     r.open(&id(1), 3.0, Box::new(|found| assert!(found.is_some())));
     assert_eq!(r.note(), None);
 }
+
+#[test]
+fn a_model_is_kept_only_when_the_person_asks() {
+    let (mut r, fake) = recent();
+    assert!(!r.can_keep());
+    assert_eq!(r.keep_offered(), None);
+    r.offer(record(1, 1.0, 10));
+    assert!(r.can_keep());
+    assert!(fake.records.borrow().is_empty(), "offering stores nothing");
+    assert!(r.list(0.0).is_empty());
+    assert_eq!(r.keep_offered(), Some(Kept::Yes));
+    assert!(!r.can_keep(), "kept: nothing more to offer");
+    assert_eq!(ids(&r), [id(1)]);
+    assert_eq!(r.keep_offered(), None);
+}
+
+#[test]
+fn a_new_offer_replaces_the_old_and_a_too_large_one_is_not_offered() {
+    let (mut r, _) = recent();
+    r.offer(record(1, 1.0, 10));
+    r.offer(record(2, 2.0, 10));
+    r.keep_offered();
+    assert_eq!(ids(&r), [id(2)]);
+    r.offer(Record {
+        info: Info {
+            id: id(3),
+            name: "Big".into(),
+            time: 3.0,
+            size: MAX_KEPT_BYTES + 1,
+        },
+        key: [3; 32],
+        blob: vec![0; MAX_KEPT_BYTES + 1],
+    });
+    assert!(!r.can_keep());
+    assert_eq!(r.note(), Some(TOO_LARGE));
+}
+
+#[test]
+fn an_offer_made_before_the_storage_opens_is_kept_when_asked() {
+    let mut r = Recent::waiting();
+    r.offer(record(1, 1.0, 10));
+    assert_eq!(r.keep_offered(), Some(Kept::Later));
+    let fake = Fake::default();
+    r.attach(Box::new(fake));
+    assert_eq!(ids(&r), [id(1)]);
+}
+
+#[test]
+fn opening_a_kept_model_ends_the_offer_and_a_missing_one_changes_nothing() {
+    let (mut r, _) = recent();
+    r.offer(record(1, 1.0, 10));
+    r.keep_offered();
+    r.offer(record(2, 2.0, 10));
+    r.offer(Record {
+        info: Info {
+            id: id(9),
+            name: "Big".into(),
+            time: 9.0,
+            size: MAX_KEPT_BYTES + 1,
+        },
+        key: [9; 32],
+        blob: vec![0; MAX_KEPT_BYTES + 1],
+    });
+    assert_eq!(r.note(), Some(TOO_LARGE));
+    // Not kept any more: opening it opens nothing, so the note stays.
+    r.open(&id(7), 5.0, Box::new(|found| assert!(found.is_none())));
+    assert_eq!(r.note(), Some(TOO_LARGE));
+    r.open(&id(1), 5.0, Box::new(|found| assert!(found.is_some())));
+    assert_eq!(r.note(), None);
+    assert!(!r.can_keep());
+}

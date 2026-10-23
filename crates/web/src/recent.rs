@@ -128,6 +128,8 @@ pub struct Recent {
     storage: Option<Box<dyn Storage>>,
     /// The model opened before the storage was, kept when it arrives.
     pending: Option<Record>,
+    /// The open model, which the person may keep (`offer`, `keep_offered`).
+    offered: Option<Record>,
     /// Why the model open now is not kept, when it is not.
     note: Option<&'static str>,
 }
@@ -144,6 +146,7 @@ impl Recent {
         Self {
             storage: None,
             pending: None,
+            offered: None,
             note: None,
         }
     }
@@ -168,6 +171,28 @@ impl Recent {
             return Some(NOT_SAVED);
         }
         self.note
+    }
+
+    /// Offers the model just opened for keeping: nothing is stored until `keep_offered` (the
+    /// person asks). A model over `MAX_KEPT_BYTES` is not offered and `note` says why.
+    pub fn offer(&mut self, record: Record) {
+        if record.blob.len() > MAX_KEPT_BYTES {
+            self.note = Some(TOO_LARGE);
+            self.offered = None;
+        } else {
+            self.offered = Some(record);
+        }
+    }
+
+    /// Whether the open model can be kept (it was offered and not yet kept).
+    pub fn can_keep(&self) -> bool {
+        self.offered.is_some()
+    }
+
+    /// Keeps the offered model, as the person asked. None when none is offered.
+    pub fn keep_offered(&mut self) -> Option<Kept> {
+        let record = self.offered.take()?;
+        Some(self.keep(record))
     }
 
     /// Keeps `record` as the newest; the oldest beyond `KEEP` go once it is written. A share
@@ -227,9 +252,11 @@ impl Recent {
             done(None);
             return;
         };
-        // What is opened was kept, whatever the model before it was.
-        self.note = (!storage.available()).then_some(NO_STORAGE);
         if storage.infos().iter().any(|i| i.id == id) {
+            // A kept model opens: what was said of the model before it no longer applies, and
+            // the model now open is already kept.
+            self.note = None;
+            self.offered = None;
             storage.clear_failure();
             storage.touch(id, now);
         }

@@ -1208,8 +1208,7 @@ impl State {
     /// size is known; the window says so when it cannot.
     fn open_shared(&mut self, model: SharedModel) {
         self.viewer_panel = None;
-        self.model_name = model.name.clone();
-        if self.editor.open_bytes(&model.name, &model.bytes) {
+        if open_shared_model(&mut self.editor, &mut self.model_name, model) {
             self.fit_pending = true;
         } else {
             self.editor.show_error(DAMAGED_LINK);
@@ -1637,15 +1636,8 @@ impl State {
             Ok(b) => b,
             Err(e) => return PhoneView::Unavailable(e.message),
         };
-        let name = self
-            .editor
-            .doc()
-            .path()
-            .and_then(Path::file_stem)
-            .map_or_else(
-                || "Untitled".to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
+        let doc = self.editor.doc();
+        let name = share_name(doc.path(), doc.imported_from(), self.flows.kept_name());
         match crate::share_server::Sharing::begin_here(&name, &bytes, stamp) {
             Ok(share) => {
                 let view = PhoneView::Sharing(share.view(stamp));
@@ -2153,15 +2145,22 @@ impl State {
             #[cfg(target_arch = "wasm32")]
             UiAction::OpenOnPhone | UiAction::ShareNewVersion | UiAction::StopSharing => {}
             UiAction::ViewerPanel(panel) => self.viewer_panel = panel,
-            UiAction::SelectParts(ids) => {
+            UiAction::SelectParts(ids) if self.features.read_only => {
                 self.viewer_panel = None;
                 self.editor.select_parts(&ids);
             }
-            UiAction::Isolate => {
+            UiAction::SelectParts(_) => {}
+            UiAction::Isolate if self.features.read_only => {
                 self.editor.isolate_selection();
             }
-            UiAction::ShowAll => {
+            UiAction::ShowAll if self.features.read_only => {
                 self.editor.show_all();
+            }
+            UiAction::Isolate | UiAction::ShowAll => {}
+            UiAction::KeepModel => {
+                if self.features.read_only {
+                    self.platform.keep_open_model();
+                }
             }
             UiAction::MeasureMode(on) => {
                 if on {
@@ -2559,6 +2558,7 @@ impl State {
                 measure: measure_text.as_deref(),
                 recent: &recent_shares,
                 recent_note: recent_note.as_deref(),
+                can_keep: viewing && self.platform.can_keep_open_model(),
             },
             library: LibraryView {
                 folder: self.prefs.library.as_deref(),
@@ -3275,6 +3275,32 @@ fn physical_char(key: PhysicalKey) -> Option<char> {
 /// The id the mouse's left button has among the viewer's touches.
 const MOUSE_TOUCH: u64 = u64::MAX;
 
+/// The file name a shared model is opened under: the shared name is only for the bar (a model
+/// called "Plan.skp" is still a `.skr`).
+const SHARED_FILE: &str = "shared.skr";
+
+/// Opens a shared model in `editor`, and only when that works makes `name` its name for the bar.
+fn open_shared_model(editor: &mut Editor, name: &mut String, model: SharedModel) -> bool {
+    if editor.open_bytes(SHARED_FILE, &model.bytes) {
+        *name = model.name;
+        true
+    } else {
+        false
+    }
+}
+
+/// The name Open on Phone gives a model: its file's name without the extension, as the window
+/// title names it (a model opened from a SketchUp file and not saved yet: that file), else
+/// the name the system kept for it, else "Untitled".
+#[cfg(not(target_arch = "wasm32"))]
+fn share_name(path: Option<&Path>, imported_from: Option<&Path>, kept: Option<&str>) -> String {
+    let stem = |p: &Path| p.file_stem().map(|n| n.to_string_lossy().into_owned());
+    path.and_then(stem)
+        .or_else(|| imported_from.and_then(stem))
+        .or_else(|| kept.and_then(|k| stem(Path::new(k))))
+        .unwrap_or_else(|| "Untitled".to_string())
+}
+
 /// The actions the viewer lets through (`Features::read_only`): the rest would change the
 /// model or open what a viewer does not have. The document refuses edits as well
 /// (`Document::set_read_only`); this keeps the window from starting them.
@@ -3286,6 +3312,7 @@ fn viewer_allows(action: &UiAction) -> bool {
             | UiAction::SelectParts(_)
             | UiAction::Isolate
             | UiAction::ShowAll
+            | UiAction::KeepModel
             | UiAction::MeasureMode(_)
             | UiAction::OpenKept(_)
             | UiAction::DeleteKept(_)
@@ -5464,5 +5491,77 @@ mod tests {
         assert!(a.failure.is_none());
         drop(session);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+
+    fn model_bytes() -> Vec<u8> {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        e.execute(session::Command::AddEdge {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 0.0, 0.0],
+        })
+        .unwrap();
+        e.doc().encode_bytes().unwrap()
+    }
+
+    fn viewer() -> Editor {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        e.set_read_only(true);
+        e
+    }
+
+    #[test]
+    fn a_shared_model_with_a_sketchup_name_opens_and_names_the_bar() {
+        let mut e = viewer();
+        let mut name = String::from("old");
+        let model = SharedModel {
+            name: "Plan.skp".into(),
+            bytes: model_bytes(),
+        };
+        assert!(open_shared_model(&mut e, &mut name, model));
+        assert_eq!(name, "Plan.skp", "the name is for the bar only");
+        assert!(e.doc().model().edges().next().is_some());
+        assert!(e.doc().is_read_only());
+    }
+
+    #[test]
+    fn the_name_changes_only_when_the_model_opened() {
+        let mut e = viewer();
+        let mut name = String::from("Kitchen");
+        let bad = SharedModel {
+            name: "Broken".into(),
+            bytes: b"not a model".to_vec(),
+        };
+        assert!(!open_shared_model(&mut e, &mut name, bad));
+        assert_eq!(name, "Kitchen");
+    }
+
+    #[test]
+    fn open_on_phone_names_a_model_as_the_window_does() {
+        fn p(s: &str) -> Option<&Path> {
+            Some(Path::new(s))
+        }
+        assert_eq!(share_name(p("/a/house.skr"), None, None), "house");
+        assert_eq!(share_name(None, p("/a/desk.skp"), None), "desk");
+        assert_eq!(share_name(None, None, Some("shed.skr")), "shed");
+        assert_eq!(
+            share_name(p("/a/house.skr"), p("/b/old.skp"), None),
+            "house"
+        );
+        assert_eq!(share_name(None, None, None), "Untitled");
+    }
+
+    #[test]
+    fn an_editor_cannot_isolate_even_when_asked() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        e.select_all();
+        assert!(!e.isolate_selection());
+        assert!(!e.isolated());
+        assert!(!viewer_allows(&UiAction::Tool(tools::ToolKind::Line)));
+        assert!(viewer_allows(&UiAction::KeepModel));
     }
 }

@@ -275,8 +275,11 @@ impl Document {
     /// drawing, picking, snapping and Zoom Extents. This is for looking only: the model, the
     /// undo history and the saved file are untouched, but the revision moves so what is derived
     /// from the model is rebuilt. False (nothing changes) when none of `keep` is a root
-    /// instance.
+    /// instance, or when the document is not read only (only a viewer hides parts).
     pub fn isolate(&mut self, keep: &[kernel::InstanceId]) -> bool {
+        if !self.read_only {
+            return false;
+        }
         let root = self.scene.root();
         if !keep.iter().any(|id| root.instance(*id).is_some()) {
             return false;

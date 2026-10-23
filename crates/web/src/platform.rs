@@ -320,6 +320,16 @@ impl Platform for WebPlatform {
         );
     }
 
+    fn can_keep_open_model(&self) -> bool {
+        self.recent.as_ref().is_some_and(|r| r.borrow().can_keep())
+    }
+
+    fn keep_open_model(&self) {
+        if let Some(recent) = &self.recent {
+            recent.borrow_mut().keep_offered();
+        }
+    }
+
     fn delete_recent(&self, id: &str) {
         if let Some(recent) = &self.recent {
             recent.borrow_mut().delete(id);

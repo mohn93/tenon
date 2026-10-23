@@ -61,7 +61,7 @@ fragment (`#v1.<id>.<key>`). It:
    authentication tag) and opens the model read only.
 3. Fits the model to the screen.
 
-Before any of that, as soon as the page's fragment starts `v1.` (valid or not), the fragment and
+Before any of that (in `index.html`, before the module downloads, handing the link to the module through a global it reads once and deletes), as soon as the page's fragment starts `v1.` (valid or not), the fragment and
 any query are removed from the address bar and the history entry (`history.replaceState`), so
 the key is not left in the browser's address, history or a bookmark made afterwards, whatever
 happens next (a wrong key, an unreachable computer). The link is kept in memory only, so after a
@@ -120,31 +120,41 @@ leaves; taps select parts again.
 
 ### Recent
 
-The viewer keeps the last 5 shared models it opened in the phone's browser, and the Recent
-button lists them (name, when, size); a tap opens one, Delete forgets one. They live in the
-browser's IndexedDB: database `sketchup-alt-viewer`, object store `recent` (`id`, `key`, `name`,
-`time`, `blob`), and a small `recent-info` store (`id`, `name`, `time`, `size`) so the list does
-not read every blob. The blob is the encrypted share as the server sent it. The store opens in
-the background after the viewer starts (and is given up on after 3 seconds), so a slow browser
-does not delay the model.
+Recent is opt-in per model. Nothing is kept when a share opens; the part card, and the top of
+the Recent list, offer "Keep on this phone" for the open model (with a line saying that a kept
+model, key included, can be read by pages served at this address). Only then is it stored. The
+Recent button lists the kept models (last 5; name, when, size); a tap opens one, Delete forgets
+one. They live in the browser's IndexedDB: database `sketchup-alt-viewer`, object store `recent`
+(`id`, `key`, `name`, `time`, `blob`), and a small `recent-info` store (`id`, `name`, `time`,
+`size`) so the list does not read every blob. The blob is the encrypted share as the server
+sent it. The store opens in the background after the viewer starts (and is given up on after
+3 seconds), so a slow browser does not delay the model.
 
-What this is and is not: the models are kept on the phone, but the viewer page itself is
-served by the computer, so Recent works while a computer is sharing (any share, not only the
-one that made the entry) and the phone reaches it at the same address. The browser keeps
-IndexedDB per origin (address and port), which is why the app tries port 47240 first for every
-share: the origin stays the same from one share to the next on the same computer and network.
-If that port is taken the share uses another and Recent starts empty there. It does not work
-with the computer off or sharing nothing: a page served over plain `http` on a local network
-cannot install itself for offline use, so the phone has no viewer to open the kept models with.
+What this is and is not:
 
-The key is kept beside the blob. That is deliberate: a kept model must be able to decrypt itself
-without the link. The encryption protects the model on the network and on the computer's server;
-on the phone the kept copy is as private as the browser's own storage (anyone with the unlocked
-phone and the browser's data can read it). Delete removes both. A share over 64 MiB is not kept
-and the Recent list says so. Where the browser blocks IndexedDB (some private windows) nothing
-is kept and the list says that; when the storage is full the list says the model could not be
-kept, and the older ones stay. The oldest beyond 5 are removed only after the new one is safely
-written. Escape (or Done) leaves Measure; Escape also closes a list.
+- The kept model (blob and key) is readable by any page later served from the same
+  `http://<address>:47240` on any network the phone joins, because the browser keeps IndexedDB
+  per origin and a plain-http LAN address is not private to this computer. Keep only models you
+  would let such a page read. The app tries port 47240 first for every share so the origin is
+  the same from one share to the next (if that port is taken another is used and Recent starts
+  empty there).
+- The viewer page is served by the computer, so Recent works while a computer is sharing, after
+  opening that share's link (any share, not only the one that made the entry). It does not work
+  with the computer off or sharing nothing: a page served over plain `http` on a local network
+  cannot install itself for offline use.
+- Reloading the phone page starts the editor, not the viewer: the share link is taken out of
+  the address bar as the page loads, so the reload has no link. Open the link again, or open a
+  kept model from Recent.
+- The page removes the link's `#...` part from the address bar and the tab's history entry
+  (`history.replaceState`) before the viewer's code downloads, but the browser's history list
+  or a QR scanner app may still have recorded the original link. The link stops working once
+  the share stops.
+- The Copy button in the Open on Phone sheet puts the full link, key included, on the clipboard.
+- Delete removes a kept model's blob and key. A model over 64 MiB is not kept and the list says
+  so. Where the browser blocks IndexedDB (some private windows) nothing is kept and the list
+  says that; when the storage is full the list says the model could not be kept, and the older
+  ones stay (the oldest beyond 5 are removed only after the new one is safely written).
+  Escape (or Done) leaves Measure; Escape also closes a list.
 
 ### Touch
 

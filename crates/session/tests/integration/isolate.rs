@@ -43,6 +43,7 @@ fn two_groups() -> (Document, InstanceId, InstanceId) {
 #[test]
 fn isolating_hides_the_others_and_changes_nothing_in_the_model() {
     let (mut d, a, b) = two_groups();
+    d.set_read_only(true);
     assert_ne!(a, b);
     let saved = d.encode_bytes().unwrap();
     let modified = d.is_modified();
@@ -80,6 +81,7 @@ fn isolating_hides_the_others_and_changes_nothing_in_the_model() {
 #[test]
 fn keeping_several_parts_and_unknown_ids() {
     let (mut d, a, b) = two_groups();
+    d.set_read_only(true);
     let ghost = InstanceId(9999);
     let revision = d.revision();
     assert!(!d.isolate(&[]));
@@ -118,17 +120,29 @@ fn isolating_a_freshly_opened_document_leaves_it_unmodified() {
         .map(|(id, _)| id)
         .next()
         .unwrap_or(a);
+    d.set_read_only(true);
     assert!(d.isolate(&[a]));
     assert!(!d.is_modified(), "isolate is not an edit");
     assert!(d.show_all());
     assert!(!d.is_modified(), "nor is Show all");
     // A document that was modified stays modified.
+    d.set_read_only(false);
     run(
         &mut d,
         json!({"type": "add_edge", "start": [0, 0, 5], "end": [1, 0, 5]}),
     );
     assert!(d.is_modified());
+    d.set_read_only(true);
     d.isolate(&[a]);
     d.show_all();
     assert!(d.is_modified());
+}
+
+#[test]
+fn only_a_read_only_document_can_isolate() {
+    let (mut d, a, _) = two_groups();
+    let revision = d.revision();
+    assert!(!d.isolate(&[a]), "an editor never hides parts");
+    assert!(!d.isolated());
+    assert_eq!(d.revision(), revision);
 }

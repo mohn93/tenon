@@ -76,7 +76,7 @@ changes the model. Touch gestures (orbit, pan, pinch, tap, double tap) and the r
 messages), `load` the browser's fetch and history calls, `recent` the Recent list's logic over a
 `Storage` trait (the last 5 models, the 64 MiB limit, ages and sizes) and `idb` its IndexedDB
 storage (database `sketchup-alt-viewer`, stores `recent` and `recent-info`; web-sys features
-`Idb*`). What is kept holds the share's key beside the encrypted blob so a kept model opens without its link (the page itself is still served by the computer, so Recent needs a sharing computer; see phone.md).
+`Idb*`). Keeping is opt-in per model ("Keep on this phone"). What is kept holds the share's key beside the encrypted blob so a kept model opens without its link (the page itself is still served by the computer, so Recent needs a sharing computer; see phone.md).
 
 ## What is off
 

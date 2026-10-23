@@ -54,6 +54,8 @@ pub struct ViewerView<'a> {
     pub recent: &'a [RecentShare],
     /// Why the open model is not kept, when it is not.
     pub recent_note: Option<&'a str>,
+    /// Whether the open model can be kept on this phone (offered, not kept yet).
+    pub can_keep: bool,
 }
 
 /// Lays out the viewer's panels, appending the actions asked for to `actions`. Returns the
@@ -267,11 +269,31 @@ fn parts_list(ctx: &egui::Context, v: &ViewerView, height: f32, actions: &mut Ve
     });
 }
 
+/// "Keep on this phone" for the open model, with what it means.
+fn keep_row(ui: &mut Ui, actions: &mut Vec<UiAction>) {
+    ui.add(
+        Label::new(
+            RichText::new(
+                "A kept model, with its key, can be read by pages served at this address.",
+            )
+            .size(TEXT - 2.0),
+        )
+        .wrap(),
+    );
+    if big_button(ui, "Keep on this phone").clicked() {
+        actions.push(UiAction::KeepModel);
+    }
+}
+
 /// The Recent list: the models kept on this phone, each opened with a tap and removed with
 /// Delete.
 fn recent_list(ctx: &egui::Context, v: &ViewerView, height: f32, actions: &mut Vec<UiAction>) {
     bottom_area(ctx, "viewer-recent", |ui| {
         heading(ui, "Recent", actions);
+        if v.can_keep {
+            keep_row(ui, actions);
+            ui.add_space(4.0);
+        }
         if let Some(note) = v.recent_note {
             ui.add(Label::new(RichText::new(note).size(TEXT)).wrap());
             ui.add_space(4.0);
@@ -313,8 +335,11 @@ fn recent_list(ctx: &egui::Context, v: &ViewerView, height: f32, actions: &mut V
 /// The selected part's card (name, size, "1 of N", Isolate or Show all), or when nothing is
 /// selected but parts are hidden, a bar with Show all.
 fn card(ctx: &egui::Context, v: &ViewerView, actions: &mut Vec<UiAction>) {
-    match v.card {
-        Some(card) => bottom_area(ctx, "viewer-card", |ui| {
+    if v.card.is_none() && !v.isolated && !v.can_keep {
+        return;
+    }
+    bottom_area(ctx, "viewer-card", |ui| {
+        if let Some(card) = v.card {
             ui.add(Label::new(RichText::new(&card.title).size(TEXT + 3.0).strong()).truncate());
             if let Some(size) = &card.size {
                 ui.label(RichText::new(size).size(TEXT));
@@ -332,8 +357,7 @@ fn card(ctx: &egui::Context, v: &ViewerView, actions: &mut Vec<UiAction>) {
                     actions.push(UiAction::Isolate);
                 }
             });
-        }),
-        None if v.isolated => bottom_area(ctx, "viewer-isolated", |ui| {
+        } else if v.isolated {
             ui.horizontal(|ui| {
                 ui.set_min_height(TOUCH_ROW);
                 ui.label(RichText::new("Other parts are hidden").size(TEXT));
@@ -343,9 +367,12 @@ fn card(ctx: &egui::Context, v: &ViewerView, actions: &mut Vec<UiAction>) {
                     }
                 });
             });
-        }),
-        None => {}
-    }
+        }
+        if v.can_keep {
+            ui.add_space(6.0);
+            keep_row(ui, actions);
+        }
+    });
 }
 
 /// Measure's strip under the bar: what to tap, or the distance, and Done.

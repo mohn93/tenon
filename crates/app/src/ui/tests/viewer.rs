@@ -321,3 +321,35 @@ fn an_empty_recent_list_says_so() {
     let h = harness_built(f, PHONE, 3.0);
     assert!(h.query_by_label_contains("Nothing kept").is_some());
 }
+
+#[test]
+fn keeping_the_open_model_is_offered_with_what_it_means() {
+    let mut f = viewer();
+    f.can_keep = true;
+    let mut h = harness_built(f, PHONE, 3.0);
+    assert!(
+        h.query_by_label_contains("read by pages served at this address")
+            .is_some()
+    );
+    let keep = h.get_by_label("Keep on this phone").rect();
+    assert!(keep.height() >= 44.0 && keep.max.x <= PHONE.x, "{keep:?}");
+    click(&mut h, "Keep on this phone");
+    assert_eq!(h.state_mut().take(), vec![UiAction::KeepModel]);
+
+    // Also under a part's card, and in the Recent list.
+    let mut f = viewer();
+    f.can_keep = true;
+    f.part_card = Some(card(false));
+    let h = harness_built(f, PHONE, 3.0);
+    assert!(h.query_by_label("Isolate").is_some());
+    assert!(h.query_by_label("Keep on this phone").is_some());
+    let mut f = viewer();
+    f.can_keep = true;
+    f.viewer_panel = Some(ViewerPanel::Recent);
+    let h = harness_built(f, PHONE, 3.0);
+    assert!(h.query_by_label("Keep on this phone").is_some());
+
+    // Nothing to keep: no button.
+    let h = harness_built(viewer(), PHONE, 3.0);
+    assert!(h.query_by_label("Keep on this phone").is_none());
+}

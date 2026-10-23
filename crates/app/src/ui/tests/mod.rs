@@ -114,6 +114,7 @@ pub(super) struct Fixture {
     pub measure: Option<String>,
     pub kept: Vec<crate::platform::RecentShare>,
     pub kept_note: Option<String>,
+    pub can_keep: bool,
     /// The one selected group or component, which Rename Component and the Name field rename.
     pub rename: Option<RenameTarget>,
     /// The Settings window's values while it is open.
@@ -201,6 +202,7 @@ impl Default for Fixture {
             measure: None,
             kept: Vec::new(),
             kept_note: None,
+            can_keep: false,
             rename: None,
             settings: None,
             recover: None,
@@ -271,6 +273,7 @@ impl Fixture {
                 measure: self.measure.as_deref(),
                 recent: &self.kept,
                 recent_note: self.kept_note.as_deref(),
+                can_keep: self.can_keep,
             },
             sheet: self.sheet.as_ref(),
             rename: self.rename.as_ref(),

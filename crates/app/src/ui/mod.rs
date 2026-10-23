@@ -66,6 +66,8 @@ pub enum UiAction {
     ShowAll,
     /// The viewer: turn Measure on or off.
     MeasureMode(bool),
+    /// The viewer: keep the open model on this phone (Recent list).
+    KeepModel,
     /// The viewer: open the kept model with this id (Recent list).
     OpenKept(String),
     /// The viewer: forget the kept model with this id.
