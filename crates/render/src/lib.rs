@@ -10,6 +10,7 @@ mod shadow_maps;
 pub mod shadows;
 pub mod snapshot;
 pub mod style;
+pub mod sun_shadow;
 pub mod texture;
 
 pub use renderer::{
@@ -17,3 +18,4 @@ pub use renderer::{
 };
 pub use snapshot::Snapshotter;
 pub use style::ViewStyle;
+pub use sun_shadow::SunLight;

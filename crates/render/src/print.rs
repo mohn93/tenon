@@ -6,6 +6,7 @@ use session::{CommandError, Document, ErrorKind};
 
 use crate::Snapshotter;
 use crate::scene::GlassView;
+use crate::sun_shadow::SunLight;
 
 /// What printing made.
 pub struct Printed {
@@ -16,7 +17,7 @@ pub struct Printed {
 }
 
 /// Renders the current view of `doc` as `spec` says: one page per sheet, each tile drawn with
-/// the document's lighting, tag colors and section display on white paper (no ground grid or
+/// the document's lighting, sun shadows, tag colors and section display on white paper (no ground grid or
 /// axes), nothing selected and no open group (the model is printed as it looks closed, without
 /// the fading around an open context). Pixels are composited over white and stored as RGB.
 pub fn render_pdf(
@@ -25,7 +26,10 @@ pub fn render_pdf(
     spec: &PrintSpec,
 ) -> Result<Printed, CommandError> {
     snapshotter.set_print_mode(true);
+    // A print shows the document's sun shadows; the next capture starts without them.
+    snapshotter.set_sun(SunLight::of(doc));
     let printed = render_sheets(snapshotter, doc, spec);
+    snapshotter.set_sun(None);
     snapshotter.set_print_mode(false);
     printed
 }

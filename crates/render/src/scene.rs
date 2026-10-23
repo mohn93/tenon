@@ -28,6 +28,7 @@ use crate::sections::{
     ACTIVE_SECTION_COLOR, CUT_FILL_COLOR, Cut, FADED_ACTIVE_SECTION_COLOR, SectionLook,
     clip_segment, clip_triangle, cut_surface,
 };
+use crate::sun_shadow::SUN_CASTER_OPACITY;
 use crate::texture::layers;
 
 /// A face corner with its selection flag, as `scene_geometry` returns it.
@@ -269,6 +270,9 @@ pub struct SceneBase {
     /// Where each placement's own casting triangles lie in `casters`, with their bounds, in
     /// the order placed; placements casting nothing have none.
     pub caster_chunks: Vec<CasterChunk>,
+    /// The corners of the triangles that cast the sun's shadow, in root coordinates: those of
+    /// shown, non-ghost faces with a side at least `SUN_CASTER_OPACITY` opaque, glowing or not.
+    pub sun_casters: Vec<[f32; 3]>,
 }
 
 /// One placement's casting triangles in `SceneBase::casters`.
@@ -960,6 +964,8 @@ impl Walk<'_> {
             let (emission, glow_color) = face_glow(&front, &back);
             // A lamp's glowing shade does not hide its own light.
             let casts = emission <= 0.0 && !ghost;
+            // The sun is stopped by what is nearly opaque, whatever X-ray makes of it.
+            let sun_casts = !ghost && front.alpha.max(back.alpha) >= SUN_CASTER_OPACITY;
             let mut face_glow = Glow::default();
             for ((&[a, b, c], &[na, nb, nc]), &uvs) in tris.iter().zip(normals).zip(positions) {
                 if glow.is_some() && !ghost {
@@ -974,9 +980,12 @@ impl Walk<'_> {
                 let tri = tri.map(|(p, n, uv)| (t.transform_point3(p), n, uv));
                 let emit = |base: &mut SceneBase, tri: [(DVec3, DVec3, [f32; 4]); 3]| {
                     base.faces.extend(tri.map(corner));
+                    let placed = &base.faces[base.faces.len() - 3..];
                     if casts {
-                        let placed = &base.faces[base.faces.len() - 3..];
                         base.casters.extend(placed.iter().map(|v| v.pos));
+                    }
+                    if sun_casts {
+                        base.sun_casters.extend(placed.iter().map(|v| v.pos));
                     }
                 };
                 if cutting {

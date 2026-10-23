@@ -1460,6 +1460,19 @@ position is the NOAA solar calculator's algorithm (Julian century of the instant
 equation of center, apparent longitude, corrected obliquity, equation of time, hour angle),
 within 0.05 degrees of the NOAA calculator's geometric elevation and azimuth.
 
+Drawing with `on` set (the window, `render_view`, snapshots and raster print/PDF; the hidden-line
+drawing, SVG and library thumbnails ignore it): each face is shaded `dark + light * cos * lit`
+times its color, where `cos` is the cosine of the angle between the side facing the viewer and
+the sun (0 behind it) and `lit` is 0 to 1 from the shadow map. Without `on` faces are shaded by
+the headlight as before. A sun below the horizon gives only the `dark` level and no shadows.
+Faces with an opacity of 0.7 or more (the more opaque side counts) cast the sun's shadow, glowing
+faces included; see-through faces, ghosted and hidden faces and what a section plane cuts away
+do not, and X-ray does not change what casts. With `on_ground` a shadow-only layer on z = 0
+darkens the background where the sun does not reach, by the ratio of the dark level to the lit
+ground's; it is not drawn when the camera is below z = 0. The shadow map is one 2048 pixel
+(1024 on the web) depth map along the sun, fitted to the casters' bounds, so a model many times
+larger than the detail loses sharpness, and redrawn only when the sun or the casters change.
+
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`

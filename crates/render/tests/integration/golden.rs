@@ -123,6 +123,7 @@ fn check(name: &str, doc: &Document) {
         return;
     }
     snap.set_section_display(doc.section_display);
+    snap.set_sun(render::SunLight::of(doc));
     let actual = snap
         .capture(
             doc.scene(),
@@ -1074,6 +1075,25 @@ fn golden_wall_shading_the_floor_from_a_lamp() {
     check("shadow", &d);
 }
 
+#[test]
+fn golden_sun_shadow() {
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    run(
+        &mut d,
+        Command::SetShadows {
+            on: Some(true),
+            date: None,
+            time: None,
+            light: None,
+            dark: None,
+            on_ground: None,
+        },
+    );
+    look(&mut d, [4.5, -3.5, 4.0], [1.0, 1.0, 0.3]);
+    check("sun_shadow", &d);
+}
+
 /// Every stored golden image belongs to a test here, so stale ones do not pile up.
 #[test]
 fn every_golden_image_has_a_test() {
@@ -1095,6 +1115,7 @@ fn every_golden_image_has_a_test() {
         "night",
         "positioned",
         "shadow",
+        "sun_shadow",
         "section_cut",
         "section_group",
     ];

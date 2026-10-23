@@ -7,6 +7,7 @@ use session::{Camera, Lighting, SectionDisplay};
 
 use crate::Renderer;
 use crate::scene::GlassView;
+use crate::sun_shadow::SunLight;
 
 /// Renders models to memory with its own offscreen renderer.
 pub struct Snapshotter {
@@ -74,6 +75,18 @@ impl Snapshotter {
     /// ground grid and axes.
     pub fn set_print_mode(&mut self, on: bool) {
         self.renderer.set_print_mode(on);
+    }
+
+    /// Lights the day captures from now on with `sun` (see `SunLight::of`); None, the default,
+    /// shades by the headlight. Night captures ignore it.
+    pub fn set_sun(&mut self, sun: Option<SunLight>) {
+        self.renderer.set_sun(sun);
+    }
+
+    /// How many times the sun's shadow map has been drawn: once per change of the sun or the
+    /// scene, not per capture.
+    pub fn sun_maps_drawn(&self) -> u64 {
+        self.renderer.sun_maps_drawn()
     }
 
     /// Shows section planes and cuts as `display` says in the captures from now on.

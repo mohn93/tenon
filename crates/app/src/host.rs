@@ -256,6 +256,7 @@ impl Host for AppHost<'_> {
             hidden_geometry: doc.hidden_geometry,
         });
         snapshotter.set_section_display(doc.section_display);
+        snapshotter.set_sun(render::SunLight::of(doc));
         snapshotter.capture(
             doc.scene(),
             doc.context(),

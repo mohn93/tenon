@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use glam::DAffine3;
+use glam::{DAffine3, Mat4, Vec3};
 use kernel::{EntityId, InstanceId, Scene};
 use session::{Camera, Lighting, SectionDisplay, world_drawing_axes};
 use wgpu::util::DeviceExt;
@@ -19,6 +19,7 @@ use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
 use crate::style::ViewStyle;
+use crate::sun_shadow::{SUN_MAP_SIZE, SunFit, SunLight, SunMap, depth_texture, fit};
 use crate::texture::TextureArray;
 
 pub const SAMPLE_COUNT: u32 = 4;
@@ -187,6 +188,14 @@ struct LightingUniforms {
     /// The step in pixels between the copies of a wide edge (x, see `vs_edge_wide`), of a wide
     /// axis (y) and of a section cut edge (z, see `vs_cut_edge_wide`).
     wide: [f32; 4],
+    /// xyz: the unit vector toward the sun; w: 0 without sun shading, 1 with it, 2 with its
+    /// shadow map too.
+    sun: [f32; 4],
+    /// x: the direct light a face square-on to the sun adds; y: the light a face in shadow
+    /// keeps; z: the world size of a map texel; w: the world depth the map spans.
+    sun_levels: [f32; 4],
+    /// World to the sun map's clip space.
+    sun_view_proj: [f32; 16],
     lights: [LightUniform; MAX_LIGHTS],
 }
 
@@ -211,6 +220,9 @@ impl LightingUniforms {
             hover_face: [0.0; 4],
             hover_edge: [0.0; 4],
             wide: [0.0; 4],
+            sun: [0.0; 4],
+            sun_levels: [0.0; 4],
+            sun_view_proj: Mat4::IDENTITY.to_cols_array(),
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
         for ((u, l), slot) in uniforms.lights.iter_mut().zip(used).zip(shadow_slots) {
@@ -241,6 +253,33 @@ impl LightingUniforms {
         uniforms.canvas_top = style.day_canvas[0];
         uniforms.canvas_bottom = style.day_canvas[1];
         uniforms
+    }
+}
+
+/// The sun lighting a frame: the sun, and the map fitted to the casters when it has shadows.
+struct SunFrame {
+    light: SunLight,
+    fit: Option<SunFit>,
+}
+
+impl LightingUniforms {
+    /// Shades by the sun (see `sun_shade` in scene.wgsl). Below the horizon only the dark level
+    /// shades.
+    fn set_sun(&mut self, sun: &SunFrame) {
+        let SunLight {
+            direction,
+            light,
+            dark,
+            ..
+        } = sun.light;
+        let mode = if sun.fit.is_some() { 2.0 } else { 1.0 };
+        self.sun = [direction.x, direction.y, direction.z, mode];
+        let direct = if sun.light.is_up() { light } else { 0.0 };
+        let (texel, range, view_proj) = sun.fit.map_or((0.0, 1.0, Mat4::IDENTITY), |f| {
+            (f.texel, f.depth_range, f.view_proj)
+        });
+        self.sun_levels = [direct, dark, texel, range];
+        self.sun_view_proj = view_proj.to_cols_array();
     }
 }
 
@@ -442,6 +481,8 @@ pub struct Renderer {
     wide_edge_pipeline: wgpu::RenderPipeline,
     /// The day canvas's gradient, when the style has one.
     canvas_pipeline: wgpu::RenderPipeline,
+    /// The ground's sun shadows, multiplied over the background.
+    sun_ground_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
     /// The fill of closed cuts, flat, nearer than the faces it lies on.
     cut_fill_pipeline: wgpu::RenderPipeline,
@@ -473,6 +514,21 @@ pub struct Renderer {
     caster_chunks: Vec<CasterChunk>,
     /// Counts the changes of the casters, so shadow maps drawn for older ones are drawn again.
     caster_generation: u64,
+    /// The sun's settings as of the last `set_sun`; None shades by the headlight.
+    sun: Option<SunLight>,
+    /// The sun's shadow map, made when the first frame needs it.
+    sun_map: Option<SunMap>,
+    sun_sampler: wgpu::Sampler,
+    /// Bound as the sun map until there is one.
+    sun_placeholder: wgpu::TextureView,
+    /// The sun casters' corners as of the last `set_model`, their vertex buffer (None when
+    /// there are none), their bounds, and a count of their changes, as for the lamps' casters.
+    sun_corners: Vec<[f32; 3]>,
+    sun_casters: Option<wgpu::Buffer>,
+    sun_bounds: Option<(Vec3, Vec3)>,
+    sun_generation: u64,
+    /// The ground quad the sun's shadows are drawn on, and the rectangle it was made for.
+    sun_ground: Option<(Mesh, [[f32; 2]; 2])>,
     /// Day or night, as of the last `set_lighting`.
     lighting: Lighting,
     /// Faces drawn in their tags' colors, as of the last `set_color_by_tag` (see
@@ -586,6 +642,25 @@ impl Renderer {
                 count: None,
             },
         ];
+        // The sun's shadow map and its sampler: a 2D depth texture, which every backend has.
+        let sun_entries = [
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
+        ];
         let scene_entries = [
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -625,9 +700,9 @@ impl Renderer {
             },
         ];
         let entries = if max_shadows.is_some() {
-            [&scene_entries[..], &shadow_entries[..]].concat()
+            [&scene_entries[..], &shadow_entries[..], &sun_entries[..]].concat()
         } else {
-            scene_entries.to_vec()
+            [&scene_entries[..], &sun_entries[..]].concat()
         };
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera and textures"),
@@ -843,6 +918,31 @@ impl Renderer {
             },
             None,
         );
+        // The ground's sun shadows: the background times how much darker the shadow makes the
+        // ground (see `fs_sun_ground`), drawn without depth.
+        let sun_ground_pipeline = pipeline(
+            "sun ground",
+            "vs_sun_ground",
+            "fs_sun_ground",
+            &lines_only,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Always,
+            },
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Dst,
+                    dst_factor: wgpu::BlendFactor::Zero,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+        );
         let guide_pipeline = pipeline(
             "guides",
             "vs_guide",
@@ -979,6 +1079,15 @@ impl Renderer {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
+        let sun_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sun map"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        // Bound until the first frame with sun shadows makes the map.
+        let sun_placeholder = depth_texture(device, "no sun map", 1, false);
         let textures = TextureArray::new(device, queue, &Scene::default());
         let shadow_maps = max_shadows.map(|max| ShadowMaps::new(device, max));
         let bind_group = bind_group(
@@ -988,6 +1097,7 @@ impl Renderer {
             &textures,
             &sampler,
             shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
+            (&sun_placeholder, &sun_sampler),
         );
 
         let (flat_ground, vertical_axis, flat_axes) =
@@ -1006,6 +1116,7 @@ impl Renderer {
             edge_pipeline,
             wide_edge_pipeline,
             canvas_pipeline,
+            sun_ground_pipeline,
             guide_pipeline,
             cut_fill_pipeline,
             cut_edge_pipeline,
@@ -1024,6 +1135,15 @@ impl Renderer {
             casters: None,
             caster_chunks: Vec::new(),
             caster_generation: 0,
+            sun: None,
+            sun_map: None,
+            sun_sampler,
+            sun_placeholder,
+            sun_casters: None,
+            sun_corners: Vec::new(),
+            sun_bounds: None,
+            sun_generation: 0,
+            sun_ground: None,
             lighting: Lighting::Day,
             color_by_tag: false,
             glass_view: GlassView::default(),
@@ -1122,6 +1242,25 @@ impl Renderer {
             self.caster_corners = base.casters;
         }
         self.caster_chunks = base.caster_chunks;
+        // The same for the sun's map.
+        if base.sun_casters != self.sun_corners {
+            self.sun_generation += 1;
+            self.sun_casters = (!base.sun_casters.is_empty()).then(|| {
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("sun casters"),
+                        contents: bytemuck::cast_slice(&base.sun_casters),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    })
+            });
+            self.sun_bounds = base.sun_casters.iter().map(|&p| Vec3::from(p)).fold(
+                None,
+                |bounds: Option<(Vec3, Vec3)>, p| {
+                    Some(bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))))
+                },
+            );
+            self.sun_corners = base.sun_casters;
+        }
     }
 
     /// Draws the axes (and the grid's lines through the world origin) as the drawing axes
@@ -1147,6 +1286,12 @@ impl Renderer {
             self.shadow_maps
                 .as_ref()
                 .map(|m| (&m.cubes, &self.shadow_sampler)),
+            (
+                self.sun_map
+                    .as_ref()
+                    .map_or(&self.sun_placeholder, |m| &m.view),
+                &self.sun_sampler,
+            ),
         );
     }
 
@@ -1227,6 +1372,68 @@ impl Renderer {
         let changed = self.section_display != display;
         self.section_display = display;
         changed
+    }
+
+    /// Shades the frames drawn from now on by day with `sun`'s light and shadows instead of the
+    /// headlight; None shades by the headlight. Night ignores it.
+    pub fn set_sun(&mut self, sun: Option<SunLight>) {
+        self.sun = sun;
+    }
+
+    /// How many times the sun's shadow map has been drawn since the renderer was made: once per
+    /// change of the sun or the casters, not per frame.
+    pub fn sun_maps_drawn(&self) -> u64 {
+        self.sun_map.as_ref().map_or(0, |m| m.drawn)
+    }
+
+    /// The sun for a frame, with its map drawn (or kept) if it has one. None by night or
+    /// without sun shading.
+    fn sun_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Option<SunFrame> {
+        let light = self.sun.filter(|_| self.lighting == Lighting::Day)?;
+        let bounds = self.sun_bounds.filter(|_| light.is_up());
+        let fit = bounds.map(|(lo, hi)| fit(light.direction, lo, hi, SUN_MAP_SIZE));
+        if let Some(fit) = &fit {
+            if self.sun_map.is_none() {
+                self.sun_map = Some(SunMap::new(&self.device));
+                self.rebind();
+            }
+            let casters = self
+                .sun_casters
+                .as_ref()
+                .map(|b| (b, self.sun_corners.len() as u32));
+            if let Some(map) = &mut self.sun_map {
+                map.draw(
+                    &self.queue,
+                    encoder,
+                    &fit.view_proj,
+                    self.sun_generation,
+                    casters,
+                );
+            }
+        }
+        Some(SunFrame { light, fit })
+    }
+
+    /// The ground quad for `ground`, kept while it stays the same.
+    fn sun_ground_mesh(&mut self, ground: [glam::Vec2; 2]) -> Option<&Mesh> {
+        let key = ground.map(|v| v.to_array());
+        if self.sun_ground.as_ref().map(|(_, k)| *k) != Some(key) {
+            let [lo, hi] = ground;
+            let corner = |x: f32, y: f32| LineVertex {
+                pos: [x, y, 0.0],
+                color: [0.0; 4],
+            };
+            let quad = [
+                corner(lo.x, lo.y),
+                corner(hi.x, lo.y),
+                corner(hi.x, hi.y),
+                corner(lo.x, lo.y),
+                corner(hi.x, hi.y),
+                corner(lo.x, hi.y),
+            ];
+            self.sun_ground = mesh(&self.device, "sun ground", &quad).map(|m| (m, key));
+        }
+        self.sun_ground.as_ref().map(|(m, _)| m)
     }
 
     /// Lights the frames drawn from now on by day or by night.
@@ -1417,6 +1624,7 @@ impl Renderer {
             });
         let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
         let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
+        let sun = self.sun_frame(&mut encoder);
         let mut lighting = LightingUniforms::new(
             &used,
             &shadow_slots,
@@ -1424,6 +1632,9 @@ impl Renderer {
             &self.style,
             (viewport.width, viewport.height),
         );
+        if let Some(sun) = &sun {
+            lighting.set_sun(sun);
+        }
         if let Some((_, look)) = self.hover {
             let [r, g, b] = look.face;
             lighting.hover_face = [r, g, b, look.face_mix];
@@ -1438,6 +1649,12 @@ impl Renderer {
         lighting.wide[2] = cut_step;
         self.queue
             .write_buffer(&self.lighting_uniforms, 0, bytemuck::bytes_of(&lighting));
+        // The ground shows the sun's shadows unless the camera looks up at it from below.
+        let ground_shadows = sun
+            .as_ref()
+            .filter(|s| s.light.on_ground && camera.eye.z >= 0.0)
+            .and_then(|s| s.fit)
+            .and_then(|f| self.sun_ground_mesh(f.ground).map(|m| m.count));
         let targets = self.targets.as_ref().expect("targets just created");
         let overlay = mesh(&self.device, "overlay", overlay);
         // Guides and annotations: both drawn anew for the camera, in the same pipeline.
@@ -1516,6 +1733,10 @@ impl Renderer {
                         pass.draw(0..mesh.count, 0..1);
                     }
                 };
+                if let (Some(count), Some((ground, _))) = (ground_shadows, &self.sun_ground) {
+                    bind(&mut pass, &self.sun_ground_pipeline, ground);
+                    pass.draw(0..count, 0..1);
+                }
                 if !self.print {
                     draw(
                         &mut pass,
@@ -1612,7 +1833,8 @@ impl Renderer {
 }
 
 /// The bind group every pipeline uses: the camera uniforms, the material textures and their
-/// sampler, the lighting uniforms and, when there are any, the shadow maps and their sampler.
+/// sampler, the lighting uniforms and, when there are any, the shadow maps and their sampler,
+/// and the sun's shadow map with its sampler.
 fn bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1620,6 +1842,7 @@ fn bind_group(
     textures: &TextureArray,
     sampler: &wgpu::Sampler,
     shadows: Option<(&wgpu::TextureView, &wgpu::Sampler)>,
+    (sun_map, sun_sampler): (&wgpu::TextureView, &wgpu::Sampler),
 ) -> wgpu::BindGroup {
     let mut entries = vec![
         wgpu::BindGroupEntry {
@@ -1649,6 +1872,14 @@ fn bind_group(
             resource: wgpu::BindingResource::Sampler(compare),
         });
     }
+    entries.push(wgpu::BindGroupEntry {
+        binding: 6,
+        resource: wgpu::BindingResource::TextureView(sun_map),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 7,
+        resource: wgpu::BindingResource::Sampler(sun_sampler),
+    });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera and textures"),
         layout,

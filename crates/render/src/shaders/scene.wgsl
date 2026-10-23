@@ -10,6 +10,9 @@ struct Uniforms {
 // One layer per textured material (see texture.rs); it repeats both ways.
 @group(0) @binding(1) var textures: texture_2d_array<f32>;
 @group(0) @binding(2) var texture_sampler: sampler;
+// The sun's shadow map, with a sampler comparing a depth with it (see sun_shadow.rs).
+@group(0) @binding(6) var sun_map: texture_depth_2d;
+@group(0) @binding(7) var sun_sampler: sampler_comparison;
 
 // A point light from glowing faces (see lights.rs).
 struct Light {
@@ -44,6 +47,14 @@ struct Lighting {
     // The step in pixels between the copies of a wide edge (x), of a wide axis (y) and of a section
     // cut edge (z).
     wide: vec4<f32>,
+    // xyz: the unit vector toward the sun; w: 0 without sun shading, 1 with it, 2 with its shadow
+    // map too.
+    sun: vec4<f32>,
+    // x: the direct light a face square-on to the sun adds; y: the light a face in shadow keeps;
+    // z: the world size of a map texel; w: the world depth the map spans.
+    sun_levels: vec4<f32>,
+    // World to the sun map's clip space.
+    sun_view_proj: mat4x4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -314,6 +325,46 @@ fn lamp_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
+// How much of the sun reaches `p` on a surface facing `n` toward the sun by `facing` (a cosine):
+// 1 lit, 0 in shadow. The point is moved off the surface along its normal, more where the sun
+// grazes it, and compared with the map in 3 x 3 taps a texel apart, each filtered over 2 x 2
+// texels by the comparing sampler.
+const SUN_NORMAL_OFFSET: f32 = 1.0;
+const SUN_SLOPE_OFFSET: f32 = 1.5;
+const SUN_BIAS: f32 = 1.5;
+
+fn sun_lit(p: vec3<f32>, n: vec3<f32>, facing: f32) -> f32 {
+    let texel = lighting.sun_levels.z;
+    let sine = sqrt(max(1.0 - facing * facing, 0.0));
+    let moved = p + n * (texel * (SUN_NORMAL_OFFSET + SUN_SLOPE_OFFSET * sine));
+    let clip = lighting.sun_view_proj * vec4<f32>(moved, 1.0);
+    let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || clip.z > 1.0 {
+        return 1.0;
+    }
+    let reference = clip.z - SUN_BIAS * texel / lighting.sun_levels.w;
+    let step = 1.0 / f32(textureDimensions(sun_map).x);
+    var lit = 0.0;
+    for (var i = -1; i <= 1; i++) {
+        for (var j = -1; j <= 1; j++) {
+            let at = uv + vec2<f32>(f32(i), f32(j)) * step;
+            lit += textureSampleCompareLevel(sun_map, sun_sampler, at, reference);
+        }
+    }
+    return lit / 9.0;
+}
+
+// The light the sun gives `p` on a surface facing `n`: what shadow keeps, plus the direct light
+// by Lambert's cosine, where the map lets it through.
+fn sun_shade(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    let facing = max(dot(n, lighting.sun.xyz), 0.0);
+    var lit = 1.0;
+    if lighting.sun.w > 1.5 && facing > 0.0 {
+        lit = sun_lit(p, n, facing);
+    }
+    return lighting.sun_levels.y + lighting.sun_levels.x * facing * lit;
+}
+
 // Each side shows its own color (its material's, or the default: light in front, blue-gray
 // behind), or its material's texture instead; ambient light, a headlight at the eye (from the
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
@@ -338,7 +389,10 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     if select(in.glow.y, in.glow.x, front) > 0.5 {
         return shown;
     }
-    let shade = lighting.mode.y + lighting.mode.z * max(dot(n, to_eye), 0.0);
+    var shade = lighting.mode.y + lighting.mode.z * max(dot(n, to_eye), 0.0);
+    if lighting.sun.w > 0.5 {
+        shade = sun_shade(in.world, n);
+    }
     return shown * (vec3<f32>(shade) + lamp_light(in.world, n));
 }
 
@@ -400,4 +454,28 @@ fn fs_preview(in: PreviewOut) -> @location(0) vec4<f32> {
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
     let shade = lighting.mode.y + lighting.mode.z * abs(dot(n, to_eye));
     return vec4<f32>(in.color.rgb * shade, in.color.a);
+}
+
+// The ground's shadows (see sun_shadow.rs): a quad on z = 0 drawn over the background, which it
+// multiplies by how much darker the ground is in shadow than in the sun.
+struct GroundOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) world: vec3<f32>,
+};
+
+@vertex
+fn vs_sun_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> GroundOut {
+    var out: GroundOut;
+    out.pos = u.view_proj * vec4<f32>(pos, 1.0);
+    out.world = pos;
+    return out;
+}
+
+@fragment
+fn fs_sun_ground(in: GroundOut) -> @location(0) vec4<f32> {
+    let facing = lighting.sun.z;
+    let lit = sun_lit(in.world, vec3<f32>(0.0, 0.0, 1.0), facing);
+    let sunny = lighting.sun_levels.y + lighting.sun_levels.x * facing;
+    let ratio = lighting.sun_levels.y / max(sunny, 1e-4);
+    return vec4<f32>(vec3<f32>(mix(ratio, 1.0, lit)), 1.0);
 }

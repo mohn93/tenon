@@ -99,6 +99,7 @@ impl Host for HeadlessHost {
                 hidden_geometry: doc.hidden_geometry,
             });
             s.set_section_display(doc.section_display);
+            s.set_sun(render::SunLight::of(doc));
             s.capture(
                 doc.scene(),
                 doc.context(),

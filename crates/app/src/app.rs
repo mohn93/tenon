@@ -180,7 +180,8 @@ type Drawn = (u64, BTreeSet<EntityId>, Vec<InstanceId>);
 
 /// What the window shows that a request can change: the model (its revision), the selection,
 /// the open context, the camera, the lighting, coloring by tag, the section display, X-ray,
-/// Hidden Geometry and the editor's state.
+/// Hidden Geometry, the shadow settings and the location (the sun's inputs) and the editor's
+/// state.
 type Shown = (
     u64,
     BTreeSet<EntityId>,
@@ -191,6 +192,8 @@ type Shown = (
     session::SectionDisplay,
     bool,
     bool,
+    kernel::Shadows,
+    kernel::Location,
     EditorState,
 );
 
@@ -207,6 +210,8 @@ fn shown(editor: &Editor) -> Shown {
         doc.section_display,
         doc.x_ray,
         doc.hidden_geometry,
+        doc.shadows,
+        doc.scene().location(),
         editor_state(editor),
     )
 }
@@ -2784,6 +2789,7 @@ impl State {
         self.renderer
             .set_pixels_per_point(gui_frame.pixels_per_point);
         self.renderer.set_lighting(doc.lighting);
+        self.renderer.set_sun(render::SunLight::of(doc));
         // The tools' marker and lines are egui's (the HUD); the renderer draws no overlay.
         self.renderer
             .render_in(&target, size, self.view, &self.editor.doc().camera, &[]);
@@ -4235,6 +4241,32 @@ mod tests {
         assert_eq!(shown(&e), before);
         e.set_import_units(crate::editor::ImportUnits::Feet);
         assert_ne!(shown(&e), before);
+    }
+
+    #[test]
+    fn a_request_that_changes_the_sun_still_shows() {
+        let mut e = Editor::new(DVec2::new(800.0, 600.0), 1.0);
+        let run = |e: &mut Editor, json: serde_json::Value| {
+            e.execute(serde_json::from_value(json).unwrap()).unwrap();
+        };
+        let before = shown(&e);
+        run(
+            &mut e,
+            serde_json::json!({"type": "set_shadows", "on": true}),
+        );
+        let shadows = shown(&e);
+        assert_ne!(shadows, before, "the shadow settings");
+        run(
+            &mut e,
+            serde_json::json!({"type": "set_shadows", "time": "09:00"}),
+        );
+        assert_ne!(shown(&e), shadows, "the time");
+        let moved = shown(&e);
+        run(
+            &mut e,
+            serde_json::json!({"type": "set_location", "latitude": 10.0}),
+        );
+        assert_ne!(shown(&e), moved, "the location");
     }
 
     #[test]
