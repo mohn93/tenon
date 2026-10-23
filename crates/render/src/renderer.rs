@@ -2402,8 +2402,10 @@ fn draw_candidates(
 
 /// The vertices of the edges (both of each, in order) that the profile copies and the endpoint
 /// marks can ever draw, by what the edges alone say: the open instance's box is drawn as it is,
-/// and an edge whose two faces continue each other (they lie on opposite sides of it in one
-/// plane) is never a silhouette, so a soft one is never drawn and an ordinary one is no profile.
+/// and an edge whose two faces continue each other exactly (their side directions are exact
+/// opposites, which makes the shader's profile product negative or zero for every eye) is never
+/// a silhouette, so a soft one is never drawn and an ordinary one is no profile. Faces that are
+/// only nearly coplanar still have a thin wedge of eyes that see a silhouette, so they stay.
 /// Which of the rest are profiles depends on the eye, so the shader still decides that.
 fn edge_candidates(extras: &[EdgeExtra]) -> (Vec<u32>, Vec<u32>) {
     let mut profiles = Vec::new();
@@ -2417,7 +2419,7 @@ fn edge_candidates(extras: &[EdgeExtra]) -> (Vec<u32>, Vec<u32>) {
         let first = 2 * k as u32;
         let a = Vec3::from_slice(&e.side_a);
         let b = Vec3::from_slice(&e.side_b);
-        let continues = e.side_a[3] > 0.5 && e.side_b[3] > 0.5 && a.dot(b) < -0.999_999;
+        let continues = e.side_a[3] > 0.5 && e.side_b[3] > 0.5 && (a + b) == Vec3::ZERO;
         if !continues {
             profiles.extend([first, first + 1]);
         }
@@ -2463,17 +2465,18 @@ mod tests {
         let right = [1.0, 0.0, 0.0, 1.0];
         let none = [0.0; 4];
         let extras: Vec<EdgeExtra> = [
-            edge(0.0, up, right),                  // 0: a box edge
-            edge(1.0, up, right),                  // 1: an ordinary corner
-            edge(1.0, up, down),                   // 2: an ordinary edge between coplanar faces
-            edge(2.0, up, down),                   // 3: a soft one, between coplanar faces
-            edge(2.0, up, [0.0, 0.2, -0.98, 1.0]), // 4: a soft one on a curve
-            edge(1.0, up, none),                   // 5: an edge with one face
+            edge(0.0, up, right),                    // 0: a box edge
+            edge(1.0, up, right),                    // 1: an ordinary corner
+            edge(1.0, up, down),                     // 2: an ordinary edge between coplanar faces
+            edge(2.0, up, down),                     // 3: a soft one, between coplanar faces
+            edge(2.0, up, [0.0, 0.2, -0.98, 1.0]),   // 4: a soft one on a curve
+            edge(1.0, up, none),                     // 5: an edge with one face
+            edge(2.0, up, [0.0, 0.0004, -1.0, 1.0]), // 6: a soft one, nearly but not exactly flat
         ]
         .concat();
         let (profiles, endpoints) = edge_candidates(&extras);
-        assert_eq!(profiles, [2, 3, 8, 9, 10, 11]);
-        assert_eq!(endpoints, [2, 3, 4, 5, 8, 9, 10, 11]);
+        assert_eq!(profiles, [2, 3, 8, 9, 10, 11, 12, 13]);
+        assert_eq!(endpoints, [2, 3, 4, 5, 8, 9, 10, 11, 12, 13]);
     }
 
     #[test]

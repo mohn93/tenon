@@ -721,3 +721,43 @@ fn no_effects_allocate_no_edge_extras() {
     assert!(bytes(Some(&profiles(4.0))) > 0);
     assert_eq!(bytes(Some(&StyleSettings::default())), 0, "and back again");
 }
+
+/// Two long quads meeting at a soft ridge along y = 50: the back one falls away by 0.023 degrees
+/// from there, so the faces' normals differ by less than the f32 noise a coplanarity test allows.
+fn soft_ridge() -> Scene {
+    let mut m = Model::new();
+    let p = |y: f64, z: f64, x: f64| DVec3::new(x, y, z);
+    let quad = |y0: f64, z0: f64, y1: f64, z1: f64| {
+        [
+            p(y0, z0, 2.0),
+            p(y0, z0, 4.0),
+            p(y1, z1, 4.0),
+            p(y1, z1, 2.0),
+        ]
+    };
+    m.add_polygon(&quad(1.0, 1.0, 50.0, 1.0)).unwrap();
+    m.add_polygon(&quad(50.0, 1.0, 1000.0, 0.62)).unwrap();
+    let edges: Vec<_> = m.edges().map(|(id, _)| id).collect();
+    m.soften_edges(&edges, true);
+    Scene::from_root(m)
+}
+
+#[test]
+fn a_soft_ridge_between_nearly_flat_faces_is_a_silhouette() {
+    // Above the front half's plane and below the back half's: the ridge is the skyline.
+    let mut camera = camera(
+        [3.0, -5.0, 1.01],
+        [3.0, 50.0, 1.0098],
+        Projection::Perspective,
+    );
+    camera.fov_y = 0.1f64.to_radians();
+    let Some(shot) = shoot(&soft_ridge(), Some(&profiles(8.0)), &camera) else {
+        return;
+    };
+    let column = shot.column_runs(W / 2, H);
+    // The surface starts below the horizon at row 57; the ridge profile is drawn above it.
+    assert!(
+        column.first().is_some_and(|r| r.start <= 55),
+        "the ridge profile is drawn: {column:?}"
+    );
+}
