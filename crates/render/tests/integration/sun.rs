@@ -368,6 +368,14 @@ fn the_sun_casters_are_held_only_while_the_sun_shades() {
     let again = shoot(&mut snap, &d, Some(lit), Lighting::Day);
     assert_eq!(again.pixels, reference.pixels);
     assert_eq!(snap.sun_maps_drawn(), 2);
+    // Off and on again with the scene untouched, as the window does: the shadow returns.
+    snap.set_sun(None);
+    snap.set_sun(Some(lit));
+    let back = snap
+        .capture_prepared(&d.camera, Lighting::Day, W, H)
+        .unwrap();
+    assert_eq!(back, reference.pixels);
+    assert_eq!(snap.sun_maps_drawn(), 3);
 }
 
 #[test]

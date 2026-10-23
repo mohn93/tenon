@@ -125,9 +125,10 @@ pub fn flat_axis_lines_in(colors: [[f32; 4]; 3], toward: [f32; 4]) -> Vec<LineVe
 }
 
 /// Whether an axis segment lies on the ground, give or take what a moved origin's rounding
-/// leaves (a micron); such segments are drawn flat, at z = 0 exactly.
+/// leaves (a micron); such segments are drawn flat, at z = 0 exactly. Both ends must, or the
+/// snap would move an end that is not on the ground.
 fn is_flat(seg: &[LineVertex]) -> bool {
-    seg[1].pos[2].abs() < 1e-6
+    seg.iter().all(|v| v.pos[2].abs() < 1e-6)
 }
 
 /// The axis segments of `frame` lying on z = 0, as in `flat_ground_lines_at`.
@@ -290,6 +291,17 @@ mod tests {
         assert!(flat.iter().all(|v| v.pos[2] == 0.0), "snapped to z = 0");
         let vertical = vertical_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
         assert_eq!(vertical.len(), 4);
+    }
+
+    #[test]
+    fn a_raised_axis_ending_on_the_ground_is_not_flattened() {
+        // The blue axis below (2, 3, 1000) ends at z = 0, but starts 1000 m up.
+        let frame = DAffine3::from_translation(DVec3::new(2.0, 3.0, 1000.0));
+        let flat = flat_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        assert!(flat.is_empty());
+        let vertical = vertical_axis_lines_at([AXIS_X, AXIS_Y, AXIS_Z], BACKGROUND, frame);
+        assert_eq!(vertical.len(), 12);
+        assert!(vertical.iter().any(|v| v.pos == [2.0, 3.0, 0.0]));
     }
 
     #[test]

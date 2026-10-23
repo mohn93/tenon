@@ -7,7 +7,7 @@ use kernel::{EdgeStyle, Fog, FogColor, Ground, Sketchy, StyleSettings};
 use render::{Renderer, SunLight};
 use session::Lighting;
 
-use crate::golden::{add_box, doc, look};
+use crate::golden::{add_box, doc, look, run};
 
 #[test]
 fn every_pipeline_builds_under_webgl2_limits() {
@@ -31,6 +31,15 @@ fn every_pipeline_builds_under_webgl2_limits() {
     }));
     let mut d = doc();
     add_box(&mut d, [0.0, 0.0]);
+    // An edge up the front face splits it in two coplanar faces, so the indexed candidate draw
+    // of profiles and endpoints runs too.
+    run(
+        &mut d,
+        session::Command::AddEdge {
+            start: [1.0, 0.0, 0.0],
+            end: [1.0, 0.0, 1.0],
+        },
+    );
     look(&mut d, [6.0, -8.0, 5.0], [1.0, 0.75, 0.5]);
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut r = Renderer::without_shadows(&device, &queue, format);
