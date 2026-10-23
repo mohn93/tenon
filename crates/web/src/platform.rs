@@ -6,11 +6,11 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use app::app::AppEvent;
+use app::app::{AppEvent, SharedModel};
 use app::clipboard::Clipboard;
 use app::platform::{
-    Answer, Download, Features, OpenKind, OpenRequest, Picked, Platform, Reply, SaveRequest, Saved,
-    Source, UnsavedChoice, UnsavedPrompt,
+    Answer, Download, Features, OpenKind, OpenRequest, Picked, Platform, RecentShare, Reply,
+    SaveRequest, Saved, Source, UnsavedChoice, UnsavedPrompt,
 };
 use js_sys::Reflect;
 use wasm_bindgen::JsCast;
@@ -22,6 +22,7 @@ use winit::keyboard::ModifiersState;
 
 use crate::files;
 use crate::names::{self, Handles, Storage};
+use crate::recent::{self, Recent};
 
 /// The file handle Save writes to (File System Access API), see `names::Handles`.
 type KeptFile = Rc<RefCell<Handles<JsValue>>>;
@@ -35,12 +36,13 @@ pub struct WebPlatform {
     held: Rc<Cell<ModifiersState>>,
     /// Reaches the window: late errors for its status line.
     proxy: EventLoopProxy<AppEvent>,
-    /// The phone viewer: `Features::VIEWER` rather than `WEB`.
-    viewer: bool,
+    /// The phone viewer's Recent list; None: this is the editor (`Features::WEB`), not the
+    /// viewer (`Features::VIEWER`).
+    recent: Option<Rc<RefCell<Recent>>>,
 }
 
 impl WebPlatform {
-    pub fn new(proxy: EventLoopProxy<AppEvent>, viewer: bool) -> Self {
+    pub fn new(proxy: EventLoopProxy<AppEvent>, recent: Option<Rc<RefCell<Recent>>>) -> Self {
         let clip = Rc::new(RefCell::new(None));
         watch_clipboard(&clip, &proxy);
         let modified = Rc::new(Cell::new(false));
@@ -53,7 +55,7 @@ impl WebPlatform {
             clip,
             modified,
             proxy,
-            viewer,
+            recent,
         }
     }
 }
@@ -132,7 +134,7 @@ impl Storage for Local {
 
 impl Platform for WebPlatform {
     fn features(&self) -> Features {
-        if self.viewer {
+        if self.recent.is_some() {
             Features::VIEWER
         } else {
             Features::WEB
@@ -275,6 +277,53 @@ impl Platform for WebPlatform {
             .open_with_url_and_target(url, "_blank")
             .map(|_| ())
             .map_err(|e| files::describe(&e))
+    }
+
+    fn recent_shares(&self) -> Vec<RecentShare> {
+        let Some(recent) = &self.recent else {
+            return Vec::new();
+        };
+        recent
+            .borrow()
+            .list(js_sys::Date::now())
+            .into_iter()
+            .map(|e| RecentShare {
+                id: e.id,
+                name: e.name,
+                when: e.when,
+                size: e.size,
+            })
+            .collect()
+    }
+
+    fn recent_note(&self) -> Option<String> {
+        let recent = self.recent.as_ref()?;
+        recent.borrow().note().map(str::to_string)
+    }
+
+    fn open_recent(&self, id: &str) {
+        let Some(recent) = &self.recent else { return };
+        let proxy = self.proxy.clone();
+        recent.borrow_mut().open(
+            id,
+            js_sys::Date::now(),
+            Box::new(move |record| {
+                let event = match record.map(|r| recent::unseal(&r)) {
+                    Some(Ok((name, bytes))) => AppEvent::Shared(SharedModel { name, bytes }),
+                    Some(Err(why)) => AppEvent::Error(why),
+                    None => {
+                        AppEvent::Error("That model is no longer kept on this phone".to_string())
+                    }
+                };
+                let _ = proxy.send_event(event);
+            }),
+        );
+    }
+
+    fn delete_recent(&self, id: &str) {
+        if let Some(recent) = &self.recent {
+            recent.borrow_mut().delete(id);
+        }
     }
 }
 

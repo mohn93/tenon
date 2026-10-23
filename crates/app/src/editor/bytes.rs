@@ -11,6 +11,7 @@ impl Editor {
         self.reset_tool();
         self.typed.clear();
         self.message = None;
+        self.measure = None;
         let opened = match self.doc.open_bytes(name, bytes, true) {
             Ok(report) => {
                 self.documents += 1;

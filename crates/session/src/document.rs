@@ -263,11 +263,50 @@ impl Document {
         &self.selection
     }
 
-    /// Increases every time the model changes (edits, undo, redo). Clients compare it to decide
+    /// Increases every time the model changes (edits, undo, redo) or `isolate` and `show_all`
+    /// change what is shown. Clients compare it to decide
     /// whether to rebuild anything derived from the model. Opening or closing an instance and
     /// selection changes do not bump it; compare `context()` too.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Hides every part but `keep` (root groups and components) from every view of the model:
+    /// drawing, picking, snapping and Zoom Extents. This is for looking only: the model, the
+    /// undo history and the saved file are untouched, but the revision moves so what is derived
+    /// from the model is rebuilt. False (nothing changes) when none of `keep` is a root
+    /// instance.
+    pub fn isolate(&mut self, keep: &[kernel::InstanceId]) -> bool {
+        let root = self.scene.root();
+        if !keep.iter().any(|id| root.instance(*id).is_some()) {
+            return false;
+        }
+        let hidden: BTreeSet<kernel::InstanceId> = root
+            .instances()
+            .map(|(id, _)| id)
+            .filter(|id| !keep.contains(id))
+            .collect();
+        if hidden == *self.scene.view_hidden() {
+            return false;
+        }
+        self.scene.set_view_hidden(hidden);
+        self.revision += 1;
+        true
+    }
+
+    /// Shows every part again after [`Document::isolate`]. False when none was hidden.
+    pub fn show_all(&mut self) -> bool {
+        if self.scene.view_hidden().is_empty() {
+            return false;
+        }
+        self.scene.set_view_hidden(BTreeSet::new());
+        self.revision += 1;
+        true
+    }
+
+    /// Whether some parts are hidden by [`Document::isolate`].
+    pub fn isolated(&self) -> bool {
+        !self.scene.view_hidden().is_empty()
     }
 
     /// Model changes after `since`, oldest first, and whether older ones were dropped.

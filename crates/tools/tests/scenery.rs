@@ -77,6 +77,30 @@ fn from_the_root_a_groups_corner_is_an_endpoint() {
 }
 
 #[test]
+fn a_part_hidden_for_viewing_is_not_seen_picked_or_snapped_to() {
+    let (mut s, group) = scene();
+    let c = camera(DVec3::ZERO);
+    let corner = p(4.0, 0.0, 1.0);
+    let at = px(&c, corner) + DVec2::new(3.0, 2.0);
+    let seen = |s: &Scene| {
+        let view = Scenery::of(s, &[]).unwrap();
+        (
+            infer_in(&view, &c, at, &Guides::default(), R),
+            face_under_in(&view, &c, px(&c, p(3.5, 0.5, 1.0))),
+        )
+    };
+    let (hit, face) = seen(&s);
+    assert_eq!(hit.kind, SnapKind::Endpoint);
+    assert!(face.is_some());
+    s.set_view_hidden(std::collections::BTreeSet::from([group]));
+    let (hit, face) = seen(&s);
+    assert_ne!(hit.kind, SnapKind::Endpoint);
+    assert!(face.is_none(), "the hidden group has no face to pick");
+    s.set_view_hidden(Default::default());
+    assert_eq!(seen(&s).0.kind, SnapKind::Endpoint);
+}
+
+#[test]
 fn a_groups_face_is_seen_but_not_given_as_the_open_contexts_face() {
     let (s, i) = scene();
     let view = Scenery::of(&s, &[]).unwrap();

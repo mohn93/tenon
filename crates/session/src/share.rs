@@ -2,8 +2,9 @@
 //! and the QR matrix for the link.
 //!
 //! The blob is `b"SKAS1" || nonce(12) || ciphertext+tag` (ChaCha20-Poly1305, the associated data
-//! is `b"SKAS1" || id`). Only the fragment of the link holds the key, so the server that hands
-//! out the blob never sees it.
+//! is `b"SKAS1" || id`). The sealed plaintext is `name_len (u16 LE) || name (UTF-8, at most 256
+//! bytes) || model bytes`, so the model's name is encrypted with it. Only the fragment of the
+//! link holds the key, so the server that hands out the blob never sees it.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -18,6 +19,8 @@ const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 /// Largest model (and blob) accepted, as for `.skr` files.
 pub const MAX_BLOB_BYTES: usize = 256 * 1024 * 1024;
+/// Longest model name carried, in bytes of UTF-8.
+pub const MAX_NAME_BYTES: usize = 256;
 
 /// A sealed model: the random `id` names the blob on the server, `key` stays in the link
 /// fragment, `blob` is what the server hands out.
@@ -52,15 +55,31 @@ fn aad(id: &[u8; 16]) -> Vec<u8> {
     a
 }
 
-/// Encrypts `model` under a fresh random key. A model over 256 MiB is `invalid_input`.
+/// `name` cut to at most [`MAX_NAME_BYTES`] bytes, at a character boundary: what a share carries.
+pub fn clip_name(name: &str) -> &str {
+    let mut end = name.len().min(MAX_NAME_BYTES);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    &name[..end]
+}
+
+/// Encrypts `model` and its `name` (cut to 256 bytes) under a fresh random key. A model over
+/// 256 MiB is `invalid_input`.
 ///
 /// # Errors
 /// `invalid_input` for an oversize model or if the OS random source fails.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn seal(model: &[u8]) -> Result<Share, CommandError> {
-    if model.len() > MAX_BLOB_BYTES - MAGIC.len() - NONCE_LEN - TAG_LEN {
+pub fn seal(name: &str, model: &[u8]) -> Result<Share, CommandError> {
+    let name = clip_name(name);
+    let header = 2 + name.len();
+    if model.len() > MAX_BLOB_BYTES - MAGIC.len() - NONCE_LEN - TAG_LEN - header {
         return Err(invalid("The model is too large to share (over 256 MiB)"));
     }
+    let mut plain = Vec::with_capacity(header + model.len());
+    plain.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    plain.extend_from_slice(name.as_bytes());
+    plain.extend_from_slice(model);
     let mut id = [0u8; 16];
     let mut key = [0u8; 32];
     let mut nonce = [0u8; NONCE_LEN];
@@ -73,7 +92,7 @@ pub fn seal(model: &[u8]) -> Result<Share, CommandError> {
         .encrypt(
             &Nonce::from(nonce),
             Payload {
-                msg: model,
+                msg: &plain,
                 aad: &aad(&id),
             },
         )
@@ -85,12 +104,13 @@ pub fn seal(model: &[u8]) -> Result<Share, CommandError> {
     Ok(Share { id, key, blob })
 }
 
-/// Decrypts a blob made by [`seal`].
+/// Decrypts a blob made by [`seal`]: the model's name and the model's bytes.
 ///
 /// # Errors
 /// `invalid_input` ("This link is damaged or expired") for a wrong key or id, a changed or
-/// truncated blob, or a wrong prefix; a blob over 256 MiB is refused as too large.
-pub fn open(blob: &[u8], id: &[u8; 16], key: &[u8; 32]) -> Result<Vec<u8>, CommandError> {
+/// truncated blob, a wrong prefix or a name that is too long or not UTF-8; a blob over 256 MiB
+/// is refused as too large.
+pub fn open(blob: &[u8], id: &[u8; 16], key: &[u8; 32]) -> Result<(String, Vec<u8>), CommandError> {
     if blob.len() > MAX_BLOB_BYTES {
         return Err(invalid("The shared model is too large (over 256 MiB)"));
     }
@@ -100,7 +120,7 @@ pub fn open(blob: &[u8], id: &[u8; 16], key: &[u8; 32]) -> Result<Vec<u8>, Comma
     let nonce =
         Nonce::try_from(&blob[MAGIC.len()..MAGIC.len() + NONCE_LEN]).map_err(|_| damaged())?;
     let ct = &blob[MAGIC.len() + NONCE_LEN..];
-    ChaCha20Poly1305::new(&Key::from(*key))
+    let mut plain = ChaCha20Poly1305::new(&Key::from(*key))
         .decrypt(
             &nonce,
             Payload {
@@ -108,7 +128,19 @@ pub fn open(blob: &[u8], id: &[u8; 16], key: &[u8; 32]) -> Result<Vec<u8>, Comma
                 aad: &aad(id),
             },
         )
-        .map_err(|_| damaged())
+        .map_err(|_| damaged())?;
+    let len = match plain.as_slice() {
+        [a, b, ..] => usize::from(u16::from_le_bytes([*a, *b])),
+        _ => return Err(damaged()),
+    };
+    if len > MAX_NAME_BYTES || plain.len() < 2 + len {
+        return Err(damaged());
+    }
+    let name = std::str::from_utf8(&plain[2..2 + len])
+        .map_err(|_| damaged())?
+        .to_string();
+    plain.drain(..2 + len);
+    Ok((name, plain))
 }
 
 /// The link fragment (without `#`): `v1.<base64url id>.<base64url key>`, no padding.

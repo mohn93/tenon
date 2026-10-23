@@ -40,5 +40,6 @@ mod share_server;
 pub mod shortcuts;
 mod touch;
 mod ui;
+pub mod viewer;
 #[cfg(windows)]
 pub mod windows;

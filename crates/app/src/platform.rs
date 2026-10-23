@@ -191,6 +191,18 @@ pub enum UnsavedChoice {
     Cancel,
 }
 
+/// A model the phone viewer kept to open again without the computer that shared it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecentShare {
+    /// What `Platform::open_recent` and `delete_recent` take.
+    pub id: String,
+    pub name: String,
+    /// When it was opened last, as the list says it ("5 min ago").
+    pub when: String,
+    /// How big it is, as the list says it ("12.3 MB").
+    pub size: String,
+}
+
 /// The system the window runs on.
 pub trait Platform {
     /// What this system offers.
@@ -261,4 +273,21 @@ pub trait Platform {
 
     /// Opens a link or a file in the system's own program or tab.
     fn open_url(&self, url: &str) -> Result<(), String>;
+
+    /// The shared models the phone viewer kept, newest first (only the viewer asks).
+    fn recent_shares(&self) -> Vec<RecentShare> {
+        Vec::new()
+    }
+
+    /// Why the model open now was not kept for the Recent list, when it was not.
+    fn recent_note(&self) -> Option<String> {
+        None
+    }
+
+    /// Opens the kept model `id`: it arrives later as `AppEvent::Shared`, or as an
+    /// `AppEvent::Error` saying why it could not be opened.
+    fn open_recent(&self, _id: &str) {}
+
+    /// Removes the kept model `id` from the Recent list.
+    fn delete_recent(&self, _id: &str) {}
 }

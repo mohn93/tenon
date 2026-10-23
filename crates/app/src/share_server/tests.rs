@@ -508,6 +508,7 @@ fn a_share_serves_a_blob_the_link_opens() {
     let s = Sharing::begin(
         d.0.clone(),
         Ipv4Addr::new(192, 168, 1, 20),
+        "House",
         b"MODEL",
         (3, 9),
     )
@@ -520,7 +521,10 @@ fn a_share_serves_a_blob_the_link_opens() {
     let (id, key) = session::share::parse_fragment(fragment).unwrap();
     let r = get(port, &format!("/s/{}", hex(&id)));
     assert_eq!(r.status, 200);
-    assert_eq!(session::share::open(&r.body, &id, &key).unwrap(), b"MODEL");
+    assert_eq!(
+        session::share::open(&r.body, &id, &key).unwrap(),
+        ("House".to_string(), b"MODEL".to_vec())
+    );
     // The key is never in anything the server could be sent or sends.
     assert!(!s.url.split('#').next().unwrap().contains("v1."));
     assert_eq!(s.view((3, 9)).sent, 1);
@@ -535,9 +539,9 @@ fn a_share_serves_a_blob_the_link_opens() {
 fn replacing_a_share_stops_the_old_one() {
     let d = viewer();
     let ip = Ipv4Addr::new(10, 0, 0, 2);
-    let old = Sharing::begin(d.0.clone(), ip, b"A", (1, 1)).unwrap();
+    let old = Sharing::begin(d.0.clone(), ip, "A", b"A", (1, 1)).unwrap();
     let old_port = old.server.port();
-    let new = Sharing::begin(d.0.clone(), ip, b"B", (1, 2)).unwrap();
+    let new = Sharing::begin(d.0.clone(), ip, "B", b"B", (1, 2)).unwrap();
     drop(old);
     assert!(TcpStream::connect(("127.0.0.1", old_port)).is_err());
     assert_eq!(get(new.server.port(), "/").status, 200);

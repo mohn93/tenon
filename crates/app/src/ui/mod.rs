@@ -43,6 +43,7 @@ mod tags;
 mod tests;
 pub mod theme;
 pub(crate) mod viewer_bar;
+pub use viewer_bar::{ViewerPanel, ViewerView};
 pub(crate) mod viewport;
 pub(crate) use context_bar::step_name;
 pub use dock::DockLayout;
@@ -55,6 +56,20 @@ pub(crate) mod widgets;
 /// What the user asked for through the panels this frame.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiAction {
+    /// The viewer: open a list over the view (Parts, Recent), or close it (None).
+    ViewerPanel(Option<ViewerPanel>),
+    /// The viewer: select these parts and frame them (a row of the parts list).
+    SelectParts(Vec<InstanceId>),
+    /// The viewer: hide every part but the selected ones.
+    Isolate,
+    /// The viewer: show every part again.
+    ShowAll,
+    /// The viewer: turn Measure on or off.
+    MeasureMode(bool),
+    /// The viewer: open the kept model with this id (Recent list).
+    OpenKept(String),
+    /// The viewer: forget the kept model with this id.
+    DeleteKept(String),
     Tool(ToolKind),
     Undo,
     Redo,
@@ -483,6 +498,8 @@ pub struct View<'a> {
     pub model_name: &'a str,
     /// The recent files as kept in the preferences, newest first (File > Open Recent).
     pub recent: &'a [PathBuf],
+    /// What the phone viewer's bar and lists show (`Features::read_only`).
+    pub viewer: ViewerView<'a>,
     /// The sheet open over the window, if any.
     pub sheet: Option<&'a Sheet>,
     /// The Library tab's folder and items.

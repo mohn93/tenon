@@ -15,9 +15,6 @@ pub const DAMAGED: &str = app::app::DAMAGED_LINK;
 /// What is said when the computer that shared the model cannot be reached.
 pub const UNREACHABLE: &str = "Could not reach the computer sharing this model";
 
-/// The name the viewer's top bar shows: the link carries no name.
-pub const MODEL_NAME: &str = "Shared model";
-
 /// What the page's fragment asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Start {
@@ -154,7 +151,7 @@ mod tests {
 
     #[test]
     fn a_share_fragment_starts_the_viewer() {
-        let share = seal(b"model").unwrap();
+        let share = seal("Model", b"model").unwrap();
         let fragment = link_fragment(&share.id, &share.key);
         for hash in [format!("#{fragment}"), fragment.clone()] {
             let Start::Viewer(link) = classify(&hash) else {
@@ -174,7 +171,7 @@ mod tests {
 
     #[test]
     fn a_broken_share_fragment_is_damaged() {
-        let share = seal(b"model").unwrap();
+        let share = seal("Model", b"model").unwrap();
         let good = link_fragment(&share.id, &share.key);
         let cut = &good[..good.len() - 1];
         let (id, _) = good.rsplit_once('.').unwrap();
@@ -208,7 +205,7 @@ mod tests {
 
     #[test]
     fn the_key_is_not_in_debug_output() {
-        let share = seal(b"model").unwrap();
+        let share = seal("Model", b"model").unwrap();
         let link = Link {
             id: share.id,
             key: share.key,
@@ -249,7 +246,7 @@ mod tests {
 
     #[test]
     fn a_share_fragment_is_taken_out_of_the_address_before_any_request() {
-        let share = seal(b"model").unwrap();
+        let share = seal("Model", b"model").unwrap();
         let good = format!("#{}", link_fragment(&share.id, &share.key));
         assert!(classify(&good).forgets_fragment());
         assert!(classify("#v1.x.y").forgets_fragment(), "damaged too");

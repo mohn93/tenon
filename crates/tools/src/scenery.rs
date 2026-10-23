@@ -942,7 +942,8 @@ fn collect<'a>(
     });
     for (iid, instance) in model.instances() {
         trail.path.push(iid);
-        let shown = tag_shown_among(hidden, instance.tag);
+        let shown = tag_shown_among(hidden, instance.tag)
+            && !(id == MeshId::Root && scene.view_hidden().contains(&iid));
         if !shown && !context.starts_with(&trail.path) {
             trail.path.pop();
             continue;

@@ -231,6 +231,9 @@ pub struct Scene {
     pub(crate) pages: Vec<(PageId, Page)>,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.
     next_id: u64,
+    /// Root instances a viewer hides for now (see [`Scene::set_view_hidden`]): not part of the
+    /// model, never saved, and left out of equality.
+    pub(crate) view_hidden: BTreeSet<InstanceId>,
 }
 
 /// Two scenes are equal when they hold the same entities, definitions, materials, tags and
@@ -259,6 +262,7 @@ impl Scene {
             materials: BTreeMap::new(),
             tags: BTreeMap::new(),
             pages: Vec::new(),
+            view_hidden: BTreeSet::new(),
         }
     }
 
@@ -288,6 +292,7 @@ impl Scene {
             tags,
             pages,
             next_id: used,
+            view_hidden: BTreeSet::new(),
         }
     }
 

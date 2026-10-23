@@ -1134,7 +1134,7 @@ impl Walk<'_> {
         for (iid, instance) in model.instances() {
             // A hidden instance hides all it places, but for the one being edited (or holding
             // it), which stays drawn.
-            if !self.scene.tag_shown(instance.tag) && !self.on_context_path(iid) {
+            if !self.scene.instance_shown(id, iid, instance) && !self.on_context_path(iid) {
                 continue;
             }
             let start = (
@@ -1217,6 +1217,21 @@ mod tests {
             .find(|id| *id != first)
             .unwrap();
         (s, first, second)
+    }
+
+    #[test]
+    fn instances_hidden_for_viewing_are_not_drawn() {
+        let (mut s, first, second) = two_squares();
+        let shown = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(shown.faces.len(), 12, "both tiles");
+        s.set_view_hidden(BTreeSet::from([second]));
+        let g = scene_geometry(&s, &[], &BTreeSet::new());
+        assert_eq!(g.faces.len(), 6, "one tile");
+        assert!(g.faces.iter().all(|v| v.pos[0] < 2.0), "the first");
+        s.set_view_hidden(BTreeSet::from([first, second]));
+        assert!(scene_geometry(&s, &[], &BTreeSet::new()).faces.is_empty());
+        s.set_view_hidden(BTreeSet::new());
+        assert_eq!(scene_geometry(&s, &[], &BTreeSet::new()).faces.len(), 12);
     }
 
     #[test]

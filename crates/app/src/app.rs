@@ -55,6 +55,7 @@ use crate::ui::{
     SectionMenu, SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction,
     View,
 };
+use crate::ui::{ViewerPanel, ViewerView};
 use crate::ui::{theme, viewport};
 
 /// The window's least size, in points: the panels and a usable 3D view.
@@ -155,6 +156,8 @@ pub enum AppEvent {
     Paste(String),
     /// Something a late platform request could not do, for the status line.
     Error(String),
+    /// The viewer was asked to open another shared model (a kept one from the Recent list).
+    Shared(SharedModel),
 }
 
 impl From<egui_winit::accesskit_winit::Event> for AppEvent {
@@ -818,6 +821,8 @@ struct State {
     model_name: String,
     /// The model was just opened in the viewer: fit it to the view once the view's size is known.
     fit_pending: bool,
+    /// The viewer's list over the view (Parts or Recent), if one is open.
+    viewer_panel: Option<ViewerPanel>,
     /// The Agent Activity window is open.
     agent_activity: bool,
     /// Whether the Keyboard Shortcuts window is open.
@@ -1123,6 +1128,7 @@ impl State {
             epoch: Instant::now(),
             model_name: String::new(),
             fit_pending: false,
+            viewer_panel: None,
             agent_activity: false,
             shortcuts_window: false,
             settings_open: false,
@@ -1201,6 +1207,7 @@ impl State {
     /// Opens the model the viewer was given, read-only, and fits it to the view once the view's
     /// size is known; the window says so when it cannot.
     fn open_shared(&mut self, model: SharedModel) {
+        self.viewer_panel = None;
         self.model_name = model.name.clone();
         if self.editor.open_bytes(&model.name, &model.bytes) {
             self.fit_pending = true;
@@ -1630,7 +1637,16 @@ impl State {
             Ok(b) => b,
             Err(e) => return PhoneView::Unavailable(e.message),
         };
-        match crate::share_server::Sharing::begin_here(&bytes, stamp) {
+        let name = self
+            .editor
+            .doc()
+            .path()
+            .and_then(Path::file_stem)
+            .map_or_else(
+                || "Untitled".to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+        match crate::share_server::Sharing::begin_here(&name, &bytes, stamp) {
             Ok(share) => {
                 let view = PhoneView::Sharing(share.view(stamp));
                 self.share = Some(share);
@@ -2136,6 +2152,30 @@ impl State {
             }
             #[cfg(target_arch = "wasm32")]
             UiAction::OpenOnPhone | UiAction::ShareNewVersion | UiAction::StopSharing => {}
+            UiAction::ViewerPanel(panel) => self.viewer_panel = panel,
+            UiAction::SelectParts(ids) => {
+                self.viewer_panel = None;
+                self.editor.select_parts(&ids);
+            }
+            UiAction::Isolate => {
+                self.editor.isolate_selection();
+            }
+            UiAction::ShowAll => {
+                self.editor.show_all();
+            }
+            UiAction::MeasureMode(on) => {
+                if on {
+                    self.viewer_panel = None;
+                    self.editor.start_measure();
+                } else {
+                    self.editor.stop_measure();
+                }
+            }
+            UiAction::OpenKept(id) => {
+                self.viewer_panel = None;
+                self.platform.open_recent(&id);
+            }
+            UiAction::DeleteKept(id) => self.platform.delete_recent(&id),
             UiAction::UnsavedAnswer(choice) => {
                 if matches!(self.sheet, Some(Sheet::Unsaved { .. })) {
                     self.sheet = None;
@@ -2488,7 +2528,38 @@ impl State {
                 Some(EntityId::Instance(id)) => Some(*id),
                 _ => None,
             });
+        let viewing = self.features.read_only;
+        let part_rows = if viewing && self.viewer_panel == Some(ViewerPanel::Parts) {
+            self.editor.part_rows()
+        } else {
+            Vec::new()
+        };
+        let part_card = if viewing {
+            self.editor.part_card()
+        } else {
+            None
+        };
+        let measure_text = self
+            .editor
+            .measurement()
+            .map(|m| m.text(&self.editor.doc().units()));
+        let (recent_shares, recent_note) =
+            if viewing && self.viewer_panel == Some(ViewerPanel::Recent) {
+                (self.platform.recent_shares(), self.platform.recent_note())
+            } else {
+                (Vec::new(), None)
+            };
         let panels = View {
+            viewer: ViewerView {
+                panel: self.viewer_panel,
+                rows: &part_rows,
+                units: self.editor.doc().units(),
+                card: part_card.as_ref(),
+                isolated: self.editor.isolated(),
+                measure: measure_text.as_deref(),
+                recent: &recent_shares,
+                recent_note: recent_note.as_deref(),
+            },
             library: LibraryView {
                 folder: self.prefs.library.as_deref(),
                 rows: self.library.rows(),
@@ -3211,6 +3282,13 @@ fn viewer_allows(action: &UiAction) -> bool {
     matches!(
         action,
         UiAction::SelectNone
+            | UiAction::ViewerPanel(_)
+            | UiAction::SelectParts(_)
+            | UiAction::Isolate
+            | UiAction::ShowAll
+            | UiAction::MeasureMode(_)
+            | UiAction::OpenKept(_)
+            | UiAction::DeleteKept(_)
             | UiAction::CloseSheet
             | UiAction::ZoomExtents
             | UiAction::StandardView(_)
@@ -3230,6 +3308,7 @@ fn map_button(button: MouseButton) -> Button {
 
 /// What `App::new` needs besides the event loop's proxy.
 /// A model given as bytes (`AppConfig::model`).
+#[derive(Debug)]
 pub struct SharedModel {
     /// The name the viewer's top bar shows.
     pub name: String,
@@ -3443,6 +3522,12 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Error(text) => {
                 if let Some(s) = self.state.as_mut() {
                     s.editor.show_error(&text);
+                    s.window.request_redraw();
+                }
+            }
+            AppEvent::Shared(model) => {
+                if let Some(s) = self.state.as_mut().filter(|s| s.features.read_only) {
+                    s.open_shared(model);
                     s.window.request_redraw();
                 }
             }

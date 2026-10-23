@@ -71,8 +71,12 @@ opens it read only, and removes the fragment from the address bar. `Features::VI
 `Features::WEB` with `read_only` on: a small top bar over the 3D view, no menus, tools, dock,
 status line, library, autosave, print or share, and the document refuses every command that
 changes the model. Touch gestures (orbit, pan, pinch, tap, double tap) and the rest are in
-[phone.md](phone.md). The `web` crate's `viewer` module holds the testable parts (fragment
-meaning, the 256 MiB cap, the messages) and `load` the browser's fetch and history calls.
+[phone.md](phone.md), with the parts card and list, Isolate, Measure and the Recent list. The
+`web` crate's `viewer` module holds the testable parts (fragment meaning, the 256 MiB cap, the
+messages), `load` the browser's fetch and history calls, `recent` the Recent list's logic over a
+`Storage` trait (the last 5 models, the 64 MiB limit, ages and sizes) and `idb` its IndexedDB
+storage (database `sketchup-alt-viewer`, stores `recent` and `recent-info`; web-sys features
+`Idb*`). What is kept holds the share's key beside the encrypted blob so it opens offline.
 
 ## What is off
 

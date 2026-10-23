@@ -267,6 +267,24 @@ impl Scene {
         tag.and_then(|t| self.tag(t)).is_none_or(|t| t.visible)
     }
 
+    /// The root instances hidden for viewing only (see [`Scene::set_view_hidden`]).
+    pub fn view_hidden(&self) -> &BTreeSet<InstanceId> {
+        &self.view_hidden
+    }
+
+    /// Hides the root instances `ids`, with all they place, from every view of the scene (drawing,
+    /// picking, snapping, `shown_bounds`) without changing the model: nothing is saved, undone or
+    /// counted as a change. A viewer isolates a part this way. Unknown ids hide nothing.
+    pub fn set_view_hidden(&mut self, ids: BTreeSet<InstanceId>) {
+        self.view_hidden = ids;
+    }
+
+    /// Whether instance `id` (`instance`) of mesh `mesh` shows: it is not on a hidden tag and
+    /// not hidden for viewing. Every walk down the instances goes by this.
+    pub fn instance_shown(&self, mesh: MeshId, id: InstanceId, instance: &Instance) -> bool {
+        self.tag_shown(instance.tag) && !(mesh == MeshId::Root && self.view_hidden.contains(&id))
+    }
+
     /// The tags that are hidden.
     pub fn hidden_tags(&self) -> BTreeSet<TagId> {
         self.tags()
@@ -281,7 +299,7 @@ impl Scene {
     /// whatever their tags, as an open instance stays drawn. None when it shows nothing. With
     /// no tag hidden, `bounds`.
     pub fn shown_bounds(&self, mesh: MeshId, open: &[InstanceId]) -> Option<[DVec3; 2]> {
-        if self.tags().all(|(_, t)| t.visible) {
+        if self.view_hidden.is_empty() && self.tags().all(|(_, t)| t.visible) {
             return self.bounds(mesh);
         }
         let m = self.mesh(mesh)?;
@@ -295,7 +313,7 @@ impl Scene {
         for (id, i) in m.instances() {
             let below = match open.split_first() {
                 Some((first, rest)) if *first == id => rest,
-                _ if self.tag_shown(i.tag) => &[],
+                _ if self.instance_shown(mesh, id, i) => &[],
                 _ => continue,
             };
             if let Some(b) = self.shown_bounds(MeshId::Definition(i.definition), below) {

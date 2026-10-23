@@ -644,16 +644,17 @@ pub struct Sharing {
 }
 
 impl Sharing {
-    /// Seals `model` (the bytes of a `.skr` file) and serves it from `dir`, advertised at `ip`.
+    /// Seals `model` (the bytes of a `.skr` file) and its `name` and serves it from `dir`, advertised at `ip`.
     /// `taken_at` is what the model was taken from, for [`Sharing::stale`]. Err: what the sheet
     /// says.
     pub fn begin(
         dir: PathBuf,
         ip: Ipv4Addr,
+        name: &str,
         model: &[u8],
         taken_at: (u64, u64),
     ) -> Result<Sharing, String> {
-        let sealed = session::share::seal(model).map_err(|e| e.message)?;
+        let sealed = session::share::seal(name, model).map_err(|e| e.message)?;
         let server = Server::start(Config::new(dir, sealed.blob, sealed.id))
             .map_err(|e| format!("Could not start sharing: {e}"))?;
         let url = format!(
@@ -672,10 +673,10 @@ impl Sharing {
     }
 
     /// [`Sharing::begin`] at this computer's address and viewer folder, or why it cannot be.
-    pub fn begin_here(model: &[u8], taken_at: (u64, u64)) -> Result<Sharing, String> {
+    pub fn begin_here(name: &str, model: &[u8], taken_at: (u64, u64)) -> Result<Sharing, String> {
         let dir = viewer_dir().ok_or_else(|| NOT_BUILT.to_string())?;
         let ip = lan_ipv4().ok_or_else(|| NO_NETWORK.to_string())?;
-        Self::begin(dir, ip, model, taken_at)
+        Self::begin(dir, ip, name, model, taken_at)
     }
 
     pub fn running(&self) -> bool {

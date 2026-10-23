@@ -49,6 +49,7 @@ mod soften;
 mod tags;
 mod texture_position;
 mod viewer;
+pub use viewer::PartCard;
 
 use soften::SoftenWindow;
 pub use tags::SelectionTag;
@@ -111,6 +112,9 @@ fn shown_name(kind: DefinitionKind, name: &str) -> &str {
         name
     }
 }
+
+/// The parts of the model, with the document count and revision they were listed for.
+type PartsCache = RefCell<Option<(u64, u64, Rc<Vec<crate::viewer::parts::Part>>)>>;
 
 /// A layout of the scene with the revision and open context it was made for.
 type LayoutCache = RefCell<Option<(u64, Vec<InstanceId>, Rc<Layout>)>>;
@@ -197,6 +201,10 @@ pub struct Editor {
     nav: Navigation,
     /// The point a touch drag turns or pans about, found where it began (`touch`).
     touch_pivot: Option<DVec3>,
+    /// The viewer's measurement while Measure is on (`start_measure`).
+    measure: Option<crate::viewer::measure::Measure>,
+    /// The parts of the model with the document count and revision they were listed for.
+    parts: PartsCache,
     tool: Box<dyn Tool>,
     kind: ToolKind,
     /// Tool settings kept across tool switches (circle sides, arc segments).
@@ -328,6 +336,8 @@ impl Editor {
             doc: Document::new(viewport),
             nav,
             touch_pivot: None,
+            measure: None,
+            parts: RefCell::new(None),
             tool: ToolKind::Select.make(),
             kind: ToolKind::Select,
             remembered: Remembered::default(),
@@ -1912,6 +1922,7 @@ impl Editor {
             dark_canvas,
             camera,
         );
+        hud.lines.extend(self.measure_lines());
         if self.hover_hidden {
             return hud;
         }

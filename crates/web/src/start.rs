@@ -1,6 +1,9 @@
 //! The module's entry point: finds the canvas, makes the GPU objects (WebGPU, else WebGL2),
 //! and hands the window app to winit's web event loop.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use app::app::{App, AppConfig, AppEvent, GpuContext, SharedModel};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -11,9 +14,11 @@ use winit::platform::web::{EventLoopExtWebSys, WindowAttributesExtWebSys};
 use winit::window::Window;
 
 use crate::files::{describe, document, window};
+use crate::idb;
 use crate::load;
 use crate::names::{self, CANVAS_ID};
 use crate::platform::WebPlatform;
+use crate::recent::{self, Info, Recent, Record};
 use crate::viewer::{self, Start};
 
 #[wasm_bindgen(start)]
@@ -142,10 +147,11 @@ fn guard_input(canvas: &HtmlCanvasElement) {
     on_press.forget();
 }
 
-/// The share the page's fragment names, fetched and opened with its key: the model's bytes
-/// (None: no share, the editor starts). The key is only ever in the fragment: the request is
-/// for the id alone. Once the model is decrypted the fragment is taken out of the address bar.
-async fn shared_model() -> Result<Option<SharedModel>, String> {
+/// The share the page's fragment names, fetched and opened with its key: the model and name
+/// and what the Recent list keeps of it (None: no share, the editor starts). The key is only
+/// ever in the fragment: the request is for the id alone, and it is taken out of the address
+/// bar before the request.
+async fn shared_model() -> Result<Option<(SharedModel, Record)>, String> {
     let start = viewer::classify(&load::hash());
     // The key leaves the address bar and the history before any request, whatever follows.
     if start.forgets_fragment() {
@@ -159,12 +165,28 @@ async fn shared_model() -> Result<Option<SharedModel>, String> {
     let blob = load::fetch_blob(&viewer::blob_path(&link.id))
         .await
         .map_err(|failure| failure.message().to_string())?;
-    let bytes = session::share::open(&blob, &link.id, &link.key)
+    let (name, bytes) = session::share::open(&blob, &link.id, &link.key)
         .map_err(|_| viewer::DAMAGED.to_string())?;
-    Ok(Some(SharedModel {
-        name: viewer::MODEL_NAME.to_string(),
-        bytes,
-    }))
+    let record = Record {
+        info: Info {
+            id: recent::id_hex(&link.id),
+            name: session::share::clip_name(&name).to_string(),
+            time: js_sys::Date::now(),
+            size: blob.len(),
+        },
+        key: link.key,
+        blob,
+    };
+    Ok(Some((SharedModel { name, bytes }, record)))
+}
+
+/// The Recent list over the browser's storage (or over nothing, where it is blocked).
+async fn recent_list() -> Rc<RefCell<Recent>> {
+    let storage: Box<dyn recent::Storage> = match idb::open().await {
+        Some(db) => Box::new(db),
+        None => Box::new(idb::Unavailable),
+    };
+    Rc::new(RefCell::new(Recent::new(storage)))
 }
 
 /// Opening another share link in this tab only changes its fragment: the page reloads, which
@@ -183,7 +205,16 @@ fn reload_on_new_share() {
 
 async fn run() -> Result<(), String> {
     reload_on_new_share();
-    let model = shared_model().await?;
+    let shared = shared_model().await?;
+    // Only the viewer keeps models; the model just opened is the newest of them.
+    let (model, recent) = match shared {
+        Some((model, record)) => {
+            let recent = recent_list().await;
+            recent.borrow_mut().keep(record);
+            (Some(model), Some(recent))
+        }
+        None => (None, None),
+    };
     let canvas = canvas()?;
     let context = gpu(&canvas).await?;
     guard_input(&canvas);
@@ -192,10 +223,9 @@ async fn run() -> Result<(), String> {
     let event_loop = EventLoop::<AppEvent>::with_user_event()
         .build()
         .map_err(|e| format!("cannot start the event loop: {e}"))?;
-    let viewing = model.is_some();
     let mut config = AppConfig::new(Box::new(WebPlatform::new(
         event_loop.create_proxy(),
-        viewing,
+        recent,
     )));
     config.model = model;
     config.gpu = Some(context);

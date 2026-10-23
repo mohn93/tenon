@@ -6,7 +6,9 @@ local network. The web build and the phone viewer itself do not have this item.
 ## How it works
 
 1. The sheet seals a copy of the open model (the bytes a `.skr` save would write; the model is
-   not marked saved) with a random key and id, using ChaCha20-Poly1305 (`session::share`).
+   not marked saved) with a random key and id, using ChaCha20-Poly1305 (`session::share`). The
+   sealed data is the model's name (the document's file name without its extension, or
+   "Untitled"; at most 256 bytes of UTF-8) and the model, so the name is encrypted too.
 2. A small HTTP server starts on this computer, on a free port of all interfaces, and the sheet
    shows a QR code and the link `http://<this computer's address>:<port>/#v1.<id>.<key>`.
 3. The phone scans the code, loads the viewer from the server, fetches the encrypted model from
@@ -71,12 +73,65 @@ link is malformed, the key is wrong, the blob is damaged or too big, or the shar
 "Could not reach the computer sharing this model" (the request failed: the computer is off the
 network or the share stopped and the page was reloaded).
 
-The screen is the 3D view with a small top bar showing the model's name (the link carries no
-name, so it reads "Shared model"). There are no menus, tools, panels, status line or keyboard
+The screen is the 3D view with a small top bar showing the model's name (from the share) and
+the buttons Parts, Measure and Recent. There are no menus, tools, panels, status line or keyboard
 shortcuts, and the model cannot be changed: the session refuses every command that changes the
 model (editing, undo and redo, new, open, import) and saving, whatever asked, and only the
 Select tool can be chosen. Export commands are not refused (the viewer has no menu to start
 them).
+
+### Parts
+
+A part is a top-level group or component instance of the model (what the root places); what is
+nested inside a part belongs to it and is not listed or counted. Tapping a part selects it and
+shows a card over the bottom of the view:
+
+- the name: the group's name, or the component's definition name ("Group" and "Component" when
+  unnamed);
+- the size, "width x depth x height": the axis-aligned box, in the model's axes, around the
+  geometry the part places (its vertices taken through the part's own transform and those of
+  everything nested in it, so a turned, scaled or mirrored part is measured as it stands, not
+  by its own box turned), written in the document's units. Geometry on hidden tags is left
+  out, and so are parts on hidden tags;
+- for a component, "1 of N": which of the model's top-level instances of that component it is
+  (in id order) and how many there are;
+- Isolate.
+
+The Parts button opens a list, every part with its size; a component's instances are one row
+with their count ("Crate x3"). Rows are at least 44 points tall. Tapping a row selects its parts
+and frames them, and closes the list.
+
+Isolate hides every other part, for looking only: nothing is saved, undone or marked changed
+(the model's own bytes are the same), and what is hidden is hidden from drawing, picking,
+snapping and Zoom Extents. While parts are hidden the card shows Show all instead (and a bar
+with Show all stays when nothing is selected). Selecting a row of the parts list shows
+everything again first. Opening another model starts with everything shown.
+
+### Measure
+
+The Measure button turns Measure on: a strip under the bar says "Tap the first point". A tap
+picks the nearest corner, edge middle, point on an edge or point on a face within 24 logical
+pixels (24 points times the display scale, where a mouse snaps at 8); a tap on nothing is
+ignored. After the second point the strip shows the distance in the document's units, with a
+cross at each point and a line between them over the view. Another tap starts a new
+measurement (a quick second tap counts as a point, not a zoom). Done (or the Measure button)
+leaves; taps select parts again.
+
+### Recent
+
+The viewer keeps the last 5 shared models it opened on the phone, so they open again with no
+computer: the Recent button lists them (name, when, size), a tap opens one, Delete forgets one.
+They live in the browser's IndexedDB: database `sketchup-alt-viewer`, object store `recent`
+(`id`, `key`, `name`, `time`, `blob`), and a small `recent-info` store (`id`, `name`, `time`,
+`size`) so the list does not read every blob. The blob is the encrypted share as the server sent
+it.
+
+The key is kept beside the blob. That is deliberate: a model that opens offline must be able to
+decrypt itself. The encryption protects the model on the network and on the computer's server;
+on the phone the kept copy is as private as the browser's own storage (anyone with the unlocked
+phone and the browser's data can read it). Delete removes both. A share over 64 MiB is not kept
+and the Recent list says so. Where the browser blocks IndexedDB (some private windows) nothing
+is kept and the list says that.
 
 ### Touch
 
@@ -85,7 +140,7 @@ them).
 | One finger drag | Orbit about the point under the finger where the drag began |
 | Two finger drag | Pan (by the midpoint) |
 | Pinch | Zoom (by the ratio of the distance between the fingers), toward the midpoint |
-| Tap | Select the part (top-level group or component) under the finger; tap empty space to clear |
+| Tap | Select the part (top-level group or component) under the finger and show its card; tap empty space to clear. In Measure, pick a point |
 | Double tap | Zoom to the tapped part, or to the whole model on empty space |
 
 A tap is a touch shorter than 300 ms that moves at most 10 points; a double tap is two taps
