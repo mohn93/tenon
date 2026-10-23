@@ -64,6 +64,46 @@ pub const MAX_COORDINATE: f64 = 1.0e6;
 /// The most points `add_curve` takes.
 pub const MAX_CURVE_POINTS: usize = 10_000;
 
+/// The most times a curve may cross itself: each crossing splits two edges, and drawing slows
+/// down as they multiply (a few hundred milliseconds in release at this many).
+pub const MAX_CURVE_CROSSINGS: usize = 10_000;
+
+/// Whether the path's segments cross each other (away from their ends) more than
+/// `MAX_CURVE_CROSSINGS` times. Counting stops at the cap; a box test first keeps the
+/// work near n^2 / 2 cheap comparisons.
+fn crosses_itself_too_often(path: &[DVec3], closed: bool) -> bool {
+    let n = path.len();
+    let sides = if closed { n } else { n - 1 };
+    let side = |i: usize| (path[i], path[(i + 1) % n]);
+    let boxes: Vec<(DVec3, DVec3)> = (0..sides)
+        .map(|i| {
+            let (a, b) = side(i);
+            (a.min(b), a.max(b))
+        })
+        .collect();
+    let slack = DVec3::splat(kernel::geom::LENGTH_TOL);
+    let mut found = 0;
+    for i in 0..sides {
+        for j in i + 2..sides {
+            if closed && i == 0 && j == sides - 1 {
+                continue;
+            }
+            let (lo, hi) = (boxes[i], boxes[j]);
+            if (lo.0 - slack).cmpgt(hi.1).any() || (hi.0 - slack).cmpgt(lo.1).any() {
+                continue;
+            }
+            let ((p, q), (a, b)) = (side(i), side(j));
+            if kernel::geom::segment_crossing(p, q, a, b).is_some() {
+                found += 1;
+                if found > MAX_CURVE_CROSSINGS {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Most copies one `copy` or `rotate` command may make.
 pub const MAX_COPIES: u32 = 1000;
 
@@ -1394,6 +1434,14 @@ impl Document {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 "a closed polyline needs points that do not lie on one line",
+            ));
+        }
+        if crosses_itself_too_often(&path, closed) {
+            return Err(CommandError::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "the curve crosses itself too often (more than {MAX_CURVE_CROSSINGS} crossings)"
+                ),
             ));
         }
         let line = Polyline {

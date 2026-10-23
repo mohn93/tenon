@@ -438,6 +438,72 @@ fn add_curve_draws_ten_thousand_points_in_a_second() {
     assert_eq!(entities(&d, "edge").len(), 9999);
 }
 
+/// Points on a circle of radius 5, each about half a turn from the previous one: every chord
+/// crosses nearly all the others.
+fn star_path(n: usize) -> Vec<[f64; 3]> {
+    (0..n)
+        .map(|i| {
+            let a = i as f64 * std::f64::consts::PI * (1.0 + 1.0 / n as f64);
+            [a.cos() * 5.0, a.sin() * 5.0, 0.0]
+        })
+        .collect()
+}
+
+#[test]
+fn a_curve_that_crosses_itself_too_often_is_refused_quickly() {
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    let e = run(
+        &mut d,
+        json!({"type": "add_curve", "points": star_path(400)}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("crosses itself too often"), "{}", e.1);
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    assert!(entities(&d, "edge").is_empty());
+}
+
+#[test]
+fn a_curve_that_crosses_itself_a_few_times_is_drawn() {
+    let mut d = doc();
+    // A figure eight: one crossing.
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": [[0, 0, 0], [2, 2, 0], [2, 0, 0], [0, 2, 0]]}),
+    )
+    .unwrap();
+    assert_eq!(entities(&d, "edge").len(), 5);
+    // A modest star: a few hundred crossings.
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": star_path(30)}),
+    )
+    .unwrap();
+    assert!(entities(&d, "edge").len() > 100);
+}
+
+#[test]
+#[ignore = "release-mode timing"]
+fn add_curve_with_a_star_of_four_hundred_points_is_quick_either_way() {
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    let _ = run(
+        &mut d,
+        json!({"type": "add_curve", "points": star_path(400)}),
+    );
+    assert!(start.elapsed().as_secs_f64() < 1.0, "{:?}", start.elapsed());
+    // The widest star that is still drawn (about the crossing cap) is quick too.
+    let mut d = doc();
+    let start = std::time::Instant::now();
+    let _ = run(
+        &mut d,
+        json!({"type": "add_curve", "points": star_path(140)}),
+    );
+    assert!(start.elapsed().as_secs_f64() < 1.0, "{:?}", start.elapsed());
+}
+
 #[test]
 fn add_curve_closed_collinear_points_are_refused() {
     let mut d = doc();
