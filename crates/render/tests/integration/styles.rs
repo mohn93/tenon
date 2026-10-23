@@ -760,8 +760,9 @@ fn long_edge_near_the_eye() -> (Scene, Camera) {
 #[test]
 fn a_long_edge_is_fogged_by_each_pixels_distance() {
     let (scene, camera) = long_edge_near_the_eye();
-    // Fog from 20 m: the edge's middle, 2 m away, is clear; its far ends are fogged.
-    let style = fogged(20.0, 30.0, FogColor::Rgb([255, 0, 255]));
+    // Fog from 5 m: the edge's middle, 2 m away, is clear; its far ends are fogged. Distances
+    // interpolated from the ends would fog the middle too.
+    let style = fogged(5.0, 10.0, FogColor::Rgb([255, 0, 255]));
     let Some(shot) = shoot(&scene, Some(&style), &camera, Lighting::Day, false) else {
         return;
     };
