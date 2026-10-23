@@ -529,14 +529,16 @@ fn endpoints_mark_each_end_and_not_the_middle() {
         })
         .max_by_key(|(_, r)| r.len())
         .expect("the edge");
-    // 3 px wide marks grow upward from the line: rows y-2 and y-1 are dark near the ends only.
+    // 3 px wide marks grow upward from the line: rows y-2 and y-1 turn dark near the ends only.
+    // A mark is darkness the plain render does not have (the blue axis crosses the middle).
     let above = |s: &Shot, x: u32| s.dark(x, y - 1) || s.dark(x, y - 2);
+    let mark = |x: u32| above(&with, x) && !above(&plain, x);
     let near_left = line.start + 4;
     let near_right = line.end - 5;
-    let middle = (line.start + line.end) / 2;
-    assert!(above(&with, near_left), "left mark");
-    assert!(above(&with, near_right), "right mark");
-    assert!(!above(&with, middle), "no mark mid-edge");
+    let quarter = (3 * line.start + line.end) / 4;
+    assert!(mark(near_left), "left mark");
+    assert!(mark(near_right), "right mark");
+    assert!(!mark(quarter), "no mark along the edge");
     assert!(!above(&plain, near_left), "no marks without endpoints");
 }
 
