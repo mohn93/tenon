@@ -2591,6 +2591,25 @@ mod tests {
         e.button(Button::Left, false);
     }
 
+    #[test]
+    fn a_refused_position_camera_stays_and_keeps_its_error() {
+        let mut e = editor();
+        e.select_tool(ToolKind::PositionCamera);
+        let eye = e.doc().camera.eye;
+        e.apply(ToolOutput {
+            commands: vec![Command::PositionCamera {
+                point: [0.0, 0.0, 999_999.0],
+                eye_height: Some(9_999.0),
+                look_at: None,
+            }],
+            next_tool: Some(ToolKind::LookAround),
+            ..ToolOutput::default()
+        });
+        assert_eq!(e.doc().camera.eye, eye, "the camera did not move");
+        assert_eq!(e.tool_kind(), ToolKind::PositionCamera);
+        assert_eq!(e.message_kind(), Some(MessageKind::Error));
+    }
+
     fn stats(e: &Editor) -> (usize, usize) {
         match e.doc().query(&Query::Stats {}).unwrap() {
             QueryResult::Stats { edges, faces, .. } => (edges, faces),
