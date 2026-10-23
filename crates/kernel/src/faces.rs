@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use glam::{DVec2, DVec3};
 
 use crate::edit::use_indexes;
-use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
+use crate::geom::{ANGLE_TOL, LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, MaterialId, TagId, VertexId};
 use crate::index::{Index, Shape};
 use crate::model::{Face, Model};
@@ -92,7 +92,15 @@ impl Model {
                     match Plane::from_points(pa, pb, self.pos(c)) {
                         Some(p) => planes.push(p),
                         None => {
-                            walked.insert(f);
+                            // Only an edge on e's line far inside the tolerance is
+                            // certain to find the same planes; a barely bent one walks itself.
+                            let on_line = |q: DVec3| {
+                                (pb - pa).cross(q - pa).length()
+                                    <= STRICT * ANGLE_TOL * (pb - pa).length() * (q - pa).length()
+                            };
+                            if on_line(self.pos(fv[0])) && on_line(self.pos(fv[1])) {
+                                walked.insert(f);
+                            }
                             if visited.insert(c) {
                                 stack.push(c);
                             }
@@ -305,6 +313,9 @@ type Paint = (
     Option<TagId>,
     bool,
 );
+
+/// How much tighter than the plane search an edge must be collinear to skip its own walk.
+const STRICT: f64 = 1e-3;
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;
@@ -570,6 +581,35 @@ mod tests {
         batch.take_changes();
         batch.validate().unwrap();
         assert_eq!(areas(&batch), [2.0, 4.0, 92.0]);
+    }
+
+    /// A chain of points (k, k^2 eps, 0) that bends far less than the tolerance, with a gap
+    /// at 0..2 whose two edges close a loop with posts at both ends and a top edge.
+    #[test]
+    fn a_barely_bent_chain_gives_the_same_faces_in_a_batch_as_one_by_one() {
+        let eps = 1e-10;
+        let p = |k: i32| DVec3::new(k as f64, (k * k) as f64 * eps, 0.0);
+        let mut start = Model::new();
+        for k in -10..12 {
+            if k == 0 || k == 1 {
+                continue;
+            }
+            start.draw_segment(p(k), p(k + 1));
+        }
+        let top = |k: i32| p(k) + DVec3::new(0.0, 0.0, 1.0);
+        start.draw_segment(p(-10), top(-10));
+        start.draw_segment(p(12), top(12));
+        start.draw_segment(top(-10), top(12));
+        start.take_changes();
+        let gap = [(p(0), p(1)), (p(1), p(2))];
+        let mut batch = start.clone();
+        batch.draw_segments(&gap);
+        let mut one_by_one = start;
+        for (a, b) in gap {
+            one_by_one.draw_segment(a, b);
+        }
+        assert_eq!(one_by_one.faces().count(), 1);
+        assert_eq!(batch.faces().count(), 1);
     }
 
     #[test]
