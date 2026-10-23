@@ -17,15 +17,22 @@ impl Editor {
     }
 
     /// The viewport's right-click menu at `at` for the selection: the section plane's entries
-    /// for a lone plane, Intersect Faces for one with faces or groups; None for any other.
+    /// for a lone plane; otherwise Hide for what can be hidden, Unhide for a hidden selection,
+    /// the face commands for faces and Intersect Faces for faces or groups. None for a
+    /// selection with none of them.
     pub fn viewport_menu(&self, at: egui::Pos2) -> Option<ViewportMenu> {
         let section = self.selected_section().map(|s| s.active);
-        let intersect = section.is_none() && self.can_intersect();
-        (section.is_some() || intersect).then_some(ViewportMenu {
+        let plain = section.is_none();
+        let menu = ViewportMenu {
             at,
             section,
-            intersect,
-        })
+            intersect: plain && self.can_intersect(),
+            hide: plain && self.selection_hidden().is_some(),
+            unhide: plain && self.selection_has_hidden(),
+            faces: plain && self.selection_has_faces(),
+        };
+        (menu.section.is_some() || menu.intersect || menu.hide || menu.unhide || menu.faces)
+            .then_some(menu)
     }
 
     /// Whether a right-click in the view opens the viewport menu: the selection has one, and the
@@ -238,7 +245,10 @@ mod tests {
             Some(ViewportMenu {
                 at,
                 section: None,
-                intersect: true
+                intersect: true,
+                hide: true,
+                unhide: false,
+                faces: true,
             })
         );
         let out = e
@@ -266,7 +276,10 @@ mod tests {
             Some(ViewportMenu {
                 at,
                 section: Some(true),
-                intersect: false
+                intersect: false,
+                hide: false,
+                unhide: false,
+                faces: false,
             }),
             "a lone plane keeps its own menu"
         );

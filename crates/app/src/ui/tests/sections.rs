@@ -73,6 +73,9 @@ fn the_section_plane_menu_flips_and_toggles_the_active_cut() {
             at: Pos2::new(300.0, 200.0),
             section: Some(active),
             intersect: false,
+            hide: false,
+            unhide: false,
+            faces: false,
         }),
         ..Default::default()
     };
@@ -114,6 +117,9 @@ fn the_faces_and_groups_menu_intersects_with_each_scope() {
             at: Pos2::new(300.0, 200.0),
             section: None,
             intersect: true,
+            hide: false,
+            unhide: false,
+            faces: false,
         }),
         ..Default::default()
     };
@@ -138,6 +144,9 @@ fn the_faces_and_groups_menu_intersects_with_each_scope() {
             at: Pos2::new(300.0, 200.0),
             section: Some(false),
             intersect: false,
+            hide: false,
+            unhide: false,
+            faces: false,
         }),
         ..Default::default()
     });

@@ -1,4 +1,4 @@
-//! Entity Info: what is selected, its tag, the Soft checkbox for edges and the texture
+//! Entity Info: what is selected, its tag, the Soft checkbox for edges, the Hidden checkbox and the texture
 //! position for faces.
 
 use egui::Ui;
@@ -56,6 +56,16 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
             .changed()
         {
             actions.push(UiAction::SetSoft(checked));
+        }
+    }
+    if let Some(hidden) = view.selection_hidden {
+        let mut checked = hidden;
+        if ui
+            .checkbox(&mut checked, "Hidden")
+            .on_hover_text("Not drawn or picked; shown ghosted while View > Hidden Geometry is on")
+            .changed()
+        {
+            actions.push(UiAction::SetHidden(checked));
         }
     }
     match &view.texture_position {

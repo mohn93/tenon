@@ -2043,6 +2043,36 @@ impl State {
             UiAction::SetSectionFill(on) => {
                 self.editor.set_section_display(None, None, Some(on));
             }
+            UiAction::Hide => {
+                self.editor.hide_selection();
+            }
+            UiAction::UnhideSelected => {
+                self.editor.unhide_selection();
+            }
+            UiAction::UnhideLast => {
+                self.editor.unhide_last();
+            }
+            UiAction::UnhideAll => {
+                self.editor.unhide_all();
+            }
+            UiAction::SetHidden(hidden) => {
+                self.editor.set_selection_hidden(hidden);
+            }
+            UiAction::OutlinerSetHidden { path, hidden } => {
+                self.editor.outliner_set_hidden(&path, hidden);
+            }
+            UiAction::SetXRay(on) => {
+                self.editor.set_x_ray(on);
+            }
+            UiAction::SetHiddenGeometry(on) => {
+                self.editor.set_hidden_geometry(on);
+            }
+            UiAction::ReverseFaces => {
+                self.editor.reverse_faces();
+            }
+            UiAction::OrientFaces => {
+                self.editor.orient_faces();
+            }
             UiAction::FlipSection => {
                 self.editor.flip_selected_section();
             }
@@ -2602,6 +2632,8 @@ impl State {
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
             section_display: self.editor.doc().section_display,
+            x_ray: self.editor.doc().x_ray,
+            hidden_geometry: self.editor.doc().hidden_geometry,
             viewport_menu,
             scenes: &scenes,
             documents: self.editor.documents(),
@@ -2611,6 +2643,9 @@ impl State {
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
+            selection_hidden: self.editor.selection_hidden(),
+            has_hidden_selected: self.editor.selection_has_hidden(),
+            has_face_selected: self.editor.selection_has_faces(),
             theme: self.prefs.theme,
             dock: self.prefs.dock,
             shortcuts: self.shortcuts_window,

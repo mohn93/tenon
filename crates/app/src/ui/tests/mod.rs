@@ -20,6 +20,7 @@ mod status;
 mod tags;
 mod viewer;
 mod viewport;
+mod visibility;
 mod widgets;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,6 +66,8 @@ pub(super) struct Fixture {
     pub tags: Vec<TagRow>,
     pub color_by_tag: bool,
     pub section_display: SectionDisplay,
+    pub x_ray: bool,
+    pub hidden_geometry: bool,
     pub viewport_menu: Option<ViewportMenu>,
     pub scenes: Vec<SceneRow>,
     /// How many times the document was replaced.
@@ -78,6 +81,9 @@ pub(super) struct Fixture {
     pub recovered: Vec<PathBuf>,
     pub soften: Option<u8>,
     pub edges_soft: Option<bool>,
+    pub selection_hidden: Option<bool>,
+    pub has_hidden_selected: bool,
+    pub has_face_selected: bool,
     pub texture_position: Option<TexturePosition>,
     /// Whether the Keyboard Shortcuts window is open.
     pub shortcuts: bool,
@@ -165,6 +171,8 @@ impl Default for Fixture {
             tags: Vec::new(),
             color_by_tag: false,
             section_display: SectionDisplay::default(),
+            x_ray: false,
+            hidden_geometry: false,
             viewport_menu: None,
             scenes: Vec::new(),
             documents: 0,
@@ -180,6 +188,9 @@ impl Default for Fixture {
             recovered: Vec::new(),
             soften: None,
             edges_soft: None,
+            selection_hidden: None,
+            has_hidden_selected: false,
+            has_face_selected: false,
             texture_position: None,
             shortcuts: false,
             theme: ThemeChoice::System,
@@ -244,6 +255,8 @@ impl Fixture {
             tags: &self.tags,
             color_by_tag: self.color_by_tag,
             section_display: self.section_display,
+            x_ray: self.x_ray,
+            hidden_geometry: self.hidden_geometry,
             viewport_menu: self.viewport_menu,
             scenes: &self.scenes,
             documents: self.documents,
@@ -253,6 +266,9 @@ impl Fixture {
             selection: &self.selection,
             soften: self.soften,
             edges_soft: self.edges_soft,
+            selection_hidden: self.selection_hidden,
+            has_hidden_selected: self.has_hidden_selected,
+            has_face_selected: self.has_face_selected,
             texture_position: self.texture_position.clone(),
             shortcuts: self.shortcuts,
             theme: self.theme,

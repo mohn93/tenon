@@ -322,7 +322,24 @@ fn outliner_row(
     let response = row_button(ui, selected, text);
     #[cfg(test)]
     super::tests::record(ui, path, response.rect, false, selected, open);
-    if response.double_clicked() {
+    let mut menu = None;
+    response.context_menu(|ui| {
+        let (label, hide) = if row.own_hidden {
+            ("Unhide", false)
+        } else {
+            ("Hide", true)
+        };
+        if widgets::menu_item(ui, label, None, true).clicked() {
+            menu = Some(UiAction::OutlinerSetHidden {
+                path: path.to_vec(),
+                hidden: hide,
+            });
+            ui.close();
+        }
+    });
+    if menu.is_some() {
+        menu
+    } else if response.double_clicked() {
         Some(UiAction::OpenPath(path.to_vec()))
     } else if response.clicked() {
         // Shift, or Cmd on macOS and Ctrl elsewhere. Ctrl is accepted on macOS too, though

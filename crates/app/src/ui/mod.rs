@@ -163,6 +163,29 @@ pub enum UiAction {
     SetSectionActive(bool),
     /// Close the viewport's right-click menu.
     CloseViewportMenu,
+    /// Edit > Hide: hide the selection.
+    Hide,
+    /// Edit > Unhide > Selected.
+    UnhideSelected,
+    /// Edit > Unhide > Last: what the latest Hide hid.
+    UnhideLast,
+    /// Edit > Unhide > All: everything hidden in the open context.
+    UnhideAll,
+    /// Entity Info's Hidden checkbox: hide (true) or show the selection.
+    SetHidden(bool),
+    /// An Outliner row's menu: hide (true) or show the instance at the path.
+    OutlinerSetHidden {
+        path: Vec<EntityId>,
+        hidden: bool,
+    },
+    /// View > X-ray: draw every face as glass.
+    SetXRay(bool),
+    /// View > Hidden Geometry: draw hidden entities ghosted and let them be picked.
+    SetHiddenGeometry(bool),
+    /// Edit > Reverse Faces: turn the selected faces over.
+    ReverseFaces,
+    /// Edit > Orient Faces: make the faces joined to the first selected one agree with it.
+    OrientFaces,
     AddTag,
     /// Delete a tag: at once when nothing is on it, otherwise after asking where what is on it
     /// goes (the Delete Tag sheet).
@@ -459,6 +482,10 @@ pub struct View<'a> {
     pub color_by_tag: bool,
     /// Whether section planes are drawn, cut and filled (checked in the View menu).
     pub section_display: SectionDisplay,
+    /// Whether every face is drawn as glass (checked in the View menu).
+    pub x_ray: bool,
+    /// Whether hidden entities are drawn ghosted and can be picked (checked in the View menu).
+    pub hidden_geometry: bool,
     /// The viewport's right-click menu, while it is open.
     pub viewport_menu: Option<ViewportMenu>,
     /// Every scene, in order: the scene tabs show while there is one.
@@ -478,6 +505,12 @@ pub struct View<'a> {
     pub soften: Option<u8>,
     /// Whether the selected edges are all soft, when only edges are selected.
     pub edges_soft: Option<bool>,
+    /// Whether everything selected that can be hidden is, None when nothing selected can be.
+    pub selection_hidden: Option<bool>,
+    /// Whether a selected entity is hidden (Edit > Unhide > Selected).
+    pub has_hidden_selected: bool,
+    /// Whether a face is selected (Reverse Faces, Orient Faces).
+    pub has_face_selected: bool,
     /// The first selected face's texture placement, when only faces are selected.
     pub texture_position: Option<TexturePosition>,
     /// The theme chosen in View > Theme.
@@ -521,12 +554,16 @@ pub struct View<'a> {
 
 /// The viewport's right-click menu: where it opened (points), the selected section plane's
 /// entries (Some: whether the plane is the active cut, so Active Cut is checked) and the
-/// Intersect Faces entries (for a selection with faces or groups).
+/// Intersect Faces entries (for a selection with faces or groups), Hide (for what can be
+/// hidden), Unhide (for a hidden selection) and Reverse Faces and Orient Faces (for faces).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewportMenu {
     pub at: egui::Pos2,
     pub section: Option<bool>,
     pub intersect: bool,
+    pub hide: bool,
+    pub unhide: bool,
+    pub faces: bool,
 }
 
 /// What the Recover Models window lists.

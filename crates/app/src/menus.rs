@@ -189,6 +189,28 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .enabled(view.has_guides)
             .entry(),
         Entry::Separator,
+        Item::new("Hide", UiAction::Hide)
+            .enabled(view.selection_hidden.is_some())
+            .entry(),
+        Entry::Submenu {
+            label: "Unhide",
+            entries: vec![
+                Item::new("Selected", UiAction::UnhideSelected)
+                    .enabled(view.has_hidden_selected)
+                    .tooltip("Hidden entities can be selected while View > Hidden Geometry is on")
+                    .entry(),
+                Item::new("Last", UiAction::UnhideLast).entry(),
+                Item::new("All", UiAction::UnhideAll).entry(),
+            ],
+        },
+        Item::new("Reverse Faces", UiAction::ReverseFaces)
+            .enabled(view.has_face_selected)
+            .entry(),
+        Item::new("Orient Faces", UiAction::OrientFaces)
+            .enabled(view.has_face_selected)
+            .tooltip("Turn the faces joined to the first selected one to agree with it")
+            .entry(),
+        Entry::Separator,
         Item::new("Soften Edges...", UiAction::ShowSoften(true)).entry(),
         Entry::Submenu {
             label: "Intersect Faces",
@@ -348,6 +370,16 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         .checked(view.section_display.fill)
         .entry(),
         Entry::Separator,
+        Item::new("X-ray", UiAction::SetXRay(!view.x_ray))
+            .checked(view.x_ray)
+            .entry(),
+        Item::new(
+            "Hidden Geometry",
+            UiAction::SetHiddenGeometry(!view.hidden_geometry),
+        )
+        .checked(view.hidden_geometry)
+        .entry(),
+        Entry::Separator,
         Item::new("Add Scene", UiAction::AddScene).entry(),
         bound_item(
             "Previous Scene",
@@ -505,7 +537,7 @@ pub fn items(menus: &[Menu]) -> Vec<&Item> {
 }
 
 /// A stable id for the item: its action's Debug text. The lighting toggle's action flips
-/// between day and night, so it has one id for both; so do the section toggles.
+/// between day and night, so it has one id for both; so do the section, X-ray and Hidden Geometry toggles.
 #[cfg(any(target_os = "macos", test))]
 pub fn item_id(action: &UiAction) -> String {
     match action {
@@ -513,6 +545,8 @@ pub fn item_id(action: &UiAction) -> String {
         UiAction::SetSectionPlanes(_) => "ToggleSectionPlanes".into(),
         UiAction::SetSectionCuts(_) => "ToggleSectionCuts".into(),
         UiAction::SetSectionFill(_) => "ToggleSectionFill".into(),
+        UiAction::SetXRay(_) => "ToggleXRay".into(),
+        UiAction::SetHiddenGeometry(_) => "ToggleHiddenGeometry".into(),
         _ => format!("{action:?}"),
     }
 }

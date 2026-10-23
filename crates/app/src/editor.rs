@@ -51,6 +51,7 @@ mod tags;
 mod texture_position;
 mod viewer;
 pub use viewer::PartCard;
+mod visibility;
 
 use soften::SoftenWindow;
 pub use tags::SelectionTag;

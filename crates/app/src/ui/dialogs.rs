@@ -156,7 +156,8 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
 
 /// The viewport's right-click menu, at `menu.at`: for a selected section plane Flip and Active
 /// Cut (checked while the plane is the active one), for faces and groups Intersect Faces with
-/// the model, the selection or the context. It closes with a choice, Escape, or a press
+/// the model, the selection or the context, and Hide, Unhide, Reverse Faces and Orient Faces
+/// where they apply. It closes with a choice, Escape, or a press
 /// elsewhere.
 pub(super) fn viewport_menu(ui: &mut Ui, menu: ViewportMenu, actions: &mut Vec<UiAction>) {
     let area = egui::Area::new(egui::Id::new("viewport menu"))
@@ -172,6 +173,18 @@ pub(super) fn viewport_menu(ui: &mut Ui, menu: ViewportMenu, actions: &mut Vec<U
                     egui::accesskit::Role::Menu,
                     || "Viewport menu".into(),
                 );
+                let entries = [
+                    (menu.hide, "Hide", UiAction::Hide),
+                    (menu.unhide, "Unhide", UiAction::UnhideSelected),
+                    (menu.faces, "Reverse Faces", UiAction::ReverseFaces),
+                    (menu.faces, "Orient Faces", UiAction::OrientFaces),
+                ];
+                for (shown, label, action) in entries {
+                    if shown && widgets::menu_item(ui, label, None, true).clicked() {
+                        actions.push(action);
+                        actions.push(UiAction::CloseViewportMenu);
+                    }
+                }
                 if menu.intersect {
                     ui.weak("Intersect Faces");
                     for (label, scope) in INTERSECT_SCOPES {
