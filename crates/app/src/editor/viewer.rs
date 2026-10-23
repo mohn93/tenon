@@ -392,7 +392,10 @@ mod tests {
         let mut e = Editor::new(DVec2::new(800.0, 600.0), 2.0);
         e.set_read_only(true);
         assert!(e.open_bytes("shared.skr", &bytes));
-        assert!(!e.doc().hidden_geometry, "the viewer draws no hidden geometry");
+        assert!(
+            !e.doc().hidden_geometry,
+            "the viewer draws no hidden geometry"
+        );
         let at = e.doc().camera.project(DVec3::new(2.0, 2.0, 0.0)).unwrap();
         e.touch(Gesture::Tap { at });
         assert_eq!(selected_instances(&e), 0, "a hidden group is not picked");
