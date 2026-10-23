@@ -124,20 +124,21 @@ fn doing_nothing_is_a_success_without_an_undo_step() {
     let mut d = doc();
     let (face, _) = square(&mut d);
     let depth = undo_depth(&d);
-    // Nothing hidden yet: each unhide does nothing; so does a hide of nothing new.
+    // Nothing is hidden yet, so each unhide does nothing; a second hide of the same face
+    // (below) does nothing too.
     for c in [
         json!({"type": "unhide", "ids": [face]}),
         json!({"type": "unhide_last"}),
         json!({"type": "unhide_all"}),
     ] {
         let out = run(&mut d, c).unwrap();
-        assert!(out.get("changed").is_none_or(|c| c == &json!([])), "{out}");
+        assert_eq!(out["changed"], json!([]), "{out}");
     }
     assert_eq!(undo_depth(&d), depth);
     run(&mut d, json!({"type": "hide", "ids": [face]})).unwrap();
     assert_eq!(undo_depth(&d), depth + 1);
     let out = run(&mut d, json!({"type": "hide", "ids": [face]})).unwrap();
-    assert!(out.get("changed").is_none_or(|c| c == &json!([])));
+    assert_eq!(out["changed"], json!([]));
     assert_eq!(undo_depth(&d), depth + 1);
 }
 

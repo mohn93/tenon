@@ -203,6 +203,8 @@ pub struct FollowMe {
     paint: [Option<MaterialId>; 2],
     /// The profile face's tag, which the caps take.
     tag: Option<TagId>,
+    /// Whether the profile face is hidden, which the caps take.
+    hidden: bool,
 }
 
 impl Model {
@@ -339,6 +341,7 @@ impl Model {
             turn,
             paint: f.paint(),
             tag: f.tag,
+            hidden: f.hidden,
         })
     }
 
@@ -482,6 +485,7 @@ impl Model {
                         self.orient(f, *out);
                         self.set_paint(f, plan.paint);
                         self.set_tag(EntityId::Face(f), plan.tag);
+                        self.set_hidden(EntityId::Face(f), plan.hidden);
                     }
                     // A hole of a cap, or a section inside the sweep, stays open.
                     _ => {
@@ -494,6 +498,7 @@ impl Model {
                 self.orient(f, *out);
                 // The sides are new geometry: Untagged, whatever the profile was on.
                 self.set_tag(EntityId::Face(f), None);
+                self.set_hidden(EntityId::Face(f), false);
                 continue;
             }
             // Neither a side, a cap nor a piece of a face that was there: a region the sweep

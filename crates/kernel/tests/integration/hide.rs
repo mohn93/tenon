@@ -182,3 +182,73 @@ fn a_copy_keeps_hidden_faces_and_edges() {
     assert_eq!(m.faces().filter(|(_, f)| f.hidden).count(), 2);
     assert_eq!(m.edges().filter(|(_, e)| e.hidden).count(), 2);
 }
+
+#[test]
+fn a_copy_over_existing_edges_leaves_them_shown() {
+    let (s, _) = square_scene();
+    let mut m = s.root().clone();
+    // A hidden edge on top of the square's shown bottom side, copied onto it.
+    m.add_edge(p(10.0, 0.0, 0.0), p(12.0, 0.0, 0.0)).unwrap();
+    let loose = m.edges().last().unwrap().0;
+    m.hide_entities(&[EntityId::Edge(loose)], true);
+    let shown_before = m.edges().filter(|(_, e)| !e.hidden).count();
+    m.copy_placed(
+        &[loose],
+        &[],
+        &[glam::DAffine3::from_translation(p(-10.0, 0.0, 0.0))],
+    )
+    .unwrap();
+    // The copy lies along the square's bottom side: that edge stays shown.
+    assert_eq!(m.edges().filter(|(_, e)| !e.hidden).count(), shown_before);
+    assert_eq!(m.edges().filter(|(_, e)| e.hidden).count(), 1);
+}
+
+#[test]
+fn a_hidden_face_split_by_a_drawn_line_keeps_both_pieces_hidden() {
+    let (s, face) = square_scene();
+    let mut m = s.root().clone();
+    m.hide_entities(&[EntityId::Face(face)], true);
+    m.add_edge(p(1.0, 0.0, 0.0), p(1.0, 2.0, 0.0)).unwrap();
+    assert_eq!(m.faces().count(), 2);
+    assert!(m.faces().all(|(_, f)| f.hidden));
+}
+
+#[test]
+fn push_pull_caps_keep_the_flag_and_sides_are_shown() {
+    let (s, face) = square_scene();
+    let mut m = s.root().clone();
+    m.hide_entities(&[EntityId::Face(face)], true);
+    m.push_pull(face, 1.0).unwrap();
+    m.validate().unwrap();
+    // Base and cap stay hidden; the four sides are shown.
+    assert_eq!(m.faces().count(), 6);
+    assert_eq!(m.faces().filter(|(_, f)| f.hidden).count(), 2);
+}
+
+#[test]
+fn exploding_a_hidden_instance_does_not_hide_what_was_already_there() {
+    let (mut s, group) = grouped_square();
+    // A shown square at the root sharing the group's footprint edge-for-edge would merge, so
+    // use one that touches along one side only.
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&[
+            p(2.0, 0.0, 0.0),
+            p(4.0, 0.0, 0.0),
+            p(4.0, 2.0, 0.0),
+            p(2.0, 2.0, 0.0),
+        ])
+    })
+    .unwrap();
+    let shown: Vec<_> = s.root().edges().map(|(e, _)| e).collect();
+    s.edit(MeshId::Root, |m| {
+        Ok(m.hide_entities(&[EntityId::Instance(group)], true).0)
+    })
+    .unwrap();
+    s.explode(MeshId::Root, group).unwrap();
+    let m = s.root();
+    // The shared side (x = 2) and the shown square's other edges stay shown.
+    for e in shown {
+        assert!(!m.edge(e).unwrap().hidden, "{e:?}");
+    }
+    assert_eq!(m.edges().filter(|(_, e)| e.hidden).count(), 3);
+}

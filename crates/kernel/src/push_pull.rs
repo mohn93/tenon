@@ -263,10 +263,11 @@ impl Model {
         } else {
             (face.paint(), face.texture)
         };
-        // The cap is the pushed face moved: it keeps the face's tag. The sides are new
-        // geometry: Untagged, whatever the pushed face (or a coplanar face they were cut
-        // from) is on.
+        // The cap is the pushed face moved: it keeps the face's tag and hidden flag. The sides
+        // are new geometry: Untagged and shown, whatever the pushed face (or a coplanar face
+        // they were cut from) is on.
         let cap_tag = face.tag;
+        let cap_hidden = face.hidden;
         let created: Vec<FaceId> = self
             .faces()
             .map(|(f, _)| f)
@@ -290,6 +291,7 @@ impl Model {
                 self.set_paint(f, new_paint);
                 self.set_texture(f, cap_texture);
                 self.set_tag(EntityId::Face(f), cap_tag);
+                self.set_hidden(EntityId::Face(f), cap_hidden);
                 continue;
             }
             // A side face lies inside a side's swept rectangle. Other new faces in a side's
@@ -316,6 +318,7 @@ impl Model {
             self.set_paint(f, new_paint);
             self.set_texture(f, None);
             self.set_tag(EntityId::Face(f), None);
+            self.set_hidden(EntityId::Face(f), false);
         }
         if cut {
             self.remove_strays(&vertices_before, &sides, offset);

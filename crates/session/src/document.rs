@@ -114,7 +114,8 @@ pub struct Document {
     /// The ids the last hide or unhide edit changed, until its outcome takes them.
     hidden_changed: Option<Vec<EntityId>>,
     /// The entities the most recent `hide` hid, for `unhide_last`; not saved, forgotten with
-    /// the model.
+    /// the model. A failed atomic batch does not restore it: its ids are filtered to what is
+    /// still hidden when used, so a rolled-back hide leaves nothing for `unhide_last` to show.
     last_hidden: Vec<EntityId>,
     /// How many faces the last `position_texture` changed, until its outcome takes it.
     positioned: Option<usize>,

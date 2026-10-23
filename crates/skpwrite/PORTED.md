@@ -102,5 +102,7 @@ sequence"); the C++ and TypeScript ports restart them per section.
     two disagree on downward horizontal faces and on normals within 1e-3 of vertical; the
     round-trip tests pin faces both agree on.
 16. **Not ported:** tag folders, attribute dictionaries, curves (`CArcCurve`,
-    `CCurve`), images, dimensions, text, section planes, hidden faces and instances,
-    component behaviours, opening and editing an existing file.
+    `CCurve`), images, dimensions, text, section planes,
+    component behaviours, opening and editing an existing file. Hidden edges, faces and
+    instances are written (the `CDrawingElement` hidden byte, as edges already were; checked
+    against this project's reader only); hidden guides are written the same way but unverified.

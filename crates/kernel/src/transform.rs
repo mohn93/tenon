@@ -305,6 +305,7 @@ impl Model {
         places: &[DAffine3],
     ) -> BTreeSet<FaceId> {
         let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
+        let existing_edges: BTreeSet<EdgeId> = self.edges().map(|(id, _)| id).collect();
         let segments: Vec<(DVec3, DVec3)> = places
             .iter()
             .flat_map(|t| {
@@ -425,7 +426,10 @@ impl Model {
                     self.set_paint(id, f.paint);
                     self.set_texture(id, f.texture);
                     self.set_tag(EntityId::Face(id), f.tag);
-                    self.set_hidden(EntityId::Face(id), f.hidden);
+                    // Only faces made here come out hidden: one already there stays as it is.
+                    if f.hidden && !existing.contains(&id) {
+                        self.set_hidden(EntityId::Face(id), true);
+                    }
                 }
             }
         }
@@ -498,7 +502,7 @@ impl Model {
                         if marks.tag.is_some() {
                             self.set_tag(EntityId::Edge(e), marks.tag);
                         }
-                        if marks.hidden {
+                        if marks.hidden && !existing_edges.contains(&e) {
                             self.set_hidden(EntityId::Edge(e), true);
                         }
                     }
