@@ -1,3 +1,7 @@
 /target
 .DS_Store
 /web/dist
+
+# Built when testing the vendored egui-winit on its own
+/vendor/egui-winit/target
+/vendor/egui-winit/Cargo.lock
