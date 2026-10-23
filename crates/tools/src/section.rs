@@ -182,6 +182,7 @@ mod tests {
                 point: p,
                 kind: SnapKind::Ground,
                 face,
+                locked: None,
             }
         }
     }
@@ -224,6 +225,7 @@ mod tests {
             point: DVec3::new(1.0, 1.0, 0.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         };
         let (_, normal, _) = placed(&r.send(ToolEvent::Click(hit)));
         assert!(normal[2] < -0.99);

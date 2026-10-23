@@ -683,6 +683,7 @@ mod tests {
                 point: p,
                 kind: SnapKind::OnFace,
                 face: face_under(&self.model, &self.camera, self.cursor).map(|(f, _)| f),
+                locked: None,
             };
             self.send(make(hit))
         }

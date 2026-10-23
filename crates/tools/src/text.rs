@@ -273,6 +273,7 @@ mod tests {
             point: DVec3::new(0.0, 50.0, 30.0),
             kind: SnapKind::Free,
             face: None,
+            locked: None,
         };
         let out = r.send(ToolEvent::Click(hit));
         assert_eq!(out.note, Some(NoteRequest::Screen { at: [0.25, 0.05] }));

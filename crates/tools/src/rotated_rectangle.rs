@@ -15,7 +15,7 @@ use crate::inference::{Inference, SnapKind};
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{
-    format_length, is_point_snap, parse_angle, parse_length, snap_distance, snap_length,
+    format_length, parse_angle, parse_length, snap_distance_on_surface, snap_length, snaps,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -62,11 +62,11 @@ impl RotatedRectangleTool {
             _ => hit.point,
         };
         let Some((a, _)) = self.corner else { return p };
-        if ctx.units.length_snap <= 0.0 || is_point_snap(hit.kind) {
+        if !snaps(hit, &ctx.units) {
             return p;
         }
         match self.edge_end {
-            None => snap_distance(a, p, hit.kind, &ctx.units),
+            None => snap_distance_on_surface(a, p, hit, ctx),
             Some(b) => match (b - a).try_normalize() {
                 Some(side) => {
                     let across = square_to(p - a, side);

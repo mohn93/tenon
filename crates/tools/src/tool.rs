@@ -488,6 +488,7 @@ mod tests {
                 point,
                 kind: SnapKind::OnFace,
                 face: Some(face),
+                locked: None,
             };
             tool.handle(ToolEvent::Click(hit), &ctx);
             out.push(rounded(tool.phase()));
@@ -544,6 +545,7 @@ mod tests {
                     SnapKind::Free
                 },
                 face: on_square.then_some(face),
+                locked: None,
             };
             commands.extend(tool.handle(make(hit), &ctx).commands);
         }
@@ -690,12 +692,14 @@ mod tests {
                 point: a,
                 kind: SnapKind::OnFace,
                 face: Some(face),
+                locked: None,
             };
             tool.handle(ToolEvent::Click(press), &ctx(camera.project(a).unwrap()));
             let off = Inference {
                 point: DVec3::new(-3.0, 1.0, 0.0),
                 kind: SnapKind::Ground,
                 face: None,
+                locked: None,
             };
             let out = tool.handle(ToolEvent::Release(off), &ctx(DVec2::new(-40.0, 300.0)));
             assert!(out.commands.is_empty(), "{kind:?}: {:?}", out.commands);
@@ -739,6 +743,7 @@ mod tests {
             point,
             kind: SnapKind::OnFace,
             face: Some(face),
+            locked: None,
         };
         tool.handle(ToolEvent::Move(hit), &ctx);
     }

@@ -13,7 +13,7 @@ use session::{Command, Units};
 
 use crate::inference::{SnapKind, edge_under_in, guide_under_where};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, is_point_snap, parse_length, snap_length};
+use crate::vcb::{format_length, on_surface, parse_length, snap_length, snaps};
 
 /// Where a measurement starts.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,11 +113,12 @@ impl TapeMeasureTool {
 
     /// Where the cursor is: its inference's point, moved so its distance from the start is a
     /// multiple of the model's length snapping unless a point of the model was snapped to.
-    fn snapped(&self, hit: &crate::inference::Inference, units: &Units) -> DVec3 {
+    fn snapped(&self, hit: &crate::inference::Inference, ctx: &ToolContext) -> DVec3 {
+        let units = &ctx.units;
         let Some(start) = self.start else {
             return hit.point;
         };
-        if units.length_snap <= 0.0 || is_point_snap(hit.kind) {
+        if !snaps(hit, units) {
             return hit.point;
         }
         let offset = start.offset(hit.point);
@@ -125,7 +126,8 @@ impl TapeMeasureTool {
         if length < LENGTH_TOL {
             return hit.point;
         }
-        hit.point - offset + offset * (snap_length(length, units) / length)
+        let q = hit.point - offset + offset * (snap_length(length, units) / length);
+        on_surface(hit.point, q, hit, ctx)
     }
 
     /// Where a click at `hit` starts measuring: along the edge or guide line under the
@@ -192,9 +194,9 @@ impl Tool for TapeMeasureTool {
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
-            ToolEvent::Move(hit) => self.hover = Some(self.snapped(&hit, &ctx.units)),
+            ToolEvent::Move(hit) => self.hover = Some(self.snapped(&hit, ctx)),
             ToolEvent::Click(hit) => {
-                let p = self.snapped(&hit, &ctx.units);
+                let p = self.snapped(&hit, ctx);
                 self.hover = Some(p);
                 match self.start {
                     None => {

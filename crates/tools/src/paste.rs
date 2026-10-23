@@ -176,6 +176,7 @@ mod tests {
             point: p,
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

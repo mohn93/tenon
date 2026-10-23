@@ -10,7 +10,7 @@ use session::{Command, Units, rectangle_axes_in, rectangle_corners};
 
 use crate::inference::{Inference, SnapKind};
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, is_point_snap, parse_lengths, snap_length, toward_cursor};
+use crate::vcb::{format_length, parse_lengths, snap_length, snaps, toward_cursor};
 
 #[derive(Clone, Debug, Default)]
 pub struct RectangleTool {
@@ -66,11 +66,11 @@ impl RectangleTool {
 
     /// The cursor's point `p` on the plane with its width and height rounded to the model's
     /// length snapping, unless a point of the model was snapped to.
-    fn snapped(&self, p: DVec3, kind: SnapKind, units: &Units) -> DVec3 {
+    fn snapped(&self, p: DVec3, hit: &Inference, units: &Units) -> DVec3 {
         let Some((corner, normal)) = self.start else {
             return p;
         };
-        if units.length_snap <= 0.0 || is_point_snap(kind) {
+        if !snaps(hit, units) {
             return p;
         }
         let (u, v) = rectangle_axes_in(self.axes, normal);
@@ -163,7 +163,7 @@ impl Tool for RectangleTool {
                 self.follow(&hit, ctx);
                 if let Some((corner, normal)) = self.start {
                     self.hover = on_plane(corner, normal, &hit, ctx)
-                        .map(|p| self.snapped(p, hit.kind, &ctx.units));
+                        .map(|p| self.snapped(p, &hit, &ctx.units));
                 }
             }
             ToolEvent::Click(hit) => match self.start {
@@ -176,7 +176,7 @@ impl Tool for RectangleTool {
                     self.follow(&hit, ctx);
                     let (corner, normal) = self.start.unwrap();
                     if let Some(p) = on_plane(corner, normal, &hit, ctx) {
-                        let p = self.snapped(p, hit.kind, &ctx.units);
+                        let p = self.snapped(p, &hit, &ctx.units);
                         self.finish(p, self.axes, &mut out);
                     }
                 }
@@ -233,6 +233,7 @@ mod tests {
             point: DVec3::new(x, y, 0.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 
@@ -396,6 +397,7 @@ mod tests {
             point: DVec3::new(0.0, y, z),
             kind: SnapKind::OnFace,
             face: Some(wall),
+            locked: None,
         };
         r.send(ToolEvent::Click(on_wall(1.0, 1.0)));
         let out = r.send(ToolEvent::Click(on_wall(2.0, 2.5)));
@@ -436,6 +438,7 @@ mod tests {
             point: p,
             kind,
             face: Some(face),
+            locked: None,
         };
         // The first corner on the shared edge, seen over the floor.
         r.send(ToolEvent::Click(at(
@@ -503,6 +506,7 @@ mod tests {
             point: DVec3::new(0.0, 0.0, 2.0),
             kind: SnapKind::Axis(crate::Axis::Z),
             face: None,
+            locked: None,
         };
         r.send(ToolEvent::Move(above));
         let (w, h) = r.tool.size(DMat3::IDENTITY).unwrap();

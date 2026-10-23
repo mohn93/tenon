@@ -63,6 +63,29 @@ pub struct Inference {
     /// The nearest face under the cursor, whatever the point snapped to, if it belongs to the
     /// open context (a face inside an instance or outside the open instance is not given).
     pub face: Option<FaceId>,
+    /// Under a direction lock, the kind of point snap (an endpoint, a midpoint...) the locked
+    /// point was projected from, so the point still counts as one of the model's although
+    /// `kind` reports the lock. None otherwise.
+    pub locked: Option<SnapKind>,
+}
+
+impl Inference {
+    /// The kind of point snap this is, whatever the lock: an endpoint, midpoint, origin, guide
+    /// point, intersection, point on an edge or on a guide line. None for the rest.
+    pub fn point_snap(&self) -> Option<SnapKind> {
+        let kind = self.locked.unwrap_or(self.kind);
+        matches!(
+            kind,
+            SnapKind::Endpoint
+                | SnapKind::Midpoint
+                | SnapKind::Origin
+                | SnapKind::GuidePoint
+                | SnapKind::Intersection
+                | SnapKind::OnEdge
+                | SnapKind::OnGuide
+        )
+        .then_some(kind)
+    }
 }
 
 /// What inference can follow from the point a tool is drawing from.
@@ -172,11 +195,20 @@ pub fn infer_detail(
             point,
             kind: lock.kind,
             face,
+            locked: snapped.as_ref().map(|(_, kind, _)| *kind),
         };
         return (hit, Vec::new());
     }
     if let Some((point, kind, involved)) = snapped {
-        return (Inference { point, kind, face }, involved);
+        return (
+            Inference {
+                point,
+                kind,
+                face,
+                locked: None,
+            },
+            involved,
+        );
     }
 
     // Along a direction from the anchor. Direction lines are guides, so faces do not hide them.
@@ -195,6 +227,7 @@ pub fn infer_detail(
                         point: p,
                         kind,
                         face,
+                        locked: None,
                     },
                 ));
             }
@@ -210,6 +243,7 @@ pub fn infer_detail(
             point,
             kind: SnapKind::OnFace,
             face,
+            locked: None,
         };
         return (hit, vec![(k, EntityId::Face(f))]);
     }
@@ -225,6 +259,7 @@ pub fn infer_detail(
             point: slab.point,
             kind,
             face,
+            locked: None,
         };
         return (hit, Vec::new());
     }
@@ -233,11 +268,13 @@ pub fn infer_detail(
             point,
             kind: SnapKind::Ground,
             face,
+            locked: None,
         },
         None => Inference {
             point: camera.target_depth_at(cursor),
             kind: SnapKind::Free,
             face,
+            locked: None,
         },
     };
     (hit, Vec::new())
@@ -1106,6 +1143,7 @@ mod tests {
                 point: DVec3::new(3.0, 1.0, 0.0),
                 kind: SnapKind::Endpoint,
                 face: None,
+                locked: None
             }
         );
     }
@@ -2337,10 +2375,16 @@ mod tests {
                     point,
                     kind: lock.kind,
                     face,
+                    locked: snapped.map(|(_, kind)| kind),
                 };
             }
             if let Some((point, kind)) = snapped {
-                return Inference { point, kind, face };
+                return Inference {
+                    point,
+                    kind,
+                    face,
+                    locked: None,
+                };
             }
 
             // Along a direction from the anchor. Direction lines are guides, so faces do not
@@ -2359,6 +2403,7 @@ mod tests {
                                 point: p,
                                 kind,
                                 face,
+                                locked: None,
                             },
                         ));
                     }
@@ -2374,6 +2419,7 @@ mod tests {
                     point,
                     kind: SnapKind::OnFace,
                     face,
+                    locked: None,
                 };
             }
 
@@ -2382,11 +2428,13 @@ mod tests {
                     point,
                     kind: SnapKind::Ground,
                     face,
+                    locked: None,
                 },
                 None => Inference {
                     point: camera.target_depth_at(cursor),
                     kind: SnapKind::Free,
                     face,
+                    locked: None,
                 },
             }
         }

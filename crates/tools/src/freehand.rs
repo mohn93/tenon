@@ -407,6 +407,7 @@ mod tests {
             point: target + DVec3::X,
             kind: SnapKind::Free,
             face: None,
+            locked: None,
         }));
         let target = on_wall(3.0, 1.0);
         let hit = r.at(target, SnapKind::OnFace, Some(wall));
@@ -433,6 +434,7 @@ mod tests {
             point: p(1.0, 1.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }));
         let hit = r.at(DVec3::new(2.0, 0.0, 0.0), SnapKind::Ground, None);
         let out = r.send(ToolEvent::Release(hit));
@@ -510,6 +512,7 @@ mod tests {
             point: p(2.3, 0.5),
             kind: SnapKind::Endpoint,
             face: None,
+            locked: None,
         }));
         r.mv(p(2.0, 1.0));
         r.mv(p(2.0, 2.0));
@@ -532,6 +535,7 @@ mod tests {
             point: p(2.0, 0.01),
             kind: SnapKind::Endpoint,
             face: None,
+            locked: None,
         }));
         let (points, _, _) = curve(&out);
         assert_eq!(points, vec![p(0.0, 0.0), p(2.0, 0.01)]);

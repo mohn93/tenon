@@ -262,3 +262,194 @@ fn length_snapping_rounds_a_move_along_the_inferred_direction() {
     r.send(ToolEvent::Move(hit));
     assert_eq!(measured(&r), "1.13 m");
 }
+
+fn locked_hit(p: DVec3) -> crate::inference::Inference {
+    crate::inference::Inference {
+        point: p,
+        kind: SnapKind::Axis(crate::inference::Axis::X),
+        face: None,
+        locked: Some(SnapKind::Endpoint),
+    }
+}
+
+fn move_to(r: &mut Rig, hit: crate::inference::Inference) {
+    r.cursor = r.camera.project(hit.point).unwrap();
+    r.send(ToolEvent::Move(hit));
+}
+
+#[test]
+fn a_point_snap_under_a_lock_keeps_its_exact_position() {
+    // Through inference: an endpoint at x = 1.13 with the direction locked along X.
+    let mut model = Model::new();
+    model
+        .add_edge(DVec3::new(1.13, 2.0, 0.0), DVec3::new(1.13, 3.0, 0.0))
+        .unwrap();
+    let mut r = Rig::new(ToolKind::Line, model);
+    r.units = snapping(0.25);
+    r.click(DVec3::ZERO);
+    let guides = crate::inference::Guides {
+        anchor: Some(DVec3::ZERO),
+        reference: None,
+        lock: Some(crate::inference::Lock {
+            dir: DVec3::X,
+            kind: SnapKind::Axis(crate::inference::Axis::X),
+        }),
+    };
+    let cursor = r.camera.project(DVec3::new(1.13, 2.0, 0.0)).unwrap();
+    let hit = crate::inference::infer_detail(
+        &crate::scenery::Scenery::single(&r.model),
+        &r.camera,
+        cursor,
+        &guides,
+        10.0,
+    )
+    .0;
+    assert_eq!(hit.locked, Some(SnapKind::Endpoint), "{hit:?}");
+    r.cursor = cursor;
+    let out = r.send(ToolEvent::Click(hit));
+    assert!((edge_end(&out).x - 1.13).abs() < 1e-9, "{out:?}");
+}
+
+#[test]
+fn locked_point_snaps_are_exact_in_every_tool() {
+    let p = DVec3::new(1.13, 0.0, 0.0);
+    for kind in [
+        ToolKind::Line,
+        ToolKind::TapeMeasure,
+        ToolKind::Arc,
+        ToolKind::Circle,
+        ToolKind::Polygon,
+        ToolKind::RotatedRectangle,
+    ] {
+        let mut r = rig(kind, snapping(0.25));
+        r.click(DVec3::ZERO);
+        move_to(&mut r, locked_hit(p));
+        assert_eq!(measured(&r), "1.13 m", "{kind:?}");
+    }
+    let mut r = rig(ToolKind::Rectangle, snapping(0.25));
+    r.click(DVec3::ZERO);
+    move_to(&mut r, locked_hit(DVec3::new(1.13, 0.62, 0.0)));
+    assert_eq!(measured(&r), "1.13 m, 0.62 m");
+
+    let mut model = Model::new();
+    model
+        .add_edge(DVec3::new(0.0, 5.0, 0.0), DVec3::new(1.0, 5.0, 0.0))
+        .unwrap();
+    let edge = model.edges().next().unwrap().0;
+    let mut r = Rig::new(ToolKind::Move, model);
+    r.units = snapping(0.25);
+    r.select(kernel::EntityId::Edge(edge));
+    r.click(DVec3::ZERO);
+    move_to(&mut r, locked_hit(p));
+    assert_eq!(measured(&r), "1.13 m");
+}
+
+#[test]
+fn a_rounded_point_never_leaves_the_ground_it_was_taken_on() {
+    // From above the ground the rounded point would sink below it: not rounded.
+    let mut r = rig(ToolKind::Line, snapping(0.25));
+    r.click(DVec3::new(0.0, 0.0, 3.0));
+    let out = r.click(DVec3::new(1.13, 0.0, 0.0));
+    assert_eq!(edge_end(&out), DVec3::new(1.13, 0.0, 0.0));
+    // From the ground it is rounded.
+    let mut r = rig(ToolKind::Line, snapping(0.25));
+    r.click(DVec3::new(0.0, 1.0, 0.0));
+    let out = r.click(DVec3::new(1.13, 1.0, 0.0));
+    assert!((edge_end(&out).x - 1.25).abs() < 1e-12);
+
+    let mut r = rig(ToolKind::TapeMeasure, snapping(0.25));
+    r.click(DVec3::new(0.0, 0.0, 3.0));
+    r.mv(DVec3::new(1.13, 0.0, 0.0));
+    assert_eq!(measured(&r), "3.206 m");
+}
+
+#[test]
+fn a_rotated_rectangles_side_and_width_round() {
+    let mut r = rig(ToolKind::RotatedRectangle, snapping(0.25));
+    r.click(DVec3::ZERO);
+    r.mv(DVec3::new(1.13, 0.0, 0.0));
+    assert_eq!(measured(&r), "1.25 m");
+    r.click(DVec3::new(1.13, 0.0, 0.0));
+    r.mv(DVec3::new(0.3, 0.62, 0.0));
+    assert_eq!(measured(&r), "0.5 m");
+    let out = r.click(DVec3::new(0.3, 0.62, 0.0));
+    let Command::AddRotatedRectangle {
+        edge_end,
+        width_point,
+        ..
+    } = only(&out)
+    else {
+        panic!("{out:?}")
+    };
+    assert!((edge_end[0] - 1.25).abs() < 1e-12, "{edge_end:?}");
+    assert!((width_point[1] - 0.5).abs() < 1e-12, "{width_point:?}");
+}
+
+#[test]
+fn the_arcs_bulge_rounds() {
+    let mut r = rig(ToolKind::Arc, snapping(0.25));
+    r.click(DVec3::ZERO);
+    r.click(DVec3::new(2.0, 0.0, 0.0));
+    r.mv(DVec3::new(1.0, 0.62, 0.0));
+    assert_eq!(measured(&r), "0.5 m");
+    let hit = r.at(DVec3::new(1.0, 0.62, 0.0), SnapKind::Endpoint, None);
+    r.send(ToolEvent::Move(hit));
+    assert_eq!(measured(&r), "0.62 m");
+}
+
+#[test]
+fn the_tape_rounds_from_an_edge() {
+    let mut model = Model::new();
+    model
+        .add_edge(DVec3::ZERO, DVec3::new(4.0, 0.0, 0.0))
+        .unwrap();
+    let mut r = Rig::new(ToolKind::TapeMeasure, model);
+    r.units = snapping(0.25);
+    let on_edge = r.at(DVec3::new(2.0, 0.0, 0.0), SnapKind::OnEdge, None);
+    r.send(ToolEvent::Click(on_edge));
+    r.mv(DVec3::new(2.0, 0.62, 0.0));
+    assert_eq!(measured(&r), "0.5 m", "the distance from the edge");
+}
+
+#[test]
+fn rotates_angle_follows_the_step_and_zero_is_free() {
+    let mut model = Model::new();
+    model
+        .add_edge(DVec3::new(0.0, 5.0, 0.0), DVec3::new(1.0, 5.0, 0.0))
+        .unwrap();
+    let edge = model.edges().next().unwrap().0;
+    let angle_at = |snap: f64, deg: f64| {
+        let mut r = Rig::new(ToolKind::Rotate, model.clone());
+        r.units.angle_snap = snap;
+        r.select(kernel::EntityId::Edge(edge));
+        r.click(DVec3::ZERO);
+        r.click(DVec3::new(1.0, 0.0, 0.0));
+        r.mv(polar(deg));
+        measured(&r)
+    };
+    assert_eq!(angle_at(15.0, 31.0), "30°");
+    assert_eq!(angle_at(5.0, 36.5), "35°");
+    assert_eq!(angle_at(1.0, 31.3), "31°");
+    assert_eq!(angle_at(0.0, 31.3), "31.3°");
+}
+
+#[test]
+fn a_step_that_does_not_divide_180_stays_in_range() {
+    let a = protractor_angle(DVec3::X, polar(179.9), DVec3::Z, false, 3.7);
+    assert!((a - (-178.7)).abs() < 1e-9, "{a}");
+    let a = protractor_angle(DVec3::X, polar(-179.9), DVec3::Z, false, 3.7);
+    assert!((a - 178.7).abs() < 1e-9, "{a}");
+}
+
+#[test]
+fn rectangles_round_along_moved_drawing_axes() {
+    let mut r = rig(ToolKind::Rectangle, snapping(0.25));
+    r.axes = glam::DAffine3::from_rotation_z(30f64.to_radians());
+    let (u, v) = (
+        glam::DMat3::from_rotation_z(30f64.to_radians()) * DVec3::X,
+        glam::DMat3::from_rotation_z(30f64.to_radians()) * DVec3::Y,
+    );
+    r.click(DVec3::ZERO);
+    r.mv(u * 1.13 + v * 0.62);
+    assert_eq!(measured(&r), "1.25 m, 0.5 m");
+}

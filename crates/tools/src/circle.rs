@@ -109,7 +109,7 @@ impl Tool for CircleTool {
             ToolEvent::Move(hit) => {
                 if let Some((center, normal)) = self.center {
                     self.hover = on_plane(center, normal, &hit, ctx)
-                        .map(|p| snap_distance(center, p, hit.kind, &ctx.units));
+                        .map(|p| snap_distance(center, p, &hit, &ctx.units));
                 }
             }
             ToolEvent::Click(hit) => match self.center {
@@ -119,7 +119,7 @@ impl Tool for CircleTool {
                 }
                 Some((center, normal)) => {
                     if let Some(p) = on_plane(center, normal, &hit, ctx) {
-                        let p = snap_distance(center, p, hit.kind, &ctx.units);
+                        let p = snap_distance(center, p, &hit, &ctx.units);
                         self.finish(center.distance(p), &mut out);
                     }
                 }
@@ -191,6 +191,7 @@ mod tests {
             point: DVec3::new(x, y, 0.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

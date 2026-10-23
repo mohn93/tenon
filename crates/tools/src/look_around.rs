@@ -161,6 +161,7 @@ mod tests {
             point: DVec3::ZERO,
             kind: crate::inference::SnapKind::Ground,
             face: None,
+            locked: None,
         }))
     }
 
@@ -170,6 +171,7 @@ mod tests {
             point: DVec3::ZERO,
             kind: crate::inference::SnapKind::Ground,
             face: None,
+            locked: None,
         }));
     }
 

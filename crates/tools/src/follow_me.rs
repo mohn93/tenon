@@ -134,6 +134,7 @@ mod tests {
             point: DVec3::ZERO,
             kind: SnapKind::Free,
             face: None,
+            locked: None,
         }
     }
 

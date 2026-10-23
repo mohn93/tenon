@@ -9,12 +9,11 @@ use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::{Command, DEFAULT_ARC_SEGMENTS, MAX_COORDINATE, Units, arc_from_bulge, arc_points};
 
-use crate::inference::SnapKind;
+use crate::inference::Inference;
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{DragStart, Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{
-    format_length, is_point_snap, meant_as_count, parse_length, parse_segments, snap_distance,
-    snap_length,
+    format_length, meant_as_count, parse_length, parse_segments, snap_distance, snap_length, snaps,
 };
 
 /// Shown for a segment count that is not a whole number in range.
@@ -73,15 +72,15 @@ impl ArcTool {
     /// The cursor's point `p` on the plane, found with an inference of `kind`: unless a point of
     /// the model was snapped to, the distance from the start (before the end is set) or the
     /// bulge is rounded to the model's length snapping.
-    fn snapped(&self, p: DVec3, kind: SnapKind, units: &Units) -> DVec3 {
+    fn snapped(&self, p: DVec3, hit: &Inference, units: &Units) -> DVec3 {
         let Some((start, _)) = self.start else {
             return p;
         };
-        if units.length_snap <= 0.0 || is_point_snap(kind) {
+        if !snaps(hit, units) {
             return p;
         }
         match (self.end, self.left()) {
-            (None, _) => snap_distance(start, p, kind, units),
+            (None, _) => snap_distance(start, p, hit, units),
             (Some(end), Some(left)) => {
                 let bulge = (p - (start + end) / 2.0).dot(left);
                 p + left * (snap_length(bulge, units) - bulge)
@@ -195,7 +194,7 @@ impl Tool for ArcTool {
             ToolEvent::Move(hit) => {
                 if let Some((start, normal)) = self.start {
                     self.hover = on_plane(start, normal, &hit, ctx)
-                        .map(|p| self.snapped(p, hit.kind, &ctx.units));
+                        .map(|p| self.snapped(p, &hit, &ctx.units));
                 }
             }
             ToolEvent::Click(hit) => match (self.start, self.end) {
@@ -205,13 +204,13 @@ impl Tool for ArcTool {
                 }
                 (Some((start, normal)), None) => {
                     if let Some(p) = on_plane(start, normal, &hit, ctx) {
-                        let p = self.snapped(p, hit.kind, &ctx.units);
+                        let p = self.snapped(p, &hit, &ctx.units);
                         self.set_end(p, &mut out);
                     }
                 }
                 (Some((start, normal)), Some(_)) => {
                     self.hover = on_plane(start, normal, &hit, ctx)
-                        .map(|p| self.snapped(p, hit.kind, &ctx.units));
+                        .map(|p| self.snapped(p, &hit, &ctx.units));
                     if let Some(b) = self.bulge() {
                         self.finish(b, &mut out);
                     }
@@ -316,6 +315,7 @@ mod tests {
             point: DVec3::new(x, y, 0.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

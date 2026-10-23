@@ -161,7 +161,14 @@ pub(crate) fn protractor_angle(from: DVec3, to: DVec3, axis: DVec3, exact: bool,
     }
     let step = (angle / snap).round() * snap;
     if (angle - step).abs() < SNAP_DEG.min(snap / 2.0) {
-        step
+        // A step that does not divide 180 can land past it: wrap into (-180, 180].
+        if step > 180.0 {
+            step - 360.0
+        } else if step <= -180.0 {
+            step + 360.0
+        } else {
+            step
+        }
     } else {
         angle
     }
@@ -464,6 +471,7 @@ mod tests {
                 point: p,
                 kind,
                 face,
+                locked: None,
             }))
         }
 
@@ -477,6 +485,7 @@ mod tests {
                 point: p,
                 kind: SnapKind::Ground,
                 face: None,
+                locked: None,
             }))
         }
     }

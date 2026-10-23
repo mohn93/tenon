@@ -216,6 +216,7 @@ mod tests {
             point: DVec3::from_array(p),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

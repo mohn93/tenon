@@ -134,7 +134,7 @@ impl Tool for PolygonTool {
             ToolEvent::Move(hit) => {
                 if let Some((center, normal)) = self.center {
                     self.hover = on_plane(center, normal, &hit, ctx)
-                        .map(|p| snap_distance(center, p, hit.kind, &ctx.units));
+                        .map(|p| snap_distance(center, p, &hit, &ctx.units));
                 }
             }
             ToolEvent::Click(hit) => match self.center {
@@ -144,7 +144,7 @@ impl Tool for PolygonTool {
                 }
                 Some((center, normal)) => {
                     if let Some(p) = on_plane(center, normal, &hit, ctx) {
-                        let p = snap_distance(center, p, hit.kind, &ctx.units);
+                        let p = snap_distance(center, p, &hit, &ctx.units);
                         let d = p - center;
                         let direction = (d.length() > 1e-9).then_some(d);
                         self.finish(center.distance(p), direction, &mut out);
@@ -239,6 +239,7 @@ mod tests {
             point: DVec3::new(x, y, 0.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

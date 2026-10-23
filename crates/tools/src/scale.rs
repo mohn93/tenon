@@ -722,6 +722,7 @@ mod tests {
                 point: p,
                 kind: SnapKind::Free,
                 face: None,
+                locked: None,
             }
         }
 

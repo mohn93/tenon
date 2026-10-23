@@ -8,10 +8,10 @@ use kernel::geom::LENGTH_TOL;
 use kernel::{EntityId, FaceId, MaterialId, Model};
 use session::{Command, Units};
 
-use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
+use crate::inference::{Inference, closest_on_line_to_ray, face_under_in};
 use crate::scenery::Owner;
 use crate::tool::{DragStart, Phase, Remembered, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length, snap_length, toward_cursor};
+use crate::vcb::{format_length, parse_length, snap_length, snaps, toward_cursor};
 
 /// A push/pull in progress.
 #[derive(Clone, Debug)]
@@ -187,14 +187,7 @@ fn solid(drag: &Drag) -> Solid {
 /// Distance from the face's plane along its normal for the cursor: the height of a snapped
 /// point, otherwise of the point on the normal line nearest the cursor ray.
 fn measure(drag: &Drag, hit: &Inference, ctx: &ToolContext) -> f64 {
-    let snapped = matches!(
-        hit.kind,
-        SnapKind::Endpoint
-            | SnapKind::Midpoint
-            | SnapKind::Origin
-            | SnapKind::Intersection
-            | SnapKind::OnEdge
-    );
+    let snapped = hit.point_snap().is_some();
     let p = if snapped {
         hit.point
     } else {
@@ -203,10 +196,10 @@ fn measure(drag: &Drag, hit: &Inference, ctx: &ToolContext) -> f64 {
     };
     let distance = (p - drag.loops[0][0]).dot(drag.normal);
     // A point snap keeps its exact height; the cursor's is rounded to the length snapping.
-    if snapped {
-        distance
-    } else {
+    if snaps(hit, &ctx.units) {
         snap_length(distance, &ctx.units)
+    } else {
+        distance
     }
 }
 
@@ -365,7 +358,7 @@ impl Tool for PushPullTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inference::face_under;
+    use crate::inference::{SnapKind, face_under};
     use crate::tool::{Remembered, ToolKind};
     use glam::DVec2;
     use session::Camera;
@@ -425,6 +418,7 @@ mod tests {
                 point: p,
                 kind: SnapKind::OnFace,
                 face: face_under(&self.model, &self.camera, self.cursor).map(|(f, _)| f),
+                locked: None,
             }
         }
 
@@ -557,6 +551,7 @@ mod tests {
             point: DVec3::new(5.0, 5.0, 0.75),
             kind: SnapKind::Endpoint,
             face: None,
+            locked: None,
         };
         // The cursor is over the corner it snapped to.
         r.cursor = r.camera.project(corner.point).unwrap();
@@ -582,6 +577,7 @@ mod tests {
             point: DVec3::new(5.0, 5.0, 0.6),
             kind: SnapKind::Endpoint,
             face: None,
+            locked: None,
         };
         r.cursor = r.camera.project(corner.point).unwrap();
         let out = r.send(ToolEvent::Click(corner));

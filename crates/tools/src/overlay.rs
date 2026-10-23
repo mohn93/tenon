@@ -203,6 +203,7 @@ mod tests {
                 point: DVec3::new(1.0, 2.0, 0.0),
                 kind,
                 face: None,
+                locked: None,
             };
             let lines = preview_lines(&[[DVec3::ZERO, hit.point]], Some(&hit), false, false, &c);
             assert_eq!(lines[0].color, PARALLEL, "{kind:?}");
@@ -280,6 +281,7 @@ mod tests {
             point: DVec3::new(0.0, 3.0, 0.0),
             kind: SnapKind::Axis(Axis::Y),
             face: None,
+            locked: None,
         };
         let seg = [[DVec3::ZERO, hit.point]];
         let free = preview_lines(&seg, Some(&hit), false, false, &c);

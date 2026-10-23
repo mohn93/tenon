@@ -4,7 +4,8 @@ use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::Units;
 
-use crate::inference::SnapKind;
+use crate::inference::{Inference, SnapKind};
+use crate::tool::ToolContext;
 
 /// Parses a typed length in meters, a bare number being in the model's unit (see
 /// `session::parse_length`). None if it is not a length.
@@ -142,26 +143,17 @@ pub fn snap_length(meters: f64, units: &Units) -> f64 {
     }
 }
 
-/// Whether an inference is a point of the model (or a guide) that keeps its exact position:
-/// it wins over length snapping.
-pub(crate) fn is_point_snap(kind: SnapKind) -> bool {
-    matches!(
-        kind,
-        SnapKind::Endpoint
-            | SnapKind::Midpoint
-            | SnapKind::Origin
-            | SnapKind::GuidePoint
-            | SnapKind::Intersection
-            | SnapKind::OnEdge
-            | SnapKind::OnGuide
-    )
+/// Whether the cursor's length is rounded to the model's length snapping at `hit`: not when it
+/// is off, and not at a point of the model (an endpoint, a midpoint...), which keeps its exact
+/// position, also under a direction lock.
+pub(crate) fn snaps(hit: &Inference, units: &Units) -> bool {
+    units.length_snap > 0.0 && hit.point_snap().is_none()
 }
 
-/// The cursor point `p`, found with an inference of `kind`, moved along the line from `from` so
-/// its distance from `from` is a multiple of the model's length snapping. A point snap and
-/// no length snapping leave it where it is.
-pub(crate) fn snap_distance(from: DVec3, p: DVec3, kind: SnapKind, units: &Units) -> DVec3 {
-    if units.length_snap <= 0.0 || is_point_snap(kind) {
+/// The cursor point `p` (found with `hit`) moved along the line from `from` so its distance
+/// from `from` is a multiple of the model's length snapping; unchanged where `snaps` is false.
+pub(crate) fn snap_distance(from: DVec3, p: DVec3, hit: &Inference, units: &Units) -> DVec3 {
+    if !snaps(hit, units) {
         return p;
     }
     let v = p - from;
@@ -170,6 +162,31 @@ pub(crate) fn snap_distance(from: DVec3, p: DVec3, kind: SnapKind, units: &Units
         return p;
     }
     from + v * (snap_length(len, units) / len)
+}
+
+/// [`snap_distance`] for a point taken on a face or the ground as it is (not on a plane the
+/// tool draws in): rounded only when the rounded point stays on that surface, which it does
+/// not when `from` lies off its plane.
+pub(crate) fn snap_distance_on_surface(
+    from: DVec3,
+    p: DVec3,
+    hit: &Inference,
+    ctx: &ToolContext,
+) -> DVec3 {
+    on_surface(p, snap_distance(from, p, hit, &ctx.units), hit, ctx)
+}
+
+/// `q`, the rounded `p`, unless it left the face or ground `hit` was taken on: then `p`.
+pub(crate) fn on_surface(p: DVec3, q: DVec3, hit: &Inference, ctx: &ToolContext) -> DVec3 {
+    let normal = match hit.kind {
+        SnapKind::OnFace => hit.face.and_then(|f| ctx.model.face(f)).map(|f| f.normal),
+        SnapKind::Ground => Some(ctx.scenery.axes().z_axis),
+        _ => None,
+    };
+    match normal {
+        Some(n) if (q - p).dot(n).abs() > LENGTH_TOL => p,
+        _ => q,
+    }
 }
 
 /// A typed `value` pointed the way the cursor is: negated when `cursor` (the live measurement)

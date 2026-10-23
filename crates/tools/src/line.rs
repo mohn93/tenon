@@ -8,7 +8,7 @@ use session::Command;
 
 use crate::inference::Inference;
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length, snap_distance};
+use crate::vcb::{format_length, parse_length, snap_distance_on_surface};
 
 #[derive(Clone, Debug, Default)]
 pub struct LineTool {
@@ -43,7 +43,7 @@ impl LineTool {
     /// from the chain's last point unless a point of the model was snapped to.
     fn snapped(&self, hit: &Inference, ctx: &ToolContext) -> DVec3 {
         match self.last {
-            Some(last) => snap_distance(last, hit.point, hit.kind, &ctx.units),
+            Some(last) => snap_distance_on_surface(last, hit.point, hit, ctx),
             None => hit.point,
         }
     }
@@ -161,6 +161,7 @@ mod tests {
             point: DVec3::new(x, y, 0.0),
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

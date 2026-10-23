@@ -11,7 +11,7 @@ use session::{Command, MAX_COPIES};
 use crate::scenery::Owner;
 use crate::select::{box_outline, face_outline, guide_outline, pick, whole_curve};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{Array, format_length, parse_array, parse_length, snap_distance};
+use crate::vcb::{Array, format_length, parse_array, parse_length, snap_distance_on_surface};
 
 /// A move in progress.
 #[derive(Clone, Debug)]
@@ -42,7 +42,7 @@ impl MoveTool {
     /// from the base point unless a point of the model was snapped to.
     fn snapped(&self, hit: &crate::inference::Inference, ctx: &ToolContext) -> DVec3 {
         match &self.drag {
-            Some(d) => snap_distance(d.base, hit.point, hit.kind, &ctx.units),
+            Some(d) => snap_distance_on_surface(d.base, hit.point, hit, ctx),
             None => hit.point,
         }
     }
@@ -203,7 +203,7 @@ impl Tool for MoveTool {
                     }
                 }
                 Some(d) => {
-                    let offset = snap_distance(d.base, hit.point, hit.kind, &ctx.units) - d.base;
+                    let offset = snap_distance_on_surface(d.base, hit.point, &hit, ctx) - d.base;
                     if offset.length() >= LENGTH_TOL {
                         self.finish(offset, &mut out);
                     }
@@ -322,6 +322,7 @@ mod tests {
             point: p,
             kind: SnapKind::Ground,
             face: None,
+            locked: None,
         }
     }
 

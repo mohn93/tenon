@@ -73,6 +73,7 @@ impl Rig {
             point: p,
             kind,
             face,
+            locked: None,
         }
     }
 
