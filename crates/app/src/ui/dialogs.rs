@@ -3,7 +3,8 @@
 
 use egui::{RichText, Ui};
 
-use super::{Agents, SectionMenu, UiAction, widgets};
+use super::{Agents, UiAction, ViewportMenu, widgets};
+use crate::menus::INTERSECT_SCOPES;
 use crate::shortcuts::TABLE;
 
 /// The width of each of the Keyboard Shortcuts window's two columns, in points.
@@ -153,10 +154,12 @@ pub(super) fn soften_window(ui: &mut Ui, angle: u8, actions: &mut Vec<UiAction>)
     }
 }
 
-/// The context menu over a selected section plane, at `menu.at`: Flip, and Active Cut (checked
-/// while the plane is the active one). It closes with a choice, Escape, or a press elsewhere.
-pub(super) fn section_menu(ui: &mut Ui, menu: SectionMenu, actions: &mut Vec<UiAction>) {
-    let area = egui::Area::new(egui::Id::new("section plane menu"))
+/// The viewport's right-click menu, at `menu.at`: for a selected section plane Flip and Active
+/// Cut (checked while the plane is the active one), for faces and groups Intersect Faces with
+/// the model, the selection or the context. It closes with a choice, Escape, or a press
+/// elsewhere.
+pub(super) fn viewport_menu(ui: &mut Ui, menu: ViewportMenu, actions: &mut Vec<UiAction>) {
+    let area = egui::Area::new(egui::Id::new("viewport menu"))
         .order(egui::Order::Foreground)
         .fixed_pos(menu.at)
         .constrain(true)
@@ -167,25 +170,35 @@ pub(super) fn section_menu(ui: &mut Ui, menu: SectionMenu, actions: &mut Vec<UiA
                     ui.ctx(),
                     ui.layer_id().id.with("move"),
                     egui::accesskit::Role::Menu,
-                    || "Section Plane menu".into(),
+                    || "Viewport menu".into(),
                 );
+                if menu.intersect {
+                    ui.weak("Intersect Faces");
+                    for (label, scope) in INTERSECT_SCOPES {
+                        if widgets::menu_item(ui, label, None, true).clicked() {
+                            actions.push(UiAction::IntersectFaces(scope));
+                            actions.push(UiAction::CloseViewportMenu);
+                        }
+                    }
+                }
+                let Some(active) = menu.section else { return };
                 if widgets::menu_item(ui, "Flip", None, true).clicked() {
                     actions.push(UiAction::FlipSection);
-                    actions.push(UiAction::CloseSectionMenu);
+                    actions.push(UiAction::CloseViewportMenu);
                 }
-                let button = egui::Button::selectable(menu.active, "Active Cut");
+                let button = egui::Button::selectable(active, "Active Cut");
                 let response = ui.add(button);
                 response.widget_info(|| {
                     egui::WidgetInfo::selected(
                         egui::WidgetType::SelectableLabel,
                         true,
-                        menu.active,
+                        active,
                         "Active Cut",
                     )
                 });
                 if response.clicked() {
-                    actions.push(UiAction::SetSectionActive(!menu.active));
-                    actions.push(UiAction::CloseSectionMenu);
+                    actions.push(UiAction::SetSectionActive(!active));
+                    actions.push(UiAction::CloseViewportMenu);
                 }
             });
         });
@@ -196,7 +209,7 @@ pub(super) fn section_menu(ui: &mut Ui, menu: SectionMenu, actions: &mut Vec<UiA
             .pointer_interact_pos()
             .is_some_and(|p| !area.response.rect.contains(p));
     if escaped || elsewhere {
-        actions.push(UiAction::CloseSectionMenu);
+        actions.push(UiAction::CloseViewportMenu);
     }
 }
 

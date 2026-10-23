@@ -81,6 +81,7 @@ fn the_file_menu_leaves_out_what_the_system_does_not_offer() {
 
 // egui names a submenu's button with its arrow.
 const OPEN_RECENT: &str = "Open Recent \u{23F5}";
+const INTERSECT_FACES: &str = "Intersect Faces \u{23F5}";
 
 fn with_recent(paths: &[&str]) -> Fixture {
     Fixture {
@@ -298,6 +299,44 @@ fn the_edit_menu_items_need_a_selection_and_guides() {
         click_menu(&mut h, &["Edit", "Soften Edges..."]),
         [UiAction::ShowSoften(true)]
     );
+}
+
+#[test]
+fn edit_intersect_faces_runs_each_scope_and_needs_a_selection() {
+    for (item, scope) in [
+        ("With Model", IntersectScope::Model),
+        ("With Selection", IntersectScope::Selection),
+        ("With Context", IntersectScope::Context),
+    ] {
+        let mut h = harness(edit_fixture(true, false));
+        assert_eq!(
+            click_menu(&mut h, &["Edit", INTERSECT_FACES, item]),
+            [UiAction::IntersectFaces(scope)],
+            "{item}"
+        );
+        // Without a selection the item is disabled and does nothing.
+        let mut h = harness(edit_fixture(false, false));
+        click(&mut h, "Edit");
+        click(&mut h, INTERSECT_FACES);
+        assert!(
+            h.get_by_label(item).accesskit_node().is_disabled(),
+            "{item}"
+        );
+        h.get_by_label(item).click();
+        h.run_ok();
+        assert_eq!(h.state_mut().take(), [], "{item}");
+    }
+}
+
+#[test]
+fn intersect_faces_has_native_ids_that_leave_the_others_alone() {
+    use crate::menus::item_id;
+    assert_eq!(
+        item_id(&UiAction::IntersectFaces(IntersectScope::Selection)),
+        "IntersectFaces(Selection)"
+    );
+    assert_eq!(item_id(&UiAction::ShowSoften(true)), "ShowSoften(true)");
+    assert_eq!(item_id(&UiAction::Soften), "Soften");
 }
 
 #[test]

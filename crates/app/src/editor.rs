@@ -35,6 +35,7 @@ mod agent;
 mod bytes;
 mod clip;
 mod input;
+mod intersect;
 pub use input::{DriveError, Driven, Stopped};
 mod labels;
 mod library;

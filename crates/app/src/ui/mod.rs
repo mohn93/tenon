@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use egui::{Panel, Ui};
 use kernel::{DefinitionId, EntityId, InstanceId, PageId, TagId, TexturePlacement};
 use session::{
-    Camera, LibraryKind, Lighting, MaterialId, OutlinerTable, Projection, SectionDisplay,
-    StandardView, Units,
+    Camera, IntersectScope, LibraryKind, Lighting, MaterialId, OutlinerTable, Projection,
+    SectionDisplay, StandardView, Units,
 };
 use tools::ToolKind;
 
@@ -162,7 +162,7 @@ pub enum UiAction {
     /// The selected section plane's context menu: make it the active cut, or clear it.
     SetSectionActive(bool),
     /// Close the section plane's context menu.
-    CloseSectionMenu,
+    CloseViewportMenu,
     AddTag,
     /// Delete a tag: at once when nothing is on it, otherwise after asking where what is on it
     /// goes (the Delete Tag sheet).
@@ -241,6 +241,8 @@ pub enum UiAction {
     Soften,
     /// Harden the selection (or the open context).
     Harden,
+    /// Edit > Intersect Faces: cross the selected faces and groups with the scope.
+    IntersectFaces(IntersectScope),
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
     /// Set the texture offset of the faces (those selected when the field was edited), in
@@ -458,7 +460,7 @@ pub struct View<'a> {
     /// Whether section planes are drawn, cut and filled (checked in the View menu).
     pub section_display: SectionDisplay,
     /// The context menu over the selected section plane, while it is open.
-    pub section_menu: Option<SectionMenu>,
+    pub viewport_menu: Option<ViewportMenu>,
     /// Every scene, in order: the scene tabs show while there is one.
     pub scenes: &'a [SceneRow],
     /// How many times the document was replaced (`Editor::documents`): what a panel holds by
@@ -517,12 +519,14 @@ pub struct View<'a> {
     pub recover: Option<RecoverView<'a>>,
 }
 
-/// The context menu of the selected section plane: where it opened (points) and whether the
-/// plane is the active cut (Active Cut is checked).
+/// The viewport's right-click menu: where it opened (points), the selected section plane's
+/// entries (Some: whether the plane is the active cut, so Active Cut is checked) and the
+/// Intersect Faces entries (for a selection with faces or groups).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SectionMenu {
+pub struct ViewportMenu {
     pub at: egui::Pos2,
-    pub active: bool,
+    pub section: Option<bool>,
+    pub intersect: bool,
 }
 
 /// What the Recover Models window lists.
@@ -680,8 +684,8 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     if let Some(angle) = view.soften {
         dialogs::soften_window(ui, angle, actions);
     }
-    if let Some(menu) = view.section_menu {
-        dialogs::section_menu(ui, menu, actions);
+    if let Some(menu) = view.viewport_menu {
+        dialogs::viewport_menu(ui, menu, actions);
     }
     if let Some(log) = view.agents.log {
         dialogs::agent_activity(ui, &view.agents, log, actions);

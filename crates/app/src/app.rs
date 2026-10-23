@@ -52,8 +52,7 @@ use crate::ui::PhoneView;
 use crate::ui::theme::UiScale;
 use crate::ui::{
     Agents, DockTab, LibrarySave, LibraryView, MaterialRow, RecoverRow, RecoverView, SceneRow,
-    SectionMenu, SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction,
-    View,
+    SettingsView, Sheet, StartCard, TagRow, TexturePosition, TextureRow, UiAction, View,
 };
 use crate::ui::{ViewerPanel, ViewerView};
 use crate::ui::{theme, viewport};
@@ -881,7 +880,7 @@ struct State {
     left_press: Option<DVec2>,
     /// Where the context menu of the selected section plane was opened (points), while it is
     /// open.
-    section_menu: Option<egui::Pos2>,
+    viewport_menu: Option<egui::Pos2>,
     /// Whether the window has keyboard focus.
     focused: bool,
     /// How fly mode holds the pointer now.
@@ -1156,7 +1155,7 @@ impl State {
             #[cfg(target_os = "macos")]
             edited: false,
             left_press: None,
-            section_menu: None,
+            viewport_menu: None,
             focused: true,
             capture: Capture::Free,
             look_held: false,
@@ -2046,7 +2045,7 @@ impl State {
             UiAction::SetSectionActive(on) => {
                 self.editor.set_selected_section_active(on);
             }
-            UiAction::CloseSectionMenu => self.section_menu = None,
+            UiAction::CloseViewportMenu => self.viewport_menu = None,
             UiAction::AddTag => {
                 self.editor.add_tag();
             }
@@ -2220,6 +2219,9 @@ impl State {
             }
             UiAction::Soften => {
                 self.editor.soften_selection();
+            }
+            UiAction::IntersectFaces(scope) => {
+                self.editor.intersect_faces(scope);
             }
             UiAction::Harden => {
                 self.editor.harden_selection();
@@ -2595,12 +2597,9 @@ impl State {
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
             section_display: self.editor.doc().section_display,
-            section_menu: self.section_menu.zip(self.editor.selected_section()).map(
-                |(at, selected)| SectionMenu {
-                    at,
-                    active: selected.active,
-                },
-            ),
+            viewport_menu: self
+                .viewport_menu
+                .and_then(|at| self.editor.viewport_menu(at)),
             scenes: &scenes,
             documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
@@ -3809,14 +3808,18 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 false
             }
-            // Right-clicking a selected section plane opens its context menu.
+            // Right-clicking a selected section plane, or a selection with faces or groups,
+            // opens its context menu.
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Right,
                 ..
-            } if s.pointer_in_view() && s.editor.selected_section().is_some() => {
+            } if s.pointer_in_view()
+                && (s.editor.selected_section().is_some()
+                    || (!s.features.read_only && s.editor.can_intersect())) =>
+            {
                 let ppp = f64::from(s.gui.pixels_per_point());
-                s.section_menu = Some(egui::pos2(
+                s.viewport_menu = Some(egui::pos2(
                     (s.cursor.x / ppp) as f32,
                     (s.cursor.y / ppp) as f32,
                 ));

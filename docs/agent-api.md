@@ -1714,6 +1714,7 @@ under a pixel and where a click would snap.
 | Settings, Model tab: the model's display units and precision (saved in the model) | `set_units`; the `units` query |
 | Edit > Erase (Delete), Edit > Delete Guides | `erase` with the `selection` query's ids; `delete_guides` |
 | Edit > Soften Edges...: angle, Soften, Harden; Entity Info's Soft box | `soften_by_angle` (`max_angle_deg`), `soften_edges` (`soft`); the window's angle and whether it is open: `set_soften_angle`, `set_dialog`; `editor.soften_angle`, `editor.dialog` |
+| Edit > Intersect Faces > With Model, With Selection, With Context (enabled with a selection), and the same three in the viewport's right-click menu over a selection with faces or groups (the section plane keeps its own right-click menu); the status says "Added N edges, split M faces" or "No faces crossed"; not in the read-only phone viewer | `intersect_faces` (`with`: `model`, `selection`, `context`) with the `selection` query's ids |
 | Edit > Select All, Select None (Cmd+A, Shift+Cmd+A) | `select` with `all: true`; `select` with `ids: []` |
 | Edit > Duplicate (Cmd+D) | `duplicate`, or `copy` with an explicit offset |
 | Edit > Cut, Copy, Paste (Cmd+X, Cmd+C, Cmd+V), Paste In Place; Cut and Copy need a selection, Paste and Paste In Place a clip on the clipboard (looked at when the window gains focus); with a text field focused the keys and items are the field's | `cut_selection`, `copy_selection`, `paste_clipboard` (`at`), `paste_in_place`; or `paste` with clip text |

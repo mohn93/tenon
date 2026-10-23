@@ -69,15 +69,16 @@ fn the_section_plane_tool_is_in_the_tools_menu_and_on_the_rail() {
 #[test]
 fn the_section_plane_menu_flips_and_toggles_the_active_cut() {
     let open = |active: bool| Fixture {
-        section_menu: Some(SectionMenu {
+        viewport_menu: Some(ViewportMenu {
             at: Pos2::new(300.0, 200.0),
-            active,
+            section: Some(active),
+            intersect: false,
         }),
         ..Default::default()
     };
     assert_eq!(
         click(&mut harness(open(true)), "Flip"),
-        [UiAction::FlipSection, UiAction::CloseSectionMenu]
+        [UiAction::FlipSection, UiAction::CloseViewportMenu]
     );
     // Checked while the plane is the active cut; clicking clears it.
     let mut h = harness(open(true));
@@ -86,14 +87,17 @@ fn the_section_plane_menu_flips_and_toggles_the_active_cut() {
         click(&mut h, "Active Cut"),
         [
             UiAction::SetSectionActive(false),
-            UiAction::CloseSectionMenu
+            UiAction::CloseViewportMenu
         ]
     );
     let mut h = harness(open(false));
     assert_eq!(is_on(&h, "Active Cut"), Some(false));
     assert_eq!(
         click(&mut h, "Active Cut"),
-        [UiAction::SetSectionActive(true), UiAction::CloseSectionMenu]
+        [
+            UiAction::SetSectionActive(true),
+            UiAction::CloseViewportMenu
+        ]
     );
     // No menu open: no such items.
     assert!(
@@ -101,4 +105,41 @@ fn the_section_plane_menu_flips_and_toggles_the_active_cut() {
             .query_by_label("Active Cut")
             .is_none()
     );
+}
+
+#[test]
+fn the_faces_and_groups_menu_intersects_with_each_scope() {
+    let open = || Fixture {
+        viewport_menu: Some(ViewportMenu {
+            at: Pos2::new(300.0, 200.0),
+            section: None,
+            intersect: true,
+        }),
+        ..Default::default()
+    };
+    for (item, scope) in [
+        ("With Model", IntersectScope::Model),
+        ("With Selection", IntersectScope::Selection),
+        ("With Context", IntersectScope::Context),
+    ] {
+        assert_eq!(
+            click(&mut harness(open()), item),
+            [UiAction::IntersectFaces(scope), UiAction::CloseViewportMenu],
+            "{item}"
+        );
+    }
+    // It is not the section plane's menu, and that one has no intersect items.
+    let h = harness(open());
+    for item in ["Flip", "Active Cut"] {
+        assert!(h.query_by_label(item).is_none(), "{item}");
+    }
+    let h = harness(Fixture {
+        viewport_menu: Some(ViewportMenu {
+            at: Pos2::new(300.0, 200.0),
+            section: Some(false),
+            intersect: false,
+        }),
+        ..Default::default()
+    });
+    assert!(h.query_by_label("With Model").is_none());
 }

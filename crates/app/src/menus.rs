@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use session::{Lighting, Projection, StandardView};
+use session::{IntersectScope, Lighting, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::shortcuts::Bound;
@@ -15,6 +15,13 @@ pub const APP_MENU: &str = "sketchup-alt";
 
 /// The File submenu that lists the recent files: the one submenu whose items change.
 pub const OPEN_RECENT: &str = "Open Recent";
+
+/// The scopes Intersect Faces offers, in the Edit menu and the viewport's right-click menu.
+pub const INTERSECT_SCOPES: [(&str, IntersectScope); 3] = [
+    ("With Model", IntersectScope::Model),
+    ("With Selection", IntersectScope::Selection),
+    ("With Context", IntersectScope::Context),
+];
 
 /// One menu of the bar.
 pub struct Menu {
@@ -183,6 +190,16 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .entry(),
         Entry::Separator,
         Item::new("Soften Edges...", UiAction::ShowSoften(true)).entry(),
+        Entry::Submenu {
+            label: "Intersect Faces",
+            entries: INTERSECT_SCOPES
+                .map(|(label, scope)| {
+                    Item::new(label, UiAction::IntersectFaces(scope))
+                        .enabled(view.has_selection)
+                        .entry()
+                })
+                .into(),
+        },
     ];
     if !native {
         edit.push(Entry::Separator);
