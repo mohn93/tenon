@@ -968,14 +968,14 @@ instances and definitions all of whose instances are listed stay as they are. Th
 step, when there was nothing to do); a batch refers to them as `$N:d0`. An unknown id is
 `not_found`.
 
-`{"type": "flip", "ids": ["f8", "i4"], "axis": "red"}` mirrors `ids` (absent: the selection) as
+`{"type": "flip", "ids": ["f8", "i4"], "axis": "red"}` mirrors `ids` (absent: the selection; present and empty: nothing to do, with an empty `changed` and no undo step, so a batch `*` reference that expands to nothing is harmless) as
 one undo step, `axis` being `red`, `green` or `blue` (x, y, z). `frame` `axes` (the default)
 mirrors about the plane through the center of the box around the selection, measured in the
 current drawing axes (the open context's own axes), normal to that axis; faces keep facing out,
 and instances become mirrored (negative determinant). `frame` `own` takes exactly one instance
 and mirrors it about its own center along its own axis (the axis of its definition, also when
-the instance is rotated, scaled or sheared), leaving it where it was. Errors: empty `ids`
-(present and empty, or absent with nothing selected) and `own` with anything but one instance are
+the instance is rotated, scaled or sheared), leaving it where it was. Errors: absent `ids`
+with nothing selected and `own` with anything but one instance are
 `invalid_input`, unknown ids `not_found`. The outcome's `changed` lists the flipped ids.
 
 ### Camera

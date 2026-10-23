@@ -53,10 +53,14 @@ impl Document {
         axis: FlipAxis,
         frame: FlipFrame,
     ) -> Result<SceneChange, CommandError> {
+        if ids.is_some_and(<[EntityId]>::is_empty) {
+            self.changed_entities = Some(Vec::new());
+            return Ok(SceneChange::default());
+        }
         let ids = self.ids_or_selection(ids);
         let invalid = |m: &str| CommandError::new(ErrorKind::InvalidInput, m);
         if ids.is_empty() {
-            return Err(invalid("ids must list what to flip (or select something)"));
+            return Err(invalid("nothing is selected: select something or give ids"));
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
         if !missing.is_empty() {

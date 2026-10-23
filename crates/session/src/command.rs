@@ -333,7 +333,8 @@ pub enum Command {
         #[serde(default)]
         ids: Option<Vec<EntityId>>,
     },
-    /// Mirror `ids` (when absent: the selection; present and empty is `invalid_input`) as one
+    /// Mirror `ids` (when absent: the selection; present and empty: nothing to do, no undo step; nothing selected
+    /// when absent is `invalid_input`) as one
     /// undo step; faces keep facing out and
     /// instances may become mirrored. `frame` `axes` (default): about the plane through the
     /// center of the selection's box in the current drawing axes, normal to the `axis` of

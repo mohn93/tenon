@@ -359,12 +359,12 @@ fn own_flip_needs_exactly_one_instance() {
         json!({"type": "select", "ids": [a, b], "mode": "replace"}),
     )
     .unwrap();
-    for ids in [json!([a, b]), json!([])] {
-        let err = run(
-            &mut d,
-            json!({"type": "flip", "ids": ids, "axis": "red", "frame": "own"}),
-        )
-        .unwrap_err();
+    for ids in [Some(json!([a, b])), None] {
+        let mut command = json!({"type": "flip", "axis": "red", "frame": "own"});
+        if let Some(ids) = ids {
+            command["ids"] = ids;
+        }
+        let err = run(&mut d, command).unwrap_err();
         assert_eq!(err.0, ErrorKind::InvalidInput);
     }
     // A selected geometry id is not an instance either.
@@ -497,11 +497,12 @@ fn empty_ids_act_on_the_selection_only_when_absent() {
     .enumerate()
     .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
     .collect();
-    assert!(d.execute_batch(commands, true).is_err());
+    d.execute_batch(commands, true).unwrap();
     assert_eq!(ask(&d, json!({"type": "entity", "id": g})), before);
-    let err = run(&mut d, json!({"type": "flip", "ids": [], "axis": "red"})).unwrap_err();
-    assert_eq!(err.0, ErrorKind::InvalidInput);
     let steps = depth(&d);
+    let out = run(&mut d, json!({"type": "flip", "ids": [], "axis": "red"})).unwrap();
+    assert_eq!(out["changed"], json!([]));
+    assert_eq!(depth(&d), steps);
     let out = run(&mut d, json!({"type": "make_unique", "ids": []})).unwrap();
     assert_eq!(out["definitions"], json!([]));
     assert_eq!(depth(&d), steps);
