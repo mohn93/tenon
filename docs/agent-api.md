@@ -1223,7 +1223,7 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
-  Polygon, the center; Arc, the start, then the end; Push/Pull, where the face was clicked; Move,
+  Polygon, the center; Arc, the start, then the end; Freehand, the press point; Rotated Rectangle, the first corner, then the end of the first side; Protractor, the center, then the baseline click; Push/Pull, where the face was clicked; Move,
   the base point; Rotate, the center, then where the angle starts; Scale, the point that stays
   put, then the grip clicked; Offset, where the face (or chain) was pressed; Follow Me is always `idle`; Tape Measure, where the measurement starts; Axes, the origin, then the red point; Dimension, the ends clicked (or the clicked edge's ends), or a circle's center; Text, the point the note points at, then where its text goes (none for a note fixed to the view). The Select tool is `active` with no points while its button is held (a
   click or a box, both on screen); Erase, Paint and Follow Me are always `idle`.
@@ -1367,11 +1367,12 @@ Events, run in order:
 - **Freehand** (no key): `drag` through the path's points (or `down`, `move` events, `up`): the
   path lies in the plane of the face under the press, or in the horizontal plane (the drawing
   axes' red-green plane) through it, each point being where the cursor ray meets that plane. The
-  samples (at most 10,000; later ones are dropped) are simplified with Douglas-Peucker at 2 px
+  samples (the press and release points may snap; the others are always where the cursor ray meets the plane, never snaps; a sample within half a pixel of the last is skipped; at most 10,000 are kept, later ones dropped but for the release point) are simplified with Douglas-Peucker at 2 px
   projected to model units at the press point's depth, and make one `add_curve`: a curve, or with
   Shift held at the press (`modifiers`) a polyline (`curve: false`). A release within the snap
   radius (10 px) of the start closes it (`closed: true`, needing 3 corners after simplifying). A
-  press and release without a path draws nothing; `cancel` or an `escape` key drops the stroke.
+  stroke whose cursor never got 4 px (the drag threshold) from the press draws nothing, and a
+  closed path whose corners lie on one line stays open; `cancel` or an `escape` key drops the stroke.
   It takes no typed value.
 - **Rotated Rectangle** (no key): `click` the first corner, `click` the end of the first side (any
   direction; inference and arrow-key locks as for other tools), then `move` to set the width and

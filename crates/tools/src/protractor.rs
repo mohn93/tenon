@@ -190,12 +190,12 @@ impl Tool for ProtractorTool {
                 }
             },
             ToolEvent::Value(text) => {
-                let Some(typed) = parse_angle(&text).or_else(|| parse_slope(&text)) else {
-                    out.message = Some(format!("Not an angle or rise:run: {text}"));
-                    return out;
-                };
-                match (self.center, self.last) {
-                    (Some(c), _) if c.baseline.is_some() => {
+                let typed = parse_angle(&text).or_else(|| parse_slope(&text));
+                match (typed, self.center, self.last) {
+                    (None, ..) => {
+                        out.message = Some(format!("Not an angle or rise:run: {text}"));
+                    }
+                    (Some(typed), Some(c), _) if c.baseline.is_some() => {
                         // A typed angle turns the way the cursor does.
                         let a = if self.angle().is_some_and(|a| a < 0.0) {
                             -typed
@@ -204,9 +204,9 @@ impl Tool for ProtractorTool {
                         };
                         self.finish(a, &mut out);
                     }
-                    (Some(_), _) => out.message = Some("Click the baseline first".into()),
+                    (Some(_), Some(_), _) => out.message = Some("Click the baseline first".into()),
                     // Right after a guide was placed: replace it, turning the way it did.
-                    (None, Some(last)) if self.guides => {
+                    (Some(typed), None, Some(last)) if self.guides => {
                         let a = if last.angle < 0.0 { -typed } else { typed };
                         out.commands.push(Command::Undo {
                             count: None,
@@ -218,7 +218,7 @@ impl Tool for ProtractorTool {
                         });
                         self.last = Some(Last { angle: a, ..last });
                     }
-                    (None, _) => out.message = Some("Click the center first".into()),
+                    (Some(_), None, _) => out.message = Some("Click the center first".into()),
                 }
             }
             ToolEvent::ToggleCopy => {
@@ -501,6 +501,14 @@ mod tests {
             assert!(out.commands.is_empty() && out.message.is_some(), "{bad:?}");
         }
         assert!(matches!(r.tool.phase(), Phase::Active { ref points } if points.len() == 2));
+    }
+
+    #[test]
+    fn a_bad_typed_value_keeps_the_preview() {
+        let mut r = started();
+        r.mv(v(1.0, 1.0, 0.0) + polar(30.0, 1.0));
+        let out = r.value("x");
+        assert!(out.message.is_some() && !out.preview.is_empty());
     }
 
     #[test]

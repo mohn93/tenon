@@ -4,7 +4,7 @@
 //! curve. Releasing within the snap radius of the start closes it; Shift held at the press
 //! draws a polyline of plain edges instead of a curve.
 
-use glam::DVec3;
+use glam::{DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use session::Command;
 
@@ -32,9 +32,42 @@ struct Stroke {
     /// Whether the edges form a curve (no Shift at the press).
     curve: bool,
     samples: Vec<DVec3>,
+    /// Where the press was on screen, and the farthest the cursor got from it.
+    press: DVec2,
+    reach: f64,
 }
 
 impl Stroke {
+    /// Adds `p`, unless it is within half a pixel of the last sample. `end` (the release
+    /// point) is always kept: it replaces the last sample when that is too near, or when the
+    /// cap is reached.
+    fn push(&mut self, p: DVec3, end: bool) {
+        let last = *self.samples.last().unwrap();
+        let gap = if end {
+            1e-9
+        } else {
+            self.tolerance / TOLERANCE_PX / 2.0
+        };
+        if last.distance(p) <= gap {
+            if end && self.samples.len() > 1 {
+                *self.samples.last_mut().unwrap() = p;
+            }
+            return;
+        }
+        if self.samples.len() >= MAX_SAMPLES {
+            if end {
+                *self.samples.last_mut().unwrap() = p;
+            }
+        } else {
+            self.samples.push(p);
+        }
+    }
+
+    /// Notes that the cursor is at `cursor` on screen.
+    fn reached(&mut self, cursor: DVec2) {
+        self.reach = self.reach.max(self.press.distance(cursor));
+    }
+
     fn length(&self) -> f64 {
         self.samples.windows(2).map(|w| w[0].distance(w[1])).sum()
     }
@@ -46,6 +79,9 @@ impl Stroke {
     /// The command for the stroke released with the cursor at `end` on screen, if it drew
     /// anything: closed when that is within `radius` pixels of the start.
     fn command(&self, ctx: &ToolContext) -> Option<Command> {
+        if self.reach < ctx.drag_threshold {
+            return None;
+        }
         let first = self.samples[0];
         let near_start = ctx
             .camera
@@ -61,13 +97,13 @@ impl Stroke {
             *ring.last_mut().unwrap() = first;
             let mut points = self.simplified(&ring);
             points.pop();
-            if points.len() >= 3 {
+            if points.len() >= 3 && !collinear(&points) {
                 return Some(command(points, true));
             }
         }
         let points = self.simplified(&self.samples);
         let last = *points.last()?;
-        (points.len() >= 2 && points[0].distance(last) >= LENGTH_TOL)
+        (points.len() > 2 || points.len() == 2 && points[0].distance(last) >= LENGTH_TOL)
             .then(|| command(points, false))
     }
 
@@ -81,6 +117,28 @@ impl Stroke {
         }
         points.windows(2).map(|w| [w[0], w[1]]).collect()
     }
+}
+
+/// Whether all of `points` lie on one line.
+fn collinear(points: &[DVec3]) -> bool {
+    let Some(dir) = points.iter().find_map(|p| (*p - points[0]).try_normalize()) else {
+        return true;
+    };
+    points
+        .iter()
+        .all(|p| (*p - points[0]).cross(dir).length() < LENGTH_TOL)
+}
+
+/// Where the cursor ray crosses the plane through `origin` with `normal`, whatever the
+/// inference says: the stroke follows the pointer, not the snaps.
+fn under_cursor(origin: DVec3, normal: DVec3, ctx: &ToolContext) -> Option<DVec3> {
+    let ray = ctx.camera.ray(ctx.cursor);
+    let denom = ray.dir.dot(normal);
+    if denom.abs() < 1e-9 {
+        return None;
+    }
+    let t = (origin - ray.origin).dot(normal) / denom;
+    (t > 0.0).then(|| ray.origin + ray.dir * t)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -136,24 +194,25 @@ impl Tool for FreehandTool {
                     tolerance: TOLERANCE_PX * ctx.camera.pixel_size(hit.point),
                     curve: !ctx.shift,
                     samples: vec![hit.point],
+                    press: ctx.cursor,
+                    reach: 0.0,
                 });
             }
-            ToolEvent::Move(hit) => {
-                if let Some(s) = &mut self.stroke
-                    && s.samples.len() < MAX_SAMPLES
-                    && let Some(p) = on_plane(s.origin, s.normal, &hit, ctx)
-                    && s.samples.last().is_some_and(|q| q.distance(p) > 1e-9)
-                {
-                    s.samples.push(p);
+            ToolEvent::Move(_) => {
+                if let Some(s) = &mut self.stroke {
+                    s.reached(ctx.cursor);
+                    if let Some(p) = under_cursor(s.origin, s.normal, ctx) {
+                        s.push(p, false);
+                    }
                 }
             }
+            // The press and release points may snap, so a stroke can start and end on
+            // existing geometry.
             ToolEvent::Release(hit) => {
                 if let Some(mut s) = self.stroke.take() {
-                    if let Some(p) = on_plane(s.origin, s.normal, &hit, ctx)
-                        && s.samples.len() < MAX_SAMPLES
-                        && s.samples.last().is_some_and(|q| q.distance(p) > 1e-9)
-                    {
-                        s.samples.push(p);
+                    s.reached(ctx.cursor);
+                    if let Some(p) = on_plane(s.origin, s.normal, &hit, ctx) {
+                        s.push(p, true);
                     }
                     out.commands.extend(s.command(ctx));
                 }
@@ -205,6 +264,15 @@ mod tests {
         (0..=n).map(|i| a.lerp(b, i as f64 / n as f64)).collect()
     }
 
+    /// Whether `points` are `expect`, to a micrometer (samples come from ray intersections).
+    fn same(points: &[DVec3], expect: &[DVec3]) -> bool {
+        points.len() == expect.len()
+            && points
+                .iter()
+                .zip(expect)
+                .all(|(a, b)| a.abs_diff_eq(*b, 1e-6))
+    }
+
     fn curve(out: &ToolOutput) -> (Vec<DVec3>, bool, Option<bool>) {
         match only(out) {
             Command::AddCurve {
@@ -227,7 +295,10 @@ mod tests {
         path.extend(line(p(2.0, 0.0), p(2.0, 2.0), 40));
         let out = stroke(&mut r, &path);
         let (points, closed, curve) = curve(&out);
-        assert_eq!(points, vec![p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0)]);
+        assert!(
+            same(&points, &[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0)]),
+            "{points:?}"
+        );
         assert!(!closed);
         assert_eq!(curve, Some(true));
         assert_eq!(r.tool.phase(), Phase::Idle);
@@ -270,9 +341,12 @@ mod tests {
         let out = stroke(&mut r, &path);
         let (points, closed, _) = curve(&out);
         assert!(closed);
-        assert_eq!(
-            points,
-            vec![p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0), p(0.0, 2.0)]
+        assert!(
+            same(
+                &points,
+                &[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0), p(0.0, 2.0)]
+            ),
+            "{points:?}"
         );
     }
 
@@ -390,13 +464,99 @@ mod tests {
         for i in 1..15_000 {
             r.mv(p(i as f64 * 0.001, if i % 2 == 0 { 0.0 } else { 0.5 }));
         }
-        let out = r.release(p(20.0, 0.0));
+        let out = r.release(p(20.0, 7.0));
         let (points, _, _) = curve(&out);
         assert!(
             points.len() >= 2 && points.len() <= 10_000,
             "{}",
             points.len()
         );
+        // Later samples were dropped but the release point is kept.
+        assert_eq!(*points.last().unwrap(), p(20.0, 7.0));
+        assert!(
+            points.iter().all(|q| q.x < 12.0 || *q == p(20.0, 7.0)),
+            "{}",
+            points.len()
+        );
+    }
+
+    #[test]
+    fn samples_follow_the_cursor_not_the_snaps() {
+        let mut r = rig();
+        r.click(p(0.0, 0.0));
+        r.mv(p(1.0, 0.0));
+        r.mv(p(2.0, 0.0));
+        // The cursor is over (2, 0.5); an endpoint on the plane at (2.3, 0.5) is near.
+        r.cursor = r.camera.project(p(2.0, 0.5)).unwrap();
+        r.send(ToolEvent::Move(crate::inference::Inference {
+            point: p(2.3, 0.5),
+            kind: SnapKind::Endpoint,
+            face: None,
+        }));
+        r.mv(p(2.0, 1.0));
+        r.mv(p(2.0, 2.0));
+        let out = r.release(p(2.0, 2.0));
+        let (points, _, _) = curve(&out);
+        assert!(
+            same(&points, &[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0)]),
+            "{points:?}"
+        );
+    }
+
+    #[test]
+    fn the_press_and_release_points_may_snap() {
+        let mut r = rig();
+        let hit = r.at(p(0.0, 0.0), SnapKind::Endpoint, None);
+        r.send(ToolEvent::Click(hit));
+        r.mv(p(1.0, 0.0));
+        r.cursor = r.camera.project(p(2.0, 0.0)).unwrap();
+        let out = r.send(ToolEvent::Release(crate::inference::Inference {
+            point: p(2.0, 0.01),
+            kind: SnapKind::Endpoint,
+            face: None,
+        }));
+        let (points, _, _) = curve(&out);
+        assert_eq!(points, vec![p(0.0, 0.0), p(2.0, 0.01)]);
+    }
+
+    #[test]
+    fn a_click_with_hand_jitter_draws_nothing() {
+        let mut r = rig();
+        let px = r.camera.pixel_size(p(0.0, 0.0));
+        r.click(p(0.0, 0.0));
+        r.mv(p(1.5 * px, 0.0));
+        let out = r.release(p(1.5 * px, 0.0));
+        assert!(out.commands.is_empty(), "{:?}", out.commands);
+        assert_eq!(r.tool.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn a_closed_loop_that_is_a_line_stays_open() {
+        let mut r = rig();
+        let mut path = line(p(0.0, 0.0), p(2.0, 0.0), 20);
+        path.extend(line(p(2.0, 0.0), p(-1.0, 0.0), 30));
+        path.extend(line(p(-1.0, 0.0), p(0.0, 0.0), 10));
+        let (points, closed, _) = curve(&stroke(&mut r, &path));
+        assert!(!closed);
+        assert!(points.len() >= 3, "{points:?}");
+    }
+
+    #[test]
+    fn sub_pixel_samples_do_not_use_up_the_cap() {
+        let mut r = rig();
+        r.click(p(0.0, 0.0));
+        // 30,000 steps of 0.1 mm, far below half a pixel, then a turn.
+        for i in 1..=30_000 {
+            r.mv(p(i as f64 * 0.0001, 0.0));
+        }
+        for i in 1..=300 {
+            r.mv(p(3.0, i as f64 * 0.01));
+        }
+        let out = r.release(p(3.0, 3.0));
+        let (points, _, _) = curve(&out);
+        assert_eq!(points.len(), 3, "{points:?}");
+        assert!(points[1].distance(p(3.0, 0.0)) < 0.02, "{points:?}");
+        assert!(points[2].abs_diff_eq(p(3.0, 3.0), 1e-9));
     }
 
     #[test]

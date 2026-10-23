@@ -360,7 +360,8 @@ impl ToolKind {
         }
     }
 
-    /// The key that selects the tool, if it has one (the Dimension, Text, Section Plane, Freehand, Rotated Rectangle and Protractor tools have none).
+    /// The key that selects the tool, if it has one (the Dimension, Text, Section Plane,
+    /// Freehand, Rotated Rectangle and Protractor tools have none).
     pub fn shortcut(self) -> Option<char> {
         Some(match self {
             ToolKind::Select => ' ',
