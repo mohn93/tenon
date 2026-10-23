@@ -15,7 +15,8 @@ use crate::inference::{Inference, SnapKind};
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{
-    format_length, parse_angle, parse_length, snap_distance_on_surface, snap_length, snaps,
+    format_length, parse_angle, parse_length, snap_distance, snap_distance_on_surface, snap_length,
+    snaps,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -55,17 +56,23 @@ impl RotatedRectangleTool {
     /// Unless a point of the model was snapped to, the side's length and then the width are
     /// rounded to the model's length snapping.
     fn point_at(&self, hit: &Inference, ctx: &ToolContext) -> DVec3 {
-        let p = match (self.corner, hit.kind) {
+        let (p, in_plane) = match (self.corner, hit.kind) {
             (Some((a, normal)), SnapKind::Ground | SnapKind::Free) => {
-                on_plane(a, normal, hit, ctx).unwrap_or(hit.point)
+                match on_plane(a, normal, hit, ctx) {
+                    Some(q) => (q, true),
+                    None => (hit.point, false),
+                }
             }
-            _ => hit.point,
+            _ => (hit.point, false),
         };
         let Some((a, _)) = self.corner else { return p };
         if !snaps(hit, &ctx.units) {
             return p;
         }
         match self.edge_end {
+            // Taken on the drawing plane, the point is rounded within it; one taken on a face
+            // or the ground as it is stays on that surface.
+            None if in_plane => snap_distance(a, p, hit, &ctx.units),
             None => snap_distance_on_surface(a, p, hit, ctx),
             Some(b) => match (b - a).try_normalize() {
                 Some(side) => {
@@ -476,6 +483,36 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn the_first_side_of_a_rectangle_on_a_wall_snaps_in_the_wall_over_the_ground() {
+        // A wall in the plane x = 0, the first corner on it, the cursor over the ground.
+        let mut m = Model::new();
+        m.add_polygon(&[
+            v(0.0, 0.0, 0.0),
+            v(0.0, 4.0, 0.0),
+            v(0.0, 4.0, 3.0),
+            v(0.0, 0.0, 3.0),
+        ])
+        .unwrap();
+        let wall = m.faces().next().unwrap().0;
+        let mut r = Rig::new(ToolKind::RotatedRectangle, m);
+        r.units.length_snap = 0.5;
+        let hit = r.at(v(0.0, 1.0, 1.0), SnapKind::OnFace, Some(wall));
+        r.send(ToolEvent::Click(hit));
+        let hit = r.free(v(1.3, 2.37, 0.0));
+        r.send(ToolEvent::Click(hit));
+        let Phase::Active { points } = r.tool.phase() else {
+            panic!("{:?}", r.tool.phase())
+        };
+        // The point stays in the wall and its distance from the corner is a multiple of 0.5.
+        assert!(points[1].x.abs() < 1e-9, "{:?}", points[1]);
+        let length = points[1].distance(points[0]);
+        assert!(
+            ((length / 0.5).round() * 0.5 - length).abs() < 1e-9,
+            "{length}"
+        );
     }
 
     #[test]

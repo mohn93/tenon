@@ -180,7 +180,8 @@ pub(crate) fn snap_distance_on_surface(
 pub(crate) fn on_surface(p: DVec3, q: DVec3, hit: &Inference, ctx: &ToolContext) -> DVec3 {
     let normal = match hit.kind {
         SnapKind::OnFace => hit.face.and_then(|f| ctx.model.face(f)).map(|f| f.normal),
-        SnapKind::Ground => Some(DVec3::Z),
+        // The ground is world z = 0: its normal in the context's own coordinates.
+        SnapKind::Ground => (ctx.to_world.matrix3.transpose() * DVec3::Z).try_normalize(),
         _ => None,
     };
     match normal {
@@ -232,6 +233,58 @@ mod tests {
             length: LengthUnit::FeetInches,
             ..Units::default()
         }
+    }
+
+    /// The surface rule in a context turned a quarter about x, where the ground (world z = 0)
+    /// is the plane y = 0 and local +Z is not up.
+    fn ground_in_a_turned_context(from: DVec3, p: DVec3) -> DVec3 {
+        let model = kernel::Model::new();
+        let camera = session::Camera::new(glam::DVec2::new(800.0, 600.0));
+        let units = Units {
+            length_snap: 0.1,
+            ..Units::default()
+        };
+        let ctx = ToolContext {
+            model: &model,
+            scenery: &crate::scenery::Scenery::single(&model),
+            camera: &camera,
+            cursor: glam::DVec2::ZERO,
+            pick_radius: 10.0,
+            drag_threshold: 4.0,
+            scale_factor: 1.0,
+            to_world: glam::DAffine3::from_rotation_x(std::f64::consts::FRAC_PI_2),
+            quick_press: false,
+            units,
+            shift: false,
+            selection: &Default::default(),
+            material: None,
+            sample: false,
+            labels: &[],
+        };
+        let hit = Inference {
+            point: p,
+            kind: SnapKind::Ground,
+            face: None,
+            locked: None,
+        };
+        snap_distance_on_surface(from, p, &hit, &ctx)
+    }
+
+    #[test]
+    fn the_ground_is_world_up_in_a_turned_context() {
+        // Both points on the ground (local y = 0): the rounded point stays on it, so it is kept.
+        let p = DVec3::new(1.23, 0.0, 0.46);
+        let q = ground_in_a_turned_context(DVec3::ZERO, p);
+        assert!(q.y.abs() < 1e-9 && q != p, "{q:?}");
+        let length = q.length();
+        assert!(
+            ((length / 0.1).round() * 0.1 - length).abs() < 1e-9,
+            "{length}"
+        );
+        // From a point off the ground the rounded point would leave it: the cursor point stays.
+        let from = DVec3::new(0.0, 1.0, 0.0);
+        let p = DVec3::new(2.0, 0.0, 0.77);
+        assert_eq!(ground_in_a_turned_context(from, p), p);
     }
 
     #[test]
