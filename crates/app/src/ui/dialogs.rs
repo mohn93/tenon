@@ -1,5 +1,5 @@
-//! The Agent Activity, Keyboard Shortcuts and Soften Edges windows, and the section plane's
-//! context menu.
+//! The Agent Activity, Keyboard Shortcuts and Soften Edges windows, and the viewport's
+//! right-click menu.
 
 use egui::{RichText, Ui};
 

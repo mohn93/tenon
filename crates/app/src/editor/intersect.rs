@@ -28,6 +28,16 @@ impl Editor {
         })
     }
 
+    /// The menu to draw for the point it was opened at, clearing the point when the selection
+    /// no longer has a menu, so it does not come back at the old place with a later selection.
+    pub fn open_viewport_menu(&self, opened: &mut Option<egui::Pos2>) -> Option<ViewportMenu> {
+        let menu = opened.and_then(|at| self.viewport_menu(at));
+        if menu.is_none() {
+            *opened = None;
+        }
+        menu
+    }
+
     /// Crosses the selected faces and instances with `scope` as one undo step, adding the
     /// edges where they meet. The status says how many edges and faces that made.
     pub fn intersect_faces(&mut self, scope: IntersectScope) -> bool {
@@ -188,6 +198,26 @@ mod tests {
         })
         .unwrap();
         assert!(!e.can_intersect(), "a guide");
+    }
+
+    #[test]
+    fn a_menu_that_stops_showing_does_not_come_back_with_a_later_selection() {
+        let mut e = editor();
+        add_box(&mut e, 0.0);
+        select_all(&mut e);
+        let mut opened = Some(egui::pos2(10.0, 20.0));
+        assert!(e.open_viewport_menu(&mut opened).is_some());
+        // The selection goes without a press (Select None, Delete, undo, an agent).
+        e.execute(Command::Select {
+            ids: vec![],
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        assert_eq!(e.open_viewport_menu(&mut opened), None);
+        assert_eq!(opened, None);
+        select_all(&mut e);
+        assert_eq!(e.open_viewport_menu(&mut opened), None);
     }
 
     #[test]

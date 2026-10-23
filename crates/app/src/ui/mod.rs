@@ -161,7 +161,7 @@ pub enum UiAction {
     FlipSection,
     /// The selected section plane's context menu: make it the active cut, or clear it.
     SetSectionActive(bool),
-    /// Close the section plane's context menu.
+    /// Close the viewport's right-click menu.
     CloseViewportMenu,
     AddTag,
     /// Delete a tag: at once when nothing is on it, otherwise after asking where what is on it
@@ -459,7 +459,7 @@ pub struct View<'a> {
     pub color_by_tag: bool,
     /// Whether section planes are drawn, cut and filled (checked in the View menu).
     pub section_display: SectionDisplay,
-    /// The context menu over the selected section plane, while it is open.
+    /// The viewport's right-click menu, while it is open.
     pub viewport_menu: Option<ViewportMenu>,
     /// Every scene, in order: the scene tabs show while there is one.
     pub scenes: &'a [SceneRow],

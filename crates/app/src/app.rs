@@ -878,8 +878,7 @@ struct State {
     /// Where the left button was last pressed in the view, so a release that ends a drag does
     /// not count as a click.
     left_press: Option<DVec2>,
-    /// Where the context menu of the selected section plane was opened (points), while it is
-    /// open.
+    /// Where the viewport's right-click menu was opened (points), while it is open.
     viewport_menu: Option<egui::Pos2>,
     /// Whether the window has keyboard focus.
     focused: bool,
@@ -2550,6 +2549,7 @@ impl State {
             } else {
                 (Vec::new(), None)
             };
+        let viewport_menu = self.editor.open_viewport_menu(&mut self.viewport_menu);
         let panels = View {
             viewer: ViewerView {
                 panel: self.viewer_panel,
@@ -2597,9 +2597,7 @@ impl State {
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
             section_display: self.editor.doc().section_display,
-            viewport_menu: self
-                .viewport_menu
-                .and_then(|at| self.editor.viewport_menu(at)),
+            viewport_menu,
             scenes: &scenes,
             documents: self.editor.documents(),
             selection_tag: self.editor.selection_tag(),
@@ -3809,14 +3807,15 @@ impl ApplicationHandler<AppEvent> for App {
                 false
             }
             // Right-clicking a selected section plane, or a selection with faces or groups,
-            // opens its context menu.
+            // opens the viewport menu.
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Right,
                 ..
             } if s.pointer_in_view()
-                && (s.editor.selected_section().is_some()
-                    || (!s.features.read_only && s.editor.can_intersect())) =>
+                && s.editor
+                    .viewport_menu(egui::Pos2::ZERO)
+                    .is_some_and(|m| m.section.is_some() || !s.features.read_only) =>
             {
                 let ppp = f64::from(s.gui.pixels_per_point());
                 s.viewport_menu = Some(egui::pos2(
