@@ -693,6 +693,8 @@ mod tests {
                 cursor: self.cursor,
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                scale_factor: 1.0,
+                to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
                 shift: false,
                 selection: &self.selection,

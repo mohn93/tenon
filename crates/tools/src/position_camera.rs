@@ -40,7 +40,20 @@ impl PositionCameraTool {
         }
     }
 
-    fn place(&mut self, point: DVec3, look_at: Option<DVec3>, out: &mut ToolOutput) {
+    /// Places the camera at `point`, looking toward `look_at` (both in the open context's
+    /// coordinates; the command takes the world's). A `look_at` straight above or below the
+    /// point has no heading and is dropped.
+    fn place(
+        &mut self,
+        point: DVec3,
+        look_at: Option<DVec3>,
+        ctx: &ToolContext,
+        out: &mut ToolOutput,
+    ) {
+        let point = ctx.to_world.transform_point3(point);
+        let look_at = look_at
+            .map(|p| ctx.to_world.transform_point3(p))
+            .filter(|p| p.truncate().distance(point.truncate()) >= 1e-6);
         out.commands.push(Command::PositionCamera {
             point: point.to_array(),
             eye_height: Some(self.eye_height),
@@ -92,7 +105,7 @@ impl Tool for PositionCameraTool {
             ToolEvent::Release(hit) => {
                 let dragged = self.drag_start.released(ctx);
                 if let Some(a) = self.standing.take() {
-                    self.place(a, dragged.then_some(hit.point), &mut out);
+                    self.place(a, dragged.then_some(hit.point), ctx, &mut out);
                 }
             }
             ToolEvent::Value(text) => match parse_eye_height(&text) {
@@ -123,6 +136,7 @@ impl Tool for PositionCameraTool {
 mod tests {
     use super::*;
     use crate::testing::{Rig, only};
+    use glam::DAffine3;
     use kernel::Model;
 
     fn rig() -> Rig {
@@ -194,5 +208,32 @@ mod tests {
         r.send(ToolEvent::Cancel);
         assert_eq!(r.tool.phase(), Phase::Idle);
         assert!(r.release(DVec3::ZERO).commands.is_empty());
+    }
+
+    #[test]
+    fn points_go_to_the_command_in_world_coordinates() {
+        let mut r = rig();
+        r.to_world = DAffine3::from_translation(DVec3::new(10.0, 0.0, 5.0));
+        let (a, b) = (DVec3::new(1.0, 1.0, 1.0), DVec3::new(1.0, 4.0, 1.0));
+        r.click(a);
+        match only(&r.release(b)) {
+            Command::PositionCamera { point, look_at, .. } => {
+                assert_eq!(*point, [11.0, 1.0, 6.0]);
+                assert_eq!(*look_at, Some([11.0, 4.0, 6.0]));
+            }
+            c => panic!("{c:?}"),
+        }
+    }
+
+    #[test]
+    fn a_drag_straight_up_places_without_a_heading() {
+        let mut r = rig();
+        r.click(DVec3::new(2.0, 3.0, 0.0));
+        let out = r.release(DVec3::new(2.0, 3.0, 4.0));
+        match only(&out) {
+            Command::PositionCamera { look_at, .. } => assert_eq!(*look_at, None),
+            c => panic!("{c:?}"),
+        }
+        assert_eq!(out.next_tool, Some(ToolKind::LookAround));
     }
 }

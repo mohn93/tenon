@@ -552,6 +552,8 @@ fn clicked(s: &Scene, tool: &mut dyn Tool, points: &[DVec3]) -> ToolOutput {
             cursor,
             pick_radius: R,
             drag_threshold: 4.0,
+            scale_factor: 1.0,
+            to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
             shift: false,
             selection: &selection,

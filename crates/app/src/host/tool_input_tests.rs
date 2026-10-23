@@ -2527,8 +2527,8 @@ fn position_camera_stands_by_click_or_drag_then_look_around_turns_the_view() {
         "heading kept"
     );
 
-    // The eye height typed is remembered when the tool is chosen again.
+    // The eye height typed (in Look Around too) is Position Camera's when it is chosen again.
     tool(&mut e, "position_camera");
     let r = input(&mut e, json!([{"type": "move", "pixel": [400, 300]}]));
-    assert_eq!(r["editor"]["measurement"], "1.5 m", "{r}");
+    assert_eq!(r["editor"]["measurement"], "2 m", "{r}");
 }

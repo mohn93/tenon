@@ -1913,9 +1913,9 @@ impl Editor {
     }
 
     /// Whether the snap under the cursor is shown (its marker and label): for every tool but
-    /// Select, and for the Paste tool whatever tool it goes back to.
+    /// Select and Look Around, and for the Paste tool whatever tool it goes back to.
     fn shows_snaps(&self) -> bool {
-        self.pasting() || self.kind != ToolKind::Select
+        self.pasting() || !matches!(self.kind, ToolKind::Select | ToolKind::LookAround)
     }
 
     /// Whether a window, a menu or the gizmo lies over the cursor in the view, as the window
@@ -2125,6 +2125,8 @@ impl Editor {
             cursor: self.cursor,
             pick_radius: PICK_RADIUS_LOGICAL_PX * self.scale_factor,
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
+            scale_factor: self.scale_factor,
+            to_world: self.doc.context_transform(),
             quick_press: self.quick_press && matches!(event, ToolEvent::Click(_)),
             shift: self.shift,
             selection: self.doc.selection(),
@@ -2148,25 +2150,7 @@ impl Editor {
         let mut pasted = false;
         let selected: Vec<EntityId> = self.doc.selection().iter().copied().collect();
         let next_tool = out.next_tool;
-        let to_world = self.doc.context_transform();
         for command in out.commands {
-            // The camera tools think in the open context's coordinates, the camera commands in
-            // the world's (the turn of a look stays about the world's vertical).
-            let command = match command {
-                Command::PositionCamera {
-                    point,
-                    eye_height,
-                    look_at,
-                } if to_world != DAffine3::IDENTITY => {
-                    let world = |p: [f64; 3]| to_world.transform_point3(DVec3::from(p)).to_array();
-                    Command::PositionCamera {
-                        point: world(point),
-                        eye_height,
-                        look_at: look_at.map(world),
-                    }
-                }
-                c => c,
-            };
             let is_undo = matches!(command, Command::Undo { .. });
             let is_copy = matches!(
                 command,
@@ -2395,6 +2379,8 @@ impl Editor {
             cursor: self.cursor,
             pick_radius: radius,
             drag_threshold: DRAG_LOGICAL_PX * self.scale_factor,
+            scale_factor: self.scale_factor,
+            to_world: self.doc.context_transform(),
             quick_press: false,
             shift: self.shift,
             selection: self.doc.selection(),
@@ -2418,7 +2404,9 @@ impl Editor {
         let turns = out.commands.into_iter().filter(Command::is_camera);
         let mut turned = false;
         for command in turns {
-            turned |= self.run(command).is_some();
+            // Even a refused one changes what is shown (its message).
+            self.run(command);
+            turned = true;
         }
         if turned {
             self.invalidate_hover();

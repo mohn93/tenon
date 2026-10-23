@@ -8,7 +8,7 @@ use kernel::EntityId;
 use session::{Command, MAX_EYE_HEIGHT, MIN_EYE_HEIGHT, Ray};
 
 use crate::probe::{Reach, pick};
-use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
+use crate::tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{format_length, parse_length};
 
 /// Radians the view turns per pixel of drag: Fly Mode's look rate.
@@ -16,6 +16,8 @@ pub const LOOK_RAD_PER_PX: f64 = 0.0025;
 
 #[derive(Clone, Debug, Default)]
 pub struct LookAroundTool {
+    /// The eye height typed, kept for the session with Position Camera's.
+    eye_height: Option<f64>,
     /// Where the cursor was at the press or the last move of a drag.
     last: Option<DVec2>,
 }
@@ -24,19 +26,34 @@ impl LookAroundTool {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// The tool carrying the eye height of an earlier use (see `remember`).
+    pub fn with_eye_height(eye_height: Option<f64>) -> Self {
+        LookAroundTool {
+            eye_height,
+            last: None,
+        }
+    }
 }
 
-/// The point on the ground or the shown face straight below `eye` (the highest face below
-/// it), in the open context's coordinates.
-fn under_eye(eye: DVec3, ctx: &ToolContext) -> DVec3 {
+/// The world point straight below the eye (as the eye is in the open context): on the highest
+/// shown face along the world's down (through instances, whatever the open context's tilt),
+/// else on the ground z = 0.
+fn under_eye(ctx: &ToolContext) -> DVec3 {
+    let eye = ctx.to_world.transform_point3(ctx.camera.eye);
+    let down = ctx
+        .to_world
+        .inverse()
+        .transform_vector3(DVec3::NEG_Z)
+        .normalize();
     let ray = Ray {
-        origin: eye,
-        dir: DVec3::NEG_Z,
+        origin: ctx.camera.eye,
+        dir: down,
     };
     let floor = pick(ctx.scenery, &ray, Reach::Around { radius: 0.0 })
         .into_iter()
         .find(|h| matches!(h.id, EntityId::Face(_)))
-        .map_or(0.0, |h| h.point.z);
+        .map_or(0.0, |h| ctx.to_world.transform_point3(h.point).z);
     DVec3::new(eye.x, eye.y, floor)
 }
 
@@ -80,7 +97,8 @@ impl Tool for LookAroundTool {
             ToolEvent::Click(_) => self.last = Some(ctx.cursor),
             ToolEvent::Move(_) => {
                 if let Some(last) = self.last.as_mut() {
-                    let d = ctx.cursor - std::mem::replace(last, ctx.cursor);
+                    // Logical pixels, as Fly Mode's look takes them.
+                    let d = (ctx.cursor - std::mem::replace(last, ctx.cursor)) / ctx.scale_factor;
                     if d.is_finite() && d != DVec2::ZERO {
                         out.commands.push(Command::LookAround {
                             yaw: -(d.x * LOOK_RAD_PER_PX).to_degrees(),
@@ -92,7 +110,8 @@ impl Tool for LookAroundTool {
             ToolEvent::Release(_) | ToolEvent::Cancel => self.last = None,
             ToolEvent::Value(text) => match parse_eye_height(&text) {
                 Ok(h) => {
-                    let point = under_eye(ctx.camera.eye, ctx);
+                    self.eye_height = Some(h);
+                    let point = under_eye(ctx);
                     out.commands.push(Command::PositionCamera {
                         point: point.to_array(),
                         eye_height: Some(h),
@@ -109,13 +128,20 @@ impl Tool for LookAroundTool {
     fn on_external_change(&mut self) {
         self.last = None;
     }
+
+    fn remember(&self, r: &mut Remembered) {
+        if self.eye_height.is_some() {
+            r.eye_height = self.eye_height;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::{Rig, only};
-    use crate::tool::ToolKind;
+    use crate::tool::{Remembered, ToolKind};
+    use glam::DAffine3;
     use kernel::Model;
 
     fn rig(model: Model) -> Rig {
@@ -223,5 +249,53 @@ mod tests {
             assert!(out.commands.is_empty(), "{text}");
             assert!(out.message.is_some(), "{text}");
         }
+    }
+
+    #[test]
+    fn the_turn_rate_is_per_logical_pixel() {
+        let mut r = rig(Model::new());
+        r.scale_factor = 2.0;
+        press(&mut r, 100.0, 100.0);
+        let (yaw, _) = look(&drag_to(&mut r, 140.0, 100.0));
+        assert!(
+            (yaw + (20.0 * LOOK_RAD_PER_PX).to_degrees()).abs() < 1e-9,
+            "{yaw}"
+        );
+    }
+
+    #[test]
+    fn a_tilted_context_looks_down_the_worlds_vertical() {
+        let tilt = DAffine3::from_rotation_x(30f64.to_radians());
+        let mut model = Model::new();
+        // A small square of the world's horizontal plane z = 2, in the context's coordinates.
+        let p = |x: f64, y: f64| tilt.inverse().transform_point3(DVec3::new(x, y, 2.0));
+        model
+            .add_polygon(&[p(0.5, 1.5), p(1.5, 1.5), p(1.5, 2.5), p(0.5, 2.5)])
+            .unwrap();
+        let mut r = rig(model);
+        r.to_world = tilt;
+        r.camera.eye = tilt.inverse().transform_point3(DVec3::new(1.0, 2.0, 9.0));
+        let out = r.value("1");
+        match only(&out) {
+            Command::PositionCamera { point, .. } => {
+                assert!(
+                    (DVec3::from(*point) - DVec3::new(1.0, 2.0, 2.0)).length() < 1e-6,
+                    "{point:?}"
+                );
+            }
+            c => panic!("{c:?}"),
+        }
+    }
+
+    #[test]
+    fn a_typed_height_is_kept_for_position_camera() {
+        let mut r = rig(Model::new());
+        r.value("1.2");
+        let mut kept = Remembered::default();
+        r.tool.remember(&mut kept);
+        assert_eq!(kept.eye_height, Some(1.2));
+        let mut none = Remembered::default();
+        rig(Model::new()).tool.remember(&mut none);
+        assert_eq!(none.eye_height, None);
     }
 }

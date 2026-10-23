@@ -1402,17 +1402,19 @@ Events, run in order:
   (the angle is reported in `message` instead) and on again. Clicking the center again as the
   baseline is refused with a message; `cancel` drops the measurement and the plane lock.
 - **Look Around** (key `w`): a `drag` turns the view about the eye, one `look_around` command per
-  pointer move: 0.0025 radian per pixel, as Fly Mode's look (dragging right turns right, down looks
-  down). `type` a length sets the eye height above the face straight below the eye (the highest
-  shown face, through groups and components), else above z = 0: one `position_camera` at that point
+  pointer move: 0.0025 radian per logical pixel, as Fly Mode's look (dragging right turns right,
+  down looks down). Give the drag as `pixels`: with model `points` the pixels are re-projected
+  after each turn, so the turn does not follow the points. The tool shows no snap marker or hover. `type` a length sets the eye height above the face straight below the eye (the highest
+  shown face along the world's down, through groups and components and inside a tilted open
+  group), else above z = 0: one `position_camera` at that point
   keeping the heading (level; the eye keeps its x and y). Lengths from 0.01 to 10,000 m; anything
-  else is refused with a message. No model change and no undo step.
+  else is refused with a message. The height is kept for Position Camera. No model change and no undo step.
 - **Position Camera** (key `h`): `click` a point to stand there (one `position_camera`, eye
   height 1.676 m unless typed), or `drag` from A to B to stand at A looking toward B (`look_at`
   B, its height ignored). `type` a length before the click sets the eye height, which the tool
-  keeps for the session (it is the tool's measurement). Once the camera is placed the active tool
-  becomes Look Around. A point inside an open group or component is turned into world coordinates
-  for the command. `cancel` drops the press. No model change and no undo step.
+  keeps for the session, shared with Look Around's typed height (it is the tool's measurement).
+  A drag ending straight above or below A stands at A without a heading. Once the camera is placed the active tool
+  becomes Look Around. Points inside an open group or component are sent as world coordinates. `cancel` drops the press. No model change and no undo step.
 - **Dimension** (no key): `click` a point, `click` a second one, `move` to where the dimension
   line goes and `click`, or `type` the line's distance from the ends (on the cursor's side) once
   the cursor has moved off their line; it makes one `add_dimension`, each end the vertex

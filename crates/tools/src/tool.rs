@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use glam::{DVec2, DVec3};
+use glam::{DAffine3, DVec2, DVec3};
 use kernel::{EntityId, MaterialId, Model};
 use session::{
     AnchorInput, Camera, Command, DEFAULT_ARC_SEGMENTS, DEFAULT_CIRCLE_SEGMENTS,
@@ -50,6 +50,11 @@ pub struct ToolContext<'a> {
     pub pick_radius: f64,
     /// How far (physical pixels) the cursor must travel from a press for it to be a drag.
     pub drag_threshold: f64,
+    /// Physical pixels per logical pixel of the window (1 where there is no window).
+    pub scale_factor: f64,
+    /// Maps the open context's coordinates to the world's (identity at the root), for the
+    /// tools that send camera commands, which take world coordinates.
+    pub to_world: DAffine3,
     /// Whether this press of the primary button comes within the double-click time of the
     /// previous click's release (false for every other event). The window times it; in
     /// `tool_input` only a `double_click` or `triple_click` event's later presses are quick.
@@ -341,7 +346,7 @@ impl ToolKind {
             ToolKind::Paint => Box::new(PaintTool::new()),
             ToolKind::SectionPlane => Box::new(SectionPlaneTool::new()),
             ToolKind::Axes => Box::new(AxesTool::new()),
-            ToolKind::LookAround => Box::new(LookAroundTool::new()),
+            ToolKind::LookAround => Box::new(LookAroundTool::with_eye_height(r.eye_height)),
             ToolKind::PositionCamera => Box::new(PositionCameraTool::with_eye_height(r.eye_height)),
         }
     }
@@ -466,6 +471,8 @@ mod tests {
                 cursor: camera.project(point).unwrap(),
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                scale_factor: 1.0,
+                to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
                 shift: false,
                 selection: &selection,
@@ -512,6 +519,8 @@ mod tests {
                 cursor: camera.project(point).unwrap(),
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                scale_factor: 1.0,
+                to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
                 shift: false,
                 selection: &selection,
@@ -662,6 +671,8 @@ mod tests {
                 cursor,
                 pick_radius: 10.0,
                 drag_threshold: 4.0,
+                scale_factor: 1.0,
+                to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
                 shift: false,
                 selection: &selection,
@@ -708,6 +719,8 @@ mod tests {
             cursor: camera.project(point).unwrap(),
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            scale_factor: 1.0,
+            to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
             shift: false,
             selection: &BTreeSet::new(),

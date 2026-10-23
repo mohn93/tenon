@@ -17,6 +17,8 @@ pub(crate) struct Rig {
     pub axes: DAffine3,
     pub shift: bool,
     pub cursor: DVec2,
+    pub scale_factor: f64,
+    pub to_world: DAffine3,
     selection: BTreeSet<EntityId>,
 }
 
@@ -29,6 +31,8 @@ impl Rig {
             axes: DAffine3::IDENTITY,
             shift: false,
             cursor: DVec2::ZERO,
+            scale_factor: 1.0,
+            to_world: DAffine3::IDENTITY,
             selection: BTreeSet::new(),
         }
     }
@@ -42,6 +46,8 @@ impl Rig {
             cursor: self.cursor,
             pick_radius: 10.0,
             drag_threshold: 4.0,
+            scale_factor: self.scale_factor,
+            to_world: self.to_world,
             quick_press: false,
             shift: self.shift,
             selection: &self.selection,
