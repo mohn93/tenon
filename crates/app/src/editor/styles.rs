@@ -98,6 +98,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_model_forgets_what_was_chosen_before_a_style_was_added() {
+        let mut e = editor();
+        e.add_style(None);
+        assert!(!e.style_before_add.is_empty());
+        e.execute(Command::New { discard: true }).unwrap();
+        assert!(e.style_before_add.is_empty());
+    }
+
+    #[test]
     fn adding_a_style_chooses_it_in_one_undo_step() {
         let mut e = editor();
         assert!(e.add_style(None));

@@ -426,7 +426,7 @@ impl Editor {
         let replaces = replaces_document(&command);
         let result = self.doc.execute(command);
         if replaces && result.is_ok() {
-            self.documents += 1;
+            self.document_replaced();
         }
         self.invalidate_hover();
         result
@@ -443,11 +443,18 @@ impl Editor {
         }
         // A batch that may have replaced the document counts as having done so.
         if commands.iter().any(|c| replaces_document(c.command())) {
-            self.documents += 1;
+            self.document_replaced();
         }
         let result = self.doc.execute_batch(commands, atomic);
         self.invalidate_hover();
         result
+    }
+
+    /// Counts a replaced document and drops the notes made by style id, which name other
+    /// styles in the next model.
+    fn document_replaced(&mut self) {
+        self.documents += 1;
+        self.style_before_add.clear();
     }
 
     /// How many times the document was replaced (new or open, by the window or an agent).
@@ -1594,7 +1601,7 @@ impl Editor {
         self.message = None;
         let opened = match self.doc.open_recovered(path) {
             Ok(()) => {
-                self.documents += 1;
+                self.document_replaced();
                 self.material = None;
                 true
             }
@@ -2286,7 +2293,7 @@ impl Editor {
         let replaces = replaces_document(&command);
         let result = self.doc.execute_as(command, label);
         if replaces && result.is_ok() {
-            self.documents += 1;
+            self.document_replaced();
         }
         if let (Some(command), Some(issued)) = (noted, self.issued.as_mut()) {
             issued.push((command, result.clone()));
