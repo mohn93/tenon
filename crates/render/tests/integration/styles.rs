@@ -313,6 +313,14 @@ impl Shot {
             .unwrap_or(0)
     }
 
+    /// How many pixels of `rows` are within 2 of `color`. The grid's far lines run together near
+    /// the horizon, and a software rasterizer (lavapipe, WARP) loses the near ones in the middle
+    /// of the view, so only the corners of the lower half show the canvas there.
+    fn count_in(&self, rows: std::ops::Range<u32>, color: [u8; 3]) -> u32 {
+        rows.map(|y| (0..W).filter(|&x| near(self.at(x, y), color, 2)).count() as u32)
+            .sum()
+    }
+
     /// The most common color of the image.
     fn dominant(&self) -> [u8; 3] {
         let mut counts = std::collections::HashMap::new();
@@ -399,7 +407,7 @@ fn night_and_print_ignore_the_style_background() {
         "{:?}",
         shot.at(1, 0)
     );
-    assert!(shot.row_matches(H - 8..H, night) >= W / 2);
+    assert!(shot.count_in(H / 2..H, night) >= W / 2);
     assert_eq!(shot.matches([255, 0, 0]), 0, "no ground");
     let print = shoot(&nothing(), Some(&s), &level_camera(), Lighting::Day, true).unwrap();
     for y in [0, H - 1] {
@@ -443,12 +451,15 @@ fn the_ground_covers_the_view_below_the_horizon() {
     let Some(shot) = shoot(&nothing(), Some(&s), &level_camera(), Lighting::Day, false) else {
         return;
     };
-    // The bottom row is the ground color (the grid's lines cross a few pixels).
+    // Below the horizon is the ground color wherever the grid's lines leave it, and above the
+    // horizon there is none.
+    let ground = s.ground.unwrap().color;
     assert!(
-        shot.row_matches(H - 8..H, s.ground.unwrap().color) >= W / 2,
+        shot.count_in(H / 2..H, ground) >= W / 2,
         "{:?}",
         shot.at(1, H - 1)
     );
+    assert_eq!(shot.count_in(0..H / 2 - 2, ground), 0);
 }
 
 #[test]
@@ -460,10 +471,11 @@ fn the_ground_mixes_over_the_background_by_its_opacity() {
     };
     let want = [130, 180, 130];
     assert!(
-        shot.row_matches(H - 8..H, want) >= W / 2,
+        shot.count_in(H / 2..H, want) >= W / 2,
         "{:?}",
         shot.at(1, H - 1)
     );
+    assert_eq!(shot.count_in(0..H / 2 - 2, want), 0);
 }
 
 #[test]
