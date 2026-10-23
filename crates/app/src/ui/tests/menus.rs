@@ -1181,6 +1181,9 @@ fn the_group_menu_renames_and_purges() {
             "Explode",
             "Close Group",
             "-",
+            "Make Unique",
+            "Flip Along",
+            "-",
             "Rename Component...",
             "Purge Unused",
         ]

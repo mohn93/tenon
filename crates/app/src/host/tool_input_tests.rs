@@ -2294,3 +2294,47 @@ fn place_library_item_refuses_what_it_cannot_place() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn the_axes_tool_moves_the_axes_in_three_clicks_and_undoes_in_one_step() {
+    let mut e = editor();
+    tool(&mut e, "axes");
+    assert_eq!(ask(&mut e, json!({"type": "editor"}))["tool"], "axes");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 1, 0]}]));
+    assert!(ran(&r).is_empty(), "{r}");
+    let r = input(&mut e, json!([{"type": "click", "point": [1, 4, 0]}]));
+    assert!(ran(&r).is_empty(), "{r}");
+    // Red runs along +y; the third click is on the -x side, so green is -x.
+    let r = input(&mut e, json!([{"type": "click", "point": [-3, 4, 0]}]));
+    assert_eq!(ran(&r), ["set_axes"], "{r}");
+    let axes = ask(&mut e, json!({"type": "camera"}))["axes"].clone();
+    assert!(near(&axes["origin"], [1.0, 1.0, 0.0]), "{axes}");
+    assert!(near(&axes["x"], [0.0, 1.0, 0.0]), "{axes}");
+    assert!(near(&axes["y"], [-1.0, 0.0, 0.0]), "{axes}");
+    assert!(near(&axes["z"], [0.0, 0.0, 1.0]), "{axes}");
+    exec(&mut e, json!({"type": "undo"}));
+    let axes = ask(&mut e, json!({"type": "camera"}))["axes"].clone();
+    assert!(near(&axes["origin"], [0.0, 0.0, 0.0]), "{axes}");
+    assert!(near(&axes["x"], [1.0, 0.0, 0.0]), "{axes}");
+}
+
+#[test]
+fn the_axes_tool_ignores_clicks_that_give_no_direction_and_escape_cancels() {
+    let mut e = editor();
+    tool(&mut e, "axes");
+    input(&mut e, json!([{"type": "click", "point": [0, 0, 0]}]));
+    // On the origin: no red direction.
+    let r = input(&mut e, json!([{"type": "click", "point": [0, 0, 0]}]));
+    assert!(ran(&r).is_empty(), "{r}");
+    input(&mut e, json!([{"type": "click", "point": [2, 0, 0]}]));
+    // In line with red: no green direction.
+    let r = input(&mut e, json!([{"type": "click", "point": [-5, 0, 0]}]));
+    assert!(ran(&r).is_empty(), "{r}");
+    let r = input(&mut e, json!([{"type": "key", "key": "escape"}]));
+    assert!(ran(&r).is_empty(), "{r}");
+    // Cancelled: the next click starts again at the origin step.
+    let r = input(&mut e, json!([{"type": "click", "point": [3, 3, 0]}]));
+    assert!(ran(&r).is_empty(), "{r}");
+    let axes = ask(&mut e, json!({"type": "camera"}))["axes"].clone();
+    assert!(near(&axes["origin"], [0.0, 0.0, 0.0]), "{axes}");
+}

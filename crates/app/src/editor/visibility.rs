@@ -645,6 +645,8 @@ mod tests {
                 unhide: false,
                 faces: true,
                 orient_from: None,
+                flip: true,
+                ..Default::default()
             })
         );
         // An edge alone: Hide only.

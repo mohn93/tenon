@@ -190,6 +190,7 @@ fn plain_menu() -> ViewportMenu {
         unhide: false,
         faces: false,
         orient_from: None,
+        ..Default::default()
     }
 }
 

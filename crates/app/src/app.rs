@@ -1985,6 +1985,15 @@ impl State {
             UiAction::Explode => {
                 self.editor.explode_selection();
             }
+            UiAction::MakeUnique => {
+                self.editor.make_unique();
+            }
+            UiAction::Flip(axis, frame) => {
+                self.editor.flip(axis, frame);
+            }
+            UiAction::ResetAxes => {
+                self.editor.reset_axes();
+            }
             UiAction::CloseInstance => {
                 self.editor.close_instance();
             }
@@ -2627,6 +2636,8 @@ impl State {
                 .selection()
                 .iter()
                 .any(|id| matches!(id, EntityId::Instance(_))),
+            can_make_unique: self.editor.can_make_unique(),
+            can_flip_own: self.editor.can_flip_own(),
             inside_instance: !self.editor.doc().context().is_empty(),
             has_guides: self.editor.doc().model().guides().next().is_some(),
             projection: self.editor.doc().camera.projection,
@@ -4086,6 +4097,9 @@ mod tests {
             A::MakeGroup,
             A::MakeComponent,
             A::Explode,
+            A::MakeUnique,
+            A::Flip(session::FlipAxis::Red, session::FlipFrame::Axes),
+            A::ResetAxes,
             A::NewModel,
             A::OpenFile,
             A::SaveFile,

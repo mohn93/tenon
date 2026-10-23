@@ -93,7 +93,7 @@ const fn repeating(s: Shortcut) -> Shortcut {
     Shortcut { repeats: true, ..s }
 }
 
-pub const TABLE: [Shortcut; 40] = [
+pub const TABLE: [Shortcut; 41] = [
     on(Bound::Tool(ToolKind::Select), false, false, Key::Space),
     tool(ToolKind::Line, 'l'),
     tool(ToolKind::Rectangle, 'r'),
@@ -109,6 +109,7 @@ pub const TABLE: [Shortcut; 40] = [
     tool(ToolKind::TapeMeasure, 't'),
     tool(ToolKind::Erase, 'e'),
     tool(ToolKind::Paint, 'b'),
+    tool(ToolKind::Axes, 'y'),
     on(Bound::NewModel, true, false, Key::Letter('n')),
     on(Bound::OpenFile, true, false, Key::Letter('o')),
     on(Bound::SaveFile, true, false, Key::Letter('s')),

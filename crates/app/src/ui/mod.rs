@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use egui::{Panel, Ui};
 use kernel::{DefinitionId, EntityId, InstanceId, PageId, TagId, TexturePlacement};
 use session::{
-    Camera, IntersectScope, LibraryKind, Lighting, MaterialId, OutlinerTable, Projection,
-    SectionDisplay, StandardView, Units,
+    Camera, FlipAxis, FlipFrame, IntersectScope, LibraryKind, Lighting, MaterialId, OutlinerTable,
+    Projection, SectionDisplay, StandardView, Units,
 };
 use tools::ToolKind;
 
@@ -93,6 +93,13 @@ pub enum UiAction {
     MakeGroup,
     MakeComponent,
     Explode,
+    /// Group > Make Unique.
+    MakeUnique,
+    /// Group > Flip Along: mirror the selection along an axis, of the drawing axes or the
+    /// one selected component's own.
+    Flip(FlipAxis, FlipFrame),
+    /// Put the model axes back to the world axes.
+    ResetAxes,
     CloseInstance,
     NewModel,
     OpenFile,
@@ -463,6 +470,10 @@ pub struct View<'a> {
     pub has_clip: bool,
     /// Whether a group or component is selected.
     pub has_instance_selected: bool,
+    /// Make Unique has something to do (`Editor::can_make_unique`).
+    pub can_make_unique: bool,
+    /// Exactly one instance is selected: Flip Along its own axes works.
+    pub can_flip_own: bool,
     /// Whether a group or component is open for editing.
     pub inside_instance: bool,
     /// Whether the open context has guides to delete.
@@ -564,7 +575,7 @@ pub struct View<'a> {
 /// entries (Some: whether the plane is the active cut, so Active Cut is checked) and the
 /// Intersect Faces entries (for a selection with faces or groups), Hide (for what can be
 /// hidden), Unhide (for a hidden selection) and Reverse Faces and Orient Faces (for faces).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ViewportMenu {
     pub at: egui::Pos2,
     pub section: Option<bool>,
@@ -574,6 +585,14 @@ pub struct ViewportMenu {
     pub faces: bool,
     /// The selected face under the cursor when the menu opened: Orient Faces works from it.
     pub orient_from: Option<EntityId>,
+    /// Make Unique: a selected instance shares its definition.
+    pub make_unique: bool,
+    /// Flip Along the drawing axes' Red, Green and Blue (a selection).
+    pub flip: bool,
+    /// Flip Along the component's own axes (one instance selected).
+    pub flip_own: bool,
+    /// Reset Axes: the model axes are moved and no context is open.
+    pub reset_axes: bool,
 }
 
 /// What the Recover Models window lists.

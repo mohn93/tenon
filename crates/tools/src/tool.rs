@@ -10,6 +10,7 @@ use session::{
 };
 
 use crate::arc::ArcTool;
+use crate::axes::AxesTool;
 use crate::circle::CircleTool;
 use crate::dimension::DimensionTool;
 use crate::erase::EraseTool;
@@ -259,11 +260,12 @@ pub enum ToolKind {
     Erase,
     Paint,
     SectionPlane,
+    Axes,
 }
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 18] = [
+    pub const ALL: [ToolKind; 19] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
@@ -282,6 +284,7 @@ impl ToolKind {
         ToolKind::Erase,
         ToolKind::Paint,
         ToolKind::SectionPlane,
+        ToolKind::Axes,
     ];
 
     /// The tool with default settings.
@@ -313,6 +316,7 @@ impl ToolKind {
             ToolKind::Erase => Box::new(EraseTool::new()),
             ToolKind::Paint => Box::new(PaintTool::new()),
             ToolKind::SectionPlane => Box::new(SectionPlaneTool::new()),
+            ToolKind::Axes => Box::new(AxesTool::new()),
         }
     }
 
@@ -337,6 +341,7 @@ impl ToolKind {
             ToolKind::Erase => "Erase",
             ToolKind::Paint => "Paint",
             ToolKind::SectionPlane => "Section Plane",
+            ToolKind::Axes => "Axes",
         }
     }
 
@@ -359,6 +364,7 @@ impl ToolKind {
             ToolKind::Dimension | ToolKind::Text | ToolKind::SectionPlane => return None,
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',
+            ToolKind::Axes => 'y',
         })
     }
 

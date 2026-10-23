@@ -2,6 +2,7 @@
 //! edit the model directly.
 
 pub mod arc;
+pub mod axes;
 pub mod circle;
 pub mod dimension;
 pub mod erase;
@@ -28,6 +29,7 @@ pub mod tool;
 pub mod vcb;
 
 pub use arc::ArcTool;
+pub use axes::AxesTool;
 pub use circle::CircleTool;
 pub use dimension::DimensionTool;
 pub use erase::EraseTool;

@@ -31,8 +31,19 @@ impl Editor {
             unhide: plain && self.selection_has_hidden(),
             faces: plain && self.selection_has_faces(),
             orient_from: face.filter(|f| self.doc.selection().contains(f)),
+            make_unique: plain && self.can_make_unique(),
+            flip: plain && !self.doc.selection().is_empty(),
+            flip_own: plain && self.can_flip_own(),
+            reset_axes: self.axes_moved(),
         };
-        (menu.section.is_some() || menu.intersect || menu.hide || menu.unhide || menu.faces)
+        (menu.section.is_some()
+            || menu.intersect
+            || menu.hide
+            || menu.unhide
+            || menu.faces
+            || menu.make_unique
+            || menu.flip
+            || menu.reset_axes)
             .then_some(menu)
     }
 
@@ -255,6 +266,8 @@ mod tests {
                 unhide: false,
                 faces: true,
                 orient_from: None,
+                flip: true,
+                ..Default::default()
             })
         );
         let out = e
@@ -287,6 +300,7 @@ mod tests {
                 unhide: false,
                 faces: false,
                 orient_from: None,
+                ..Default::default()
             }),
             "a lone plane keeps its own menu"
         );

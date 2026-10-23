@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use session::{IntersectScope, Lighting, Projection, StandardView};
+use session::{FlipAxis, FlipFrame, IntersectScope, Lighting, Projection, StandardView};
 use tools::ToolKind;
 
 use crate::shortcuts::Bound;
@@ -15,6 +15,13 @@ pub const APP_MENU: &str = "sketchup-alt";
 
 /// The File submenu that lists the recent files: the one submenu whose items change.
 pub const OPEN_RECENT: &str = "Open Recent";
+
+/// The axes Flip Along offers, by label.
+pub const FLIP_AXES: [(&str, FlipAxis); 3] = [
+    ("Red", FlipAxis::Red),
+    ("Green", FlipAxis::Green),
+    ("Blue", FlipAxis::Blue),
+];
 
 /// The scopes Intersect Faces offers, in the Edit menu and the viewport's right-click menu.
 pub const INTERSECT_SCOPES: [(&str, IntersectScope); 3] = [
@@ -253,6 +260,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::Dimension,
         ToolKind::Text,
         ToolKind::SectionPlane,
+        ToolKind::Axes,
         ToolKind::Erase,
         ToolKind::Paint,
     ]
@@ -281,6 +289,30 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         bound_item("Close Group", Bound::CloseInstance, UiAction::CloseInstance)
             .enabled(view.inside_instance)
             .entry(),
+        Entry::Separator,
+        Item::new("Make Unique", UiAction::MakeUnique)
+            .enabled(view.can_make_unique)
+            .entry(),
+        Entry::Submenu {
+            label: "Flip Along",
+            entries: FLIP_AXES
+                .iter()
+                .map(|&(label, axis)| {
+                    Item::new(label, UiAction::Flip(axis, FlipFrame::Axes))
+                        .enabled(view.has_selection)
+                        .entry()
+                })
+                .chain([Entry::Separator])
+                .chain(FLIP_AXES.iter().map(|&(label, axis)| {
+                    Item::new(
+                        format!("Component's {label}"),
+                        UiAction::Flip(axis, FlipFrame::Own),
+                    )
+                    .enabled(view.can_flip_own)
+                    .entry()
+                }))
+                .collect(),
+        },
         Entry::Separator,
         bound_item(
             "Rename Component...",

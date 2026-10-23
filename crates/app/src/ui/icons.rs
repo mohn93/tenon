@@ -54,6 +54,7 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Dimension => ph::ARROWS_HORIZONTAL,
         ToolKind::Text => ph::TEXT_T,
         ToolKind::SectionPlane => ph::SQUARE_HALF,
+        ToolKind::Axes => ph::CROSSHAIR_SIMPLE,
     }
 }
 

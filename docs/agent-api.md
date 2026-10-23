@@ -1013,6 +1013,21 @@ scene restore use +Z up, and the first orbit levels the roll.
 With the world axes everything is as before. `add_circle`, `add_polygon` and `add_arc` keep
 their documented default normal `[0,0,1]` and u axis in the world.
 
+In the window, the Axes tool (Tools menu and the rail; key Y) takes three clicks, each with
+inference and the arrow-key locks: the new origin, a point on the red axis, and a point on the
+green side of the red-green plane. A preview shows the axes as they will be. The third click
+runs one `set_axes` (in the open context's coordinates, so inside a group it re-origins that
+definition) and says "Axes moved". A second click on the origin, or a third in line with red,
+gives no direction and is ignored with a message; Escape starts again. Group > Make Unique
+(enabled with a selected component instance whose definition has another instance) runs
+`make_unique` and says "Made 2 components unique" (the definitions made). Group > Flip Along
+has Red, Green and Blue (the selection, `flip` with `frame` `axes`; "Flipped along red") and
+Component's Red, Green and Blue (exactly one instance selected, `frame` `own`). The viewport's
+right-click menu has Make Unique, the same Flip Along entries and, at the root with moved axes
+(also with nothing selected), Reset Axes (`reset_axes`, "Axes reset"). Entity Info of a
+component instance shows its definition's instance count after "1 component" ("3 instances";
+`definitions` has it as `instances`). The phone viewer has none of these.
+
 ### Camera
 
 The camera belongs to the document (it is saved with the model) and is always in root
@@ -1188,8 +1203,8 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
 ```
 
 - `tool` is `select`, `line`, `rectangle`, `circle`, `polygon`, `arc`, `push_pull`, `move`,
-  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `dimension`, `text`, `erase`, `paint`
-  or `section_plane`. The editor starts in the Select tool.
+  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `dimension`, `text`, `erase`, `paint`,
+  `section_plane` or `axes`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
@@ -1851,6 +1866,7 @@ under a pixel and where a click would snap.
 | Orbit, pan and zoom with the mouse or trackpad (about the point under the cursor), fly mode (F, Escape) and its speed | `orbit` and `zoom` (`about` a point), `pan`, `set_camera`; a middle `drag` in `tool_input`; `set_fly_mode` (`on`, `speed`), `cancel`; `editor.flying`, `editor.fly_speed`. Flying itself (moving keys, mouse look) moves the camera, which `set_camera` places directly |
 | Drawing by dragging (Line, Rectangle, Circle, Polygon, Arc, Push/Pull); Push/Pull retype and double-click repeat | `tool_input` (`drag`, `type`, `double_click`) |
 | The tool rail and the tools' keys | `set_tool` or a `tool_input` key; `editor.tool`, `editor.phase`, `editor.points` |
+| Tools > Axes (rail, Y): click the origin, a point on red, a point on the green side; Group > Make Unique, Flip Along > Red, Green, Blue and Component's Red, Green, Blue; the viewport menu's Make Unique, Flip Along and Reset Axes; Entity Info's instance count | `tool_input` (`click`s) or `set_axes`; `make_unique`; `flip` (`frame` `axes` or `own`); `reset_axes`; `definitions` (`instances`), `camera` (`axes`) |
 | Tools > Section Plane (rail; no key): click a face or the ground, arrow keys lock the normal to an axis; right-click a selected plane: Flip, Active Cut; View > Section Planes, Section Cuts, Section Fill; Entity Info of a plane | `tool_input` (`click`, arrow `key`s) or `add_section_plane`; `flip_section_plane`, `activate_section_plane`, `deactivate_section`; `set_section_display`; `section_planes`, `section_display`, `entity` |
 | Select: click, Shift-click, box (inside or crossing), double-click (bounds, or open a group), triple-click (connected) | `tool_input` (`click`, `modifiers`, `drag`, `double_click`, `triple_click`); `select` (`mode`; `box` with `crossing`), `pick` for what is under a pixel, `open_instance` / `open_path` |
 | Line, Rectangle, Circle, Polygon (`8s`, Ctrl switches circumscribed), Arc, Push/Pull, Move (Ctrl copies, `5x`, `/5`), Rotate, Scale (grips, Shift uniform, Ctrl about the center), Offset (drag or type a distance; double-click repeats), Follow Me (select the path, click the face), Tape Measure, Dimension (Ctrl: diameter or radius), Text (and its note sheet), Erase, Paint (Cmd samples) | `tool_input`, or the commands they make: `add_edge`, `add_rectangle`, `add_circle` (`segments`), `add_polygon` (`sides`, `circumscribed`, `direction`), `add_arc`, `push_pull`, `move`, `copy` (`count`), `rotate` (`copies`), `scale` (`origin`, `factors`), `offset` (`distance`, `toward`), `follow_me` (`face`, `path`), `add_guide_line` / `add_guide_point`, `add_dimension`, `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `erase`, `paint` (`side`); a sampled material is the `entity` query's |

@@ -119,10 +119,13 @@ fn selection_info(doc: &Document) -> Vec<String> {
     if let ([], [], [i], 0) = (&edges[..], &faces[..], &instances[..], others) {
         let instance = m.instance(*i);
         let d = instance.and_then(|i| doc.scene().definition(i.definition));
-        let mut lines = match d {
-            Some(d) if d.kind == DefinitionKind::Component => {
+        let mut lines = match (d, instance) {
+            (Some(d), Some(i)) if d.kind == DefinitionKind::Component => {
                 // The name is Entity Info's Name field.
-                vec!["1 component".into()]
+                vec![
+                    "1 component".into(),
+                    count(doc.scene().instance_count(i.definition), "instance"),
+                ]
             }
             _ => vec!["1 group".into()],
         };
@@ -551,7 +554,28 @@ mod tests {
         })
         .unwrap();
         // The name is Entity Info's Name field, not a line.
-        assert_eq!(entity_info(&d), ["1 component"]);
+        assert_eq!(entity_info(&d), ["1 component", "1 instance"]);
+        let out = d
+            .execute(Command::Copy {
+                ids: vec![*d.selection().first().unwrap()],
+                offset: [0.0, 5.0, 0.0],
+                count: None,
+            })
+            .unwrap();
+        let copy = *out.changes.created.first().unwrap();
+        d.execute(Command::Select {
+            ids: vec![copy],
+            mode: SelectMode::Replace,
+            all: false,
+        })
+        .unwrap();
+        assert_eq!(
+            entity_info(&d),
+            ["1 component", "2 instances"],
+            "the copies share the definition"
+        );
+        d.execute(Command::MakeUnique { ids: None }).unwrap();
+        assert_eq!(entity_info(&d)[1], "1 instance", "made unique");
         d.execute(Command::AddEdge {
             start: [5.0, 0.0, 0.0],
             end: [6.0, 0.0, 0.0],

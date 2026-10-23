@@ -4,8 +4,9 @@
 use egui::{RichText, Ui};
 
 use super::{Agents, UiAction, ViewportMenu, widgets};
-use crate::menus::INTERSECT_SCOPES;
+use crate::menus::{FLIP_AXES, INTERSECT_SCOPES};
 use crate::shortcuts::TABLE;
+use session::FlipFrame;
 
 /// The width of each of the Keyboard Shortcuts window's two columns, in points.
 const SHORTCUT_COLUMN: f32 = 200.0;
@@ -188,6 +189,32 @@ pub(super) fn viewport_menu(ui: &mut Ui, menu: ViewportMenu, actions: &mut Vec<U
                         actions.push(action);
                         actions.push(UiAction::CloseViewportMenu);
                     }
+                }
+                if menu.make_unique && widgets::menu_item(ui, "Make Unique", None, true).clicked() {
+                    actions.push(UiAction::MakeUnique);
+                    actions.push(UiAction::CloseViewportMenu);
+                }
+                if menu.flip {
+                    ui.weak("Flip Along");
+                    for (label, axis) in FLIP_AXES {
+                        if widgets::menu_item(ui, label, None, true).clicked() {
+                            actions.push(UiAction::Flip(axis, FlipFrame::Axes));
+                            actions.push(UiAction::CloseViewportMenu);
+                        }
+                    }
+                    if menu.flip_own {
+                        for (label, axis) in FLIP_AXES {
+                            let label = format!("Component's {label}");
+                            if widgets::menu_item(ui, &label, None, true).clicked() {
+                                actions.push(UiAction::Flip(axis, FlipFrame::Own));
+                                actions.push(UiAction::CloseViewportMenu);
+                            }
+                        }
+                    }
+                }
+                if menu.reset_axes && widgets::menu_item(ui, "Reset Axes", None, true).clicked() {
+                    actions.push(UiAction::ResetAxes);
+                    actions.push(UiAction::CloseViewportMenu);
                 }
                 if menu.intersect {
                     ui.weak("Intersect Faces");

@@ -34,6 +34,7 @@ pub const GROUPS: [&[ToolKind]; 4] = [
         ToolKind::Dimension,
         ToolKind::Text,
         ToolKind::SectionPlane,
+        ToolKind::Axes,
     ],
 ];
 

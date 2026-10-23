@@ -2,6 +2,7 @@
 //! AccessKit tree, so the tests do not depend on where the layout puts them.
 
 mod access;
+mod axes;
 mod context;
 mod dock;
 mod entity;
@@ -56,6 +57,8 @@ pub(super) struct Fixture {
     /// Whether the clipboard holds a clip.
     pub has_clip: bool,
     pub has_instance_selected: bool,
+    pub can_make_unique: bool,
+    pub can_flip_own: bool,
     pub inside_instance: bool,
     pub has_guides: bool,
     pub projection: Projection,
@@ -165,6 +168,8 @@ impl Default for Fixture {
             has_selection: false,
             has_clip: false,
             has_instance_selected: false,
+            can_make_unique: false,
+            can_flip_own: false,
             inside_instance: false,
             has_guides: false,
             projection: Projection::Perspective,
@@ -252,6 +257,8 @@ impl Fixture {
             has_selection: self.has_selection,
             has_clip: self.has_clip,
             has_instance_selected: self.has_instance_selected,
+            can_make_unique: self.can_make_unique,
+            can_flip_own: self.can_flip_own,
             inside_instance: self.inside_instance,
             has_guides: self.has_guides,
             projection: self.projection,

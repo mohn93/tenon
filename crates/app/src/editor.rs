@@ -32,6 +32,7 @@ use crate::navigation::{Button, LOGICAL_PX_PER_ZOOM_STEP, Navigation, Scroll, Tr
 use crate::shortcuts::{self, Bound};
 
 mod agent;
+mod axes;
 mod bytes;
 mod clip;
 mod input;
@@ -2100,8 +2101,12 @@ impl Editor {
                     | Command::InsertLibraryItem { .. }
                     | Command::Add3dText { .. }
             );
+            let is_axes = matches!(command, Command::SetAxes { .. });
             let revision = self.doc.revision();
             let outcome = self.run(command);
+            if is_axes && outcome.is_some() {
+                self.message = Some(Message::info("Axes moved"));
+            }
             let unchanged =
                 (is_copy || is_turn) && outcome.is_some() && self.doc.revision() == revision;
             if unchanged {
