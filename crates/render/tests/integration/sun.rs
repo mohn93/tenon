@@ -54,6 +54,23 @@ impl Shot {
         [0, 1, 2].map(|k| i32::from(self.pixels[i + k]))
     }
 
+    /// The brightest pixel within a pixel of `p`.
+    fn brightest_near(&self, p: [f64; 3]) -> i32 {
+        let s = self
+            .camera
+            .project(DVec3::from(p))
+            .expect("in front of the camera");
+        let (x, y) = (s.x as i32, s.y as i32);
+        (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
+            .map(|(x, y)| {
+                let i = ((y as u32 * W + x as u32) * 4) as usize;
+                (0..3).map(|k| i32::from(self.pixels[i + k])).sum::<i32>()
+            })
+            .max()
+            .unwrap()
+    }
+
     fn brightness(&self, p: [f64; 3]) -> i32 {
         self.at(p).iter().sum()
     }
@@ -61,6 +78,11 @@ impl Shot {
 
 fn shoot(snap: &mut Snapshotter, d: &Document, sun: Option<SunLight>, lighting: Lighting) -> Shot {
     snap.set_sun(sun);
+    snap.set_glass_view(render::scene::GlassView {
+        x_ray: d.x_ray,
+        hidden_geometry: d.hidden_geometry,
+    });
+    snap.set_section_display(d.section_display);
     let pixels = snap
         .capture(
             d.scene(),
@@ -170,14 +192,15 @@ fn the_shadow_starts_at_the_foot_of_the_box() {
         look(&mut d, [6.0, -5.0, 4.0], [1.0, 0.75, 0.5]);
         d
     };
-    // Sun from the west at 60 degrees: the shadow reaches 0.58 m past the east wall.
+    // Sun from the west at 60 degrees: the shadow reaches 0.58 m past the east wall; 3 cm off the wall is
+    // a few texels, so a light gap there would be peter-panning.
     let shot = shoot(
         &mut snap,
         &d,
         Some(sun(toward(270.0, 60.0), 0.8, 0.45)),
         Lighting::Day,
     );
-    let foot = shot.brightness([2.08, 0.75, 0.0]);
+    let foot = shot.brightness([2.03, 0.75, 0.0]);
     let sunny = shot.brightness([3.5, 0.75, 0.0]);
     assert!(
         foot * 10 < sunny * 6,
@@ -382,4 +405,82 @@ fn the_sun_of_a_document_follows_its_shadow_settings() {
     assert!(sun.is_up(), "Boulder at 13:30 in November");
     let want = d.sun().direction.as_vec3();
     assert!((sun.direction - want).length() < 1e-6);
+}
+
+#[test]
+fn grid_lines_in_a_shadow_darken_with_the_ground() {
+    let Some(mut snap) = gpu() else { return };
+    let d = one_box();
+    let shot = shoot(&mut snap, &d, Some(sun(west(), 0.8, 0.45)), Lighting::Day);
+    // The 1 m grid line y = 1 crosses the shadow (x from 2 to 3): no pixel near it may be
+    // lighter than the shadowed ground (about 0.44 of the background), as it was when the
+    // grid was drawn over the shadow.
+    let bright: i32 = background().iter().sum();
+    let in_shadow = shot.brightest_near([2.5, 1.0, 0.0]);
+    assert!(
+        in_shadow * 10 < bright * 6,
+        "grid in shadow {in_shadow}, background {bright}"
+    );
+}
+
+/// Whether the ground at (2.5, 0.75) is in the box's shadow.
+fn shadowed(shot: &Shot) -> bool {
+    shot.brightness([2.5, 0.75, 0.0]) * 10 < shot.brightness([4.6, 0.75, 0.0]) * 8
+}
+
+#[test]
+fn ghosts_under_hidden_geometry_do_not_cast() {
+    let Some(mut snap) = gpu() else { return };
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    let faces = all_faces(&d);
+    run(&mut d, Command::Hide { ids: faces });
+    run(&mut d, Command::SetHiddenGeometry { on: true });
+    look(&mut d, [3.0, -6.0, 5.0], [1.0, 0.75, 0.5]);
+    let shot = shoot(&mut snap, &d, Some(sun(west(), 0.8, 0.45)), Lighting::Day);
+    assert!(!shadowed(&shot));
+}
+
+#[test]
+fn x_ray_does_not_change_what_casts() {
+    let Some(mut snap) = gpu() else { return };
+    let mut d = doc();
+    add_box(&mut d, [0.0, 0.0]);
+    run(&mut d, Command::SetXRay { on: true });
+    look(&mut d, [3.0, -6.0, 5.0], [1.0, 0.75, 0.5]);
+    let shot = shoot(&mut snap, &d, Some(sun(west(), 0.8, 0.45)), Lighting::Day);
+    assert!(shadowed(&shot));
+}
+
+#[test]
+fn what_a_section_plane_cuts_away_does_not_cast() {
+    let Some(mut snap) = gpu() else { return };
+    // The east wall (x = 2) and its shadow, with the plane at x = 1 keeping one half.
+    let cut = |normal: [f64; 3]| {
+        let mut d = doc();
+        add_box(&mut d, [0.0, 0.0]);
+        run(
+            &mut d,
+            Command::AddSectionPlane {
+                point: [1.0, 0.0, 0.0],
+                normal,
+                activate: Some(true),
+            },
+        );
+        look(&mut d, [3.0, -6.0, 5.0], [1.0, 0.75, 0.5]);
+        d
+    };
+    let both: Vec<bool> = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]]
+        .map(|n| {
+            shadowed(&shoot(
+                &mut snap,
+                &cut(n),
+                Some(sun(west(), 0.8, 0.45)),
+                Lighting::Day,
+            ))
+        })
+        .to_vec();
+    // One side keeps the east half, whose wall still shades x = 2.5; the other keeps the west
+    // half, whose shadow ends at x = 2.
+    assert_eq!(both.iter().filter(|&&s| s).count(), 1, "{both:?}");
 }

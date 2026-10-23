@@ -69,7 +69,8 @@ pub struct SunFit {
 
 /// The map for casters inside the box `lo` to `hi` and a sun toward `direction` (above the
 /// horizon), `size` pixels wide. It depends on nothing but those, so the view moving never
-/// changes it, and its edges lie on whole texels so growing casters do not shimmer the rest.
+/// changes it (no shimmer while orbiting). Its edges lie on whole texels of a size that follows
+/// the casters' span, so a change of casters may change the texel.
 pub fn fit(direction: Vec3, lo: Vec3, hi: Vec3, size: u32) -> SunFit {
     let forward = -direction.normalize();
     let reference = if forward.z.abs() > 0.99 {

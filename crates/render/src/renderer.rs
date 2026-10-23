@@ -521,9 +521,11 @@ pub struct Renderer {
     sun_sampler: wgpu::Sampler,
     /// Bound as the sun map until there is one.
     sun_placeholder: wgpu::TextureView,
-    /// The sun casters' corners as of the last `set_model`, their vertex buffer (None when
-    /// there are none), their bounds, and a count of their changes, as for the lamps' casters.
-    sun_corners: Vec<[f32; 3]>,
+    /// The sun casters as of the last `set_model`: how many corners, a hash of them (so a change
+    /// is found without keeping a copy), their vertex buffer (None when there are none), their
+    /// bounds, and a count of their changes, as for the lamps' casters.
+    sun_count: u32,
+    sun_hash: u64,
     sun_casters: Option<wgpu::Buffer>,
     sun_bounds: Option<(Vec3, Vec3)>,
     sun_generation: u64,
@@ -1140,7 +1142,8 @@ impl Renderer {
             sun_sampler,
             sun_placeholder,
             sun_casters: None,
-            sun_corners: Vec::new(),
+            sun_count: 0,
+            sun_hash: 0,
             sun_bounds: None,
             sun_generation: 0,
             sun_ground: None,
@@ -1243,7 +1246,14 @@ impl Renderer {
         }
         self.caster_chunks = base.caster_chunks;
         // The same for the sun's map.
-        if base.sun_casters != self.sun_corners {
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytemuck::cast_slice::<_, u8>(&base.sun_casters).hash(&mut hasher);
+            hasher.finish()
+        };
+        let count = base.sun_casters.len() as u32;
+        if (count, hash) != (self.sun_count, self.sun_hash) {
             self.sun_generation += 1;
             self.sun_casters = (!base.sun_casters.is_empty()).then(|| {
                 self.device
@@ -1259,7 +1269,8 @@ impl Renderer {
                     Some(bounds.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))))
                 },
             );
-            self.sun_corners = base.sun_casters;
+            self.sun_count = count;
+            self.sun_hash = hash;
         }
     }
 
@@ -1397,10 +1408,7 @@ impl Renderer {
                 self.sun_map = Some(SunMap::new(&self.device));
                 self.rebind();
             }
-            let casters = self
-                .sun_casters
-                .as_ref()
-                .map(|b| (b, self.sun_corners.len() as u32));
+            let casters = self.sun_casters.as_ref().map(|b| (b, self.sun_count));
             if let Some(map) = &mut self.sun_map {
                 map.draw(
                     &self.queue,
@@ -1733,11 +1741,17 @@ impl Renderer {
                         pass.draw(0..mesh.count, 0..1);
                     }
                 };
-                if let (Some(count), Some((ground, _))) = (ground_shadows, &self.sun_ground) {
-                    bind(&mut pass, &self.sun_ground_pipeline, ground);
-                    pass.draw(0..count, 0..1);
-                }
-                if !self.print {
+                // The ground's shadow goes over the grid and the flat axes (none are drawn in a
+                // print) so they darken with the ground, and under the vertical axis.
+                let sun_ground = |pass: &mut wgpu::RenderPass| {
+                    if let (Some(count), Some((ground, _))) = (ground_shadows, &self.sun_ground) {
+                        bind(pass, &self.sun_ground_pipeline, ground);
+                        pass.draw(0..count, 0..1);
+                    }
+                };
+                if self.print {
+                    sun_ground(&mut pass);
+                } else {
                     draw(
                         &mut pass,
                         &self.flat_ground_pipeline,
@@ -1749,6 +1763,7 @@ impl Renderer {
                         bind(&mut pass, &self.wide_flat_axes_pipeline, flat);
                         pass.draw(0..flat.count, 0..axis_copies);
                     }
+                    sun_ground(&mut pass);
                     draw(
                         &mut pass,
                         &self.ground_pipeline,
