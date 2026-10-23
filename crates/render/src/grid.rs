@@ -142,7 +142,8 @@ pub fn flat_axis_lines_at(
         .filter(|seg| is_flat(seg))
         .flatten()
         .map(|v| LineVertex {
-            pos: [v.pos[0], v.pos[1], 0.0],
+            // Exact zeros (and their signs) stay as they are.
+            pos: [v.pos[0], v.pos[1], v.pos[2] * 0.0],
             ..*v
         })
         .collect()
