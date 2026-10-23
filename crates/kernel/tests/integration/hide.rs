@@ -371,3 +371,72 @@ fn shown_bounds_leave_out_hidden_entities_and_equal_bounds_when_nothing_is_hidde
     hide(&mut s, def, EntityId::Edge(tall));
     assert_eq!(s.shown_bounds(MeshId::Root, &[]).unwrap()[1].z, 0.0);
 }
+
+/// The hidden edges of `m` as sorted (x0, y0, x1, y1) with the smaller end first.
+fn hidden_spans(m: &Model) -> Vec<[f64; 4]> {
+    let mut v: Vec<[f64; 4]> = m
+        .edges()
+        .filter(|(_, e)| e.hidden)
+        .map(|(_, e)| {
+            let [a, b] = e.v.map(|v| m.vertex(v).unwrap().pos);
+            let (a, b) = if (a.x, a.y) <= (b.x, b.y) {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            [a.x, a.y, b.x, b.y]
+        })
+        .collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v
+}
+
+#[test]
+fn a_copy_along_part_of_a_shown_edge_leaves_that_piece_shown() {
+    let (s, _) = square_scene();
+    let mut m = s.root().clone();
+    m.add_edge(p(10.0, 0.0, 0.0), p(11.0, 0.0, 0.0)).unwrap();
+    let loose = m.edges().last().unwrap().0;
+    m.hide_entities(&[EntityId::Edge(loose)], true);
+    m.copy_placed(
+        &[loose],
+        &[],
+        &[glam::DAffine3::from_translation(p(-10.0, 0.0, 0.0))],
+    )
+    .unwrap();
+    // The copy lies along half of the square's shown bottom side: both pieces stay shown.
+    assert_eq!(hidden_spans(&m), vec![[10.0, 0.0, 11.0, 0.0]]);
+}
+
+#[test]
+fn exploding_a_hidden_instance_beside_an_overlapping_shown_outline_keeps_it_shown() {
+    let (mut s, group) = grouped_square();
+    s.edit(MeshId::Root, |m| {
+        m.add_polygon(&[
+            p(2.0, 0.0, 0.0),
+            p(6.0, 0.0, 0.0),
+            p(6.0, 1.0, 0.0),
+            p(2.0, 1.0, 0.0),
+        ])
+    })
+    .unwrap();
+    // Move the group so its bottom side lies along part of the rectangle's bottom side.
+    s.edit(MeshId::Root, |m| {
+        Ok(m.move_instances(&[group], p(3.0, 0.0, 0.0)))
+    })
+    .unwrap();
+    s.edit(MeshId::Root, |m| {
+        Ok(m.hide_entities(&[EntityId::Instance(group)], true).0)
+    })
+    .unwrap();
+    s.explode(MeshId::Root, group).unwrap();
+    let m = s.root();
+    // The bottom side of the exploded square, x 3..5, lies on the shown rectangle's edge.
+    assert!(
+        hidden_spans(m)
+            .iter()
+            .all(|e| !(e[1] == 0.0 && e[3] == 0.0)),
+        "{:?}",
+        hidden_spans(m)
+    );
+}

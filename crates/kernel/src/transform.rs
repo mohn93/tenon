@@ -293,6 +293,17 @@ impl Model {
         s
     }
 
+    /// Whether the middle of edge `e` lies on one of `spans` (segments, by end positions).
+    fn lies_on_any(&self, e: EdgeId, spans: &[(DVec3, DVec3)]) -> bool {
+        let Some(e) = self.edge(e) else { return false };
+        let mid = (self.pos(e.v[0]) + self.pos(e.v[1])) / 2.0;
+        spans.iter().any(|&(a, b)| {
+            let ab = b - a;
+            let t = ((mid - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
+            mid.distance(a + ab * t) < LENGTH_TOL
+        })
+    }
+
     /// Draws `stencil` once per placement, without ending the edit. Copies are drawn like new
     /// edges, so they merge with geometry they touch; each face keeps the orientation of its
     /// original, and openings stay open. Drawing adds no faces the stencil does not have, apart
@@ -305,7 +316,15 @@ impl Model {
         places: &[DAffine3],
     ) -> BTreeSet<FaceId> {
         let existing: BTreeSet<FaceId> = self.faces().map(|(id, _)| id).collect();
-        let existing_edges: BTreeSet<EdgeId> = self.edges().map(|(id, _)| id).collect();
+        // Where the edges already were: drawing splits them into new ids, so a piece is told
+        // apart by position (see the hidden marks below).
+        let existing_edges: Vec<(DVec3, DVec3)> = if stencil.marks.iter().any(|m| m.hidden) {
+            self.edges()
+                .map(|(_, e)| (self.pos(e.v[0]), self.pos(e.v[1])))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let segments: Vec<(DVec3, DVec3)> = places
             .iter()
             .flat_map(|t| {
@@ -502,7 +521,9 @@ impl Model {
                         if marks.tag.is_some() {
                             self.set_tag(EntityId::Edge(e), marks.tag);
                         }
-                        if marks.hidden && !existing_edges.contains(&e) {
+                        // Only edges drawn here come out hidden: a piece lying on an edge
+                        // that was already there stays as it is.
+                        if marks.hidden && !self.lies_on_any(e, &existing_edges) {
                             self.set_hidden(EntityId::Edge(e), true);
                         }
                     }

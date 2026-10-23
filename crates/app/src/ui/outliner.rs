@@ -237,8 +237,8 @@ fn expand_open_path(ctx: &egui::Context, context: &[EntityId]) {
 /// One node and, when expanded, its children. `path` leads to the node's parent. With a
 /// filter, a node that does not show is skipped, one holding rows that show is drawn expanded
 /// (under its own state, leaving the one kept without a filter), and nothing is drawn past
-/// `MAX_FILTERED_ROWS` rows (the count goes one past it to say so). A node that is hidden (its own flag or
-/// tag, or `hidden` for one above it) is greyed.
+/// `MAX_FILTERED_ROWS` rows (the count goes one past it to say so). A node that is hidden (its
+/// own flag or tag, or `hidden` for one above it) is greyed.
 fn outliner_node(
     ui: &mut Ui,
     view: &View,

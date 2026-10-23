@@ -212,7 +212,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .entry(),
         Item::new("Orient Faces", UiAction::OrientFaces(None))
             .enabled(view.has_face_selected)
-            .tooltip("Turn the faces joined to the lowest-numbered selected face to agree with it; right-click a face to choose")
+            .tooltip("Turn joined faces to agree with the lowest-numbered selected one")
             .entry(),
         Entry::Separator,
         Item::new("Soften Edges...", UiAction::ShowSoften(true)).entry(),

@@ -251,8 +251,8 @@ fn invalid(e: KernelError, ids: &[EntityId]) -> CommandError {
 }
 
 /// The nodes for `rows`, placed along `path` (instance ids from the root), with their marks;
-/// `hidden` when a hidden tag or a hide flag hides the instances above them. `depth` is how many levels below
-/// these nodes to include (None: all).
+/// `hidden` when a hidden tag or a hide flag hides the instances above them. `depth` is how
+/// many levels below these nodes to include (None: all).
 fn outliner_nodes(
     table: &OutlinerTable,
     rows: &[OutlinerRow],

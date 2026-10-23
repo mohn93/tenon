@@ -24,13 +24,14 @@ use crate::units::{Units, check_precision};
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
 /// The newest schema version this build reads, and the one it writes when an edge, face,
-/// instance or guide is hidden.
+/// instance or guide is hidden, or the camera or a scene's view has `x_ray` or
+/// `hidden_geometry` on.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
 /// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
-/// and display units, version 13 section planes and the section display settings, and version 14 hidden
-/// entities; older
+/// and display units, version 13 section planes and the section display settings, and
+/// version 14 hidden entities and the x-ray and hidden geometry view flags; older
 /// files still open (untagged before version 10, without scenes before version 11, without
 /// annotations and in the default units before version 12, without section planes and with
 /// the default section display before version 13).
