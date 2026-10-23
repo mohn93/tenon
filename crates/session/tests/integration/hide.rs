@@ -547,10 +547,9 @@ fn zoom_extents_and_print_extent_leave_out_hidden_entities() {
     run(&mut d, json!({"type": "hide", "ids": [far]})).unwrap();
     assert_eq!(max_x(&d), 2.0);
     run(&mut d, json!({"type": "zoom_extents"})).unwrap();
-    let target = ask(&d, json!({"type": "camera"}))["target"][0]
-        .as_f64()
-        .unwrap();
-    assert!(target < 3.0, "the box alone is framed: {target}");
+    let target = ask(&d, json!({"type": "camera"}))["target"].clone();
+    // The box alone is framed, around its centre.
+    assert_eq!(target, json!([1.0, 1.0, 0.5]));
 }
 
 #[test]

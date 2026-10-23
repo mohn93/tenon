@@ -220,7 +220,8 @@ pub struct ModelGeometry {
 /// outside it are faded and its bounding box is outlined. Each face side gets its material's
 /// color, or else that of the nearest painted instance placing it, or else the default.
 /// Faces, edges and guides on hidden tags or hidden themselves are left out, and instances on
-/// hidden tags or hidden themselves with all they place (see `Scene::instance_shown`), but for the instances the open context is in.
+/// hidden tags or hidden themselves with all they place (see `Scene::instance_shown`), but for
+/// the instances the open context is in.
 ///
 /// This is `scene_base` with `Spans::flags` applied; the renderer keeps the two apart.
 pub fn scene_geometry(

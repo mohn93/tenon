@@ -436,7 +436,8 @@ impl Document {
             let message = if skipped_faces > 0 {
                 format!("nothing to export: {skipped_faces} faces could not be triangulated")
             } else if self.scene.hides_faces() {
-                "nothing to export: no face is shown (hidden tags and hidden entities hide the rest)".to_string()
+                "nothing to export: no face is shown (hidden tags and hidden entities hide the rest)"
+                    .to_string()
             } else {
                 "nothing to export: the model has no faces".to_string()
             };

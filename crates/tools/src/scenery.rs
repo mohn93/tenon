@@ -214,6 +214,8 @@ pub struct Part<'s> {
     placed: &'s Placed,
     /// The tags hidden.
     hidden: &'s BTreeSet<TagId>,
+    /// Whether some edge or face of the layout is hidden by its own flag.
+    flagged: bool,
     /// The active section planes cutting the part (its own mesh's and its ancestors'), in the
     /// open context's coordinates; empty when cuts are not applied.
     cuts: &'s [SectionPlane],
@@ -224,23 +226,33 @@ impl Part<'_> {
         tag_shown_among(self.hidden, tag)
     }
 
+    /// Whether nothing can hide an edge or face of the part: no tag is hidden and no entity
+    /// is hidden itself.
+    fn all_shown(&self) -> bool {
+        self.hidden.is_empty() && !self.flagged
+    }
+
     /// Whether the face shows: it is not hidden itself and not on a hidden tag.
     pub fn shows_face(&self, f: FaceId) -> bool {
-        self.model
-            .face(f)
-            .is_some_and(|f| !f.hidden && self.shows(f.tag))
+        self.all_shown()
+            || self
+                .model
+                .face(f)
+                .is_some_and(|f| !f.hidden && self.shows(f.tag))
     }
 
     /// Whether the edge shows: it is not hidden itself and not on a hidden tag.
     pub fn shows_edge(&self, e: EdgeId) -> bool {
-        self.model
-            .edge(e)
-            .is_some_and(|e| !e.hidden && self.shows(e.tag))
+        self.all_shown()
+            || self
+                .model
+                .edge(e)
+                .is_some_and(|e| !e.hidden && self.shows(e.tag))
     }
 
     /// Whether the vertex shows: some edge or face using it does (see `Model::vertex_shown`).
     pub fn shows_vertex(&self, v: VertexId) -> bool {
-        self.model.vertex_shown(v, self.hidden)
+        self.all_shown() || self.model.vertex_shown(v, self.hidden, false)
     }
 }
 
@@ -351,6 +363,9 @@ pub struct Layout {
     boxes: Vec<(InstanceId, OnceLock<Option<[DVec3; 2]>>)>,
     /// The tags hidden: what is on them is not seen.
     hidden: BTreeSet<TagId>,
+    /// Whether some placed mesh has an edge or face hidden by its own flag (when not, parts
+    /// need not look at the flags).
+    flagged: bool,
 }
 
 impl Layout {
@@ -494,6 +509,7 @@ impl Layout {
                 .map(|i| (i, OnceLock::new()))
                 .collect(),
             hidden,
+            flagged: models.iter().any(|m| m.has_hidden_edge_or_face()),
         }
     }
 
@@ -733,6 +749,7 @@ impl<'a> Scenery<'a> {
             model: self.models[placed.mesh],
             placed,
             hidden: &self.layout.hidden,
+            flagged: self.layout.flagged,
             cuts: &self.layout.cuts[k],
         }
     }
@@ -775,6 +792,7 @@ impl<'a> Scenery<'a> {
             model: self.models[placed.mesh],
             placed,
             hidden: &self.layout.hidden,
+            flagged: self.layout.flagged,
             cuts: self.cuts_of(k),
         }
     }
@@ -789,6 +807,7 @@ impl<'a> Scenery<'a> {
                 model: self.models[placed.mesh],
                 placed,
                 hidden: &self.layout.hidden,
+                flagged: self.layout.flagged,
                 cuts: self.cuts_of(k),
             })
     }

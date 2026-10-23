@@ -129,7 +129,7 @@ fn placements(scene: &Scene, cuts: bool) -> Vec<Placement<'_>> {
         });
         for (_, instance) in model
             .instances()
-            .filter(|(_, i)| !i.hidden && scene.tag_shown(i.tag))
+            .filter(|(_, i)| scene.placed_instance_shown(i))
         {
             walk(
                 scene,

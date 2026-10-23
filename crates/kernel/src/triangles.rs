@@ -86,7 +86,7 @@ impl Scene {
         }
         for (_, instance) in model
             .instances()
-            .filter(|(_, i)| !i.hidden && self.tag_shown(i.tag))
+            .filter(|(_, i)| self.placed_instance_shown(i))
         {
             self.collect_triangles(
                 MeshId::Definition(instance.definition),

@@ -301,7 +301,7 @@ impl Editor {
             let Some(instance) = root.instance(*id) else {
                 continue;
             };
-            if let Some([a, b]) = scene.instance_bounds(instance) {
+            if let Some([a, b]) = scene.shown_instance_bounds(instance) {
                 lo = lo.min(a);
                 hi = hi.max(b);
             }

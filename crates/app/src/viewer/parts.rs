@@ -45,7 +45,7 @@ pub fn list(scene: &Scene) -> Vec<Part> {
     let mut counts: std::collections::BTreeMap<DefinitionId, usize> = Default::default();
     let mut parts = Vec::new();
     for (id, instance) in root.instances() {
-        if instance.hidden || !scene.tag_shown(instance.tag) {
+        if !scene.placed_instance_shown(instance) {
             continue;
         }
         let Some(definition) = scene.definition(instance.definition) else {
@@ -96,8 +96,10 @@ fn extent(
         let Some(mesh) = scene.mesh(MeshId::Definition(definition)) else {
             continue;
         };
+        // Nothing to look up when nothing hides a vertex.
+        let all_shown = hidden.is_empty() && !mesh.has_hidden_edge_or_face();
         for (id, v) in mesh.vertices() {
-            if mesh.vertex_shown(id, hidden) {
+            if all_shown || mesh.vertex_shown(id, hidden, false) {
                 let p = place.transform_point3(v.pos);
                 lo = lo.min(p);
                 hi = hi.max(p);
@@ -108,7 +110,7 @@ fn extent(
             continue;
         }
         for (_, inner) in mesh.instances() {
-            if !inner.hidden && scene.tag_shown(inner.tag) {
+            if scene.placed_instance_shown(inner) {
                 stack.push((inner.definition, place * inner.transform, depth + 1));
             }
         }

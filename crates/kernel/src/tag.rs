@@ -2,7 +2,7 @@
 //! planes, shown or hidden together. An entity is on at most one tag; on none it is "Untagged". Tags are
 //! shared by every mesh of a scene.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use glam::DVec3;
 
@@ -79,9 +79,10 @@ pub fn tag_shown_among(hidden: &BTreeSet<TagId>, tag: Option<TagId>) -> bool {
 
 impl Model {
     /// Whether a vertex shows while the tags `hidden` are hidden: when some shown edge or
-    /// shown face (not hidden itself either) uses it (a vertex has no tag of its own; one used by nothing shows).
-    pub fn vertex_shown(&self, v: VertexId, hidden: &BTreeSet<TagId>) -> bool {
-        let shown = |tag, own: bool| !own && tag_shown_among(hidden, tag);
+    /// shown face uses it (a vertex has no tag of its own; one used by nothing shows). With
+    /// `reveal`, an edge or face hidden by its own flag counts as shown (only tags hide).
+    pub fn vertex_shown(&self, v: VertexId, hidden: &BTreeSet<TagId>, reveal: bool) -> bool {
+        let shown = |tag, own: bool| (reveal || !own) && tag_shown_among(hidden, tag);
         let edges = self.edges_at(v);
         let mut faces = self.faces_at(v).peekable();
         (edges.is_empty() && faces.peek().is_none())
@@ -92,6 +93,11 @@ impl Model {
             || faces
                 .filter_map(|f| self.face(f))
                 .any(|f| shown(f.tag, f.hidden))
+    }
+
+    /// Whether some edge or face is hidden by its own flag.
+    pub fn has_hidden_edge_or_face(&self) -> bool {
+        self.edges().any(|(_, e)| e.hidden) || self.faces().any(|(_, f)| f.hidden)
     }
 
     /// Puts edges, faces, instances, guides and annotations on `tag` (None: Untagged) as one
@@ -282,9 +288,14 @@ impl Scene {
     /// Whether instance `id` (`instance`) of mesh `mesh` shows: it is not hidden itself, not on
     /// a hidden tag and not hidden for viewing. Every walk down the instances goes by this.
     pub fn instance_shown(&self, mesh: MeshId, id: InstanceId, instance: &Instance) -> bool {
-        !instance.hidden
-            && self.tag_shown(instance.tag)
+        self.placed_instance_shown(instance)
             && !(mesh == MeshId::Root && self.view_hidden.contains(&id))
+    }
+
+    /// Whether `instance` shows by itself: it is not hidden and not on a hidden tag (the
+    /// check of [`Scene::instance_shown`] without the viewing isolation).
+    pub fn placed_instance_shown(&self, instance: &Instance) -> bool {
+        !instance.hidden && self.tag_shown(instance.tag)
     }
 
     /// Whether `face` shows: it is not hidden itself and not on a hidden tag. Instances
@@ -304,20 +315,22 @@ impl Scene {
         !guide.hidden() && self.tag_shown(guide.tag())
     }
 
-    /// Whether mesh `mesh` or a definition it places holds an entity with its hidden flag set.
-    fn any_hidden_flag(&self, mesh: MeshId, seen: &mut BTreeSet<MeshId>) -> bool {
+    /// Whether mesh `mesh` or a definition it places holds an edge, face or instance with its
+    /// hidden flag set (guides count in no bounds); `memo` holds the meshes answered so far.
+    fn any_hidden_flag(&self, mesh: MeshId, memo: &mut HashMap<MeshId, bool>) -> bool {
+        if let Some(&known) = memo.get(&mesh) {
+            return known;
+        }
+        memo.insert(mesh, false);
         let Some(m) = self.mesh(mesh) else {
             return false;
         };
-        if !seen.insert(mesh) {
-            return false;
-        }
-        m.edges().any(|(_, e)| e.hidden)
-            || m.faces().any(|(_, f)| f.hidden)
-            || m.guides().any(|(_, g)| g.hidden())
+        let any = m.has_hidden_edge_or_face()
             || m.instances().any(|(_, i)| {
-                i.hidden || self.any_hidden_flag(MeshId::Definition(i.definition), seen)
-            })
+                i.hidden || self.any_hidden_flag(MeshId::Definition(i.definition), memo)
+            });
+        memo.insert(mesh, any);
+        any
     }
 
     /// The tags that are hidden.
@@ -334,9 +347,26 @@ impl Scene {
     /// whatever their tags, as an open instance stays drawn. None when it shows nothing. With
     /// no tag hidden and nothing hidden itself, `bounds`.
     pub fn shown_bounds(&self, mesh: MeshId, open: &[InstanceId]) -> Option<[DVec3; 2]> {
+        self.shown_bounds_in(mesh, open, &mut HashMap::new())
+    }
+
+    /// The box around what instance `instance` shows, in the coordinates of the mesh holding
+    /// it (`instance_bounds` leaving out what is hidden). None when it shows nothing.
+    pub fn shown_instance_bounds(&self, instance: &Instance) -> Option<[DVec3; 2]> {
+        let b = self.shown_bounds(MeshId::Definition(instance.definition), &[])?;
+        enclose(&placed_box(instance.transform, b))
+    }
+
+    /// `shown_bounds`, with the meshes found to hold hidden entities kept in `flagged`.
+    fn shown_bounds_in(
+        &self,
+        mesh: MeshId,
+        open: &[InstanceId],
+        flagged: &mut HashMap<MeshId, bool>,
+    ) -> Option<[DVec3; 2]> {
         if self.view_hidden.is_empty()
             && self.tags().all(|(_, t)| t.visible)
-            && !self.any_hidden_flag(mesh, &mut BTreeSet::new())
+            && !self.any_hidden_flag(mesh, flagged)
         {
             return self.bounds(mesh);
         }
@@ -354,7 +384,8 @@ impl Scene {
                 _ if self.instance_shown(mesh, id, i) => &[],
                 _ => continue,
             };
-            if let Some(b) = self.shown_bounds(MeshId::Definition(i.definition), below) {
+            if let Some(b) = self.shown_bounds_in(MeshId::Definition(i.definition), below, flagged)
+            {
                 points.extend(placed_box(i.transform, b));
             }
         }
@@ -383,7 +414,7 @@ impl Scene {
         let hides = m.faces().any(|(_, f)| !self.face_shown(f))
             || m.instances().any(|(_, i): (_, &Instance)| {
                 let def = MeshId::Definition(i.definition);
-                if !i.hidden && self.tag_shown(i.tag) {
+                if self.placed_instance_shown(i) {
                     self.hides_faces_in(def, memo)
                 } else {
                     self.places_faces(def)
