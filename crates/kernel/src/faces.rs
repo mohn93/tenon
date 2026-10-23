@@ -17,8 +17,13 @@ impl Model {
     /// Updates the faces of every plane spanned by one of `new_edges` and an edge touching it.
     pub(crate) fn create_faces(&mut self, new_edges: &[EdgeId]) {
         let mut planes = PlaneSet::default();
+        // Edges on a line already walked (see `candidate_planes`) give the same planes.
+        let mut walked: BTreeSet<EdgeId> = BTreeSet::new();
         for &e in new_edges {
-            for plane in self.candidate_planes(e) {
+            if walked.contains(&e) {
+                continue;
+            }
+            for plane in self.candidate_planes(e, &mut walked) {
                 planes.insert(plane);
             }
         }
@@ -67,8 +72,10 @@ impl Model {
     }
 
     /// Planes spanned by edge e and each non-collinear edge reachable from its endpoints,
-    /// walking through vertices whose edges continue along e's line.
-    fn candidate_planes(&self, e: EdgeId) -> Vec<Plane> {
+    /// walking through vertices whose edges continue along e's line. The edges walked along that
+    /// line are added to `walked`: starting from any of them gives the same planes.
+    fn candidate_planes(&self, e: EdgeId, walked: &mut BTreeSet<EdgeId>) -> Vec<Plane> {
+        walked.insert(e);
         let [a, b] = self.edge(e).unwrap().v;
         let (pa, pb) = (self.pos(a), self.pos(b));
         let mut planes = Vec::new();
@@ -85,6 +92,7 @@ impl Model {
                     match Plane::from_points(pa, pb, self.pos(c)) {
                         Some(p) => planes.push(p),
                         None => {
+                            walked.insert(f);
                             if visited.insert(c) {
                                 stack.push(c);
                             }
