@@ -1217,9 +1217,9 @@ with, the units imports are read in, and the status bar. `{"type": "editor"}` re
  "hovered": "f3", "snap_label": null}
 ```
 
-- `tool` is `select`, `line`, `rectangle`, `circle`, `polygon`, `arc`, `push_pull`, `move`,
-  `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`, `dimension`, `text`, `erase`, `paint`,
-  `section_plane` or `axes`. The editor starts in the Select tool.
+- `tool` is `select`, `line`, `rectangle`, `rotated_rectangle`, `circle`, `polygon`, `arc`,
+  `freehand`, `push_pull`, `move`, `rotate`, `scale`, `offset`, `follow_me`, `tape_measure`,
+  `protractor`, `dimension`, `text`, `erase`, `paint`, `section_plane` or `axes`. The editor starts in the Select tool.
 - `phase` is `idle` (the next click starts an operation) or `active`, and `points` are the
   points the operation was given so far, in the open context's coordinates: Line, the chain's
   first point and the point the next edge starts from; Rectangle, the first corner; Circle and
@@ -1311,8 +1311,8 @@ Events, run in order:
 | `{"type": "click", "point": [1, 2, 0]}` | Moves there, presses and releases. Separate `click` events are never a double-click, however soon they are sent: each press counts as coming after the double-click time. |
 | `{"type": "double_click", "point": [1, 2, 0]}` | Two left clicks there, then the double-click: the Select tool selects a face with its edges, or an edge with its faces, opens the group under it, or closes the open one when there is nothing of it there. Push/Pull repeats the last pull distance on the face (the one being pulled, else the one under the cursor). In Push/Pull, a click that finishes a pull, followed within the double-click time by another click, repeats the pull (the SketchUp convention). The second click of a `double_click` (and the second and third of a `triple_click`) comes within the double-click time; its first does not, so a `click` that starts a pull followed by a `double_click` finishes the pull with the double-click's first click. In the window, Push/Pull ignores a second press within the double-click time near the first click (a jittery double-click) rather than finishing a pull of a few pixels; a later click there finishes it. |
 | `{"type": "triple_click", "point": [1, 2, 0]}` | Three left clicks there: the Select tool selects everything connected to the edge or face under it (a triple-click that follows a double-click that opened or closed a group does nothing more). |
-| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. With Line, Rectangle, Circle, Polygon, Arc, Push/Pull or Scale (pressed on a grip), a drag acts as two clicks when the release is at least the drag threshold (4 px) from the press, inside the view. While a navigation drag turns the view, the hover waits, as in the window. |
-| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure guide making, Polygon inscribed and circumscribed, Scale scaling about the center, Dimension a radial dimension's diameter and radius). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none), `d` (duplicate, as the `duplicate` command), `x` (cut, as `cut_selection`), `c` (copy, as `copy_selection`) and `v` (paste, as `paste_clipboard` without `at`) are taken, the last four not with `shift`; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
+| `{"type": "drag", "pixels": [[100, 100], [200, 150], [300, 300]]}` (or `points`) | Presses at the first place, moves through the others, releases at the last (at least two): a Select box (dragged right: inside; left: crossing), or a navigation drag with `"button": "middle"`. With Line, Rectangle, Rotated Rectangle, Circle, Polygon, Arc, Push/Pull or Scale (pressed on a grip), a drag acts as two clicks when the release is at least the drag threshold (4 px) from the press, inside the view. While a navigation drag turns the view, the hover waits, as in the window. |
+| `{"type": "key", "key": "r", "shift": false, "alt": false, "ctrl": false, "cmd": false}` | A key pressed with those modifiers held: one character (tool shortcuts, "g" group, "G" or Shift+g component, "Z" zoom extents, "f" fly, or a measurement's first character), or `enter`, `backspace`, `delete`, `escape`, `space`, `right` / `left` / `up` (lock the red / green / blue axis during an operation, or unlock it; Rotate also takes them before its first click, to lock the protractor's plane, and an agent `cancel` drops that lock), `down` (unlock), `ctrl` (Ctrl tapped alone: Move and Rotate switch copying, the Tape Measure and Protractor guide making, Polygon inscribed and circumscribed, Scale scaling about the center, Dimension a radial dimension's diameter and radius). An uppercase letter holds Shift. With `cmd` or `ctrl` (given or held) only `z` (undo; with `shift` redo), `a` (select all; with `shift` select none), `d` (duplicate, as the `duplicate` command), `x` (cut, as `cut_selection`), `c` (copy, as `copy_selection`) and `v` (paste, as `paste_clipboard` without `at`) are taken, the last four not with `shift`; the window's file shortcuts are commands (`new`, `open`, `save`, `import`, `export`, `quit`) and other keys, Cmd+Shift+D included, are `invalid_input`. With `alt` (given or held) no key is taken (`invalid_input`): in the window Alt with a key does nothing. |
 | `{"type": "modifiers", "shift": true}` | Holds exactly these modifiers (`shift`, `alt`, `ctrl`, `cmd`; absent ones are let go, so `{"type": "modifiers"}` lets go of all): Shift over an axis, parallel or perpendicular snap locks the direction, Shift toggles in the Select tool, Shift switches the Scale tool between uniform and per-axis scaling, Cmd or Ctrl makes a Paint click sample the material. They stay held across calls (see Modifiers below). |
 | `{"type": "type", "text": "2,3"}` | Types the text into the measurements box, replacing anything typed, and presses Enter. Unlike a key, a first letter is text here, not a shortcut. Refused (`invalid_input`) while Cmd, Ctrl or Alt is held. Right after a pull, a typed distance redoes the pull at that distance (keeping its direction), as Rotate retypes its last angle, Scale its last scale and Offset its last distance; Move only replaces a copy with an array (`5x`, `/5`). A retyped pull is refused ("Click a face first") if another step has come in between. |
 
@@ -1364,6 +1364,41 @@ Events, run in order:
   coordinates). A click on the origin, or a third in line with red, runs nothing and says why
   (`message`); arrow keys lock the inferred direction as for other tools; Escape starts again. It
   takes no typed value.
+- **Freehand** (no key): `drag` through the path's points (or `down`, `move` events, `up`): the
+  path lies in the plane of the face under the press, or in the horizontal plane (the drawing
+  axes' red-green plane) through it, each point being where the cursor ray meets that plane. The
+  samples (at most 10,000; later ones are dropped) are simplified with Douglas-Peucker at 2 px
+  projected to model units at the press point's depth, and make one `add_curve`: a curve, or with
+  Shift held at the press (`modifiers`) a polyline (`curve: false`). A release within the snap
+  radius (10 px) of the start closes it (`closed: true`, needing 3 corners after simplifying). A
+  press and release without a path draws nothing; `cancel` or an `escape` key drops the stroke.
+  It takes no typed value.
+- **Rotated Rectangle** (no key): `click` the first corner, `click` the end of the first side (any
+  direction; inference and arrow-key locks as for other tools), then `move` to set the width and
+  the plane and `click`: one `add_rotated_rectangle`. With the cursor on nothing in particular
+  (ground, free space) the width point is where its ray crosses the plane of the first corner (the
+  face under it, else the horizontal plane of the drawing axes); a snap to a point off that plane
+  tilts the rectangle. `drag` from the first corner to the second is the first two clicks. `type`
+  after the first click `length` (toward the cursor; negative reverses) or `length,angle`: the
+  side's angle in degrees in the corner's plane from its red direction (the drawing axes' red axis
+  on the horizontal plane, the horizontal direction of a face), counter-clockwise seen from the
+  plane's normal, as Rotate and Protractor measure. After the second click `width` (toward the
+  cursor's side of the first side) or `width,angle`: the angle tilts the rectangle about the first
+  side, upward toward the plane's normal, from the corner's plane; the typed value finishes the
+  rectangle. A width point on the side's line is refused with a message. `cancel` or an `escape`
+  key steps back (the side, then the corner).
+- **Protractor** (no key): `click` the center (the face under it gives the plane, else the
+  horizontal plane of the drawing axes; an arrow key before the click locks the plane square to a
+  drawing axis as for Rotate), `click` a point on the baseline, `move`, and `click`: one
+  `add_guide_line` through the center at the angle from the baseline, counter-clockwise about the
+  plane's normal, snapping to 15 degree steps within 2 degrees (not on endpoints, midpoints,
+  origins, intersections or edges, which are exact). `type` after the baseline replaces the click:
+  an angle (`30`, `-45`, `22.5deg`) or a slope `rise:run` (`1:2` is atan(1/2); the run must not be
+  zero); it turns the way the cursor does as for Rotate, so a negative value reverses it. Typed
+  right after a guide was placed, a value replaces that guide (`undo`, then `add_guide_line`,
+  turning the way the guide did), until another click. A `ctrl` key switches guide creation off
+  (the angle is reported in `message` instead) and on again. Clicking the center again as the
+  baseline is refused with a message; `cancel` drops the measurement and the plane lock.
 - **Dimension** (no key): `click` a point, `click` a second one, `move` to where the dimension
   line goes and `click`, or `type` the line's distance from the ends (on the cursor's side) once
   the cursor has moved off their line; it makes one `add_dimension`, each end the vertex

@@ -133,6 +133,14 @@ pub fn parse_angle(s: &str) -> Option<f64> {
     number(s).filter(|a| a.is_finite()).map(|a| sign * a)
 }
 
+/// Parses a slope "rise:run" ("1:2", "6in:12in", "-1:4") as an angle in degrees, atan(rise / run).
+/// None if it is not two lengths or the run is zero.
+pub fn parse_slope(s: &str) -> Option<f64> {
+    let (rise, run) = s.split_once(':')?;
+    let (rise, run) = (parse_length(rise)?, parse_length(run)?);
+    (run != 0.0).then(|| (rise / run).atan().to_degrees())
+}
+
 /// An angle for display, in degrees to a tenth: "22.5°".
 pub fn format_angle(degrees: f64) -> String {
     let s = format!("{degrees:.1}");
@@ -285,5 +293,31 @@ mod tests {
         assert_eq!(format_length(0.12345), "0.123 m");
         assert_eq!(format_length(-0.0001), "0 m");
         assert_eq!(format_length(-1.25), "-1.25 m");
+    }
+}
+
+#[cfg(test)]
+mod slope_tests {
+    use super::*;
+
+    #[test]
+    fn slopes_are_rise_over_run_in_degrees() {
+        let deg = |s| parse_slope(s).unwrap();
+        assert!((deg("1:1") - 45.0).abs() < 1e-12);
+        assert!((deg("1:2") - 0.5f64.atan().to_degrees()).abs() < 1e-12);
+        assert!((deg(" 3 : 12 ") - 0.25f64.atan().to_degrees()).abs() < 1e-12);
+        assert!((deg("6in:12in") - 0.5f64.atan().to_degrees()).abs() < 1e-12);
+        assert!((deg("0:5")).abs() < 1e-12);
+        // Signs: either one negative tips it down, both negative cancel.
+        assert!((deg("-1:2") + 0.5f64.atan().to_degrees()).abs() < 1e-12);
+        assert!((deg("1:-2") + 0.5f64.atan().to_degrees()).abs() < 1e-12);
+        assert!((deg("-1:-2") - 0.5f64.atan().to_degrees()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bad_slopes_are_refused() {
+        for bad in ["1:0", "1", "", ":", "1:", ":2", "a:2", "1:b", "1:2:3", "30"] {
+            assert_eq!(parse_slope(bad), None, "{bad:?}");
+        }
     }
 }

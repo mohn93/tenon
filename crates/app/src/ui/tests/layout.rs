@@ -40,9 +40,20 @@ fn toolbar_buttons() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
+/// The tools the rail holds: all but the three the window does not show yet (M14e registers
+/// them in its window task).
+fn rail_tools() -> impl Iterator<Item = ToolKind> {
+    ToolKind::ALL.into_iter().filter(|k| {
+        !matches!(
+            k,
+            ToolKind::Freehand | ToolKind::RotatedRectangle | ToolKind::Protractor
+        )
+    })
+}
+
 /// Every toolbar button reports itself in a window of `size`.
 fn every_toolbar_button_works(size: Vec2) {
-    for kind in ToolKind::ALL {
+    for kind in rail_tools() {
         let mut h = harness_sized(toolbar_fixture(), size);
         assert_eq!(
             click(&mut h, kind.label()),
@@ -74,8 +85,8 @@ fn the_rail_holds_every_tool_in_one_column_by_group() {
             .iter()
             .flat_map(|g| g.iter().copied())
             .collect();
-        assert_eq!(order.len(), ToolKind::ALL.len());
-        for kind in ToolKind::ALL {
+        assert_eq!(order.len(), rail_tools().count());
+        for kind in rail_tools() {
             assert!(order.contains(&kind), "{kind:?} on the rail");
         }
         let rects: Vec<Rect> = order.iter().map(|k| rect_of(&h, k.label())).collect();

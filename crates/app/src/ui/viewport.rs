@@ -168,6 +168,9 @@ pub fn cursor_icon(tool: ToolKind, pasting: bool, hovering: bool, navigating: bo
         ToolKind::Select => CursorIcon::Default,
         ToolKind::Line
         | ToolKind::Rectangle
+        | ToolKind::RotatedRectangle
+        | ToolKind::Freehand
+        | ToolKind::Protractor
         | ToolKind::Circle
         | ToolKind::Polygon
         | ToolKind::Arc

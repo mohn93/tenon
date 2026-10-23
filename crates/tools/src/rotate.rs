@@ -23,7 +23,7 @@ const SNAP_DEG: f64 = 2.0;
 /// The protractor's steps, in degrees.
 const STEP: f64 = 15.0;
 /// The protractor's radius as a fraction of its distance from the eye.
-const PROTRACTOR: f64 = 0.08;
+pub(crate) const PROTRACTOR: f64 = 0.08;
 
 /// A rotation in progress.
 #[derive(Clone, Debug)]
@@ -80,17 +80,7 @@ impl RotateTool {
         let turn = self.turn.as_ref()?;
         let from = turn.reference?;
         let to = flat(self.hover? - turn.center, turn.axis).try_normalize()?;
-        let angle = from
-            .cross(to)
-            .dot(turn.axis)
-            .atan2(from.dot(to))
-            .to_degrees();
-        let step = (angle / STEP).round() * STEP;
-        Some(if !self.on_point && (angle - step).abs() < SNAP_DEG {
-            step
-        } else {
-            angle
-        })
+        Some(protractor_angle(from, to, turn.axis, self.on_point))
     }
 
     /// Turns what the rotation in progress holds by `angle` degrees (or copies it).
@@ -161,8 +151,21 @@ fn command(last: &Last, angle: f64, count: Option<u32>) -> Command {
     }
 }
 
+/// The angle in degrees (-180 to 180), counter-clockwise about the unit vector `axis`, from the
+/// unit vector `from` to the unit vector `to` (both square to `axis`), snapped to `STEP` unless
+/// `exact`. The Protractor tool measures its angles the same way.
+pub(crate) fn protractor_angle(from: DVec3, to: DVec3, axis: DVec3, exact: bool) -> f64 {
+    let angle = from.cross(to).dot(axis).atan2(from.dot(to)).to_degrees();
+    let step = (angle / STEP).round() * STEP;
+    if !exact && (angle - step).abs() < SNAP_DEG {
+        step
+    } else {
+        angle
+    }
+}
+
 /// `v` without its component along the unit vector `axis`.
-fn flat(v: DVec3, axis: DVec3) -> DVec3 {
+pub(crate) fn flat(v: DVec3, axis: DVec3) -> DVec3 {
     v - axis * v.dot(axis)
 }
 
@@ -180,7 +183,7 @@ pub(crate) fn is_point(kind: SnapKind) -> bool {
 
 /// Where the cursor is on the plane through `center` square to `axis`: a point it snapped to,
 /// dropped onto the plane, else where its ray crosses the plane.
-fn on_rotation_plane(
+pub(crate) fn on_rotation_plane(
     center: DVec3,
     axis: DVec3,
     hit: &Inference,
@@ -193,7 +196,7 @@ fn on_rotation_plane(
 }
 
 /// A circle of `n` segments around `center` square to `axis`.
-fn circle(center: DVec3, axis: DVec3, radius: f64, n: usize) -> Vec<[DVec3; 2]> {
+pub(crate) fn circle(center: DVec3, axis: DVec3, radius: f64, n: usize) -> Vec<[DVec3; 2]> {
     let u = axis.any_orthonormal_vector() * radius;
     let at = |k: usize| {
         let t = rotation(center, axis, 360.0 * k as f64 / n as f64);

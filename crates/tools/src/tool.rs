@@ -15,15 +15,18 @@ use crate::circle::CircleTool;
 use crate::dimension::DimensionTool;
 use crate::erase::EraseTool;
 use crate::follow_me::FollowMeTool;
+use crate::freehand::FreehandTool;
 use crate::inference::{Axis, Inference};
 use crate::line::LineTool;
 use crate::move_tool::MoveTool;
 use crate::offset::OffsetTool;
 use crate::paint::PaintTool;
 use crate::polygon::PolygonTool;
+use crate::protractor::ProtractorTool;
 use crate::push_pull::PushPullTool;
 use crate::rectangle::RectangleTool;
 use crate::rotate::RotateTool;
+use crate::rotated_rectangle::RotatedRectangleTool;
 use crate::scale::ScaleTool;
 use crate::scenery::{Label, Scenery};
 use crate::section::SectionPlaneTool;
@@ -245,9 +248,11 @@ pub enum ToolKind {
     Select,
     Line,
     Rectangle,
+    RotatedRectangle,
     Circle,
     Polygon,
     Arc,
+    Freehand,
     PushPull,
     Move,
     Rotate,
@@ -255,6 +260,7 @@ pub enum ToolKind {
     Offset,
     FollowMe,
     TapeMeasure,
+    Protractor,
     Dimension,
     Text,
     Erase,
@@ -265,13 +271,15 @@ pub enum ToolKind {
 
 impl ToolKind {
     /// Every tool, in toolbar order.
-    pub const ALL: [ToolKind; 19] = [
+    pub const ALL: [ToolKind; 22] = [
         ToolKind::Select,
         ToolKind::Line,
         ToolKind::Rectangle,
+        ToolKind::RotatedRectangle,
         ToolKind::Circle,
         ToolKind::Polygon,
         ToolKind::Arc,
+        ToolKind::Freehand,
         ToolKind::PushPull,
         ToolKind::Move,
         ToolKind::Rotate,
@@ -279,6 +287,7 @@ impl ToolKind {
         ToolKind::Offset,
         ToolKind::FollowMe,
         ToolKind::TapeMeasure,
+        ToolKind::Protractor,
         ToolKind::Dimension,
         ToolKind::Text,
         ToolKind::Erase,
@@ -298,6 +307,7 @@ impl ToolKind {
             ToolKind::Select => Box::new(SelectTool::new()),
             ToolKind::Line => Box::new(LineTool::new()),
             ToolKind::Rectangle => Box::new(RectangleTool::new()),
+            ToolKind::RotatedRectangle => Box::new(RotatedRectangleTool::new()),
             ToolKind::Circle => Box::new(CircleTool::with_sides(r.circle_sides)),
             ToolKind::Polygon => Box::new(PolygonTool::with_settings(
                 r.polygon_sides,
@@ -305,12 +315,14 @@ impl ToolKind {
             )),
             ToolKind::Arc => Box::new(ArcTool::with_segments(r.arc_segments)),
             ToolKind::PushPull => Box::new(PushPullTool::with_distance(r.pull_distance)),
+            ToolKind::Freehand => Box::new(FreehandTool::new()),
             ToolKind::Move => Box::new(MoveTool::new()),
             ToolKind::Rotate => Box::new(RotateTool::new()),
             ToolKind::Scale => Box::new(ScaleTool::new()),
             ToolKind::Offset => Box::new(OffsetTool::with_distance(r.offset_distance)),
             ToolKind::FollowMe => Box::new(FollowMeTool::new()),
             ToolKind::TapeMeasure => Box::new(TapeMeasureTool::new()),
+            ToolKind::Protractor => Box::new(ProtractorTool::new()),
             ToolKind::Dimension => Box::new(DimensionTool::new()),
             ToolKind::Text => Box::new(TextTool::new()),
             ToolKind::Erase => Box::new(EraseTool::new()),
@@ -326,6 +338,9 @@ impl ToolKind {
             ToolKind::Select => "Select",
             ToolKind::Line => "Line",
             ToolKind::Rectangle => "Rectangle",
+            ToolKind::RotatedRectangle => "Rotated Rectangle",
+            ToolKind::Freehand => "Freehand",
+            ToolKind::Protractor => "Protractor",
             ToolKind::Circle => "Circle",
             ToolKind::Polygon => "Polygon",
             ToolKind::Arc => "Arc",
@@ -345,7 +360,7 @@ impl ToolKind {
         }
     }
 
-    /// The key that selects the tool, if it has one (the Dimension, Text and Section Plane tools have none).
+    /// The key that selects the tool, if it has one (the Dimension, Text, Section Plane, Freehand, Rotated Rectangle and Protractor tools have none).
     pub fn shortcut(self) -> Option<char> {
         Some(match self {
             ToolKind::Select => ' ',
@@ -361,7 +376,12 @@ impl ToolKind {
             ToolKind::Offset => 'o',
             ToolKind::FollowMe => 'j',
             ToolKind::TapeMeasure => 't',
-            ToolKind::Dimension | ToolKind::Text | ToolKind::SectionPlane => return None,
+            ToolKind::Dimension
+            | ToolKind::Text
+            | ToolKind::SectionPlane
+            | ToolKind::RotatedRectangle
+            | ToolKind::Freehand
+            | ToolKind::Protractor => return None,
             ToolKind::Erase => 'e',
             ToolKind::Paint => 'b',
             ToolKind::Axes => 'y',

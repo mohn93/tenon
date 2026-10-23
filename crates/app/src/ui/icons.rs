@@ -41,6 +41,10 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Paint => ph::PAINT_BUCKET,
         ToolKind::Line => ph::LINE_SEGMENT,
         ToolKind::Rectangle => ph::RECTANGLE,
+        // Stand-ins until the window registers the new tools (their own glyphs come then).
+        ToolKind::RotatedRectangle => ph::RECTANGLE,
+        ToolKind::Freehand => ph::BEZIER_CURVE,
+        ToolKind::Protractor => ph::RULER,
         ToolKind::Circle => ph::CIRCLE,
         ToolKind::Polygon => ph::HEXAGON,
         ToolKind::Arc => ph::BEZIER_CURVE,

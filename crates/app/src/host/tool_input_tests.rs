@@ -2384,3 +2384,102 @@ fn the_axes_tool_in_an_opened_turned_group_emits_local_coordinates() {
     assert!(near(&axes["origin"], [0.0, 0.0, 0.0]), "{axes}");
     assert!(near(&axes["x"], [1.0, 0.0, 0.0]), "{axes}");
 }
+
+#[test]
+fn freehand_draws_a_simplified_curve_and_shift_makes_a_polyline() {
+    let mut e = editor();
+    tool(&mut e, "freehand");
+    let mut path = Vec::new();
+    for i in 0..=20 {
+        path.push(json!([i as f64 * 0.1, 0, 0]));
+    }
+    for i in 1..=20 {
+        path.push(json!([2, i as f64 * 0.1, 0]));
+    }
+    let r = input(&mut e, json!([{"type": "drag", "points": path}]));
+    assert_eq!(ran(&r), ["add_curve"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert_eq!(c["points"].as_array().unwrap().len(), 3, "{c}");
+    assert_eq!(c["closed"], false, "{c}");
+    assert_ne!(c["curve"], false, "{c}");
+    assert_eq!(r["editor"]["phase"], "idle", "{r}");
+    // Shift at the press: plain edges.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "modifiers", "shift": true},
+            {"type": "drag", "points": [[0, 3, 0], [1, 3, 0], [1, 4, 0]]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_curve"], "{r}");
+    assert_eq!(r["commands"][0]["command"]["curve"], false, "{r}");
+}
+
+#[test]
+fn the_rotated_rectangle_takes_clicks_and_typed_values() {
+    let mut e = editor();
+    tool(&mut e, "rotated_rectangle");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [2, 1, 0]},
+            {"type": "click", "point": [0, 1.5, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_rotated_rectangle"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["edge_end"], [2.0, 1.0, 0.0]), "{c}");
+    assert!(near(&c["width_point"], [0.0, 1.5, 0.0]), "{c}");
+    // Typed: a 3 m side at 90 degrees from the red axis, then a 1 m width toward the cursor.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [5, 5, 0]},
+            {"type": "type", "text": "3,90"},
+            {"type": "move", "point": [4, 6.5, 0]},
+            {"type": "type", "text": "1"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_rotated_rectangle"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["edge_end"], [5.0, 8.0, 0.0]), "{c}");
+    assert!(near(&c["width_point"], [4.0, 5.0, 0.0]), "{c}");
+}
+
+#[test]
+fn the_protractor_places_guides_by_click_angle_and_slope() {
+    let mut e = editor();
+    tool(&mut e, "protractor");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [1, 1, 0]},
+            {"type": "click", "point": [3, 1, 0]},
+            {"type": "type", "text": "1:1"}
+        ]),
+    );
+    assert_eq!(ran(&r), ["add_guide_line"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["point"], [1.0, 1.0, 0.0]), "{c}");
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(near(&c["direction"], [s, s, 0.0]), "{c}");
+    // Right after, a typed value replaces the guide.
+    let r = input(&mut e, json!([{"type": "type", "text": "30"}]));
+    assert_eq!(ran(&r), ["undo", "add_guide_line"], "{r}");
+    let c = &r["commands"][1]["command"];
+    let (cos, sin) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    assert!(near(&c["direction"], [cos, sin, 0.0]), "{c}");
+    // Ctrl: measure only.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "key", "key": "ctrl"},
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [2, 0, 0]},
+            {"type": "type", "text": "45"}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+    assert_eq!(r["editor"]["message"], "Angle: 45°", "{r}");
+}

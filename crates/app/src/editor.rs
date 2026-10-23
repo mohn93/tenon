@@ -836,13 +836,17 @@ impl Editor {
     }
 
     /// The copy modifier (Ctrl) was tapped. The Move and Rotate tools switch copying, the Tape
-    /// Measure switches guide creation, the Polygon tool switches inscribed and circumscribed,
+    /// Measure and the Protractor switch guide creation, the Polygon tool switches inscribed and circumscribed,
     /// the Scale tool switches scaling about the center, the Dimension tool a radial dimension
     /// between diameter and radius; elsewhere it does nothing and returns false.
     pub fn toggle_copy(&mut self) -> bool {
         let takes_ctrl = matches!(
             self.kind,
-            ToolKind::TapeMeasure | ToolKind::Polygon | ToolKind::Scale | ToolKind::Dimension
+            ToolKind::TapeMeasure
+                | ToolKind::Protractor
+                | ToolKind::Polygon
+                | ToolKind::Scale
+                | ToolKind::Dimension
         );
         if self.flying || self.pasting() || !copies(self.kind) && !takes_ctrl {
             return false;
