@@ -240,7 +240,7 @@ fn make_from(snapshotter: &mut Snapshotter, item: &session::LibraryContent) -> O
         pixels.iter_mut().skip(3).step_by(4).for_each(|a| *a = 255);
         return Some(Pixels(pixels));
     }
-    let [lo, hi] = item.scene.bounds(MeshId::Root)?;
+    let [lo, hi] = item.scene.shown_bounds(MeshId::Root, &[])?;
     let mut camera = Camera::new(DVec2::splat(f64::from(THUMB_SIZE)));
     camera.look_from(StandardView::Iso);
     camera.fit(lo, hi);
