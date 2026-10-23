@@ -214,9 +214,9 @@ impl Model {
         let old = self.remove_edge(e);
         let [a, b] = old.v;
         let m = self.insert_vertex(p);
-        // Both pieces stay on the edge's curve and tag and keep its soft and polygon flags.
-        let first = self.insert_edge_like(a, m, old.curve, old.soft, old.polygon, old.tag);
-        let second = self.insert_edge_like(m, b, old.curve, old.soft, old.polygon, old.tag);
+        // Both pieces stay on the edge's curve and tag and keep its soft, polygon and hidden flags.
+        let first = self.insert_edge_like(a, m, &old);
+        let second = self.insert_edge_like(m, b, &old);
         if fresh.remove(&e) {
             fresh.extend([first, second]);
         }

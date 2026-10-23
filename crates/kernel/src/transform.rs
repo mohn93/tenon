@@ -253,6 +253,7 @@ impl Model {
                     soft: e.soft,
                     polygon: e.polygon,
                     tag: e.tag,
+                    hidden: e.hidden,
                 },
             )
         };
@@ -271,6 +272,7 @@ impl Model {
                 paint: f.paint(),
                 texture: f.texture,
                 tag: f.tag,
+                hidden: f.hidden,
                 openings: Vec::new(),
                 filled: Vec::new(),
             };
@@ -423,6 +425,7 @@ impl Model {
                     self.set_paint(id, f.paint);
                     self.set_texture(id, f.texture);
                     self.set_tag(EntityId::Face(id), f.tag);
+                    self.set_hidden(EntityId::Face(id), f.hidden);
                 }
             }
         }
@@ -490,9 +493,14 @@ impl Model {
             let mut renamed: BTreeMap<CurveId, CurveId> = BTreeMap::new();
             for ((a, b), marks) in stencil.segments.iter().zip(&stencil.marks) {
                 let (a, b) = (t.transform_point3(*a), t.transform_point3(*b));
-                if marks.tag.is_some() {
+                if marks.tag.is_some() || marks.hidden {
                     for e in self.edges_along(a, b) {
-                        self.set_tag(EntityId::Edge(e), marks.tag);
+                        if marks.tag.is_some() {
+                            self.set_tag(EntityId::Edge(e), marks.tag);
+                        }
+                        if marks.hidden {
+                            self.set_hidden(EntityId::Edge(e), true);
+                        }
                     }
                 }
                 if marks.curve.is_none() && !marks.soft {
@@ -546,6 +554,7 @@ struct SegmentMarks {
     soft: bool,
     polygon: bool,
     tag: Option<TagId>,
+    hidden: bool,
 }
 
 impl Stencil {
@@ -594,6 +603,16 @@ impl Stencil {
         self
     }
 
+    /// The stencil with every edge and face hidden when `hidden` (an exploded instance's
+    /// hidden flag passing to its geometry).
+    pub(crate) fn hidden_over(mut self, hidden: bool) -> Stencil {
+        if hidden {
+            self.marks.iter_mut().for_each(|m| m.hidden = true);
+            self.faces.iter_mut().for_each(|f| f.hidden = true);
+        }
+        self
+    }
+
     /// The stencil with each painted face's texture placement adjusted so that, drawn by
     /// `t`, its texture stays where it was shown (an exploded instance's faces keeping their
     /// textures in place).
@@ -617,6 +636,7 @@ struct StencilFace {
     /// The texture placement, kept as it is wherever the face is drawn.
     texture: Option<TexturePlacement>,
     tag: Option<TagId>,
+    hidden: bool,
     /// Holes no face fills.
     openings: Vec<Vec<DVec3>>,
     /// Holes another face fills.
@@ -632,6 +652,7 @@ impl StencilFace {
             paint: self.paint,
             texture: self.texture,
             tag: self.tag,
+            hidden: self.hidden,
             openings: self.openings.iter().map(ring).collect(),
             filled: self.filled.iter().map(ring).collect(),
         }

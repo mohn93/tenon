@@ -195,6 +195,7 @@ impl Document {
                     transform: glam::DAffine3::IDENTITY,
                     material: None,
                     tag: None,
+                    hidden: false,
                 });
                 tree.definitions.push(ImportDefinition {
                     name: "Letter".into(),
@@ -231,6 +232,7 @@ fn geometry(letters: &[&TextFace], filled: bool, depth: f64) -> ImportGeometry {
         front: None,
         back: None,
         tag: None,
+        hidden: false,
     };
     for letter in letters {
         let rings: Vec<&Vec<DVec2>> = std::iter::once(&letter.outer)
@@ -247,6 +249,7 @@ fn geometry(letters: &[&TextFace], filled: bool, depth: f64) -> ImportGeometry {
                     b: ids[(i + 1) % ids.len()],
                     soft: false,
                     tag: None,
+                    hidden: false,
                 }));
             }
             loops.push(ids);

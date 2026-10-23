@@ -292,7 +292,7 @@ impl Ctx<'_> {
                     b: at(e.v[1]),
                     soft: e.soft,
                     smooth: e.soft,
-                    hidden: false,
+                    hidden: e.hidden,
                     tag: self.tag(e.tag),
                 }
             })
@@ -317,6 +317,7 @@ impl Ctx<'_> {
                 front_uv: front_uv.into_option(),
                 back_uv: back_uv.into_option(),
                 tag: self.tag(f.tag),
+                hidden: f.hidden,
             });
         }
 
@@ -331,6 +332,7 @@ impl Ctx<'_> {
                     translation: inches(i.transform.translation),
                     material: self.material(i.material),
                     tag: self.tag(i.tag),
+                    hidden: i.hidden,
                 })
             })
             .collect();
@@ -342,14 +344,21 @@ impl Ctx<'_> {
                     point,
                     direction,
                     tag,
+                    hidden,
                 } => skpwrite::Guide::Line {
                     point: inches(point),
                     direction: direction.to_array(),
                     tag: self.tag(tag),
+                    hidden,
                 },
-                Guide::Point { position, tag } => skpwrite::Guide::Point {
+                Guide::Point {
+                    position,
+                    tag,
+                    hidden,
+                } => skpwrite::Guide::Point {
                     position: inches(position),
                     tag: self.tag(tag),
+                    hidden,
                 },
             })
             .collect();

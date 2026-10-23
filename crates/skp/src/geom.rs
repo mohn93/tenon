@@ -363,8 +363,13 @@ pub struct DefGeometry {
     /// The layer of each guide, parallel to `guides`: a 2021+ file's layer pid (cut to 32
     /// bits), a legacy file's layer index, or [`NO_LAYER`].
     pub guide_layer: Vec<u32>,
-    /// 2021+ files: hidden guides in this definition, skipped (not in `guides`). Legacy
-    /// files count theirs in `legacy::ReadStats::hidden_guides` and leave this 0.
+    /// The hidden guides of this definition, which are not in `guides`, and the layer of
+    /// each (as `guide_layer`).
+    pub hidden_guide_items: Vec<RawGuide>,
+    pub hidden_guide_layer: Vec<u32>,
+    /// 2021+ files: the number of hidden guides in this definition (they are in
+    /// `hidden_guide_items`, not in `guides`). Legacy files count theirs in
+    /// `legacy::ReadStats::hidden_guides` and leave this 0.
     pub hidden_guides: u32,
     /// 2021+ files: records in this definition's guide lists that were not read as a guide
     /// (an unknown record, or a guide without its point or line), skipped. Always 0 for
@@ -718,6 +723,9 @@ pub fn parse_component_within(payload: &[u8], budget: &mut u64) -> Result<DefGeo
             };
             if flags & 1 != 0 {
                 g.hidden_guides = g.hidden_guides.saturating_add(1);
+                spend(budget, 1)?;
+                g.hidden_guide_items.push(guide);
+                g.hidden_guide_layer.push(layer_ref(&common));
                 continue;
             }
             spend(budget, 1)?;

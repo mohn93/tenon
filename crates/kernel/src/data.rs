@@ -173,6 +173,9 @@ pub struct EdgeData {
     /// The tag it is on (absent: Untagged, as in files written before tags existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<u64>,
+    /// Absent (false) before hiding existed, and for entities that are shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -193,6 +196,9 @@ pub struct FaceData {
     /// The tag it is on (absent: Untagged, as in files written before tags existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<u64>,
+    /// Absent (false) before hiding existed, and for entities that are shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -208,6 +214,9 @@ pub struct InstanceData {
     /// The tag it is on (absent: Untagged, as in files written before tags existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<u64>,
+    /// Absent (false) before hiding existed, and for entities that are shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// A guide line through `point` along `direction` (a unit vector), or, without `direction`, a
@@ -222,6 +231,9 @@ pub struct GuideData {
     /// The tag it is on (absent: Untagged, as in files written before tags existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<u64>,
+    /// Absent (false) before hiding existed, and for entities that are shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// A dimension end or a note's anchor: `{"vertex": 12}` or `{"point": [x, y, z]}`.
@@ -478,6 +490,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 soft: e.soft,
                 polygon: e.polygon,
                 tag: e.tag.map(|t| t.0),
+                hidden: e.hidden,
             })
             .collect(),
         faces: m
@@ -495,6 +508,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 back: f.back.map(|m| m.0),
                 texture_position: f.texture,
                 tag: f.tag.map(|t| t.0),
+                hidden: f.hidden,
             })
             .collect(),
         instances: m
@@ -505,6 +519,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 transform: i.transform.to_cols_array(),
                 material: i.material.map(|m| m.0),
                 tag: i.tag.map(|t| t.0),
+                hidden: i.hidden,
             })
             .collect(),
         guides: m
@@ -514,17 +529,24 @@ fn mesh_data(m: &Model) -> MeshData {
                     point,
                     direction,
                     tag,
+                    hidden,
                 } => GuideData {
                     id: id.0,
                     point: point.to_array(),
                     direction: Some(direction.to_array()),
                     tag: tag.map(|t| t.0),
+                    hidden,
                 },
-                Guide::Point { position, tag } => GuideData {
+                Guide::Point {
+                    position,
+                    tag,
+                    hidden,
+                } => GuideData {
                     id: id.0,
                     point: position.to_array(),
                     direction: None,
                     tag: tag.map(|t| t.0),
+                    hidden,
                 },
             })
             .collect(),
@@ -651,6 +673,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             soft: e.soft,
             polygon: e.polygon,
             tag: e.tag.map(TagId),
+            hidden: e.hidden,
         };
         if edges.insert(EdgeId(e.id), edge).is_some() {
             return Err(format!("edge e{} appears twice", e.id));
@@ -670,6 +693,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             // A default placement is the same as none.
             texture: f.texture_position.filter(|t| !t.is_default()),
             tag: f.tag.map(TagId),
+            hidden: f.hidden,
         };
         if faces.insert(FaceId(f.id), face).is_some() {
             return Err(format!("face f{} appears twice", f.id));
@@ -691,6 +715,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             transform,
             material: i.material.map(MaterialId),
             tag: i.tag.map(TagId),
+            hidden: i.hidden,
         };
         if instances.insert(InstanceId(i.id), instance).is_some() {
             return Err(format!("instance i{} appears twice", i.id));
@@ -706,6 +731,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             None => Guide::Point {
                 position: point,
                 tag,
+                hidden: g.hidden,
             },
             Some(d) => {
                 finite(&d, format!("guide g{}", g.id))?;
@@ -720,6 +746,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
                     point,
                     direction,
                     tag,
+                    hidden: g.hidden,
                 }
             }
         };

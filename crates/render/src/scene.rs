@@ -1739,6 +1739,7 @@ mod tests {
                 m.add_guide(Guide::Point {
                     position: DVec3::new(0.5, 0.5, 0.0),
                     tag: None,
+                    hidden: false,
                 })
             })
             .unwrap()
@@ -1750,6 +1751,7 @@ mod tests {
                     point: DVec3::ZERO,
                     direction: DVec3::Y,
                     tag: None,
+                    hidden: false,
                 })
             })
             .unwrap()
@@ -2269,6 +2271,7 @@ mod tests {
             m.add_guide(Guide::Point {
                 position: DVec3::new(0.5, 0.5, 0.5),
                 tag: None,
+                hidden: false,
             })
         })
         .unwrap();
@@ -2317,6 +2320,7 @@ mod tests {
                 point: at(0.0, -1.0),
                 direction: DVec3::X,
                 tag: None,
+                hidden: false,
             })
         })
         .unwrap();

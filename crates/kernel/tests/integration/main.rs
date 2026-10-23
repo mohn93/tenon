@@ -12,6 +12,7 @@ mod erase;
 mod faces;
 mod groups;
 mod guides;
+mod hide;
 mod import_tree;
 mod index;
 mod intersect;

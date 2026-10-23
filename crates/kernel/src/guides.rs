@@ -19,10 +19,12 @@ impl Model {
                 point,
                 direction,
                 tag,
+                hidden,
             } => Guide::Line {
                 point,
                 direction: direction.try_normalize().ok_or(KernelError::NotFinite)?,
                 tag,
+                hidden,
             },
             g => g,
         };

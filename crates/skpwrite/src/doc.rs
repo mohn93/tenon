@@ -94,6 +94,8 @@ pub struct Face {
     pub back_uv: Option<[UvPin; 3]>,
     /// Index into `Doc::tags`; `None` is Layer0.
     pub tag: Option<usize>,
+    /// Written as a hidden face.
+    pub hidden: bool,
 }
 
 /// A placement of a definition.
@@ -109,20 +111,24 @@ pub struct Instance {
     pub material: Option<usize>,
     /// Index into `Doc::tags`; `None` is Layer0.
     pub tag: Option<usize>,
+    /// Written as a hidden instance.
+    pub hidden: bool,
 }
 
 /// A guide line (infinite) or a guide point, each with its tag (an index into `Doc::tags`;
-/// `None` is Layer0).
+/// `None` is Layer0) and whether it is hidden.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Guide {
     Line {
         point: [f64; 3],
         direction: [f64; 3],
         tag: Option<usize>,
+        hidden: bool,
     },
     Point {
         position: [f64; 3],
         tag: Option<usize>,
+        hidden: bool,
     },
 }
 
@@ -131,6 +137,13 @@ impl Guide {
     pub fn tag(&self) -> Option<usize> {
         match *self {
             Guide::Line { tag, .. } | Guide::Point { tag, .. } => tag,
+        }
+    }
+
+    /// Whether the guide is hidden.
+    pub fn hidden(&self) -> bool {
+        match *self {
+            Guide::Line { hidden, .. } | Guide::Point { hidden, .. } => hidden,
         }
     }
 }

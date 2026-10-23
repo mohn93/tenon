@@ -320,6 +320,7 @@ impl Archive {
         &mut self,
         (material, back_material): (u16, u16),
         layer: u32,
+        hidden: bool,
         plane: [f64; 4],
         loops: &[Vec<Use>],
         uv: Option<UvSides>,
@@ -329,7 +330,11 @@ impl Archive {
             Some(ftc) => self.preamble_with_container(Some(ftc)),
             None => self.preamble(),
         }
-        self.drawbase(material, DrawFlags::default(), layer);
+        let flags = DrawFlags {
+            hidden,
+            ..DrawFlags::default()
+        };
+        self.drawbase(material, flags, layer);
         self.f64s(&plane);
         // Validation refuses a count past u32 (`Plan::new`).
         self.u32(u32::try_from(loops.len()).unwrap_or(u32::MAX));
@@ -505,6 +510,7 @@ impl Archive {
         definition: u32,
         material: u16,
         layer: u32,
+        hidden: bool,
         rotation: &[[f64; 3]; 3],
         translation: &[f64; 3],
         name: &str,
@@ -517,7 +523,11 @@ impl Archive {
             self.new_of_class("CComponentInstance", INSTANCE_SCHEMA);
             self.preamble_with_container(None);
         }
-        self.drawbase(material, DrawFlags::default(), layer);
+        let flags = DrawFlags {
+            hidden,
+            ..DrawFlags::default()
+        };
+        self.drawbase(material, flags, layer);
         self.back_ref(definition);
         for row in rotation {
             self.f64s(row);
@@ -529,10 +539,20 @@ impl Archive {
     }
 
     /// An infinite `CConstructionLine` through `point` along the unit `direction`.
-    pub(crate) fn construction_line(&mut self, point: [f64; 3], direction: [f64; 3], layer: u32) {
+    pub(crate) fn construction_line(
+        &mut self,
+        point: [f64; 3],
+        direction: [f64; 3],
+        layer: u32,
+        hidden: bool,
+    ) {
         self.new_of_class("CConstructionLine", CONSTRUCTION_LINE_SCHEMA);
         self.preamble();
-        self.drawbase(0, DrawFlags::default(), layer);
+        let flags = DrawFlags {
+            hidden,
+            ..DrawFlags::default()
+        };
+        self.drawbase(0, flags, layer);
         self.f64s(&point);
         self.f64s(&direction);
         self.f64(-CLINE_INFINITE);
@@ -540,10 +560,14 @@ impl Archive {
         self.bytes(&[0; 4]);
     }
 
-    pub(crate) fn construction_point(&mut self, position: [f64; 3], layer: u32) {
+    pub(crate) fn construction_point(&mut self, position: [f64; 3], layer: u32, hidden: bool) {
         self.new_of_class("CConstructionPoint", CONSTRUCTION_POINT_SCHEMA);
         self.preamble();
-        self.drawbase(0, DrawFlags::default(), layer);
+        let flags = DrawFlags {
+            hidden,
+            ..DrawFlags::default()
+        };
+        self.drawbase(0, flags, layer);
         self.f64s(&position);
         self.f64s(&[0.0; 3]);
         self.u8(0);

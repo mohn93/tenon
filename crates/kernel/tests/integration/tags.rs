@@ -441,6 +441,7 @@ fn make_group_keeps_tags_and_explode_passes_the_instance_tag_to_untagged_content
         m.add_guide(Guide::Point {
             position: p(1.0, 1.0, 2.0),
             tag: Some(walls),
+            hidden: false,
         })
     })
     .unwrap();
@@ -514,12 +515,14 @@ fn an_import_tree_on_a_missing_tag_is_refused_and_keeps_its_tags() {
             front: None,
             back: None,
             tag: face,
+            hidden: false,
         }],
         edges: vec![ImportEdge {
             a: 1,
             b: 0,
             soft: false,
             tag: edge,
+            hidden: false,
         }],
         guides: vec![Guide::point(p(1.0, 1.0, 1.0)).with_tag(guide)],
         instances: Vec::new(),
@@ -531,6 +534,7 @@ fn an_import_tree_on_a_missing_tag_is_refused_and_keeps_its_tags() {
             transform: glam::DAffine3::IDENTITY,
             material: None,
             tag: t[3],
+            hidden: false,
         });
         kernel::ImportTree {
             definitions: vec![ImportDefinition {

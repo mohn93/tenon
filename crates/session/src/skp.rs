@@ -1,7 +1,8 @@
 //! Reading SketchUp files (2017 and newer) into an import tree: every definition once, with
-//! its faces (holes included), edges (soft, smooth and hidden ones soft), placements, guides,
-//! materials, tags (the file's layers) and, from SketchUp 2021 and newer files, scenes. Images
-//! and hidden states are not carried; the notes say what was left out. Files from SketchUp
+//! its faces (holes included), edges (soft and smooth ones soft, hidden ones hidden),
+//! placements, guides, hidden faces, groups, components and guides (kept hidden), materials,
+//! tags (the file's layers) and, from SketchUp 2021 and newer files, scenes. Images are not
+//! carried; the notes say what was left out. Files from SketchUp
 //! 2017 to 2020 (the legacy container) are read by `skp::legacy` into the same shape as newer
 //! ones, without their scenes.
 
@@ -75,10 +76,6 @@ pub(crate) struct SkpNotes {
     pub unread_holes: usize,
     /// Edges whose ends could not be read.
     pub unread_edges: usize,
-    pub hidden_faces: usize,
-    pub hidden_instances: usize,
-    /// Hidden guides, which the reader leaves out.
-    pub hidden_guides: usize,
     /// Guides that could not be read, or are not finite, have no direction or lie beyond
     /// `MAX_COORDINATE`: skipped.
     pub skipped_guides: usize,
@@ -169,16 +166,6 @@ impl SkpNotes {
             "scenes' cameras could not be used; those scenes leave the camera alone",
         );
         say(
-            self.hidden_faces,
-            "hidden face was imported visible",
-            "hidden faces were imported visible",
-        );
-        say(
-            self.hidden_instances,
-            "hidden group or component was imported visible",
-            "hidden groups or components were imported visible",
-        );
-        say(
             self.lost_entities,
             "entity could not be read and was skipped",
             "entities could not be read and were skipped",
@@ -187,11 +174,6 @@ impl SkpNotes {
             self.faces_short,
             "face may be missing a hole",
             "faces may be missing holes",
-        );
-        say(
-            self.hidden_guides,
-            "hidden guide was not imported",
-            "hidden guides were not imported",
         );
         say(
             self.skipped_guides + built.skipped_guides,
@@ -238,8 +220,8 @@ impl SkpNotes {
         );
         say(
             built.hard,
-            "soft, smooth or hidden edge not between two faces was imported as an ordinary edge",
-            "soft, smooth or hidden edges not between two faces were imported as ordinary edges",
+            "soft or smooth edge not between two faces was imported as an ordinary edge",
+            "soft or smooth edges not between two faces were imported as ordinary edges",
         );
         say(
             self.dropped_materials + self.capped_materials,
@@ -329,12 +311,7 @@ pub(crate) fn read_skp(
         )));
     }
     check_world_size(&model.root, &model.definitions, unit, &by_pid)?;
-    // Hidden guides and guide records not read, in the reached geometry (a 2017-2020 file
-    // counts its hidden guides over the whole file).
-    let legacy_hidden = stats.as_ref().map_or(0, |s| saturate(s.hidden_guides));
-    notes.hidden_guides = geometries()
-        .map(|g| g.hidden_guides as usize)
-        .fold(legacy_hidden, usize::saturating_add);
+    // Guide records not read, in the reached geometry.
     notes.skipped_guides = geometries()
         .map(|g| g.unread_guides as usize)
         .fold(0, usize::saturating_add);
@@ -743,9 +720,7 @@ fn geometry(
     let mut ring: Vec<u32> = Vec::new();
     for f in 0..g.faces() {
         notes.polygons += 1;
-        if g.face_flags.get(f).is_some_and(|flags| flags & 1 != 0) {
-            notes.hidden_faces += 1;
-        }
+        let hidden = g.face_flags.get(f).is_some_and(|flags| flags & 1 != 0);
         let (Some(&first), Some(&end)) = (g.face_loop_ofs.get(f), g.face_loop_ofs.get(f + 1))
         else {
             notes.unread_faces += 1;
@@ -782,6 +757,7 @@ fn geometry(
             front: material(g.face_material.get(f)),
             back: material(g.face_back_material.get(f)),
             tag: layer(&g.face_layer, f),
+            hidden,
         });
     }
 
@@ -795,8 +771,9 @@ fn geometry(
         edges.push(ImportEdge {
             a: ends[0] as usize,
             b: ends[1] as usize,
-            soft: flags & (edge_flag::SOFT | edge_flag::SMOOTH | edge_flag::HIDDEN) != 0,
+            soft: flags & (edge_flag::SOFT | edge_flag::SMOOTH) != 0,
             tag: layer(&g.edge_layer, e),
+            hidden: flags & edge_flag::HIDDEN != 0,
         });
     }
 
@@ -814,9 +791,6 @@ fn geometry(
             }
             continue;
         };
-        if i.flags & 1 != 0 {
-            notes.hidden_instances += 1;
-        }
         instances.push(ImportInstance {
             definition,
             transform,
@@ -825,12 +799,23 @@ fn geometry(
                 .has_layer
                 .then(|| u32::try_from(i.layer).ok().and_then(|l| ids.tag(l)))
                 .flatten(),
+            hidden: i.flags & 1 != 0,
         });
     }
     let mut guides = Vec::with_capacity(g.guides.len());
     for (k, r) in g.guides.iter().enumerate() {
         match guide(r, unit) {
             Some(guide) => guides.push(guide.with_tag(layer(&g.guide_layer, k))),
+            None => notes.skipped_guides += 1,
+        }
+    }
+    for (k, r) in g.hidden_guide_items.iter().enumerate() {
+        match guide(r, unit) {
+            Some(guide) => guides.push(
+                guide
+                    .with_tag(layer(&g.hidden_guide_layer, k))
+                    .with_hidden(true),
+            ),
             None => notes.skipped_guides += 1,
         }
     }
@@ -855,10 +840,12 @@ fn guide(r: &RawGuide, unit: f64) -> Option<Guide> {
             point: at(point)?,
             direction: DVec3::from_array(direction).try_normalize()?,
             tag: None,
+            hidden: false,
         }),
         RawGuide::Point { position } => Some(Guide::Point {
             position: at(position)?,
             tag: None,
+            hidden: false,
         }),
     }
 }

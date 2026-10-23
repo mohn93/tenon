@@ -100,7 +100,7 @@ impl Model {
             }
             for w in chain.windows(2) {
                 if self.edge_between(w[0], w[1]).is_none() {
-                    self.insert_edge_like(w[0], w[1], old.curve, old.soft, old.polygon, old.tag);
+                    self.insert_edge_like(w[0], w[1], &old);
                 }
             }
         }

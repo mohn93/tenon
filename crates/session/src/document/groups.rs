@@ -210,7 +210,8 @@ impl Document {
                         kind: d.kind,
                         name: d.name.clone(),
                         material: i.material,
-                        hidden: !self.scene.tag_shown(i.tag),
+                        hidden: i.hidden || !self.scene.tag_shown(i.tag),
+                        own_hidden: i.hidden,
                     }
                 })
                 .collect()
@@ -239,6 +240,7 @@ impl Document {
                 max: hi.to_array(),
             }),
             material: i.material,
+            hidden: i.hidden,
             tag: i.tag,
         }
     }
@@ -289,6 +291,7 @@ fn outliner_nodes(
                 open,
                 selected: in_context && doc.selection.contains(&row.id),
                 hidden,
+                own_hidden: row.own_hidden,
                 children,
                 truncated,
             }

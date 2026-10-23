@@ -474,6 +474,21 @@ pub enum Command {
     /// change like `set_camera`, not an undo step), and show and hide tags as it stores (one
     /// undo step, only when that changes a tag). It becomes the selected scene.
     GoToScene { scene: PageId },
+    /// Hide edges, faces, instances and guides of the open context, as one undo step (an
+    /// entity already hidden is ignored; none to hide is a success with no undo step).
+    /// A hidden entity is not drawn, picked or snapped to, and leaves the selection.
+    /// Hiding a face leaves its edges and hiding an edge leaves its faces; hiding an
+    /// instance hides everything inside it. The outcome's `changed` lists what was hidden.
+    Hide { ids: Vec<EntityId> },
+    /// Show the hidden entities in `ids`, as one undo step. The outcome's `changed` lists
+    /// what was shown.
+    Unhide { ids: Vec<EntityId> },
+    /// Show what the most recent `hide` of this session hid that is in the open context and
+    /// still hidden, as one undo step. Not saved: forgotten on `new` and `open`.
+    UnhideLast {},
+    /// Show every hidden entity of the open context (not those inside its instances), as one
+    /// undo step.
+    UnhideAll {},
     /// Make edges of the open context soft (`soft`: true) or hard again, as one undo step: the
     /// edges in `ids` and the edges around the faces in `ids`. A soft edge is hidden and the
     /// faces on its sides are shaded as one smooth surface. Only an edge between exactly two
@@ -889,6 +904,10 @@ pub struct Outcome {
     /// What an `intersect_faces` drew and split; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intersect: Option<IntersectReport>,
+    /// The ids a `hide`, `unhide`, `unhide_last` or `unhide_all` changed, in id order (empty
+    /// when it did nothing); absent for other commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<Vec<EntityId>>,
     /// How many faces a `position_texture` changed; absent for other commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub positioned: Option<usize>,

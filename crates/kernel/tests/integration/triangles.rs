@@ -186,6 +186,7 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         soft: false,
         polygon: false,
         tag: None,
+        hidden: false,
     };
     let face = |k, outer: &[u64], holes: Vec<Vec<u64>>| FaceData {
         id: id(k),
@@ -199,6 +200,7 @@ fn mesh_with_an_empty_face(first: u64, x: f64) -> kernel::MeshData {
         back: None,
         texture_position: None,
         tag: None,
+        hidden: false,
     };
     MeshData {
         vertices: vec![
@@ -240,6 +242,7 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
         transform: glam::DAffine3::from_translation(p(x, 5.0, 0.0)).to_cols_array(),
         material: None,
         tag: None,
+        hidden: false,
     };
     root.instances = vec![place(0, 0.0), place(1, 3.0)];
     let data = kernel::SceneData {

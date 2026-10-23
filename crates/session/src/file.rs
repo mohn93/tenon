@@ -23,17 +23,21 @@ use crate::units::{Units, check_precision};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when the model has a
-/// scene.
+/// The newest schema version this build reads, and the one it writes when an edge, face,
+/// instance or guide is hidden.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
 /// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
-/// and display units, and version 13 section planes and the section display settings; older
+/// and display units, version 13 section planes and the section display settings, and version 14 hidden
+/// entities; older
 /// files still open (untagged before version 10, without scenes before version 11, without
 /// annotations and in the default units before version 12, without section planes and with
 /// the default section display before version 13).
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
+/// The version written when the model has a section plane or non-default section display but
+/// nothing is hidden.
+pub const SECTIONS_SCHEMA_VERSION: u32 = 13;
 /// The version written when the model has a dimension or a note, or the non-default display
 /// units, but no section plane and the default section display.
 pub const ANNOTATIONS_SCHEMA_VERSION: u32 = 12;
@@ -224,6 +228,15 @@ pub(crate) fn write_bytes(
         .chain(model.definitions.iter().map(|d| &d.mesh))
         .any(|m| !m.sections.is_empty())
         || section != SectionDisplay::default();
+    // Every hidden flag lives in the mesh data, so a model with none writes what it always did.
+    let hidden = std::iter::once(&model.root)
+        .chain(model.definitions.iter().map(|d| &d.mesh))
+        .any(|m| {
+            m.edges.iter().any(|e| e.hidden)
+                || m.faces.iter().any(|f| f.hidden)
+                || m.instances.iter().any(|i| i.hidden)
+                || m.guides.iter().any(|g| g.hidden)
+        });
     let needs_lights_schema =
         model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
     let textured = model.materials.iter().any(|m| m.texture.is_some());
@@ -240,8 +253,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if sectioned {
+        schema_version: if hidden {
             SCHEMA_VERSION
+        } else if sectioned {
+            SECTIONS_SCHEMA_VERSION
         } else if annotated {
             ANNOTATIONS_SCHEMA_VERSION
         } else if has_scenes {

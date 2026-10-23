@@ -1002,6 +1002,7 @@ mod tests {
             point: DVec3::new(-5.0, 0.5, 0.0),
             direction: DVec3::X,
             tag: None,
+            hidden: false,
         })
         .unwrap();
         let v = Scenery::single(&m);
@@ -1422,18 +1423,21 @@ mod tests {
         m.add_guide(Guide::Point {
             position: DVec3::new(2.0, 1.0, 0.0),
             tag: None,
+            hidden: false,
         })
         .unwrap();
         m.add_guide(Guide::Line {
             point: DVec3::new(0.0, 3.0, 0.0),
             direction: DVec3::X,
             tag: None,
+            hidden: false,
         })
         .unwrap();
         m.add_guide(Guide::Line {
             point: DVec3::new(5.0, 0.0, 0.0),
             direction: DVec3::Y,
             tag: None,
+            hidden: false,
         })
         .unwrap();
         m
@@ -1523,6 +1527,7 @@ mod tests {
             m.add_guide(Guide::Point {
                 position: p(3.0, 1.0),
                 tag: None,
+                hidden: false,
             })
         })
         .unwrap();
@@ -1613,12 +1618,14 @@ mod tests {
             let mut c = m.add_guide(Guide::Point {
                 position: DVec3::new(0.25, 0.25, 0.9),
                 tag: None,
+                hidden: false,
             })?;
             c.ops.extend(
                 m.add_guide(Guide::Line {
                     point: DVec3::new(0.0, 0.5, 0.25),
                     direction: DVec3::X,
                     tag: None,
+                    hidden: false,
                 })?
                 .ops,
             );
@@ -1687,6 +1694,7 @@ mod tests {
                     point: DVec3::new(0.0, 0.0, 0.3),
                     direction: DVec3::new(1.0, 1.0, 0.0).normalize(),
                     tag: None,
+                    hidden: false,
                 })?
                 .ops,
             );

@@ -204,10 +204,13 @@ fn vff_guide_records_are_read_and_unknown_ones_counted() {
 #[test]
 fn vff_guides_count_against_the_element_budget() {
     let bytes = component_with_guides();
-    let mut enough = 3; // the tables, then the two guides kept
+    let mut enough = 5; // the tables, then the two guides kept and the two hidden ones
     let g = parse_component_within(&bytes, &mut enough).expect("within budget");
-    assert_eq!((g.guides.len(), enough), (2, 0));
-    let mut short = 2;
+    assert_eq!(
+        (g.guides.len(), g.hidden_guide_items.len(), enough),
+        (2, 2, 0)
+    );
+    let mut short = 4;
     assert!(parse_component_within(&bytes, &mut short).is_err());
 }
 

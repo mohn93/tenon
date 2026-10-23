@@ -133,6 +133,7 @@ fn broken_data_is_rejected() {
                 transform: glam::DAffine3::IDENTITY.to_cols_array(),
                 material: None,
                 tag: None,
+                hidden: false,
             });
         },
         "places itself",
@@ -285,6 +286,7 @@ fn scene_with_every_kind() -> Scene {
         m.add_guide(kernel::Guide::Point {
             position: p(0.0, 0.0, 5.0),
             tag: None,
+            hidden: false,
         })
     })
     .unwrap();
@@ -340,6 +342,7 @@ fn no_number_is_the_id_of_two_things() {
                     point: [0.0, 0.0, 9.0],
                     direction: None,
                     tag: None,
+                    hidden: false,
                 })
             }),
             format!("v{root_vertex} and g{root_vertex} share an id"),
@@ -394,6 +397,7 @@ fn nested(n: u64, cycle: bool) -> SceneData {
         transform: glam::DAffine3::IDENTITY.to_cols_array(),
         material: None,
         tag: None,
+        hidden: false,
     };
     let definitions = (0..n)
         .map(|k| kernel::DefinitionData {

@@ -12,6 +12,7 @@ mod faces;
 pub mod geom;
 mod group;
 mod guides;
+mod hide;
 mod ids;
 mod import;
 mod import_tree;

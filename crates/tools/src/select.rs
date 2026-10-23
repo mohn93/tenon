@@ -1031,6 +1031,7 @@ mod tests {
             .add_guide(Guide::Point {
                 position: DVec3::new(3.0, 1.0, 0.0),
                 tag: None,
+                hidden: false,
             })
             .unwrap();
         r.model
@@ -1038,6 +1039,7 @@ mod tests {
                 point: DVec3::new(0.0, 3.0, 0.0),
                 direction: DVec3::X,
                 tag: None,
+                hidden: false,
             })
             .unwrap();
         let point = r.click(DVec3::new(3.0, 1.0, 0.0));
@@ -1050,6 +1052,7 @@ mod tests {
                 point: DVec3::ZERO,
                 direction: DVec3::X,
                 tag: None,
+                hidden: false,
             })
             .unwrap();
         let edge = r.click(DVec3::new(1.0, 0.0, 0.0));
@@ -1107,6 +1110,7 @@ mod tests {
             m.add_guide(Guide::Point {
                 position: p(3.0, 1.0),
                 tag: None,
+                hidden: false,
             })
         })
         .unwrap();

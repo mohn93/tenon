@@ -282,6 +282,7 @@ mod tests {
                     point: DVec3::new(6.0, 0.0, 0.0),
                     direction: DVec3::Y,
                     tag: None,
+                    hidden: false,
                 })
                 .unwrap();
             Rig {

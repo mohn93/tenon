@@ -212,8 +212,13 @@ impl Model {
                 });
                 let keep = in_old_face || (uses_new && (!in_old_hole || apart));
                 let normal = container.map_or(plane.normal, |i| old[i].1.normal);
-                let paint = container.map_or(([None, None], None, None), |i| {
-                    (old[i].1.paint(), old[i].1.texture, old[i].1.tag)
+                let paint = container.map_or(([None, None], None, None, false), |i| {
+                    (
+                        old[i].1.paint(),
+                        old[i].1.texture,
+                        old[i].1.tag,
+                        old[i].1.hidden,
+                    )
                 });
                 keep.then_some((r, normal, paint))
             })
@@ -231,7 +236,7 @@ impl Model {
         plane: Plane,
     ) {
         let mut matched: BTreeSet<FaceId> = BTreeSet::new();
-        for (r, normal, ([front, back], texture, tag)) in wanted {
+        for (r, normal, ([front, back], texture, tag, hidden)) in wanted {
             let outer: BTreeSet<VertexId> = r.outer.iter().copied().collect();
             // Faces in one plane may face opposite ways (push/pull flips a base face), so an
             // old face matches by vertex set and keeps its own orientation.
@@ -271,6 +276,7 @@ impl Model {
                         back,
                         texture,
                         tag,
+                        hidden,
                     });
                 }
             }
@@ -283,12 +289,13 @@ impl Model {
     }
 }
 
-/// A face's front and back materials, its texture placement and its tag, which the pieces
-/// split from it keep.
+/// A face's front and back materials, its texture placement, its tag and whether it is
+/// hidden, which the pieces split from it keep.
 type Paint = (
     [Option<MaterialId>; 2],
     Option<TexturePlacement>,
     Option<TagId>,
+    bool,
 );
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.

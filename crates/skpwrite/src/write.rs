@@ -1040,6 +1040,7 @@ impl Ctx<'_> {
             ar.face(
                 (self.material(f.front), self.material(f.back)),
                 self.layer(f.tag),
+                f.hidden,
                 fp.plane,
                 &loops,
                 fp.uv,
@@ -1068,6 +1069,7 @@ impl Ctx<'_> {
                 slot,
                 self.material(inst.material),
                 self.layer(inst.tag),
+                inst.hidden,
                 &inst.rotation,
                 &inst.translation,
                 name,
@@ -1082,9 +1084,11 @@ impl Ctx<'_> {
             match guide {
                 Guide::Line { point, .. } => {
                     let d = directions.next().copied().unwrap_or([1.0, 0.0, 0.0]);
-                    ar.construction_line(*point, d, layer);
+                    ar.construction_line(*point, d, layer, guide.hidden());
                 }
-                Guide::Point { position, .. } => ar.construction_point(*position, layer),
+                Guide::Point { position, .. } => {
+                    ar.construction_point(*position, layer, guide.hidden())
+                }
             }
             count += 1;
         }

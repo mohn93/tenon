@@ -207,6 +207,7 @@ pub(super) fn many_groups(n: u64) -> OutlinerTable {
                 name: String::new(),
                 material: None,
                 hidden: false,
+                own_hidden: false,
             })
             .collect(),
         by_definition: BTreeMap::new(),

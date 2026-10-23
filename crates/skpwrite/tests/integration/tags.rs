@@ -68,6 +68,7 @@ fn tagged_doc(materials: usize) -> Doc {
     inner.guides = vec![Guide::Point {
         position: [0.5, 0.5, 1.0],
         tag: Some(1),
+        hidden: false,
     }];
     let mut root = square();
     root.faces[0].tag = Some(0);
@@ -79,6 +80,7 @@ fn tagged_doc(materials: usize) -> Doc {
             translation: [5.0, 0.0, 0.0],
             material: None,
             tag: Some(1),
+            hidden: false,
         },
         Instance {
             definition: 0,
@@ -86,6 +88,7 @@ fn tagged_doc(materials: usize) -> Doc {
             translation: [9.0, 0.0, 0.0],
             material: None,
             tag: None,
+            hidden: false,
         },
     ];
     root.guides = vec![
@@ -93,10 +96,12 @@ fn tagged_doc(materials: usize) -> Doc {
             point: [0.0, 0.0, 2.0],
             direction: [1.0, 0.0, 0.0],
             tag: Some(0),
+            hidden: false,
         },
         Guide::Point {
             position: [3.0, 3.0, 3.0],
             tag: None,
+            hidden: false,
         },
     ];
     Doc {
@@ -202,6 +207,7 @@ fn bad_tags_are_errors() {
         g.guides.push(Guide::Point {
             position: [0.0; 3],
             tag: Some(1),
+            hidden: false,
         })
     })));
     let mut placed = with(one(), |_| {});
@@ -216,6 +222,7 @@ fn bad_tags_are_errors() {
         translation: [0.0; 3],
         material: None,
         tag: Some(1),
+        hidden: false,
     });
     out_of_range(write(&placed));
 

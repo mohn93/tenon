@@ -175,3 +175,8 @@ Upstream's tests are not copied: they read a private corpus.
     `CText` records `new_obj` reads (they were read only to stay in step and dropped), so the
     importer can say how many it left out. `CDimensionRadial` is still not a known class (see
     the module notes). A unit test in `legacy.rs` reads a crafted `CText` record.
+29. Hidden guides kept: `DefGeometry::hidden_guide_items` and `hidden_guide_layer` (parallel,
+    layer as `guide_layer`) hold the hidden guides that `guides` leaves out, on both the
+    2021+ and the legacy path (a legacy mark rolls them back with the other guide arenas).
+    `hidden_guides` and `ReadStats::hidden_guides` still count them. Each kept one counts
+    against the element budget.

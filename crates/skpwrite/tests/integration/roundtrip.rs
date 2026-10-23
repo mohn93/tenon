@@ -413,6 +413,7 @@ fn nested_doc() -> Doc {
         translation,
         material,
         tag: None,
+        hidden: false,
     };
     let b = Definition {
         name: "Shelf".into(),
@@ -444,6 +445,7 @@ fn nested_doc() -> Doc {
         translation,
         material: None,
         tag: None,
+        hidden: false,
     };
     Doc {
         materials: vec![Material {
@@ -527,15 +529,18 @@ fn guides() {
             point: [1.0, 2.0, 3.0],
             direction: [0.0, 0.0, 2.0],
             tag: None,
+            hidden: false,
         },
         Guide::Point {
             position: [4.0, 5.0, 6.0],
             tag: None,
+            hidden: false,
         },
         Guide::Line {
             point: [-1.0, 0.5, 0.0],
             direction: [3.0, 4.0, 0.0],
             tag: None,
+            hidden: false,
         },
     ];
     let (m, _, stats) = read(
@@ -571,6 +576,7 @@ fn a_guide_line_can_end_a_definition() {
         point: [0.0, 0.0, 1.0],
         direction: [1.0, 0.0, 0.0],
         tag: None,
+        hidden: false,
     }];
     let mut root = one_edge_root();
     root.instances = vec![Instance {
@@ -579,16 +585,19 @@ fn a_guide_line_can_end_a_definition() {
         translation: [0.0; 3],
         material: None,
         tag: None,
+        hidden: false,
     }];
     root.guides = vec![
         Guide::Line {
             point: [0.0, 0.0, 2.0],
             direction: [0.0, 1.0, 0.0],
             tag: None,
+            hidden: false,
         },
         Guide::Point {
             position: [1.0, 1.0, 1.0],
             tag: None,
+            hidden: false,
         },
     ];
     let doc = Doc {
@@ -667,10 +676,12 @@ fn many_entities_cross_the_slot_escape() {
         Guide::Point {
             position: [1.0, 2.0, 3.0],
             tag: None,
+            hidden: false,
         },
         Guide::Point {
             position: [4.0, 5.0, 6.0],
             tag: None,
+            hidden: false,
         },
     ];
     root.instances = vec![Instance {
@@ -679,6 +690,7 @@ fn many_entities_cross_the_slot_escape() {
         translation: [0.0; 3],
         material: None,
         tag: None,
+        hidden: false,
     }];
     // 254 UTF-16 units, two of them a surrogate pair.
     let name: String = core::iter::once('\u{10400}')
@@ -740,6 +752,7 @@ fn the_same_document_gives_the_same_bytes() {
     doc.root.guides = vec![Guide::Point {
         position: [1.0, 1.0, 1.0],
         tag: None,
+        hidden: false,
     }];
     let first = write(&doc).expect("writes");
     let second = write(&doc.clone()).expect("writes");
@@ -770,6 +783,7 @@ fn invalid_documents_are_errors() {
         translation: [0.0; 3],
         material: None,
         tag: None,
+        hidden: false,
     };
     let solid = |name: String| Material {
         name,

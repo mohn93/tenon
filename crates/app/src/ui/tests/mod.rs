@@ -638,6 +638,7 @@ pub(super) fn table_row(
         name: name.into(),
         material: None,
         hidden: false,
+        own_hidden: false,
     }
 }
 

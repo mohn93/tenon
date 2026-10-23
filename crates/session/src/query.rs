@@ -131,6 +131,9 @@ pub struct EdgeInfo {
     /// false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub soft: bool,
+    /// True for a hidden edge (see `hide`). Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
 }
@@ -180,6 +183,9 @@ pub struct FaceInfo {
     /// it lies as projected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_position: Option<TexturePlacement>,
+    /// True for a hidden face (see `hide`). Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
 }
@@ -200,6 +206,10 @@ pub struct InstanceInfo {
     /// The material shown on face sides inside it without one of their own; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
+    /// True for a hidden instance (see `hide`; not for one on a hidden tag). Absent when
+    /// false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
 }
@@ -221,6 +231,9 @@ pub struct GuideInfo {
     pub point: [f64; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f64; 3]>,
+    /// True for a hidden guide (see `hide`). Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
 }
@@ -351,10 +364,14 @@ pub struct OutlinerNode {
     /// false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub selected: bool,
-    /// True when a hidden tag hides the node: its own, or that of an instance above it.
-    /// Hidden nodes are still listed. Absent when false.
+    /// True when the node is hidden: its own `hide` flag or hidden tag, or that of an
+    /// instance above it. Hidden nodes are still listed. Absent when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// True when the node's own `hide` flag is set (it is hidden itself, not only through a
+    /// tag or an instance above). Absent when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_hidden: bool,
     /// The instances its definition places, in id order.
     pub children: Vec<OutlinerNode>,
     /// True when the query's `depth` left out this node's children (it has some). Absent
@@ -373,8 +390,11 @@ pub struct OutlinerRow {
     /// The definition's name; empty for an unnamed group.
     pub name: String,
     pub material: Option<MaterialId>,
-    /// True when the instance is on a hidden tag (instances above it may hide it too).
+    /// True when the instance is hidden or on a hidden tag (instances above it may hide it
+    /// too).
     pub hidden: bool,
+    /// True when the instance's own hide flag is set.
+    pub own_hidden: bool,
 }
 
 /// The outliner tree stored flat (`Document::outliner_rows`): the root's instances and, for

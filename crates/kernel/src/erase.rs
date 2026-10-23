@@ -91,11 +91,19 @@ impl Model {
             .collect();
         let (first, second) = (self.remove_edge(e1), self.remove_edge(e2));
         // The joined edge keeps what the two had in common: their curve (with its polygon
-        // flag), and being soft. It takes the first one's tag, or the second's when the first
-        // has none.
+        // flag), being soft and being hidden. It takes the first one's tag, or the second's when
+        // the first has none.
         let curve = first.curve.filter(|c| second.curve == Some(*c));
         let tag = first.tag.or(second.tag);
-        self.insert_edge_like(p, q, curve, first.soft && second.soft, first.polygon, tag);
+        let joined = crate::model::Edge {
+            v: [p, q],
+            curve,
+            soft: first.soft && second.soft,
+            polygon: first.polygon,
+            tag,
+            hidden: first.hidden && second.hidden,
+        };
+        self.insert_edge_like(p, q, &joined);
         for (id, mut f) in users {
             f.outer.retain(|x| *x != v);
             f.holes.iter_mut().for_each(|h| h.retain(|x| *x != v));

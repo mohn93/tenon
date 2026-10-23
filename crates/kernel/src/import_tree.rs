@@ -12,7 +12,7 @@ use crate::edit::KernelError;
 use crate::geom::vector_area;
 use crate::ids::{DefinitionId, EdgeId, InstanceId, MaterialId, TagId, VertexId};
 use crate::import::{FLAT_TOL, MAX_IMPORT_FACES, normal_of, pieces, weld};
-use crate::model::{ChangeSet, Face, Guide, Instance, Model};
+use crate::model::{ChangeSet, Edge, Face, Guide, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
 use crate::transform::rings_are_valid;
 
@@ -68,6 +68,7 @@ pub struct ImportFace {
     pub front: Option<MaterialId>,
     pub back: Option<MaterialId>,
     pub tag: Option<TagId>,
+    pub hidden: bool,
 }
 
 /// An edge of the file: face sides and loose edges alike, so loose ones are kept and face
@@ -78,6 +79,7 @@ pub struct ImportEdge {
     pub b: usize,
     pub soft: bool,
     pub tag: Option<TagId>,
+    pub hidden: bool,
 }
 
 /// A placement of definition `definition` (an index into `ImportTree::definitions`).
@@ -87,6 +89,7 @@ pub struct ImportInstance {
     pub transform: DAffine3,
     pub material: Option<MaterialId>,
     pub tag: Option<TagId>,
+    pub hidden: bool,
 }
 
 /// What building an import tree made. Counts are over every mesh built, each shared
@@ -410,6 +413,7 @@ struct ShapedFace {
     front: Option<MaterialId>,
     back: Option<MaterialId>,
     tag: Option<TagId>,
+    hidden: bool,
 }
 
 /// An edge between two welded points: soft when the file marks it so, on the tag of the
@@ -419,6 +423,7 @@ struct ShapedEdge {
     b: usize,
     soft: bool,
     tag: Option<TagId>,
+    hidden: bool,
 }
 
 /// Welds a geometry's points and makes its faces, edges and guides, counting what is
@@ -462,6 +467,7 @@ fn shape<'a>(
                     front: f.front,
                     back: f.back,
                     tag: f.tag,
+                    hidden: f.hidden,
                 });
             }
         }
@@ -484,6 +490,7 @@ fn shape<'a>(
                 b,
                 soft: false,
                 tag: None,
+                hidden: false,
             });
             edges.len() - 1
         });
@@ -491,6 +498,7 @@ fn shape<'a>(
             edges[at].soft |= e.soft;
             if tagged.insert(at) {
                 edges[at].tag = e.tag;
+                edges[at].hidden = e.hidden;
             }
         }
     };
@@ -601,7 +609,15 @@ impl Model {
         let mut soft: Vec<EdgeId> = Vec::new();
         for e in &s.edges {
             let (va, vb) = (vertex_of(self, e.a), vertex_of(self, e.b));
-            let id = self.insert_edge_like(va, vb, None, false, false, e.tag);
+            let id = self.insert_edge_like(
+                va,
+                vb,
+                &Edge {
+                    tag: e.tag,
+                    hidden: e.hidden,
+                    ..Edge::new(va, vb)
+                },
+            );
             if e.soft {
                 soft.push(id);
             }
@@ -617,6 +633,7 @@ impl Model {
             face.front = f.front;
             face.back = f.back;
             face.tag = f.tag;
+            face.hidden = f.hidden;
             self.insert_face(face);
         }
         report.faces += s.faces.len();
@@ -636,6 +653,7 @@ impl Model {
                 transform: i.transform,
                 material: i.material,
                 tag: i.tag,
+                hidden: i.hidden,
             });
             report.instances += 1;
         }
@@ -667,6 +685,7 @@ mod tests {
                 front: None,
                 back: None,
                 tag: None,
+                hidden: false,
             }],
             ..Default::default()
         }

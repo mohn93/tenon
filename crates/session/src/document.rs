@@ -33,6 +33,7 @@ mod clip;
 mod files;
 mod follow_me;
 mod groups;
+mod hide;
 mod import;
 mod intersect;
 mod library;
@@ -110,6 +111,11 @@ pub struct Document {
     soften_report: Option<SoftenReport>,
     /// What the last intersect edit did, until its outcome takes it.
     intersect_report: Option<IntersectReport>,
+    /// The ids the last hide or unhide edit changed, until its outcome takes them.
+    hidden_changed: Option<Vec<EntityId>>,
+    /// The entities the most recent `hide` hid, for `unhide_last`; not saved, forgotten with
+    /// the model.
+    last_hidden: Vec<EntityId>,
     /// How many faces the last `position_texture` changed, until its outcome takes it.
     positioned: Option<usize>,
     /// How many definitions the last `purge_definitions` removed, until its outcome takes it.
@@ -154,6 +160,8 @@ impl Document {
             import_report: None,
             soften_report: None,
             intersect_report: None,
+            hidden_changed: None,
+            last_hidden: Vec::new(),
             positioned: None,
             purged: None,
             text_report: None,
@@ -396,6 +404,7 @@ impl Document {
             outcome.import = self.import_report.take();
             outcome.soften = self.soften_report.take();
             outcome.intersect = self.intersect_report.take();
+            outcome.changed = self.hidden_changed.take();
             outcome.positioned = self.positioned.take();
             outcome.purged = self.purged.take();
             outcome.text_3d = self.text_report.take();
@@ -597,6 +606,10 @@ impl Document {
                     self.parts(&ids)?;
                     ids.into_iter().collect()
                 };
+                let ids: BTreeSet<EntityId> = ids
+                    .into_iter()
+                    .filter(|id| !self.is_unselectable(*id))
+                    .collect();
                 match mode {
                     SelectMode::Replace => self.selection = ids,
                     SelectMode::Add => self.selection.extend(ids),
@@ -655,6 +668,10 @@ impl Document {
             | Command::MoveScene { .. }
             | Command::DeleteScene { .. }
             | Command::GoToScene { .. }
+            | Command::Hide { .. }
+            | Command::Unhide { .. }
+            | Command::UnhideLast {}
+            | Command::UnhideAll {}
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::IntersectFaces { .. }
@@ -726,6 +743,7 @@ impl Document {
                 self.add_guide(Guide::Point {
                     position: DVec3::from(*position),
                     tag: None,
+                    hidden: false,
                 })
             }),
             Command::DeleteGuides {} => {
@@ -873,6 +891,10 @@ impl Document {
             Command::DeleteScene { scene } => self.delete_scene_changes(*scene),
             // Its view change is made here too, outside the returned change.
             Command::GoToScene { scene } => self.go_to_scene_changes(*scene),
+            Command::Hide { ids } => self.hide_changes(ids),
+            Command::Unhide { ids } => self.unhide_changes(ids),
+            Command::UnhideLast {} => self.unhide_last_changes(),
+            Command::UnhideAll {} => self.unhide_all_changes(),
             Command::SoftenEdges { ids, soft } => self.soften_changes(ids, *soft),
             Command::SoftenByAngle { ids, max_angle_deg } => {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
@@ -1023,6 +1045,7 @@ impl Document {
                             export: None,
                             soften: self.soften_report.take(),
                             intersect: self.intersect_report.take(),
+                            changed: self.hidden_changed.take(),
                             positioned: self.positioned.take(),
                             purged: self.purged.take(),
                             text_3d: self.text_report.take(),
@@ -1108,6 +1131,7 @@ impl Document {
             point: DVec3::from(point),
             direction,
             tag: None,
+            hidden: false,
         })
     }
 
@@ -1863,7 +1887,7 @@ impl Document {
             .selection
             .iter()
             .copied()
-            .filter(|id| self.exists(*id))
+            .filter(|id| self.exists(*id) && !self.is_unselectable(*id))
             .collect();
         let summary = changes.summary();
         self.events.push_back(ChangeEvent {
@@ -2158,6 +2182,7 @@ impl Document {
             end: self.model().position(b).unwrap().to_array(),
             curve: e.curve.map(|c| c.to_string()),
             soft: e.soft,
+            hidden: e.hidden,
             tag: e.tag,
         }
     }
@@ -2217,6 +2242,7 @@ impl Document {
             kind,
             point: point.to_array(),
             direction: direction.map(|d| d.to_array()),
+            hidden: guide.hidden(),
             tag: guide.tag(),
         }
     }
@@ -2233,6 +2259,7 @@ impl Document {
             front_material: f.front,
             back_material: f.back,
             texture_position: f.texture,
+            hidden: f.hidden,
             tag: f.tag,
         }
     }

@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last` and `unhide_all` (see Hide and unhide below), `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -111,7 +111,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`,
 `set_lighting`, `set_color_by_tag`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -369,6 +369,33 @@ In the window, Edit > Soften Edges... opens a small window with an angle (0 to 1
 `"soft": false`, both on the selected edges and faces, or on the whole open context when nothing
 is selected; the status line says how many edges changed. With only edges selected, Entity Info
 shows a Soft checkbox that softens or hardens them.
+
+### Hide and unhide
+
+A hidden edge, face, instance or guide has `"hidden": true` in `entities` and `entity` (absent
+when false). The flag is the entity's own, apart from its tag (see Tags): hiding a face hides
+only the face (its edges stay shown), hiding an edge never changes the faces it bounds, and
+hiding an instance hides everything placed through it, at any depth. Component instances each
+have their own flag; geometry inside a definition is shared by every instance of it. Copies,
+clipboard and library items, groups made from or exploded into hidden entities (an exploded
+hidden instance leaves its contents hidden), split edges and `.skr` files keep the flag.
+
+| Command | Effect |
+|---|---|
+| `{"type": "hide", "ids": ["f8", "e3"]}` | Hides the edges, faces, instances and guides in `ids` (of the open context), as one undo step labelled `hide`; ones already hidden are ignored. Hidden entities leave the selection. Vertex ids are `invalid_input`, unknown ids `not_found`; dimensions, notes and section planes are left alone. The outcome's `changed` lists the ids hidden (`[]`, with no undo step, when there was nothing to hide). |
+| `{"type": "unhide", "ids": ["f8"]}` | Shows the listed entities, as one undo step labelled `unhide`; `changed` lists the ids shown. |
+| `{"type": "unhide_last"}` | Shows what the most recent `hide` of this session hid that is in the open context and still hidden (so nothing after an undo of that hide, or from another context), as one undo step labelled `unhide_last`. The memory of the last hide is not saved and `new` and `open` clear it. |
+| `{"type": "unhide_all"}` | Shows every hidden entity of the open context (not those inside its instances), as one undo step labelled `unhide_all`. |
+
+Doing nothing is a success with an empty `changed` and no undo step. A hidden entity is not
+selected: `select` skips hidden ids, and a `hide` or an undo that hides a selected entity drops
+it from the selection. In the `outliner`, a node's `hidden` is true for a hidden instance as well as one on a hidden
+tag (or under one), and `own_hidden` (absent when false) is true when the instance's own flag
+is set.
+
+A SketchUp file written by `export` keeps the flag on edges, faces, instances and guides; an
+imported SketchUp file's hidden edges, faces, groups, components and guides come in hidden
+(a hidden edge is no longer made soft; soft and smooth edges still are).
 
 ### Intersect Faces
 
@@ -865,8 +892,9 @@ open:
   (`["i55", "i27"]` above, with `i55` open and `i27` selected in it), which is what `open_path` takes.
 - `name` is the definition's name (empty for an unnamed group; the window shows it as `Group`);
   `material` is the instance's own (absent for none).
-- `hidden` (absent when false) marks the nodes a hidden tag hides: their own tag, or that of an
-  instance above them (see Tags). Hidden nodes are still listed.
+- `hidden` (absent when false) marks the nodes that are hidden: their own hide flag or tag, or
+  that of an instance above them (see Tags and Hide and unhide). Hidden nodes are still listed.
+  `own_hidden` (absent when false) marks a node whose own hide flag is set.
 - `open` (absent when false) marks the nodes on the open context's path: the open instance and
   the ones it is inside of. `selected` (absent when false) marks selected instances of the open
   context; the same ids under another placement are not marked.
@@ -1287,7 +1315,7 @@ and older files open without glow; version 6 and older files open without textur
 every material opaque, version 4 files, written before materials, open unpainted, version 3 files, written before camera projections, open in perspective, and
 versions 2 and 1, written before curves and guides, still open), the camera (eye, target, field
 of view, up, projection, `lighting` when it is `night`: a file without it opens lit by day,
-and `new` starts by day, and `"color_by_tag": true` when faces are colored by tag) and the model with every id, edges with their curve and soft flag,
+and `new` starts by day, and `"color_by_tag": true` when faces are colored by tag) and the model with every id, edges with their curve and soft flag, `"hidden": true` on each hidden edge, face, instance and guide (schema 14, written only when something is hidden; a file without hidden entities is written as before),
 the materials and what is painted with them, the tags (name, color, and `"visible": false` when
 hidden) and each entity's `tag` (absent when Untagged), and the scenes in order (`pages`: each
 one's id, name, `view` when it stores one (`eye`, `target`, `up`, `fov_y` in radians, and
@@ -1394,7 +1422,7 @@ within 16 MiB); `skp` starts with SketchUp's file header; a texture image is a P
 | `stl` | Binary STL: one record per triangle with its normal; Z up, as in the model; no colors or opacity |
 | `glb` | Binary glTF 2.0: one mesh of flat-shaded triangles (`POSITION`, `NORMAL`), one primitive per material; materials are double-sided, so lone faces show from behind; a painted one has its name and its color as `baseColorFactor` (linear, with the opacity as alpha), and a see-through one `alphaMode` `BLEND`; the default one is named `default`; a material with a texture has a `TEXCOORD_0` attribute and a `baseColorTexture` (its image file, as it was read, in the buffer; a sampler with linear mipmapped filtering that repeats both ways) with a white `baseColorFactor` (and the opacity as alpha); a glowing material has `emissiveFactor`, its color (linear) times its emission up to 1 (white, and an `emissiveTexture` naming its texture, when it has one), and an emission above 1 goes in `KHR_materials_emissive_strength` (`emissiveStrength`, listed in `extensionsUsed`); Y up |
 | `gltf` | The same glTF document as JSON, its buffer embedded as a base64 data URI |
-| `skp` | A SketchUp 2017 file (SketchUp 2017 and newer open it), written from the scene rather than triangles: the root and every group and component definition the root places (at any depth), each written once in its own coordinates and placed by its instances (transform and material kept, a mirrored one stays mirrored); faces with their holes and front and back materials; every edge, soft edges soft and smooth; guide lines and points; every material (color, opacity, texture image as it was read and its size); each textured face side carries its texture's placement (a face whose corners are too close to a line to fix it keeps the default projection, with a warning); every tag, used or not, as a layer with its name, color and visibility (hidden tags stay hidden), and every edge, face, instance and guide on its tag, hidden or not (Untagged ones on the file's Layer0). Lengths are inches, as SketchUp stores them; Z up. Material, tag and definition names are trimmed, blank ones become `Material`, `Tag`, `Group` or `Component`, they are cut to 240 UTF-16 units, and a name already taken gets the first free number (" 2", " 3"), so copied groups sharing a name come back as `Group`, `Group 2` (and a tag named `Layer0`, the file's own layer, is written as `Layer0 2`). Groups and components with nothing in them are left out. Curves (circles, arcs, polygons) are written as their separate edges. The same model gives the same bytes. |
+| `skp` | A SketchUp 2017 file (SketchUp 2017 and newer open it), written from the scene rather than triangles: the root and every group and component definition the root places (at any depth), each written once in its own coordinates and placed by its instances (transform and material kept, a mirrored one stays mirrored); faces with their holes and front and back materials; every edge, soft edges soft and smooth; guide lines and points; every material (color, opacity, texture image as it was read and its size); each textured face side carries its texture's placement (a face whose corners are too close to a line to fix it keeps the default projection, with a warning); every tag, used or not, as a layer with its name, color and visibility (hidden tags stay hidden), and every edge, face, instance and guide on its tag, hidden or not (Untagged ones on the file's Layer0); hidden edges, faces, instances and guides are written hidden. Lengths are inches, as SketchUp stores them; Z up. Material, tag and definition names are trimmed, blank ones become `Material`, `Tag`, `Group` or `Component`, they are cut to 240 UTF-16 units, and a name already taken gets the first free number (" 2", " 3"), so copied groups sharing a name come back as `Group`, `Group 2` (and a tag named `Layer0`, the file's own layer, is written as `Layer0 2`). Groups and components with nothing in them are left out. Curves (circles, arcs, polygons) are written as their separate edges. The same model gives the same bytes. |
 
 In the triangle formats (`obj`, `stl`, `glb`, `gltf`), colors and textures come from each face's
 front side (its own material, else that of the nearest painted instance placing it); back-side
@@ -1493,8 +1521,8 @@ supported"). What is carried:
 - Faces with their holes; a face that is not flat to within 5e-7 m or whose loops cross is made
   from its outer loop alone (cut into triangles where needed), losing its holes. Front and back
   materials. A face's front is the side its plane in the file faces.
-- Edges: every edge, loose ones included; soft, smooth and hidden edges become soft edges
-  (an edge not between exactly two faces stays an ordinary edge).
+- Edges: every edge, loose ones included; soft and smooth edges become soft edges (an edge
+  not between exactly two faces stays an ordinary edge), and hidden edges become hidden edges.
 - Materials used by an imported face or instance: color, opacity, and the texture image (PNG
   or JPEG, read from the file, under the limits of `add_material`: at most 16 MiB, 4096 pixels a
   side, the pixel budget and 256 textures) with the file's tile size (clamped to 0.001 to
@@ -1533,12 +1561,12 @@ supported"). What is carried:
 
 Not carried, each counted in `warnings`: scenes of 2017-2020 files ("12 scenes were not
 imported"),
-hidden states (hidden faces, groups and components are imported visible), images (skipped),
+images (skipped),
 instances of a definition the file lacks or with a flat or broken transform (skipped),
 faces that cannot be made (skipped: an outline that cannot be read, fewer than three distinct
 corners, a corner repeated, no area, or a duplicate), holes and edges that cannot be read,
 faces made from their outer loop, material references that match no material of the file
-(or one whose id is too large to match), hidden guides (not imported), guides that cannot be
+(or one whose id is too large to match), guides that cannot be
 read, and, in a 2017-2020 file, entities that could not be read after a damaged record
 ("12 entities could not be read and were skipped": the rest of the model is imported).
 Section planes, dimensions, text, texture positions and the file's camera and
@@ -1559,15 +1587,15 @@ that cannot be read, fewer than three distinct corners, no area, or a duplicate)
 `definitions` and `instances` (made from the file's, without the wrapper), `guides` (guides
 made), `textures` (materials added with a texture) and `warnings`
 (sentences, such as "2 scenes were not imported", "4 dimensions and text labels were not
-imported" (2017-2020 files only), "3 hidden faces were imported visible",
-"1 image was skipped", "5 face holes could not be read and were dropped", "2 hidden guides were not imported", "1 guide could not be
+imported" (2017-2020 files only),
+"1 image was skipped", "5 face holes could not be read and were dropped", "1 guide could not be
 read and was skipped"); each is absent when 0 or empty, and always absent for
 OBJ and STL:
 
 ```
 {"import": {"instance": "i6341", "definition": "d15", "polygons": 609, "faces": 616,
  "vertices": 2580, "skipped": 0, "materials": 9, "definitions": 6, "instances": 8,
- "warnings": ["1 hidden group or component was imported visible"]}}
+ "warnings": ["1 image was skipped"]}}
 ```
 
 `instance` and `definition` are absent for `"as": "context"`. Errors leave the model as it was:

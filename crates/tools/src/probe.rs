@@ -213,6 +213,7 @@ mod tests {
                 m.add_guide(Guide::Point {
                     position: p(0.25, 0.25, 5.0),
                     tag: None,
+                    hidden: false,
                 })?
                 .ops,
             );

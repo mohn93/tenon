@@ -12,6 +12,7 @@ fn line(point: DVec3, direction: DVec3) -> Guide {
         point,
         direction,
         tag: None,
+        hidden: false,
     }
 }
 
@@ -39,6 +40,7 @@ fn guides_are_added_erased_moved_and_copied_as_undoable_changes() {
         &m.add_guide(Guide::Point {
             position: p(2.0, 2.0, 0.0),
             tag: None,
+            hidden: false,
         })
         .unwrap()
         .summary()
@@ -81,7 +83,8 @@ fn guides_need_finite_numbers_and_a_direction() {
     assert!(
         m.add_guide(Guide::Point {
             position: p(0.0, f64::INFINITY, 0.0),
-            tag: None
+            tag: None,
+            hidden: false,
         })
         .is_err()
     );
@@ -152,6 +155,7 @@ fn broken_guides_are_rejected() {
                 point: [0.0; 3],
                 direction: None,
                 tag: None,
+                hidden: false,
             });
         },
         "share an id",

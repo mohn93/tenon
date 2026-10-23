@@ -521,6 +521,7 @@ fn a_guide_line_is_drawn_dashed_across_the_view() {
         point: c.target,
         direction: c.right(),
         tag: None,
+        hidden: false,
     })
     .unwrap();
     let Some(pixels) = render_scene(&c, &m, &[]) else {
@@ -1156,6 +1157,7 @@ fn restyling_recolors_a_selected_guide() {
         point: c.target + c.up() * (0.5 * c.pixel_size(c.target)),
         direction: c.right(),
         tag: None,
+        hidden: false,
     })
     .unwrap();
     let guide = m.guides().next().unwrap().0;

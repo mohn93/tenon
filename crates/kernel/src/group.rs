@@ -147,6 +147,7 @@ impl Scene {
         let stencil = whole(&definition.mesh)
             .painted_over(placed.material)
             .tagged_over(placed.tag)
+            .hidden_over(placed.hidden)
             .textures_carried(&placed.transform);
         let inner: Vec<Instance> = definition
             .mesh
@@ -159,6 +160,7 @@ impl Scene {
             .map(|(_, g)| {
                 g.transformed(placed.transform)
                     .with_tag(g.tag().or(placed.tag))
+                    .with_hidden(g.hidden() || placed.hidden)
             })
             .collect();
         let planes: Vec<_> = definition
@@ -195,6 +197,7 @@ impl Scene {
                 transform: placed.transform * i.transform,
                 material: i.material.or(placed.material),
                 tag: i.tag.or(placed.tag),
+                hidden: i.hidden || placed.hidden,
             });
         }
         let exploded = self.edit(parent, |m| {
@@ -271,6 +274,7 @@ impl Scene {
                     transform: *place * original.transform,
                     material: original.material,
                     tag: original.tag,
+                    hidden: original.hidden,
                 });
             }
         }
@@ -321,6 +325,7 @@ impl Scene {
                 transform: child.transform,
                 material: child.material,
                 tag: child.tag,
+                hidden: child.hidden,
             });
         }
         let (copy, added) = self.add_definition(&name, kind);

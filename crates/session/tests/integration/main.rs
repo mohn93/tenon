@@ -16,6 +16,7 @@ mod files;
 mod follow_me;
 mod groups;
 mod guides;
+mod hide;
 mod history_origin;
 mod import;
 mod intersect;

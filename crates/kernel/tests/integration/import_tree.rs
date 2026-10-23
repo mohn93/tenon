@@ -14,6 +14,7 @@ fn face(loops: &[&[usize]]) -> ImportFace {
         front: None,
         back: None,
         tag: None,
+        hidden: false,
     }
 }
 
@@ -23,6 +24,7 @@ fn edge(a: usize, b: usize, soft: bool) -> ImportEdge {
         b,
         soft,
         tag: None,
+        hidden: false,
     }
 }
 
@@ -32,6 +34,7 @@ fn place(definition: usize, transform: DAffine3) -> ImportInstance {
         transform,
         material: None,
         tag: None,
+        hidden: false,
     }
 }
 
@@ -125,11 +128,13 @@ fn a_face_with_a_hole_and_soft_edges() {
             Guide::Point {
                 position: DVec3::ONE,
                 tag: None,
+                hidden: false,
             },
             Guide::Line {
                 point: DVec3::ZERO,
                 direction: DVec3::ZERO,
                 tag: None,
+                hidden: false,
             },
         ],
         instances: vec![],

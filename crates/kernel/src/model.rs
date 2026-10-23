@@ -38,6 +38,9 @@ pub struct Edge {
     /// The tag the edge is on; None is Untagged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<TagId>,
+    /// A hidden edge is not drawn or picked. It still bounds its faces.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl Edge {
@@ -49,6 +52,7 @@ impl Edge {
             soft: false,
             polygon: false,
             tag: None,
+            hidden: false,
         }
     }
 }
@@ -73,6 +77,9 @@ pub struct Face {
     /// The tag the face is on; None is Untagged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<TagId>,
+    /// A hidden face is not drawn or picked; its edges stay as they are.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl Face {
@@ -86,6 +93,7 @@ impl Face {
             back: None,
             texture: None,
             tag: None,
+            hidden: false,
         }
     }
 
@@ -101,6 +109,7 @@ impl Face {
             back: self.front,
             texture: self.texture.map(|t| t.turned_over(is_level(self.normal))),
             tag: self.tag,
+            hidden: self.hidden,
         }
     }
 
@@ -123,6 +132,9 @@ pub struct Instance {
     /// The tag the instance is on; None is Untagged. Hiding it hides everything inside.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<TagId>,
+    /// A hidden instance hides everything placed through it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl Instance {
@@ -133,6 +145,7 @@ impl Instance {
             transform,
             material: None,
             tag: None,
+            hidden: false,
         }
     }
 }
@@ -148,6 +161,9 @@ pub enum Guide {
         /// The tag the guide is on; None is Untagged.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<TagId>,
+        /// A hidden guide is not drawn, picked or snapped to.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
     },
     /// A single point.
     Point {
@@ -155,6 +171,9 @@ pub enum Guide {
         /// The tag the guide is on; None is Untagged.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tag: Option<TagId>,
+        /// A hidden guide is not drawn, picked or snapped to.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
     },
 }
 
@@ -165,6 +184,7 @@ impl Guide {
             point,
             direction,
             tag: None,
+            hidden: false,
         }
     }
 
@@ -173,6 +193,7 @@ impl Guide {
         Guide::Point {
             position,
             tag: None,
+            hidden: false,
         }
     }
 
@@ -183,6 +204,21 @@ impl Guide {
         }
     }
 
+    /// Whether the guide is hidden.
+    pub fn hidden(&self) -> bool {
+        match *self {
+            Guide::Line { hidden, .. } | Guide::Point { hidden, .. } => hidden,
+        }
+    }
+
+    /// The same guide, hidden or shown.
+    pub fn with_hidden(mut self, to: bool) -> Guide {
+        match &mut self {
+            Guide::Line { hidden, .. } | Guide::Point { hidden, .. } => *hidden = to,
+        }
+        self
+    }
+
     /// The same guide on `tag`.
     pub fn with_tag(mut self, to: Option<TagId>) -> Guide {
         match &mut self {
@@ -191,21 +227,28 @@ impl Guide {
         self
     }
 
-    /// The guide moved by a rigid motion `t`, on the same tag.
+    /// The guide moved by a rigid motion `t`, on the same tag and as hidden.
     pub fn transformed(&self, t: DAffine3) -> Guide {
         match *self {
             Guide::Line {
                 point,
                 direction,
                 tag,
+                hidden,
             } => Guide::Line {
                 point: t.transform_point3(point),
                 direction: t.transform_vector3(direction).normalize(),
                 tag,
+                hidden,
             },
-            Guide::Point { position, tag } => Guide::Point {
+            Guide::Point {
+                position,
+                tag,
+                hidden,
+            } => Guide::Point {
                 position: t.transform_point3(position),
                 tag,
+                hidden,
             },
         }
     }
@@ -247,6 +290,8 @@ pub enum Op {
     /// An edge's, face's, instance's, guide's or annotation's tag changed from the first to
     /// the second.
     SetTag(EntityId, Option<TagId>, Option<TagId>),
+    /// An edge's, face's, instance's or guide's hidden flag changed from the first to the second.
+    SetHidden(EntityId, bool, bool),
     AddDimension(DimensionId, Dimension),
     RemoveDimension(DimensionId, Dimension),
     AddNote(NoteId, Note),
@@ -277,6 +322,7 @@ impl Op {
             Op::PaintInstance(id, from, to) => Op::PaintInstance(id, to, from),
             Op::PlaceTexture(id, from, to) => Op::PlaceTexture(id, to, from),
             Op::SetTag(id, from, to) => Op::SetTag(id, to, from),
+            Op::SetHidden(id, from, to) => Op::SetHidden(id, to, from),
             Op::AddDimension(id, d) => Op::RemoveDimension(id, d),
             Op::RemoveDimension(id, d) => Op::AddDimension(id, d),
             Op::AddNote(id, n) => Op::RemoveNote(id, n),
@@ -307,7 +353,7 @@ impl Op {
             Op::PaintFace(id, _, _) => Some((EntityId::Face(*id), true, true)),
             Op::PaintInstance(id, _, _) => Some((EntityId::Instance(*id), true, true)),
             Op::PlaceTexture(id, _, _) => Some((EntityId::Face(*id), true, true)),
-            Op::SetTag(id, _, _) => Some((*id, true, true)),
+            Op::SetTag(id, _, _) | Op::SetHidden(id, _, _) => Some((*id, true, true)),
             Op::AddDimension(id, _) => Some((EntityId::Dimension(*id), false, true)),
             Op::RemoveDimension(id, _) => Some((EntityId::Dimension(*id), true, false)),
             Op::AddNote(id, _) => Some((EntityId::Note(*id), false, true)),
@@ -845,6 +891,29 @@ impl Model {
                 }
                 EntityId::Vertex(_) => {}
             },
+            Op::SetHidden(id, _, to) => match id {
+                EntityId::Edge(e) => {
+                    if let Some(e) = self.edges.get_mut(&e) {
+                        e.hidden = to;
+                    }
+                }
+                EntityId::Face(f) => {
+                    if let Some(f) = self.faces.get_mut(&f) {
+                        f.hidden = to;
+                    }
+                }
+                EntityId::Instance(i) => {
+                    if let Some(i) = self.instances.get_mut(&i) {
+                        i.hidden = to;
+                    }
+                }
+                EntityId::Guide(g) => {
+                    if let Some(g) = self.guides.get_mut(&g) {
+                        *g = g.with_hidden(to);
+                    }
+                }
+                _ => {}
+            },
             Op::AddDimension(id, d) => {
                 self.bump(id.0);
                 self.dimensions.insert(id, d);
@@ -988,27 +1057,17 @@ impl Model {
     }
 
     pub(crate) fn insert_edge(&mut self, a: VertexId, b: VertexId) -> EdgeId {
-        self.insert_edge_like(a, b, None, false, false, None)
+        self.insert_edge_like(a, b, &Edge::new(a, b))
     }
 
-    /// Adds the edge a-b on `curve`, with `soft` and `polygon`, and on `tag` (the attributes
-    /// of an edge it replaces). An edge on no curve is never a polygon side.
-    pub(crate) fn insert_edge_like(
-        &mut self,
-        a: VertexId,
-        b: VertexId,
-        curve: Option<CurveId>,
-        soft: bool,
-        polygon: bool,
-        tag: Option<TagId>,
-    ) -> EdgeId {
+    /// Adds the edge a-b with the curve, soft, polygon, tag and hidden attributes of `like` (an
+    /// edge it replaces; its vertices are ignored). An edge on no curve is never a polygon side.
+    pub(crate) fn insert_edge_like(&mut self, a: VertexId, b: VertexId, like: &Edge) -> EdgeId {
         let id = EdgeId(self.alloc());
         let edge = Edge {
             v: [a, b],
-            curve,
-            soft,
-            polygon: polygon && curve.is_some(),
-            tag,
+            polygon: like.polygon && like.curve.is_some(),
+            ..like.clone()
         };
         self.record(Op::AddEdge(id, edge));
         id
@@ -1035,6 +1094,7 @@ impl Model {
             soft,
             polygon,
             tag: from.tag,
+            hidden: from.hidden,
         };
         self.record(Op::ChangeEdge(id, from, to));
     }
@@ -1229,6 +1289,27 @@ impl Model {
             EntityId::Note(n) => self.notes.get(&n).map(Note::tag),
             EntityId::Section(p) => self.sections.get(&p).map(SectionPlane::tag),
             EntityId::Vertex(_) => None,
+        }
+    }
+
+    /// Whether an edge, face, instance or guide is hidden; None for anything else or an unknown id.
+    pub fn hidden_of(&self, id: EntityId) -> Option<bool> {
+        match id {
+            EntityId::Edge(e) => self.edges.get(&e).map(|e| e.hidden),
+            EntityId::Face(f) => self.faces.get(&f).map(|f| f.hidden),
+            EntityId::Instance(i) => self.instances.get(&i).map(|i| i.hidden),
+            EntityId::Guide(g) => self.guides.get(&g).map(Guide::hidden),
+            _ => None,
+        }
+    }
+
+    /// Hides or shows an edge, face, instance or guide, recording a change only when it differs.
+    /// Other kinds and unknown ids are skipped.
+    pub(crate) fn set_hidden(&mut self, id: EntityId, hidden: bool) {
+        if let Some(from) = self.hidden_of(id)
+            && from != hidden
+        {
+            self.record(Op::SetHidden(id, from, hidden));
         }
     }
 

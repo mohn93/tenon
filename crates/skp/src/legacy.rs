@@ -1125,6 +1125,9 @@ struct Archive<'a> {
     guide_layers: Vec<u32>,
     /// See `ReadStats::hidden_guides`.
     hidden_guides: u64,
+    /// The hidden guides read, and each one's layer slot, kept for their definition.
+    hidden_guide_items: Vec<RawGuide>,
+    hidden_guide_layers: Vec<u32>,
     /// See `ReadStats::annotations`.
     annotations: u64,
     /// Where the last image read ended, when it was a JPEG.
@@ -1250,6 +1253,8 @@ impl<'a> Archive<'a> {
             guides: Vec::new(),
             guide_layers: Vec::new(),
             hidden_guides: 0,
+            hidden_guide_items: Vec::new(),
+            hidden_guide_layers: Vec::new(),
             annotations: 0,
             jpeg_end: None,
             emit: Emit::Batches,
@@ -1921,6 +1926,9 @@ impl<'a> Archive<'a> {
                 let _params = self.c.f64s::<2>()?;
                 if hidden {
                     self.hidden_guides += 1;
+                    self.hidden_guide_items
+                        .push(RawGuide::Line { point, direction });
+                    self.hidden_guide_layers.push(layer);
                 } else {
                     self.guides.push(RawGuide::Line { point, direction });
                     self.guide_layers.push(layer);
@@ -1969,6 +1977,8 @@ impl<'a> Archive<'a> {
                 let position = self.c.f64s::<3>()?;
                 if hidden {
                     self.hidden_guides += 1;
+                    self.hidden_guide_items.push(RawGuide::Point { position });
+                    self.hidden_guide_layers.push(layer);
                 } else {
                     self.guides.push(RawGuide::Point { position });
                     self.guide_layers.push(layer);
@@ -2854,6 +2864,7 @@ impl<'a> Archive<'a> {
             face_loops: self.face_loops.len() as u32,
             ftcs: self.ftcs.len() as u32,
             guides: self.guides.len() as u32,
+            hidden_guide_items: self.hidden_guide_items.len() as u32,
             instances: self.instances.len() as u32,
             slot: self.next_slot(),
         }
@@ -2877,6 +2888,10 @@ impl<'a> Archive<'a> {
         self.ftcs.truncate(m.ftcs as usize);
         self.guides.truncate(m.guides as usize);
         self.guide_layers.truncate(m.guides as usize);
+        self.hidden_guide_items
+            .truncate(m.hidden_guide_items as usize);
+        self.hidden_guide_layers
+            .truncate(m.hidden_guide_items as usize);
         {
             let from = core::cmp::min(m.slot.saturating_sub(self.base) as usize, self.slots.len());
             for i in from..self.slots.len() {
@@ -3075,6 +3090,12 @@ impl<'a> Archive<'a> {
         g.guides.extend_from_slice(guides);
         let layers = self.guide_layers.get(m.guides as usize..).unwrap_or(&[]);
         g.guide_layer = layers.iter().map(|&s| self.layer_index(s)).collect();
+        let at = m.hidden_guide_items as usize;
+        let hidden = self.hidden_guide_items.get(at..).unwrap_or(&[]);
+        spend(&mut self.budget, hidden.len() as u64).ok()?;
+        g.hidden_guide_items.extend_from_slice(hidden);
+        let layers = self.hidden_guide_layers.get(at..).unwrap_or(&[]);
+        g.hidden_guide_layer = layers.iter().map(|&s| self.layer_index(s)).collect();
         Some(g)
     }
 
@@ -3433,6 +3454,7 @@ struct Mark {
     face_loops: u32,
     ftcs: u32,
     guides: u32,
+    hidden_guide_items: u32,
     /// Not released: `finish` groups every placement at the end.
     instances: u32,
     slot: u32,

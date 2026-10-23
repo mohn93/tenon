@@ -523,6 +523,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::MakeGroup { ids }
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }
+        | Command::Hide { ids }
+        | Command::Unhide { ids }
         | Command::SoftenEdges { ids, .. }
         | Command::SoftenByAngle { ids, .. }
         | Command::IntersectFaces { ids, .. }
@@ -584,6 +586,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::CloseInstance {}
         | Command::RenameDefinition { .. }
         | Command::PurgeDefinitions {}
+        | Command::UnhideLast {}
+        | Command::UnhideAll {}
         | Command::AddMaterial { .. }
         | Command::AddTag { .. }
         | Command::ChangeTag { .. }
