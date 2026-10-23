@@ -544,6 +544,50 @@ fn time_profile_edges() {
     );
 }
 
+/// Orbit frames of a model of 135 000 faces (about a million edge vertices) with profiles and
+/// endpoints on, against the same frames without a style: the profile and endpoint copies draw
+/// every edge once per copy, so this is where their cost shows. Ignored by default.
+#[test]
+#[ignore]
+fn time_profile_edges_on_a_large_model() {
+    let d = box_grid(150);
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    let style = kernel::StyleSettings {
+        edges: kernel::EdgeStyle {
+            profiles: Some(4.0),
+            endpoints: Some(8.0),
+            ..kernel::EdgeStyle::default()
+        },
+        ..kernel::StyleSettings::default()
+    };
+    let mut orbit = |style: Option<&kernel::StyleSettings>| {
+        snap.set_model_style(style);
+        snap.prepare(d.scene(), d.context(), d.selection());
+        let mut camera = d.camera.clone();
+        let frames: Vec<f64> = (0..10)
+            .map(|k| {
+                let turn = glam::DMat3::from_rotation_z(0.1 * f64::from(k));
+                camera.eye = camera.target + turn * (d.camera.eye - d.camera.target);
+                let t = Instant::now();
+                snap.capture_prepared(&camera, Lighting::Day, 1400, 900)
+                    .expect("capture");
+                t.elapsed().as_secs_f64()
+            })
+            .collect();
+        frames.iter().sum::<f64>() / frames.len() as f64
+    };
+    orbit(None);
+    let plain = orbit(None);
+    orbit(Some(&style));
+    let styled = orbit(Some(&style));
+    eprintln!(
+        "135 000 faces: orbit frame {plain:.3} s plain, {styled:.3} s with profiles and endpoints"
+    );
+}
+
 /// Building a scene with profiles on, whose edges each need the direction into their faces: a
 /// face of thousands of corners must cost one walk of its loop, not one per edge. Ignored by default.
 #[test]

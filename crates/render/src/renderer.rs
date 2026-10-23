@@ -481,6 +481,16 @@ struct Mesh {
     hover: Option<wgpu::Buffer>,
     /// For model edges, what the edge effects need per vertex; None when no effect is on.
     extras: Option<wgpu::Buffer>,
+    /// For model edges with effects: the vertices (in pairs) the profile copies and the
+    /// endpoint marks can draw, when fewer than all of them (see `edge_candidates`).
+    profile_edges: Option<Indices>,
+    endpoint_edges: Option<Indices>,
+}
+
+/// An index buffer of vertices to draw and how many it holds.
+struct Indices {
+    buffer: wgpu::Buffer,
+    count: u32,
 }
 
 /// The triangles of `faces` with a see-through side, drawn after everything opaque.
@@ -1785,6 +1795,8 @@ impl Renderer {
                 flags: None,
                 hover: None,
                 extras: None,
+                profile_edges: None,
+                endpoint_edges: None,
             });
         }
         if let Some(preview) = &mut self.preview {
@@ -2143,14 +2155,24 @@ impl Renderer {
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, &self.profile_edge_pipeline, edges);
-                    pass.draw(0..edges.count, 0..profile_copies);
+                    draw_candidates(
+                        &mut pass,
+                        edges,
+                        edges.profile_edges.as_ref(),
+                        profile_copies,
+                    );
                 }
                 if with_effects
                     && endpoint_copies > 0
                     && let Some(edges) = &self.edges
                 {
                     bind(&mut pass, &self.endpoint_pipeline, edges);
-                    pass.draw(0..edges.count, 0..endpoint_copies);
+                    draw_candidates(
+                        &mut pass,
+                        edges,
+                        edges.endpoint_edges.as_ref(),
+                        endpoint_copies,
+                    );
                 }
                 draw(&mut pass, &self.cut_fill_pipeline, self.cut_fill.as_ref());
                 if let Some(cuts) = &self.cut_edges {
@@ -2302,6 +2324,8 @@ fn mesh<T: bytemuck::Pod>(device: &wgpu::Device, label: &str, vertices: &[T]) ->
         flags: None,
         hover: None,
         extras: None,
+        profile_edges: None,
+        endpoint_edges: None,
     })
 }
 
@@ -2331,6 +2355,21 @@ fn flagged_mesh<T: bytemuck::Pod>(
 fn edge_mesh(device: &wgpu::Device, vertices: &[LineVertex], extras: &[EdgeExtra]) -> Option<Mesh> {
     let mut mesh = flagged_mesh(device, "edges", vertices)?;
     if !extras.is_empty() {
+        let (profiles, endpoints) = edge_candidates(extras);
+        let indices = |list: Vec<u32>| {
+            // Only worth an index buffer when it leaves edges out.
+            (list.len() < extras.len()).then(|| Indices {
+                count: list.len() as u32,
+                buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("edge candidates"),
+                    // A buffer is never empty; `count` says how much of it is read.
+                    contents: bytemuck::cast_slice(if list.is_empty() { &[0u32] } else { &list }),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+            })
+        };
+        mesh.profile_edges = indices(profiles);
+        mesh.endpoint_edges = indices(endpoints);
         mesh.extras = Some(
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("edge extras"),
@@ -2340,6 +2379,53 @@ fn edge_mesh(device: &wgpu::Device, vertices: &[LineVertex], extras: &[EdgeExtra
         );
     }
     Some(mesh)
+}
+
+/// Draws `copies` instances of the edges in `candidates`, or of all of `edges` when it is None.
+/// Edge vertices come in pairs, so an index keeps its parity (the shader tells an edge's ends
+/// apart by `vertex_index`).
+fn draw_candidates(
+    pass: &mut wgpu::RenderPass<'_>,
+    edges: &Mesh,
+    candidates: Option<&Indices>,
+    copies: u32,
+) {
+    match candidates {
+        Some(list) if list.count == 0 => {}
+        Some(list) => {
+            pass.set_index_buffer(list.buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..list.count, 0, 0..copies);
+        }
+        None => pass.draw(0..edges.count, 0..copies),
+    }
+}
+
+/// The vertices of the edges (both of each, in order) that the profile copies and the endpoint
+/// marks can ever draw, by what the edges alone say: the open instance's box is drawn as it is,
+/// and an edge whose two faces continue each other (they lie on opposite sides of it in one
+/// plane) is never a silhouette, so a soft one is never drawn and an ordinary one is no profile.
+/// Which of the rest are profiles depends on the eye, so the shader still decides that.
+fn edge_candidates(extras: &[EdgeExtra]) -> (Vec<u32>, Vec<u32>) {
+    let mut profiles = Vec::new();
+    let mut endpoints = Vec::new();
+    let (pairs, _) = extras.as_chunks::<2>();
+    for (k, pair) in pairs.iter().enumerate() {
+        let e = &pair[0];
+        if e.meta[0] < 0.5 {
+            continue;
+        }
+        let first = 2 * k as u32;
+        let a = Vec3::from_slice(&e.side_a);
+        let b = Vec3::from_slice(&e.side_b);
+        let continues = e.side_a[3] > 0.5 && e.side_b[3] > 0.5 && a.dot(b) < -0.999_999;
+        if !continues {
+            profiles.extend([first, first + 1]);
+        }
+        if e.meta[0] < 1.5 || !continues {
+            endpoints.extend([first, first + 1]);
+        }
+    }
+    (profiles, endpoints)
 }
 
 #[cfg(test)]
@@ -2358,6 +2444,36 @@ mod tests {
         // A line no wider than a pixel needs no copies.
         assert_eq!(spread(1.0), (0, 0.0));
         assert_eq!(spread(0.75), (0, 0.0));
+    }
+
+    #[test]
+    fn edge_candidates_leave_out_what_can_never_be_drawn() {
+        use super::edge_candidates;
+        use crate::scene::EdgeExtra;
+        let edge = |x: f32, a: [f32; 4], b: [f32; 4]| {
+            [EdgeExtra {
+                side_a: a,
+                side_b: b,
+                meta: [x, 0.0, 0.0, 0.0],
+                ..EdgeExtra::default()
+            }; 2]
+        };
+        let up = [0.0, 0.0, 1.0, 1.0];
+        let down = [0.0, 0.0, -1.0, 1.0];
+        let right = [1.0, 0.0, 0.0, 1.0];
+        let none = [0.0; 4];
+        let extras: Vec<EdgeExtra> = [
+            edge(0.0, up, right),                  // 0: a box edge
+            edge(1.0, up, right),                  // 1: an ordinary corner
+            edge(1.0, up, down),                   // 2: an ordinary edge between coplanar faces
+            edge(2.0, up, down),                   // 3: a soft one, between coplanar faces
+            edge(2.0, up, [0.0, 0.2, -0.98, 1.0]), // 4: a soft one on a curve
+            edge(1.0, up, none),                   // 5: an edge with one face
+        ]
+        .concat();
+        let (profiles, endpoints) = edge_candidates(&extras);
+        assert_eq!(profiles, [2, 3, 8, 9, 10, 11]);
+        assert_eq!(endpoints, [2, 3, 4, 5, 8, 9, 10, 11]);
     }
 
     #[test]
