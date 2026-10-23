@@ -520,6 +520,38 @@ fn a_parallel_side_view_has_a_straight_horizon() {
         shot.at(1, 0)
     );
     assert!(shot.row_matches(H - 8..H, s.ground.unwrap().color) >= W / 2);
+    // The eye and target are 1.5 m up: the ground plane's row is below the middle, at
+    // 24 + 24 * 1.5 / (6 * tan(17.5 degrees)) = about 43. Above it is no ground.
+    let ground = s.ground.unwrap().color;
+    for y in H / 2 + 2..H / 2 + 14 {
+        assert_eq!(
+            shot.row_matches(y..y + 1, ground),
+            0,
+            "row {y} is above the ground"
+        );
+    }
+}
+
+#[test]
+fn a_parallel_view_has_no_eye_height_below_the_ground() {
+    // Level, with the target 1.5 m below the ground: the ground plane's row is about 19 rows
+    // above the middle and everything under it is ground; the arbitrary height of a parallel
+    // view's eye does not make this a view from below.
+    let s = sky_and_ground();
+    let mut camera = level_camera();
+    camera.projection = Projection::Parallel;
+    camera.eye.z = -1.5;
+    camera.target.z = -1.5;
+    let Some(shot) = shoot(&nothing(), Some(&s), &camera, Lighting::Day, false) else {
+        return;
+    };
+    let ground = s.ground.unwrap().color;
+    assert!(shot.row_matches(H / 2..H, ground) >= W / 2);
+    assert_eq!(
+        shot.row_matches(0..2, ground),
+        0,
+        "sky above the plane's row"
+    );
 }
 
 /// A square of ground 8 m across.
@@ -712,4 +744,80 @@ fn the_default_settings_look_like_no_style_but_for_the_background() {
         .filter(|&k| !near(a.at(k % W, k / W), b.at(k % W, k / W), 8))
         .count();
     assert_eq!(differing, 0);
+}
+
+/// A long edge along x passing 2 m in front of the eye, its ends about 40 m away.
+fn long_edge_near_the_eye() -> (Scene, Camera) {
+    let mut m = Model::new();
+    m.add_edge(DVec3::new(-40.0, 2.0, 1.5), DVec3::new(40.0, 2.0, 1.5))
+        .unwrap();
+    let mut camera = Camera::new(DVec2::new(W as f64, H as f64));
+    camera.eye = DVec3::new(0.0, 0.0, 1.5);
+    camera.target = DVec3::new(0.0, 10.0, 1.5);
+    (Scene::from_root(m), camera)
+}
+
+#[test]
+fn a_long_edge_is_fogged_by_each_pixels_distance() {
+    let (scene, camera) = long_edge_near_the_eye();
+    // Fog from 20 m: the edge's middle, 2 m away, is clear; its far ends are fogged.
+    let style = fogged(20.0, 30.0, FogColor::Rgb([255, 0, 255]));
+    let Some(shot) = shoot(&scene, Some(&style), &camera, Lighting::Day, false) else {
+        return;
+    };
+    let dark = (0..W * H)
+        .map(|k| shot.at(k % W, k / W))
+        .filter(|p| p[0] < 170 && p[1] < 170 && p[2] < 170)
+        .count();
+    assert!(dark > 0, "the middle of the edge is unfogged");
+}
+
+#[test]
+fn the_grid_and_axes_are_fogged_too() {
+    let mut style = fogged(1.0, 10.0, FogColor::Background);
+    style.background = [250, 100, 50];
+    let camera = looking_down_from(30.0);
+    let Some(shot) = shoot(&nothing(), Some(&style), &camera, Lighting::Day, false) else {
+        return;
+    };
+    assert!(shot.matches([250, 100, 50]) >= W * H * 98 / 100);
+}
+
+#[test]
+fn selected_faces_and_edges_are_not_fogged() {
+    let style = fogged(1.0, 10.0, FogColor::Rgb([255, 0, 255]));
+    let camera = looking_down_from(30.0);
+    let scene = ground_face();
+    let Some(mut snap) = Snapshotter::new_headless() else {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    };
+    snap.set_model_style(Some(&style));
+    let faces: BTreeSet<kernel::EntityId> = scene
+        .mesh(kernel::MeshId::Root)
+        .unwrap()
+        .faces()
+        .map(|(id, _)| kernel::EntityId::Face(id))
+        .collect();
+    let px = snap
+        .capture(&scene, &[], &faces, &camera, Lighting::Day, W, H)
+        .unwrap();
+    let i = ((ON_FACE.1 * W + ON_FACE.0) * 4) as usize;
+    let selected = [px[i], px[i + 1], px[i + 2]];
+    assert!(!near(selected, [255, 0, 255], 60), "{selected:?}");
+    // Selected edges: blue pixels (the selection color) remain.
+    let edges: BTreeSet<kernel::EntityId> = scene
+        .mesh(kernel::MeshId::Root)
+        .unwrap()
+        .edges()
+        .map(|(id, _)| kernel::EntityId::Edge(id))
+        .collect();
+    let px = snap
+        .capture(&scene, &[], &edges, &camera, Lighting::Day, W, H)
+        .unwrap();
+    let blue = px
+        .chunks(4)
+        .filter(|p| p[0] < 100 && p[1] < 150 && p[2] > 200)
+        .count();
+    assert!(blue > 0, "selected edges keep their color in fog");
 }

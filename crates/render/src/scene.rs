@@ -16,8 +16,8 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{
     DimensionId, EdgeColorMode, EdgeId, EdgeStyle, EntityId, FaceId, Guide, GuideId, InstanceId,
-    MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId, VertexId,
-    back_texture_position,
+    MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId, TextureImage,
+    VertexId, back_texture_position,
 };
 use session::{AnnotationShape, SectionDisplay, SectionShape};
 
@@ -719,25 +719,42 @@ fn mix_corner(a: (DVec3, [f32; 4]), b: (DVec3, [f32; 4]), t: f64) -> (DVec3, [f3
     )
 }
 
+/// The average colors worked out so far, by image: an image is summed once however often the
+/// scene is set again, and forgotten once nothing holds it.
+static AVERAGES: std::sync::Mutex<Vec<(std::sync::Weak<TextureImage>, [f32; 3])>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The average color of an image (sRGB, 0 to 1), from the cache when it was summed before.
+fn image_average(image: &std::sync::Arc<TextureImage>) -> Option<[f32; 3]> {
+    let mut cache = AVERAGES.lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|(w, _)| w.strong_count() > 0);
+    if let Some((_, average)) = cache
+        .iter()
+        .find(|(w, _)| std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(image)))
+    {
+        return Some(*average);
+    }
+    let pixels = image.pixels.as_chunks::<4>().0;
+    if pixels.is_empty() {
+        return None;
+    }
+    let mut sum = [0u64; 3];
+    for p in pixels {
+        for k in 0..3 {
+            sum[k] += u64::from(p[k]);
+        }
+    }
+    let n = pixels.len() as f32 * 255.0;
+    let average = sum.map(|c| c as f32 / n);
+    cache.push((std::sync::Arc::downgrade(image), average));
+    Some(average)
+}
+
 /// The average color of each textured material's image (sRGB, 0 to 1), by material.
 fn texture_averages(scene: &Scene) -> HashMap<MaterialId, [f32; 3]> {
     scene
         .materials()
-        .filter_map(|(id, m)| {
-            let image = &m.texture.as_ref()?.image;
-            let pixels = image.pixels.as_chunks::<4>().0;
-            if pixels.is_empty() {
-                return None;
-            }
-            let mut sum = [0u64; 3];
-            for p in pixels {
-                for k in 0..3 {
-                    sum[k] += u64::from(p[k]);
-                }
-            }
-            let n = pixels.len() as f32 * 255.0;
-            Some((id, sum.map(|c| c as f32 / n)))
-        })
+        .filter_map(|(id, m)| Some((id, image_average(&m.texture.as_ref()?.image)?)))
         .collect()
 }
 

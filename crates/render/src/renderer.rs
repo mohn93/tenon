@@ -321,11 +321,22 @@ impl LightingUniforms {
         let up = camera.up() * half;
         let w = if camera.is_parallel() { 0.0 } else { 1.0 };
         self.cam_pos = [eye.x, eye.y, eye.z, w];
-        self.cam_forward = [forward.x, forward.y, forward.z, 0.0];
+        // A parallel view: the target's height over its distance, which sets where the ground
+        // plane's row lies; the eye's own height is arbitrary there.
+        let target_height = if camera.is_parallel() {
+            (camera.target.z / camera.distance()) as f32
+        } else {
+            0.0
+        };
+        self.cam_forward = [forward.x, forward.y, forward.z, target_height];
         let (right, up) = (right.as_vec3(), up.as_vec3());
         self.cam_right = [right.x, right.y, right.z, 0.0];
         self.cam_up = [up.x, up.y, up.z, 0.0];
-        self.canvas[1] = if camera.eye.z < 0.0 { 1.0 } else { 0.0 };
+        self.canvas[1] = if !camera.is_parallel() && camera.eye.z < 0.0 {
+            1.0
+        } else {
+            0.0
+        };
     }
 }
 
