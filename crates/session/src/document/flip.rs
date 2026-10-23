@@ -2,19 +2,18 @@
 
 use std::collections::BTreeSet;
 
-use glam::{DAffine3, DMat3, DVec3};
+use glam::{DAffine3, DVec3};
 use kernel::{EntityId, Instance, MeshId, Parts, SceneChange};
 
 use super::Document;
 use crate::command::{CommandError, ErrorKind, FlipAxis, FlipFrame};
 
 impl Document {
-    /// `ids`, or the selection when `ids` is empty.
-    fn ids_or_selection(&self, ids: &[EntityId]) -> Vec<EntityId> {
-        if ids.is_empty() {
-            self.selection.iter().copied().collect()
-        } else {
-            ids.to_vec()
+    /// `ids`, or the selection when there are none.
+    fn ids_or_selection(&self, ids: Option<&[EntityId]>) -> Vec<EntityId> {
+        match ids {
+            Some(ids) => ids.to_vec(),
+            None => self.selection.iter().copied().collect(),
         }
     }
 
@@ -27,7 +26,7 @@ impl Document {
     /// Gives the shared component instances among `ids` definitions of their own.
     pub(super) fn make_unique_changes(
         &mut self,
-        ids: &[EntityId],
+        ids: Option<&[EntityId]>,
     ) -> Result<SceneChange, CommandError> {
         let ids = self.ids_or_selection(ids);
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
@@ -50,7 +49,7 @@ impl Document {
     /// (`FlipFrame::Own`) one instance along its own axis about its own center.
     pub(super) fn flip_changes(
         &mut self,
-        ids: &[EntityId],
+        ids: Option<&[EntityId]>,
         axis: FlipAxis,
         frame: FlipFrame,
     ) -> Result<SceneChange, CommandError> {
@@ -149,21 +148,17 @@ impl Document {
                     .with_ids(ids.to_vec()),
             );
         };
-        let instance = self.model().instance(*id).expect("checked to exist");
+        let t = self.model().instance(*id).expect("checked to exist");
         let local = self
             .scene
-            .bounds(MeshId::Definition(instance.definition))
+            .bounds(MeshId::Definition(t.definition))
             .map_or(DVec3::ZERO, |[lo, hi]| (lo + hi) / 2.0);
-        let center = instance.transform.transform_point3(local);
-        let normal = instance.transform.matrix3.col(k).normalize_or_zero();
-        if normal == DVec3::ZERO {
-            return Err(invalid("the instance has no such axis").with_ids(ids.to_vec()));
-        }
-        let reflect = DMat3::IDENTITY
-            - 2.0 * DMat3::from_cols(normal * normal.x, normal * normal.y, normal * normal.z);
-        Ok(DAffine3 {
-            matrix3: reflect,
-            translation: center - reflect * center,
-        })
+        let mut flip = DVec3::ONE;
+        flip[k] = -1.0;
+        // The mirror in the definition's own frame, about its center, brought into the context.
+        let own = DAffine3::from_translation(local)
+            * DAffine3::from_scale(flip)
+            * DAffine3::from_translation(-local);
+        Ok(t.transform * own * t.transform.inverse())
     }
 }

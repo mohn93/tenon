@@ -52,7 +52,7 @@ all commands and results.
   each self-contained (its `$ref`s point into its own `$defs`). `execute` params are any of
   Command, ScreenCommand and EditorCommand; `query` params any of Query and EditorQuery.
   `subscribe` and `describe` take no params (`params_schema` null).
-  In `batch` params an `EntityId` or `MaterialId` may also be a `BatchRef` (see References inside
+  In `batch` params an `EntityId`, `MaterialId` or `DefinitionId` may also be a `BatchRef` (see References inside
   a batch).
 - The `schemas` entries for Command, Query, EditorQuery, EditorCommand and ScreenCommand have
   `"type": "object"` at the root beside their `oneOf`.
@@ -143,7 +143,7 @@ Modeling commands, each one undo step:
 | `{"type": "make_group", "ids": ["e2", "f8", "i4"]}` | Moves edges, faces (with their edges), instances, guides, dimensions and notes (keeping their ids) into a new group definition and places one instance of it where they were; the instance becomes the selection. Edges that still bound a face left behind stay outside too. An annotation anchored to a vertex that goes inside stays anchored to it; one anchored to a vertex left outside anchors to where that vertex is, and a radial dimension whose circle stays outside keeps it as a fixed circle. Screen notes stay in the root. Vertex ids are `invalid_input`, and so are ids naming only guides and annotations. |
 | `{"type": "make_component", "ids": ["f8"], "name": "Chair"}` | Like `make_group`, but makes a named component: its copies share the definition, so editing one edits them all. An empty name is `invalid_input`. |
 | `{"type": "explode", "ids": ["i4"]}` | Replaces instances by their geometry, which merges with what it touches; instances, guides, dimensions and notes inside come out as such (with new ids; annotations stay anchored to their vertices, placed by the instance's transform). What comes out becomes the selection. Ids that are not instances are `invalid_input`, and so is an instance whose geometry, guides or annotations would land beyond the coordinate limit (naming it). |
-| `{"type": "make_unique", "ids": ["i4"]}` | Gives shared component instances a definition of their own (`Chair#2`); see Make Unique and Flip Along below. `ids` defaults to the selection. The outcome's `definitions` lists the new definitions |
+| `{"type": "make_unique", "ids": ["i4"]}` | Gives shared component instances a definition of their own (`Chair#2`); see Make Unique and Flip Along below. `ids` defaults to the selection (when absent). The outcome's `definitions` lists the new definitions |
 | `{"type": "flip", "ids": ["i4"], "axis": "red", "frame": "axes"}` | Mirrors the selection about the center of its box along the red, green or blue axis (`frame` `own`: one instance, along its own axis); see Make Unique and Flip Along below |
 | `{"type": "push_pull", "face": "f8", "distance": 1.5}` | Moves a face along its normal (negative: against it). A face on a flat sheet extrudes into a solid and stays as its base. A face on a solid extrudes a bump, or cuts a recess when pushed in; pushed in exactly as far as a parallel face that holds it (the back of a wall), it cuts an opening through. A face whose neighbors all run along the normal, like a box top, moves and stretches them; moved back flush with the surface around it (a recess or bump pushed back), it closes up and the seams heal. When the face is extruded, its sides along a curve get a moved copy on the cap that is a curve of its own, and the swept edges between two sides of one curve are soft (`"soft": true`), so a pulled circle is a cylinder with a smooth side. |
 
@@ -293,7 +293,7 @@ references: a `$` string there is not a tag or scene id and fails the batch's pa
 Errors:
 
 - A malformed reference (a string in one of those fields that starts with `$` but does not match
-  the pattern), a kind that does not fit the field, a `*` in `face`, `id` or `material`, or a
+  the pattern), a kind that does not fit the field, a `*` in `face`, `id`, `material` or `definition`, or a
   reference to the command itself or a later one rejects the whole batch before anything runs:
   `-32602` with the message `invalid params: commands[<index>]: <reason>`. A command that is not a
   valid command at all is also `-32602`, its message prefixed `commands[<index>]: `.
@@ -955,23 +955,28 @@ counts the definitions removed, nested ones included (0 when nothing was unused)
 
 #### Make Unique and Flip Along
 
-`{"type": "make_unique", "ids": ["i4", "i9"]}` gives the component instances in `ids` (default,
-also when empty: the selection; other entities are ignored) whose definition has other
-instances, in any context, a definition of their own, as one undo step. All the listed instances
-of one definition share one new copy, named like the old one with `#N` in place of any trailing
+`{"type": "make_unique", "ids": ["i4", "i9"]}` gives the component instances in `ids` (absent:
+the selection; other entities are ignored; present and empty: nothing to do, so a batch `*`
+reference that expands to nothing never reaches the selection) a definition of their own when
+their definition is placed elsewhere too, as one undo step. Only definitions the root reaches
+count, so an unplaced one does not make a definition shared. All the listed instances of one
+definition share one new copy, named like the old one with `#N` in place of any trailing
 `#<digits>` (`Chair`, `Chair#2`, `Chair#3`; N is the smallest of 2 or more no definition's name
-is). The copy is deep for groups inside it and shares the components inside it. Groups and
-instances that are the only ones of their definition stay as they are. The outcome's
-`definitions` lists the new definitions (empty, with no undo step, when there was nothing to do);
-a batch refers to them as `$N:d0`.
+is). The copy is deep for groups inside it and shares the components inside it. Groups, sole
+instances and definitions all of whose instances are listed stay as they are. The outcome's
+`definitions` lists the new definitions in the id order of the old ones (empty, with no undo
+step, when there was nothing to do); a batch refers to them as `$N:d0`. An unknown id is
+`not_found`.
 
-`{"type": "flip", "ids": ["f8", "i4"], "axis": "red"}` mirrors `ids` (default: the selection) as
+`{"type": "flip", "ids": ["f8", "i4"], "axis": "red"}` mirrors `ids` (absent: the selection) as
 one undo step, `axis` being `red`, `green` or `blue` (x, y, z). `frame` `axes` (the default)
 mirrors about the plane through the center of the box around the selection, measured in the
 current drawing axes (the open context's own axes), normal to that axis; faces keep facing out,
 and instances become mirrored (negative determinant). `frame` `own` takes exactly one instance
-(else `invalid_input`) and mirrors it about its own center along its own axis (a column of its
-transform), leaving it where it was. The outcome's `changed` lists the flipped ids.
+and mirrors it about its own center along its own axis (the axis of its definition, also when
+the instance is rotated, scaled or sheared), leaving it where it was. Errors: empty `ids`
+(present and empty, or absent with nothing selected) and `own` with anything but one instance are
+`invalid_input`, unknown ids `not_found`. The outcome's `changed` lists the flipped ids.
 
 ### Camera
 

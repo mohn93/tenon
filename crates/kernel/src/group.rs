@@ -287,10 +287,11 @@ impl Scene {
         Ok(SceneChange::join([steps, placed]))
     }
 
-    /// Gives the component instances among `instances` of mesh `parent` whose definition has
-    /// other instances (in any mesh) a definition of their own: all the instances of one
-    /// definition share one new copy, named by `unique_name`. Groups and sole instances stay
-    /// as they are. Returns the new definitions, in the order of the old ones' ids.
+    /// Gives the component instances among `instances` of mesh `parent` a definition of their
+    /// own when their definition is placed elsewhere too: all the listed instances of one
+    /// definition share one new copy, named by `unique_name`. A definition whose every placed
+    /// instance is listed, groups, and sole instances stay as they are. Only meshes the root
+    /// reaches count. Returns the new definitions, in the order of the old ones' ids.
     pub fn make_unique(
         &mut self,
         parent: MeshId,
@@ -303,11 +304,12 @@ impl Scene {
                 && self
                     .definition(i.definition)
                     .is_some_and(|d| d.kind == DefinitionKind::Component)
-                && self.instance_count(i.definition) > 1
             {
                 shared.entry(i.definition).or_default().push(*id);
             }
         }
+        let placed = self.placed_instance_counts();
+        shared.retain(|old, listed| placed.get(old).copied().unwrap_or(0) > listed.len());
         let mut made = Vec::new();
         let mut changes = Vec::new();
         for (old, ids) in shared {
@@ -389,6 +391,23 @@ impl Scene {
             })
             .expect("drawing a copy cannot fail");
         (copy, SceneChange::join([change, added.into(), filled]))
+    }
+
+    /// How many instances of each definition the meshes the root reaches hold.
+    fn placed_instance_counts(&self) -> BTreeMap<DefinitionId, usize> {
+        let mut counts = BTreeMap::new();
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![MeshId::Root];
+        while let Some(mesh) = pending.pop() {
+            let Some(m) = self.mesh(mesh) else { continue };
+            for (_, i) in m.instances() {
+                *counts.entry(i.definition).or_default() += 1;
+                if seen.insert(i.definition) {
+                    pending.push(MeshId::Definition(i.definition));
+                }
+            }
+        }
+        counts
     }
 
     /// Removes instances from mesh `parent`. A group's definition goes with its last instance.

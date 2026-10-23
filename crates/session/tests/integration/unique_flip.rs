@@ -417,3 +417,242 @@ fn definition_references_fit_only_definition_fields() {
         assert!(BatchCommand::parse(v, index + 1).is_err());
     }
 }
+
+#[test]
+fn make_unique_of_every_instance_of_a_definition_changes_nothing() {
+    let mut d = doc();
+    let first = wrapped_box(&mut d, [0.0, 0.0, 0.0], "make_component");
+    let more = copies(&mut d, std::slice::from_ref(&first), 1);
+    let steps = depth(&d);
+    let out = run(
+        &mut d,
+        json!({"type": "make_unique", "ids": [first, more[0]]}),
+    )
+    .unwrap();
+    assert_eq!(out["definitions"], json!([]));
+    assert_eq!(depth(&d), steps);
+    assert_eq!(instance_count(&d, "Chair"), 2);
+}
+
+#[test]
+fn own_flip_of_a_sheared_instance_keeps_its_bounds_and_mirrors_its_own_axis() {
+    let mut d = doc();
+    let g = wrapped_box(&mut d, [0.0, 0.0, 0.0], "make_group");
+    run(
+        &mut d,
+        json!({"type": "rotate", "ids": [g], "center": [0, 0, 0], "axis": [0, 0, 1], "angle": 30}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "scale", "ids": [g], "origin": [0, 0, 0], "factors": [3, 1, 1]}),
+    )
+    .unwrap();
+    let before = ask(&d, json!({"type": "entity", "id": g}));
+    let t0: Vec<f64> = serde_json::from_value(before["transform"].clone()).unwrap();
+    run(
+        &mut d,
+        json!({"type": "flip", "ids": [g], "axis": "red", "frame": "own"}),
+    )
+    .unwrap();
+    let after = ask(&d, json!({"type": "entity", "id": g}));
+    let near = |a: &Value, b: &Value| {
+        let (a, b): (Vec<f64>, Vec<f64>) = (
+            a.as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect(),
+            b.as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect(),
+        );
+        a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-9)
+    };
+    assert!(near(&after["bounds"]["min"], &before["bounds"]["min"]));
+    assert!(near(&after["bounds"]["max"], &before["bounds"]["max"]));
+    // Own red column negated, the others as they were.
+    let t: Vec<f64> = serde_json::from_value(after["transform"].clone()).unwrap();
+    for k in 0..3 {
+        assert!((t[k] + t0[k]).abs() < 1e-9, "red column {k}");
+    }
+    for k in 3..9 {
+        assert!((t[k] - t0[k]).abs() < 1e-9, "other columns {k}");
+    }
+}
+
+#[test]
+fn empty_ids_act_on_the_selection_only_when_absent() {
+    let mut d = doc();
+    let g = wrapped_box(&mut d, [0.0, 0.0, 0.0], "make_group");
+    let before = ask(&d, json!({"type": "entity", "id": g}));
+    // g is selected; a reference that expands to nothing must not reach it.
+    let commands: Vec<BatchCommand> = [
+        json!({"type": "add_edge", "start": [5, 5, 5], "end": [6, 5, 5]}),
+        json!({"type": "flip", "ids": ["$0:i*"], "axis": "red"}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    assert!(d.execute_batch(commands, true).is_err());
+    assert_eq!(ask(&d, json!({"type": "entity", "id": g})), before);
+    let err = run(&mut d, json!({"type": "flip", "ids": [], "axis": "red"})).unwrap_err();
+    assert_eq!(err.0, ErrorKind::InvalidInput);
+    let steps = depth(&d);
+    let out = run(&mut d, json!({"type": "make_unique", "ids": []})).unwrap();
+    assert_eq!(out["definitions"], json!([]));
+    assert_eq!(depth(&d), steps);
+    // Absent: the selection.
+    run(&mut d, json!({"type": "flip", "axis": "red"})).unwrap();
+}
+
+#[test]
+fn make_unique_ignores_instances_in_unplaced_definitions() {
+    let mut d = doc();
+    let first = wrapped_box(&mut d, [0.0, 0.0, 0.0], "make_component");
+    // A second chair only inside a component that nothing places.
+    let more = copies(&mut d, std::slice::from_ref(&first), 1);
+    let holder = created(
+        &run(
+            &mut d,
+            json!({"type": "make_component", "ids": [more[0]], "name": "Holder"}),
+        )
+        .unwrap(),
+        'i',
+    )[0]
+    .clone();
+    run(&mut d, json!({"type": "erase", "ids": [holder]})).unwrap();
+    assert_eq!(instance_count(&d, "Chair"), 2, "one in the unplaced Holder");
+    let out = run(&mut d, json!({"type": "make_unique", "ids": [first]})).unwrap();
+    assert_eq!(out["definitions"], json!([]));
+}
+
+#[test]
+fn flip_of_a_mixed_selection_moves_guides_sections_and_dimensions_too() {
+    let mut d = doc();
+    let group = wrapped_box(&mut d, [3.0, 3.0, 0.0], "make_group");
+    run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 0, 0], "opposite": [2, 2, 0]}),
+    )
+    .unwrap();
+    let face = all_ids(&d, &["face"])[0].clone();
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": face, "distance": 1}),
+    )
+    .unwrap();
+    let geometry = all_ids(&d, &["edge", "face"]);
+    let guide = created(
+        &run(
+            &mut d,
+            json!({"type": "add_guide_point", "position": [1, 5, 0]}),
+        )
+        .unwrap(),
+        'g',
+    )[0]
+    .clone();
+    let plane = created(
+        &run(
+            &mut d,
+            json!({"type": "add_section_plane", "point": [1, 1, 1], "normal": [1, 0, 0]}),
+        )
+        .unwrap(),
+        's',
+    )[0]
+    .clone();
+    let dim = created(
+        &run(
+            &mut d,
+            json!({"type": "add_dimension", "a": [0, 0, 0], "b": [1, 0, 0], "offset": [0, -1, 0]}),
+        )
+        .unwrap(),
+        'r',
+    )[0]
+    .clone();
+    let mut ids = geometry;
+    ids.extend([group.clone(), guide.clone(), plane.clone(), dim.clone()]);
+    // The box spans x 0..4 (geometry and the group), so x -> 4 - x.
+    run(&mut d, json!({"type": "flip", "ids": ids, "axis": "red"})).unwrap();
+    let g = ask(&d, json!({"type": "entity", "id": guide}));
+    assert_eq!(g["point"], json!([3.0, 5.0, 0.0]));
+    let s = ask(&d, json!({"type": "entity", "id": plane}));
+    assert_eq!(s["point"], json!([3.0, 1.0, 1.0]));
+    let m = ask(&d, json!({"type": "entity", "id": dim}));
+    assert_eq!(m["a"]["point"], json!([4.0, 0.0, 0.0]));
+    assert_eq!(m["b"]["point"], json!([3.0, 0.0, 0.0]));
+    let i = ask(&d, json!({"type": "entity", "id": group}));
+    assert_eq!(i["bounds"]["min"], json!([0.0, 3.0, 0.0]));
+    assert_eq!(i["bounds"]["max"], json!([1.0, 4.0, 1.0]));
+}
+
+/// Whether every face of the open context points away from the middle of its vertices.
+fn faces_point_out(d: &Document) -> bool {
+    let all = ask(d, json!({"type": "entities", "kinds": ["vertex", "face"]}));
+    let at = |id: &Value| -> [f64; 3] {
+        let v = all["vertices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == *id)
+            .unwrap();
+        serde_json::from_value(v["position"].clone()).unwrap()
+    };
+    let points = positions(d);
+    let middle: [f64; 3] = std::array::from_fn(|k| {
+        let lo = points.iter().map(|p| p[k]).fold(f64::MAX, f64::min);
+        let hi = points.iter().map(|p| p[k]).fold(f64::MIN, f64::max);
+        (lo + hi) / 2.0
+    });
+    all["faces"].as_array().unwrap().iter().all(|f| {
+        let n: [f64; 3] = serde_json::from_value(f["normal"].clone()).unwrap();
+        let ring: Vec<[f64; 3]> = f["outer"].as_array().unwrap().iter().map(at).collect();
+        let c: [f64; 3] =
+            std::array::from_fn(|k| ring.iter().map(|p| p[k]).sum::<f64>() / ring.len() as f64);
+        (0..3).map(|k| n[k] * (c[k] - middle[k])).sum::<f64>() > 0.0
+    })
+}
+
+#[test]
+fn faces_keep_facing_out_after_flips_at_every_depth() {
+    let mut d = doc();
+    let inner = wrapped_box(&mut d, [0.0, 0.0, 0.0], "make_group");
+    let outer = created(
+        &run(&mut d, json!({"type": "make_group", "ids": [inner]})).unwrap(),
+        'i',
+    )[0]
+    .clone();
+    // Flipping the outer instance mirrors its transform; its definitions are untouched.
+    run(
+        &mut d,
+        json!({"type": "flip", "ids": [outer], "axis": "red"}),
+    )
+    .unwrap();
+    let t: Vec<f64> = serde_json::from_value(
+        ask(&d, json!({"type": "entity", "id": outer}))["transform"].clone(),
+    )
+    .unwrap();
+    let (x, y, z) = (
+        glam::DVec3::new(t[0], t[1], t[2]),
+        glam::DVec3::new(t[3], t[4], t[5]),
+        glam::DVec3::new(t[6], t[7], t[8]),
+    );
+    assert!(x.cross(y).dot(z) < 0.0);
+    run(&mut d, json!({"type": "open_instance", "id": outer})).unwrap();
+    let inner_inside =
+        ask(&d, json!({"type": "entities", "kinds": ["instance"]}))["instances"][0]["id"].clone();
+    // Flip the inner group's instance inside the outer one, then the inner geometry inside it.
+    run(
+        &mut d,
+        json!({"type": "flip", "ids": [inner_inside], "axis": "green"}),
+    )
+    .unwrap();
+    run(&mut d, json!({"type": "open_instance", "id": inner_inside})).unwrap();
+    assert!(faces_point_out(&d));
+    let ids = all_ids(&d, &["edge", "face"]);
+    run(&mut d, json!({"type": "flip", "ids": ids, "axis": "blue"})).unwrap();
+    assert!(faces_point_out(&d));
+}

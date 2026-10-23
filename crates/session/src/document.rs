@@ -844,8 +844,8 @@ impl Document {
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
-            Command::MakeUnique { ids } => self.make_unique_changes(ids),
-            Command::Flip { ids, axis, frame } => self.flip_changes(ids, *axis, *frame),
+            Command::MakeUnique { ids } => self.make_unique_changes(ids.as_deref()),
+            Command::Flip { ids, axis, frame } => self.flip_changes(ids.as_deref(), *axis, *frame),
             Command::RenameDefinition { definition, name } => {
                 self.rename_changes(*definition, name)
             }

@@ -576,8 +576,6 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::MakeGroup { ids }
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }
-        | Command::MakeUnique { ids }
-        | Command::Flip { ids, .. }
         | Command::Hide { ids }
         | Command::Unhide { ids }
         | Command::ReverseFaces { ids }
@@ -587,6 +585,11 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::PositionTexture { ids, .. }
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
+        Command::MakeUnique { ids } | Command::Flip { ids, .. } => {
+            if let Some(ids) = ids {
+                f(Slot::List(ids));
+            }
+        }
         Command::OpenPath { path } => f(Slot::List(path)),
         Command::SaveToLibrary { item, .. } => {
             if let Some(item) = item {

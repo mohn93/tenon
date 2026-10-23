@@ -811,9 +811,7 @@ fn make_unique_gives_the_instance_a_copy_with_nested_groups_copied() {
     );
     s.apply(&change.inverse());
     s.validate().unwrap();
-    assert_eq!(s.definitions().count(), before.definitions().count());
-    assert_eq!(definition_of(&s, b), shared);
-    assert!(s.definition(made[0]).is_none());
+    assert_eq!(s, before);
 }
 
 #[test]
@@ -846,10 +844,42 @@ fn make_unique_shares_nested_components() {
 #[test]
 fn make_unique_makes_one_copy_for_all_selected_instances_of_a_definition() {
     let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    // A third chair stays behind so the definition remains shared.
+    s.copy_instances(MeshId::Root, &[a], p(0.0, 9.0, 0.0), 1)
+        .unwrap();
     let (made, _) = s.make_unique(MeshId::Root, &[a, b, a]).unwrap();
     assert_eq!(made.len(), 1);
     assert_eq!(definition_of(&s, a), definition_of(&s, b));
     assert_eq!(s.instance_count(made[0]), 2);
+}
+
+#[test]
+fn make_unique_of_every_placed_instance_changes_nothing() {
+    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    let before = s.clone();
+    let (made, change) = s.make_unique(MeshId::Root, &[a, b]).unwrap();
+    assert!(made.is_empty() && change.is_empty());
+    assert_eq!(s.definitions().count(), before.definitions().count());
+}
+
+#[test]
+fn make_unique_counts_only_placed_instances() {
+    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    // Hide the second chair in a component nothing places.
+    let (holder, _) = s
+        .make_group(
+            MeshId::Root,
+            &[],
+            &[],
+            &[b],
+            DefinitionKind::Component,
+            "Holder",
+        )
+        .unwrap();
+    s.erase_instances(MeshId::Root, &[holder]);
+    assert_eq!(s.instance_count(definition_of(&s, a)), 2);
+    let (made, _) = s.make_unique(MeshId::Root, &[a]).unwrap();
+    assert!(made.is_empty());
 }
 
 #[test]
@@ -869,12 +899,11 @@ fn make_unique_leaves_groups_and_sole_instances_alone() {
 
 #[test]
 fn unique_names_count_up_from_two_and_drop_a_trailing_number() {
-    let (mut s, [a, b]) = two_chairs(DefinitionKind::Group);
+    let (mut s, [_, b]) = two_chairs(DefinitionKind::Group);
     assert_eq!(s.unique_name("Chair"), "Chair#2");
     assert_eq!(s.unique_name("Chair#7"), "Chair#2");
     assert_eq!(s.unique_name("Chair #"), "Chair ##2");
     s.make_unique(MeshId::Root, &[b]).unwrap();
     assert_eq!(s.unique_name("Chair"), "Chair#3");
     assert_eq!(s.unique_name("Chair#2"), "Chair#3");
-    let _ = a;
 }

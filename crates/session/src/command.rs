@@ -320,18 +320,21 @@ pub enum Command {
     /// Replace instances by their geometry, which merges with what it touches. Instances and
     /// guides inside them come out as instances and guides. What comes out becomes the selection.
     Explode { ids: Vec<EntityId> },
-    /// Give the component instances in `ids` (default: the selection; other entities are
-    /// ignored) whose definition has other instances, in any context, a definition of their
-    /// own, as one undo step. All the selected instances of one definition share one new copy,
-    /// named like the old one with `#N` (the smallest N of 2 or more no definition has).
-    /// Groups, sole instances and nested components are left alone (a copy shares the
-    /// components inside it, and copies the groups). The outcome's `definitions` lists the new
-    /// ones; with nothing to do it is empty and no undo step is made.
+    /// Give the component instances in `ids` (when absent: the selection; other entities are
+    /// ignored; present and empty: nothing to do) a definition of their own when their
+    /// definition is placed elsewhere too (in any context the root reaches), as one undo step.
+    /// All the listed instances of one definition share one new copy, named like the old one
+    /// with `#N` (the smallest N of 2 or more no definition has). A definition all of whose
+    /// instances are listed, groups and sole instances are left as they are. The copy copies
+    /// the groups inside it and shares the components inside it. The outcome's `definitions`
+    /// lists the new ones, in the id order of the old ones; with nothing to do it is empty
+    /// and no undo step is made.
     MakeUnique {
         #[serde(default)]
-        ids: Vec<EntityId>,
+        ids: Option<Vec<EntityId>>,
     },
-    /// Mirror `ids` (default: the selection) as one undo step; faces keep facing out and
+    /// Mirror `ids` (when absent: the selection; present and empty is `invalid_input`) as one
+    /// undo step; faces keep facing out and
     /// instances may become mirrored. `frame` `axes` (default): about the plane through the
     /// center of the selection's box in the current drawing axes, normal to the `axis` of
     /// those axes (`red` x, `green` y, `blue` z). `own`: `ids` is exactly one instance,
@@ -339,7 +342,7 @@ pub enum Command {
     /// `changed` lists the ids flipped.
     Flip {
         #[serde(default)]
-        ids: Vec<EntityId>,
+        ids: Option<Vec<EntityId>>,
         axis: FlipAxis,
         #[serde(default)]
         frame: FlipFrame,

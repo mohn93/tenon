@@ -1155,9 +1155,11 @@ fn describe_batch_schema_accepts_references() {
     assert_eq!(entity[1], json!({"$ref": "#/$defs/BatchRef"}));
     let material = defs["MaterialId"]["anyOf"].as_array().unwrap();
     assert_eq!(material[1], json!({"$ref": "#/$defs/BatchRef"}));
+    let definition = defs["DefinitionId"]["anyOf"].as_array().unwrap();
+    assert_eq!(definition[1], json!({"$ref": "#/$defs/BatchRef"}));
     assert_eq!(
         defs["BatchRef"]["pattern"],
-        r"^\$(0|[1-9][0-9]*):(([vefigm])(0|[1-9][0-9]*|\*)|\*)$"
+        r"^\$(0|[1-9][0-9]*):(([vefigrnsmd])(0|[1-9][0-9]*|\*)|\*)$"
     );
     assert!(
         d["methods"]["execute"]["params_schema"]["$defs"]
