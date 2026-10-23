@@ -7,6 +7,7 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::annotation::{Anchor, Dimension, Note, RadialAnchor};
+use crate::axes::Axes;
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
     PageId, SectionId, TagId, VertexId,
@@ -45,6 +46,20 @@ pub struct SceneData {
     /// when there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pages: Vec<PageData>,
+    /// The model axes. Absent in files written before axes existed (and when they are the
+    /// world axes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axes: Option<AxesData>,
+}
+
+/// The model axes: an origin and three perpendicular unit vectors, right-handed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AxesData {
+    pub origin: [f64; 3],
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    pub z: [f64; 3],
 }
 
 /// A page (saved scene). `view` is absent when the page does not store the camera, `tags`
@@ -383,6 +398,15 @@ impl Scene {
                     tags: p.tags.as_ref().map(|t| t.iter().map(|t| t.0).collect()),
                 })
                 .collect(),
+            axes: (!self.axes().is_world()).then(|| {
+                let a = self.axes();
+                AxesData {
+                    origin: a.origin.to_array(),
+                    x: a.x.to_array(),
+                    y: a.y.to_array(),
+                    z: a.z.to_array(),
+                }
+            }),
         }
     }
 
@@ -466,7 +490,11 @@ impl Scene {
             };
             pages.push((PageId(p.id), page));
         }
-        let scene = Scene::from_meshes(root, definitions, materials, tags, pages, data.next_id);
+        let mut scene = Scene::from_meshes(root, definitions, materials, tags, pages, data.next_id);
+        if let Some(a) = &data.axes {
+            scene.axes = Axes::from_parts(a.origin.into(), a.x.into(), a.y.into(), a.z.into())
+                .map_err(|e| e.to_string())?;
+        }
         scene.validate()?;
         Ok(scene)
     }

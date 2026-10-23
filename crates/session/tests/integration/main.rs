@@ -2,6 +2,7 @@
 //! program per crate instead of one per file.
 
 mod annotations;
+mod axes;
 mod batch_refs;
 mod bytes;
 mod camera;

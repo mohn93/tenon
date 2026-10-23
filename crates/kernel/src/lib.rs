@@ -2,6 +2,7 @@
 //! No GPU or UI dependencies.
 
 mod annotation;
+mod axes;
 mod clip;
 mod connected;
 mod curves;
@@ -41,10 +42,11 @@ mod weld;
 pub use annotation::{
     Anchor, Circle, Dimension, MAX_NOTE_CHARS, MAX_NOTE_LINES, Note, RadialAnchor, check_note_text,
 };
+pub use axes::Axes;
 pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
-    AnchorData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
+    AnchorData, AxesData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
     InstanceData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData, PageData,
     RadialAnchorData, SceneData, SectionData, TagData, TextureData, VertexData,
 };

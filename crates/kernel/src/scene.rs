@@ -6,6 +6,7 @@ use glam::{DAffine3, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::annotation::Note;
+use crate::axes::Axes;
 use crate::edit::KernelError;
 use crate::ids::{
     CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
@@ -98,6 +99,8 @@ pub enum Step {
     ChangePage(PageId, Page, Page),
     /// A page moved from the first index in the page order to the second.
     MovePage(PageId, usize, usize),
+    /// The model axes changed from the first to the second.
+    SetAxes(Axes, Axes),
 }
 
 impl Step {
@@ -117,6 +120,7 @@ impl Step {
             Step::RemovePage(id, index, p) => Step::AddPage(id, index, p),
             Step::ChangePage(id, from, to) => Step::ChangePage(id, to, from),
             Step::MovePage(id, from, to) => Step::MovePage(id, to, from),
+            Step::SetAxes(from, to) => Step::SetAxes(to, from),
         }
     }
 }
@@ -229,6 +233,8 @@ pub struct Scene {
     pub(crate) tags: BTreeMap<TagId, Tag>,
     /// The pages (saved scenes), in their order.
     pub(crate) pages: Vec<(PageId, Page)>,
+    /// The model axes (see [`Axes`]).
+    pub(crate) axes: Axes,
     /// The next id to hand out, in any mesh. Never decreases, so ids are never reused.
     next_id: u64,
     /// Root instances a viewer hides for now (see [`Scene::set_view_hidden`]): not part of the
@@ -245,6 +251,7 @@ impl PartialEq for Scene {
             && self.materials == other.materials
             && self.tags == other.tags
             && self.pages == other.pages
+            && self.axes == other.axes
     }
 }
 
@@ -262,6 +269,7 @@ impl Scene {
             materials: BTreeMap::new(),
             tags: BTreeMap::new(),
             pages: Vec::new(),
+            axes: Axes::WORLD,
             view_hidden: BTreeSet::new(),
         }
     }
@@ -291,6 +299,7 @@ impl Scene {
             materials,
             tags,
             pages,
+            axes: Axes::WORLD,
             next_id: used,
             view_hidden: BTreeSet::new(),
         }
@@ -625,6 +634,7 @@ impl Scene {
                     *p = to.clone();
                 }
             }
+            Step::SetAxes(_, to) => self.axes = *to,
             Step::MovePage(id, _, to) => {
                 if let Some(from) = self.page_index(*id) {
                     let page = self.pages.remove(from);

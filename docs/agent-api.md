@@ -106,7 +106,7 @@ Unknown fields in commands, queries and params are rejected with `-32602` (a typ
 of silently doing nothing), and so are params given by position (an array).
 
 Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `push_pull`, `erase`, `move`, `copy`, `rotate`, `scale`, `offset`, `follow_me`, `make_group`,
-`make_component`, `explode`, `make_unique`, `flip`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
+`make_component`, `explode`, `make_unique`, `flip`, `set_axes`, `reset_axes`, `open_instance`, `close_instance`, `open_path`, `rename_definition`,
 `purge_definitions`, `add_guide_line`, `add_guide_point`, `delete_guides`, `add_dimension`,
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
@@ -978,6 +978,24 @@ the instance is rotated, scaled or sheared), leaving it where it was. Errors: ab
 with nothing selected and `own` with anything but one instance are
 `invalid_input`, unknown ids `not_found`. The outcome's `changed` lists the flipped ids.
 
+### Axes
+
+`{"type": "set_axes", "origin": [1, 2, 0], "x_axis": [1, 1, 0], "y_axis": [-1, 1, 0]}` moves the
+axes of the open context as one undo step. `x_axis` is normalized, `y_axis` is made
+perpendicular to it (Gram-Schmidt) and normalized, `z` is `x` cross `y`; a zero or non-finite
+vector, or parallel ones, is `invalid_input`, and so is an origin beyond the coordinate limit.
+
+At the root these are the model axes: the `camera` query's `axes` reports them, `flip` follows
+them, and the file keeps them (schema 15; a model with the world axes is written as before).
+Scenes do not store axes, and `.skp` import and export ignore them.
+
+Inside an open group or component they become that definition's own origin and axes, given in
+the open context's coordinates: its geometry, guides, dimensions, notes, section planes and
+nested instances move by the new frame's inverse, and every instance of it, in every context,
+is placed by its transform times the frame, so nothing moves in the model and the open context
+stays open. `{"type": "reset_axes"}` puts the model axes back to the world axes (one undo step;
+nothing to change makes none); inside a context it does nothing.
+
 ### Camera
 
 The camera belongs to the document (it is saved with the model) and is always in root
@@ -992,7 +1010,8 @@ fails with `invalid_input` and leaves the camera as it was.
 
 ```
 {"type": "camera", "eye": [-8,-12,7], "target": [0,0,0], "up": [0,0,1], "fov_y_deg": 35.0,
- "projection": "perspective", "view_height": 10.11, "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false}
+ "projection": "perspective", "view_height": 10.11, "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false,
+ "axes": {"origin": [0,0,0], "x": [1,0,0], "y": [0,1,0], "z": [0,0,1]}}
 ```
 
 - `up` is the direction pointing up the screen: always `[0,0,1]`, except in a view straight down
@@ -1008,6 +1027,8 @@ fails with `invalid_input` and leaves the camera as it was.
 - `x_ray` is whether every shown face is drawn as glass (`set_x_ray`).
 - `hidden_geometry` is whether entities hidden by their own flag are drawn ghosted and can be
   picked (`set_hidden_geometry`; see Hide and unhide).
+- `axes` is the model axes (see Axes below): `origin` and the unit vectors `x` (red), `y` (green)
+  and `z` (blue), the world axes until `set_axes` moves them.
 
 | Command | Effect |
 |---|---|
@@ -1357,7 +1378,7 @@ there (unless the Paste tool is out). `preview` no longer outlines the hovered t
 ### Files
 
 Models are saved as `.skr` files: a zip archive holding `document.json`, which records `format`
-(`"sketchup-alt"`), `schema_version` (13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
+(`"sketchup-alt"`), `schema_version` (15 when the model axes are not the world axes (written as `axes` with `origin`, `x`, `y` and `z` in the model), else 14 when something is hidden or the view has `x_ray` or `hidden_geometry` on, else 13 when the model has a section plane or `set_section_display` has turned something off (written in the view as `section_planes`, `section_cuts` and `section_fill`, only when false), else 12 when the model has a dimension or a note, or display units other than meters with 3 decimals, else 11 when the model has a scene, else 10 when the model has a tag or the view colors faces by tag, else 9 when a face has a texture position, else 8 when a material glows or the view is lit by night, else 7 when a material has a
 texture, else 6 when a material is see-through, else 5; a material's `opacity` is written only
 when below 1 and its `emission` only when above 0, and a face's `texture_position` only when it
 has one, so a model whose materials are all opaque

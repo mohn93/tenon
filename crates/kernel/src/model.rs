@@ -1251,6 +1251,16 @@ impl Model {
         self.take_changes()
     }
 
+    /// Sets an instance's transform, recording a change only when it differs.
+    pub(crate) fn set_instance_transform(&mut self, id: InstanceId, to: DAffine3) {
+        if let Some(i) = self.instances.get(&id)
+            && i.transform != to
+        {
+            let from = i.transform;
+            self.record(Op::TransformInstance(id, from, to));
+        }
+    }
+
     /// Sets a face's front and back materials, recording a change only when they differ.
     pub(crate) fn set_paint(&mut self, id: FaceId, paint: [Option<MaterialId>; 2]) {
         let from = self.faces[&id].paint();

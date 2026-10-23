@@ -238,6 +238,15 @@ pub struct GuideInfo {
     pub tag: Option<TagId>,
 }
 
+/// The model axes: `origin` and the unit vectors `x` (red), `y` (green) and `z` (blue).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AxesInfo {
+    pub origin: [f64; 3],
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    pub z: [f64; 3],
+}
+
 /// A section plane: through `point` with the unit vector `normal`, keeping the side the normal
 /// points to; `active` when it is the one cutting its context.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -522,6 +531,8 @@ pub enum QueryResult {
         color_by_tag: bool,
         x_ray: bool,
         hidden_geometry: bool,
+        /// The model axes (see `set_axes`).
+        axes: AxesInfo,
     },
     /// Counts for the open context, plus the number of definitions.
     Stats {

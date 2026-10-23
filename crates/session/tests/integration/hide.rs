@@ -360,7 +360,7 @@ fn the_skr_round_trips_hidden_and_schema_14_is_only_written_when_needed() {
     assert_eq!(stored(&path)["schema_version"], 5);
 
     // A file from a newer build is refused.
-    edit_file(&path, |doc| doc["schema_version"] = json!(15));
+    edit_file(&path, |doc| doc["schema_version"] = json!(16));
     let err = run(
         &mut e,
         json!({"type": "open", "path": path.to_str().unwrap(), "discard": true}),

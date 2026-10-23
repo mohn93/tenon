@@ -348,6 +348,23 @@ pub enum Command {
         #[serde(default)]
         frame: FlipFrame,
     },
+    /// Move the axes of the open context as one undo step. `x_axis` is normalized and
+    /// `y_axis` made perpendicular to it and normalized (so only its side of `x_axis` matters),
+    /// `z` is their cross product; zero or parallel vectors are `invalid_input`. At the root
+    /// these are the model axes (the camera query reports them). Inside a group or component
+    /// they become that definition's origin and axes, in the open context's coordinates: its
+    /// geometry and nested instances move by the frame's inverse and every instance of it is
+    /// placed by its transform times the frame, so nothing moves in the model.
+    SetAxes {
+        #[schemars(with = "ModelPoint")]
+        origin: [f64; 3],
+        x_axis: [f64; 3],
+        y_axis: [f64; 3],
+    },
+    /// Put the model axes back to the world axes, as one undo step (nothing to change makes no
+    /// step). Inside a group or component it does nothing: a definition's axes are its own
+    /// frame, with nothing to reset to.
+    ResetAxes {},
     /// Edit the definition an instance of the open context places: its entities become the
     /// ones commands and queries see, in its own coordinates. Clears the selection. Not
     /// recorded in undo history.

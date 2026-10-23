@@ -644,6 +644,8 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::SetUnits { .. }
         | Command::CloseInstance {}
         | Command::PurgeDefinitions {}
+        | Command::SetAxes { .. }
+        | Command::ResetAxes {}
         | Command::UnhideLast {}
         | Command::UnhideAll {}
         | Command::AddMaterial { .. }

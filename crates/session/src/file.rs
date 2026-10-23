@@ -23,19 +23,21 @@ use crate::units::{Units, check_precision};
 
 /// The `format` every file records.
 pub const FORMAT: &str = "sketchup-alt";
-/// The newest schema version this build reads, and the one it writes when an edge, face,
-/// instance or guide is hidden, or the camera or a scene's view has `x_ray` or
-/// `hidden_geometry` on.
+/// The newest schema version this build reads, and the one it writes when the model axes are
+/// not the world axes.
 /// Version 2 added guides, version 3 curves and soft edges, version 4 the camera's up direction
 /// and projection, version 5 materials, version 6 material opacity, version 7 textures,
 /// version 8 material emission and the lighting mode, version 9 texture positions on faces,
 /// version 10 tags and coloring by tag, version 11 scenes, version 12 dimensions, notes
 /// and display units, version 13 section planes and the section display settings, and
-/// version 14 hidden entities and the x-ray and hidden geometry view flags; older
-/// files still open (untagged before version 10, without scenes before version 11, without
+/// version 14 hidden entities and the x-ray and hidden geometry view flags, and version 15 the
+/// model axes; older files still open (untagged before version 10, without scenes before version 11, without
 /// annotations and in the default units before version 12, without section planes and with
 /// the default section display before version 13).
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
+/// The version written when an edge, face, instance or guide is hidden, or the camera or a
+/// scene's view has `x_ray` or `hidden_geometry` on, and the model axes are the world axes.
+pub const HIDDEN_SCHEMA_VERSION: u32 = 14;
 /// The version written when the model has a section plane or non-default section display but
 /// nothing is hidden.
 pub const SECTIONS_SCHEMA_VERSION: u32 = 13;
@@ -271,8 +273,10 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if hidden {
+        schema_version: if model.axes.is_some() {
             SCHEMA_VERSION
+        } else if hidden {
+            HIDDEN_SCHEMA_VERSION
         } else if sectioned {
             SECTIONS_SCHEMA_VERSION
         } else if annotated {

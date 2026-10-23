@@ -20,8 +20,8 @@ use crate::command::{
 use crate::import::ImportReport;
 use crate::polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 use crate::query::{
-    ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind,
-    Query, QueryResult, VertexInfo,
+    AxesInfo, ChangeEvent, CurveInfo, DefinitionInfo, EdgeInfo, EntityKind, FaceInfo, GuideInfo,
+    GuideKind, Query, QueryResult, VertexInfo,
 };
 use crate::rectangle::rectangle_corners;
 use crate::rotate::rotation;
@@ -29,6 +29,7 @@ use crate::text3d::Text3dReport;
 use crate::units::Units;
 
 mod annotations;
+mod axes;
 mod camera;
 mod clip;
 mod files;
@@ -682,6 +683,8 @@ impl Document {
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
             | Command::MakeUnique { .. }
+            | Command::SetAxes { .. }
+            | Command::ResetAxes {}
             | Command::Flip { .. }
             | Command::RenameDefinition { .. }
             | Command::PurgeDefinitions {}
@@ -844,6 +847,12 @@ impl Document {
             Command::MakeGroup { ids } => self.group_changes(ids, None),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
             Command::Explode { ids } => self.explode_changes(ids),
+            Command::SetAxes {
+                origin,
+                x_axis,
+                y_axis,
+            } => self.set_axes_changes(*origin, *x_axis, *y_axis),
+            Command::ResetAxes {} => Ok(self.reset_axes_changes()),
             Command::MakeUnique { ids } => self.make_unique_changes(ids.as_deref()),
             Command::Flip { ids, axis, frame } => self.flip_changes(ids.as_deref(), *axis, *frame),
             Command::RenameDefinition { definition, name } => {
@@ -2052,6 +2061,15 @@ impl Document {
                 color_by_tag: self.color_by_tag,
                 x_ray: self.x_ray,
                 hidden_geometry: self.hidden_geometry,
+                axes: {
+                    let a = self.scene.axes();
+                    AxesInfo {
+                        origin: a.origin.to_array(),
+                        x: a.x.to_array(),
+                        y: a.y.to_array(),
+                        z: a.z.to_array(),
+                    }
+                },
             },
             Query::Stats {} => QueryResult::Stats {
                 vertices: m.vertices().count(),
