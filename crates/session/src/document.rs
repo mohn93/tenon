@@ -65,8 +65,8 @@ pub const MAX_COORDINATE: f64 = 1.0e6;
 pub const MAX_CURVE_POINTS: usize = 10_000;
 
 /// The most times a curve may cross itself: each crossing splits two edges, and drawing slows
-/// down as they multiply (a few hundred milliseconds in release at this many).
-pub const MAX_CURVE_CROSSINGS: usize = 10_000;
+/// down as they multiply (under a second in release at this many).
+pub const MAX_CURVE_CROSSINGS: usize = 4_000;
 
 /// Whether the path's segments cross each other, or the edges already in `model` (away from
 /// their ends), more than `MAX_CURVE_CROSSINGS` times. Counting stops at the cap; a box test

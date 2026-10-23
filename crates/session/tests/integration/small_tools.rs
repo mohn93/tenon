@@ -525,7 +525,7 @@ fn a_curve_that_crosses_the_drawn_edges_a_few_times_is_drawn() {
 #[test]
 #[ignore = "release-mode timing"]
 fn two_serpentines_are_refused_or_drawn_in_under_a_second() {
-    for n in [100, 400] {
+    for n in [60, 400] {
         let mut d = doc();
         let start = std::time::Instant::now();
         run(
@@ -580,7 +580,7 @@ fn add_curve_with_a_star_of_four_hundred_points_is_quick_either_way() {
     let start = std::time::Instant::now();
     let _ = run(
         &mut d,
-        json!({"type": "add_curve", "points": star_path(140)}),
+        json!({"type": "add_curve", "points": star_path(88)}),
     );
     assert!(start.elapsed().as_secs_f64() < 1.0, "{:?}", start.elapsed());
 }

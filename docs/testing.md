@@ -58,8 +58,15 @@ cargo test --release -p kernel --test integration perf:: -- --ignored --nocaptur
 ```
 
 `crates/session/tests/integration/perf.rs` times saving and opening a big model, purging many definitions,
-Intersect Faces over 22,500 placed boxes with Select All (With Model, about 0.1 s), and an ignored release test that two long self-crossing curves are refused or drawn in under a second:
+Intersect Faces over 22,500 placed boxes with Select All (With Model, about 0.1 s):
 
 ```
 cargo test --release -p session --test integration perf:: -- --ignored --nocapture
+```
+
+`crates/session/tests/integration/small_tools.rs` has ignored release timings of `add_curve`, among them
+`two_serpentines_are_refused_or_drawn_in_under_a_second` and a self-crossing star (each under a second):
+
+```
+cargo test --release -p session --test integration small_tools:: -- --ignored --nocapture
 ```

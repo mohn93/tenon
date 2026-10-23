@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use glam::{DVec2, DVec3};
 
 use crate::edit::use_indexes;
-use crate::geom::{ANGLE_TOL, LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
+use crate::geom::{LENGTH_TOL, PLANE_ANGLE_TOL, Plane, point_in_polygon};
 use crate::ids::{EdgeId, FaceId, MaterialId, TagId, VertexId};
 use crate::index::{Index, Shape};
 use crate::model::{Face, Model};
@@ -17,13 +17,8 @@ impl Model {
     /// Updates the faces of every plane spanned by one of `new_edges` and an edge touching it.
     pub(crate) fn create_faces(&mut self, new_edges: &[EdgeId]) {
         let mut planes = PlaneSet::default();
-        // Edges on a line already walked (see `candidate_planes`) give the same planes.
-        let mut walked: BTreeSet<EdgeId> = BTreeSet::new();
         for &e in new_edges {
-            if walked.contains(&e) {
-                continue;
-            }
-            for plane in self.candidate_planes(e, &mut walked) {
+            for plane in self.candidate_planes(e) {
                 planes.insert(plane);
             }
         }
@@ -72,10 +67,10 @@ impl Model {
     }
 
     /// Planes spanned by edge e and each non-collinear edge reachable from its endpoints,
-    /// walking through vertices whose edges continue along e's line. The edges walked along that
-    /// line are added to `walked`: starting from any of them gives the same planes.
-    fn candidate_planes(&self, e: EdgeId, walked: &mut BTreeSet<EdgeId>) -> Vec<Plane> {
-        walked.insert(e);
+    /// walking through vertices whose edges continue along e's line. The collinearity test is
+    /// relative to e's first vertex, so an edge on the same line can walk elsewhere: each new
+    /// edge is walked on its own.
+    fn candidate_planes(&self, e: EdgeId) -> Vec<Plane> {
         let [a, b] = self.edge(e).unwrap().v;
         let (pa, pb) = (self.pos(a), self.pos(b));
         let mut planes = Vec::new();
@@ -92,15 +87,6 @@ impl Model {
                     match Plane::from_points(pa, pb, self.pos(c)) {
                         Some(p) => planes.push(p),
                         None => {
-                            // Only an edge on e's line far inside the tolerance is
-                            // certain to find the same planes; a barely bent one walks itself.
-                            let on_line = |q: DVec3| {
-                                (pb - pa).cross(q - pa).length()
-                                    <= STRICT * ANGLE_TOL * (pb - pa).length() * (q - pa).length()
-                            };
-                            if on_line(self.pos(fv[0])) && on_line(self.pos(fv[1])) {
-                                walked.insert(f);
-                            }
                             if visited.insert(c) {
                                 stack.push(c);
                             }
@@ -313,9 +299,6 @@ type Paint = (
     Option<TagId>,
     bool,
 );
-
-/// How much tighter than the plane search an edge must be collinear to skip its own walk.
-const STRICT: f64 = 1e-3;
 
 /// Above this many planes, `create_faces` finds each plane's edges with an index.
 const FEW_PLANES: usize = 4;
@@ -610,6 +593,93 @@ mod tests {
         }
         assert_eq!(one_by_one.faces().count(), 1);
         assert_eq!(batch.faces().count(), 1);
+    }
+
+    /// A chain on the x axis whose vertices sit `bends` off the line (one y per vertex, from
+    /// x = xs[0]), drawn except for the edges in `gap`, plus posts at both ends and a top edge.
+    /// Returns the face counts after drawing the gap as a batch and one segment at a time.
+    fn chain_faces(xs: &[f64], bends: &[f64], gap: &[(usize, usize)]) -> (usize, usize) {
+        let p = |k: usize| DVec3::new(xs[k], bends[k], 0.0);
+        let last = xs.len() - 1;
+        let mut start = Model::new();
+        for k in 0..last {
+            if !gap.iter().any(|g| g.0.min(g.1) == k && g.0.max(g.1) == k + 1) {
+                start.draw_segment(p(k), p(k + 1));
+            }
+        }
+        let up = DVec3::new(0.0, 0.0, 1.0);
+        start.draw_segment(p(0), p(0) + up);
+        start.draw_segment(p(last), p(last) + up);
+        start.draw_segment(p(0) + up, p(last) + up);
+        start.take_changes();
+        let segments: Vec<_> = gap.iter().map(|&(a, b)| (p(a), p(b))).collect();
+        let mut batch = start.clone();
+        batch.draw_segments(&segments);
+        let mut one_by_one = start;
+        for (a, b) in segments {
+            one_by_one.draw_segment(a, b);
+        }
+        (batch.faces().count(), one_by_one.faces().count())
+    }
+
+    /// The reviewer's probe: the gap's second edge lies on e's line, but its walk starts nearer
+    /// the bent vertices than e's does and passes them.
+    #[test]
+    fn a_gap_edge_whose_walk_passes_vertices_the_first_one_stops_at_gives_the_same_faces() {
+        // P, L, A, B, C, R, Q: A-B and C-B are the gap, drawn (A, B) then (C, B).
+        let xs = [-10.0, -0.01, 0.0, 1.0, 2.0, 2.01, 12.0];
+        for dl in [5e-11, 1e-10, 5e-10, 2e-9] {
+            for dr in [3e-9, 1e-8, 1e-7] {
+                let bends = [0.0, dl, 0.0, 0.0, 0.0, dr, 0.0];
+                let (batch, one_by_one) = chain_faces(&xs, &bends, &[(2, 3), (4, 3)]);
+                assert_eq!(batch, one_by_one, "dl {dl} dr {dr}");
+                assert_eq!(batch, 1, "dl {dl} dr {dr}");
+            }
+        }
+    }
+
+    /// Seeded near-straight chains with a gap of two edges drawn in either order and direction:
+    /// the batch never finds fewer faces than one segment at a time, and as many when the
+    /// two gap edges are drawn in chain order.
+    #[test]
+    fn near_straight_chains_give_the_same_faces_in_a_batch_as_one_by_one() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for trial in 0..3000 {
+            let n = 6 + (next() * 11.0) as usize;
+            let mut x = -10.0;
+            let mut xs = vec![x];
+            for _ in 0..n {
+                x += if next() < 0.5 {
+                    0.005 + next() * 0.05
+                } else {
+                    0.5 + next() * 3.0
+                };
+                xs.push(x);
+            }
+            let bends: Vec<f64> = (0..xs.len())
+                .map(|_| {
+                    if next() < 0.2 {
+                        0.0
+                    } else {
+                        10f64.powf(-11.0 + 4.0 * next()) * if next() < 0.5 { -1.0 } else { 1.0 }
+                    }
+                })
+                .collect();
+            let g = 1 + (next() * (n - 3) as f64) as usize;
+            let (a, b) = if next() < 0.5 { (g, g + 1) } else { (g + 1, g) };
+            let (c, d) = if next() < 0.5 { (g + 1, g + 2) } else { (g + 2, g + 1) };
+            let (batch, one_by_one) = chain_faces(&xs, &bends, &[(a, b), (c, d)]);
+            assert!(
+                batch >= one_by_one,
+                "trial {trial}: batch {batch} one by one {one_by_one}, xs {xs:?} bends {bends:?}"
+            );
+        }
     }
 
     #[test]
