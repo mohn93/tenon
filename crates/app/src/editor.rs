@@ -1861,7 +1861,7 @@ impl Editor {
                 lock: None,
             };
         }
-        let (label, value) = self.tool.measurement();
+        let (label, value) = self.tool.measurement(&self.doc.units());
         let value = if self.typed.is_empty() {
             value
         } else {
@@ -2128,6 +2128,7 @@ impl Editor {
             scale_factor: self.scale_factor,
             to_world: self.doc.context_transform(),
             quick_press: self.quick_press && matches!(event, ToolEvent::Click(_)),
+            units: self.doc.units(),
             shift: self.shift,
             selection: self.doc.selection(),
             material: self.current_material(),
@@ -2382,6 +2383,7 @@ impl Editor {
             scale_factor: self.scale_factor,
             to_world: self.doc.context_transform(),
             quick_press: false,
+            units: self.doc.units(),
             shift: self.shift,
             selection: self.doc.selection(),
             material: self.current_material(),

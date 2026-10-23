@@ -11,7 +11,7 @@ use session::{Command, MAX_COPIES};
 use crate::scenery::Owner;
 use crate::select::{box_outline, face_outline, guide_outline, pick, whole_curve};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{Array, format_length, parse_array, parse_length};
+use crate::vcb::{Array, format_length, parse_array, parse_length, snap_distance};
 
 /// A move in progress.
 #[derive(Clone, Debug)]
@@ -36,6 +36,15 @@ pub struct MoveTool {
 impl MoveTool {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Where the cursor is: its inference's point, at a multiple of the model's length snapping
+    /// from the base point unless a point of the model was snapped to.
+    fn snapped(&self, hit: &crate::inference::Inference, ctx: &ToolContext) -> DVec3 {
+        match &self.drag {
+            Some(d) => snap_distance(d.base, hit.point, hit.kind, &ctx.units),
+            None => hit.point,
+        }
     }
 
     fn finish(&mut self, offset: DVec3, out: &mut ToolOutput) {
@@ -146,12 +155,12 @@ impl Tool for MoveTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         let distance = self
             .drag
             .as_ref()
             .zip(self.hover)
-            .map(|(d, h)| format_length(d.base.distance(h)));
+            .map(|(d, h)| format_length(d.base.distance(h), units));
         ("Distance", distance)
     }
 
@@ -173,7 +182,7 @@ impl Tool for MoveTool {
         let mut out = ToolOutput::default();
         self.selected = !ctx.selection.is_empty();
         match event {
-            ToolEvent::Move(hit) => self.hover = Some(hit.point),
+            ToolEvent::Move(hit) => self.hover = Some(self.snapped(&hit, ctx)),
             ToolEvent::Click(hit) => match &self.drag {
                 None => {
                     let ids: Vec<EntityId> = if ctx.selection.is_empty() {
@@ -194,7 +203,7 @@ impl Tool for MoveTool {
                     }
                 }
                 Some(d) => {
-                    let offset = hit.point - d.base;
+                    let offset = snap_distance(d.base, hit.point, hit.kind, &ctx.units) - d.base;
                     if offset.length() >= LENGTH_TOL {
                         self.finish(offset, &mut out);
                     }
@@ -206,7 +215,7 @@ impl Tool for MoveTool {
                         .hover
                         .map(|h| h - d.base)
                         .filter(|v| v.length() >= LENGTH_TOL);
-                    match (dir, parse_length(&text)) {
+                    match (dir, parse_length(&text, &ctx.units)) {
                         (None, _) => {
                             out.message = Some("Move the cursor to set a direction first".into());
                         }
@@ -291,6 +300,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &self.selection,
                 material: None,
@@ -554,6 +564,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &r.selection,
             material: None,

@@ -6,11 +6,11 @@
 
 use glam::{DMat3, DVec3};
 use kernel::geom::LENGTH_TOL;
-use session::{Command, rectangle_axes_in, rectangle_corners};
+use session::{Command, Units, rectangle_axes_in, rectangle_corners};
 
 use crate::inference::{Inference, SnapKind};
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_lengths, toward_cursor};
+use crate::vcb::{format_length, is_point_snap, parse_lengths, snap_length, toward_cursor};
 
 #[derive(Clone, Debug, Default)]
 pub struct RectangleTool {
@@ -62,6 +62,20 @@ impl RectangleTool {
                 *normal = face.normal;
             }
         }
+    }
+
+    /// The cursor's point `p` on the plane with its width and height rounded to the model's
+    /// length snapping, unless a point of the model was snapped to.
+    fn snapped(&self, p: DVec3, kind: SnapKind, units: &Units) -> DVec3 {
+        let Some((corner, normal)) = self.start else {
+            return p;
+        };
+        if units.length_snap <= 0.0 || is_point_snap(kind) {
+            return p;
+        }
+        let (u, v) = rectangle_axes_in(self.axes, normal);
+        let d = p - corner;
+        corner + u * snap_length(d.dot(u), units) + v * snap_length(d.dot(v), units)
     }
 
     /// Width and height along the rectangle axes (on axis planes, the drawing axes `axes`) from
@@ -117,10 +131,14 @@ impl Tool for RectangleTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
-        let size = self
-            .size(self.axes)
-            .map(|(w, h)| format!("{}, {}", format_length(w.abs()), format_length(h.abs())));
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
+        let size = self.size(self.axes).map(|(w, h)| {
+            format!(
+                "{}, {}",
+                format_length(w.abs(), units),
+                format_length(h.abs(), units)
+            )
+        });
         ("Dimensions", size)
     }
 
@@ -144,7 +162,8 @@ impl Tool for RectangleTool {
             ToolEvent::Move(hit) => {
                 self.follow(&hit, ctx);
                 if let Some((corner, normal)) = self.start {
-                    self.hover = on_plane(corner, normal, &hit, ctx);
+                    self.hover = on_plane(corner, normal, &hit, ctx)
+                        .map(|p| self.snapped(p, hit.kind, &ctx.units));
                 }
             }
             ToolEvent::Click(hit) => match self.start {
@@ -157,24 +176,27 @@ impl Tool for RectangleTool {
                     self.follow(&hit, ctx);
                     let (corner, normal) = self.start.unwrap();
                     if let Some(p) = on_plane(corner, normal, &hit, ctx) {
+                        let p = self.snapped(p, hit.kind, &ctx.units);
                         self.finish(p, self.axes, &mut out);
                     }
                 }
             },
-            ToolEvent::Value(text) => match (self.start, parse_lengths(&text).as_deref()) {
-                (None, _) => out.message = Some("Click the first corner first".into()),
-                (Some((corner, normal)), Some(&[w, h])) => {
-                    // Typed sizes extend toward the cursor; a negative size flips the side.
-                    let (u, v) = rectangle_axes_in(self.axes, normal);
-                    let (sw, sh) = self.size(self.axes).unwrap_or((0.0, 0.0));
-                    let (w, h) = (toward_cursor(sw, w), toward_cursor(sh, h));
-                    self.finish(corner + u * w + v * h, self.axes, &mut out);
-                    if self.start.is_some() {
-                        out.message = Some("Width and height must not be zero".into());
+            ToolEvent::Value(text) => {
+                match (self.start, parse_lengths(&text, &ctx.units).as_deref()) {
+                    (None, _) => out.message = Some("Click the first corner first".into()),
+                    (Some((corner, normal)), Some(&[w, h])) => {
+                        // Typed sizes extend toward the cursor; a negative size flips the side.
+                        let (u, v) = rectangle_axes_in(self.axes, normal);
+                        let (sw, sh) = self.size(self.axes).unwrap_or((0.0, 0.0));
+                        let (w, h) = (toward_cursor(sw, w), toward_cursor(sh, h));
+                        self.finish(corner + u * w + v * h, self.axes, &mut out);
+                        if self.start.is_some() {
+                            out.message = Some("Width and height must not be zero".into());
+                        }
                     }
+                    (Some(_), _) => out.message = Some(format!("Not width,height: {text}")),
                 }
-                (Some(_), _) => out.message = Some(format!("Not width,height: {text}")),
-            },
+            }
             ToolEvent::Release(hit) => {
                 if self.drag_start.released(ctx) {
                     return self.handle(ToolEvent::Click(hit), ctx);
@@ -244,6 +266,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &Default::default(),
                 material: None,
@@ -273,7 +296,7 @@ mod tests {
         let moved = r.send(ToolEvent::Move(ground(3.0, 4.0)));
         assert_eq!(moved.preview.len(), 4);
         assert_eq!(
-            r.tool.measurement(),
+            r.tool.measurement(&Default::default()),
             ("Dimensions", Some("2 m, 3 m".to_string()))
         );
         let out = r.send(ToolEvent::Click(ground(3.0, 4.0)));
@@ -312,7 +335,7 @@ mod tests {
             "{corners:?}"
         );
         assert_eq!(
-            r.tool.measurement(),
+            r.tool.measurement(&Default::default()),
             ("Dimensions", Some("1.414 m, 1.414 m".to_string()))
         );
     }

@@ -29,7 +29,7 @@ impl Tool for EraseTool {
         "Click an edge, face, guide or group to erase it"
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, _units: &session::Units) -> (&'static str, Option<String>) {
         ("", None)
     }
 
@@ -113,6 +113,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &Default::default(),
             material: None,

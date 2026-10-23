@@ -9,7 +9,7 @@
 use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use kernel::{Circle, CurveKind, EdgeId, EntityId};
-use session::{AnchorInput, AnnotationShape, Command};
+use session::{AnchorInput, AnnotationShape, Command, Units};
 
 use crate::inference::{Guides, Inference, SnapKind, infer_detail};
 use crate::scenery::Owner;
@@ -216,8 +216,8 @@ impl DimensionTool {
 
     /// What a typed value does: in the offset step it sets the offset's length on the cursor's
     /// side; right after a dimension was added it moves that dimension's line.
-    fn typed(&mut self, text: &str, out: &mut ToolOutput) {
-        let Some(length) = parse_length(text) else {
+    fn typed(&mut self, text: &str, units: &Units, out: &mut ToolOutput) {
+        let Some(length) = parse_length(text, units) else {
             out.message = Some(format!("Not a length: {text}"));
             return;
         };
@@ -300,27 +300,28 @@ impl Tool for DimensionTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         match self.step {
             Step::Idle => ("Length", None),
             Step::First(a) => (
                 "Length",
-                self.hover.map(|h| format_length(a.point.distance(h))),
+                self.hover
+                    .map(|h| format_length(a.point.distance(h), units)),
             ),
             Step::Offset { a, b, .. } => (
                 "Offset",
-                self.offset(a, b).map(|o| format_length(o.length())),
+                self.offset(a, b).map(|o| format_length(o.length(), units)),
             ),
             Step::Radial {
                 circle,
                 diameter: true,
                 ..
-            } => ("Diameter", Some(format_length(circle.radius * 2.0))),
+            } => ("Diameter", Some(format_length(circle.radius * 2.0, units))),
             Step::Radial {
                 circle,
                 diameter: false,
                 ..
-            } => ("Radius", Some(format_length(circle.radius))),
+            } => ("Radius", Some(format_length(circle.radius, units))),
         }
     }
 
@@ -387,7 +388,7 @@ impl Tool for DimensionTool {
                     }
                 }
             }
-            ToolEvent::Value(text) => self.typed(&text, &mut out),
+            ToolEvent::Value(text) => self.typed(&text, &ctx.units, &mut out),
             ToolEvent::ToggleCopy => {
                 if let Step::Radial { diameter, .. } = &mut self.step {
                     *diameter = !*diameter;
@@ -455,6 +456,7 @@ pub(crate) mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &Default::default(),
                 material: None,
@@ -531,7 +533,10 @@ pub(crate) mod tests {
             }
         );
         r.hover(v(4.0, 0.0));
-        assert_eq!(r.tool.measurement(), ("Length", Some("4 m".into())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Length", Some("4 m".into()))
+        );
         r.click(v(4.0, 0.0));
         let out = r.hover(v(2.0, 1.0));
         assert_eq!(
@@ -539,7 +544,10 @@ pub(crate) mod tests {
             3,
             "two extension lines and the dimension line"
         );
-        assert_eq!(r.tool.measurement(), ("Offset", Some("1 m".into())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Offset", Some("1 m".into()))
+        );
         let out = r.click(v(2.5, 1.5));
         let [Command::AddDimension { a, b, offset }] = out.commands[..] else {
             panic!("{:?}", out.commands);
@@ -638,7 +646,10 @@ pub(crate) mod tests {
         // Along the circle's first side, away from its ends.
         let points = circle();
         r.click(points[0].lerp(points[1], 0.3));
-        assert_eq!(r.tool.measurement(), ("Diameter", Some("4 m".into())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Diameter", Some("4 m".into()))
+        );
         let out = r.hover(v(3.0, 7.0));
         assert!(!out.preview.is_empty());
         let out = r.send(ToolEvent::ToggleCopy);

@@ -507,7 +507,7 @@ impl Tool for ScaleTool {
     }
 
     /// The factors of the scale in progress: one when uniform, else those of the moving axes.
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, _units: &session::Units) -> (&'static str, Option<String>) {
         let value = self.stretch.as_ref().map(|s| {
             let factors = s.factors(self.about_center, self.shift);
             let moving = s.moving(self.shift);
@@ -567,7 +567,7 @@ impl Tool for ScaleTool {
                     self.finish_at(&hit, ctx, &mut out);
                 }
             }
-            ToolEvent::Value(text) => match parse_scale(&text) {
+            ToolEvent::Value(text) => match parse_scale(&text, &ctx.units) {
                 None => out.message = Some(format!("Not a scale factor or length: {text}")),
                 Some(values) => {
                     let typed = self.stretch.as_ref().map(|s| {
@@ -706,6 +706,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: self.shift,
                 selection: &self.selection,
                 material: None,
@@ -782,6 +783,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &r.selection,
             material: None,
@@ -808,6 +810,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &r.selection,
             material: None,
@@ -836,7 +839,10 @@ mod tests {
             }
         );
         r.hover(v(3.0, 3.0, 3.0));
-        assert_eq!(r.tool.measurement(), ("Scale", Some("1.5".into())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Scale", Some("1.5".into()))
+        );
         let out = r.click(v(3.0, 3.0, 3.0));
         let (origin, factors) = scale_of(&out);
         assert!(close(origin, DVec3::ZERO), "{origin}");
@@ -862,7 +868,10 @@ mod tests {
         let mut r = Rig::cube();
         r.click(v(2.0, 2.0, 1.0));
         r.hover(v(3.0, 4.0, 1.0));
-        assert_eq!(r.tool.measurement(), ("Scale", Some("1.5, 2".into())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Scale", Some("1.5, 2".into()))
+        );
         let (origin, factors) = scale_of(&r.click(v(3.0, 4.0, 1.0)));
         assert!(close(origin, v(0.0, 0.0, 1.0)), "{origin}");
         assert!(close(factors, v(1.5, 2.0, 1.0)), "{factors}");

@@ -2,8 +2,12 @@
 
 use glam::{DAffine3, DMat3, DQuat};
 use kernel::{CurveKind, DefinitionKind, Dimension, EdgeId, EntityId, Guide, Model, Note};
-use session::{AnnotationShape, Document, note_label};
-use tools::vcb::format_length;
+use session::{AnnotationShape, Document, Units, note_label};
+
+/// Entity Info still shows meters (it follows the model units from the next step on).
+fn format_length(meters: f64) -> String {
+    session::format_length(meters, &Units::default())
+}
 
 /// Lines describing the selection: counts, plus length, area or normal for a single entity,
 /// the radius, segments, angle and length of a whole curve (a circle or arc), the direction

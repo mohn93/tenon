@@ -56,7 +56,7 @@ impl Tool for PaintTool {
         "Click a face or group to paint it; Cmd/Ctrl-click picks up a material"
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, _units: &session::Units) -> (&'static str, Option<String>) {
         ("", None)
     }
 
@@ -213,6 +213,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection,
             material: Some(MaterialId(77)),

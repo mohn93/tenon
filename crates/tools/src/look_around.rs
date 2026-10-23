@@ -5,7 +5,7 @@
 
 use glam::{DVec2, DVec3};
 use kernel::EntityId;
-use session::{Command, MAX_EYE_HEIGHT, MIN_EYE_HEIGHT, Ray};
+use session::{Command, MAX_EYE_HEIGHT, MIN_EYE_HEIGHT, Ray, Units};
 
 use crate::probe::{Reach, pick};
 use crate::tool::{Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
@@ -58,13 +58,13 @@ fn under_eye(ctx: &ToolContext) -> DVec3 {
 }
 
 /// The eye height typed, if it is a length within the limits `position_camera` accepts.
-pub(crate) fn parse_eye_height(text: &str) -> Result<f64, String> {
-    match parse_length(text) {
+pub(crate) fn parse_eye_height(text: &str, units: &Units) -> Result<f64, String> {
+    match parse_length(text, units) {
         Some(h) if (MIN_EYE_HEIGHT..=MAX_EYE_HEIGHT).contains(&h) => Ok(h),
         Some(_) => Err(format!(
             "The eye height must be between {} and {}",
-            format_length(MIN_EYE_HEIGHT),
-            format_length(MAX_EYE_HEIGHT)
+            format_length(MIN_EYE_HEIGHT, units),
+            format_length(MAX_EYE_HEIGHT, units)
         )),
         None => Err(format!("Not an eye height: {text}")),
     }
@@ -79,7 +79,7 @@ impl Tool for LookAroundTool {
         "Drag to turn the view, or type an eye height"
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, _units: &session::Units) -> (&'static str, Option<String>) {
         ("Eye height", None)
     }
 
@@ -108,7 +108,7 @@ impl Tool for LookAroundTool {
                 }
             }
             ToolEvent::Release(_) | ToolEvent::Cancel => self.last = None,
-            ToolEvent::Value(text) => match parse_eye_height(&text) {
+            ToolEvent::Value(text) => match parse_eye_height(&text, &ctx.units) {
                 Ok(h) => {
                     self.eye_height = Some(h);
                     let point = under_eye(ctx);

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use glam::{DAffine3, DVec2, DVec3};
 use kernel::{EntityId, FaceId, Model};
-use session::{Camera, Command};
+use session::{Camera, Command, Units};
 
 use crate::inference::{Inference, SnapKind};
 use crate::scenery::Scenery;
@@ -19,6 +19,7 @@ pub(crate) struct Rig {
     pub cursor: DVec2,
     pub scale_factor: f64,
     pub to_world: DAffine3,
+    pub units: Units,
     selection: BTreeSet<EntityId>,
 }
 
@@ -33,8 +34,14 @@ impl Rig {
             cursor: DVec2::ZERO,
             scale_factor: 1.0,
             to_world: DAffine3::IDENTITY,
+            units: Units::default(),
             selection: BTreeSet::new(),
         }
+    }
+
+    /// Selects `id`.
+    pub fn select(&mut self, id: EntityId) {
+        self.selection.insert(id);
     }
 
     pub fn send(&mut self, event: ToolEvent) -> ToolOutput {
@@ -49,6 +56,7 @@ impl Rig {
             scale_factor: self.scale_factor,
             to_world: self.to_world,
             quick_press: false,
+            units: self.units,
             shift: self.shift,
             selection: &self.selection,
             material: None,

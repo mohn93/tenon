@@ -164,10 +164,12 @@ impl Tool for FreehandTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         (
             "Length",
-            self.stroke.as_ref().map(|s| format_length(s.length())),
+            self.stroke
+                .as_ref()
+                .map(|s| format_length(s.length(), units)),
         )
     }
 

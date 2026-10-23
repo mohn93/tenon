@@ -6,12 +6,12 @@
 use glam::{DVec2, DVec3};
 use kernel::geom::LENGTH_TOL;
 use kernel::{EntityId, FaceId, MaterialId, Model};
-use session::Command;
+use session::{Command, Units};
 
 use crate::inference::{Inference, SnapKind, closest_on_line_to_ray, face_under_in};
 use crate::scenery::Owner;
 use crate::tool::{DragStart, Phase, Remembered, Solid, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length, toward_cursor};
+use crate::vcb::{format_length, parse_length, snap_length, toward_cursor};
 
 /// A push/pull in progress.
 #[derive(Clone, Debug)]
@@ -78,12 +78,12 @@ impl PushPullTool {
     }
 
     /// Redoes the last pull at the typed `text`, keeping its direction.
-    fn retype(&mut self, text: &str, out: &mut ToolOutput) {
+    fn retype(&mut self, text: &str, units: &Units, out: &mut ToolOutput) {
         let Some((face, last)) = self.last else {
             out.message = Some("Click a face first".into());
             return;
         };
-        match parse_length(text) {
+        match parse_length(text, units) {
             None => out.message = Some(format!("Not a length: {text}")),
             Some(v) if v.abs() < LENGTH_TOL => {
                 out.message = Some("Distance must not be zero".into());
@@ -201,7 +201,13 @@ fn measure(drag: &Drag, hit: &Inference, ctx: &ToolContext) -> f64 {
         let ray = ctx.camera.ray(ctx.cursor);
         closest_on_line_to_ray(drag.start, drag.normal, &ray, false)
     };
-    (p - drag.loops[0][0]).dot(drag.normal)
+    let distance = (p - drag.loops[0][0]).dot(drag.normal);
+    // A point snap keeps its exact height; the cursor's is rounded to the length snapping.
+    if snapped {
+        distance
+    } else {
+        snap_length(distance, &ctx.units)
+    }
 }
 
 impl Tool for PushPullTool {
@@ -217,10 +223,10 @@ impl Tool for PushPullTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         (
             "Distance",
-            self.drag.as_ref().map(|d| format_length(d.distance)),
+            self.drag.as_ref().map(|d| format_length(d.distance, units)),
         )
     }
 
@@ -294,8 +300,8 @@ impl Tool for PushPullTool {
                     }
                 }
             },
-            ToolEvent::Value(text) => match (self.drag.as_ref(), parse_length(&text)) {
-                (None, _) => self.retype(&text, &mut out),
+            ToolEvent::Value(text) => match (self.drag.as_ref(), parse_length(&text, &ctx.units)) {
+                (None, _) => self.retype(&text, &ctx.units, &mut out),
                 (Some(_), None) => out.message = Some(format!("Not a length: {text}")),
                 (Some(_), Some(v)) if v.abs() < LENGTH_TOL => {
                     out.message = Some("Distance must not be zero".into());
@@ -371,6 +377,7 @@ mod tests {
         face: FaceId,
         camera: Camera,
         cursor: DVec2,
+        units: Units,
         /// Whether presses come within the double-click time of the last release.
         quick: bool,
     }
@@ -400,6 +407,7 @@ mod tests {
                 face,
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 cursor: DVec2::ZERO,
+                units: Units::default(),
                 quick: false,
             }
         }
@@ -436,6 +444,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: self.quick && matches!(event, ToolEvent::Click(_)),
+                units: self.units,
                 shift: false,
                 selection: &Default::default(),
                 material: None,
@@ -478,7 +487,7 @@ mod tests {
         let up = DVec3::new(1.0, 1.0, 1.5);
         let preview = r.at(up, ToolEvent::Move);
         assert_eq!(preview.preview.len(), 4 + 4 + 4);
-        let (label, value) = r.tool.measurement();
+        let (label, value) = r.tool.measurement(&Default::default());
         assert_eq!((label, value.as_deref()), ("Distance", Some("1.5 m")));
         let out = r.at(up, ToolEvent::Click);
         let [Command::PushPull { face, distance }] = out.commands.as_slice() else {
@@ -486,7 +495,10 @@ mod tests {
         };
         assert_eq!(*face, EntityId::Face(r.face));
         assert!((distance - 1.5).abs() < 1e-6);
-        assert!(r.tool.measurement().1.is_none(), "the drag ended");
+        assert!(
+            r.tool.measurement(&Default::default()).1.is_none(),
+            "the drag ended"
+        );
     }
 
     #[test]
@@ -553,6 +565,42 @@ mod tests {
     }
 
     #[test]
+    fn the_cursors_distance_snaps_to_the_length_step_and_typed_ones_do_not() {
+        let mut r = Rig::new();
+        r.units.length_snap = 0.25;
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(1.0, 1.0, 0.6), ToolEvent::Move);
+        assert_eq!(r.tool.measurement(&r.units).1.as_deref(), Some("0.5 m"));
+        let out = r.at(DVec3::new(1.0, 1.0, 0.6), ToolEvent::Click);
+        assert_eq!(out.commands, vec![push_pull(r.face, 0.5)]);
+
+        // A point snap keeps its exact height.
+        let mut r = Rig::new();
+        r.units.length_snap = 0.25;
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        let corner = Inference {
+            point: DVec3::new(5.0, 5.0, 0.6),
+            kind: SnapKind::Endpoint,
+            face: None,
+        };
+        r.cursor = r.camera.project(corner.point).unwrap();
+        let out = r.send(ToolEvent::Click(corner));
+        assert_eq!(out.commands, vec![push_pull(r.face, 0.6)]);
+
+        // A typed value is exact, in the model unit.
+        let mut r = Rig::new();
+        r.units.length_snap = 0.25;
+        r.units.length = session::LengthUnit::FeetInches;
+        r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(1.0, 1.0, 0.6), ToolEvent::Move);
+        let out = r.send(ToolEvent::Value("1'3 1/2\"".into()));
+        let [Command::PushPull { distance, .. }] = out.commands.as_slice() else {
+            panic!("{out:?}")
+        };
+        assert!((distance - 15.5 * 0.0254).abs() < 1e-12);
+    }
+
+    #[test]
     fn typed_distance_follows_the_drag_direction() {
         let mut r = Rig::new();
         r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
@@ -584,7 +632,7 @@ mod tests {
                 .commands
                 .is_empty()
         );
-        assert!(r.tool.measurement().1.is_none());
+        assert!(r.tool.measurement(&Default::default()).1.is_none());
         let out = r.send(ToolEvent::Value("1".into()));
         assert_eq!(out.message.as_deref(), Some("Click a face first"));
     }
@@ -623,6 +671,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &Default::default(),
             material: None,
@@ -685,6 +734,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &Default::default(),
             material: None,
@@ -935,9 +985,9 @@ mod tests {
         let mut r = Rig::new();
         r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
         r.send(ToolEvent::Cancel);
-        assert!(r.tool.measurement().1.is_none());
+        assert!(r.tool.measurement(&Default::default()).1.is_none());
         r.at(DVec3::new(1.0, 1.0, 0.0), ToolEvent::Click);
         r.tool.on_external_change();
-        assert!(r.tool.measurement().1.is_none());
+        assert!(r.tool.measurement(&Default::default()).1.is_none());
     }
 }

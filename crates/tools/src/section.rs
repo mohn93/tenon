@@ -53,7 +53,7 @@ impl Tool for SectionPlaneTool {
         "Click a face or the ground to place a section plane; arrows lock the normal to an axis"
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, _units: &session::Units) -> (&'static str, Option<String>) {
         ("", None)
     }
 
@@ -164,6 +164,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &self.selection,
                 material: None,

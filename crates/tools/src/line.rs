@@ -6,8 +6,9 @@ use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
 use session::Command;
 
+use crate::inference::Inference;
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length};
+use crate::vcb::{format_length, parse_length, snap_distance};
 
 #[derive(Clone, Debug, Default)]
 pub struct LineTool {
@@ -38,6 +39,15 @@ impl LineTool {
         }
     }
 
+    /// Where the cursor is: its inference's point, at a multiple of the model's length snapping
+    /// from the chain's last point unless a point of the model was snapped to.
+    fn snapped(&self, hit: &Inference, ctx: &ToolContext) -> DVec3 {
+        match self.last {
+            Some(last) => snap_distance(last, hit.point, hit.kind, &ctx.units),
+            None => hit.point,
+        }
+    }
+
     fn reset(&mut self) {
         self.first = None;
         self.last = None;
@@ -57,11 +67,11 @@ impl Tool for LineTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         let length = self
             .last
             .zip(self.hover)
-            .map(|(a, b)| format_length(a.distance(b)));
+            .map(|(a, b)| format_length(a.distance(b), units));
         ("Length", length)
     }
 
@@ -83,9 +93,9 @@ impl Tool for LineTool {
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
-            ToolEvent::Move(hit) => self.hover = Some(hit.point),
+            ToolEvent::Move(hit) => self.hover = Some(self.snapped(&hit, ctx)),
             ToolEvent::Click(hit) => {
-                let p = hit.point;
+                let p = self.snapped(&hit, ctx);
                 self.hover = Some(p);
                 match self.last {
                     None => {
@@ -108,7 +118,7 @@ impl Tool for LineTool {
                     .zip(self.hover)
                     .map(|(a, b)| b - a)
                     .filter(|d| d.length() >= LENGTH_TOL);
-                match (self.last, dir, parse_length(&text)) {
+                match (self.last, dir, parse_length(&text, &ctx.units)) {
                     (None, _, _) | (_, None, _) => {
                         out.message = Some("Move the cursor to set a direction first".into());
                     }
@@ -188,6 +198,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &Default::default(),
                 material: None,
@@ -209,7 +220,10 @@ mod tests {
         let out = r.send(ToolEvent::Move(at(2.0, 0.0)));
         assert_eq!(out.preview, vec![[DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0)]]);
         assert_eq!(r.tool.anchor(), Some(DVec3::ZERO));
-        assert_eq!(r.tool.measurement(), ("Length", Some("2 m".to_string())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Length", Some("2 m".to_string()))
+        );
     }
 
     #[test]

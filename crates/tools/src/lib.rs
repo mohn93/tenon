@@ -34,6 +34,8 @@ pub mod tape;
 mod testing;
 pub mod text;
 pub mod tool;
+#[cfg(test)]
+mod units_tests;
 pub mod vcb;
 
 pub use arc::ArcTool;

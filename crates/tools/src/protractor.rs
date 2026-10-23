@@ -8,7 +8,7 @@
 
 use glam::{DQuat, DVec3};
 use kernel::geom::LENGTH_TOL;
-use session::Command;
+use session::{Command, Units};
 
 use crate::inference::Axis;
 use crate::rectangle::plane_normal;
@@ -74,15 +74,15 @@ impl ProtractorTool {
     }
 
     /// The angle from the baseline to the cursor, in degrees, snapped unless on a point.
-    fn angle(&self) -> Option<f64> {
+    fn angle(&self, snap: f64) -> Option<f64> {
         let c = self.center.as_ref()?;
         let (from, _) = c.baseline?;
         let to = flat(self.hover? - c.point, c.axis).try_normalize()?;
-        Some(protractor_angle(from, to, c.axis, self.on_point))
+        Some(protractor_angle(from, to, c.axis, self.on_point, snap))
     }
 
     /// Places the guide at `angle` (or only reports it), ending the measurement.
-    fn finish(&mut self, angle: f64, out: &mut ToolOutput) {
+    fn finish(&mut self, angle: f64, out: &mut ToolOutput, units: &Units) {
         let Some(c) = self.center.take() else { return };
         let Some((reference, _)) = c.baseline else {
             return;
@@ -101,7 +101,7 @@ impl ProtractorTool {
             });
             self.last = Some(last);
         } else {
-            out.message = Some(format!("Angle: {}", format_angle(angle)));
+            out.message = Some(format!("Angle: {}", format_angle(angle, units)));
             out.info = true;
         }
     }
@@ -127,8 +127,11 @@ impl Tool for ProtractorTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
-        ("Angle", self.angle().map(format_angle))
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
+        (
+            "Angle",
+            self.angle(units.angle_snap).map(|a| format_angle(a, units)),
+        )
     }
 
     fn anchor(&self) -> Option<DVec3> {
@@ -183,26 +186,26 @@ impl Tool for ProtractorTool {
                     self.on_point = is_point(hit.kind);
                     let c = self.center.unwrap();
                     self.hover = on_rotation_plane(c.point, c.axis, &hit, ctx);
-                    match self.angle() {
-                        Some(a) => self.finish(a, &mut out),
+                    match self.angle(ctx.units.angle_snap) {
+                        Some(a) => self.finish(a, &mut out, &ctx.units),
                         None => out.message = Some("Move away from the center".into()),
                     }
                 }
             },
             ToolEvent::Value(text) => {
-                let typed = parse_angle(&text).or_else(|| parse_slope(&text));
+                let typed = parse_angle(&text).or_else(|| parse_slope(&text, &ctx.units));
                 match (typed, self.center, self.last) {
                     (None, ..) => {
                         out.message = Some(format!("Not an angle or rise:run: {text}"));
                     }
                     (Some(typed), Some(c), _) if c.baseline.is_some() => {
                         // A typed angle turns the way the cursor does.
-                        let a = if self.angle().is_some_and(|a| a < 0.0) {
+                        let a = if self.angle(ctx.units.angle_snap).is_some_and(|a| a < 0.0) {
                             -typed
                         } else {
                             typed
                         };
-                        self.finish(a, &mut out);
+                        self.finish(a, &mut out, &ctx.units);
                     }
                     (Some(_), Some(_), _) => out.message = Some("Click the baseline first".into()),
                     // Right after a guide was placed: replace it, turning the way it did.
@@ -246,7 +249,9 @@ impl Tool for ProtractorTool {
             if let Some(hover) = self.hover {
                 out.preview.push([c.point, hover]);
             }
-            if let (Some((reference, _)), Some(angle)) = (c.baseline, self.angle()) {
+            if let (Some((reference, _)), Some(angle)) =
+                (c.baseline, self.angle(ctx.units.angle_snap))
+            {
                 let dir = DQuat::from_axis_angle(c.axis, angle.to_radians()) * reference;
                 out.preview.push([c.point, c.point + dir * radius]);
                 if self.guides {
@@ -328,7 +333,10 @@ mod tests {
         let c = v(1.0, 1.0, 0.0);
         let out = r.mv(c + polar(30.0, 1.0));
         assert!(!out.preview.is_empty());
-        assert_eq!(r.tool.measurement(), ("Angle", Some("30°".to_string())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Angle", Some("30°".to_string()))
+        );
         let out = r.click(c + polar(30.0, 1.0));
         let (point, dir) = guide(&out);
         assert_eq!(point, c);
@@ -341,16 +349,28 @@ mod tests {
         let c = v(1.0, 1.0, 0.0);
         let mut r = started();
         r.mv(c + polar(31.0, 1.0));
-        assert_eq!(r.tool.measurement().1, Some("30°".to_string()));
+        assert_eq!(
+            r.tool.measurement(&Default::default()).1,
+            Some("30°".to_string())
+        );
         r.mv(c + polar(38.0, 1.0));
-        assert_eq!(r.tool.measurement().1, Some("38°".to_string()));
+        assert_eq!(
+            r.tool.measurement(&Default::default()).1,
+            Some("38°".to_string())
+        );
         // On an endpoint the angle is exact.
         let hit = r.at(c + polar(31.0, 1.0), SnapKind::Endpoint, None);
         r.send(ToolEvent::Move(hit));
-        assert_eq!(r.tool.measurement().1, Some("31°".to_string()));
+        assert_eq!(
+            r.tool.measurement(&Default::default()).1,
+            Some("31°".to_string())
+        );
         // Clockwise is negative.
         r.mv(c + polar(-44.0, 1.0));
-        assert_eq!(r.tool.measurement().1, Some("-45°".to_string()));
+        assert_eq!(
+            r.tool.measurement(&Default::default()).1,
+            Some("-45°".to_string())
+        );
     }
 
     #[test]

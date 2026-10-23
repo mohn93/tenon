@@ -9,12 +9,14 @@
 
 use glam::{DMat3, DQuat, DVec3};
 use kernel::geom::LENGTH_TOL;
-use session::{Command, rectangle_axes_in};
+use session::{Command, Units, rectangle_axes_in};
 
 use crate::inference::{Inference, SnapKind};
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{DragStart, Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_angle, parse_length};
+use crate::vcb::{
+    format_length, is_point_snap, parse_angle, parse_length, snap_distance, snap_length,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct RotatedRectangleTool {
@@ -50,12 +52,32 @@ impl RotatedRectangleTool {
     /// The point a cursor at `hit` gives: where the cursor ray crosses the corner's plane
     /// when the cursor is on nothing in particular, else the inferred point (which may leave
     /// the plane and so tilt the rectangle).
+    /// Unless a point of the model was snapped to, the side's length and then the width are
+    /// rounded to the model's length snapping.
     fn point_at(&self, hit: &Inference, ctx: &ToolContext) -> DVec3 {
-        match (self.corner, hit.kind) {
+        let p = match (self.corner, hit.kind) {
             (Some((a, normal)), SnapKind::Ground | SnapKind::Free) => {
                 on_plane(a, normal, hit, ctx).unwrap_or(hit.point)
             }
             _ => hit.point,
+        };
+        let Some((a, _)) = self.corner else { return p };
+        if ctx.units.length_snap <= 0.0 || is_point_snap(hit.kind) {
+            return p;
+        }
+        match self.edge_end {
+            None => snap_distance(a, p, hit.kind, &ctx.units),
+            Some(b) => match (b - a).try_normalize() {
+                Some(side) => {
+                    let across = square_to(p - a, side);
+                    let width = across.length();
+                    if width < LENGTH_TOL {
+                        return p;
+                    }
+                    p - across + across * (snap_length(width, &ctx.units) / width)
+                }
+                None => p,
+            },
         }
     }
 
@@ -88,14 +110,14 @@ impl RotatedRectangleTool {
     }
 
     /// Handles typed text: the side after the first click, the width after the second.
-    fn typed(&mut self, text: &str, out: &mut ToolOutput) {
+    fn typed(&mut self, text: &str, units: &Units, out: &mut ToolOutput) {
         let Some((a, normal)) = self.corner else {
             out.message = Some("Click the first corner first".into());
             return;
         };
         let (length, angle) = match text.split_once(',') {
-            Some((l, d)) => (parse_length(l), parse_angle(d).map(Some)),
-            None => (parse_length(text), Some(None)),
+            Some((l, d)) => (parse_length(l, units), parse_angle(d).map(Some)),
+            None => (parse_length(text, units), Some(None)),
         };
         let (Some(length), Some(angle)) = (length, angle) else {
             let what = if self.edge_end.is_none() {
@@ -159,17 +181,17 @@ impl Tool for RotatedRectangleTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         let (Some((a, _)), hover) = (self.corner, self.hover) else {
             return ("Length", None);
         };
         match self.edge_end {
-            None => ("Length", hover.map(|h| format_length(a.distance(h)))),
+            None => ("Length", hover.map(|h| format_length(a.distance(h), units))),
             Some(b) => (
                 "Width",
                 hover
                     .and_then(|h| corners(a, b, h))
-                    .map(|(_, w)| format_length(w)),
+                    .map(|(_, w)| format_length(w, units)),
             ),
         }
     }
@@ -215,7 +237,7 @@ impl Tool for RotatedRectangleTool {
                     return self.handle(ToolEvent::Click(hit), ctx);
                 }
             }
-            ToolEvent::Value(text) => self.typed(&text, &mut out),
+            ToolEvent::Value(text) => self.typed(&text, &ctx.units, &mut out),
             ToolEvent::Cancel => {
                 if self.edge_end.take().is_none() {
                     self.on_external_change();
@@ -313,7 +335,10 @@ mod tests {
             expect.iter().all(|e| corners.iter().any(|c| close(*c, *e))),
             "{corners:?}"
         );
-        assert_eq!(r.tool.measurement(), ("Width", Some("0.75 m".to_string())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Width", Some("0.75 m".to_string()))
+        );
     }
 
     #[test]

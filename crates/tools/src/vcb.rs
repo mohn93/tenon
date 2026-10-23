@@ -1,45 +1,25 @@
 //! The measurements box: parsing typed lengths and formatting live ones.
 
+use glam::DVec3;
 use kernel::geom::LENGTH_TOL;
+use session::Units;
 
-const INCH: f64 = 0.0254;
+use crate::inference::SnapKind;
 
-/// Parses a length in meters: "2.5" (meters), "250mm", "25cm", "2m", "10in", "10\"", "3ft",
-/// "3'", "5'6\"" or "5'6". A leading "-" negates it. None if it is not a length.
-pub fn parse_length(s: &str) -> Option<f64> {
-    let s = s.trim();
-    let (sign, s) = match s.strip_prefix('-') {
-        Some(rest) => (-1.0, rest.trim_start()),
-        None => (1.0, s),
-    };
-    let meters = match s.split_once('\'') {
-        Some((feet, inches)) => {
-            let inches = inches.trim();
-            let inches = inches.strip_suffix('"').unwrap_or(inches).trim();
-            let inches = if inches.is_empty() {
-                0.0
-            } else {
-                number(inches)?
-            };
-            (number(feet.trim())? * 12.0 + inches) * INCH
-        }
-        None => {
-            let split = s
-                .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-                .unwrap_or(s.len());
-            let (value, unit) = s.split_at(split);
-            number(value)? * unit_scale(unit.trim())?
-        }
-    };
-    meters.is_finite().then_some(sign * meters)
+/// Parses a typed length in meters, a bare number being in the model's unit (see
+/// `session::parse_length`). None if it is not a length.
+pub fn parse_length(s: &str, units: &Units) -> Option<f64> {
+    session::parse_length(s, units).ok()
 }
 
-/// Comma-separated lengths, each with its own unit: "2,3" or "200mm, 1.5m".
-pub fn parse_lengths(s: &str) -> Option<Vec<f64>> {
-    s.split(',').map(parse_length).collect()
+/// Comma-separated lengths, each with its own unit: "2,3" or "200mm, 1.5m". A comma inside
+/// feet and inches ("3'6 1/2", 4'") does not matter: they have none.
+pub fn parse_lengths(s: &str, units: &Units) -> Option<Vec<f64>> {
+    s.split(',').map(|v| parse_length(v, units)).collect()
 }
 
-/// One typed scale value: a plain number is a factor, a number with a unit a length (meters).
+/// One typed scale value: a plain number is a factor, a length (one with a unit, or in feet and
+/// inches) a length in meters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScaleValue {
     Factor(f64),
@@ -47,8 +27,9 @@ pub enum ScaleValue {
 }
 
 /// Comma-separated scale values, all factors ("2", "-1", "1.5, 2") or all lengths ("3m",
-/// "250mm, 1m"). None if one is neither or the kinds are mixed.
-pub fn parse_scale(s: &str) -> Option<Vec<ScaleValue>> {
+/// "250mm, 1m"). A bare number is always a factor, whatever the model's unit. None if one is
+/// neither or the kinds are mixed.
+pub fn parse_scale(s: &str, units: &Units) -> Option<Vec<ScaleValue>> {
     let values: Vec<ScaleValue> = s
         .split(',')
         .map(|v| {
@@ -59,7 +40,7 @@ pub fn parse_scale(s: &str) -> Option<Vec<ScaleValue>> {
             };
             match number(digits) {
                 Some(f) => Some(ScaleValue::Factor(sign * f)),
-                None => parse_length(v).map(ScaleValue::Length),
+                None => parse_length(v, units).map(ScaleValue::Length),
             }
         })
         .collect::<Option<_>>()?;
@@ -135,26 +116,60 @@ pub fn parse_angle(s: &str) -> Option<f64> {
 
 /// Parses a slope "rise:run" ("1:2", "6in:12in", "-1:4") as an angle in degrees, atan(rise / run).
 /// None if it is not two lengths or the run is zero.
-pub fn parse_slope(s: &str) -> Option<f64> {
+pub fn parse_slope(s: &str, units: &Units) -> Option<f64> {
     let (rise, run) = s.split_once(':')?;
-    let (rise, run) = (parse_length(rise)?, parse_length(run)?);
+    let (rise, run) = (parse_length(rise, units)?, parse_length(run, units)?);
     (run != 0.0).then(|| (rise / run).atan().to_degrees())
 }
 
-/// An angle for display, in degrees to a tenth: "22.5°".
-pub fn format_angle(degrees: f64) -> String {
-    let s = format!("{degrees:.1}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    let s = if s == "-0" { "0" } else { s };
-    format!("{s}°")
+/// An angle for display in the model's angle precision: "22.5°".
+pub fn format_angle(degrees: f64, units: &Units) -> String {
+    session::format_angle(degrees, units)
 }
 
-/// A length for display, in meters with up to millimeter precision: "2.5 m".
-pub fn format_length(meters: f64) -> String {
-    let s = format!("{meters:.3}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    let s = if s == "-0" { "0" } else { s };
-    format!("{s} m")
+/// A length for display in the model's unit and precision: "2.5 m", "7' 3 1/2\"".
+pub fn format_length(meters: f64, units: &Units) -> String {
+    session::format_length(meters, units)
+}
+
+/// `meters` rounded to the nearest multiple of the model's length snapping (unchanged where it
+/// is off). For lengths taken from the cursor; typed lengths are never rounded.
+pub fn snap_length(meters: f64, units: &Units) -> f64 {
+    if units.length_snap > 0.0 {
+        (meters / units.length_snap).round() * units.length_snap
+    } else {
+        meters
+    }
+}
+
+/// Whether an inference is a point of the model (or a guide) that keeps its exact position:
+/// it wins over length snapping.
+pub(crate) fn is_point_snap(kind: SnapKind) -> bool {
+    matches!(
+        kind,
+        SnapKind::Endpoint
+            | SnapKind::Midpoint
+            | SnapKind::Origin
+            | SnapKind::GuidePoint
+            | SnapKind::Intersection
+            | SnapKind::OnEdge
+            | SnapKind::OnGuide
+    )
+}
+
+/// The cursor point `p`, found with an inference of `kind`, moved along the line from `from` so
+/// its distance from `from` is a multiple of the model's length snapping. A point snap and
+/// no length snapping leave it where it is.
+pub(crate) fn snap_distance(from: DVec3, p: DVec3, kind: SnapKind, units: &Units) -> DVec3 {
+    if units.length_snap <= 0.0 || is_point_snap(kind) {
+        return p;
+    }
+    let v = p - from;
+    let len = v.length();
+    if len < LENGTH_TOL {
+        return p;
+    }
+    from + v * (snap_length(len, units) / len)
 }
 
 /// A typed `value` pointed the way the cursor is: negated when `cursor` (the live measurement)
@@ -168,20 +183,39 @@ fn number(s: &str) -> Option<f64> {
     if digits { s.parse().ok() } else { None }
 }
 
-fn unit_scale(unit: &str) -> Option<f64> {
-    Some(match unit.to_ascii_lowercase().as_str() {
-        "" | "m" => 1.0,
-        "mm" => 0.001,
-        "cm" => 0.01,
-        "in" | "\"" => INCH,
-        "ft" => 12.0 * INCH,
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use session::LengthUnit;
+
+    const INCH: f64 = 0.0254;
+
+    fn parse_length(s: &str) -> Option<f64> {
+        super::parse_length(s, &Units::default())
+    }
+
+    fn parse_lengths(s: &str) -> Option<Vec<f64>> {
+        super::parse_lengths(s, &Units::default())
+    }
+
+    fn parse_scale(s: &str) -> Option<Vec<ScaleValue>> {
+        super::parse_scale(s, &Units::default())
+    }
+
+    fn format_length(m: f64) -> String {
+        super::format_length(m, &Units::default())
+    }
+
+    fn format_angle(d: f64) -> String {
+        super::format_angle(d, &Units::default())
+    }
+
+    fn feet_inches() -> Units {
+        Units {
+            length: LengthUnit::FeetInches,
+            ..Units::default()
+        }
+    }
 
     #[test]
     fn side_counts_end_in_s() {
@@ -214,6 +248,86 @@ mod tests {
         assert!(close(parse_length("3'"), 0.9144));
         assert!(close(parse_length("5'6\""), 66.0 * INCH));
         assert!(close(parse_length("5' 6"), 66.0 * INCH));
+    }
+
+    #[test]
+    fn typed_lengths_follow_the_model_unit() {
+        let fi = feet_inches();
+        let ft = Units {
+            length: LengthUnit::Feet,
+            ..Units::default()
+        };
+        let p = |s: &str, u: &Units| super::parse_length(s, u);
+        assert!(close(p("3'6 1/2\"", &fi), 42.5 * INCH));
+        assert!(close(p("10", &fi), 10.0 * INCH));
+        assert!(close(p("2", &ft), 24.0 * INCH));
+        assert!(close(p("2m", &fi), 2.0));
+        assert!(close(p("-3'6", &fi), -42.0 * INCH));
+        assert_eq!(p("3'x", &fi), None);
+    }
+
+    #[test]
+    fn feet_inches_lengths_split_only_on_the_comma_between_them() {
+        let fi = feet_inches();
+        assert_eq!(
+            super::parse_lengths("3'6 1/2\", 4'", &fi),
+            Some(vec![42.5 * INCH, 48.0 * INCH])
+        );
+        assert_eq!(
+            super::parse_lengths("6 1/2, 3", &fi).map(|v| v.len()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn scale_numbers_stay_factors_whatever_the_unit() {
+        use ScaleValue::{Factor, Length};
+        let fi = feet_inches();
+        assert_eq!(super::parse_scale("2", &fi), Some(vec![Factor(2.0)]));
+        assert_eq!(
+            super::parse_scale("1.5, 2", &fi),
+            Some(vec![Factor(1.5), Factor(2.0)])
+        );
+        let Some([Length(m)]) = super::parse_scale("3'", &fi).as_deref().map(|v| [v[0]]) else {
+            panic!("not a length")
+        };
+        assert!((m - 36.0 * INCH).abs() < 1e-12);
+        assert_eq!(super::parse_scale("2,3'", &fi), None);
+    }
+
+    #[test]
+    fn slope_lengths_follow_the_model_unit() {
+        let deg = super::parse_slope("6:12", &feet_inches()).unwrap();
+        assert!((deg - 0.5f64.atan().to_degrees()).abs() < 1e-12);
+        let deg = super::parse_slope("1':2'", &feet_inches()).unwrap();
+        assert!((deg - 0.5f64.atan().to_degrees()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lengths_show_in_the_model_unit_and_snap() {
+        let cm = Units {
+            length: LengthUnit::Centimeters,
+            ..Units::default()
+        };
+        assert_eq!(super::format_length(1.25, &cm), "125 cm");
+        assert_eq!(super::format_length(1.25, &feet_inches()), "4' 1 1/4\"");
+        let snap = Units {
+            length_snap: 0.25,
+            ..Units::default()
+        };
+        assert_eq!(super::snap_length(1.13, &snap), 1.25);
+        assert_eq!(super::snap_length(-0.9, &snap), -1.0);
+        assert_eq!(super::snap_length(1.13, &Units::default()), 1.13);
+    }
+
+    #[test]
+    fn angles_show_with_the_model_precision() {
+        let u = Units {
+            angle_precision: 2,
+            ..Units::default()
+        };
+        assert_eq!(super::format_angle(22.456, &u), "22.46°");
+        assert_eq!(super::format_angle(22.456, &Units::default()), "22.5°");
     }
 
     #[test]
@@ -299,6 +413,10 @@ mod tests {
 #[cfg(test)]
 mod slope_tests {
     use super::*;
+
+    fn parse_slope(s: &str) -> Option<f64> {
+        super::parse_slope(s, &Units::default())
+    }
 
     #[test]
     fn slopes_are_rise_over_run_in_degrees() {

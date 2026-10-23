@@ -95,8 +95,8 @@ impl Tool for PositionCameraTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
-        ("Eye height", Some(format_length(self.eye_height)))
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
+        ("Eye height", Some(format_length(self.eye_height, units)))
     }
 
     fn anchor(&self) -> Option<DVec3> {
@@ -131,10 +131,10 @@ impl Tool for PositionCameraTool {
                     self.place(a, dragged.then_some(hit.point), ctx, &mut out);
                 }
             }
-            ToolEvent::Value(text) => match parse_eye_height(&text) {
+            ToolEvent::Value(text) => match parse_eye_height(&text, &ctx.units) {
                 Ok(h) => {
                     self.eye_height = h;
-                    out.message = Some(format!("Eye height {}", format_length(h)));
+                    out.message = Some(format!("Eye height {}", format_length(h, &ctx.units)));
                     out.info = true;
                 }
                 Err(e) => out.message = Some(e),
@@ -244,7 +244,10 @@ mod tests {
         r.tool.remember(&mut kept);
         assert_eq!(kept.eye_height, Some(1.2));
         let mut next = ToolKind::PositionCamera.make_with(&kept);
-        assert_eq!(next.measurement().1.as_deref(), Some("1.2 m"));
+        assert_eq!(
+            next.measurement(&Default::default()).1.as_deref(),
+            Some("1.2 m")
+        );
         next.on_external_change();
     }
 

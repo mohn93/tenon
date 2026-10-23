@@ -9,11 +9,11 @@
 use glam::DVec3;
 use kernel::Guide;
 use kernel::geom::LENGTH_TOL;
-use session::Command;
+use session::{Command, Units};
 
 use crate::inference::{SnapKind, edge_under_in, guide_under_where};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length};
+use crate::vcb::{format_length, is_point_snap, parse_length, snap_length};
 
 /// Where a measurement starts.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,7 +92,7 @@ impl TapeMeasureTool {
 
     /// Ends the measurement at `offset` from the start: adds the guide, or reports the
     /// distance when measuring only.
-    fn finish(&mut self, start: Start, offset: DVec3, out: &mut ToolOutput) {
+    fn finish(&mut self, start: Start, offset: DVec3, units: &Units, out: &mut ToolOutput) {
         let length = offset.length();
         if length < LENGTH_TOL {
             out.message = Some(match start {
@@ -105,10 +105,27 @@ impl TapeMeasureTool {
             out.commands.push(start.guide(offset));
             self.last = Some((start, offset / length));
         } else {
-            out.message = Some(format!("Distance: {}", format_length(length)));
+            out.message = Some(format!("Distance: {}", format_length(length, units)));
             out.info = true;
         }
         self.start = None;
+    }
+
+    /// Where the cursor is: its inference's point, moved so its distance from the start is a
+    /// multiple of the model's length snapping unless a point of the model was snapped to.
+    fn snapped(&self, hit: &crate::inference::Inference, units: &Units) -> DVec3 {
+        let Some(start) = self.start else {
+            return hit.point;
+        };
+        if units.length_snap <= 0.0 || is_point_snap(hit.kind) {
+            return hit.point;
+        }
+        let offset = start.offset(hit.point);
+        let length = offset.length();
+        if length < LENGTH_TOL {
+            return hit.point;
+        }
+        hit.point - offset + offset * (snap_length(length, units) / length)
     }
 
     /// Where a click at `hit` starts measuring: along the edge or guide line under the
@@ -154,8 +171,8 @@ impl Tool for TapeMeasureTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
-        ("Length", self.distance().map(format_length))
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
+        ("Length", self.distance().map(|d| format_length(d, units)))
     }
 
     fn anchor(&self) -> Option<DVec3> {
@@ -175,19 +192,20 @@ impl Tool for TapeMeasureTool {
     fn handle(&mut self, event: ToolEvent, ctx: &ToolContext) -> ToolOutput {
         let mut out = ToolOutput::default();
         match event {
-            ToolEvent::Move(hit) => self.hover = Some(hit.point),
+            ToolEvent::Move(hit) => self.hover = Some(self.snapped(&hit, &ctx.units)),
             ToolEvent::Click(hit) => {
-                self.hover = Some(hit.point);
+                let p = self.snapped(&hit, &ctx.units);
+                self.hover = Some(p);
                 match self.start {
                     None => {
                         self.start = Some(Self::start_at(&hit, ctx));
                         self.last = None;
                     }
-                    Some(start) => self.finish(start, start.offset(hit.point), &mut out),
+                    Some(start) => self.finish(start, start.offset(p), &ctx.units, &mut out),
                 }
             }
             ToolEvent::Value(text) => {
-                let Some(length) = parse_length(&text) else {
+                let Some(length) = parse_length(&text, &ctx.units) else {
                     out.message = Some(format!("Not a length: {text}"));
                     return out;
                 };
@@ -203,7 +221,7 @@ impl Tool for TapeMeasureTool {
                         } else if let Some(dir) =
                             self.hover.and_then(|h| start.offset(h).try_normalize())
                         {
-                            self.finish(start, dir * length, &mut out);
+                            self.finish(start, dir * length, &ctx.units, &mut out);
                         } else {
                             out.message = Some("Move the cursor to show the direction".into());
                         }
@@ -214,7 +232,7 @@ impl Tool for TapeMeasureTool {
                             count: None,
                             expect: None,
                         });
-                        self.finish(start, dir * length, &mut out);
+                        self.finish(start, dir * length, &ctx.units, &mut out);
                     }
                     (None, None) => {
                         out.message = Some("Click where to measure from first".into());
@@ -305,6 +323,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &Default::default(),
                 material: None,
@@ -361,7 +380,7 @@ mod tests {
             Some(true)
         );
         r.hover(DVec3::new(2.0, 2.5, 0.0));
-        let (label, value) = r.tool.measurement();
+        let (label, value) = r.tool.measurement(&Default::default());
         assert_eq!((label, value.as_deref()), ("Length", Some("2.5 m")));
         let out = r.click(DVec3::new(2.0, 2.5, 0.0));
         let [Command::AddGuideLine { point, direction }] = out.commands[..] else {

@@ -55,6 +55,9 @@ pub struct ToolContext<'a> {
     /// Maps the open context's coordinates to the world's (identity at the root), for the
     /// tools that send camera commands, which take world coordinates.
     pub to_world: DAffine3,
+    /// The model's display units: how typed lengths are read, how lengths and angles are shown,
+    /// and the steps cursor-driven lengths and angles snap to.
+    pub units: session::Units,
     /// Whether this press of the primary button comes within the double-click time of the
     /// previous click's release (false for every other event). The window times it; in
     /// `tool_input` only a `double_click` or `triple_click` event's later presses are quick.
@@ -161,7 +164,7 @@ pub trait Tool {
     /// What the user should do next.
     fn prompt(&self) -> &'static str;
     /// The measurements box label and the live value, e.g. ("Length", Some("2.5 m")).
-    fn measurement(&self) -> (&'static str, Option<String>);
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>);
     /// The point axis inference starts from, if any.
     fn anchor(&self) -> Option<DVec3>;
     /// Whether an operation is in progress, and the points it was given so far.
@@ -474,6 +477,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &selection,
                 material: None,
@@ -522,6 +526,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &selection,
                 material: None,
@@ -674,6 +679,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &selection,
                 material: None,
@@ -722,6 +728,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &BTreeSet::new(),
             material: None,

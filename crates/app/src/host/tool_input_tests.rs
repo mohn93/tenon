@@ -2448,6 +2448,61 @@ fn the_rotated_rectangle_takes_clicks_and_typed_values() {
 }
 
 #[test]
+fn typed_values_and_measurements_follow_the_model_units() {
+    let mut e = editor();
+    exec(
+        &mut e,
+        json!({"type": "set_units", "length": "feet_inches", "length_snap": 0.25}),
+    );
+    tool(&mut e, "line");
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "move", "point": [1.13, 0, 0]}
+        ]),
+    );
+    // The cursor's 1.13 m rounds to 1.25 m, shown in feet and inches.
+    assert_eq!(r["editor"]["measurement"], "4' 1 1/4\"", "{r}");
+    // A typed length is read as feet and inches and not rounded.
+    let r = input(&mut e, json!([{"type": "type", "text": "3'6 1/2\""}]));
+    assert_eq!(ran(&r), ["add_edge"], "{r}");
+    let end = vec3(&r["commands"][0]["command"]["end"]);
+    assert!((end.x - 42.5 * 0.0254).abs() < 1e-9, "{end}");
+}
+
+#[test]
+fn the_angle_snap_and_precision_follow_the_model_units() {
+    let mut e = editor();
+    exec(
+        &mut e,
+        json!({"type": "set_units", "angle_snap": 5, "angle_precision": 2}),
+    );
+    tool(&mut e, "protractor");
+    let a = 36.5f64.to_radians();
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [1, 0, 0]},
+            {"type": "move", "point": [a.cos(), a.sin(), 0]}
+        ]),
+    );
+    assert_eq!(r["editor"]["measurement"], "35°", "{r}");
+    exec(&mut e, json!({"type": "set_units", "angle_snap": 0}));
+    // A units change drops the operation in progress: start again.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "click", "point": [0, 0, 0]},
+            {"type": "click", "point": [1, 0, 0]},
+            {"type": "move", "point": [a.cos(), a.sin(), 0]}
+        ]),
+    );
+    assert_eq!(r["editor"]["measurement"], "36.5°", "{r}");
+}
+
+#[test]
 fn the_protractor_places_guides_by_click_angle_and_slope() {
     let mut e = editor();
     tool(&mut e, "protractor");

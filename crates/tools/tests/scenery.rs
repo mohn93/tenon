@@ -555,6 +555,7 @@ fn clicked(s: &Scene, tool: &mut dyn Tool, points: &[DVec3]) -> ToolOutput {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &selection,
             material: None,

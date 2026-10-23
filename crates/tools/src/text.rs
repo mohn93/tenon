@@ -123,7 +123,7 @@ impl Tool for TextTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, _units: &session::Units) -> (&'static str, Option<String>) {
         ("", None)
     }
 

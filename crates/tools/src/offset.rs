@@ -10,12 +10,12 @@ use glam::{DVec2, DVec3};
 use kernel::geom::{LENGTH_TOL, point_in_polygon};
 use kernel::offset::{offset_arc, offset_chain, offset_face, offset_loop, plane_normal, side_of};
 use kernel::{EdgeId, EntityId, FaceId, Model};
-use session::{Camera, Command};
+use session::{Camera, Command, Units};
 
 use crate::inference::face_under_in;
 use crate::scenery::Owner;
 use crate::tool::{DragStart, Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, parse_length, toward_cursor};
+use crate::vcb::{format_length, parse_length, snap_length, toward_cursor};
 
 /// The smallest distance an offset has (the command's).
 const LEAST: f64 = 10.0 * LENGTH_TOL;
@@ -339,12 +339,12 @@ impl OffsetTool {
     }
 
     /// Redoes the last offset at the typed `text`, keeping its direction.
-    fn retype(&mut self, text: &str, out: &mut ToolOutput) {
+    fn retype(&mut self, text: &str, units: &Units, out: &mut ToolOutput) {
         let Some(last) = self.last.clone() else {
             out.message = Some("Click a face first".into());
             return;
         };
-        match parse_length(text) {
+        match parse_length(text, units) {
             None => out.message = Some(format!("Not a length: {text}")),
             Some(v) if v.abs() < LEAST => {
                 out.message = Some("The offset distance is too small".into());
@@ -453,10 +453,10 @@ impl Tool for OffsetTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
         (
             "Distance",
-            self.drag.as_ref().map(|d| format_length(d.distance)),
+            self.drag.as_ref().map(|d| format_length(d.distance, units)),
         )
     }
 
@@ -483,7 +483,7 @@ impl Tool for OffsetTool {
                 Some(d) => {
                     if let Some(p) = d.source.plane_point(ctx.camera, ctx.cursor) {
                         let (distance, toward) = d.source.measure(p);
-                        d.distance = distance;
+                        d.distance = snap_length(distance, &ctx.units);
                         d.toward = toward;
                     }
                 }
@@ -542,8 +542,8 @@ impl Tool for OffsetTool {
                     }
                 }
             },
-            ToolEvent::Value(text) => match (self.drag.as_ref(), parse_length(&text)) {
-                (None, _) => self.retype(&text, &mut out),
+            ToolEvent::Value(text) => match (self.drag.as_ref(), parse_length(&text, &ctx.units)) {
+                (None, _) => self.retype(&text, &ctx.units, &mut out),
                 (Some(_), None) => out.message = Some(format!("Not a length: {text}")),
                 (Some(_), Some(v)) if v.abs() < LEAST => {
                     out.message = Some("The offset distance is too small".into());
@@ -632,6 +632,7 @@ mod tests {
         face: FaceId,
         camera: Camera,
         cursor: DVec2,
+        units: Units,
         selection: BTreeSet<EntityId>,
     }
 
@@ -656,6 +657,7 @@ mod tests {
                 face,
                 camera: Camera::new(DVec2::new(800.0, 600.0)),
                 cursor: DVec2::ZERO,
+                units: Units::default(),
                 selection: BTreeSet::new(),
             }
         }
@@ -696,6 +698,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: self.units,
                 shift: false,
                 selection: &self.selection,
                 material: None,
@@ -744,10 +747,32 @@ mod tests {
         r.at(DVec3::new(0.5, 1.0, 0.0), ToolEvent::Click);
         let out = r.at(DVec3::new(0.3, 1.0, 0.0), ToolEvent::Move);
         assert_eq!(out.preview.len(), 4, "the new loop");
-        assert_eq!(r.tool.measurement().1.as_deref(), Some("0.3 m"));
+        assert_eq!(
+            r.tool.measurement(&Default::default()).1.as_deref(),
+            Some("0.3 m")
+        );
         let out = r.at(DVec3::new(0.3, 1.0, 0.0), ToolEvent::Click);
         assert!((distance_of(&out) - 0.3).abs() < 1e-6);
         assert_eq!(r.tool.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn the_cursors_distance_snaps_to_the_length_step_and_typed_ones_do_not() {
+        let mut r = Rig::new();
+        r.units.length_snap = 0.25;
+        r.at(DVec3::new(0.5, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(0.3, 1.0, 0.0), ToolEvent::Move);
+        assert_eq!(r.tool.measurement(&r.units).1.as_deref(), Some("0.25 m"));
+        let out = r.at(DVec3::new(0.3, 1.0, 0.0), ToolEvent::Click);
+        assert_eq!(distance_of(&out), 0.25);
+
+        let mut r = Rig::new();
+        r.units.length_snap = 0.25;
+        r.units.length = session::LengthUnit::FeetInches;
+        r.at(DVec3::new(0.5, 1.0, 0.0), ToolEvent::Click);
+        r.at(DVec3::new(0.3, 1.0, 0.0), ToolEvent::Move);
+        let out = r.send(ToolEvent::Value("1'".into()));
+        assert!((distance_of(&out) - 12.0 * 0.0254).abs() < 1e-12);
     }
 
     #[test]

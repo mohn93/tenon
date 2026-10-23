@@ -18,10 +18,9 @@ use crate::select::{pick, whole_curve};
 use crate::tool::{Phase, Tool, ToolContext, ToolEvent, ToolOutput};
 use crate::vcb::{Array, format_angle, parse_angle, parse_array};
 
-/// Angles within this many degrees of a multiple of `STEP` snap to it.
+/// Angles within this many degrees of a multiple of the model's angle snapping snap to it (at
+/// most half a step, so a fine step snaps everywhere).
 const SNAP_DEG: f64 = 2.0;
-/// The protractor's steps, in degrees.
-const STEP: f64 = 15.0;
 /// The protractor's radius as a fraction of its distance from the eye.
 pub(crate) const PROTRACTOR: f64 = 0.08;
 
@@ -76,11 +75,11 @@ impl RotateTool {
 
     /// The angle from the reference to the cursor, in degrees (-180 to 180), snapped to steps
     /// unless the cursor is on a point.
-    fn angle(&self) -> Option<f64> {
+    fn angle(&self, snap: f64) -> Option<f64> {
         let turn = self.turn.as_ref()?;
         let from = turn.reference?;
         let to = flat(self.hover? - turn.center, turn.axis).try_normalize()?;
-        Some(protractor_angle(from, to, turn.axis, self.on_point))
+        Some(protractor_angle(from, to, turn.axis, self.on_point, snap))
     }
 
     /// Turns what the rotation in progress holds by `angle` degrees (or copies it).
@@ -152,12 +151,16 @@ fn command(last: &Last, angle: f64, count: Option<u32>) -> Command {
 }
 
 /// The angle in degrees (-180 to 180), counter-clockwise about the unit vector `axis`, from the
-/// unit vector `from` to the unit vector `to` (both square to `axis`), snapped to `STEP` unless
-/// `exact`. The Protractor tool measures its angles the same way.
-pub(crate) fn protractor_angle(from: DVec3, to: DVec3, axis: DVec3, exact: bool) -> f64 {
+/// unit vector `from` to the unit vector `to` (both square to `axis`), snapped to multiples of
+/// `snap` degrees (0: not at all) unless `exact`. The Protractor tool measures its angles the
+/// same way.
+pub(crate) fn protractor_angle(from: DVec3, to: DVec3, axis: DVec3, exact: bool, snap: f64) -> f64 {
     let angle = from.cross(to).dot(axis).atan2(from.dot(to)).to_degrees();
-    let step = (angle / STEP).round() * STEP;
-    if !exact && (angle - step).abs() < SNAP_DEG {
+    if exact || snap <= 0.0 {
+        return angle;
+    }
+    let step = (angle / snap).round() * snap;
+    if (angle - step).abs() < SNAP_DEG.min(snap / 2.0) {
         step
     } else {
         angle
@@ -239,8 +242,11 @@ impl Tool for RotateTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
-        ("Angle", self.angle().map(format_angle))
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
+        (
+            "Angle",
+            self.angle(units.angle_snap).map(|a| format_angle(a, units)),
+        )
     }
 
     fn anchor(&self) -> Option<DVec3> {
@@ -312,7 +318,7 @@ impl Tool for RotateTool {
                     self.on_point = is_point(hit.kind);
                     let t = self.turn.as_ref().unwrap();
                     self.hover = on_rotation_plane(t.center, t.axis, &hit, ctx);
-                    match self.angle() {
+                    match self.angle(ctx.units.angle_snap) {
                         Some(a) if a.abs() > 1e-9 => self.finish(a, &mut out),
                         _ => out.message = Some("Move away from the start to turn".into()),
                     }
@@ -325,7 +331,7 @@ impl Tool for RotateTool {
                     }
                     (Some(a), _) if self.turn.is_some() => {
                         // A typed angle turns the way the cursor does.
-                        let a = if self.angle().is_some_and(|c| c < 0.0) {
+                        let a = if self.angle(ctx.units.angle_snap).is_some_and(|c| c < 0.0) {
                             -a
                         } else {
                             a
@@ -355,7 +361,7 @@ impl Tool for RotateTool {
             if let Some(hover) = self.hover {
                 out.preview.push([t.center, hover]);
             }
-            if let Some(angle) = self.angle() {
+            if let Some(angle) = self.angle(ctx.units.angle_snap) {
                 let turned = rotation(t.center, t.axis, angle);
                 out.preview.extend(
                     t.outline
@@ -439,6 +445,7 @@ mod tests {
                 scale_factor: 1.0,
                 to_world: glam::DAffine3::IDENTITY,
                 quick_press: false,
+                units: session::Units::default(),
                 shift: false,
                 selection: &self.selection,
                 material: None,
@@ -527,7 +534,10 @@ mod tests {
         r.click(DVec3::new(1.0, 1.0, 0.0));
         r.click(DVec3::new(2.0, 1.0, 0.0));
         let live = r.hover(DVec3::new(1.0, 2.0, 0.0));
-        assert_eq!(r.tool.measurement(), ("Angle", Some("90°".into())));
+        assert_eq!(
+            r.tool.measurement(&Default::default()),
+            ("Angle", Some("90°".into()))
+        );
         assert_eq!(
             live.preview.len(),
             4 + 24 + 2 + 4,

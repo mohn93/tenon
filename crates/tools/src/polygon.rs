@@ -10,7 +10,7 @@ use session::{Command, DEFAULT_POLYGON_SIDES, polygon_points};
 
 use crate::rectangle::{on_plane, plane_normal};
 use crate::tool::{DragStart, Phase, Remembered, Tool, ToolContext, ToolEvent, ToolOutput};
-use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments};
+use crate::vcb::{format_length, meant_as_count, parse_length, parse_segments, snap_distance};
 
 /// Shown for a side count that is not a whole number in range.
 const BAD_SIDES: &str = "Sides must be a whole number from 3 to 360, like 8s";
@@ -111,8 +111,8 @@ impl Tool for PolygonTool {
         }
     }
 
-    fn measurement(&self) -> (&'static str, Option<String>) {
-        ("Radius", self.radius().map(format_length))
+    fn measurement(&self, units: &session::Units) -> (&'static str, Option<String>) {
+        ("Radius", self.radius().map(|r| format_length(r, units)))
     }
 
     fn anchor(&self) -> Option<DVec3> {
@@ -133,7 +133,8 @@ impl Tool for PolygonTool {
         match event {
             ToolEvent::Move(hit) => {
                 if let Some((center, normal)) = self.center {
-                    self.hover = on_plane(center, normal, &hit, ctx);
+                    self.hover = on_plane(center, normal, &hit, ctx)
+                        .map(|p| snap_distance(center, p, hit.kind, &ctx.units));
                 }
             }
             ToolEvent::Click(hit) => match self.center {
@@ -143,6 +144,7 @@ impl Tool for PolygonTool {
                 }
                 Some((center, normal)) => {
                     if let Some(p) = on_plane(center, normal, &hit, ctx) {
+                        let p = snap_distance(center, p, hit.kind, &ctx.units);
                         let d = p - center;
                         let direction = (d.length() > 1e-9).then_some(d);
                         self.finish(center.distance(p), direction, &mut out);
@@ -162,7 +164,7 @@ impl Tool for PolygonTool {
                 } else if meant_as_count(&text) {
                     out.message = Some(BAD_SIDES.into());
                 } else {
-                    match (self.center, parse_length(&text)) {
+                    match (self.center, parse_length(&text, &ctx.units)) {
                         (None, _) => {
                             out.message = Some("Click the center first, or type 8s".into());
                         }
@@ -254,6 +256,7 @@ mod tests {
             scale_factor: 1.0,
             to_world: glam::DAffine3::IDENTITY,
             quick_press: false,
+            units: session::Units::default(),
             shift: false,
             selection: &Default::default(),
             material: None,
@@ -286,7 +289,10 @@ mod tests {
         on_ground(&mut tool, ToolEvent::Click(ground(0.0, 0.0)));
         let out = on_ground(&mut tool, ToolEvent::Move(ground(2.0, 0.0)));
         assert_eq!(out.preview.len(), 7, "six sides and the radius");
-        assert_eq!(tool.measurement(), ("Radius", Some("2 m".into())));
+        assert_eq!(
+            tool.measurement(&Default::default()),
+            ("Radius", Some("2 m".into()))
+        );
         let out = on_ground(&mut tool, ToolEvent::Click(ground(2.0, 0.0)));
         assert_eq!(
             out.commands,
