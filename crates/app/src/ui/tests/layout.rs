@@ -40,19 +40,11 @@ fn toolbar_buttons() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
-/// The tools the rail holds: all but the five the window does not show yet (M14e registers
-/// them in its window task).
+/// The tools the rail holds, in its own order.
 fn rail_tools() -> impl Iterator<Item = ToolKind> {
-    ToolKind::ALL.into_iter().filter(|k| {
-        !matches!(
-            k,
-            ToolKind::Freehand
-                | ToolKind::RotatedRectangle
-                | ToolKind::Protractor
-                | ToolKind::LookAround
-                | ToolKind::PositionCamera
-        )
-    })
+    crate::ui::rail::GROUPS
+        .iter()
+        .flat_map(|g| g.iter().copied())
 }
 
 /// Every toolbar button reports itself in a window of `size`.

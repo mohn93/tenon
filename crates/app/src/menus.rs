@@ -245,6 +245,8 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::Circle,
         ToolKind::Polygon,
         ToolKind::Arc,
+        ToolKind::Freehand,
+        ToolKind::RotatedRectangle,
     ]
     .map(tool_item)
     .into();
@@ -263,6 +265,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
         ToolKind::Axes,
         ToolKind::Erase,
         ToolKind::Paint,
+        ToolKind::Protractor,
     ]
     .map(tool_item)
     .into_iter()
@@ -365,6 +368,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .entry(),
     );
     camera.push(Entry::Separator);
+    camera.extend([ToolKind::LookAround, ToolKind::PositionCamera].map(tool_item));
     camera.push(
         bound_item("Fly Mode", Bound::ToggleFly, UiAction::ToggleFly)
             .checked(view.flying)

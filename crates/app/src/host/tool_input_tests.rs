@@ -2532,3 +2532,54 @@ fn position_camera_stands_by_click_or_drag_then_look_around_turns_the_view() {
     let r = input(&mut e, json!([{"type": "move", "pixel": [400, 300]}]));
     assert_eq!(r["editor"]["measurement"], "2 m", "{r}");
 }
+
+#[test]
+fn freehand_closes_near_its_start_and_escape_cancels() {
+    let mut e = editor();
+    tool(&mut e, "freehand");
+    let mut square = Vec::new();
+    for (a, b) in [
+        ([0.0, 0.0], [2.0, 0.0]),
+        ([2.0, 0.0], [2.0, 2.0]),
+        ([2.0, 2.0], [0.0, 2.0]),
+    ] {
+        for i in 0..20 {
+            let t = i as f64 / 20.0;
+            square.push(json!([
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                0
+            ]));
+        }
+    }
+    for i in 0..=20 {
+        square.push(json!([0, 2.0 - 2.0 * i as f64 / 20.0, 0]));
+    }
+    let r = input(&mut e, json!([{"type": "drag", "points": square}]));
+    assert_eq!(ran(&r), ["add_curve"], "{r}");
+    assert_eq!(r["commands"][0]["command"]["closed"], true, "{r}");
+    // Escape mid-stroke draws nothing.
+    let r = input(
+        &mut e,
+        json!([
+            {"type": "down", "point": [0, 5, 0]},
+            {"type": "move", "point": [1, 5, 0]},
+            {"type": "move", "point": [2, 6, 0]},
+            {"type": "key", "key": "escape"},
+            {"type": "up", "point": [3, 6, 0]}
+        ]),
+    );
+    assert_eq!(ran(&r), Vec::<String>::new(), "{r}");
+}
+
+#[test]
+fn position_camera_stands_at_a_click_with_the_default_eye_height() {
+    let mut e = editor();
+    tool(&mut e, "position_camera");
+    let r = input(&mut e, json!([{"type": "click", "point": [4, -2, 0]}]));
+    assert_eq!(ran(&r), ["position_camera"], "{r}");
+    let c = &r["commands"][0]["command"];
+    assert!(near(&c["point"], [4.0, -2.0, 0.0]), "{c}");
+    assert!(c.get("look_at").is_none_or(|v| v.is_null()), "{c}");
+    assert_eq!(e.tool_kind(), tools::ToolKind::LookAround);
+}

@@ -158,6 +158,11 @@ fn the_native_menu_ids_of_the_new_items_are_distinct_and_stable() {
         "Flip(Red, Axes)",
         "Flip(Blue, Own)",
         "Tool(Axes)",
+        "Tool(Freehand)",
+        "Tool(RotatedRectangle)",
+        "Tool(Protractor)",
+        "Tool(LookAround)",
+        "Tool(PositionCamera)",
     ] {
         assert!(ids.iter().any(|i| i == id), "{id} in {ids:?}");
     }

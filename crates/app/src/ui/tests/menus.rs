@@ -237,6 +237,13 @@ fn the_camera_menu_has_views_zoom_extents_and_projections() {
         [UiAction::SetProjection(Projection::Perspective)]
     );
     assert_eq!(camera_menu(plain, "Fly Mode"), [UiAction::ToggleFly]);
+    for kind in [ToolKind::LookAround, ToolKind::PositionCamera] {
+        assert_eq!(
+            camera_menu(plain, kind.label()),
+            [UiAction::Tool(kind)],
+            "{kind:?}"
+        );
+    }
     assert_eq!(
         camera_menu(plain, "Night Lighting"),
         [UiAction::SetLighting(Lighting::Night)]
@@ -397,6 +404,12 @@ fn menu_items_show_the_tables_keys() {
     let fly = chord(Bound::ToggleFly).unwrap().text();
     assert!(drawn_texts(&h).contains(&fly), "{fly}");
     h.get_by_label("Fly Mode");
+    // The new tools show their keys in the menus that hold them.
+    for kind in [ToolKind::LookAround, ToolKind::PositionCamera] {
+        let key = chord(Bound::Tool(kind)).unwrap().text();
+        assert!(drawn_texts(&h).contains(&key), "{kind:?}: {key}");
+        h.get_by_label(kind.label());
+    }
 }
 
 #[test]
@@ -544,6 +557,8 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
         ToolKind::Circle,
         ToolKind::Polygon,
         ToolKind::Arc,
+        ToolKind::Freehand,
+        ToolKind::RotatedRectangle,
     ] {
         assert_eq!(
             click_menu(&mut harness(f()), &["Draw", kind.label()]),
@@ -563,6 +578,7 @@ fn the_draw_tools_group_and_help_menus_report_their_items() {
         ToolKind::Text,
         ToolKind::Erase,
         ToolKind::Paint,
+        ToolKind::Protractor,
     ] {
         assert_eq!(
             click_menu(&mut harness(f()), &["Tools", kind.label()]),

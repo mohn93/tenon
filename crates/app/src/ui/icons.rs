@@ -33,7 +33,8 @@ pub const ARROWS_CLOCKWISE: &str = ph::ARROWS_CLOCKWISE;
 pub const ARROW_UP: &str = ph::ARROW_UP;
 pub const ARROW_DOWN: &str = ph::ARROW_DOWN;
 
-/// A tool's glyph on the rail.
+/// A tool's glyph. The rail draws it; tools reached from the menus only (Freehand, Rotated
+/// Rectangle, Protractor, Look Around, Position Camera) have one for when a button is added.
 pub fn tool(kind: ToolKind) -> &'static str {
     match kind {
         ToolKind::Select => ph::CURSOR,
@@ -41,10 +42,9 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Paint => ph::PAINT_BUCKET,
         ToolKind::Line => ph::LINE_SEGMENT,
         ToolKind::Rectangle => ph::RECTANGLE,
-        // Stand-ins until the window registers the new tools (their own glyphs come then).
-        ToolKind::RotatedRectangle => ph::RECTANGLE,
-        ToolKind::Freehand => ph::BEZIER_CURVE,
-        ToolKind::Protractor => ph::RULER,
+        ToolKind::RotatedRectangle => ph::PARALLELOGRAM,
+        ToolKind::Freehand => ph::PENCIL_SIMPLE_LINE,
+        ToolKind::Protractor => ph::ANGLE,
         ToolKind::Circle => ph::CIRCLE,
         ToolKind::Polygon => ph::HEXAGON,
         ToolKind::Arc => ph::BEZIER_CURVE,
@@ -59,13 +59,12 @@ pub fn tool(kind: ToolKind) -> &'static str {
         ToolKind::Text => ph::TEXT_T,
         ToolKind::SectionPlane => ph::SQUARE_HALF,
         ToolKind::Axes => ph::CROSSHAIR_SIMPLE,
-        // Stand-ins until the window registers the camera tools (their own glyphs come then).
-        ToolKind::LookAround => ph::CROSSHAIR_SIMPLE,
-        ToolKind::PositionCamera => ph::CROSSHAIR_SIMPLE,
+        ToolKind::LookAround => ph::EYE,
+        ToolKind::PositionCamera => ph::PERSON_SIMPLE_WALK,
     }
 }
 
-/// Every glyph the panels draw: the constants above, then each tool's.
+/// Every glyph the panels draw: the constants above, then the rail's tools'.
 #[cfg(test)]
 pub fn all() -> Vec<&'static str> {
     let mut all = vec![
@@ -89,6 +88,11 @@ pub fn all() -> Vec<&'static str> {
         ARROW_UP,
         ARROW_DOWN,
     ];
-    all.extend(ToolKind::ALL.map(tool));
+    all.extend(
+        super::rail::GROUPS
+            .iter()
+            .flat_map(|g| g.iter().copied())
+            .map(tool),
+    );
     all
 }
