@@ -36,6 +36,21 @@ impl Model {
         ids.dedup();
         ids
     }
+
+    /// How many edges of the model the segment `a`-`b` crosses away from every endpoint,
+    /// counting stops at `cap`.
+    pub fn edges_crossed_by(&self, a: DVec3, b: DVec3, cap: usize) -> usize {
+        let mut found = 0;
+        self.index().near_segment(a, b, LENGTH_TOL, |s| {
+            if found < cap
+                && let Shape::Segment(_, p, q) = s
+                && crate::geom::segment_crossing(a, b, *p, *q).is_some()
+            {
+                found += 1;
+            }
+        });
+        found
+    }
 }
 
 /// The face `face` of `model` with its loops moved by `to_world` (which may scale, mirror or

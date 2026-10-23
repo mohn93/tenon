@@ -68,10 +68,10 @@ pub const MAX_CURVE_POINTS: usize = 10_000;
 /// down as they multiply (a few hundred milliseconds in release at this many).
 pub const MAX_CURVE_CROSSINGS: usize = 10_000;
 
-/// Whether the path's segments cross each other (away from their ends) more than
-/// `MAX_CURVE_CROSSINGS` times. Counting stops at the cap; a box test first keeps the
-/// work near n^2 / 2 cheap comparisons.
-fn crosses_itself_too_often(path: &[DVec3], closed: bool) -> bool {
+/// Whether the path's segments cross each other, or the edges already in `model` (away from
+/// their ends), more than `MAX_CURVE_CROSSINGS` times. Counting stops at the cap; a box test
+/// first keeps the work near n^2 / 2 cheap comparisons, and the edges are found by index.
+fn crosses_too_often(model: &Model, path: &[DVec3], closed: bool) -> bool {
     let n = path.len();
     let sides = if closed { n } else { n - 1 };
     let side = |i: usize| (path[i], path[(i + 1) % n]);
@@ -99,6 +99,13 @@ fn crosses_itself_too_often(path: &[DVec3], closed: bool) -> bool {
                     return true;
                 }
             }
+        }
+    }
+    for i in 0..sides {
+        let (a, b) = side(i);
+        found += model.edges_crossed_by(a, b, MAX_CURVE_CROSSINGS + 1 - found);
+        if found > MAX_CURVE_CROSSINGS {
+            return true;
         }
     }
     false
@@ -1436,11 +1443,11 @@ impl Document {
                 "a closed polyline needs points that do not lie on one line",
             ));
         }
-        if crosses_itself_too_often(&path, closed) {
+        if crosses_too_often(self.model(), &path, closed) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,
                 format!(
-                    "the curve crosses itself too often (more than {MAX_CURVE_CROSSINGS} crossings)"
+                    "the curve crosses itself too often (more than {MAX_CURVE_CROSSINGS} crossings, with the edges already drawn)"
                 ),
             ));
         }

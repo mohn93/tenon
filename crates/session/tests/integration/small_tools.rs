@@ -464,6 +464,87 @@ fn a_curve_that_crosses_itself_too_often_is_refused_quickly() {
     assert!(entities(&d, "edge").is_empty());
 }
 
+/// `n` parallel runs joined at alternate ends; `across` turns them a quarter turn.
+fn serpentine(n: usize, across: bool) -> Vec<[f64; 3]> {
+    let mut points = Vec::new();
+    for i in 0..n {
+        let (lo, hi) = if across { (-1.0, 5.0) } else { (0.0, 10.0) };
+        let (start, end) = if i % 2 == 0 { (lo, hi) } else { (hi, lo) };
+        let at = if across {
+            0.5 + i as f64 * 0.02
+        } else {
+            i as f64 * 0.01
+        };
+        for run in [start, end] {
+            points.push(if across {
+                [at, run, 0.0]
+            } else {
+                [run, at, 0.0]
+            });
+        }
+    }
+    points
+}
+
+#[test]
+fn a_curve_that_crosses_the_drawn_edges_too_often_is_refused_quickly() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": serpentine(400, false)}),
+    )
+    .unwrap();
+    let edges = entities(&d, "edge").len();
+    let start = std::time::Instant::now();
+    let e = run(
+        &mut d,
+        json!({"type": "add_curve", "points": serpentine(400, true)}),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, ErrorKind::InvalidInput);
+    assert!(e.1.contains("crosses itself too often"), "{}", e.1);
+    assert!(start.elapsed().as_secs() < 1, "{:?}", start.elapsed());
+    assert_eq!(entities(&d, "edge").len(), edges);
+}
+
+#[test]
+fn a_curve_that_crosses_the_drawn_edges_a_few_times_is_drawn() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": serpentine(10, false)}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_curve", "points": serpentine(10, true)}),
+    )
+    .unwrap();
+}
+
+#[test]
+#[ignore = "release-mode timing"]
+fn two_serpentines_are_refused_or_drawn_in_under_a_second() {
+    for n in [100, 400] {
+        let mut d = doc();
+        let start = std::time::Instant::now();
+        run(
+            &mut d,
+            json!({"type": "add_curve", "points": serpentine(n, false)}),
+        )
+        .unwrap();
+        let _ = run(
+            &mut d,
+            json!({"type": "add_curve", "points": serpentine(n, true)}),
+        );
+        assert!(
+            start.elapsed().as_secs_f64() < 1.0,
+            "{n}: {:?}",
+            start.elapsed()
+        );
+    }
+}
+
 #[test]
 fn a_curve_that_crosses_itself_a_few_times_is_drawn() {
     let mut d = doc();
