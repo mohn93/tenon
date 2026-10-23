@@ -57,7 +57,8 @@ impl Source {
     }
 
     /// The chain the selected edges form, if they form one in a plane. A straight chain has no
-    /// plane of its own: it takes its face's, else the ground's (the drawing axes' red-green plane, or, upright, the view's).
+    /// plane of its own: it takes its face's, else the ground's (the drawing axes' red-green
+    /// plane, or, upright, the view's).
     fn chain(
         model: &Model,
         selection: &BTreeSet<EntityId>,

@@ -1004,7 +1004,12 @@ run along them on axis planes (`add_rectangle` too, and its `normal`-less form n
 corners to differ in two coordinates along them), the tools' horizontal plane is their red and
 green plane, `standard_view` and the orientation gizmo look along them (`top` from the blue
 axis with the green axis up; inside a context the context's axes as placed in the world), and
-the drawn axis lines run along them from their origin (the ground grid stays on world z = 0).
+the drawn axis lines run along them from their origin (the ground grid stays on world z = 0,
+and so does the ground inference: a point inferred on the ground lies on world z = 0 while the
+horizontal plane tools draw in follows the axes). Inside a placement mirrored in x or y the
+context's frame is left-handed: blue stays the definition's z direction. With a tilted blue axis
+the non-vertical standard views give the camera an `up` that is not +Z; `set_camera` and a
+scene restore use +Z up, and the first orbit levels the roll.
 With the world axes everything is as before. `add_circle`, `add_polygon` and `add_arc` keep
 their documented default normal `[0,0,1]` and u axis in the world.
 

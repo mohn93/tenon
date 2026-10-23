@@ -683,3 +683,57 @@ fn rectangles_on_axis_planes_follow_the_drawing_axes() {
     )
     .unwrap_err();
 }
+
+#[test]
+fn standard_views_inside_a_mirrored_placement_keep_blue_where_the_definition_z_goes() {
+    // (flips, rotate first?, expected top direction, expected top up, expected front direction)
+    let cases = [
+        (
+            vec!["red"],
+            false,
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ),
+        (
+            vec!["blue"],
+            false,
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ),
+        (
+            vec!["red"],
+            true,
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ),
+    ];
+    for (flips, turn, top, up, front) in cases {
+        let mut d = doc();
+        let a = crate_at(&mut d, [0.0, 0.0, 0.0]);
+        if turn {
+            run(
+                &mut d,
+                json!({"type": "rotate", "ids": [a], "center": [0, 0, 0], "axis": [0, 0, 1], "angle": 90}),
+            )
+            .unwrap();
+        }
+        for axis in &flips {
+            run(
+                &mut d,
+                json!({"type": "flip", "ids": [a], "axis": axis, "frame": "own"}),
+            )
+            .unwrap();
+        }
+        run(&mut d, json!({"type": "open_instance", "id": a})).unwrap();
+        standard_view(&mut d, "top");
+        let (dir, u) = look(&d);
+        assert!(near(dir, top), "{flips:?} {turn}: top from {dir:?}");
+        assert!(near(u, up), "{flips:?} {turn}: top up {u:?}");
+        standard_view(&mut d, "front");
+        let (dir, _) = look(&d);
+        assert!(near(dir, front), "{flips:?} {turn}: front from {dir:?}");
+    }
+}

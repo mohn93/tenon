@@ -8,8 +8,9 @@ use crate::command::{CommandError, ErrorKind};
 
 /// The drawing axes as a frame in world space, for what is seen from the open context
 /// `context`: the model axes at the root, inside a group or component that definition's own
-/// axes as the open instance places them (an orthonormal frame: a scaled or mirrored placement
-/// keeps its axes' directions, right-handed).
+/// axes as the open instance places them (an orthonormal frame along the placement's own x, y
+/// and z directions: a scaled placement keeps them, a mirrored one gives a left-handed frame,
+/// so blue stays where the definition's z goes).
 pub fn world_drawing_axes(scene: &Scene, context: &[InstanceId]) -> DAffine3 {
     if context.is_empty() {
         return scene.axes().frame();
@@ -22,7 +23,10 @@ pub fn world_drawing_axes(scene: &Scene, context: &[InstanceId]) -> DAffine3 {
     let y = (m.y_axis - x * m.y_axis.dot(x))
         .try_normalize()
         .unwrap_or_else(|| x.any_orthonormal_vector());
-    DAffine3::from_mat3_translation(DMat3::from_cols(x, y, x.cross(y)), placed.translation)
+    let z = (m.z_axis - x * m.z_axis.dot(x) - y * m.z_axis.dot(y))
+        .try_normalize()
+        .unwrap_or_else(|| x.cross(y));
+    DAffine3::from_mat3_translation(DMat3::from_cols(x, y, z), placed.translation)
 }
 
 impl Document {
