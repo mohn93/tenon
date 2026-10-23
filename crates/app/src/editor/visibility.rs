@@ -2,7 +2,7 @@
 //! the window's side of the visibility and orientation commands.
 
 use kernel::EntityId;
-use session::Command;
+use session::{Command, SelectMode};
 
 use super::{Editor, Message};
 use crate::info::count;
@@ -39,6 +39,31 @@ impl Editor {
             }
         }
         seen.then_some(hidden)
+    }
+
+    /// Whether Hide would do something: a selected edge, face, instance or guide is shown.
+    pub fn selection_can_hide_more(&self) -> bool {
+        self.selection_hidden() == Some(false)
+    }
+
+    /// Whether the open context has a hidden edge, face, instance or guide (Unhide > All).
+    /// Cached by revision and context, since the menu asks every frame.
+    pub fn context_has_hidden(&self) -> bool {
+        let mut cache = self.hidden_cache.borrow_mut();
+        if let Some((revision, context, any)) = cache.as_ref()
+            && *revision == self.doc.revision()
+            && context == self.doc.context()
+        {
+            return *any;
+        }
+        let any = self.doc.model().any_hidden();
+        *cache = Some((self.doc.revision(), self.doc.context().to_vec(), any));
+        any
+    }
+
+    /// Whether Unhide > Last would show something.
+    pub fn has_last_hidden(&self) -> bool {
+        self.doc.has_last_hidden()
     }
 
     /// Whether any selected entity is hidden (possible only while Hidden Geometry shows them).
@@ -120,9 +145,15 @@ impl Editor {
         let Some((id, parent)) = path.split_last() else {
             return false;
         };
-        let open = self.doc.context().iter().map(|i| EntityId::Instance(*i));
-        let in_context = parent.iter().copied().eq(open);
-        if !in_context
+        let context: Vec<EntityId> = self
+            .doc
+            .context()
+            .iter()
+            .map(|i| EntityId::Instance(*i))
+            .collect();
+        let moved = parent != context.as_slice();
+        let selection = self.selected_ids();
+        if moved
             && self
                 .run_visibility(Command::OpenPath {
                     path: parent.to_vec(),
@@ -136,6 +167,17 @@ impl Editor {
             self.set_hidden_of(Command::Hide { ids }, "Hid");
         } else {
             self.set_hidden_of(Command::Unhide { ids }, "Unhid");
+        }
+        if moved {
+            // Back where the user was, with what was selected there (what is hidden leaves it).
+            let message = self.message.take();
+            let _ = self.execute(Command::OpenPath { path: context });
+            let _ = self.execute(Command::Select {
+                ids: selection,
+                mode: SelectMode::Replace,
+                all: false,
+            });
+            self.message = message;
         }
         true
     }
@@ -176,10 +218,11 @@ impl Editor {
         true
     }
 
-    /// Edit > Orient Faces: from the first selected face, turns the faces joined to it so they
-    /// agree with it (among the selected faces when several are selected, else the whole
-    /// connected surface), as one undo step.
-    pub fn orient_faces(&mut self) -> bool {
+    /// Orient Faces: from `from` (the face right-clicked) when it is a selected face, else
+    /// from the selected face with the lowest id, turns the faces joined to it so they agree
+    /// with it (among the selected faces when several are selected, else the whole connected
+    /// surface), as one undo step.
+    pub fn orient_faces(&mut self, from: Option<EntityId>) -> bool {
         let faces: Vec<EntityId> = self
             .doc
             .selection()
@@ -187,7 +230,10 @@ impl Editor {
             .copied()
             .filter(|id| matches!(id, EntityId::Face(_)))
             .collect();
-        let Some(&id) = faces.first() else {
+        let start = from
+            .filter(|f| faces.contains(f))
+            .or(faces.first().copied());
+        let Some(id) = start else {
             self.message = Some(Message::error("Select a face to orient from"));
             return true;
         };
@@ -251,10 +297,15 @@ mod tests {
 
     /// A 2 x 2 x 1 m box with its corner at the origin.
     fn add_box(e: &mut Editor) {
+        add_box_at(e, 0.0);
+    }
+
+    /// The same box with its corner at (`at`, `at`).
+    fn add_box_at(e: &mut Editor, at: f64) {
         let out = e
             .execute(Command::AddRectangle {
-                corner: [0.0, 0.0, 0.0],
-                opposite: [2.0, 2.0, 0.0],
+                corner: [at, at, 0.0],
+                opposite: [at + 2.0, at + 2.0, 0.0],
                 normal: None,
             })
             .unwrap();
@@ -278,6 +329,10 @@ mod tests {
             all: false,
         })
         .unwrap();
+    }
+
+    fn selected(e: &Editor) -> Vec<EntityId> {
+        e.doc().selection().iter().copied().collect()
     }
 
     fn select_all(e: &mut Editor) {
@@ -391,10 +446,10 @@ mod tests {
 
         // One face selected: the whole connected surface is oriented from it.
         select(&mut e, vec![all[2]]);
-        assert!(e.orient_faces());
+        assert!(e.orient_faces(None));
         assert_eq!(message(&e).as_deref(), Some("Flipped 1 face"));
         assert_eq!(e.doc().undo_label(), Some("orient_faces"));
-        e.orient_faces();
+        e.orient_faces(None);
         assert_eq!(message(&e).as_deref(), Some("Faces already agree"));
     }
 
@@ -407,10 +462,10 @@ mod tests {
         e.reverse_faces();
         // The odd face is out of scope, so it stays.
         select(&mut e, vec![all[0], all[1], all[2]]);
-        e.orient_faces();
+        e.orient_faces(None);
         assert_eq!(message(&e).as_deref(), Some("Faces already agree"));
         select(&mut e, all.clone());
-        e.orient_faces();
+        e.orient_faces(None);
         assert_eq!(message(&e).as_deref(), Some("Flipped 1 face"));
     }
 
@@ -421,7 +476,7 @@ mod tests {
         select(&mut e, vec![]);
         e.reverse_faces();
         assert_eq!(message(&e).as_deref(), Some("Select the faces to reverse"));
-        e.orient_faces();
+        e.orient_faces(None);
         assert_eq!(message(&e).as_deref(), Some("Select a face to orient from"));
         assert!(!e.selection_has_faces());
         select_all(&mut e);
@@ -464,6 +519,116 @@ mod tests {
     }
 
     #[test]
+    fn orient_works_from_the_face_that_was_right_clicked() {
+        let mut e = editor();
+        add_box(&mut e);
+        let all = faces(&e);
+        select(&mut e, vec![all[0]]);
+        e.reverse_faces();
+        select_all(&mut e);
+        // Without a face to go by, the lowest id (the odd one) is the reference.
+        assert!(e.orient_faces(None));
+        assert_eq!(message(&e).as_deref(), Some("Flipped 5 faces"));
+        e.undo();
+        // From another face, the odd one is turned to agree with it.
+        e.orient_faces(Some(all[1]));
+        assert_eq!(message(&e).as_deref(), Some("Flipped 1 face"));
+        e.orient_faces(None);
+        assert_eq!(message(&e).as_deref(), Some("Faces already agree"));
+        // A face that is not selected is no reference.
+        select(&mut e, vec![all[0], all[1]]);
+        e.orient_faces(Some(all[2]));
+        assert_eq!(message(&e).as_deref(), Some("Faces already agree"));
+    }
+
+    #[test]
+    fn the_menu_remembers_the_selected_face_under_the_cursor() {
+        let at = egui::pos2(10.0, 20.0);
+        let mut e = editor();
+        add_box(&mut e);
+        let all = faces(&e);
+        select(&mut e, vec![all[0], all[1]]);
+        assert_eq!(
+            e.viewport_menu(at, Some(all[1])).unwrap().orient_from,
+            Some(all[1])
+        );
+        assert_eq!(e.viewport_menu(at, Some(all[2])).unwrap().orient_from, None);
+    }
+
+    #[test]
+    fn hide_is_offered_only_for_something_still_shown() {
+        let at = egui::pos2(10.0, 20.0);
+        let mut e = editor();
+        add_box(&mut e);
+        let all = faces(&e);
+        e.execute(Command::SetHiddenGeometry { on: true }).unwrap();
+        select(&mut e, vec![all[0]]);
+        e.hide_selection();
+        assert!(!e.selection_can_hide_more());
+        assert!(!e.viewport_menu(at, None).unwrap().hide);
+        select(&mut e, vec![all[0], all[1]]);
+        assert!(e.selection_can_hide_more(), "a mix");
+        select(&mut e, vec![all[1]]);
+        assert!(e.selection_can_hide_more());
+    }
+
+    #[test]
+    fn unhide_all_and_last_are_offered_only_when_they_would_do_something() {
+        let mut e = editor();
+        add_box(&mut e);
+        let all = faces(&e);
+        assert!(!e.context_has_hidden() && !e.has_last_hidden());
+        select(&mut e, vec![all[0]]);
+        e.hide_selection();
+        assert!(e.context_has_hidden() && e.has_last_hidden());
+        e.unhide_all();
+        assert!(!e.context_has_hidden() && !e.has_last_hidden());
+        select(&mut e, vec![all[0]]);
+        e.hide_selection();
+        e.undo();
+        assert!(!e.context_has_hidden() && !e.has_last_hidden(), "undone");
+        e.redo();
+        assert!(e.context_has_hidden());
+    }
+
+    #[test]
+    fn hiding_from_a_nested_outliner_row_keeps_the_context_and_selection() {
+        let mut e = editor();
+        add_box(&mut e);
+        select_all(&mut e);
+        let ids = e.doc().selection().iter().copied().collect();
+        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let outer = out
+            .changes
+            .created
+            .iter()
+            .copied()
+            .find(|id| matches!(id, EntityId::Instance(_)))
+            .unwrap();
+        e.execute(Command::OpenPath { path: vec![outer] }).unwrap();
+        add_box_at(&mut e, 5.0);
+        select_all(&mut e);
+        let ids = e.doc().selection().iter().copied().collect();
+        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let inner = out
+            .changes
+            .created
+            .iter()
+            .copied()
+            .find(|id| matches!(id, EntityId::Instance(_)))
+            .unwrap();
+        e.execute(Command::OpenPath { path: vec![] }).unwrap();
+        select(&mut e, vec![outer]);
+        assert!(e.outliner_set_hidden(&[outer, inner], true));
+        assert!(e.doc().context().is_empty(), "back at the root");
+        assert_eq!(selected(&e), vec![outer]);
+        assert_eq!(message(&e).as_deref(), Some("Hid 1 entity"));
+        // Opening inside to see it: the inner group is hidden.
+        e.execute(Command::OpenPath { path: vec![outer] }).unwrap();
+        assert!(e.context_has_hidden());
+    }
+
+    #[test]
     fn the_right_click_menu_offers_hide_unhide_and_face_commands() {
         let at = egui::pos2(10.0, 20.0);
         let mut e = editor();
@@ -471,7 +636,7 @@ mod tests {
         let all = faces(&e);
         select(&mut e, vec![all[0]]);
         assert_eq!(
-            e.viewport_menu(at),
+            e.viewport_menu(at, None),
             Some(ViewportMenu {
                 at,
                 section: None,
@@ -479,6 +644,7 @@ mod tests {
                 hide: true,
                 unhide: false,
                 faces: true,
+                orient_from: None,
             })
         );
         // An edge alone: Hide only.
@@ -490,12 +656,12 @@ mod tests {
             .next()
             .unwrap();
         select(&mut e, vec![edge]);
-        let menu = e.viewport_menu(at).unwrap();
+        let menu = e.viewport_menu(at, None).unwrap();
         assert!(menu.hide && !menu.unhide && !menu.faces && !menu.intersect);
         // A hidden selection (only possible with Hidden Geometry) can be unhidden.
         e.execute(Command::SetHiddenGeometry { on: true }).unwrap();
         e.hide_selection();
-        assert!(e.viewport_menu(at).unwrap().unhide);
+        assert!(e.viewport_menu(at, None).unwrap().unhide);
         assert!(e.opens_viewport_menu(false));
         assert!(!e.opens_viewport_menu(true), "a viewer never opens it");
     }

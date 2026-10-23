@@ -20,16 +20,17 @@ impl Editor {
     /// for a lone plane; otherwise Hide for what can be hidden, Unhide for a hidden selection,
     /// the face commands for faces and Intersect Faces for faces or groups. None for a
     /// selection with none of them.
-    pub fn viewport_menu(&self, at: egui::Pos2) -> Option<ViewportMenu> {
+    pub fn viewport_menu(&self, at: egui::Pos2, face: Option<EntityId>) -> Option<ViewportMenu> {
         let section = self.selected_section().map(|s| s.active);
         let plain = section.is_none();
         let menu = ViewportMenu {
             at,
             section,
             intersect: plain && self.can_intersect(),
-            hide: plain && self.selection_hidden().is_some(),
+            hide: plain && self.selection_can_hide_more(),
             unhide: plain && self.selection_has_hidden(),
             faces: plain && self.selection_has_faces(),
+            orient_from: face.filter(|f| self.doc.selection().contains(f)),
         };
         (menu.section.is_some() || menu.intersect || menu.hide || menu.unhide || menu.faces)
             .then_some(menu)
@@ -38,13 +39,17 @@ impl Editor {
     /// Whether a right-click in the view opens the viewport menu: the selection has one, and the
     /// window is not a viewer (which has no way to close it, and nothing in it to run).
     pub fn opens_viewport_menu(&self, read_only: bool) -> bool {
-        !read_only && self.viewport_menu(egui::Pos2::ZERO).is_some()
+        !read_only && self.viewport_menu(egui::Pos2::ZERO, None).is_some()
     }
 
     /// The menu to draw for the point it was opened at, clearing the point when the selection
     /// no longer has a menu, so it does not come back at the old place with a later selection.
-    pub fn open_viewport_menu(&self, opened: &mut Option<egui::Pos2>) -> Option<ViewportMenu> {
-        let menu = opened.and_then(|at| self.viewport_menu(at));
+    pub fn open_viewport_menu(
+        &self,
+        opened: &mut Option<egui::Pos2>,
+        face: Option<EntityId>,
+    ) -> Option<ViewportMenu> {
+        let menu = opened.and_then(|at| self.viewport_menu(at, face));
         if menu.is_none() {
             *opened = None;
         }
@@ -219,7 +224,7 @@ mod tests {
         add_box(&mut e, 0.0);
         select_all(&mut e);
         let mut opened = Some(egui::pos2(10.0, 20.0));
-        assert!(e.open_viewport_menu(&mut opened).is_some());
+        assert!(e.open_viewport_menu(&mut opened, None).is_some());
         // The selection goes without a press (Select None, Delete, undo, an agent).
         e.execute(Command::Select {
             ids: vec![],
@@ -227,21 +232,21 @@ mod tests {
             all: false,
         })
         .unwrap();
-        assert_eq!(e.open_viewport_menu(&mut opened), None);
+        assert_eq!(e.open_viewport_menu(&mut opened, None), None);
         assert_eq!(opened, None);
         select_all(&mut e);
-        assert_eq!(e.open_viewport_menu(&mut opened), None);
+        assert_eq!(e.open_viewport_menu(&mut opened, None), None);
     }
 
     #[test]
     fn the_right_click_menu_follows_the_selection() {
         let at = egui::pos2(10.0, 20.0);
         let mut e = editor();
-        assert_eq!(e.viewport_menu(at), None, "nothing selected");
+        assert_eq!(e.viewport_menu(at, None), None, "nothing selected");
         add_box(&mut e, 0.0);
         select_all(&mut e);
         assert_eq!(
-            e.viewport_menu(at),
+            e.viewport_menu(at, None),
             Some(ViewportMenu {
                 at,
                 section: None,
@@ -249,6 +254,7 @@ mod tests {
                 hide: true,
                 unhide: false,
                 faces: true,
+                orient_from: None,
             })
         );
         let out = e
@@ -272,7 +278,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            e.viewport_menu(at),
+            e.viewport_menu(at, None),
             Some(ViewportMenu {
                 at,
                 section: Some(true),
@@ -280,6 +286,7 @@ mod tests {
                 hide: false,
                 unhide: false,
                 faces: false,
+                orient_from: None,
             }),
             "a lone plane keeps its own menu"
         );

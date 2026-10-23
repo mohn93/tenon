@@ -76,6 +76,7 @@ fn the_section_plane_menu_flips_and_toggles_the_active_cut() {
             hide: false,
             unhide: false,
             faces: false,
+            orient_from: None,
         }),
         ..Default::default()
     };
@@ -120,6 +121,7 @@ fn the_faces_and_groups_menu_intersects_with_each_scope() {
             hide: false,
             unhide: false,
             faces: false,
+            orient_from: None,
         }),
         ..Default::default()
     };
@@ -147,6 +149,7 @@ fn the_faces_and_groups_menu_intersects_with_each_scope() {
             hide: false,
             unhide: false,
             faces: false,
+            orient_from: None,
         }),
         ..Default::default()
     });

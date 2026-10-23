@@ -250,6 +250,8 @@ pub struct Editor {
     navigated: bool,
     /// Where the scene's meshes lie seen from the open context (see `cached_layout`).
     layout: LayoutCache,
+    /// Whether the open context has a hidden entity, by revision and context.
+    hidden_cache: RefCell<Option<(u64, Vec<InstanceId>, bool)>>,
     /// Text typed into the measurements box, not yet submitted.
     typed: String,
     /// Feedback from the last tool action or failed command.
@@ -361,6 +363,7 @@ impl Editor {
             covered: false,
             navigated: false,
             layout: RefCell::new(None),
+            hidden_cache: RefCell::new(None),
             typed: String::new(),
             message: None,
             flash: None,

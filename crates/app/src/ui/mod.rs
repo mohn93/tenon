@@ -184,8 +184,9 @@ pub enum UiAction {
     SetHiddenGeometry(bool),
     /// Edit > Reverse Faces: turn the selected faces over.
     ReverseFaces,
-    /// Edit > Orient Faces: make the faces joined to the first selected one agree with it.
-    OrientFaces,
+    /// Orient Faces: make the faces joined to the face (None: the lowest-id selected face) agree
+    /// with it.
+    OrientFaces(Option<EntityId>),
     AddTag,
     /// Delete a tag: at once when nothing is on it, otherwise after asking where what is on it
     /// goes (the Delete Tag sheet).
@@ -509,6 +510,10 @@ pub struct View<'a> {
     pub selection_hidden: Option<bool>,
     /// Whether a selected entity is hidden (Edit > Unhide > Selected).
     pub has_hidden_selected: bool,
+    /// Whether the open context has a hidden entity (Edit > Unhide > All).
+    pub has_hidden: bool,
+    /// Whether Edit > Unhide > Last would show something.
+    pub has_last_hidden: bool,
     /// Whether a face is selected (Reverse Faces, Orient Faces).
     pub has_face_selected: bool,
     /// The first selected face's texture placement, when only faces are selected.
@@ -564,6 +569,8 @@ pub struct ViewportMenu {
     pub hide: bool,
     pub unhide: bool,
     pub faces: bool,
+    /// The selected face under the cursor when the menu opened: Orient Faces works from it.
+    pub orient_from: Option<EntityId>,
 }
 
 /// What the Recover Models window lists.

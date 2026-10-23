@@ -3,6 +3,60 @@ use super::*;
 use kernel::DefinitionKind;
 
 #[test]
+fn edit_hide_needs_something_still_shown() {
+    let mut h = harness(Fixture {
+        selection_hidden: Some(true),
+        ..Default::default()
+    });
+    click(&mut h, "Edit");
+    assert!(h.get_by_label("Hide").accesskit_node().is_disabled());
+}
+
+#[test]
+fn edit_unhide_last_and_all_need_something_hidden() {
+    const UNHIDE: &str = "Unhide \u{23F5}";
+    let mut h = harness(Fixture::default());
+    click(&mut h, "Edit");
+    click(&mut h, UNHIDE);
+    assert!(h.get_by_label("Last").accesskit_node().is_disabled());
+    assert!(h.get_by_label("All").accesskit_node().is_disabled());
+    let mut h = harness(Fixture {
+        has_hidden: true,
+        has_last_hidden: true,
+        ..Default::default()
+    });
+    click(&mut h, "Edit");
+    click(&mut h, UNHIDE);
+    assert!(!h.get_by_label("Last").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("All").accesskit_node().is_disabled());
+}
+
+#[test]
+fn orient_faces_from_the_menu_uses_the_face_under_the_cursor_when_there_is_one() {
+    let face: EntityId = "f4".parse().unwrap();
+    let menu = ViewportMenu {
+        faces: true,
+        orient_from: Some(face),
+        ..plain_menu()
+    };
+    assert_eq!(
+        click(&mut harness(open_menu(menu)), "Orient Faces"),
+        [
+            UiAction::OrientFaces(Some(face)),
+            UiAction::CloseViewportMenu
+        ]
+    );
+    let mut h = harness(Fixture {
+        has_face_selected: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        click_menu(&mut h, &["Edit", "Orient Faces"]),
+        [UiAction::OrientFaces(None)]
+    );
+}
+
+#[test]
 fn edit_hide_needs_something_that_can_be_hidden() {
     let mut h = harness(Fixture {
         selection_hidden: Some(false),
@@ -24,6 +78,8 @@ fn edit_unhide_has_selected_last_and_all() {
     ] {
         let mut h = harness(Fixture {
             has_hidden_selected: true,
+            has_hidden: true,
+            has_last_hidden: true,
             ..Default::default()
         });
         assert_eq!(click_menu(&mut h, &["Edit", UNHIDE, item]), [action]);
@@ -33,14 +89,13 @@ fn edit_unhide_has_selected_last_and_all() {
     click(&mut h, "Edit");
     click(&mut h, UNHIDE);
     assert!(h.get_by_label("Selected").accesskit_node().is_disabled());
-    assert!(!h.get_by_label("Last").accesskit_node().is_disabled());
 }
 
 #[test]
 fn edit_reverse_and_orient_faces_need_a_face() {
     for (item, action) in [
         ("Reverse Faces", UiAction::ReverseFaces),
-        ("Orient Faces", UiAction::OrientFaces),
+        ("Orient Faces", UiAction::OrientFaces(None)),
     ] {
         let mut h = harness(Fixture {
             has_face_selected: true,
@@ -134,6 +189,7 @@ fn plain_menu() -> ViewportMenu {
         hide: false,
         unhide: false,
         faces: false,
+        orient_from: None,
     }
 }
 
@@ -149,7 +205,7 @@ fn the_viewport_menu_hides_unhides_reverses_and_orients() {
         ("Hide", UiAction::Hide),
         ("Unhide", UiAction::UnhideSelected),
         ("Reverse Faces", UiAction::ReverseFaces),
-        ("Orient Faces", UiAction::OrientFaces),
+        ("Orient Faces", UiAction::OrientFaces(None)),
     ] {
         assert_eq!(
             click(&mut harness(open_menu(all)), item),

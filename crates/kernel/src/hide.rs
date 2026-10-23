@@ -21,6 +21,14 @@ impl Model {
         (self.take_changes(), changed)
     }
 
+    /// Whether this mesh has a hidden edge, face, instance or guide (stops at the first).
+    pub fn any_hidden(&self) -> bool {
+        self.edges().any(|(_, e)| e.hidden)
+            || self.faces().any(|(_, f)| f.hidden)
+            || self.instances().any(|(_, i)| i.hidden)
+            || self.guides().any(|(_, g)| g.hidden())
+    }
+
     /// The hidden edges, faces, instances and guides of this mesh (not those inside its
     /// instances), in kind then id order.
     pub fn hidden_entities(&self) -> Vec<EntityId> {

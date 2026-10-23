@@ -177,7 +177,11 @@ pub(super) fn viewport_menu(ui: &mut Ui, menu: ViewportMenu, actions: &mut Vec<U
                     (menu.hide, "Hide", UiAction::Hide),
                     (menu.unhide, "Unhide", UiAction::UnhideSelected),
                     (menu.faces, "Reverse Faces", UiAction::ReverseFaces),
-                    (menu.faces, "Orient Faces", UiAction::OrientFaces),
+                    (
+                        menu.faces,
+                        "Orient Faces",
+                        UiAction::OrientFaces(menu.orient_from),
+                    ),
                 ];
                 for (shown, label, action) in entries {
                     if shown && widgets::menu_item(ui, label, None, true).clicked() {

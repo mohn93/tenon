@@ -885,6 +885,8 @@ struct State {
     left_press: Option<DVec2>,
     /// Where the viewport's right-click menu was opened (points), while it is open.
     viewport_menu: Option<egui::Pos2>,
+    /// The face under the cursor when the viewport menu opened.
+    menu_face: Option<EntityId>,
     /// Whether the window has keyboard focus.
     focused: bool,
     /// How fly mode holds the pointer now.
@@ -1160,6 +1162,7 @@ impl State {
             edited: false,
             left_press: None,
             viewport_menu: None,
+            menu_face: None,
             focused: true,
             capture: Capture::Free,
             look_held: false,
@@ -2070,8 +2073,8 @@ impl State {
             UiAction::ReverseFaces => {
                 self.editor.reverse_faces();
             }
-            UiAction::OrientFaces => {
-                self.editor.orient_faces();
+            UiAction::OrientFaces(from) => {
+                self.editor.orient_faces(from);
             }
             UiAction::FlipSection => {
                 self.editor.flip_selected_section();
@@ -2584,7 +2587,9 @@ impl State {
             } else {
                 (Vec::new(), None)
             };
-        let viewport_menu = self.editor.open_viewport_menu(&mut self.viewport_menu);
+        let viewport_menu = self
+            .editor
+            .open_viewport_menu(&mut self.viewport_menu, self.menu_face);
         let panels = View {
             viewer: ViewerView {
                 panel: self.viewer_panel,
@@ -2644,6 +2649,8 @@ impl State {
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
+            has_hidden: self.editor.context_has_hidden(),
+            has_last_hidden: self.editor.has_last_hidden(),
             has_hidden_selected: self.editor.selection_has_hidden(),
             has_face_selected: self.editor.selection_has_faces(),
             theme: self.prefs.theme,
@@ -3850,14 +3857,15 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 false
             }
-            // Right-clicking a selected section plane, or a selection with faces or groups,
-            // opens the viewport menu.
+            // Right-clicking a selected section plane, or a selection with something to hide,
+            // reverse or intersect, opens the viewport menu.
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Right,
                 ..
             } if s.pointer_in_view() && s.editor.opens_viewport_menu(s.features.read_only) => {
                 let ppp = f64::from(s.gui.pixels_per_point());
+                s.menu_face = s.editor.hovered();
                 s.viewport_menu = Some(egui::pos2(
                     (s.cursor.x / ppp) as f32,
                     (s.cursor.y / ppp) as f32,

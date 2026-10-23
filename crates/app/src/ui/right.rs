@@ -1,5 +1,5 @@
-//! Entity Info: what is selected, its tag, the Soft checkbox for edges, the Hidden checkbox and the texture
-//! position for faces.
+//! Entity Info: what is selected, its tag, the Soft checkbox for edges, the Hidden checkbox and
+//! the texture position for faces.
 
 use egui::Ui;
 use kernel::{DefinitionId, EntityId};

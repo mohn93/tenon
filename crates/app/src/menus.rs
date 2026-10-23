@@ -190,7 +190,7 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .entry(),
         Entry::Separator,
         Item::new("Hide", UiAction::Hide)
-            .enabled(view.selection_hidden.is_some())
+            .enabled(view.selection_hidden == Some(false))
             .entry(),
         Entry::Submenu {
             label: "Unhide",
@@ -199,16 +199,20 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
                     .enabled(view.has_hidden_selected)
                     .tooltip("Hidden entities can be selected while View > Hidden Geometry is on")
                     .entry(),
-                Item::new("Last", UiAction::UnhideLast).entry(),
-                Item::new("All", UiAction::UnhideAll).entry(),
+                Item::new("Last", UiAction::UnhideLast)
+                    .enabled(view.has_last_hidden)
+                    .entry(),
+                Item::new("All", UiAction::UnhideAll)
+                    .enabled(view.has_hidden)
+                    .entry(),
             ],
         },
         Item::new("Reverse Faces", UiAction::ReverseFaces)
             .enabled(view.has_face_selected)
             .entry(),
-        Item::new("Orient Faces", UiAction::OrientFaces)
+        Item::new("Orient Faces", UiAction::OrientFaces(None))
             .enabled(view.has_face_selected)
-            .tooltip("Turn the faces joined to the first selected one to agree with it")
+            .tooltip("Turn the faces joined to the lowest-numbered selected face to agree with it; right-click a face to choose")
             .entry(),
         Entry::Separator,
         Item::new("Soften Edges...", UiAction::ShowSoften(true)).entry(),
@@ -537,7 +541,8 @@ pub fn items(menus: &[Menu]) -> Vec<&Item> {
 }
 
 /// A stable id for the item: its action's Debug text. The lighting toggle's action flips
-/// between day and night, so it has one id for both; so do the section, X-ray and Hidden Geometry toggles.
+/// between day and night, so it has one id for both; so do the section, X-ray and Hidden
+/// Geometry toggles.
 #[cfg(any(target_os = "macos", test))]
 pub fn item_id(action: &UiAction) -> String {
     match action {

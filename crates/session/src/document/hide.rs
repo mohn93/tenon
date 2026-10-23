@@ -21,6 +21,15 @@ impl Document {
         Ok(change)
     }
 
+    /// Whether `unhide_last` would show something: an entity the latest `hide` hid is still
+    /// hidden in the open context.
+    pub fn has_last_hidden(&self) -> bool {
+        let m = self.model();
+        self.last_hidden
+            .iter()
+            .any(|id| m.hidden_of(*id) == Some(true))
+    }
+
     /// Shows the entities in `ids` (same rules as `hide_changes`).
     pub(super) fn unhide_changes(&mut self, ids: &[EntityId]) -> Result<SceneChange, CommandError> {
         self.parts(ids)?;
