@@ -14,8 +14,8 @@ use crate::batch::BatchCommand;
 use crate::camera::{Camera, Lighting};
 use crate::circle::{DEFAULT_CIRCLE_SEGMENTS, circle_points};
 use crate::command::{
-    BatchError, Command, CommandError, ErrorKind, IntersectReport, OrientOutcome, Origin, Outcome,
-    SelectMode,
+    BatchError, Command, CommandError, ErrorKind, ExpectedStep, IntersectReport, OrientOutcome,
+    Origin, Outcome, SelectMode,
 };
 use crate::import::ImportReport;
 use crate::polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
@@ -2583,6 +2583,60 @@ impl Document {
     /// The label of the step `undo` would undo next (the `history` query's first `undo`).
     pub fn undo_label(&self) -> Option<&str> {
         self.undo.last().map(|s| s.label.as_str())
+    }
+
+    /// Whether the last `n` (at least 1) undo steps are each `expect` (label, and origin when
+    /// given).
+    fn last_steps_are(&self, n: usize, expect: &ExpectedStep) -> bool {
+        n > 0
+            && self.undo.len() >= n
+            && self.undo[self.undo.len() - n..]
+                .iter()
+                .all(|s| s.label == expect.label && expect.origin.is_none_or(|o| o == s.origin))
+    }
+
+    /// Joins the last `n` undo steps into one, which undoes and redoes them all: how a client
+    /// makes a gesture that ran as many commands (a slider drag) one step, ending exactly where
+    /// the gesture left the model. Only when each of them is `expect`; false (nothing changes)
+    /// otherwise. The model and the revision do not change.
+    pub fn join_last_steps(&mut self, n: usize, expect: &ExpectedStep) -> bool {
+        if !self.last_steps_are(n, expect) {
+            return false;
+        }
+        let steps = self.undo.split_off(self.undo.len() - n);
+        let units = steps
+            .iter()
+            .filter_map(|s| s.units)
+            .reduce(|(from, _), (_, to)| (from, to));
+        let last = steps.last().expect("n > 0");
+        let (label, origin) = (last.label.clone(), last.origin);
+        self.undo.push(Step {
+            label,
+            origin,
+            changes: SceneChange::join(steps.into_iter().map(|s| s.changes)),
+            units,
+        });
+        true
+    }
+
+    /// Undoes the last `n` undo steps and forgets them (they cannot be redone): for a gesture
+    /// that ended where it began. Only when each of them is `expect`; false (nothing changes)
+    /// otherwise.
+    pub fn drop_last_steps(&mut self, n: usize, expect: &ExpectedStep) -> bool {
+        if !self.last_steps_are(n, expect) {
+            return false;
+        }
+        for _ in 0..n {
+            let step = self.undo.pop().expect("counted");
+            let inverse = step.changes.inverse();
+            self.scene.apply(&inverse);
+            let restored = step.units.map(|(from, _)| from);
+            if let Some(from) = restored {
+                self.units = from;
+            }
+            self.changed(&inverse, restored);
+        }
+        true
     }
 
     /// The label of the step `redo` would redo next.
