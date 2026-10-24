@@ -21,7 +21,7 @@ class ApiError(Exception):
     """An error reply. ``kind`` is the API's error kind (``invalid_input``,
     ``not_found``...) for a failed command, else a name for the JSON-RPC code.
     For a failed batch ``index`` is the failing command, ``rolled_back`` says
-    whether the batch was undone, and ``completed`` how many commands ran.
+    whether the batch was undone, and ``completed`` the outcomes of the commands that ran.
     """
 
     def __init__(self, kind, message, data=None, code=None, index=None, rolled_back=None, completed=None):

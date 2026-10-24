@@ -191,14 +191,14 @@ class AppTests(unittest.TestCase):
                 atomic=False,
             )
         self.assertEqual(cm.exception.index, 1)
-        self.assertEqual(cm.exception.completed, 1)
+        self.assertEqual(len(cm.exception.completed), 1)
         self.assertFalse(cm.exception.rolled_back)
         self.assertEqual(self.client.query("stats")["faces"], 1)
 
     def test_batch_schema_excludes_editor_commands(self):
         schema = self.client.command_schema()
         self.assertIn("add_rectangle", schema)
-        for name in ("set_camera", "tool_input"):
+        for name in ("set_tool", "set_fly_mode"):
             self.assertNotIn(name, schema)
 
     def test_builder_refs_and_result(self):
