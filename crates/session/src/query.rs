@@ -65,6 +65,24 @@ pub enum Query {
         #[serde(default)]
         ids: Vec<EntityId>,
     },
+    /// Turns joint `joint` through a range on a copy of the model and checks the root's solid
+    /// parts at each step: `steps` (2 to `MAX_SWEEP_STEPS`) evenly spaced values from `from`
+    /// to `to` (degrees or meters, as `drive`), `slide` held for a cylindrical joint. `ids`
+    /// limits the parts (root groups and components; every one when empty). Reports each pair
+    /// that comes within `report_within` meters (default 0.005) at some step. Never changes
+    /// the model.
+    SweepCheck {
+        joint: JointId,
+        from: f64,
+        to: f64,
+        steps: u32,
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        slide: Option<f64>,
+        #[serde(default)]
+        report_within: Option<f64>,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -175,6 +193,38 @@ pub struct ClearancePair {
     pub point_a: [f64; 3],
     pub point_b: [f64; 3],
     pub overlap: bool,
+}
+
+/// Most steps a `sweep_check` takes.
+pub const MAX_SWEEP_STEPS: u32 = 10_000;
+
+/// One pair of parts over a sweep, joint values in degrees or meters: the first and last
+/// values where they overlap (absent when they never do), the largest volume they share (0
+/// when none) and where, the smallest clearance (0 when they touch or overlap) and the first
+/// value where it occurs, and the first value where their overlap could not be measured.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SweepPair {
+    pub a: EntityId,
+    pub b: EntityId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<f64>,
+    pub volume: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_at: Option<f64>,
+    pub clearance: f64,
+    pub clearance_at: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<SweepStop>,
+}
+
+/// A joint value (degrees or meters) and why the sweep stopped there, or why a pair's overlap
+/// could not be measured there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SweepStop {
+    pub value: f64,
+    pub reason: String,
 }
 
 /// An axis-aligned box, bounds included.
@@ -753,6 +803,16 @@ pub enum QueryResult {
     Clearance {
         pairs: Vec<ClearancePair>,
         skipped: Vec<SkippedPart>,
+        revision: u64,
+    },
+    /// The `sweep_check` query: pairs in order of ids; `steps` checked; `stopped` only when a
+    /// value the solver could not meet ended the sweep.
+    SweepCheck {
+        pairs: Vec<SweepPair>,
+        skipped: Vec<SkippedPart>,
+        steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stopped: Option<SweepStop>,
         revision: u64,
     },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or

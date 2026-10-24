@@ -306,6 +306,7 @@ fn describe_lists_methods_and_schemas() {
         "section_display",
         "interference",
         "clearance",
+        "sweep_check",
     ] {
         assert!(
             query_schema.contains(variant),

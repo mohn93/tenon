@@ -33,6 +33,7 @@ mod smooth;
 mod soften;
 mod solver;
 mod styles;
+mod sweep_check;
 mod tags;
 mod texture_placement;
 mod textures;

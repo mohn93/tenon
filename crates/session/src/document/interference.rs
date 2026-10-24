@@ -1,14 +1,14 @@
 //! The `interference` and `clearance` queries: which solid parts overlap and how near parts
 //! come. Read-only: the overlap volumes come from booleans on copies.
 
-use kernel::interfere::{Checker, Part};
-use kernel::{EntityId, InstanceId};
+use kernel::interfere::{Checker, Part, SWEEP_REPORT_WITHIN, sweep_check};
+use kernel::{EntityId, InstanceId, JointId, KernelError};
 
 use super::Document;
 use crate::command::{CommandError, ErrorKind};
 use crate::query::{
-    ClearancePair, FailedPair, InterferencePair, MAX_CLEARANCE_IDS, QueryResult, SkippedPart,
-    TouchingPair,
+    ClearancePair, FailedPair, InterferencePair, MAX_CLEARANCE_IDS, MAX_SWEEP_STEPS, QueryResult,
+    SkippedPart, SweepPair, SweepStop, TouchingPair,
 };
 
 fn invalid(message: impl Into<String>) -> CommandError {
@@ -134,6 +134,106 @@ impl Document {
         Ok(QueryResult::Clearance {
             pairs,
             skipped: skipped(skip),
+            revision: self.revision,
+        })
+    }
+}
+
+impl Document {
+    /// The `sweep_check` query: drives `joint` through the range on a copy of the scene.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn sweep_check_query(
+        &self,
+        joint: JointId,
+        from: f64,
+        to: f64,
+        steps: u32,
+        ids: &[EntityId],
+        slide: Option<f64>,
+        report_within: Option<f64>,
+    ) -> Result<QueryResult, CommandError> {
+        let Some(j) = self.scene.joint(joint) else {
+            return Err(CommandError::new(
+                ErrorKind::NotFound,
+                format!("no joint {joint}"),
+            ));
+        };
+        let angular = j.kind.is_angular();
+        if !from.is_finite() || !to.is_finite() || slide.is_some_and(|s| !s.is_finite()) {
+            return Err(invalid("from, to and slide must be finite numbers"));
+        }
+        if !(2..=MAX_SWEEP_STEPS).contains(&steps) {
+            return Err(invalid(format!(
+                "steps must be from 2 to {MAX_SWEEP_STEPS}"
+            )));
+        }
+        let within = report_within.unwrap_or(SWEEP_REPORT_WITHIN);
+        if !within.is_finite() || within < 0.0 {
+            return Err(invalid("report_within must be a distance of 0 or more"));
+        }
+        let root = self.scene.root();
+        let mut parts = Vec::new();
+        for id in ids {
+            let EntityId::Instance(i) = *id else {
+                return Err(
+                    invalid(format!("{id} is not a group or component")).with_ids(vec![*id])
+                );
+            };
+            if root.instance(i).is_none() {
+                return Err(CommandError::new(
+                    ErrorKind::NotFound,
+                    format!("no group or component {id} in the root"),
+                )
+                .with_ids(vec![*id]));
+            }
+            if !parts.contains(&i) {
+                parts.push(i);
+            }
+        }
+        let to_kernel = |v: f64| if angular { v.to_radians() } else { v };
+        let shown = |v: f64| if angular { v.to_degrees() } else { v };
+        let report = sweep_check(
+            &self.scene,
+            joint,
+            to_kernel(from),
+            to_kernel(to),
+            steps as usize,
+            slide,
+            &parts,
+            within,
+        )
+        .map_err(|e| match e {
+            KernelError::JointNotFound => {
+                CommandError::new(ErrorKind::NotFound, format!("no joint {joint}"))
+            }
+            e => invalid(e.to_string()),
+        })?;
+        let e = EntityId::Instance;
+        Ok(QueryResult::SweepCheck {
+            pairs: report
+                .pairs
+                .into_iter()
+                .map(|q| SweepPair {
+                    a: e(q.a),
+                    b: e(q.b),
+                    first: q.interferes.map(|(f, _)| shown(f)),
+                    last: q.interferes.map(|(_, l)| shown(l)),
+                    volume: q.volume,
+                    volume_at: q.volume_at.map(shown),
+                    clearance: q.clearance,
+                    clearance_at: shown(q.clearance_at),
+                    failed: q.failed.map(|(value, reason)| SweepStop {
+                        value: shown(value),
+                        reason,
+                    }),
+                })
+                .collect(),
+            skipped: skipped(report.skipped),
+            steps: report.steps as u32,
+            stopped: report.stopped.map(|(value, reason)| SweepStop {
+                value: shown(value),
+                reason,
+            }),
             revision: self.revision,
         })
     }

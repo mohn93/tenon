@@ -65,9 +65,10 @@ pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
     AnchorInfo, Bounds, ChangeEvent, ClearancePair, CurveInfo, DefinitionInfo, DimensionInfo,
     DimensionKind, EdgeInfo, EntityKind, FaceInfo, FailedPair, GuideInfo, GuideKind, InstanceInfo,
-    InterferencePair, MAX_CLEARANCE_IDS, MaterialInfo, NoteInfo, NoteKind, OutlinerNode,
-    OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo, SceneTransitionInfo, SceneView,
-    SectionPlaneInfo, SkippedPart, TagInfo, TextureInfo, TouchingPair, VertexInfo,
+    InterferencePair, MAX_CLEARANCE_IDS, MAX_SWEEP_STEPS, MaterialInfo, NoteInfo, NoteKind,
+    OutlinerNode, OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo, SceneTransitionInfo,
+    SceneView, SectionPlaneInfo, SkippedPart, SweepPair, SweepStop, TagInfo, TextureInfo,
+    TouchingPair, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_axes_in, rectangle_corners};
 pub use rotate::rotation;

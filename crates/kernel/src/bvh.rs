@@ -92,6 +92,14 @@ impl Bvh {
         search.pair(0, 0);
         search.best
     }
+
+    /// Whether this tree placed by `pa` and `other` placed by `pb` cross: an edge of a
+    /// triangle of one passes through a triangle of the other (its boundary included) with
+    /// its ends more than `tol` to either side. Surfaces that only touch (faces lying on each
+    /// other, edges along faces) do not cross; a crossing shallower than `tol` may be missed.
+    pub fn crosses(&self, pa: &DAffine3, other: &Bvh, pb: &DAffine3, tol: f64) -> bool {
+        !self.is_empty() && !other.is_empty() && crossing_pair(self, pa, other, pb, 0, 0, tol)
+    }
 }
 
 fn build(tris: &mut [[DVec3; 3]], offset: usize, nodes: &mut Vec<Node>) -> usize {
@@ -221,6 +229,74 @@ impl Search<'_> {
             }
         }
     }
+}
+
+fn crossing_pair(
+    a: &Bvh,
+    pa: &DAffine3,
+    b: &Bvh,
+    pb: &DAffine3,
+    i: usize,
+    j: usize,
+    tol: f64,
+) -> bool {
+    let (na, nb) = (a.nodes[i], b.nodes[j]);
+    let (ba, bb) = (placed_box(&na, pa), placed_box(&nb, pb));
+    if box_distance(ba, bb) > tol {
+        return false;
+    }
+    match (na.count > 0, nb.count > 0) {
+        (true, true) => {
+            let ta: Vec<[DVec3; 3]> = a.tris[na.first as usize..(na.first + na.count) as usize]
+                .iter()
+                .map(|t| t.map(|p| pa.transform_point3(p)))
+                .collect();
+            let tb: Vec<[DVec3; 3]> = b.tris[nb.first as usize..(nb.first + nb.count) as usize]
+                .iter()
+                .map(|t| t.map(|p| pb.transform_point3(p)))
+                .collect();
+            ta.iter().any(|p| {
+                tb.iter()
+                    .any(|q| edges_pierce(p, q, tol) || edges_pierce(q, p, tol))
+            })
+        }
+        (a_leaf, b_leaf) => {
+            let open_a = b_leaf || (!a_leaf && (ba.1 - ba.0).length() >= (bb.1 - bb.0).length());
+            if open_a {
+                crossing_pair(a, pa, b, pb, i + 1, j, tol)
+                    || crossing_pair(a, pa, b, pb, na.first as usize, j, tol)
+            } else {
+                crossing_pair(a, pa, b, pb, i, j + 1, tol)
+                    || crossing_pair(a, pa, b, pb, i, nb.first as usize, tol)
+            }
+        }
+    }
+}
+
+/// Whether an edge of triangle `p` passes through triangle `q` (its boundary within `tol`
+/// included) with its ends more than `tol` to either side of `q`'s plane.
+fn edges_pierce(p: &[DVec3; 3], q: &[DVec3; 3], tol: f64) -> bool {
+    let n = (q[1] - q[0]).cross(q[2] - q[0]);
+    let len = n.length();
+    if len == 0.0 || !len.is_finite() {
+        return false;
+    }
+    let n = n / len;
+    let side: [f64; 3] = p.map(|v| (v - q[0]).dot(n));
+    (0..3).any(|k| {
+        let (d0, d1) = (side[k], side[(k + 1) % 3]);
+        if !((d0 > tol && d1 < -tol) || (d0 < -tol && d1 > tol)) {
+            return false;
+        }
+        let (e0, e1) = (p[k], p[(k + 1) % 3]);
+        let x = e0 + (e1 - e0) * (d0 / (d0 - d1));
+        (0..3).all(|m| {
+            let (u, v) = (q[m], q[(m + 1) % 3]);
+            let edge = v - u;
+            let el = edge.length();
+            el == 0.0 || edge.cross(x - u).dot(n) >= -tol * el
+        })
+    })
 }
 
 /// The nearest points of two triangles (0 apart where they cross or touch).
@@ -404,6 +480,24 @@ mod tests {
         let p = tri([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]);
         let q = tri([0.2, 0.2, 0.0], [0.5, 0.2, 0.0], [0.2, 0.5, 0.0]);
         assert!(triangle_distance(p, q).distance < 1e-12);
+    }
+
+    #[test]
+    fn crossing_needs_an_edge_through_a_triangle_beyond_the_tolerance() {
+        let p = tri([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]);
+        let through = tri([0.5, 0.5, -1.0], [0.5, 0.5, 1.0], [0.6, -1.0, 0.0]);
+        assert!(edges_pierce(&through, &p, 1e-6) || edges_pierce(&p, &through, 1e-6));
+        // Lying on it, or standing on it with one end in its plane, is touching.
+        let flat = tri([0.2, 0.2, 0.0], [0.5, 0.2, 0.0], [0.2, 0.5, 0.0]);
+        assert!(!edges_pierce(&flat, &p, 1e-6) && !edges_pierce(&p, &flat, 1e-6));
+        let standing = tri([0.5, 0.5, 0.0], [0.6, 0.5, 1.0], [0.5, 0.6, 1.0]);
+        assert!(!edges_pierce(&standing, &p, 1e-6) && !edges_pierce(&p, &standing, 1e-6));
+        // Through it by less than the tolerance does not count.
+        let shallow = tri([0.5, 0.5, -1e-7], [0.6, 0.5, 1.0], [0.5, 0.6, 1.0]);
+        assert!(!edges_pierce(&shallow, &p, 1e-6));
+        // Through its boundary does.
+        let edge = tri([1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [1.0, -1.0, 0.0]);
+        assert!(edges_pierce(&edge, &p, 1e-6));
     }
 
     fn grid(n: usize, z: f64) -> Vec<[DVec3; 3]> {
