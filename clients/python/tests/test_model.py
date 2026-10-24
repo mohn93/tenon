@@ -1,7 +1,5 @@
 """Tests for Transform (pure) and Model (against a launched headless app).
 
-Helpers for milestones not merged yet (solid tools, material finish, studio lighting,
-labels, scene positions) are skipped until the app's `describe` lists them.
 """
 import math
 import os
@@ -64,17 +62,6 @@ class TransformTests(unittest.TestCase):
             Transform([1, 2, 3])
         with self.assertRaises(ValueError):
             Transform.look((0, 0, 0), (0, 0, 0))
-
-
-def describe_has(client, command=None, field=None, lighting=None):
-    d = client.describe()
-    cmds = {v["properties"]["type"]["const"]: v for v in d["methods"]["batch"]["params_schema"]["$defs"]["Command"]["oneOf"]}
-    if lighting is not None:
-        p = d["methods"]["render_view"]["params_schema"]
-        return lighting in repr(p)
-    if command not in cmds:
-        return False
-    return field is None or field in cmds[command]["properties"]
 
 
 @unittest.skipIf(APP is None, "no sketchup-alt app binary found")
@@ -171,11 +158,8 @@ class ModelTests(unittest.TestCase):
         with open(path, "rb") as f:
             self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
 
-    # helpers for later milestones
 
     def test_solids(self):
-        if not describe_has(self.client, "solid_union"):
-            self.skipTest("solid tools not in this app")
         a = self.m.box((0, 0, 0), (2, 2, 2))
         b = self.m.box((1, 1, 1), (2, 2, 2))
         u = self.m.union([a, b])
@@ -190,15 +174,15 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(close(self.entity(i)["bounds"]["min"], (21, 1, 1), 1e-6))
 
     def test_material_finish(self):
-        if not describe_has(self.client, "add_material", "metalness"):
-            self.skipTest("material finish not in this app")
         m = self.m.material("Chrome", (200, 200, 210), metalness=1, roughness=0.2)
         again = self.m.material("Chrome", (200, 200, 210), metalness=0.5, roughness=0.4)
         self.assertEqual(m.id, again.id)
+        mats = self.client.query("materials")["materials"]
+        chrome = next(x for x in mats if x["id"] == m.id)
+        self.assertAlmostEqual(chrome["metalness"], 0.5, places=6)
+        self.assertAlmostEqual(chrome["roughness"], 0.4, places=6)
 
     def test_studio_render(self):
-        if not describe_has(self.client, lighting="studio"):
-            self.skipTest("studio lighting not in this app")
         self.m.box((0, 0, 0), (1, 1, 1))
         try:
             self.m.render(os.path.join(self.tmp, "s.png"), 64, 48)
@@ -206,15 +190,11 @@ class ModelTests(unittest.TestCase):
             self.skipTest("no GPU: %s" % e)
 
     def test_label(self):
-        if not describe_has(self.client, "add_label"):
-            self.skipTest("labels not in this app")
         box = self.m.box((0, 0, 0), (1, 1, 1))
         note = self.m.label(box, "Block")
         self.assertTrue(note)
 
     def test_scene_positions(self):
-        if not describe_has(self.client, "add_scene", "positions"):
-            self.skipTest("scene positions not in this app")
         box = self.m.box((0, 0, 0), (1, 1, 1))
         self.assertTrue(self.m.scene("Start", positions=[box]))
 
