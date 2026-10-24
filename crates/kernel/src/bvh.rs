@@ -37,6 +37,41 @@ pub struct Closest {
     pub b: DVec3,
 }
 
+impl Closest {
+    pub fn new(a: DVec3, b: DVec3) -> Closest {
+        Closest {
+            distance: a.distance(b),
+            a,
+            b,
+        }
+    }
+
+    /// The same pair with the surfaces exchanged.
+    pub fn swapped(self) -> Closest {
+        Closest {
+            distance: self.distance,
+            a: self.b,
+            b: self.a,
+        }
+    }
+
+    /// The nearer of the two (this one on a tie).
+    pub fn min(self, other: Closest) -> Closest {
+        if other.distance < self.distance {
+            other
+        } else {
+            self
+        }
+    }
+}
+
+/// Nothing found yet: infinitely far.
+pub const NONE: Closest = Closest {
+    distance: f64::INFINITY,
+    a: DVec3::ZERO,
+    b: DVec3::ZERO,
+};
+
 impl Bvh {
     /// A tree over `tris` (degenerate ones included; they still bound the surface).
     pub fn new(mut tris: Vec<[DVec3; 3]>) -> Bvh {
@@ -91,6 +126,37 @@ impl Bvh {
         };
         search.pair(0, 0);
         search.best
+    }
+
+    /// The point of this tree placed by `place` nearest `q`, as `Closest` with `a` = `q` and
+    /// `b` on the surface; None when empty.
+    pub fn nearest_point(&self, place: &DAffine3, q: DVec3) -> Option<Closest> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut best = NONE;
+        self.point_rec(0, place, q, &mut best);
+        Some(best)
+    }
+
+    fn point_rec(&self, i: usize, place: &DAffine3, q: DVec3, best: &mut Closest) {
+        let n = self.nodes[i];
+        if point_gap(placed_box(&n, place), q) >= best.distance {
+            return;
+        }
+        if n.count > 0 {
+            for t in &self.tris[n.first as usize..(n.first + n.count) as usize] {
+                let t = t.map(|p| place.transform_point3(p));
+                *best = best.min(Closest::new(q, closest_on_triangle(q, t)));
+            }
+            return;
+        }
+        let kids = [i + 1, n.first as usize];
+        let gap = kids.map(|k| point_gap(placed_box(&self.nodes[k], place), q));
+        let order = if gap[0] <= gap[1] { [0, 1] } else { [1, 0] };
+        for k in order {
+            self.point_rec(kids[k], place, q, best);
+        }
     }
 
     /// Whether this tree placed by `pa` and `other` placed by `pb` cross: an edge of a
@@ -153,6 +219,11 @@ fn placed_box(n: &Node, place: &DAffine3) -> (DVec3, DVec3) {
 fn box_distance((alo, ahi): (DVec3, DVec3), (blo, bhi): (DVec3, DVec3)) -> f64 {
     let gap = (blo - ahi).max(alo - bhi).max(DVec3::ZERO);
     gap.length()
+}
+
+/// How far point `p` is from a box (0 inside it).
+fn point_gap((lo, hi): (DVec3, DVec3), p: DVec3) -> f64 {
+    (lo - p).max(p - hi).max(DVec3::ZERO).length()
 }
 
 struct Search<'a> {
@@ -360,48 +431,96 @@ fn segment_crosses(a: DVec3, b: DVec3, [p, q, r]: [DVec3; 3]) -> Option<DVec3> {
 
 /// The nearest points of segments `p1`-`q1` and `p2`-`q2` (Ericson, Real-Time Collision
 /// Detection 5.1.9), degenerate segments included.
-fn segment_segment(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> (DVec3, DVec3) {
-    let (d1, d2, r) = (q1 - p1, q2 - p2, p1 - p2);
-    let (a, e, f) = (d1.length_squared(), d2.length_squared(), d2.dot(r));
-    const EPS: f64 = 1e-30;
+pub fn segment_segment(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> (DVec3, DVec3) {
+    let c = segment_segment_ranges((p1, q1 - p1, 0.0, 1.0), (p2, q2 - p2, 0.0, 1.0));
+    (c.a, c.b)
+}
+
+/// The nearest points of two segments or lines, each `(p, d, lo, hi)`: the points `p + d t`
+/// for `t` in `lo..=hi` (infinite bounds give a ray or a line).
+pub fn segment_segment_ranges(
+    s1: (DVec3, DVec3, f64, f64),
+    s2: (DVec3, DVec3, f64, f64),
+) -> Closest {
+    let (p1, d1, lo1, hi1) = s1;
+    let (p2, d2, lo2, hi2) = s2;
+    let r = p1 - p2;
+    let a = d1.dot(d1);
+    let e = d2.dot(d2);
+    let f = d2.dot(r);
+    const EPS: f64 = 1e-300;
     let (s, t);
     if a <= EPS && e <= EPS {
-        return (p1, p2);
-    }
-    if a <= EPS {
         s = 0.0;
-        t = (f / e).clamp(0.0, 1.0);
+        t = 0.0;
+    } else if a <= EPS {
+        s = 0.0;
+        t = (f / e).clamp(lo2, hi2);
     } else {
         let c = d1.dot(r);
         if e <= EPS {
             t = 0.0;
-            s = (-c / a).clamp(0.0, 1.0);
+            s = (-c / a).clamp(lo1, hi1);
         } else {
             let b = d1.dot(d2);
             let denom = a * e - b * b;
-            let mut s0 = if denom > EPS {
-                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            let mut s0 = if denom > 1e-12 * a * e {
+                ((b * f - c * e) / denom).clamp(lo1, hi1)
             } else {
-                0.0
+                0.0f64.clamp(lo1, hi1)
             };
             let mut t0 = (b * s0 + f) / e;
-            if t0 < 0.0 {
-                t0 = 0.0;
-                s0 = (-c / a).clamp(0.0, 1.0);
-            } else if t0 > 1.0 {
-                t0 = 1.0;
-                s0 = ((b - c) / a).clamp(0.0, 1.0);
+            if t0 < lo2 || t0 > hi2 {
+                t0 = t0.clamp(lo2, hi2);
+                s0 = ((b * t0 - c) / a).clamp(lo1, hi1);
             }
             s = s0;
             t = t0;
         }
     }
-    (p1 + d1 * s, p2 + d2 * t)
+    Closest::new(p1 + d1 * s, p2 + d2 * t)
+}
+
+/// Whether `x`, in the plane of the triangle, lies inside it (within rounding).
+fn in_triangle([a, b, c]: [DVec3; 3], x: DVec3) -> bool {
+    let n = (b - a).cross(c - a);
+    let tol = -1e-12 * n.length_squared();
+    n.dot((b - a).cross(x - a)) >= tol
+        && n.dot((c - b).cross(x - b)) >= tol
+        && n.dot((a - c).cross(x - c)) >= tol
+}
+
+/// A segment or line (`p + d t`, `t` in `lo..=hi`, bounds possibly infinite) against a
+/// triangle: the nearest points, 0 apart where it passes through.
+pub fn segment_triangle(p: DVec3, d: DVec3, lo: f64, hi: f64, t: [DVec3; 3]) -> Closest {
+    let n = (t[1] - t[0]).cross(t[2] - t[0]);
+    let dn = n.dot(d);
+    if dn.abs() > 1e-14 * n.length() * d.length() {
+        let s = n.dot(t[0] - p) / dn;
+        if s >= lo && s <= hi {
+            let x = p + d * s;
+            if in_triangle(t, x) {
+                return Closest::new(x, x);
+            }
+        }
+    }
+    let mut best = NONE;
+    for s in [lo, hi] {
+        if s.is_finite() {
+            let q = p + d * s;
+            best = best.min(Closest::new(q, closest_on_triangle(q, t)));
+        }
+    }
+    for i in 0..3 {
+        let (a, b) = (t[i], t[(i + 1) % 3]);
+        best = best.min(segment_segment_ranges((p, d, lo, hi), (a, b - a, 0.0, 1.0)));
+    }
+    best
 }
 
 /// The point of triangle `t` nearest `p` (Ericson 5.1.5); a degenerate triangle gives the
 /// nearest point of its sides.
-fn closest_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
+pub fn closest_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
     let (ab, ac, ap) = (b - a, c - a, p - a);
     if ab.cross(ac).length_squared() <= 1e-30 {
         let candidates = [
@@ -530,6 +649,40 @@ mod tests {
         }
         assert!((tree.distance - brute).abs() < 1e-12, "{tree:?} vs {brute}");
         assert!((tree.a.distance(tree.b) - tree.distance).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nearest_point_finds_the_brute_force_minimum_under_a_placement() {
+        let a = Bvh::new(grid(8, 0.0));
+        let place = DAffine3::from_rotation_y(0.4)
+            * DAffine3::from_scale(DVec3::new(1.0, 2.0, 0.5))
+            * DAffine3::from_translation(DVec3::new(1.0, -2.0, 0.3));
+        for q in [
+            DVec3::new(3.3, 2.1, 1.7),
+            DVec3::new(-5.0, 4.0, -2.0),
+            DVec3::new(2.0, 2.0, 0.2),
+        ] {
+            let c = a.nearest_point(&place, q).unwrap();
+            let brute = a
+                .triangles()
+                .iter()
+                .map(|t| {
+                    let t = t.map(|p| place.transform_point3(p));
+                    closest_on_triangle(q, t).distance(q)
+                })
+                .fold(f64::INFINITY, f64::min);
+            assert!((c.distance - brute).abs() < 1e-12, "{c:?} vs {brute}");
+            assert_eq!(c.a, q);
+        }
+        assert!(Bvh::default().nearest_point(&place, DVec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn lines_use_parameter_ranges() {
+        let line = (DVec3::ZERO, DVec3::X, f64::NEG_INFINITY, f64::INFINITY);
+        let seg = (DVec3::new(5.0, 1.0, 2.0), DVec3::X, 0.0, 1.0);
+        let c = segment_segment_ranges(line, seg);
+        assert!((c.distance - 5.0f64.sqrt()).abs() < 1e-12);
     }
 
     #[test]

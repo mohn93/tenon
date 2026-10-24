@@ -1211,6 +1211,7 @@ impl Document {
                 emission,
                 metalness,
                 roughness,
+                density,
                 existing,
             } => self.add_material_changes(
                 name.as_deref(),
@@ -1218,6 +1219,7 @@ impl Document {
                 *opacity,
                 texture.as_ref(),
                 (*emission, *metalness, *roughness),
+                *density,
                 *existing,
             ),
             Command::ChangeMaterial {
@@ -1229,6 +1231,7 @@ impl Document {
                 emission,
                 metalness,
                 roughness,
+                density,
             } => self.change_material_changes(
                 *material,
                 MaterialEdit {
@@ -1239,6 +1242,7 @@ impl Document {
                     emission: *emission,
                     metalness: *metalness,
                     roughness: *roughness,
+                    density: *density,
                 },
                 texture.as_ref().map(Option::as_ref),
             ),
@@ -2747,6 +2751,120 @@ impl Document {
                         reason: Some(reason),
                     },
                 }
+            }
+            Query::MassProperties { ids } => {
+                let mut instances = Vec::new();
+                for id in ids {
+                    match id {
+                        EntityId::Instance(i) if m.instance(*i).is_some() => instances.push(*i),
+                        EntityId::Instance(_) => {
+                            return Err(self.missing_error(vec![*id], format!("no entity {id}")));
+                        }
+                        _ => {
+                            return Err(CommandError::new(
+                                ErrorKind::InvalidInput,
+                                format!("{id} is not a group or component"),
+                            )
+                            .with_ids(vec![*id]));
+                        }
+                    }
+                }
+                let inherited = kernel::mass::context_density(&self.scene, &self.context);
+                let report = kernel::mass::mass_report(&self.scene, m, &instances, inherited)
+                    .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e))?;
+                QueryResult::MassProperties {
+                    instances: report
+                        .instances
+                        .iter()
+                        .map(|(i, p)| crate::query::InstanceMassInfo {
+                            id: EntityId::Instance(*i),
+                            mass: p.into(),
+                        })
+                        .collect(),
+                    total: report.total.as_ref().map(Into::into),
+                    skipped: report
+                        .skipped
+                        .into_iter()
+                        .map(|s| crate::query::SkippedInfo {
+                            path: s.path,
+                            reason: s.reason,
+                        })
+                        .collect(),
+                }
+            }
+            Query::Measure {
+                distance,
+                angle,
+                round,
+            } => {
+                let start = self.active();
+                let paths = |p: &crate::query::MeasureRef| p.path();
+                let err = |e: kernel::measure::MeasureError| match e {
+                    kernel::measure::MeasureError::Missing(id) => {
+                        self.missing_error(vec![id], format!("no entity {id}"))
+                    }
+                    kernel::measure::MeasureError::Invalid(m) => {
+                        CommandError::new(ErrorKind::InvalidInput, m)
+                    }
+                };
+                let given = [distance.is_some(), angle.is_some(), round.is_some()];
+                if given.iter().filter(|g| **g).count() != 1 {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        "measure takes exactly one of distance, angle and round",
+                    ));
+                }
+                let mut out = QueryResult::Measure {
+                    distance: None,
+                    angle: None,
+                    round: None,
+                };
+                let QueryResult::Measure {
+                    distance: od,
+                    angle: oa,
+                    round: or,
+                } = &mut out
+                else {
+                    unreachable!()
+                };
+                if let Some([a, b]) = distance {
+                    let (c, skipped) =
+                        kernel::measure::measure_distance(&self.scene, start, &paths(a), &paths(b))
+                            .map_err(err)?;
+                    *od = Some(crate::query::DistanceInfo {
+                        distance: c.distance,
+                        points: [c.a.to_array(), c.b.to_array()],
+                        skipped,
+                    });
+                }
+                if let Some([a, b]) = angle {
+                    let r =
+                        kernel::measure::measure_angle(&self.scene, start, &paths(a), &paths(b))
+                            .map_err(err)?;
+                    *oa = Some(crate::query::AngleInfo {
+                        degrees: r.degrees,
+                        acute: r.acute,
+                    });
+                }
+                if let Some(a) = round {
+                    let r = kernel::measure::measure_round(&self.scene, start, &paths(a))
+                        .map_err(err)?;
+                    *or = Some(crate::query::RoundInfo {
+                        kind: match r.kind {
+                            kernel::measure::RoundKind::Circle => crate::query::RoundKind::Circle,
+                            kernel::measure::RoundKind::Cylinder => {
+                                crate::query::RoundKind::Cylinder
+                            }
+                        },
+                        center: r.center.to_array(),
+                        axis: r.axis.to_array(),
+                        radius: r.radius,
+                        length: r.length,
+                        max_deviation: r.max_deviation,
+                        samples: r.samples,
+                    });
+                }
+                out
             }
             Query::Interference { ids, touching } => self.interference_query(ids, *touching)?,
             Query::Clearance { a, b, ids } => self.clearance_query(*a, *b, ids)?,

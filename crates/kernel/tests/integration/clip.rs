@@ -635,6 +635,7 @@ fn a_failed_insert_changes_nothing() {
             emission: 0.0,
             metalness: 0.0,
             roughness: 1.0,
+            density: None,
         })
         .unwrap();
     s.edit(MeshId::Root, |m| {

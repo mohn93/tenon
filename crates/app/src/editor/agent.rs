@@ -206,6 +206,7 @@ mod tests {
                 emission: None,
                 metalness: None,
                 roughness: None,
+                density: None,
                 existing: Default::default(),
                 texture: None,
             })

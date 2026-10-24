@@ -161,6 +161,8 @@ pub enum UiAction {
     SetMaterialMetalness(MaterialId, u8),
     /// Set a material's roughness, in percent (0 to 100: 100 is matte).
     SetMaterialRoughness(MaterialId, u8),
+    /// Set a material's density in kg/m³ (None clears it).
+    SetMaterialDensity(MaterialId, Option<f64>),
     /// Choose an image file for a material's texture.
     LoadTexture(MaterialId),
     /// Take a material's texture off.
@@ -479,6 +481,8 @@ pub struct MaterialRow {
     pub metalness: f32,
     /// From 0 (a mirror) to 1 (matte).
     pub roughness: f32,
+    /// kg/m³; None when unknown.
+    pub density: Option<f64>,
     pub texture: Option<TextureRow>,
 }
 

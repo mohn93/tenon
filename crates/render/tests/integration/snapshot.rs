@@ -123,6 +123,7 @@ fn lamp_over_ground() -> Scene {
             emission: 5.0,
             metalness: 0.0,
             roughness: 1.0,
+            density: None,
         })
         .unwrap();
     s.paint(

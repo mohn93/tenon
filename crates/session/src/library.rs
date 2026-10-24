@@ -331,13 +331,14 @@ pub fn outline(path: &Path) -> Result<crate::ClipOutline, CommandError> {
 }
 
 /// Whether two materials are the same but for their ids and names: color, opacity, emission,
-/// metalness, roughness and texture (its image's file bytes and its size).
+/// metalness, roughness, density and texture (its image's file bytes and its size).
 pub(crate) fn same_material(a: &Material, b: &Material) -> bool {
     a.color == b.color
         && a.opacity == b.opacity
         && a.emission == b.emission
         && a.metalness == b.metalness
         && a.roughness == b.roughness
+        && a.density == b.density
         && match (&a.texture, &b.texture) {
             (None, None) => true,
             (Some(x), Some(y)) => {

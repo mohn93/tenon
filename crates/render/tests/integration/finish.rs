@@ -97,6 +97,7 @@ fn set_finish(d: &mut Document, material: MaterialId, metalness: f32, roughness:
             emission: None,
             metalness: Some(metalness),
             roughness: Some(roughness),
+            density: None,
         },
     );
 }

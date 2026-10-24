@@ -229,6 +229,7 @@ fn edges_by_material_use_a_texture_average() {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     )

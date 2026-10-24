@@ -785,6 +785,9 @@ impl Scene {
                 .map_err(|e| format!("material {id}: {e}"))?;
             crate::material::check_unit("roughness", m.roughness)
                 .map_err(|e| format!("material {id}: {e}"))?;
+            if let Some(d) = m.density {
+                crate::material::check_density(d).map_err(|e| format!("material {id}: {e}"))?;
+            }
             if let Some(t) = &m.texture {
                 crate::texture::check_texture(t).map_err(|e| format!("material {id}: {e}"))?;
             }

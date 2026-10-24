@@ -261,6 +261,7 @@ pub(crate) fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> Ma
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     );
@@ -414,6 +415,7 @@ fn golden_glass_pane_in_front_of_a_box() {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     )
@@ -819,6 +821,7 @@ fn golden_textured_box_and_ground() {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     )
@@ -893,6 +896,7 @@ fn golden_positioned_textures() {
             emission: None,
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     )
@@ -949,6 +953,7 @@ pub(crate) fn add_lamp_material(
             emission: Some(emission),
             metalness: None,
             roughness: None,
+            density: None,
             existing: Default::default(),
         },
     );

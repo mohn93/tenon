@@ -729,12 +729,14 @@ pub enum Command {
     /// `metalness` (default 0) and `roughness` (default 1), each from 0 to 1, set its finish:
     /// a rough non-metal is matte, a smooth one has highlights and reflections, a metal tints
     /// them with its color.
+    /// `density` (kg/m³, 1 to 30000, default none) weighs solids painted with it (see
+    /// `mass_properties`).
     /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
     /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
     /// material unchanged (no undo step), `update` gives it the color, opacity, texture,
-    /// emission, metalness and roughness passed, as `change_material` would (one undo step),
-    /// and returns it. `reuse` checks only the ranges of the opacity, emission, metalness and
-    /// roughness given.
+    /// emission, metalness, roughness and density passed, as `change_material` would (one undo
+    /// step), and returns it. `reuse` checks only the ranges of the opacity, emission,
+    /// metalness, roughness and density given.
     /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]
@@ -752,11 +754,13 @@ pub enum Command {
         #[serde(default)]
         roughness: Option<f32>,
         #[serde(default)]
+        density: Option<f64>,
+        #[serde(default)]
         existing: ExistingMaterial,
     },
     /// Rename, recolor, change the opacity (0 to 1), the texture, the emission (0 to 10), the
-    /// metalness and/or the roughness (each 0 to 1) of a material; absent fields stay as they
-    /// are. `texture`: null removes it; an object
+    /// metalness and/or the roughness (each 0 to 1) and/or the density (kg/m³, 1 to 30000;
+    /// null clears it) of a material; absent fields stay as they are. `texture`: null removes it; an object
     /// sets it, reading `path` (the color becomes the image's average unless `color` is
     /// given), or without `path` keeps the image and changes its size.
     ChangeMaterial {
@@ -780,6 +784,13 @@ pub enum Command {
         metalness: Option<f32>,
         #[serde(default)]
         roughness: Option<f32>,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "Option<f64>")]
+        density: Option<Option<f64>>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.

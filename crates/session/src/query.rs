@@ -44,6 +44,40 @@ pub enum Query {
     Solid {
         id: EntityId,
     },
+    /// Volume, mass, centre of gravity and inertia of instances of the open context (`ids`:
+    /// instances, repeats counted once; empty means every instance of it), each and in total,
+    /// in the context's coordinates. A part's density is that of the material most of its faces
+    /// show on the outside (their front, or their back when the solid faces inward), else its
+    /// instance's own material's, else the nearest enclosing instance's (the instances the open
+    /// context sits in included), passing over materials without a density. `mass`, `inertia`
+    /// and `principal` are absent when a contributing solid has no density; without a mass
+    /// `centroid` is the volume's centroid. `inertia` is about the centroid, in kg m2;
+    /// `principal` gives its moments (ascending) and axes. Loose geometry that is not closed, or
+    /// has a face that cannot be triangulated, is listed in `skipped` and ignored.
+    MassProperties {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
+    /// Measure the model, exactly one of `distance`, `angle` and `round`. Entities are named by
+    /// id in the open context, or by a path of instances from it ending in the entity
+    /// (`["i1", "i2", "f3"]`), in which case the placements of the instances apply and results
+    /// are in open-context coordinates. `distance`: the minimum distance between two entities
+    /// (vertices, edges, faces, instances, guides) and the closest point on each; faces are
+    /// planar polygons with holes, instances are measured between their faces (surface to
+    /// surface: an instance inside another is the gap between their faces, not 0), and faces
+    /// that cannot be triangulated are left out and listed in `skipped`. `angle`: between
+    /// two edges (directions) or two faces (normals), 0 to 180 degrees. `round`: the circle
+    /// (an edge of a circle or arc, or a flat disc face) or cylinder (a face joined by soft
+    /// edges to others around one axis) the entity lies on, fitted by least squares with the
+    /// largest deviation of its vertices from the fit.
+    Measure {
+        #[serde(default)]
+        distance: Option<[MeasureRef; 2]>,
+        #[serde(default)]
+        angle: Option<[MeasureRef; 2]>,
+        #[serde(default)]
+        round: Option<MeasureRef>,
+    },
     /// Which solid parts of the open context overlap: `ids` are its groups and components
     /// (every one when empty), each a part with all it places at any depth. Pairs sharing a
     /// volume, largest first; with `touching`, also pairs whose surfaces meet with no volume
@@ -649,6 +683,128 @@ impl OutlinerTable {
     }
 }
 
+/// An entity named by id, or by a path of instances ending in the entity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MeasureRef {
+    Id(EntityId),
+    Path(Vec<EntityId>),
+}
+
+impl MeasureRef {
+    pub fn path(&self) -> Vec<EntityId> {
+        match self {
+            MeasureRef::Id(id) => vec![*id],
+            MeasureRef::Path(p) => p.clone(),
+        }
+    }
+}
+
+/// The minimum distance between two entities (see `Query::Measure`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DistanceInfo {
+    /// Meters; 0 when they touch or cross.
+    pub distance: f64,
+    /// The closest point on the first and on the second entity.
+    pub points: [[f64; 3]; 2],
+    /// Faces of measured instances that could not be triangulated and were left out, as paths
+    /// from the instance ("i4/i7/f12"); absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
+}
+
+/// The angle between two edges or two faces (see `Query::Measure`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AngleInfo {
+    /// 0 to 180: between the edges' directions (each from its first to its second vertex) or
+    /// the faces' normals.
+    pub degrees: f64,
+    /// 0 to 90: between the lines or planes, whichever way they point.
+    pub acute: f64,
+}
+
+/// What a round feature is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RoundKind {
+    Circle,
+    Cylinder,
+}
+
+/// A circle or cylinder fitted to a round feature (see `Query::Measure`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RoundInfo {
+    pub kind: RoundKind,
+    /// The circle's center; the middle of the cylinder's axis segment.
+    pub center: [f64; 3],
+    /// The unit axis, pointing up (positive z, else y, else x).
+    pub axis: [f64; 3],
+    pub radius: f64,
+    /// A cylinder's extent along its axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    /// The largest distance of a fitted vertex from the circle or cylinder, so the error of a
+    /// faceted surface shows.
+    pub max_deviation: f64,
+    /// Vertices fitted.
+    pub samples: usize,
+}
+
+/// Mass properties of one instance or of a sum of instances (see `Query::MassProperties`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MassInfo {
+    /// Cubic meters.
+    pub volume: f64,
+    /// Kilograms; absent when a contributing solid has no density.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass: Option<f64>,
+    pub centroid: [f64; 3],
+    /// The 3x3 inertia tensor about the centroid (rows), kg m2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inertia: Option<[[f64; 3]; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<PrincipalInfo>,
+}
+
+/// The principal moments of inertia, ascending, and their unit axes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PrincipalInfo {
+    pub moments: [f64; 3],
+    pub axes: [[f64; 3]; 3],
+}
+
+/// An instance's mass properties.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InstanceMassInfo {
+    pub id: EntityId,
+    #[serde(flatten)]
+    pub mass: MassInfo,
+}
+
+/// A part left out of a mass sum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SkippedInfo {
+    /// The instance path, "i3/i7"; "i3" alone for its own loose geometry.
+    pub path: String,
+    pub reason: String,
+}
+
+impl From<&kernel::mass::MassProps> for MassInfo {
+    fn from(p: &kernel::mass::MassProps) -> Self {
+        MassInfo {
+            volume: p.volume,
+            mass: p.mass,
+            centroid: p.centroid.to_array(),
+            // glam matrices are column major and this one is symmetric; rows are written.
+            inertia: p.inertia.map(|i| i.transpose().to_cols_array_2d()),
+            principal: p.principal.map(|pr| PrincipalInfo {
+                moments: pr.moments,
+                axes: pr.axes.map(|a| a.to_array()),
+            }),
+        }
+    }
+}
+
 /// A material and how much of the model uses it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MaterialInfo {
@@ -664,6 +820,9 @@ pub struct MaterialInfo {
     pub metalness: f32,
     /// How rough its surface is, from 0 (a mirror) to 1 (matte). Always present.
     pub roughness: f32,
+    /// Its density in kg/m³; absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<f64>,
     /// The texture faces painted with it show; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<TextureInfo>,
@@ -787,6 +946,23 @@ pub enum QueryResult {
         volume: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// The `mass_properties` query: each instance that counts and the sum (absent when none
+    /// does).
+    MassProperties {
+        instances: Vec<InstanceMassInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total: Option<MassInfo>,
+        skipped: Vec<SkippedInfo>,
+    },
+    /// The `measure` query: the one of `distance`, `angle` and `round` asked for.
+    Measure {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        distance: Option<DistanceInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        angle: Option<AngleInfo>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        round: Option<RoundInfo>,
     },
     /// The `interference` query: overlapping pairs, largest volume first; `touching` only
     /// when asked; `failed` only when a pair's overlap could not be measured.

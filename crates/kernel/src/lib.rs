@@ -25,7 +25,9 @@ pub mod interfere;
 pub mod intersect;
 mod joint;
 mod location;
+pub mod mass;
 mod material;
+pub mod measure;
 mod mesh;
 mod model;
 pub mod offset;
@@ -80,8 +82,8 @@ pub use joint::{
 };
 pub use location::Location;
 pub use material::{
-    DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit,
-    Side,
+    DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_DENSITY, MAX_EMISSION, MAX_MATERIAL_NAME,
+    MIN_DENSITY, Material, MaterialEdit, Side, check_density,
 };
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use orient::OrientReport;

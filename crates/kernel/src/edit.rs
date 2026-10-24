@@ -48,6 +48,8 @@ pub enum KernelError {
     /// A material metalness or roughness is not a finite number from 0 to 1; the text says
     /// which.
     MaterialFinish(String),
+    /// A material density is not a finite number from 1 to 30000 kg/m³; the text says which.
+    MaterialDensity(String),
     /// A texture placement's offset, rotation or scale is out of range; the text says which.
     TexturePlacement(String),
     /// A tag id names no tag in the scene.
@@ -126,6 +128,7 @@ impl fmt::Display for KernelError {
             | KernelError::MaterialTexture(why)
             | KernelError::MaterialEmission(why)
             | KernelError::MaterialFinish(why)
+            | KernelError::MaterialDensity(why)
             | KernelError::TexturePlacement(why)
             | KernelError::TagName(why)
             | KernelError::Page(why)

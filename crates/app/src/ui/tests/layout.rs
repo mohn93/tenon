@@ -200,6 +200,7 @@ pub(super) fn many_materials(n: u64) -> Vec<MaterialRow> {
             emission: 0.0,
             metalness: 0.0,
             roughness: 1.0,
+            density: None,
             texture: None,
         })
         .collect()
