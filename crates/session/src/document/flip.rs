@@ -25,9 +25,7 @@ impl Document {
         let ids = self.ids_or_selection(ids);
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
         if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Err(self.no_such_entities(missing));
         }
         let parts = Parts::of(&ids);
         let mesh = self.active();
@@ -58,9 +56,7 @@ impl Document {
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
         if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Err(self.no_such_entities(missing));
         }
         let ids: Vec<EntityId> = ids
             .into_iter()

@@ -64,10 +64,12 @@ impl Document {
     fn section_of(&self, id: EntityId) -> Result<SectionId, CommandError> {
         match id {
             EntityId::Section(s) if self.model().section(s).is_some() => Ok(s),
-            EntityId::Section(_) => Err(invalid(&format!(
-                "{id} is not a section plane of the open context"
-            ))
-            .with_ids(vec![id])),
+            EntityId::Section(_) => Err(if self.elsewhere_note(id).is_some() {
+                self.no_such_entities(vec![id])
+            } else {
+                invalid(&format!("{id} is not a section plane of the open context"))
+                    .with_ids(vec![id])
+            }),
             _ => Err(invalid(&format!("{id} is not a section plane")).with_ids(vec![id])),
         }
     }

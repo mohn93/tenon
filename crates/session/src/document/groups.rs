@@ -56,6 +56,7 @@ impl Document {
             .make_group_with(mesh, &parts, kind, name)
             .map_err(|e| invalid(e, ids))?;
         self.selection = BTreeSet::from([EntityId::Instance(instance)]);
+        self.made_definitions = self.model().instance(instance).map(|i| vec![i.definition]);
         Ok(change)
     }
 
@@ -143,10 +144,7 @@ impl Document {
             );
         };
         if self.model().instance(i).is_none() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, format!("no entity {id}"))
-                    .with_ids(vec![id]),
-            );
+            return Err(self.missing_error(vec![id], format!("no entity {id}")));
         }
         self.context.push(i);
         self.selection.clear();

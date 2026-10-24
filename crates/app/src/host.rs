@@ -208,7 +208,7 @@ impl Host for AppHost<'_> {
                 let mut completed = Vec::new();
                 for (index, command) in commands.iter().enumerate() {
                     match command
-                        .resolve(&completed, &|id| host.editor.doc().exists(id))
+                        .resolve(&completed, host.editor.doc())
                         .and_then(|command| host.execute_keeping(command))
                     {
                         Ok(outcome) => completed.push(outcome),

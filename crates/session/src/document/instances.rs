@@ -42,9 +42,7 @@ impl Document {
             );
         };
         if !self.exists(id) {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(vec![id])
-            );
+            return Err(self.no_such_entities(vec![id]));
         }
         let mesh = self.active();
         self.scene

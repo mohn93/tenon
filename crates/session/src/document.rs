@@ -32,6 +32,7 @@ mod annotations;
 mod axes;
 mod camera;
 mod clip;
+mod elsewhere;
 mod files;
 mod flip;
 mod follow_me;
@@ -1200,7 +1201,7 @@ impl Document {
         if !atomic {
             for (index, command) in commands.iter().enumerate() {
                 match command
-                    .resolve(&outcomes, &|id| self.exists(id))
+                    .resolve(&outcomes, self)
                     .and_then(|command| self.execute(command))
                 {
                     Ok(o) => outcomes.push(o),
@@ -1233,7 +1234,7 @@ impl Document {
         let mut names: Vec<String> = Vec::new();
         for (index, command) in commands.iter().enumerate() {
             let units_then = self.units;
-            let result = match command.resolve(&outcomes, &|id| self.exists(id)) {
+            let result = match command.resolve(&outcomes, self) {
                 Err(error) => Err(error),
                 Ok(command) => match self.edit(&command) {
                     Some(changes) => changes.map(|c| {
@@ -1561,10 +1562,7 @@ impl Document {
             );
         };
         let Some(f) = self.model().face(id) else {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, format!("no entity {face}"))
-                    .with_ids(vec![face]),
-            );
+            return Err(self.missing_error(vec![face], format!("no entity {face}")));
         };
         if !distance.is_finite() || distance.abs() > MAX_COORDINATE {
             return Err(CommandError::new(
@@ -1596,9 +1594,7 @@ impl Document {
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
         if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Err(self.no_such_entities(missing));
         }
         check_coordinates(&[offset])?;
         let vertices = self.vertex_ids(ids);
@@ -1635,7 +1631,7 @@ impl Document {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing))
+            Err(self.no_such_entities(missing))
         }
     }
 
@@ -1797,9 +1793,7 @@ impl Document {
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
         if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Err(self.no_such_entities(missing));
         }
         let least = 10.0 * kernel::geom::LENGTH_TOL;
         if !distance.is_finite() || distance.abs() < least || distance.abs() > MAX_COORDINATE {
@@ -2166,9 +2160,7 @@ impl Document {
         }
         let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
         if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Err(self.no_such_entities(missing));
         }
         Ok(Parts::of(ids))
     }
@@ -2206,17 +2198,7 @@ impl Document {
 
     /// Whether the open context holds the entity.
     pub fn exists(&self, id: EntityId) -> bool {
-        let m = self.model();
-        match id {
-            EntityId::Vertex(v) => m.vertex(v).is_some(),
-            EntityId::Edge(e) => m.edge(e).is_some(),
-            EntityId::Face(f) => m.face(f).is_some(),
-            EntityId::Instance(i) => m.instance(i).is_some(),
-            EntityId::Guide(g) => m.guide(g).is_some(),
-            EntityId::Dimension(d) => m.dimension(d).is_some(),
-            EntityId::Note(n) => m.note(n).is_some(),
-            EntityId::Section(p) => m.section(p).is_some(),
-        }
+        elsewhere::holds(self.model(), id)
     }
 
     /// Records `changes` and the change of display `units` (before, after) as an undo step
@@ -2323,10 +2305,7 @@ impl Document {
                 }
             }
             Query::Entity { id } => {
-                let missing = || {
-                    CommandError::new(ErrorKind::NotFound, format!("no entity {id}"))
-                        .with_ids(vec![*id])
-                };
+                let missing = || self.missing_error(vec![*id], format!("no entity {id}"));
                 match *id {
                     EntityId::Vertex(v) => QueryResult::Vertex(
                         m.vertex(v)
@@ -2582,10 +2561,7 @@ impl Document {
             .with_ids(vec![id]));
         };
         if self.model().edge(e).is_none() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, format!("no entity {id}"))
-                    .with_ids(vec![id]),
-            );
+            return Err(self.missing_error(vec![id], format!("no entity {id}")));
         }
         let Some(curve) = self.model().curve_of(e) else {
             return Err(CommandError::new(

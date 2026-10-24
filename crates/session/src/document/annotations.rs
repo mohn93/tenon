@@ -189,7 +189,7 @@ impl Document {
             return Err(invalid("change_note needs a note id (n...)").with_ids(vec![note]));
         };
         if self.model().note(id).is_none() {
-            return Err(not_found(note));
+            return Err(self.missing_error(vec![note], format!("no entity {note}")));
         }
         self.edit_mesh(|m| m.set_note_text(id, text))
             .map_err(|e| invalid(&e.to_string()).with_ids(vec![note]))
@@ -200,7 +200,10 @@ impl Document {
         match input {
             AnchorInput::Vertex(EntityId::Vertex(v)) => match self.model().vertex(v) {
                 Some(_) => Ok(Anchor::Vertex(v)),
-                None => Err(not_found(EntityId::Vertex(v))),
+                None => {
+                    let id = EntityId::Vertex(v);
+                    Err(self.missing_error(vec![id], format!("no entity {id}")))
+                }
             },
             AnchorInput::Vertex(id) => {
                 Err(invalid("an anchor is a vertex id or a point").with_ids(vec![id]))
@@ -218,7 +221,7 @@ impl Document {
             return Err(invalid("an edge id (e...) is needed here").with_ids(vec![id]));
         };
         if self.model().edge(e).is_none() {
-            return Err(not_found(id));
+            return Err(self.missing_error(vec![id], format!("no entity {id}")));
         }
         Ok(e)
     }
@@ -439,8 +442,4 @@ fn perpendicular(v: DVec3, along: DVec3) -> DVec3 {
 
 fn invalid(message: &str) -> CommandError {
     CommandError::new(ErrorKind::InvalidInput, message)
-}
-
-fn not_found(id: EntityId) -> CommandError {
-    CommandError::new(ErrorKind::NotFound, format!("no entity {id}")).with_ids(vec![id])
 }

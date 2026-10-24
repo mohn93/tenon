@@ -29,6 +29,7 @@ mod materials;
 mod modeling;
 mod offset;
 mod orient;
+mod other_context;
 mod outliner;
 mod perf;
 mod place_instance;

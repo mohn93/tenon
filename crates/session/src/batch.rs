@@ -17,8 +17,29 @@ use kernel::{
 };
 use serde_json::Value;
 
+/// A context that holds every id (for paths, which `open_path` checks).
+struct AnyContext;
+
+impl OpenContext for AnyContext {
+    fn holds(&self, _: EntityId) -> bool {
+        true
+    }
+
+    fn missing_text(&self, id: EntityId) -> String {
+        format!("{id} is not in the open context")
+    }
+}
+
 use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
 use crate::library::LibraryRef;
+
+/// What a batch needs to know about the open context to resolve references.
+pub trait OpenContext {
+    /// Whether the open context holds the entity.
+    fn holds(&self, id: EntityId) -> bool;
+    /// Why the open context lacks it, naming the path to open when it is elsewhere.
+    fn missing_text(&self, id: EntityId) -> String;
+}
 
 /// The first stand-in id number. The ids a document makes come from one counter that never gets
 /// near it, but ids a client names or a document holds (a crafted file) may in principle be that
@@ -220,28 +241,28 @@ impl BatchRef {
             .collect()
     }
 
-    /// The entity ids this reference stands for, in order. `exists` says whether the open
+    /// The entity ids this reference stands for, in order. `context` says whether the open
     /// context still holds an id: `*` drops the ones it does not, an indexed reference to one
     /// is `not_found`.
     fn entities(
         &self,
         done: &[Outcome],
-        exists: &dyn Fn(EntityId) -> bool,
+        context: &dyn OpenContext,
     ) -> Result<Vec<EntityId>, CommandError> {
         let found = self.candidates(self.outcome(done)?, self.kind);
         match (self.kind, self.index) {
             (Some(kind), Some(_)) => {
                 let picked = self.pick(&found, kind)?;
-                if let Some(gone) = picked.iter().find(|id| !exists(**id)) {
+                if let Some(gone) = picked.iter().find(|id| !context.holds(**id)) {
                     return Err(CommandError::new(
                         ErrorKind::NotFound,
-                        format!("{self}: {gone} is not in the open context"),
+                        format!("{self}: {}", context.missing_text(*gone)),
                     )
                     .with_ids(vec![*gone]));
                 }
                 Ok(picked)
             }
-            _ => Ok(found.into_iter().filter(|id| exists(*id)).collect()),
+            _ => Ok(found.into_iter().filter(|id| context.holds(*id)).collect()),
         }
     }
 
@@ -420,7 +441,7 @@ impl BatchCommand {
     pub fn resolve(
         &self,
         done: &[Outcome],
-        exists: &dyn Fn(EntityId) -> bool,
+        context: &dyn OpenContext,
     ) -> Result<Command, CommandError> {
         let mut command = self.command.clone();
         if self.refs.is_empty() {
@@ -432,15 +453,15 @@ impl BatchCommand {
                 return;
             }
             let result = match slot {
-                Slot::List(ids) => self.resolve_list(ids, done, exists),
+                Slot::List(ids) => self.resolve_list(ids, done, context),
                 // The elements of a path are instances of nested contexts, not of the open one:
                 // `open_path` checks them.
-                Slot::Path(ids) => self.resolve_list(ids, done, &|_| true),
-                Slot::One(id) => self.resolve_one(id, done, exists),
+                Slot::Path(ids) => self.resolve_list(ids, done, &AnyContext),
+                Slot::One(id) => self.resolve_one(id, done, context),
                 Slot::Material(m) => self.resolve_material(m, done),
                 Slot::Definition(d) => self.resolve_definition(d, done),
                 Slot::Style(s) => self.resolve_style(s, done),
-                Slot::Item(r) => self.resolve_item(r, done, exists),
+                Slot::Item(r) => self.resolve_item(r, done, context),
             };
             if let Err(e) = result {
                 error = Some(e);
@@ -460,12 +481,12 @@ impl BatchCommand {
         &self,
         ids: &mut Vec<EntityId>,
         done: &[Outcome],
-        exists: &dyn Fn(EntityId) -> bool,
+        context: &dyn OpenContext,
     ) -> Result<(), CommandError> {
         let mut resolved = Vec::with_capacity(ids.len());
         for id in ids.iter() {
             if is_stand_in(id) {
-                resolved.extend(self.reference(number(id)).entities(done, exists)?);
+                resolved.extend(self.reference(number(id)).entities(done, context)?);
             } else {
                 resolved.push(*id);
             }
@@ -478,11 +499,11 @@ impl BatchCommand {
         &self,
         id: &mut EntityId,
         done: &[Outcome],
-        exists: &dyn Fn(EntityId) -> bool,
+        context: &dyn OpenContext,
     ) -> Result<(), CommandError> {
         if is_stand_in(id) {
             // Scalar fields hold only single-id references, which resolve to one id or fail.
-            *id = self.reference(number(id)).entities(done, exists)?[0];
+            *id = self.reference(number(id)).entities(done, context)?[0];
         }
         Ok(())
     }
@@ -491,10 +512,10 @@ impl BatchCommand {
         &self,
         r: &mut LibraryRef,
         done: &[Outcome],
-        exists: &dyn Fn(EntityId) -> bool,
+        context: &dyn OpenContext,
     ) -> Result<(), CommandError> {
         match r {
-            LibraryRef::Entity(id) => self.resolve_one(id, done, exists),
+            LibraryRef::Entity(id) => self.resolve_one(id, done, context),
             LibraryRef::Material(m) => self.resolve_material(m, done),
         }
     }

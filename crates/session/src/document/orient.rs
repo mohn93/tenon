@@ -83,7 +83,7 @@ impl Document {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(CommandError::new(ErrorKind::NotFound, "no such faces").with_ids(missing))
+            Err(self.missing_error(missing, "no such faces".to_string()))
         }
     }
 }

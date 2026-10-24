@@ -24,9 +24,7 @@ impl Document {
             .filter(|id| !self.exists(*id))
             .collect();
         if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Err(self.no_such_entities(missing));
         }
         let EntityId::Face(profile) = face else {
             return Err(invalid("face must be a face").with_ids(vec![face]));

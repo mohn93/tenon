@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `placed` (the instances left in the open context, in creation order; absent when it placed none) for `copy`, `rotate` with `copies`, `make_group`, `make_component`, `explode`, `paste`, `insert_library_item` and `place_instance`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below) and for `make_group` and `make_component` (the one new definition), `placed` (the instances left in the open context, in creation order; absent when it placed none) for `copy`, `rotate` with `copies`, `make_group`, `make_component`, `explode`, `paste`, `insert_library_item` and `place_instance`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -287,7 +287,7 @@ A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1
 
 - `"$N:KI"` is the I-th id (from 0) of kind K that command N made: `v` vertex, `e` edge, `f`
   face, `i` instance, `g` guide, `r` dimension, `n` note, `s` section plane from its `changes.created` (lowest id
-  first, which is the order they were made), `m` material from its `changes.materials`, `y` style from its `changes.styles` (an `add_style` outcome), or `d` definition from its `definitions` (a `make_unique` outcome). Style ids (`style`, and `from` of `add_style`) take a `y` reference, which must name one style.
+  first, which is the order they were made), `m` material from its `changes.materials`, `y` style from its `changes.styles` (an `add_style` outcome), or `d` definition from its `definitions` (a `make_unique`, `make_group` or `make_component` outcome, e.g. `make_component` then `place_instance` with `"definition": "$0:d0"`). Style ids (`style`, and `from` of `add_style`) take a `y` reference, which must name one style.
 - Instances count only top-level ones: `$N:iK`, `$N:i*` and the instances of `$N:*` pick from the
   instances command N left in the open context (its outcome's `placed`), not from instances inside
   definitions it made or copied (a copied group's nested groups), though `changes.created` lists
@@ -299,7 +299,7 @@ A reference is a whole string matching `^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1
   drops ids that are not in the context open when the reference resolves (erased or merged away
   by a later command, or made inside a definition). An indexed reference such as `$0:f0` to an id
   that is not in the open context is `not_found` ("is not in the open context"), naming the
-  reference. Indices of kinds other than `i` count over every id the command created, ones
+  reference (and the path to open, when the id is elsewhere in the model, as below). Indices of kinds other than `i` count over every id the command created, ones
   inside new definitions included, and need the right context open: after `make_group` and
   `open_instance`, `$1:f0` names the definition's face. The `path` of `open_path` is not checked
   against the open context (its elements are instances of nested contexts); `open_path` checks it.
@@ -933,6 +933,14 @@ What a render does with the settings:
 Style commands that change the list are undo steps, change the revision, mark the model modified and list the style in `changes.styles`. `{"type": "styles"}` gives `{"styles": [{"id": "y41", "name": "Blueprint", "settings": {...}}], "revision": 12}`; the `camera` query's `style` (and a scene's `view.style`) says which is chosen. A chosen style that stops existing (its `add_style` undone, or it deleted) draws as none while it does not exist, and is chosen again if it comes back.
 
 ### Groups and components
+
+Ids are unique across the whole model, but a command sees only the open context. When a command
+names an id (written out or through a batch reference) that is not in the open context but exists
+elsewhere, `not_found` says where: `s129810 is inside i95934 > i85590; open that path first
+(open_path)`. The path is from the root; for a definition with several instances it is any one
+of them. An id that exists nowhere keeps the plain message (`no such entities`, `no entity f9`).
+A section plane of another context given to `flip_section_plane` or `activate_section_plane` is
+reported this way too (an unknown plane id stays `invalid_input`).
 
 Commands and queries work on the open context: the root at first. `{"type": "open_instance",
 "id": "i4"}` opens an instance of the open context for editing, and `{"type": "close_instance"}`
