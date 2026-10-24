@@ -577,7 +577,7 @@ impl Model {
 
     /// Removes the edges along the profile's loop sides that bound no face, then the vertices
     /// they leave without edges.
-    fn clear_profile(&mut self, profile: &[Vec<DVec3>]) {
+    pub(crate) fn clear_profile(&mut self, profile: &[Vec<DVec3>]) {
         let segments: Vec<(DVec3, DVec3)> = profile.iter().flat_map(|l| sides(l)).collect();
         let on = on_segment;
         let strays: Vec<EdgeId> = self

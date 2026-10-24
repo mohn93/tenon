@@ -725,6 +725,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         Command::FlipSectionPlane { plane } | Command::ActivateSectionPlane { plane } => {
             f(Slot::One(plane))
         }
+        Command::Revolve { face, .. } => f(Slot::One(face)),
         Command::FollowMe { face, path } => {
             f(Slot::One(face));
             f(Slot::List(path));

@@ -46,6 +46,7 @@ mod materials;
 mod orient;
 mod placement;
 mod primitives;
+mod revolve;
 mod scenes;
 mod sections;
 mod shadows;
@@ -780,6 +781,7 @@ impl Document {
             | Command::Scale { .. }
             | Command::Offset { .. }
             | Command::FollowMe { .. }
+            | Command::Revolve { .. }
             | Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }
@@ -981,6 +983,13 @@ impl Document {
                 toward,
             } => self.offset_changes(ids, *distance, *toward),
             Command::FollowMe { face, path } => self.follow_me_changes(*face, path),
+            Command::Revolve {
+                face,
+                center,
+                axis,
+                angle,
+                segments,
+            } => self.revolve_changes(*face, (*center, *axis), (*angle, *segments)),
             Command::MakeGroup { ids, name } => self.group_changes(ids, None, name.as_deref()),
             Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name), None),
             Command::Explode { ids } => self.explode_changes(ids),

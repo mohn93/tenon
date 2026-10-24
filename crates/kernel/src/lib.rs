@@ -29,6 +29,7 @@ mod page;
 mod primitives;
 mod push_pull;
 mod regions;
+pub mod revolve;
 mod scene;
 mod section;
 mod section_loops;

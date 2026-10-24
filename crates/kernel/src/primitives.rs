@@ -54,7 +54,7 @@ fn invalid<T>(message: impl Into<String>) -> Result<T, PrimitiveError> {
 #[derive(Clone, Debug, Default)]
 pub struct Solid {
     points: Vec<DVec3>,
-    faces: Vec<SolidFace>,
+    pub(crate) faces: Vec<SolidFace>,
     /// Closed chains of edges that form one curve each, with their polygon flag.
     rings: Vec<(Vec<usize>, bool)>,
     /// Edges (as ordered index pairs, smaller first) that are soft.
@@ -62,9 +62,9 @@ pub struct Solid {
 }
 
 #[derive(Clone, Debug)]
-struct SolidFace {
-    outer: Vec<usize>,
-    holes: Vec<Vec<usize>>,
+pub(crate) struct SolidFace {
+    pub(crate) outer: Vec<usize>,
+    pub(crate) holes: Vec<Vec<usize>>,
 }
 
 fn pair(a: usize, b: usize) -> (usize, usize) {
@@ -78,31 +78,75 @@ impl Solid {
     }
 
     /// Adds a point and returns its index.
-    fn point(&mut self, p: DVec3) -> usize {
+    pub(crate) fn point(&mut self, p: DVec3) -> usize {
         self.points.push(p);
         self.points.len() - 1
     }
 
-    fn face(&mut self, outer: Vec<usize>) {
+    pub(crate) fn face(&mut self, outer: Vec<usize>) {
         self.faces.push(SolidFace {
             outer,
             holes: Vec::new(),
         });
     }
 
-    fn face_with_hole(&mut self, outer: Vec<usize>, hole: Vec<usize>) {
+    pub(crate) fn face_with_hole(&mut self, outer: Vec<usize>, hole: Vec<usize>) {
         self.faces.push(SolidFace {
             outer,
             holes: vec![hole],
         });
     }
 
-    fn ring(&mut self, points: Vec<usize>, polygon: bool) {
+    pub(crate) fn ring(&mut self, points: Vec<usize>, polygon: bool) {
         self.rings.push((points, polygon));
     }
 
-    fn soften(&mut self, a: usize, b: usize) {
+    pub(crate) fn soften(&mut self, a: usize, b: usize) {
         self.soft.insert(pair(a, b));
+    }
+
+    /// Adds a face with any number of holes.
+    pub(crate) fn face_with_holes(&mut self, outer: Vec<usize>, holes: Vec<Vec<usize>>) {
+        self.faces.push(SolidFace { outer, holes });
+    }
+
+    /// The volume the faces enclose by the divergence theorem, positive when they wind
+    /// counter-clockwise seen from outside.
+    pub(crate) fn signed_volume(&self) -> f64 {
+        let ring = |l: &[usize]| -> Vec<DVec3> { l.iter().map(|i| self.points[*i]).collect() };
+        self.faces
+            .iter()
+            .map(|f| {
+                let outer = ring(&f.outer);
+                let area = vector_area(&outer);
+                let normal = area.normalize_or_zero();
+                let net = area.length()
+                    - f.holes
+                        .iter()
+                        .map(|h| vector_area(&ring(h)).length())
+                        .sum::<f64>();
+                outer[0].dot(normal) * net / 3.0
+            })
+            .sum()
+    }
+
+    /// Turns every face over when the faces enclose a negative volume, so they face outward.
+    pub(crate) fn face_outward(&mut self) {
+        if self.signed_volume() < 0.0 {
+            for f in &mut self.faces {
+                f.outer.reverse();
+            }
+        }
+    }
+
+    /// The unit normal of face `i`, from its outer loop.
+    pub(crate) fn face_normal(&self, i: usize) -> DVec3 {
+        let ring: Vec<DVec3> = self.faces[i]
+            .outer
+            .iter()
+            .map(|k| self.points[*k])
+            .collect();
+        vector_area(&ring).normalize_or_zero()
     }
 
     /// The solid moved by `t`.

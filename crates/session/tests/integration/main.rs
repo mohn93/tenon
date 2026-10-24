@@ -37,6 +37,7 @@ mod polygon;
 mod primitives;
 mod print;
 mod read_only;
+mod revolve;
 mod rotate;
 mod scale;
 mod scenes;

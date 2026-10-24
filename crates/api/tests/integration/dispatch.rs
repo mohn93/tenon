@@ -199,6 +199,7 @@ fn describe_lists_methods_and_schemas() {
         "scale",
         "offset",
         "follow_me",
+        "revolve",
         "add_guide_line",
         "add_guide_point",
         "delete_guides",

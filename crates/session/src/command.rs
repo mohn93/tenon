@@ -370,6 +370,28 @@ pub enum Command {
     /// path segments, on one curve that is not a polygon are soft. `path` may not include the
     /// face's own edges unless it is exactly the outer loop of another face.
     FollowMe { face: EntityId, path: Vec<EntityId> },
+    /// Turn face `face` of the open context about the line through `center` along `axis`
+    /// (any length; zero or non-finite is `invalid_input`) into a solid, as one undo step.
+    /// `angle` in degrees, above 0 and at most 360 (default 360), counter-clockwise looking
+    /// down the axis; `segments` (1 to 360, default 24) is the number of steps in a full turn,
+    /// scaled by angle/360 and rounded up (at least 1); a step must turn by less than 180
+    /// degrees. The face may touch the axis (the swept faces collapse to triangles, or to
+    /// nothing along it, never to zero-area faces) but must not cross it, and its plane must
+    /// not be square to the axis (use push_pull); a plane that holds the axis or lies beside
+    /// it is fine. A full turn removes the face; a partial one keeps it as the start cap and
+    /// closes the end with a copy. Edges between consecutive faces swept by one side are
+    /// soft, and so are those at a corner between two sides on one curve that is not a
+    /// polygon. Outcome `created`.
+    Revolve {
+        face: EntityId,
+        #[schemars(with = "ModelPoint")]
+        center: [f64; 3],
+        axis: [f64; 3],
+        #[serde(default)]
+        angle: Option<f64>,
+        #[serde(default)]
+        segments: Option<u32>,
+    },
     /// Turn edges, faces (with their edges), instances, guides, annotations and section planes
     /// into a group:
     /// they move into a new definition, placed by one new instance where they were. Guides,
