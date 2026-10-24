@@ -139,6 +139,8 @@ pub enum BevelError {
     Invalid(String),
     /// This edge cannot be bevelled; the text says why and names it.
     Edge(EdgeId, String),
+    /// These two edges' cuts would overlap on a face between them; the text names both.
+    Edges([EdgeId; 2], String),
     /// The boolean failed.
     Boolean(BooleanError),
 }
@@ -147,7 +149,9 @@ impl fmt::Display for BevelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BevelError::NotSolid(why) => write!(f, "not a solid: {why}"),
-            BevelError::Invalid(why) | BevelError::Edge(_, why) => f.write_str(why),
+            BevelError::Invalid(why) | BevelError::Edge(_, why) | BevelError::Edges(_, why) => {
+                f.write_str(why)
+            }
             BevelError::Boolean(e) => e.fmt(f),
         }
     }
@@ -274,6 +278,12 @@ pub fn bevelled(m: &Model, edges: &[EdgeId], profile: Profile) -> Result<Model, 
             }
         }
         cuts.push((*e, cut));
+    }
+    if let Some([x, y]) = crossing_strips(&cuts) {
+        return Err(BevelError::Edges(
+            [x, y],
+            format!("{noun} too large for edges e{} and e{}", x.0, y.0),
+        ));
     }
     let mut cutters = Vec::new();
     let mut fillers = Vec::new();
@@ -440,16 +450,10 @@ fn analyze(m: &Model, id: EdgeId, outward: f64, profile: Profile) -> Result<Edge
     let [f1, f2] = faces[..] else {
         return Err(format!("{name} does not bound exactly two faces"));
     };
-    for f in [f1, f2] {
-        if m.face_edges(f)
-            .iter()
-            .any(|e| m.edge(*e).is_some_and(|e| e.soft))
-        {
-            return Err(format!(
-                "{name} is not between two flat faces: f{} is part of a curved surface",
-                f.0
-            ));
-        }
+    // The seams of a curved surface are soft and its rims are curves: neither is bevelled.
+    // A flat face beside a soft edge (one next to an earlier fillet) is fine.
+    if edge.soft {
+        return Err(format!("{name} is soft: it lies within a curved surface"));
     }
     let (face1, face2) = (m.face(f1).expect("face"), m.face(f2).expect("face"));
     let (n1, n2) = (face1.normal * outward, face2.normal * outward);
@@ -505,6 +509,68 @@ fn analyze(m: &Model, id: EdgeId, outward: f64, profile: Profile) -> Result<Edge
         convex,
         setback: size,
         ends: [End::Extend(reach); 2],
+    })
+}
+
+/// A chosen edge's strip on one face: the edge, its ends, its direction into the face, and
+/// the strip's corners.
+type Strip = (EdgeId, [VertexId; 2], DVec3, [DVec3; 4]);
+
+/// The first two chosen edges (by id) that share no vertex but whose strips on a face they
+/// both bound overlap, facing each other (their directions into the face more than 90 degrees
+/// apart): the two cuts would meet within the face and leave no tangent strip of it between
+/// them. Strips of edges turning less than that (the sides of an earlier round, the edges of a
+/// box face) overlap only where the cuts' corner closes.
+fn crossing_strips(cuts: &[(EdgeId, EdgeCut)]) -> Option<[EdgeId; 2]> {
+    let mut strips: BTreeMap<FaceId, Vec<Strip>> = BTreeMap::new();
+    for (e, cut) in cuts {
+        for (f, d) in [(cut.f1, cut.d1), (cut.f2, cut.d2)] {
+            let deep = d * cut.setback;
+            let corners = [cut.a, cut.b, cut.b + deep, cut.a + deep];
+            strips
+                .entry(f)
+                .or_default()
+                .push((*e, [cut.va, cut.vb], d, corners));
+        }
+    }
+    let mut found: Option<[EdgeId; 2]> = None;
+    for list in strips.values() {
+        for (i, (e, ends, d, corners)) in list.iter().enumerate() {
+            for (g, other_ends, other_d, other) in &list[i + 1..] {
+                let touching = ends.iter().any(|v| other_ends.contains(v));
+                if touching || d.dot(*other_d) >= -1e-9 {
+                    continue;
+                }
+                if overlap(corners, other) {
+                    let pair = [(*e).min(*g), (*e).max(*g)];
+                    if found.is_none_or(|f| pair < f) {
+                        found = Some(pair);
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Whether two rectangles in one plane overlap by more than `LENGTH_TOL` (separating axes:
+/// their sides' directions).
+fn overlap(p: &[DVec3; 4], q: &[DVec3; 4]) -> bool {
+    let axes = [p[1] - p[0], p[3] - p[0], q[1] - q[0], q[3] - q[0]];
+    axes.iter().all(|axis| {
+        let axis = axis.normalize_or_zero();
+        if axis == DVec3::ZERO {
+            return true;
+        }
+        let span = |r: &[DVec3; 4]| {
+            r.iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
+                    let t = c.dot(axis);
+                    (lo.min(t), hi.max(t))
+                })
+        };
+        let ((plo, phi), (qlo, qhi)) = (span(p), span(q));
+        phi.min(qhi) - plo.max(qlo) > LENGTH_TOL
     })
 }
 
@@ -1266,6 +1332,97 @@ mod tests {
         assert!(signed_volume(&r) < signed_volume(&m));
     }
 
+    fn crossing(m: &Model, edges: &[EdgeId], profile: Profile, text: &str) {
+        match bevelled(m, edges, profile) {
+            Err(BevelError::Edges([x, y], why)) => {
+                assert!(edges.contains(&x) && edges.contains(&y) && x < y);
+                assert_eq!(
+                    why,
+                    format!("{text} too large for edges e{} and e{}", x.0, y.0)
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cuts_meeting_across_a_face_are_too_large() {
+        let m = cuboid([1.0, 1.0, 1.0]);
+        let all: Vec<EdgeId> = m.edges().map(|(id, _)| id).collect();
+        crossing(&m, &all, fillet(0.6), "radius");
+        closed(&bevelled(&m, &all, fillet(0.45)).unwrap());
+        let parallel = [
+            edge_at(&m, [0.0, 0.0, 1.0], [1.0, 0.0, 1.0]),
+            edge_at(&m, [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]),
+        ];
+        crossing(&m, &parallel, chamfer(0.7), "distance");
+        crossing(&m, &parallel, fillet(0.7), "radius");
+        // Each alone fits.
+        assert!(bevelled(&m, &parallel[..1], chamfer(0.7)).is_ok());
+        assert!(bevelled(&m, &parallel, chamfer(0.45)).is_ok());
+    }
+
+    /// The edges of `m` around its top face (at height `z`).
+    fn top_loop(m: &Model, z: f64) -> Vec<EdgeId> {
+        let top = m
+            .faces()
+            .find(|(_, f)| f.normal.z > 1.0 - 1e-9 && m.pos(f.outer[0]).z > z - 1e-9)
+            .map(|(id, _)| id)
+            .unwrap();
+        m.face_edges(top)
+    }
+
+    #[test]
+    fn a_rounded_box_rounds_again_around_its_top() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let upright: Vec<EdgeId> = m
+            .edges()
+            .filter(|(_, e)| (m.pos(e.v[0]) - m.pos(e.v[1])).truncate().length() < 1e-9)
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(upright.len(), 4);
+        let first = Profile::Fillet {
+            radius: 0.25,
+            segments: 4,
+        };
+        let once = bevelled(&m, &upright, first).unwrap();
+        closed(&once);
+        let edges = top_loop(&once, 4.0);
+        // 4 sides and 4 quarter rounds of 4 faces.
+        assert_eq!(edges.len(), 4 + 16);
+        let twice = bevelled(&once, &edges, fillet(0.2)).unwrap();
+        closed(&twice);
+        let removed = signed_volume(&once) - signed_volume(&twice);
+        // The straight runs lose a quarter round each; along the corners less than their
+        // outer length's worth.
+        let loss = quarter_loss(0.2, 8);
+        let straight = 2.0 * (1.5 + 2.5);
+        let corners = 16.0 * 2.0 * 0.25 * (std::f64::consts::PI / 16.0).sin();
+        assert!(
+            removed > loss * straight && removed < loss * (straight + corners),
+            "{removed}"
+        );
+        assert!(!has_vertex(&twice, [0.25, 0.0, 4.0]));
+    }
+
+    #[test]
+    fn a_chamfer_beside_a_fillet_is_allowed() {
+        let m = cuboid([2.0, 3.0, 4.0]);
+        let e = edge_at(&m, [0.0, 0.0, 4.0], [2.0, 0.0, 4.0]);
+        let rounded = bevelled(&m, &[e], fillet(0.5)).unwrap();
+        // The top face and the front face now have a soft edge; their other edges still bevel.
+        let edges = [
+            edge_at(&rounded, [0.0, 3.0, 4.0], [2.0, 3.0, 4.0]),
+            edge_at(&rounded, [0.0, 0.0, 0.0], [2.0, 0.0, 0.0]),
+        ];
+        let r = bevelled(&rounded, &edges, chamfer(0.5)).unwrap();
+        closed(&r);
+        let v = signed_volume(&rounded) - 0.125 * 2.0 * 2.0;
+        assert!((signed_volume(&r) - v).abs() < 1e-9);
+        // The round stays soft.
+        assert_eq!(r.edges().filter(|(_, e)| e.soft).count(), 9);
+    }
+
     fn refused(m: &Model, e: EdgeId, profile: Profile, text: &str) {
         match bevelled(m, &[e], profile) {
             Err(BevelError::Edge(id, why)) => {
@@ -1289,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn a_face_on_a_curved_surface_is_refused() {
+    fn a_soft_edge_is_refused() {
         let m = Solid::cylinder(1.0, 2.0, 12).unwrap().to_model();
         let e = m.edges().find(|(_, e)| e.soft).map(|(id, _)| id).unwrap();
         refused(&m, e, chamfer(0.1), "curved surface");

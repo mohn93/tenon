@@ -549,10 +549,14 @@ The geometry chamfered (the open context's faces, nested groups and components a
 instance's definition, which must have no nested ones) must be a solid (see the `solid` query);
 otherwise `invalid_input` ("the open context is not a solid: edge e12 bounds 1 face", "i4 is not a
 solid: ..."). Each edge must be straight (an edge of a curve such as a circle is refused; a
-polygon's side is fine), lie between two flat faces (a face with a soft edge is part of a curved
-surface and is refused), those faces at least 1 degree apart (a seam between coplanar faces is
-refused), and the setback line must stay inside both faces along the whole edge ("distance too
-large for edge e12"); otherwise `invalid_input` naming the edge. Empty `edges`, an id named twice,
+polygon's side is fine), not be soft (a seam within a curved surface such as a cylinder's side),
+lie between two flat faces at least 1 degree apart (a seam between coplanar faces is refused), and
+the setback line must stay inside both faces along the whole edge ("distance too large for edge
+e12"); otherwise `invalid_input` naming the edge. A flat face that already has a soft edge (next
+to an earlier fillet) is fine. Two chosen edges of one face that face each other across it (their
+directions into the face more than 90 degrees apart, with no shared end) must not have
+overlapping setback strips, or the cuts would meet within the face: `invalid_input` "distance too
+large for edges e12 and e15" naming both. Empty `edges`, an id named twice,
 an id that is not an edge, or more than 1,000 edges are `invalid_input`; unknown ids are
 `not_found`. Failures of the boolean are reported as for Solid Tools. On any error nothing
 changes.
@@ -574,7 +578,8 @@ Each edge becomes a round of `radius` (more than 0.000001 m, in the edited mesh'
 tangent to both faces beside it: an arc whose corners lie on the true circle, made of `segments`
 faces per quarter turn (default 8, 1 to 90), in proportion for other angles (the faces of a box
 edge turn 90 degrees, so 8 faces; an edge whose faces meet at 60 degrees inside turns 120 degrees,
-so 11), at least 1. The round touches each face `radius / tan(angle / 2)` from the edge, `angle`
+so 11), at least 1. `segments: 1` gives a single face for a quarter turn, still soft at both
+sides: a low-poly round shaded smooth, not a chamfer. The round touches each face `radius / tan(angle / 2)` from the edge, `angle`
 being the angle between the faces inside the solid (outside it for a concave edge): `radius` for a
 box edge. The edges between the round's faces and the two where it meets the flat faces are soft,
 so it is shaded as one smooth surface; the round's faces are listed in `created` and take the
@@ -583,9 +588,11 @@ first face's materials. A convex edge loses material; a concave edge gains a cov
 Ends, corners and validation are as for `chamfer_edges`, with the setback above in place of
 `distance` ("radius too large for edge e12" when the round would not stay inside both faces).
 Rounds of convex edges meeting at an outside corner overlap and close it: a box with all twelve
-edges rounded has corners where the three rounds cross, not spherical patches. Since the flat
-faces beside a round get a soft edge, they count as part of a curved surface afterwards: round all
-the edges of a face in one command rather than one after another. `segments` outside 1 to 90 is
+edges rounded has corners where the three rounds cross, not spherical patches. The flat faces
+beside a round can still be bevelled later: round a box's four upright edges, then the loop
+around its top (the straight sides and the rounds' top edges) in a second command, with another
+radius if wanted, or chamfer an edge next to a round. Edges facing each other across a face whose
+rounds would overlap are "radius too large for edges e12 and e15". `segments` outside 1 to 90 is
 `invalid_input`. A batch can refer to `instance` and `edges` as for `chamfer_edges`.
 
 ### Guides

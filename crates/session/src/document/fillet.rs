@@ -83,13 +83,17 @@ impl Document {
         for id in edges {
             let EntityId::Edge(e) = *id else {
                 if owner.is_none() && !self.exists(*id) {
-                    missing.push(*id);
+                    if !missing.contains(id) {
+                        missing.push(*id);
+                    }
                     continue;
                 }
                 return Err(invalid(format!("{id} is not an edge")).with_ids(vec![*id]));
             };
             if m.edge(e).is_none() {
-                missing.push(*id);
+                if !missing.contains(id) {
+                    missing.push(*id);
+                }
                 continue;
             }
             if !seen.insert(e) {
@@ -118,6 +122,9 @@ impl Document {
                 }
                 BevelError::Invalid(why) => invalid(why),
                 BevelError::Edge(e, why) => invalid(why).with_ids(vec![EntityId::Edge(e)]),
+                BevelError::Edges(pair, why) => {
+                    invalid(why).with_ids(pair.map(EntityId::Edge).to_vec())
+                }
                 BevelError::Boolean(BooleanError::TooMuch) => invalid(TOO_MUCH),
                 BevelError::Boolean(_) => invalid(NOT_CLOSED).with_ids(edges.to_vec()),
             })

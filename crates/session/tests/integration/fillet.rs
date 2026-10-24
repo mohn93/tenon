@@ -235,16 +235,87 @@ fn unsuitable_fillets_change_nothing() {
         ErrorKind::NotFound,
         "e999999",
     );
-    // A face of the round is on a curved surface: its edges cannot be rounded again.
-    run(&mut d, fillet(0.5, json!(8)));
-    let m = mesh(&d, &b).clone();
-    let top = edge(&m, [0.0, 0.5, 4.0], [0.0, 3.0, 4.0]);
-    refused(
+    // Edges facing each other across a 1 m face: their cuts would meet.
+    let cube = add_box(&mut d, [1.0, 1.0, 1.0], "group");
+    let m = mesh(&d, &cube).clone();
+    let front = edge(&m, [0.0, 0.0, 1.0], [1.0, 0.0, 1.0]);
+    let back = edge(&m, [0.0, 1.0, 1.0], [1.0, 1.0, 1.0]);
+    for (kind, size) in [("fillet_edges", "radius"), ("chamfer_edges", "distance")] {
+        let revision = d.revision();
+        let err = try_run(
+            &mut d,
+            json!({"type": kind, "instance": cube, "edges": [front, back], size: 0.7}),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert!(
+            err.message
+                .contains(&format!("{size} too large for edges e")),
+            "{}",
+            err.message
+        );
+        let ids = serde_json::to_value(&err.ids).unwrap();
+        assert!(ids.as_array().unwrap().contains(&front), "{ids}");
+        assert!(ids.as_array().unwrap().contains(&back), "{ids}");
+        assert_eq!(d.revision(), revision);
+    }
+    // Missing ids are listed once.
+    let err = try_run(
         &mut d,
-        json!({"type": "fillet_edges", "instance": b, "edges": [top], "radius": 0.1}),
-        ErrorKind::InvalidInput,
-        "curved surface",
+        json!({"type": "fillet_edges", "instance": b, "edges": ["e999999", "e999999"],
+               "radius": 0.1}),
+    )
+    .unwrap_err();
+    assert_eq!(err.message.matches("e999999").count(), 1, "{}", err.message);
+}
+
+#[test]
+fn a_rounded_box_rounds_its_top_in_a_second_command() {
+    let mut d = doc();
+    let b = add_box(&mut d, [2.0, 3.0, 4.0], "group");
+    let m = mesh(&d, &b).clone();
+    let id = |e| serde_json::to_value(EntityId::Edge(e)).unwrap();
+    let upright: Vec<Value> = m
+        .edges()
+        .filter(|(_, e)| {
+            let (p, q) = (m.position(e.v[0]).unwrap(), m.position(e.v[1]).unwrap());
+            (p - q).truncate().length() < 1e-9
+        })
+        .map(|(e, _)| id(e))
+        .collect();
+    run(
+        &mut d,
+        json!({"type": "fillet_edges", "instance": b, "edges": upright, "radius": 0.25,
+               "segments": 4}),
     );
+    let once = volume(&d, &b);
+    let m = mesh(&d, &b).clone();
+    let top = m
+        .faces()
+        .find(|(_, f)| f.normal.z > 0.5 && m.position(f.outer[0]).unwrap().z > 3.9)
+        .unwrap()
+        .0;
+    let edges: Vec<Value> = m.face_edges(top).into_iter().map(id).collect();
+    assert_eq!(edges.len(), 20);
+    run(
+        &mut d,
+        json!({"type": "fillet_edges", "instance": b, "edges": edges, "radius": 0.2}),
+    );
+    let removed = once - volume(&d, &b);
+    let loss = quarter_loss(0.2, 8);
+    assert!(removed > loss * 8.0 && removed < loss * 9.6, "{removed}");
+    d.scene().validate().unwrap();
+
+    // A chamfer beside the rounds.
+    let m = mesh(&d, &b).clone();
+    let bottom = edge(&m, [0.25, 0.0, 0.0], [1.75, 0.0, 0.0]);
+    let before = volume(&d, &b);
+    run(
+        &mut d,
+        json!({"type": "chamfer_edges", "instance": b, "edges": [bottom], "distance": 0.1}),
+    );
+    let v = volume(&d, &b);
+    assert!(v < before && v > before - 0.005 * 2.0, "{v}");
 }
 
 #[test]

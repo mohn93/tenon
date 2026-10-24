@@ -954,11 +954,14 @@ pub enum Command {
     /// (nested groups and components aside) must be a solid: open the group first. With
     /// `instance` (a group or component of the open context, a solid), `edges` are edges of
     /// its definition, which is edited (a component's other instances change too). Each edge
-    /// must be straight (not part of a curve), lie between two flat faces (no face on a
-    /// smoothed surface) at least 1 degree apart, and the setback line must stay inside both
-    /// faces along the whole edge. Chamfers meeting at a corner overlap and close it; at an
-    /// end with no other chosen edge the cut stops at the face there. Faces and edges the
-    /// cut does not touch keep their ids.
+    /// must be straight (not part of a curve), not soft, lie between two flat faces at least 1
+    /// degree apart, and the setback line must stay inside both faces along the whole edge;
+    /// two chosen edges facing each other across a face must not have overlapping setbacks.
+    /// Chamfers of convex edges meeting at an outside corner overlap and close it; at any
+    /// other end (no other chosen edge, next to a concave edge, or an inside corner) the cut
+    /// stops in the plane of the face there. A concave edge whose two faces are both cut away
+    /// at an end starts `distance` back from that end. Faces and edges the cut does not touch
+    /// keep their ids.
     ChamferEdges {
         #[serde(default)]
         instance: Option<EntityId>,
