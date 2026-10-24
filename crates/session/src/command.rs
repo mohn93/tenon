@@ -285,8 +285,11 @@ pub enum Command {
     DeactivateSection {},
     /// Set how section planes are shown; absent fields stay as they are: `planes` draws the
     /// plane entities, `cuts` applies the active planes' cuts, `fill` fills closed cuts. All
-    /// default to true. A view setting like `set_lighting`: saved with the model, but not an
-    /// undo step and not a change to the revision.
+    /// default to true; `fill_color` is `dark` (default, #3a3a3a) or `material` (the color of
+    /// the material most of the cut faces show on their front, else the nearest painted
+    /// instance's material, else the default face color, darkened by 20%). A view setting
+    /// like `set_lighting`: saved with the model, but not an undo step and not a change to the
+    /// revision.
     SetSectionDisplay {
         #[serde(default)]
         planes: Option<bool>,
@@ -294,7 +297,16 @@ pub enum Command {
         cuts: Option<bool>,
         #[serde(default)]
         fill: Option<bool>,
+        #[serde(default)]
+        fill_color: Option<crate::document::SectionFillColor>,
     },
+    /// Set whether section planes of the contexts outside each instance in `ids` cut it
+    /// (default true for every instance), as one undo step. An instance with `cut` false
+    /// stays whole under planes outside it; planes inside its own definition still cut its
+    /// contents. Entities that are not instances are `invalid_input`; instances already as
+    /// asked are skipped (no change, no undo step when none differs). The outcome's `changed`
+    /// lists the instances that changed.
+    SetSectionCut { ids: Vec<EntityId>, cut: bool },
     /// Set the model's display units, which lengths and angles are written and typed in and
     /// the tools snap to, as one undo step; absent fields stay as they are. `precision` is
     /// the decimals kept (0 to 6), or for `feet_inches` the finest fraction of an inch,

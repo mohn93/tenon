@@ -306,6 +306,18 @@ pub struct InstanceData {
     /// Absent (false) before hiding existed, and for entities that are shown.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Absent (true) before section cuts could be refused, and for instances section planes
+    /// cut.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_cut: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// A guide line through `point` along `direction` (a unit vector), or, without `direction`, a
@@ -673,6 +685,7 @@ fn mesh_data(m: &Model) -> MeshData {
                 material: i.material.map(|m| m.0),
                 tag: i.tag.map(|t| t.0),
                 hidden: i.hidden,
+                section_cut: i.section_cut,
             })
             .collect(),
         guides: m
@@ -869,6 +882,7 @@ fn mesh(data: &MeshData) -> Result<Model, String> {
             material: i.material.map(MaterialId),
             tag: i.tag.map(TagId),
             hidden: i.hidden,
+            section_cut: i.section_cut,
         };
         if instances.insert(InstanceId(i.id), instance).is_some() {
             return Err(format!("instance i{} appears twice", i.id));

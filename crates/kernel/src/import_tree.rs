@@ -654,6 +654,7 @@ impl Model {
                 material: i.material,
                 tag: i.tag,
                 hidden: i.hidden,
+                section_cut: true,
             });
             report.instances += 1;
         }

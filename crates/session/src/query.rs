@@ -217,8 +217,20 @@ pub struct InstanceInfo {
     /// false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// False for an instance section planes outside it do not cut (see `set_section_cut`).
+    /// Absent when true.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub section_cut: bool,
     /// The tag it is on; null when Untagged.
     pub tag: Option<TagId>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// Whether a guide is a line or a point.
@@ -731,6 +743,7 @@ pub enum QueryResult {
         planes: bool,
         cuts: bool,
         fill: bool,
+        fill_color: crate::document::SectionFillColor,
     },
     /// The items of a library folder.
     Library(LibraryListing),

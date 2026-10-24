@@ -19,7 +19,7 @@ use kernel::{
     MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId, TextureImage,
     VertexId, back_texture_position,
 };
-use session::{AnnotationShape, SectionDisplay, SectionShape};
+use session::{AnnotationShape, SectionDisplay, SectionFillColor, SectionShape};
 
 use crate::annotations::{ANNOTATION_COLOR, AnnotationLook, FADED_ANNOTATION_COLOR};
 use crate::grid::{AXIS_X, AXIS_Y, AXIS_Z, LineVertex};
@@ -27,7 +27,7 @@ use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
 use crate::sections::{
     ACTIVE_SECTION_COLOR, CUT_FILL_COLOR, Cut, FADED_ACTIVE_SECTION_COLOR, SectionLook,
-    clip_segment, clip_triangle, cut_surface,
+    clip_segment, clip_triangle, crosses_plane, cut_surface, material_fill_color,
 };
 use crate::sun_shadow::SUN_CASTER_OPACITY;
 use crate::texture::layers;
@@ -1120,12 +1120,12 @@ fn drawn_count(
     (faces, edges)
 }
 
-/// Adds a placement's cut to the base: the fill, and the cut edges in `color`.
-fn push_cut(base: &mut SceneBase, cut: &Cut, color: [f32; 4]) {
+/// Adds a placement's cut to the base: the fill in `fill`, and the cut edges in `color`.
+fn push_cut(base: &mut SceneBase, cut: &Cut, color: [f32; 4], fill: [f32; 4]) {
     base.cut_fill
         .extend(cut.fill.iter().flatten().map(|p| LineVertex {
             pos: p.as_vec3().to_array(),
-            color: CUT_FILL_COLOR,
+            color: fill,
         }));
     base.cut_edges
         .extend(cut.edges.iter().flatten().map(|p| LineVertex {
@@ -1243,6 +1243,9 @@ impl Walk<'_> {
             (self.glowing && (!self.glows.contains_key(&glow_key) || cutting)).then(Vec::new);
         // The placement's own surface in root coordinates, before any cut, for the cut outlines.
         let mut surface: Vec<[DVec3; 3]> = Vec::new();
+        // With the material fill, how many cut triangles each front color has.
+        let by_material = display.fill && display.fill_color == SectionFillColor::Material;
+        let mut votes: Vec<([f32; 3], usize)> = Vec::new();
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
@@ -1324,6 +1327,12 @@ impl Walk<'_> {
                         surface.push([a, b, c]);
                     } else if !ghost && cache_key.is_none() {
                         surface.push(tri.map(|c| c.0));
+                    }
+                    if by_material && !ghost && crosses_plane(&tri.map(|c| c.0), &planes) {
+                        match votes.iter_mut().find(|(c, _)| *c == front.color) {
+                            Some((_, n)) => *n += 1,
+                            None => votes.push((front.color, 1)),
+                        }
                     }
                     let attributes = tri.map(|(p, n, uv)| (p, (n, uv)));
                     for piece in clip_triangle(attributes, &planes, &mix_corner) {
@@ -1493,6 +1502,19 @@ impl Walk<'_> {
                 base.spans.edges.push((*eid, start..base.edges.len()));
             }
         }
+        // The fill: the material most of the cut faces show, else the look the placement gives
+        // faces without one (the nearest painted instance's, or the default).
+        let fill_color = if by_material {
+            let winner = votes
+                .iter()
+                .fold(None, |best: Option<&([f32; 3], usize)>, v| {
+                    best.filter(|b| b.1 >= v.1).or(Some(v))
+                })
+                .map_or(front.color, |v| v.0);
+            material_fill_color(winner)
+        } else {
+            CUT_FILL_COLOR
+        };
         if let (Some(key), Some(plane)) = (cache_key, own_plane) {
             if collect_local && !surface.is_empty() {
                 self.cuts
@@ -1510,11 +1532,11 @@ impl Walk<'_> {
                     .iter()
                     .map(|e| e.map(|p| t.transform_point3(p)))
                     .collect();
-                push_cut(base, &Cut { fill, edges }, color);
+                push_cut(base, &Cut { fill, edges }, color, fill_color);
             }
         } else if cutting && !surface.is_empty() {
             let cut = cut_surface(&surface, &planes, display.fill);
-            push_cut(base, &cut, color);
+            push_cut(base, &cut, color, fill_color);
         }
         let color = if inside {
             GUIDE_COLOR
@@ -1629,6 +1651,8 @@ impl Walk<'_> {
                 self.base.annotations.len(),
                 self.base.sections.len(),
             );
+            // An instance left whole is cut by none of the planes outside it.
+            let outside = (!instance.section_cut).then(|| std::mem::take(&mut self.planes));
             self.path.push(iid);
             self.mesh(
                 MeshId::Definition(instance.definition),
@@ -1637,6 +1661,9 @@ impl Walk<'_> {
                 instance.tag.or(inherited_tag),
             );
             self.path.pop();
+            if let Some(planes) = outside {
+                self.planes = planes;
+            }
             self.ghost = was_ghost;
             if open {
                 let placed = Ranges {

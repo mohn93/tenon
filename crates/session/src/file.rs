@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::camera::{Camera, Lighting, Projection};
-use crate::document::{MAX_COORDINATE, SectionDisplay};
+use crate::document::{MAX_COORDINATE, SectionDisplay, SectionFillColor};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 use crate::units::{StoredUnits, Units};
 
@@ -32,12 +32,15 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
 /// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
 /// and the length and angle snapping settings of the display units, and version 18 styles
-/// and the style a view chooses, and version 19 material metalness and roughness, and version 20 studio lighting, and version 21 ambient occlusion in a style; older
+/// and the style a view chooses, and version 19 material metalness and roughness, and version 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material section fill and instances left whole by section planes; older
 /// files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 22;
+/// The version written when the section fill takes the material's color or an instance is not
+/// cut by section planes.
+pub const SECTION_CUT_SCHEMA_VERSION: u32 = 22;
 /// The version written when a style has ambient occlusion on or with other than the default
 /// radius or strength.
 pub const AMBIENT_OCCLUSION_SCHEMA_VERSION: u32 = 21;
@@ -141,6 +144,13 @@ pub(crate) struct StoredCamera {
     pub section_cuts: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub section_fill: bool,
+    /// The fill color, written only when not the dark default (it needs version 22).
+    #[serde(default, skip_serializing_if = "is_dark")]
+    pub section_fill_color: SectionFillColor,
+}
+
+fn is_dark(c: &SectionFillColor) -> bool {
+    *c == SectionFillColor::Dark
 }
 
 fn yes() -> bool {
@@ -319,6 +329,10 @@ pub(crate) fn write_bytes(
         .styles
         .iter()
         .any(|s| !s.settings.ambient_occlusion.is_default());
+    let section_cut = section.fill_color != SectionFillColor::Dark
+        || std::iter::once(&model.root)
+            .chain(model.definitions.iter().map(|d| &d.mesh))
+            .any(|m| m.instances.iter().any(|i| !i.section_cut));
     let finished = model
         .materials
         .iter()
@@ -337,7 +351,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if occluded {
+        schema_version: if section_cut {
+            SECTION_CUT_SCHEMA_VERSION
+        } else if occluded {
             AMBIENT_OCCLUSION_SCHEMA_VERSION
         } else if studio {
             STUDIO_SCHEMA_VERSION
@@ -387,6 +403,7 @@ pub(crate) fn write_bytes(
             section_planes: section.planes,
             section_cuts: section.cuts,
             section_fill: section.fill,
+            section_fill_color: section.fill_color,
         },
         units: (units != Units::default()).then(|| StoredUnits::from(units)),
         model,

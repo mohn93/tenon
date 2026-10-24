@@ -643,6 +643,25 @@ fn faces_on_the_cut_away_side_are_not_picked_and_the_kept_side_is() {
 }
 
 #[test]
+fn an_instance_left_whole_is_picked_where_the_plane_would_cut_it() {
+    let (mut s, i, _) = cut_scene();
+    s.edit(MeshId::Root, |m| {
+        Ok(
+            m.set_section_cut_entities(&[kernel::EntityId::Instance(i)], false)
+                .0,
+        )
+    })
+    .unwrap();
+    let c = camera(DVec3::ZERO);
+    let view = Scenery::of(&s, &[]).unwrap();
+    let away = p(3.75, 0.5, 1.0);
+    assert_eq!(
+        face_under_in(&view, &c, px(&c, away)).map(|(o, ..)| o),
+        Some(Owner::Instance(i))
+    );
+}
+
+#[test]
 fn points_and_edges_on_the_cut_away_side_are_not_snapped_to() {
     let (s, _, _) = cut_scene();
     let c = camera(DVec3::ZERO);
@@ -781,6 +800,7 @@ fn with_planes_off_a_plane_is_not_picked_or_box_selected() {
         planes,
         cuts: true,
         fill: true,
+        ..Default::default()
     };
     let on = Scenery::of(&s, &[]).unwrap().section_display(display(true));
     let off = Scenery::of(&s, &[])
@@ -968,6 +988,7 @@ fn with_the_fill_off_the_cut_hides_nothing() {
         planes: true,
         cuts: true,
         fill,
+        ..Default::default()
     };
     let on = Scenery::of(&s, &[]).unwrap().section_display(display(true));
     let off = Scenery::of(&s, &[])

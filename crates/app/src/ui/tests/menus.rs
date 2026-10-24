@@ -881,6 +881,7 @@ fn the_menu_bar_has_the_same_items_in_every_state() {
             planes: false,
             cuts: false,
             fill: false,
+            ..Default::default()
         },
         recent: vec!["/a/house.skr".into(), "/b/shed.skr".into()],
         ..super::styles::styles_tab(Some(kernel::StyleId(2)))

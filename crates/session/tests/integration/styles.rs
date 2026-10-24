@@ -370,7 +370,7 @@ fn files_without_styles_keep_their_schema_and_bytes() {
     assert!(doc["model"].get("styles").is_none());
     assert!(doc["camera"].get("style").is_none());
     assert_eq!(session::file::STYLES_SCHEMA_VERSION, 18);
-    assert_eq!(session::file::SCHEMA_VERSION, 21);
+    assert_eq!(session::file::SCHEMA_VERSION, 22);
 }
 
 #[test]

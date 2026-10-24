@@ -420,6 +420,7 @@ impl Paste<'_> {
                 material: i.material.and_then(|id| self.materials.get(&id).copied()),
                 tag: i.tag.and_then(|id| self.tags.get(&id).copied()),
                 hidden: i.hidden,
+                section_cut: i.section_cut,
             });
         }
         Ok(out)

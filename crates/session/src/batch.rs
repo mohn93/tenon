@@ -687,6 +687,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::MakeComponent { ids, .. }
         | Command::Explode { ids }
         | Command::Hide { ids }
+        | Command::SetSectionCut { ids, .. }
         | Command::Unhide { ids }
         | Command::ReverseFaces { ids }
         | Command::SoftenEdges { ids, .. }

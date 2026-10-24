@@ -189,6 +189,7 @@ pub enum UiAction {
     UnhideAll,
     /// Entity Info's Hidden checkbox: hide (true) or show the selection.
     SetHidden(bool),
+    SetSectionCut(bool),
     /// An Outliner row's menu: hide (true) or show the instance at the path.
     OutlinerSetHidden {
         path: Vec<EntityId>,
@@ -586,6 +587,9 @@ pub struct View<'a> {
     pub edges_soft: Option<bool>,
     /// Whether everything selected that can be hidden is, None when nothing selected can be.
     pub selection_hidden: Option<bool>,
+    /// Whether every selected instance is cut by section planes outside it, None when no
+    /// instance is selected.
+    pub selection_section_cut: Option<bool>,
     /// Whether a selected entity is hidden (Edit > Unhide > Selected).
     pub has_hidden_selected: bool,
     /// Whether the open context has a hidden entity (Edit > Unhide > All).

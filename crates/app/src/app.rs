@@ -2119,6 +2119,9 @@ impl State {
             UiAction::SetHidden(hidden) => {
                 self.editor.set_selection_hidden(hidden);
             }
+            UiAction::SetSectionCut(cut) => {
+                self.editor.set_selection_section_cut(cut);
+            }
             UiAction::OutlinerSetHidden { path, hidden } => {
                 self.editor.outliner_set_hidden(&path, hidden);
             }
@@ -2739,6 +2742,7 @@ impl State {
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
+            selection_section_cut: self.editor.selection_section_cut(),
             has_hidden: self.editor.context_has_hidden(),
             has_last_hidden: self.editor.has_last_hidden(),
             has_hidden_selected: self.editor.selection_has_hidden(),

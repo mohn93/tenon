@@ -135,6 +135,18 @@ pub struct Instance {
     /// A hidden instance hides everything placed through it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Whether section planes of the contexts outside it cut it (default). Off leaves it
+    /// whole; planes inside its own definition still cut its contents.
+    #[serde(default = "section_cut_default", skip_serializing_if = "is_true")]
+    pub section_cut: bool,
+}
+
+fn section_cut_default() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 impl Instance {
@@ -146,6 +158,7 @@ impl Instance {
             material: None,
             tag: None,
             hidden: false,
+            section_cut: true,
         }
     }
 }
@@ -292,6 +305,8 @@ pub enum Op {
     SetTag(EntityId, Option<TagId>, Option<TagId>),
     /// An edge's, face's, instance's or guide's hidden flag changed from the first to the second.
     SetHidden(EntityId, bool, bool),
+    /// An instance's section-cut flag changed from the first to the second.
+    SetSectionCut(InstanceId, bool, bool),
     AddDimension(DimensionId, Dimension),
     RemoveDimension(DimensionId, Dimension),
     AddNote(NoteId, Note),
@@ -323,6 +338,7 @@ impl Op {
             Op::PlaceTexture(id, from, to) => Op::PlaceTexture(id, to, from),
             Op::SetTag(id, from, to) => Op::SetTag(id, to, from),
             Op::SetHidden(id, from, to) => Op::SetHidden(id, to, from),
+            Op::SetSectionCut(id, from, to) => Op::SetSectionCut(id, to, from),
             Op::AddDimension(id, d) => Op::RemoveDimension(id, d),
             Op::RemoveDimension(id, d) => Op::AddDimension(id, d),
             Op::AddNote(id, n) => Op::RemoveNote(id, n),
@@ -354,6 +370,7 @@ impl Op {
             Op::PaintInstance(id, _, _) => Some((EntityId::Instance(*id), true, true)),
             Op::PlaceTexture(id, _, _) => Some((EntityId::Face(*id), true, true)),
             Op::SetTag(id, _, _) | Op::SetHidden(id, _, _) => Some((*id, true, true)),
+            Op::SetSectionCut(id, _, _) => Some((EntityId::Instance(*id), true, true)),
             Op::AddDimension(id, _) => Some((EntityId::Dimension(*id), false, true)),
             Op::RemoveDimension(id, _) => Some((EntityId::Dimension(*id), true, false)),
             Op::AddNote(id, _) => Some((EntityId::Note(*id), false, true)),
@@ -898,6 +915,11 @@ impl Model {
                 }
                 EntityId::Vertex(_) => {}
             },
+            Op::SetSectionCut(id, _, to) => {
+                if let Some(i) = self.instances.get_mut(&id) {
+                    i.section_cut = to;
+                }
+            }
             Op::SetHidden(id, _, to) => match id {
                 EntityId::Edge(e) => {
                     if let Some(e) = self.edges.get_mut(&e) {
@@ -1327,6 +1349,21 @@ impl Model {
             && from != hidden
         {
             self.record(Op::SetHidden(id, from, hidden));
+        }
+    }
+
+    /// Whether section planes outside instance `id` cut it; None for an unknown instance.
+    pub fn section_cut_of(&self, id: InstanceId) -> Option<bool> {
+        self.instances.get(&id).map(|i| i.section_cut)
+    }
+
+    /// Sets whether outside section planes cut an instance, recording a change only when it
+    /// differs. Unknown ids are skipped.
+    pub(crate) fn set_section_cut(&mut self, id: InstanceId, cut: bool) {
+        if let Some(from) = self.section_cut_of(id)
+            && from != cut
+        {
+            self.record(Op::SetSectionCut(id, from, cut));
         }
     }
 
