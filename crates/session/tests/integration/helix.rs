@@ -164,6 +164,7 @@ fn bad_helix_options_are_refused_and_change_nothing() {
         json!({"radius": -1}),
         json!({"pitch": 0}),
         json!({"pitch": -0.5}),
+        json!({"pitch": 5e-6}),
         json!({"turns": 0}),
         json!({"turns": 1001}),
         json!({"segments": 2}),
@@ -630,4 +631,46 @@ fn the_new_commands_take_batch_references() {
     .collect();
     let out = d.execute_batch(batch, true).unwrap();
     assert_eq!(out[3].placed.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn a_half_turn_on_a_circle_flips_about_the_circle_axis() {
+    let mut d = doc();
+    let points: Vec<[f64; 3]> = (0..24)
+        .map(|k| {
+            let a = std::f64::consts::TAU * k as f64 / 24.0;
+            [4.0 * a.cos(), 0.0, 4.0 * a.sin()]
+        })
+        .collect();
+    let out = run(
+        &mut d,
+        json!({"type": "add_curve", "points": points, "closed": true, "curve": false}),
+    )
+    .unwrap();
+    let path = created(&out, 'e');
+    let m = marker(&mut d, [-1.0, -1.0, 0.0]);
+    let out = run(&mut d, copy_along(&[m], &path, json!({"count": 24}))).unwrap();
+    let placed = placed(&out);
+    assert_eq!(placed.len(), 23);
+    let t = transform_of(&d, &placed[11]);
+    let r = t.matrix3;
+    assert!(t.translation.is_finite() && r.is_finite());
+    assert!((r.determinant() - 1.0).abs() < 1e-9);
+    assert!((r.transpose() * r - glam::DMat3::IDENTITY).abs_diff_eq(glam::DMat3::ZERO, 1e-9));
+    // A half turn about the circle's axis (Y): that axis stays, the other two flip.
+    assert!(near(r.y_axis, DVec3::Y), "{:?}", r.y_axis);
+    assert!(near(r.x_axis.abs(), DVec3::X) || near(r.x_axis.abs(), DVec3::Z));
+}
+
+#[test]
+fn copies_closer_than_the_merge_tolerance_are_refused() {
+    let mut d = doc();
+    let path = l_path(&mut d);
+    let m = marker(&mut d, [-1.0, -1.0, 0.0]);
+    let before = depth(&d);
+    for extra in [json!({"spacing": 1e-7}), json!({"count": 9000000})] {
+        let (kind, _) = run(&mut d, copy_along(&[m.clone()], &path, extra)).unwrap_err();
+        assert_eq!(kind, ErrorKind::InvalidInput);
+    }
+    assert_eq!(depth(&d), before);
 }

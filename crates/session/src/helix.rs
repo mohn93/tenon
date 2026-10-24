@@ -61,6 +61,11 @@ pub fn helix_points(h: Helix) -> Result<Vec<DVec3>, CommandError> {
             "pitch must be a positive number (left_handed turns the other way)",
         ));
     }
+    if h.pitch < 10.0 * LENGTH_TOL {
+        return Err(invalid(
+            "pitch must be at least ten times the merge tolerance",
+        ));
+    }
     let steps_f = (h.turns * h.segments as f64 - 1e-9).ceil().max(1.0);
     if steps_f + 1.0 > MAX_POINTS {
         return Err(invalid(&format!(

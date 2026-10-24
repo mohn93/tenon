@@ -46,6 +46,21 @@ impl Walk {
         (self.end(i) - self.points[i]).normalize()
     }
 
+    /// The smallest rotation taking `from` to `to`; for a straight-back turn, a half turn
+    /// about the path's turning plane normal (not an arbitrary axis).
+    fn turn_between(&self, from: DVec3, to: DVec3) -> DQuat {
+        if from.dot(to) < -1.0 + EPS {
+            let axis = (0..self.segments())
+                .map(|i| from.cross(self.direction(i)))
+                .find(|c| c.length() > 1e-6)
+                .and_then(|c| c.try_normalize());
+            if let Some(axis) = axis {
+                return DQuat::from_axis_angle(axis, std::f64::consts::PI);
+            }
+        }
+        DQuat::from_rotation_arc(from, to)
+    }
+
     fn point_at(&self, t: f64) -> DVec3 {
         let i = self.segment_at(t);
         let along = (t - self.cum[i]).clamp(0.0, self.cum[i + 1] - self.cum[i]);
@@ -131,7 +146,7 @@ impl Document {
             .map(|t| {
                 let at = walk.point_at(*t);
                 let turn = if align {
-                    DQuat::from_rotation_arc(t0, walk.direction(walk.segment_at(*t)))
+                    walk.turn_between(t0, walk.direction(walk.segment_at(*t)))
                 } else {
                     DQuat::IDENTITY
                 };
@@ -259,6 +274,18 @@ fn positions(
     };
     if all.len() > MAX_PATH_COPIES + 1 {
         return Err(too_many());
+    }
+    // Copies closer than the merge tolerance would merge with the originals or each other.
+    let mut steps: Vec<f64> = all.windows(2).map(|w| w[1] - w[0]).collect();
+    if walk.closed {
+        steps.push(length - all.last().copied().unwrap_or(0.0));
+    }
+    let least = steps.into_iter().fold(f64::INFINITY, f64::min);
+    if least < kernel::geom::LENGTH_TOL {
+        return Err(CommandError::new(
+            ErrorKind::InvalidInput,
+            "copies would be closer together than the merge tolerance",
+        ));
     }
     Ok(all.into_iter().skip(1).collect())
 }
