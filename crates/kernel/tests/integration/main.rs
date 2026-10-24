@@ -11,6 +11,7 @@ mod edges;
 mod emission;
 mod erase;
 mod faces;
+mod finish;
 mod groups;
 mod guides;
 mod hide;

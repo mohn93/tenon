@@ -156,6 +156,24 @@ fn material_controls(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
     }
     glow_slider(ui, m, actions);
     texture_controls(ui, m, actions);
+    finish_slider(
+        ui,
+        m,
+        "Metalness",
+        "A metal tints its highlights and reflections with its color and has no diffuse shading",
+        m.metalness,
+        UiAction::SetMaterialMetalness,
+        actions,
+    );
+    finish_slider(
+        ui,
+        m,
+        "Roughness",
+        "Rough surfaces are matte; smooth ones show highlights and reflect the sky and ground",
+        m.roughness,
+        UiAction::SetMaterialRoughness,
+        actions,
+    );
 }
 
 /// A material's Glow slider, its emission from 0 to 10 in tenths; like the opacity, one change
@@ -191,6 +209,39 @@ fn glow_slider(ui: &mut Ui, m: &MaterialRow, actions: &mut Vec<UiAction>) {
             actions.push(UiAction::SetMaterialEmission(m.id, tenths(value)));
         }
         ui.data_mut(|d| d.remove::<f32>(key));
+    }
+}
+
+/// A material's Metalness or Roughness slider (`label`), the value (`current`, 0 to 1) in whole
+/// percent; like the opacity, one change when a drag ends.
+fn finish_slider(
+    ui: &mut Ui,
+    m: &MaterialRow,
+    label: &'static str,
+    hover: &str,
+    current: f32,
+    action: fn(MaterialId, u8) -> UiAction,
+    actions: &mut Vec<UiAction>,
+) {
+    let key = egui::Id::new((label, m.id.0));
+    let shown = percent(current);
+    let mut value = ui.data(|d| d.get_temp::<u8>(key)).unwrap_or(shown);
+    let slider = ui
+        .horizontal(|ui| {
+            let text = ui.label(label).on_hover_text(hover);
+            ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(40.0);
+            widgets::slider_row(ui, text.id, label, &mut value, 0..=100, 1.0, |b| {
+                b.suffix("%")
+            })
+        })
+        .inner;
+    if slider.dragged() {
+        ui.data_mut(|d| d.insert_temp(key, value));
+    } else {
+        if (slider.drag_stopped() || slider.changed()) && value != shown {
+            actions.push(action(m.id, value));
+        }
+        ui.data_mut(|d| d.remove::<u8>(key));
     }
 }
 

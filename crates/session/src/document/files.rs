@@ -129,6 +129,7 @@ impl Document {
             planes: c.section_planes,
             cuts: c.section_cuts,
             fill: c.section_fill,
+            fill_color: c.section_fill_color,
         };
     }
 

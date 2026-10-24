@@ -730,3 +730,53 @@ fn the_default_note_wraps_inside_the_dock() {
     assert!(note.height() > 20.0, "wrapped onto lines: {note:?}");
     assert!(note.max.x <= SCREEN.x, "{note:?}");
 }
+
+fn occlusion(f: impl FnOnce(&mut session::AmbientOcclusionPatch)) -> StylePatch {
+    let mut a = session::AmbientOcclusionPatch::default();
+    f(&mut a);
+    StylePatch {
+        ambient_occlusion: Some(a),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn ambient_occlusion_is_a_checkbox_with_a_radius_and_a_strength() {
+    let mut h = tall(styles_tab(Some(PLAIN)));
+    assert_eq!(is_on(&h, "Ambient occlusion"), Some(false));
+    assert_eq!(
+        click(&mut h, "Ambient occlusion"),
+        [change(PLAIN, occlusion(|a| a.on = Some(true)))]
+    );
+    // The radius and the strength wait for it to be on.
+    h.state_mut().styles[0].settings.ambient_occlusion.on = true;
+    h.run_ok();
+    assert_eq!(is_on(&h, "Ambient occlusion"), Some(true));
+    // The radius is a length in the model's units: 25 cm shown, 2 m typed.
+    let actions = type_into(&mut h, "Occlusion radius value", 0, "2", egui::Key::Enter);
+    assert_eq!(
+        actions,
+        [change(PLAIN, occlusion(|a| a.radius = Some(2.0)))]
+    );
+    h.get_by_label("Occlusion strength");
+    assert_eq!(
+        click(&mut h, "Ambient occlusion"),
+        [change(PLAIN, occlusion(|a| a.on = Some(false)))]
+    );
+}
+
+#[test]
+fn where_the_renderer_cannot_draw_ambient_occlusion_the_tab_says_so() {
+    let h = tall(styles_tab(Some(PLAIN)));
+    assert!(
+        h.query_by_label_contains(crate::ui::styles::AMBIENT_OCCLUSION_OFF)
+            .is_none()
+    );
+    let mut h = tall(Fixture {
+        ambient_occlusion: false,
+        ..styles_tab(Some(PLAIN))
+    });
+    h.get_by_label_contains(crate::ui::styles::AMBIENT_OCCLUSION_OFF);
+    // The checkbox is there but cannot be used.
+    assert_eq!(click(&mut h, "Ambient occlusion"), []);
+}

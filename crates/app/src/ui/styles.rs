@@ -9,10 +9,10 @@ use std::ops::RangeInclusive;
 use egui::text::{CCursor, CCursorRange};
 use egui::{Color32, Id, Popup, PopupCloseBehavior, RichText, Ui, Vec2};
 use kernel::{
-    ENDPOINT_LENGTH, EdgeColorMode, Fog, FogColor, Ground, PROFILE_WIDTH, SKETCHY_EXTENSION,
-    SKETCHY_JITTER, Sketchy, StyleId, StyleSettings,
+    AO_RADIUS, AO_STRENGTH, ENDPOINT_LENGTH, EdgeColorMode, Fog, FogColor, Ground, PROFILE_WIDTH,
+    SKETCHY_EXTENSION, SKETCHY_JITTER, Sketchy, StyleId, StyleSettings,
 };
-use session::{EdgesPatch, StylePatch, Units, format_length, parse_length};
+use session::{AmbientOcclusionPatch, EdgesPatch, StylePatch, Units, format_length, parse_length};
 
 use super::widgets::{self, Fill};
 use super::{EdgeEffect, StyleRow, UiAction, View, icons};
@@ -35,6 +35,10 @@ const FOG_ON: Fog = Fog {
     end: 100.0,
     color: FogColor::Background,
 };
+
+/// What the Styles tab says where the renderer cannot draw ambient occlusion.
+pub(super) const AMBIENT_OCCLUSION_OFF: &str =
+    "Ambient occlusion is not available in this browser (WebGL2)";
 
 /// The furthest a fog distance goes, in meters.
 const FOG_FAR: f64 = 100_000.0;
@@ -157,7 +161,7 @@ pub(super) fn styles(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) {
         );
         return;
     };
-    editor(ui, row, view.units, actions);
+    editor(ui, row, view.units, view.ambient_occlusion, actions);
 }
 
 /// Forgets what was held for styles no longer listed (deleted, or the model replaced): the name
@@ -241,7 +245,7 @@ fn name(ui: &mut Ui, row: &StyleRow, chosen: bool, actions: &mut Vec<UiAction>) 
 }
 
 /// The editor of the chosen style: Edges, Background and Fog.
-fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>) {
+fn editor(ui: &mut Ui, row: &StyleRow, units: Units, occlusion: bool, actions: &mut Vec<UiAction>) {
     let s = &row.settings;
     let id = row.id;
     let mut send = |patch: StylePatch| actions.push(UiAction::ChangeStyle(id, patch));
@@ -393,6 +397,43 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
         }
     });
 
+    widgets::section_header(ui, "Shading");
+    let ao = s.ambient_occlusion;
+    if !occlusion {
+        ui.add(egui::Label::new(RichText::new(AMBIENT_OCCLUSION_OFF).weak()).wrap());
+    }
+    ui.add_enabled_ui(occlusion, |ui| {
+        let mut on = ao.on;
+        if ui
+            .checkbox(&mut on, "Ambient occlusion")
+            .on_hover_text("Shade creases and corners darker")
+            .changed()
+        {
+            send(occlusion_patch(|a| a.on = Some(on)));
+        }
+        ui.add_enabled_ui(ao.on, |ui| {
+            if let Some(v) = length(
+                ui,
+                "Occlusion radius",
+                f64::from(ao.radius),
+                f64::from(*AO_RADIUS.start())..=f64::from(*AO_RADIUS.end()),
+                units,
+            ) {
+                send(occlusion_patch(|a| a.radius = Some(v as f32)));
+            }
+            if let Some(v) = slider(
+                ui,
+                "Occlusion strength",
+                ao.strength,
+                AO_STRENGTH,
+                0.05,
+                |b| b,
+            ) {
+                send(occlusion_patch(|a| a.strength = Some(v)));
+            }
+        });
+    });
+
     widgets::section_header(ui, "Distance fog");
     let mut on = s.fog.is_some();
     if ui.checkbox(&mut on, "Fog").changed() {
@@ -447,6 +488,16 @@ fn editor(ui: &mut Ui, row: &StyleRow, units: Units, actions: &mut Vec<UiAction>
             }
         });
     });
+}
+
+/// The ambient occlusion part of a style patch.
+fn occlusion_patch(f: impl FnOnce(&mut AmbientOcclusionPatch)) -> StylePatch {
+    let mut a = AmbientOcclusionPatch::default();
+    f(&mut a);
+    StylePatch {
+        ambient_occlusion: Some(a),
+        ..Default::default()
+    }
 }
 
 /// A color swatch named `name` (a click opens a picker). While the picker is open the color

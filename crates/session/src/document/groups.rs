@@ -250,6 +250,7 @@ impl Document {
             }),
             material: i.material,
             hidden: i.hidden,
+            section_cut: i.section_cut,
             tag: i.tag,
         }
     }

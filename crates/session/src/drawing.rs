@@ -131,11 +131,17 @@ fn placements(scene: &Scene, cuts: bool) -> Vec<Placement<'_>> {
             .instances()
             .filter(|(_, i)| scene.placed_instance_shown(i))
         {
+            // An instance left whole is cut by none of the planes outside it.
+            let outside = if instance.section_cut {
+                planes.clone()
+            } else {
+                Vec::new()
+            };
             walk(
                 scene,
                 MeshId::Definition(instance.definition),
                 place * instance.transform,
-                planes.clone(),
+                outside,
                 cuts,
                 out,
             );

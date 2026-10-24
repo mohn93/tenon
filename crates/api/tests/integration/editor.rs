@@ -7,8 +7,7 @@ use api::{
 };
 use serde_json::{Value, json};
 use session::{
-    BatchCommand, BatchError, Camera, Command, CommandError, Document, ImportUnits, Lighting,
-    Outcome,
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, ImportUnits, Outcome,
 };
 
 /// A document with an editor that only records what it was told.
@@ -70,7 +69,7 @@ impl Host for Editing {
         self.inner.execute_batch(commands, atomic)
     }
 
-    fn render_view(&mut self, _: &Camera, _: Lighting, _: u32, _: u32) -> Option<Vec<u8>> {
+    fn render_view(&mut self, _: &Camera, _: &api::RenderOptions) -> Option<Vec<u8>> {
         None
     }
 

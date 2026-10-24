@@ -238,3 +238,80 @@ fn night_lighting_is_saved_with_the_camera_as_version_8() {
     .unwrap();
     assert_eq!(ask(&e, json!({"type": "camera"}))["lighting"], "day");
 }
+
+#[test]
+fn studio_lighting_is_set_reported_and_not_an_edit() {
+    let mut d = doc();
+    let history = ask(&d, json!({"type": "history"}));
+    run(&mut d, json!({"type": "set_lighting", "mode": "studio"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "studio");
+    assert_eq!(ask(&d, json!({"type": "history"})), history);
+    assert!(!d.is_modified());
+    run(&mut d, json!({"type": "set_lighting", "mode": "night"})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "night");
+}
+
+#[test]
+fn studio_lighting_is_saved_as_version_20_and_only_then() {
+    let mut d = doc();
+    run(&mut d, json!({"type": "set_lighting", "mode": "studio"})).unwrap();
+    let path = scratch("studio.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let document = stored(&path);
+    assert_eq!(
+        document["schema_version"],
+        session::file::STUDIO_SCHEMA_VERSION
+    );
+    assert_eq!(session::file::STUDIO_SCHEMA_VERSION, 20);
+    assert_eq!(document["camera"]["lighting"], "studio");
+
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(ask(&e, json!({"type": "camera"}))["lighting"], "studio");
+
+    // Night alone keeps the version it always had.
+    run(&mut d, json!({"type": "set_lighting", "mode": "night"})).unwrap();
+    run(&mut d, json!({"type": "save"})).unwrap();
+    assert_eq!(stored(&path)["schema_version"], 8);
+}
+
+#[test]
+fn a_scene_stores_studio_lighting_and_the_file_keeps_it() {
+    let mut d = doc();
+    run(&mut d, json!({"type": "set_lighting", "mode": "studio"})).unwrap();
+    let out = run(&mut d, json!({"type": "add_scene"})).unwrap();
+    let scene = out["changes"]["scenes"][0].as_str().unwrap().to_string();
+    let detail = ask(&d, json!({"type": "scene", "scene": scene}));
+    assert_eq!(detail["view"]["lighting"], "studio");
+
+    // Back to day, then the scene brings studio back.
+    run(&mut d, json!({"type": "set_lighting", "mode": "day"})).unwrap();
+    run(&mut d, json!({"type": "go_to_scene", "scene": scene})).unwrap();
+    assert_eq!(ask(&d, json!({"type": "camera"}))["lighting"], "studio");
+
+    // A file whose only studio is in a scene still needs version 20.
+    run(&mut d, json!({"type": "set_lighting", "mode": "day"})).unwrap();
+    let path = scratch("studio_scene.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(stored(&path)["schema_version"], 20);
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    run(&mut e, json!({"type": "go_to_scene", "scene": scene})).unwrap();
+    assert_eq!(ask(&e, json!({"type": "camera"}))["lighting"], "studio");
+}

@@ -64,7 +64,7 @@ pub use axes::world_drawing_axes;
 pub use camera::{DEFAULT_EYE_HEIGHT, MAX_EYE_HEIGHT, MIN_EYE_HEIGHT};
 pub use files::ExportedBytes;
 pub use import::ImportOptions;
-pub use sections::SectionDisplay;
+pub use sections::{SectionDisplay, SectionFillColor};
 
 /// Largest coordinate magnitude (meters) accepted from commands.
 pub const MAX_COORDINATE: f64 = 1.0e6;
@@ -639,8 +639,13 @@ impl Document {
                 self.prune_hidden_selection();
                 Ok(Outcome::default())
             }
-            Command::SetSectionDisplay { planes, cuts, fill } => {
-                self.set_section_display_changes(planes, cuts, fill);
+            Command::SetSectionDisplay {
+                planes,
+                cuts,
+                fill,
+                fill_color,
+            } => {
+                self.set_section_display_changes(planes, cuts, fill, fill_color);
                 Ok(Outcome::default())
             }
             Command::OpenInstance { id } => {
@@ -781,6 +786,7 @@ impl Document {
             | Command::FlipSectionPlane { .. }
             | Command::ActivateSectionPlane { .. }
             | Command::DeactivateSection {}
+            | Command::SetSectionCut { .. }
             | Command::Add3dText { .. }
             | Command::SetUnits { .. }
             | Command::PushPull { .. }
@@ -1168,13 +1174,15 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                metalness,
+                roughness,
                 existing,
             } => self.add_material_changes(
                 name.as_deref(),
                 *color,
                 *opacity,
                 texture.as_ref(),
-                *emission,
+                (*emission, *metalness, *roughness),
                 *existing,
             ),
             Command::ChangeMaterial {
@@ -1184,6 +1192,8 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                metalness,
+                roughness,
             } => self.change_material_changes(
                 *material,
                 MaterialEdit {
@@ -1192,6 +1202,8 @@ impl Document {
                     opacity: *opacity,
                     texture: None,
                     emission: *emission,
+                    metalness: *metalness,
+                    roughness: *roughness,
                 },
                 texture.as_ref().map(Option::as_ref),
             ),
@@ -1243,6 +1255,7 @@ impl Document {
             } => self.change_style_changes(*style, name.as_deref(), settings.as_ref()),
             Command::DeleteStyle { style } => self.delete_style_changes(*style),
             Command::Hide { ids } => self.hide_changes(ids),
+            Command::SetSectionCut { ids, cut } => self.set_section_cut_changes(ids, *cut),
             Command::Unhide { ids } => self.unhide_changes(ids),
             Command::UnhideLast {} => self.unhide_last_changes(),
             Command::UnhideAll {} => self.unhide_all_changes(),
@@ -2653,6 +2666,7 @@ impl Document {
                 planes: self.section_display.planes,
                 cuts: self.section_display.cuts,
                 fill: self.section_display.fill,
+                fill_color: self.section_display.fill_color,
             },
         })
     }

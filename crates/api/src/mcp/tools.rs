@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use session::{Command, Lighting, Query};
 
 use super::Backend;
-use crate::dispatch::{EditorQuery, MAX_IMAGE_SIDE};
+use crate::dispatch::{EditorQuery, MAX_IMAGE_SIDE, MAX_SUPERSAMPLE};
 use crate::editor::EditorCommand;
 use crate::input::ToolInputParams;
 use crate::probe::{InferQuery, PickQuery, ScreenCommand, View};
@@ -146,7 +146,40 @@ fn input_schema(tool: &str) -> Value {
                     "width": side(DEFAULT_WIDTH),
                     "height": side(DEFAULT_HEIGHT),
                     "camera": camera,
-                    "lighting": lighting
+                    "lighting": lighting,
+                    "style": {
+                        "type": "string",
+                        "description": "A style id (y<n>) to draw this image with instead of the document's chosen style."
+                    },
+                    "projection": {
+                        "enum": ["perspective", "parallel"],
+                        "description": "Overrides the camera's projection for this image."
+                    },
+                    "section": {
+                        "type": "object",
+                        "properties": {
+                            "planes": {"type": "boolean"},
+                            "cuts": {"type": "boolean"},
+                            "fill": {"type": "boolean"},
+                            "fill_color": {"enum": ["dark", "material"]}
+                        },
+                        "additionalProperties": false,
+                        "description": "Overrides parts of the section display for this image; parts left out follow the document's."
+                    },
+                    "shadows": {
+                        "type": "boolean",
+                        "description": "Sun shadows on or off for this image."
+                    },
+                    "supersample": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_SUPERSAMPLE,
+                        "description": "Default 1. Renders at this many times the size and averages down to width x height for smoother edges; width and height times it are at most twice the largest side."
+                    },
+                    "background": {
+                        "enum": ["style", "transparent"],
+                        "description": "style (default) or transparent: pixels with nothing drawn (no faces, edges, guides, ground grid or axes) get alpha 0."
+                    }
                 },
                 "additionalProperties": false,
                 "$defs": defs

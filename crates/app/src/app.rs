@@ -516,6 +516,8 @@ struct Gpu {
     lost: Arc<AtomicBool>,
     /// Whether the adapter can draw light shadows (see `render::supports_shadows`).
     shadows: bool,
+    /// Whether it can draw ambient occlusion (see `render::supports_ambient_occlusion`).
+    occlusion: bool,
 }
 
 /// A GPU adapter, device and queue with the surface they draw to. The desktop makes them when
@@ -604,6 +606,7 @@ fn gpu(context: GpuContext, size: (u32, u32)) -> Result<Gpu, String> {
         // A desktop's renderer finds out for itself (it checks its shader); a browser's cannot
         // wait for that.
         shadows: cfg!(not(target_arch = "wasm32")) || render::supports_shadows(&adapter),
+        occlusion: render::supports_ambient_occlusion(&adapter),
     })
 }
 
@@ -613,12 +616,27 @@ fn make_renderer(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     shadows: bool,
+    occlusion: bool,
 ) -> Renderer {
-    if shadows {
+    let mut renderer = if shadows {
         Renderer::new(device, queue, format)
     } else {
         Renderer::without_shadows(device, queue, format)
+    };
+    if !occlusion {
+        renderer.disable_ambient_occlusion();
     }
+    renderer
+}
+
+/// The offscreen snapshotter for pictures of the model (swatches, thumbnails), sharing the
+/// window's device.
+fn make_snapshotter(device: &wgpu::Device, queue: &wgpu::Queue, occlusion: bool) -> Snapshotter {
+    let mut snapshotter = Snapshotter::with_device(device, queue);
+    if !occlusion {
+        snapshotter.disable_ambient_occlusion();
+    }
+    snapshotter
 }
 
 /// True for the input that makes a held Ctrl part of a chord rather than a tap: presses,
@@ -1087,13 +1105,14 @@ impl State {
             config,
             lost,
             shadows,
+            occlusion,
         } = gpu(context, (size.width, size.height)).unwrap_or_else(|e| panic!("{e}"));
 
-        let renderer = make_renderer(&device, &queue, config.format, shadows);
+        let renderer = make_renderer(&device, &queue, config.format, shadows, occlusion);
         let gui = Gui::new(&window, &device, config.format, prefs.theme, prefs.ui_scale);
         set_min_window(&window, prefs.ui_scale);
         let view = Viewport::full((config.width, config.height));
-        let offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
+        let offscreen = Offscreen::with(make_snapshotter(&device, &queue, occlusion));
         let mut editor = Editor::new(
             DVec2::new(config.width as f64, config.height as f64),
             window.scale_factor(),
@@ -1602,6 +1621,8 @@ impl State {
                 color: m.color,
                 opacity: m.opacity,
                 emission: m.emission,
+                metalness: m.metalness,
+                roughness: m.roughness,
             })
             .collect()
     }
@@ -2058,6 +2079,12 @@ impl State {
             UiAction::SetMaterialEmission(material, tenths) => {
                 self.editor.set_material_emission(material, tenths);
             }
+            UiAction::SetMaterialMetalness(material, percent) => {
+                self.editor.set_material_metalness(material, percent);
+            }
+            UiAction::SetMaterialRoughness(material, percent) => {
+                self.editor.set_material_roughness(material, percent);
+            }
             UiAction::LoadTexture(material) => self.load_texture(material),
             UiAction::RemoveTexture(material) => {
                 self.editor.remove_texture(material);
@@ -2091,6 +2118,9 @@ impl State {
             }
             UiAction::SetHidden(hidden) => {
                 self.editor.set_selection_hidden(hidden);
+            }
+            UiAction::SetSectionCut(cut) => {
+                self.editor.set_selection_section_cut(cut);
             }
             UiAction::OutlinerSetHidden { path, hidden } => {
                 self.editor.outliner_set_hidden(&path, hidden);
@@ -2441,6 +2471,7 @@ impl State {
             config,
             lost,
             shadows,
+            occlusion,
         } = match made {
             Ok(gpu) => gpu,
             Err(e) => {
@@ -2449,8 +2480,8 @@ impl State {
             }
         };
         eprintln!("GPU device made again");
-        self.renderer = make_renderer(&device, &queue, config.format, shadows);
-        self.offscreen = Offscreen::with(Snapshotter::with_device(&device, &queue));
+        self.renderer = make_renderer(&device, &queue, config.format, shadows, occlusion);
+        self.offscreen = Offscreen::with(make_snapshotter(&device, &queue, occlusion));
         // The window and its AccessKit adapter stay; only the panels' renderer is new.
         self.gui = self.gui.rebuilt(
             &self.window,
@@ -2698,6 +2729,7 @@ impl State {
             tags: self.tag_rows.as_ref().map(|(_, t)| t).expect("built above"),
             color_by_tag: self.editor.doc().color_by_tag,
             styles: &styles,
+            ambient_occlusion: self.renderer.ambient_occlusion_available(),
             style: self.editor.doc().style(),
             section_display: self.editor.doc().section_display,
             x_ray: self.editor.doc().x_ray,
@@ -2714,6 +2746,7 @@ impl State {
             soften: self.editor.soften_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
+            selection_section_cut: self.editor.selection_section_cut(),
             has_hidden: self.editor.context_has_hidden(),
             has_last_hidden: self.editor.has_last_hidden(),
             has_hidden_selected: self.editor.selection_has_hidden(),

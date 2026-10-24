@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::camera::{Camera, Lighting, Projection};
-use crate::document::{MAX_COORDINATE, SectionDisplay};
+use crate::document::{MAX_COORDINATE, SectionDisplay, SectionFillColor};
 use crate::texture::{MAX_TEXTURE_BYTES, check_total_pixels, decode, dimensions};
 use crate::units::{StoredUnits, Units};
 
@@ -32,11 +32,23 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
 /// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
 /// and the length and angle snapping settings of the display units, and version 18 styles
-/// and the style a view chooses; older files still open
+/// and the style a view chooses, and version 19 material metalness and roughness, and version
+/// 20 studio lighting, and version 21 ambient occlusion in a style, and version 22 the material
+/// section fill and instances left whole by section planes; older files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 22;
+/// The version written when the section fill takes the material's color or an instance is not
+/// cut by section planes.
+pub const SECTION_CUT_SCHEMA_VERSION: u32 = 22;
+/// The version written when a style has ambient occlusion on or with other than the default
+/// radius or strength.
+pub const AMBIENT_OCCLUSION_SCHEMA_VERSION: u32 = 21;
+/// The version written when the view or a scene's view is lit by the studio lights.
+pub const STUDIO_SCHEMA_VERSION: u32 = 20;
+/// The version written when a material has a metalness above 0 or a roughness below 1.
+pub const FINISH_SCHEMA_VERSION: u32 = 19;
 /// The version written when the model has a style or the camera or a scene's view chooses
 /// one.
 pub const STYLES_SCHEMA_VERSION: u32 = 18;
@@ -96,7 +108,7 @@ struct Stored {
 }
 
 /// The saved view. Files before version 4 have no `up` or `projection`: their views are
-/// never vertical, and they are perspective. `lighting` is written only at night; files before
+/// never vertical, and they are perspective. `lighting` is written only at night or in the studio; files before
 /// version 8 are lit by day. `color_by_tag` is written only when on; files before version 10
 /// color by material.
 #[derive(Serialize, Deserialize)]
@@ -133,6 +145,13 @@ pub(crate) struct StoredCamera {
     pub section_cuts: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub section_fill: bool,
+    /// The fill color, written only when not the dark default (it needs version 22).
+    #[serde(default, skip_serializing_if = "is_dark")]
+    pub section_fill_color: SectionFillColor,
+}
+
+fn is_dark(c: &SectionFillColor) -> bool {
+    *c == SectionFillColor::Dark
 }
 
 fn yes() -> bool {
@@ -304,7 +323,21 @@ pub(crate) fn write_bytes(
             .iter()
             .any(|p| p.view.is_some_and(|v| v.style.is_some()));
     let needs_lights_schema =
-        model.materials.iter().any(|m| m.emission > 0.0) || lighting != Lighting::Day;
+        model.materials.iter().any(|m| m.emission > 0.0) || lighting == Lighting::Night;
+    let studio = lighting == Lighting::Studio
+        || model.pages.iter().any(|p| p.view.is_some_and(|v| v.studio));
+    let occluded = model
+        .styles
+        .iter()
+        .any(|s| !s.settings.ambient_occlusion.is_default());
+    let section_cut = section.fill_color != SectionFillColor::Dark
+        || std::iter::once(&model.root)
+            .chain(model.definitions.iter().map(|d| &d.mesh))
+            .any(|m| m.instances.iter().any(|i| !i.section_cut));
+    let finished = model
+        .materials
+        .iter()
+        .any(|m| m.metalness > 0.0 || m.roughness < 1.0);
     let textured = model.materials.iter().any(|m| m.texture.is_some());
     let translucent = model.materials.iter().any(|m| m.opacity < 1.0);
     let mut images: Vec<(String, Arc<TextureImage>)> = model
@@ -319,7 +352,15 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if styled {
+        schema_version: if section_cut {
+            SECTION_CUT_SCHEMA_VERSION
+        } else if occluded {
+            AMBIENT_OCCLUSION_SCHEMA_VERSION
+        } else if studio {
+            STUDIO_SCHEMA_VERSION
+        } else if finished {
+            FINISH_SCHEMA_VERSION
+        } else if styled {
             STYLES_SCHEMA_VERSION
         } else if units.needs_snap_schema() {
             SNAP_SCHEMA_VERSION
@@ -363,6 +404,7 @@ pub(crate) fn write_bytes(
             section_planes: section.planes,
             section_cuts: section.cuts,
             section_fill: section.fill,
+            section_fill_color: section.fill_color,
         },
         units: (units != Units::default()).then(|| StoredUnits::from(units)),
         model,
@@ -760,6 +802,7 @@ mod tests {
             fov_y: 35f64.to_radians(),
             parallel: false,
             night: false,
+            studio: false,
             color_by_tag: false,
             x_ray: false,
             hidden_geometry: false,

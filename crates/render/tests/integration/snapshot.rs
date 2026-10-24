@@ -121,6 +121,8 @@ fn lamp_over_ground() -> Scene {
             opacity: 1.0,
             texture: None,
             emission: 5.0,
+            metalness: 0.0,
+            roughness: 1.0,
         })
         .unwrap();
     s.paint(

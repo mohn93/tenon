@@ -149,7 +149,7 @@ fn the_new_items_have_stable_native_ids() {
     let bar = crate::menus::menu_bar(&Fixture::default().view(), true);
     let mut seen = std::collections::BTreeSet::new();
     for item in crate::menus::items(&bar) {
-        let id = item_id(&item.action);
+        let id = crate::menus::item_key(item);
         assert!(seen.insert(id.clone()), "{id} twice");
     }
 }

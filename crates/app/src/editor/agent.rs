@@ -204,6 +204,8 @@ mod tests {
                 color: Some([200, 80, 60]),
                 opacity: None,
                 emission: None,
+                metalness: None,
+                roughness: None,
                 existing: Default::default(),
                 texture: None,
             })

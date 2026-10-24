@@ -633,6 +633,8 @@ fn a_failed_insert_changes_nothing() {
             opacity: 1.0,
             texture: Some(texture()),
             emission: 0.0,
+            metalness: 0.0,
+            roughness: 1.0,
         })
         .unwrap();
     s.edit(MeshId::Root, |m| {

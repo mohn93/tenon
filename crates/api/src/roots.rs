@@ -525,6 +525,8 @@ mod tests {
                 opacity: None,
                 texture: Some(texture()),
                 emission: None,
+                metalness: None,
+                roughness: None,
                 existing: Default::default(),
             },
             Command::ChangeMaterial {
@@ -534,6 +536,8 @@ mod tests {
                 opacity: None,
                 texture: Some(Some(texture())),
                 emission: None,
+                metalness: None,
+                roughness: None,
             },
         ];
         let expected = ["m.skr", "s.skr", "e.obj", "a.obj", "t.png", "t.png"];

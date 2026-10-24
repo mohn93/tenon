@@ -491,7 +491,8 @@ fn display_settings_default_on_and_are_view_settings() {
         Command::SetSectionDisplay {
             planes: None,
             cuts: None,
-            fill: None
+            fill: None,
+            fill_color: None
         }
         .is_camera()
     );
@@ -651,7 +652,7 @@ fn a_schema_12_file_opens_with_no_planes_and_default_display() {
     assert_eq!(ask(&e, json!({"type": "section_display"}))["cuts"], true);
 
     // A newer schema is refused.
-    edit_file(&path, |doc| doc["schema_version"] = json!(19));
+    edit_file(&path, |doc| doc["schema_version"] = json!(23));
     let err = run(
         &mut e,
         json!({"type": "open", "path": path.to_str().unwrap(), "discard": true}),
@@ -858,4 +859,334 @@ fn select_all_skips_planes_while_they_are_not_shown() {
     .unwrap();
     run(&mut d, json!({"type": "select", "ids": [], "all": true})).unwrap();
     assert_eq!(ask(&d, json!({"type": "selection"}))["ids"], json!([a]));
+}
+
+/// A cube made a group. Returns the group's id.
+fn grouped_cube(d: &mut Document) -> String {
+    let ids = cube(d);
+    let out = run(d, json!({"type": "make_group", "ids": ids})).unwrap();
+    made(&out, 'i')
+}
+
+fn instance_entry(d: &Document, id: &str) -> Value {
+    ask(d, json!({"type": "entities"}))["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == id)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn section_cut_is_on_by_default_and_absent_from_the_entities_query() {
+    let mut d = doc();
+    let g = grouped_cube(&mut d);
+    assert!(instance_entry(&d, &g).get("section_cut").is_none());
+    let out = run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [g], "cut": false}),
+    )
+    .unwrap();
+    assert_eq!(out["changed"], json!([g]));
+    assert_eq!(instance_entry(&d, &g)["section_cut"], false);
+    assert_eq!(
+        ask(&d, json!({"type": "entity", "id": g}))["section_cut"],
+        false
+    );
+    run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [g], "cut": true}),
+    )
+    .unwrap();
+    assert!(instance_entry(&d, &g).get("section_cut").is_none());
+}
+
+#[test]
+fn set_section_cut_is_one_undo_step_and_skips_instances_already_as_asked() {
+    let mut d = doc();
+    let g = grouped_cube(&mut d);
+    let depth = undo_depth(&d);
+    run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [g], "cut": false}),
+    )
+    .unwrap();
+    assert_eq!(undo_depth(&d), depth + 1);
+    let out = run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [g], "cut": false}),
+    )
+    .unwrap();
+    assert_eq!(out["changed"], json!([]));
+    assert_eq!(undo_depth(&d), depth + 1, "nothing changed, no step");
+    run(&mut d, json!({"type": "undo"})).unwrap();
+    assert!(instance_entry(&d, &g).get("section_cut").is_none());
+    run(&mut d, json!({"type": "redo"})).unwrap();
+    assert_eq!(instance_entry(&d, &g)["section_cut"], false);
+}
+
+#[test]
+fn set_section_cut_refuses_what_is_not_an_instance() {
+    let mut d = doc();
+    grouped_cube(&mut d);
+    let plane = plane(&mut d, [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], true);
+    let (kind, ..) = run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [plane], "cut": false}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+    let (kind, ..) = run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [], "cut": false}),
+    )
+    .unwrap_err();
+    assert_eq!(kind, ErrorKind::InvalidInput);
+}
+
+#[test]
+fn fill_color_is_a_display_setting_saved_only_when_not_dark() {
+    let mut d = doc();
+    cube(&mut d);
+    assert_eq!(
+        ask(&d, json!({"type": "section_display"}))["fill_color"],
+        "dark"
+    );
+    let depth = undo_depth(&d);
+    run(
+        &mut d,
+        json!({"type": "set_section_display", "fill_color": "material"}),
+    )
+    .unwrap();
+    assert_eq!(undo_depth(&d), depth, "a view setting, not an undo step");
+    assert_eq!(
+        ask(&d, json!({"type": "section_display"}))["fill_color"],
+        "material"
+    );
+    let path = scratch("fill-color.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let doc_json = stored(&path);
+    assert_eq!(doc_json["schema_version"], 22);
+    assert_eq!(doc_json["camera"]["section_fill_color"], "material");
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(
+        ask(&e, json!({"type": "section_display"}))["fill_color"],
+        "material"
+    );
+
+    run(
+        &mut d,
+        json!({"type": "set_section_display", "fill_color": "dark"}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap(), "overwrite": true}),
+    )
+    .unwrap();
+    let doc_json = stored(&path);
+    assert!(doc_json["schema_version"].as_u64().unwrap() < 22);
+    assert!(doc_json["camera"].get("section_fill_color").is_none());
+    // New starts dark.
+    run(&mut e, json!({"type": "new", "discard": true})).unwrap();
+    assert_eq!(
+        ask(&e, json!({"type": "section_display"}))["fill_color"],
+        "dark"
+    );
+}
+
+#[test]
+fn an_instance_left_whole_writes_schema_22_and_round_trips() {
+    let mut d = doc();
+    let g = grouped_cube(&mut d);
+    let path = scratch("whole.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let before = stored(&path);
+    assert!(before["schema_version"].as_u64().unwrap() < 22);
+    assert!(
+        before["model"]["root"]["instances"][0]
+            .get("section_cut")
+            .is_none()
+    );
+
+    run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [g], "cut": false}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap(), "overwrite": true}),
+    )
+    .unwrap();
+    let after = stored(&path);
+    assert_eq!(after["schema_version"], 22);
+    assert_eq!(after["model"]["root"]["instances"][0]["section_cut"], false);
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(instance_entry(&e, &g)["section_cut"], false);
+
+    // An old file has no field: every instance is cut.
+    edit_file(&path, |doc| {
+        doc["schema_version"] = json!(21);
+        doc["model"]["root"]["instances"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("section_cut");
+    });
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap(), "discard": true}),
+    )
+    .unwrap();
+    assert!(instance_entry(&e, &g).get("section_cut").is_none());
+}
+
+/// The ids of the instances in the open context that are left whole.
+fn left_whole(d: &Document) -> Vec<String> {
+    ask(d, json!({"type": "entities"}))["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["section_cut"] == false)
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn set_whole(d: &mut Document, id: &str) {
+    run(
+        d,
+        json!({"type": "set_section_cut", "ids": [id], "cut": false}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn section_cut_survives_explode() {
+    let mut d = doc();
+    let inner = grouped_cube(&mut d);
+    set_whole(&mut d, &inner);
+    let outer = run(&mut d, json!({"type": "make_group", "ids": [inner]})).unwrap();
+    let outer = made(&outer, 'i');
+    assert!(
+        left_whole(&d).is_empty(),
+        "inside the group, not in the root"
+    );
+    run(&mut d, json!({"type": "explode", "ids": [outer]})).unwrap();
+    assert_eq!(left_whole(&d).len(), 1, "the freed instance is still whole");
+}
+
+#[test]
+fn section_cut_survives_paste() {
+    let mut d = doc();
+    let g = grouped_cube(&mut d);
+    set_whole(&mut d, &g);
+    let clip = d.clip(&[g.parse().unwrap()]).unwrap();
+    let out = run(
+        &mut d,
+        json!({"type": "paste", "clip": clip, "at": [10, 0, 0]}),
+    )
+    .unwrap();
+    let pasted = made(&out, 'i');
+    assert_ne!(pasted, g);
+    let mut whole = left_whole(&d);
+    whole.sort();
+    let mut both = vec![g, pasted];
+    both.sort();
+    assert_eq!(whole, both);
+}
+
+#[test]
+fn section_cut_survives_make_unique() {
+    let mut d = doc();
+    let ids = cube(&mut d);
+    let out = run(
+        &mut d,
+        json!({"type": "make_component", "ids": ids, "name": "Box"}),
+    )
+    .unwrap();
+    let c = made(&out, 'i');
+    let copy = run(
+        &mut d,
+        json!({"type": "copy", "ids": [c], "offset": [5, 0, 0]}),
+    )
+    .unwrap()["placed"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    set_whole(&mut d, &copy);
+    run(&mut d, json!({"type": "make_unique", "ids": [copy]})).unwrap();
+    assert_eq!(left_whole(&d), [copy]);
+}
+
+#[test]
+fn a_group_left_whole_stays_whole_in_the_line_drawing_while_a_sibling_is_cut() {
+    use session::drawing::line_drawing;
+    let mut d = doc();
+    let a = grouped_cube(&mut d);
+    // A second cube beside it, grouped too.
+    let out = run(
+        &mut d,
+        json!({"type": "add_rectangle", "corner": [0, 5, 0], "opposite": [2, 7, 0]}),
+    )
+    .unwrap();
+    let face = made(&out, 'f');
+    run(
+        &mut d,
+        json!({"type": "push_pull", "face": face, "distance": 1}),
+    )
+    .unwrap();
+    let all = ask(&d, json!({"type": "entities"}));
+    let ids: Vec<Value> = all["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(all["faces"].as_array().unwrap())
+        .map(|e| e["id"].clone())
+        .collect();
+    let out = run(&mut d, json!({"type": "make_group", "ids": ids})).unwrap();
+    let b = made(&out, 'i');
+    plane(&mut d, [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], true);
+    let extent = |d: &Document| -> (f64, f64) {
+        let pts = session::drawing::extent_points(d);
+        let x = |sel: fn(f64, f64) -> f64, y_lo: f64, y_hi: f64| {
+            pts.iter()
+                .filter(|p| p.y >= y_lo && p.y <= y_hi)
+                .map(|p| p.x)
+                .fold(f64::NAN, sel)
+        };
+        (x(f64::min, -1.0, 3.0), x(f64::min, 4.0, 8.0))
+    };
+    let (cut, other) = extent(&d);
+    assert!(
+        (cut - 1.0).abs() < 1e-6 && (other - 1.0).abs() < 1e-6,
+        "{cut} {other}"
+    );
+    run(
+        &mut d,
+        json!({"type": "set_section_cut", "ids": [b], "cut": false}),
+    )
+    .unwrap();
+    let (cut, other) = extent(&d);
+    assert!((cut - 1.0).abs() < 1e-6, "{a} is still cut: {cut}");
+    assert!(other.abs() < 1e-6, "{b} is whole: {other}");
+    assert!(line_drawing(&d, &d.camera, d.camera.viewport).is_ok());
 }

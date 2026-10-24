@@ -2,10 +2,30 @@
 
 use glam::DVec3;
 use kernel::{EntityId, SceneChange, SectionId, SectionPlane};
+use serde::{Deserialize, Serialize};
 
 use super::{Document, check_coordinates, unit_vector};
 use crate::command::{CommandError, ErrorKind};
 use crate::query::SectionPlaneInfo;
+
+/// The color closed cuts are filled with.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionFillColor {
+    /// The fixed dark gray (#3a3a3a).
+    #[default]
+    Dark,
+    /// The color of the material most of the cut faces' area shows on their front, darkened by 20%.
+    Material,
+}
+
+impl SectionFillColor {
+    /// How much of the material's color the fill keeps (the rest is dark), so a cut reads as
+    /// a cut.
+    pub const MATERIAL_SHADE: f32 = 0.8;
+}
 
 /// How section planes are shown. A view setting like the lighting: saved with the camera, not
 /// an undo step, not part of the model's revision.
@@ -17,6 +37,8 @@ pub struct SectionDisplay {
     pub cuts: bool,
     /// Closed cuts are filled.
     pub fill: bool,
+    /// The color of the fill.
+    pub fill_color: SectionFillColor,
 }
 
 impl Default for SectionDisplay {
@@ -25,6 +47,7 @@ impl Default for SectionDisplay {
             planes: true,
             cuts: true,
             fill: true,
+            fill_color: SectionFillColor::Dark,
         }
     }
 }
@@ -39,11 +62,13 @@ impl Document {
         planes: Option<bool>,
         cuts: Option<bool>,
         fill: Option<bool>,
+        fill_color: Option<SectionFillColor>,
     ) {
         let s = &mut self.section_display;
         s.planes = planes.unwrap_or(s.planes);
         s.cuts = cuts.unwrap_or(s.cuts);
         s.fill = fill.unwrap_or(s.fill);
+        s.fill_color = fill_color.unwrap_or(s.fill_color);
     }
 
     pub(super) fn add_section_plane_changes(
@@ -94,6 +119,30 @@ impl Document {
     pub(super) fn deactivate_section_changes(&mut self) -> SceneChange {
         self.edit_mesh(|m| m.set_active_section(None))
             .expect("clearing the active plane cannot fail")
+    }
+
+    pub(super) fn set_section_cut_changes(
+        &mut self,
+        ids: &[EntityId],
+        cut: bool,
+    ) -> Result<SceneChange, CommandError> {
+        if ids.is_empty() {
+            return Err(invalid("ids must list at least one instance"));
+        }
+        self.parts(ids)?;
+        if let Some(bad) = ids.iter().find(|id| !matches!(id, EntityId::Instance(_))) {
+            return Err(invalid(&format!("{bad} is not an instance")).with_ids(vec![*bad]));
+        }
+        let mut changed = Vec::new();
+        let change = self
+            .edit_mesh(|m| {
+                let (changes, c) = m.set_section_cut_entities(ids, cut);
+                changed = c;
+                Ok(changes)
+            })
+            .expect("setting a flag cannot fail");
+        self.changed_entities = Some(changed);
+        Ok(change)
     }
 
     pub(super) fn section_plane_info(&self, id: SectionId) -> SectionPlaneInfo {

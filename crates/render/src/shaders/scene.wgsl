@@ -13,6 +13,9 @@ struct Uniforms {
 // The sun's shadow map, with a sampler comparing a depth with it (see sun_shadow.rs).
 @group(0) @binding(6) var sun_map: texture_depth_2d;
 @group(0) @binding(7) var sun_sampler: sampler_comparison;
+// The ambient occlusion at half resolution (see ssao.rs); a 1 x 1 placeholder while no style asks
+// for it.
+@group(0) @binding(8) var ao_map: texture_2d<f32>;
 
 // A point light from glowing faces (see lights.rs).
 struct Light {
@@ -79,6 +82,14 @@ struct Lighting {
     // x: where the fog starts; y: where it is complete; z: 1 when there is fog.
     fog: vec4<f32>,
     fog_color: vec4<f32>,
+    // x: 1 in studio lighting, else 0.
+    studio: vec4<f32>,
+    // xyz: the unit vector toward the studio's fill light and its rim light; w: its strength
+    // (0 outside the studio). The key light is the sun's slot (`sun`, `sun_levels`).
+    studio_fill: vec4<f32>,
+    studio_rim: vec4<f32>,
+    // x: 1 when `ao_map` holds this frame's ambient occlusion.
+    ao: vec4<f32>,
     // World to the sun map's clip space.
     sun_view_proj: mat4x4<f32>,
     lights: array<Light, MAX_LIGHTS>,
@@ -539,6 +550,11 @@ fn styled_canvas(ndc: vec2<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_canvas(in: CanvasOut) -> @location(0) vec4<f32> {
+    if lighting.studio.x > 0.5 && lighting.canvas.x > 0.5 {
+        // The studio's backdrop: the background at the bottom of the view, the style's sky at the
+        // top (the canvas is only drawn with a sky).
+        return vec4<f32>(mix(lighting.sky.rgb, lighting.background.rgb, in.down), 1.0);
+    }
     if lighting.canvas.x > 0.5 {
         return vec4<f32>(styled_canvas(in.ndc), 1.0);
     }
@@ -561,6 +577,8 @@ struct FaceOut {
     // 1 on a glowing front (x) or back (y) side.
     @location(8) @interpolate(flat) glow: vec2<f32>,
     @location(9) @interpolate(flat) hovered: f32,
+    // The front side's metalness and roughness (xy) and the back side's (zw).
+    @location(10) @interpolate(flat) finish: vec4<f32>,
 };
 
 // `selected` (1 or 0) comes from the second vertex buffer, `hovered` from the third.
@@ -576,6 +594,7 @@ fn vs_face(
     @location(7) layer: vec2<f32>,
     @location(8) glow: vec2<f32>,
     @location(9) hovered: f32,
+    @location(10) finish: vec4<f32>,
 ) -> FaceOut {
     var out: FaceOut;
     out.pos = u.view_proj * vec4<f32>(pos, 1.0);
@@ -589,6 +608,7 @@ fn vs_face(
     out.layer = layer;
     out.glow = glow;
     out.hovered = hovered;
+    out.finish = finish;
     return out;
 }
 
@@ -664,14 +684,143 @@ fn sun_shade(p: vec3<f32>, n: vec3<f32>) -> f32 {
     return lighting.sun_levels.y + lighting.sun_levels.x * facing * lit;
 }
 
+// The light the studio's fill and rim lights give a surface facing `n`, by Lambert's cosine; 0
+// outside the studio.
+fn studio_extra(n: vec3<f32>) -> f32 {
+    return lighting.studio_fill.w * max(dot(n, lighting.studio_fill.xyz), 0.0)
+        + lighting.studio_rim.w * max(dot(n, lighting.studio_rim.xyz), 0.0);
+}
+
+// What a smooth or metallic surface adds to the matte shading (see `finished_color`). The
+// environment is a vertical gradient: the style's sky above the horizon and its ground below,
+// or these colors without a sky or ground.
+const DEFAULT_SKY: vec3<f32> = vec3<f32>(0.62, 0.74, 0.92);
+const DEFAULT_GROUND: vec3<f32> = vec3<f32>(0.38, 0.36, 0.34);
+// The ambient light of day (DAY in renderer.rs): the environment dims in proportion to the
+// ambient light, so it is dark at night.
+const DAY_AMBIENT: f32 = 0.6;
+
+// The environment seen in direction `dir`.
+fn environment(dir: vec3<f32>) -> vec3<f32> {
+    if lighting.studio.x > 0.5 {
+        // The studio is a backdrop: the sky if the style has one, else the background, above;
+        // the background darkened below.
+        let top = select(lighting.background.rgb, lighting.sky.rgb, lighting.sky.w > 0.5);
+        return mix(lighting.background.rgb * 0.5, top, smoothstep(-0.25, 0.25, dir.z));
+    }
+    let sky = select(DEFAULT_SKY, lighting.sky.rgb, lighting.sky.w > 0.5);
+    let ground = select(DEFAULT_GROUND, lighting.ground.rgb, lighting.ground.w > 0.0);
+    return mix(ground, sky, smoothstep(-0.25, 0.25, dir.z));
+}
+
+// The highlight of a light of `level` toward `l` (a unit vector) on a surface facing `n` seen
+// along `v`: a Blinn-Phong lobe of exponent `shininess`, by the cosine of the light's angle. It
+// is 0 for a light behind the surface, and finite where the light is opposite the eye.
+fn highlight(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, shininess: f32, level: f32) -> f32 {
+    let facing = max(dot(n, l), 0.0);
+    let sum = l + v;
+    let h = sum / max(length(sum), 1e-4);
+    return level * facing * pow(max(dot(n, h), 0.0), shininess);
+}
+
+// The sun's highlight, stopped where the sun is in shadow (as `sun_shade` does).
+fn sun_highlight(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, shininess: f32) -> f32 {
+    let facing = max(dot(n, lighting.sun.xyz), 0.0);
+    var lit = 1.0;
+    if lighting.sun.w > 1.5 && facing > 0.0 {
+        lit = sun_lit(p, n, facing);
+    }
+    return highlight(n, v, lighting.sun.xyz, shininess, lighting.sun_levels.x * lit);
+}
+
+// The ambient occlusion at the pixel `frag` (a fragment position) of the surface at `world`: 1
+// where nothing shades it, less in creases; 1 without ambient occlusion. The map is half the
+// size, so the four texels around the pixel are weighed by how near they lie and how well the
+// depth of the surface they were worked out for (green) matches this one's, which keeps the
+// occlusion of a nearer or farther surface from spreading over a silhouette.
+fn ao_factor(frag: vec4<f32>, world: vec3<f32>) -> f32 {
+    if lighting.ao.x < 0.5 {
+        return 1.0;
+    }
+    let size = vec2<i32>(textureDimensions(ao_map));
+    let at = frag.xy * 0.5 - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(at));
+    let t = at - floor(at);
+    let depth = dot(world - lighting.cam_pos.xyz, lighting.cam_forward.xyz);
+    let sigma = 0.04 * abs(depth) + 0.02;
+    var sum = 0.0;
+    var total = 0.0;
+    var nearest = 1.0;
+    var best = 1e30;
+    for (var k = 0; k < 4; k++) {
+        let step = vec2<i32>(k & 1, k >> 1);
+        let texel = textureLoad(ao_map, clamp(base + step, vec2<i32>(0), size - vec2<i32>(1)), 0);
+        let near = select(1.0 - t, t, step == vec2<i32>(1));
+        let miss = abs(texel.g - depth);
+        let w = near.x * near.y * exp(-(miss * miss) / (sigma * sigma));
+        sum += w * texel.r;
+        total += w;
+        if miss < best {
+            best = miss;
+            nearest = texel.r;
+        }
+    }
+    return select(nearest, sum / total, total > 1e-3);
+}
+
+// The color of a surface that is not matte: `shown` its base color, `shade` the matte shading
+// at the point, `finish` its metalness (x) and roughness (y). The diffuse part is scaled by
+// 1 - metalness, and by `ao` (the ambient occlusion, 1 for none) with the ambient light.
+// The headlight (the sun when it shades) adds a highlight of strength
+// (1 - roughness)^2 tinted by the base color as far as the surface is metallic, and the
+// environment, seen in the reflected view direction, is added weighted by 1 - roughness and
+// the Fresnel reflectance (0.04 for a non-metal, the base color for a metal, 1 at grazing
+// angles).
+fn finished_color(
+    shown: vec3<f32>,
+    n: vec3<f32>,
+    to_eye: vec3<f32>,
+    p: vec3<f32>,
+    shade: f32,
+    finish: vec2<f32>,
+    ao: f32,
+) -> vec3<f32> {
+    let metalness = finish.x;
+    let gloss = 1.0 - finish.y;
+    // A rough metal keeps some of its color as diffuse light (a blurry reflection).
+    let diffuse_part = (1.0 - metalness) + metalness * finish.y * 0.75;
+    let diffuse = shown * diffuse_part * ((vec3<f32>(shade) + lamp_light(p, n)) * ao);
+    let tint = mix(vec3<f32>(1.0), shown, metalness);
+    let shininess = exp2(mix(3.0, 10.0, gloss));
+    var light = highlight(n, to_eye, to_eye, shininess, lighting.mode.z);
+    if lighting.sun.w > 0.5 {
+        light = sun_highlight(p, n, to_eye, shininess);
+    }
+    if lighting.studio.x > 0.5 {
+        light += highlight(n, to_eye, lighting.studio_fill.xyz, shininess, lighting.studio_fill.w);
+        light += highlight(n, to_eye, lighting.studio_rim.xyz, shininess, lighting.studio_rim.w);
+    }
+    let spec = tint * (gloss * gloss * light);
+    let facing = clamp(dot(n, to_eye), 0.0, 1.0);
+    let grazing = pow(1.0 - facing, 5.0);
+    let reflectance = mix(vec3<f32>(0.04), shown, metalness);
+    let fresnel = reflectance + (vec3<f32>(1.0) - reflectance) * grazing;
+    // The studio reflects its backdrop at full strength.
+    let dim = select(clamp(lighting.mode.y / DAY_AMBIENT, 0.0, 1.0), 1.0, lighting.studio.x > 0.5);
+    let reflected = environment(reflect(-to_eye, n)) * fresnel * (gloss * dim);
+    return diffuse + spec + reflected;
+}
+
 // Each side shows its own color (its material's, or the default: light in front, blue-gray
 // behind), or its material's texture instead; ambient light, a headlight at the eye (from the
 // viewer, in a parallel view) and the glowing faces' lights shade both. A glowing side is shown
 // unshaded. Selected faces are tinted toward the style's color; unselected ones skip the mix so
 // their arithmetic stays exactly as before the tint came from a uniform. A hovered face is
 // mixed toward the hover color from its own color, so the hover wins over the selection.
+// The ambient and diffuse light (the glowing faces' too) is multiplied by `ao`, the ambient
+// occlusion, 1 for none; emission, highlights and reflections are not.
 // Call it before any discard: the texture lookup needs every pixel of its quad.
-fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
+fn face_color(in: FaceOut, front: bool, ao: f32) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
     let layer = select(in.layer.y, in.layer.x, front);
@@ -690,9 +839,21 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     }
     var shade = lighting.mode.y + lighting.mode.z * max(dot(n, to_eye), 0.0);
     if lighting.sun.w > 0.5 {
-        shade = sun_shade(in.world, n);
+        shade = sun_shade(in.world, n) + studio_extra(n);
     }
-    return shown * (vec3<f32>(shade) + lamp_light(in.world, n));
+    let finish = select(in.finish.zw, in.finish.xy, front);
+    if finish.x > 0.0 || finish.y < 1.0 {
+        // Shaded from the side's own color; the selection and hover tints come after, so a
+        // selected or hovered face of a metal shows them.
+        let finished = finished_color(color, n, to_eye, in.world, shade, finish, ao);
+        let selected = mix(finished, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
+        return select(
+            selected,
+            mix(finished, lighting.hover_face.rgb, lighting.hover_face.w),
+            in.hovered > 0.5,
+        );
+    }
+    return shown * ((vec3<f32>(shade) + lamp_light(in.world, n)) * ao);
 }
 
 // A face's color in the fog; selected and hovered faces stay as they are.
@@ -706,14 +867,14 @@ fn face_fog(in: FaceOut, color: vec3<f32>) -> vec3<f32> {
 // Opaque faces.
 @fragment
 fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(face_fog(in, face_color(in, front)), 1.0);
+    return vec4<f32>(face_fog(in, face_color(in, front, ao_factor(in.pos, in.world))), 1.0);
 }
 
 // The opaque side of a face whose other side is see-through: drawn with the opaque faces, the
 // see-through side left to `fs_glass`.
 @fragment
 fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let color = face_color(in, front);
+    let color = face_color(in, front, ao_factor(in.pos, in.world));
     if select(in.alpha.y, in.alpha.x, front) < 1.0 {
         discard;
     }
@@ -724,12 +885,23 @@ fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @locat
 // A selected one is made more opaque so its tint shows even when it is nearly invisible.
 @fragment
 fn fs_glass(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let color = face_color(in, front);
+    let color = face_color(in, front, 1.0);
     let alpha = select(in.alpha.y, in.alpha.x, front);
     if alpha >= 1.0 {
         discard;
     }
     return vec4<f32>(face_fog(in, color), mix(alpha, 1.0, 0.4 * in.selected));
+}
+
+// The ambient occlusion pass's picture of the opaque faces: the world normal turned toward the
+// viewer (see ssao.rs), nothing of a see-through side.
+@fragment
+fn fs_ao_normal(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if select(in.alpha.y, in.alpha.x, front) < 1.0 {
+        discard;
+    }
+    let n = normalize(in.normal) * select(-1.0, 1.0, front);
+    return vec4<f32>(n * 0.5 + 0.5, 1.0);
 }
 
 struct PreviewOut {
@@ -759,7 +931,11 @@ fn vs_preview(
 fn fs_preview(in: PreviewOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
-    let shade = lighting.mode.y + lighting.mode.z * abs(dot(n, to_eye));
+    var shade = lighting.mode.y + lighting.mode.z * abs(dot(n, to_eye));
+    if lighting.studio.x > 0.5 {
+        // No headlight: the key light is the sun's slot, shaded without a shadow.
+        shade += lighting.sun_levels.x * abs(dot(n, lighting.sun.xyz)) + studio_extra(n);
+    }
     return vec4<f32>(in.color.rgb * shade, in.color.a);
 }
 
@@ -780,11 +956,21 @@ fn vs_sun_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> 
 
 @fragment
 fn fs_sun_ground(in: GroundOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(vec3<f32>(sun_ground_shade(in)), 1.0);
+}
+
+// On a transparent background the shadow is black with the alpha the shade takes away.
+@fragment
+fn fs_sun_ground_clear(in: GroundOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - sun_ground_shade(in));
+}
+
+fn sun_ground_shade(in: GroundOut) -> f32 {
     let facing = lighting.sun.z;
     let lit = sun_lit(in.world, vec3<f32>(0.0, 0.0, 1.0), facing);
     let sunny = lighting.sun_levels.y + lighting.sun_levels.x * facing;
     let ratio = lighting.sun_levels.y / max(sunny, 1e-4);
     // A shadow fades out in the fog with what it falls on.
     let shade = mix(ratio, 1.0, lit);
-    return vec4<f32>(vec3<f32>(mix(shade, 1.0, fog_amount(eye_distance(in.world)))), 1.0);
+    return mix(shade, 1.0, fog_amount(eye_distance(in.world)));
 }

@@ -155,6 +155,10 @@ pub enum UiAction {
     SetMaterialOpacity(MaterialId, u8),
     /// Set how strongly a material glows, in tenths (0 to 100: emission 0 to 10).
     SetMaterialEmission(MaterialId, u8),
+    /// Set a material's metalness, in percent (0 to 100).
+    SetMaterialMetalness(MaterialId, u8),
+    /// Set a material's roughness, in percent (0 to 100: 100 is matte).
+    SetMaterialRoughness(MaterialId, u8),
     /// Choose an image file for a material's texture.
     LoadTexture(MaterialId),
     /// Take a material's texture off.
@@ -185,6 +189,9 @@ pub enum UiAction {
     UnhideAll,
     /// Entity Info's Hidden checkbox: hide (true) or show the selection.
     SetHidden(bool),
+    /// Entity Info's "Cut by section planes" checkbox: whether the selected instances are cut
+    /// by the section planes of the contexts outside them (`set_section_cut`).
+    SetSectionCut(bool),
     /// An Outliner row's menu: hide (true) or show the instance at the path.
     OutlinerSetHidden {
         path: Vec<EntityId>,
@@ -440,6 +447,10 @@ pub struct MaterialRow {
     pub opacity: f32,
     /// From 0 (no glow) to 10.
     pub emission: f32,
+    /// From 0 (not metallic) to 1.
+    pub metalness: f32,
+    /// From 0 (a mirror) to 1 (matte).
+    pub roughness: f32,
     pub texture: Option<TextureRow>,
 }
 
@@ -546,6 +557,9 @@ pub struct View<'a> {
     pub color_by_tag: bool,
     /// Every style, in the order they were made.
     pub styles: &'a [StyleRow],
+    /// Whether the renderer can draw ambient occlusion (not in a browser's WebGL2): the Styles
+    /// tab says so where it cannot.
+    pub ambient_occlusion: bool,
     /// The style the view draws with (None: the default look).
     pub style: Option<StyleId>,
     /// Whether section planes are drawn, cut and filled (checked in the View menu).
@@ -579,6 +593,9 @@ pub struct View<'a> {
     pub edges_soft: Option<bool>,
     /// Whether everything selected that can be hidden is, None when nothing selected can be.
     pub selection_hidden: Option<bool>,
+    /// Whether every selected instance is cut by section planes outside it, None when no
+    /// instance is selected.
+    pub selection_section_cut: Option<bool>,
     /// Whether a selected entity is hidden (Edit > Unhide > Selected).
     pub has_hidden_selected: bool,
     /// Whether the open context has a hidden entity (Edit > Unhide > All).

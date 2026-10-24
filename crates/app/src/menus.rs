@@ -371,18 +371,17 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
             .enabled(view.projection == Projection::Perspective)
             .entry(),
     );
-    let night = view.lighting == Lighting::Night;
-    let lighting = if night {
-        Lighting::Day
-    } else {
-        Lighting::Night
+    // Each lighting item toggles its own mode; unchecking one goes back to day.
+    let lighting_item = |label: &str, mode: Lighting| {
+        let on = view.lighting == mode;
+        let target = if on { Lighting::Day } else { mode };
+        Item::new(label, UiAction::SetLighting(target))
+            .checked(on)
+            .entry()
     };
     camera.push(Entry::Separator);
-    camera.push(
-        Item::new("Night Lighting", UiAction::SetLighting(lighting))
-            .checked(night)
-            .entry(),
-    );
+    camera.push(lighting_item("Night Lighting", Lighting::Night));
+    camera.push(lighting_item("Studio Lighting", Lighting::Studio));
     camera.push(Entry::Separator);
     camera.extend([ToolKind::LookAround, ToolKind::PositionCamera].map(tool_item));
     camera.push(
@@ -629,9 +628,21 @@ pub fn items(menus: &[Menu]) -> Vec<&Item> {
     out
 }
 
-/// A stable id for the item: its action's Debug text. The lighting toggle's action flips
-/// between day and night, so it has one id for both; so do the section, X-ray and Hidden
-/// Geometry toggles.
+/// A stable id for the item: its action's Debug text, except for the lighting toggles, which
+/// are told apart by their labels (see `item_id`).
+#[cfg(any(target_os = "macos", test))]
+pub fn item_key(item: &Item) -> String {
+    match item.action {
+        UiAction::SetLighting(_) if item.label == "Studio Lighting" => {
+            "ToggleStudioLighting".into()
+        }
+        _ => item_id(&item.action),
+    }
+}
+
+/// A stable id for an action: its Debug text. The lighting toggle's action flips between its
+/// mode and day, so it has one id for both (the Night Lighting item's; `item_key` gives the
+/// Studio Lighting item its own); so do the section, X-ray and Hidden Geometry toggles.
 #[cfg(any(target_os = "macos", test))]
 pub fn item_id(action: &UiAction) -> String {
     match action {

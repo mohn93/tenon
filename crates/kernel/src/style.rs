@@ -12,6 +12,11 @@ use crate::ids::StyleId;
 use crate::page::PageView;
 use crate::scene::{Scene, SceneChange, Step};
 
+/// The ambient occlusion radius, in meters.
+pub const AO_RADIUS: std::ops::RangeInclusive<f32> = 0.001..=100.0;
+/// The ambient occlusion strength.
+pub const AO_STRENGTH: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+
 /// The longest style name, in characters (after trimming).
 pub const MAX_STYLE_NAME: usize = 100;
 
@@ -119,6 +124,35 @@ pub struct Fog {
     pub color: FogColor,
 }
 
+/// Ambient occlusion: creases and corners shade darker, as ambient light reaches them less.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, default)]
+pub struct AmbientOcclusion {
+    pub on: bool,
+    /// How far from a surface other surfaces shade it, in meters, 0.001 to 100.
+    pub radius: f32,
+    /// How dark the shading goes, 0 to 2 (1: a right-angled inside corner halves the ambient
+    /// and diffuse light).
+    pub strength: f32,
+}
+
+impl Default for AmbientOcclusion {
+    fn default() -> Self {
+        AmbientOcclusion {
+            on: false,
+            radius: 0.25,
+            strength: 1.0,
+        }
+    }
+}
+
+impl AmbientOcclusion {
+    /// Whether this is the default (off, 0.25 m, strength 1): such a style is saved without it.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// What a style changes about how a view looks. The default is today's look.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
@@ -129,6 +163,9 @@ pub struct StyleSettings {
     pub sky: Option<[u8; 3]>,
     pub ground: Option<Ground>,
     pub fog: Option<Fog>,
+    /// Ambient occlusion (a saved file leaves it out while it is the default, see
+    /// `data::StyleData`).
+    pub ambient_occlusion: AmbientOcclusion,
 }
 
 impl Default for StyleSettings {
@@ -139,6 +176,7 @@ impl Default for StyleSettings {
             sky: None,
             ground: None,
             fog: None,
+            ambient_occlusion: AmbientOcclusion::default(),
         }
     }
 }
@@ -173,6 +211,9 @@ impl StyleSettings {
         if let Some(g) = &self.ground {
             check_range("the ground opacity", g.opacity, &(0.0..=1.0))?;
         }
+        let ao = &self.ambient_occlusion;
+        check_range("the ambient occlusion radius", ao.radius, &AO_RADIUS)?;
+        check_range("the ambient occlusion strength", ao.strength, &AO_STRENGTH)?;
         if let Some(f) = &self.fog
             && (!(f.start.is_finite() && f.end.is_finite()) || f.start < 0.0 || f.start >= f.end)
         {

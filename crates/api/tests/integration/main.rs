@@ -6,5 +6,6 @@ mod editor;
 mod hub;
 mod mcp;
 mod probe;
+mod render_options;
 mod roots;
 mod socket;

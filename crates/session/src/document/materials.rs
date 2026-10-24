@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kernel::{
-    EntityId, KernelError, MAX_TEXTURE_SIZE, MIN_TEXTURE_SIZE, Material, MaterialEdit, MaterialId,
-    Scene, SceneChange, Side, Texture,
+    DEFAULT_METALNESS, DEFAULT_ROUGHNESS, EntityId, KernelError, MAX_TEXTURE_SIZE,
+    MIN_TEXTURE_SIZE, Material, MaterialEdit, MaterialId, Scene, SceneChange, Side, Texture,
 };
 
 use super::Document;
@@ -27,7 +27,7 @@ impl Document {
         color: Option<[u8; 3]>,
         opacity: Option<f32>,
         texture: Option<&TextureSource>,
-        emission: Option<f32>,
+        (emission, metalness, roughness): (Option<f32>, Option<f32>, Option<f32>),
         existing: ExistingMaterial,
     ) -> Result<SceneChange, CommandError> {
         self.existing_material = None;
@@ -54,6 +54,8 @@ impl Document {
                     opacity,
                     texture: None,
                     emission,
+                    metalness,
+                    roughness,
                 },
                 texture.map(Some),
             )?;
@@ -62,7 +64,8 @@ impl Document {
         }
         if let (Some(id), ExistingMaterial::Reuse) = (found, existing) {
             // Only the ranges of what is given are checked; a texture is not read.
-            Scene::check_material_ranges(opacity, emission).map_err(|e| material_error(e, None))?;
+            Scene::check_material_ranges(opacity, emission, metalness, roughness)
+                .map_err(|e| material_error(e, None))?;
             self.existing_material = Some(id);
             return Ok(SceneChange::default());
         }
@@ -91,6 +94,8 @@ impl Document {
             opacity: opacity.unwrap_or(1.0),
             texture,
             emission: emission.unwrap_or(0.0),
+            metalness: metalness.unwrap_or(DEFAULT_METALNESS),
+            roughness: roughness.unwrap_or(DEFAULT_ROUGHNESS),
         };
         self.scene
             .add_material_from(material)
@@ -198,6 +203,8 @@ impl Document {
                     color: m.color,
                     opacity: m.opacity,
                     emission: m.emission,
+                    metalness: m.metalness,
+                    roughness: m.roughness,
                     texture: m.texture.as_ref().map(|t| TextureInfo {
                         width: t.width,
                         height: t.height,
