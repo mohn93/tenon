@@ -39,8 +39,14 @@ pub struct SunLight {
 impl SunLight {
     /// The sun of `doc`'s shadow settings, or None when shadows are off.
     pub fn of(doc: &session::Document) -> Option<Self> {
+        Self::with_shadows(doc, doc.shadows.on)
+    }
+
+    /// Like [`SunLight::of`] with the shadows on or off as `on` says, whatever `doc` has (its
+    /// date, time and light levels stay).
+    pub fn with_shadows(doc: &session::Document, on: bool) -> Option<Self> {
         let shadows = doc.shadows;
-        shadows.on.then(|| Self {
+        on.then(|| Self {
             direction: doc.sun().direction.as_vec3(),
             light: f32::from(shadows.light) / 100.0,
             dark: f32::from(shadows.dark) / 100.0,

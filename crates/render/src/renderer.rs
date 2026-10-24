@@ -754,6 +754,9 @@ pub struct Renderer {
     model_style: Option<StyleSettings>,
     /// Printing: white paper, no canvas gradient, ground grid or axes.
     print: bool,
+    /// Cleared to alpha 0 with no canvas, ground grid or axes: see
+    /// `set_transparent_background`.
+    transparent: bool,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
     /// The grid and the axes in the style's colors (see `set_style`) along the drawing axes
@@ -1450,6 +1453,7 @@ impl Renderer {
             style: ViewStyle::CLASSIC,
             model_style: None,
             print: false,
+            transparent: false,
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
@@ -1965,6 +1969,15 @@ impl Renderer {
         self.print = on;
     }
 
+    /// Draws the frames from now on on a transparent background (or, off, on the style's): the
+    /// target is cleared to alpha 0 and the canvas gradient, the ground grid and the axes stay
+    /// out, so what is drawn (faces, edges, guides, the sun's shadow on the ground) is all that
+    /// has alpha. Antialiased edges come out with premultiplied color: the color already
+    /// multiplied by the coverage in alpha.
+    pub fn set_transparent_background(&mut self, on: bool) {
+        self.transparent = on;
+    }
+
     /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
     /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild; the grid
     /// and axes are rebuilt only when their colors change.
@@ -2174,6 +2187,8 @@ impl Renderer {
 
         let [r, g, b, a] = if self.print {
             [1.0; 4]
+        } else if self.transparent {
+            [0.0; 4]
         } else {
             background(self.lighting, &self.style, canvas_style.as_ref()).map(f64::from)
         };
@@ -2221,7 +2236,7 @@ impl Renderer {
                     }
                     None => self.style.has_gradient(),
                 };
-                if !self.print && self.lighting != Lighting::Night && canvas {
+                if !self.print && !self.transparent && self.lighting != Lighting::Night && canvas {
                     pass.set_pipeline(&self.canvas_pipeline);
                     pass.draw(0..3, 0..1);
                 }
@@ -2252,7 +2267,7 @@ impl Renderer {
                         pass.draw(0..count, 0..1);
                     }
                 };
-                if self.print {
+                if self.print || self.transparent {
                     sun_ground(&mut pass);
                 } else {
                     draw(

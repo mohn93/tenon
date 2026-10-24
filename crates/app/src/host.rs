@@ -6,15 +6,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use api::{
-    ApiRoots, Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, ToolInput,
-    ToolInputError, ToolInputResult, ToolInputStopped, ToolName, no_gpu_for_printing, snap_name,
+    ApiRoots, Dialog, EditorCommand, EditorState, Host, Hover, Issued, PhaseName, RenderOptions,
+    ToolInput, ToolInputError, ToolInputResult, ToolInputStopped, ToolName, no_gpu_for_printing,
+    snap_name,
 };
 use render::Snapshotter;
 use render::print::{Printed, render_pdf};
 use session::print::PrintSpec;
 use session::{
-    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Lighting, Origin,
-    Outcome,
+    BatchCommand, BatchError, Camera, Command, CommandError, Document, ErrorKind, Origin, Outcome,
 };
 use tools::Phase;
 
@@ -241,32 +241,32 @@ impl Host for AppHost<'_> {
         })
     }
 
-    fn render_view(
-        &mut self,
-        camera: &Camera,
-        lighting: Lighting,
-        width: u32,
-        height: u32,
-    ) -> Option<Vec<u8>> {
+    fn render_view(&mut self, camera: &Camera, options: &RenderOptions) -> Option<Vec<u8>> {
         let doc = self.editor.doc();
-        let snapshotter = self.offscreen.get()?;
-        snapshotter.set_color_by_tag(doc.color_by_tag);
-        snapshotter.set_glass_view(render::scene::GlassView {
+        let s = self.offscreen.get()?;
+        s.set_color_by_tag(doc.color_by_tag);
+        s.set_glass_view(render::scene::GlassView {
             x_ray: doc.x_ray,
             hidden_geometry: doc.hidden_geometry,
         });
-        snapshotter.set_section_display(doc.section_display);
-        snapshotter.set_sun(render::SunLight::of(doc));
-        snapshotter.set_model_style(doc.chosen_style());
-        snapshotter.capture(
+        s.set_section_display(options.section);
+        s.set_sun(render::SunLight::with_shadows(doc, options.shadows));
+        s.set_model_style(options.style.as_ref());
+        s.set_transparent_background(options.transparent);
+        s.set_pixels_per_point(options.supersample as f32);
+        let (width, height) = options.drawn();
+        let pixels = s.capture(
             doc.scene(),
             doc.context(),
             doc.selection(),
             camera,
-            lighting,
+            options.lighting,
             width,
             height,
-        )
+        );
+        s.set_transparent_background(false);
+        s.set_pixels_per_point(1.0);
+        pixels
     }
 
     fn render_pdf(&mut self, spec: &PrintSpec) -> Result<Printed, CommandError> {
