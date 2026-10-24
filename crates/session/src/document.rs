@@ -52,6 +52,7 @@ mod scenes;
 mod sections;
 mod shadows;
 mod soften;
+mod solid;
 mod styles;
 mod tags;
 mod text3d;
@@ -199,6 +200,8 @@ pub struct Document {
     purged: Option<usize>,
     /// The definitions the last `make_unique` made, until its outcome takes them.
     made_definitions: Option<Vec<DefinitionId>>,
+    /// Set when the last solid boolean left nothing, until its outcome takes it.
+    solid_empty: Option<bool>,
     /// What the last `add_3d_text` made, until its outcome takes it.
     text_report: Option<Text3dReport>,
     /// The material an `insert_library_item` of a material added or reused, for its outcome.
@@ -252,6 +255,7 @@ impl Document {
             positioned: None,
             purged: None,
             made_definitions: None,
+            solid_empty: None,
             text_report: None,
             library_material: None,
             existing_material: None,
@@ -499,6 +503,10 @@ impl Document {
             outcome.purged = self.purged.take();
             outcome.definitions = self.made_definitions.take();
             outcome.placed = self.placed_instances(&outcome.changes);
+            outcome.empty = self.solid_empty.take();
+            if outcome.empty.is_some() {
+                outcome.placed = Some(Vec::new());
+            }
             outcome.text_3d = self.text_report.take();
             outcome.material = self.library_material.take();
             if let Some(m) = self.existing_material.take()
@@ -830,6 +838,9 @@ impl Document {
             | Command::SoftenEdges { .. }
             | Command::SoftenByAngle { .. }
             | Command::IntersectFaces { .. }
+            | Command::SolidUnion { .. }
+            | Command::SolidSubtract { .. }
+            | Command::SolidIntersect { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -1239,6 +1250,13 @@ impl Document {
                 self.soften_by_angle_changes(ids, *max_angle_deg)
             }
             Command::IntersectFaces { ids, with } => self.intersect_faces_changes(ids, *with),
+            Command::SolidUnion { ids } => {
+                self.solid_all_changes(kernel::boolean::BooleanOp::Union, ids)
+            }
+            Command::SolidSubtract { target, tools } => self.solid_subtract_changes(*target, tools),
+            Command::SolidIntersect { ids } => {
+                self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
+            }
             Command::PositionTexture {
                 ids,
                 offset,
@@ -1392,7 +1410,12 @@ impl Document {
                         }
                         applied.push(c);
                         names.push(command.name());
-                        let placed = self.placed_instances(&summary);
+                        let empty = self.solid_empty.take();
+                        let placed = if empty.is_some() {
+                            Some(Vec::new())
+                        } else {
+                            self.placed_instances(&summary)
+                        };
                         Outcome {
                             changes: summary,
                             import: self.import_report.take(),
@@ -1408,6 +1431,7 @@ impl Document {
                             text_3d: self.text_report.take(),
                             material: self.library_material.take(),
                             units: (self.units != units_then).then_some(self.units),
+                            empty,
                         }
                     }),
                     None if matches!(

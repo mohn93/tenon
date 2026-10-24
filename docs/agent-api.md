@@ -61,7 +61,7 @@ all commands and results.
 
 | Method | Params | Result |
 |---|---|---|
-| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `make_group`, `make_component` and the `add_<primitive>` commands as group or component (the one new definition), `placed` (the instances left in the open context, in creation order; present whenever the command placed instances, absent otherwise), e.g. for `copy`, `copy_along_path`, `rotate` with `copies`, `make_group`, `make_component`, the primitives as group or component, `explode`, `paste`, `insert_library_item`, `place_instance` and `import`, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
+| `execute` | a Command, e.g. `{"type": "add_edge", "start": [0,0,0], "end": [1,0,0]}` | `{changes, revision}`, plus `import` for an `import` (see Import below), `soften` for `soften_edges` and `soften_by_angle`, `changed` (the ids changed) for `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces` and `flip` (see Hide and unhide and Reverse and orient faces below), `orient` for `orient_faces`, `intersect` for `intersect_faces` (see Intersect Faces below), `positioned` for `position_texture`, `purged` for `purge_definitions`, `definitions` for `make_unique` (see Make Unique and Flip Along below), `make_group`, `make_component` and the `add_<primitive>` commands as group or component (the one new definition), `placed` (the instances left in the open context, in creation order; present whenever the command placed instances, absent otherwise), e.g. for `copy`, `copy_along_path`, `rotate` with `copies`, `make_group`, `make_component`, the primitives as group or component, `explode`, `paste`, `insert_library_item`, `place_instance`, `import` and `solid_union`, `solid_subtract` and `solid_intersect` (see Solid Tools below), `empty: true` for a `solid_subtract` or `solid_intersect` that left nothing, `text_3d` for `add_3d_text` (see 3D text below), and `units` (the display units now) for `set_units` and an `undo` or `redo` of a `set_units` step |
 | `batch` | `{"commands": [...], "atomic": true}` | `{outcomes, changes, revision}`; `changes` is the net effect of the whole batch (made then erased is absent); atomic = one undo step, all or nothing. Steps made through the API are `agent` steps |
 | `query` | a Query, see the table below | the QueryResult |
 | `render_view` | `{"width": 640, "height": 400, "camera": {"eye": [...], "target": [...]}}` (camera optional; it also takes `fov_y_deg`, `up` and `projection` as `set_camera` does; `lighting`, `day` or `night`, is optional and defaults to the document's) | `{width, height, png_base64}` |
@@ -116,7 +116,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`, `look_around`, `position_camera`,
 `set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_style`, `set_location`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -483,6 +483,40 @@ the edges made (the halves of an edge it cut included), the faces that existed b
 split (they no longer exist), and the faces the splits made. All can be batch references
 (`$0:e*`, `$0:f*` name the made edges and faces). A face that only gained a hole keeps its id (it is `modified` in `changes`, not listed in `split_faces`); the window's status counts it as split. No crossings is a success with empty lists and
 no undo step.
+
+### Solid Tools
+
+| Command | Effect |
+|---|---|
+| `{"type": "solid_union", "ids": ["i4", "i9"]}` | One new group holding everything inside any of the solids `ids` (2 or more), as one undo step labelled `solid_union`. |
+| `{"type": "solid_subtract", "target": "i4", "tools": ["i9", "i12"]}` | `target` minus each of `tools` (1 or more) in order, as one undo step labelled `solid_subtract`: bores, pockets, cut-aways. Tools lying apart from each other are cut in one pass. |
+| `{"type": "solid_intersect", "ids": ["i4", "i9"]}` | What lies inside every one of `ids` (2 or more), as one undo step labelled `solid_intersect`. |
+
+Every operand is a group or component instance of the open context and must be a solid (see the
+`solid` query); one that is not is `invalid_input` naming it and the reason ("i9 is not a solid:
+edge e12 bounds 1 face"). Fewer than 2 `ids`, empty `tools`, a target that is also a tool, an id
+named twice or an id that is not an instance are `invalid_input`; unknown ids are `not_found`.
+The result is a new group (never a component), placed with the transform of the first operand
+(the target for `solid_subtract`), with its material, tag and hidden flag and named as its
+definition was (a component's name gets no "#n"); it becomes the selection. All operands are
+erased (target and tools for `solid_subtract`). The outcome's `placed` holds the new group and
+`changes.deleted` the erased instances. When nothing is left (solids that share no volume, a tool
+that removes everything) no group is made, the operands are still erased, `placed` is empty and the
+outcome has `empty: true`.
+
+Faces keep their front and back materials and texture positions; a face side without a material
+that showed an operand's instance material gets that material (unless it is the result's own). The
+faces of a subtracted tool that bound the cut are turned over to face out of the result and keep
+their front material on the front, so the tool's material shows on the cut. Faces where two solids
+touch are kept once (union, intersect) or dropped (union where they face each other); seams the
+operation leaves between coplanar faces that look alike are removed (two boxes sharing a face
+unite into one box of six faces). Soft and hidden edges stay so; edges along a cut are hard.
+Curves split by a cut stay curves where their pieces still form chains.
+
+The result must be closed. If numerical trouble would leave it open (solids touching only along
+an edge, which would leave an edge bounding four faces; nearly tangent faces; very thin slivers), the command is `invalid_input` ("the
+result would not be a solid") and changes nothing. A batch can refer to `ids`, `target` and
+`tools`.
 
 ### Guides
 

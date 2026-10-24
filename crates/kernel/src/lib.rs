@@ -3,6 +3,7 @@
 
 mod annotation;
 mod axes;
+pub mod boolean;
 mod clip;
 mod connected;
 mod curves;

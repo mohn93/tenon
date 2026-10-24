@@ -51,6 +51,7 @@ mod skp_export;
 mod small_tools;
 mod soften;
 mod solid;
+mod solid_tools;
 mod styles;
 mod sun;
 mod tags;

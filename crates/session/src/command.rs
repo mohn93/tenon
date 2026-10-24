@@ -909,6 +909,27 @@ pub enum Command {
         #[serde(default)]
         with: IntersectScope,
     },
+    /// Solid Tools Union, as one undo step: the groups and components `ids` (2 or more,
+    /// instances of the open context, each a solid: see the `solid` query) become one new
+    /// group holding everything inside any of them, placed with the first one's transform,
+    /// material, tag and hidden flag and its definition's name; the operands are erased.
+    /// Faces keep their materials; seams between coplanar faces the operation made are
+    /// removed. `placed` holds the new group. A result that would not be closed is
+    /// `invalid_input` ("the result would not be a solid") and changes nothing.
+    SolidUnion { ids: Vec<EntityId> },
+    /// Solid Tools Subtract, as one undo step: `target` minus each of `tools` (1 or more) in
+    /// order, under the rules of `solid_union`; target and tools are erased. The tools' faces
+    /// that bound the cut are turned over, with their front material on the cut. When
+    /// nothing is left, no group is made: the outcome has `empty: true` and `placed` is
+    /// empty.
+    SolidSubtract {
+        target: EntityId,
+        tools: Vec<EntityId>,
+    },
+    /// Solid Tools Intersect, as one undo step: what lies inside every one of `ids` (2 or
+    /// more), under the rules of `solid_union`. When the solids share no volume, no group is
+    /// made and the operands are still erased: the outcome has `empty: true`.
+    SolidIntersect { ids: Vec<EntityId> },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's
@@ -1522,6 +1543,10 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
+    /// True when a `solid_subtract` or `solid_intersect` left nothing (no group was made; the
+    /// operands were still erased); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty: Option<bool>,
     /// The display units, after a command that changed them (`set_units`, or an undo or redo
     /// of such a step); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]

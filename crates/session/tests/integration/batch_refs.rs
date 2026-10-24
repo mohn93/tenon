@@ -243,6 +243,7 @@ fn reference_keys_cover_every_id_field() {
                 || matches!(
                     (key.as_str(), name),
                     ("path", "open_path" | "follow_me" | "copy_along_path")
+                        | ("target" | "tools", "solid_subtract")
                         | ("a" | "b", "add_dimension")
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")
