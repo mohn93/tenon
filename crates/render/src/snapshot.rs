@@ -17,6 +17,9 @@ pub struct Snapshotter {
     software: bool,
 }
 
+/// Captures of more pixels than this free their render targets when they are done.
+const LARGE_CAPTURE_PIXELS: u64 = 4096 * 4096;
+
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl Snapshotter {
@@ -191,6 +194,10 @@ impl Snapshotter {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.set_lighting(lighting);
         self.renderer.render(&view, (width, height), &camera, &[]);
+        // A supersampled capture's targets (several hundred MB) are not kept for the next one.
+        if u64::from(width) * u64::from(height) > LARGE_CAPTURE_PIXELS {
+            self.renderer.release_targets();
+        }
 
         // Texture-to-buffer copies need rows padded to a multiple of 256 bytes.
         let row = width * 4;

@@ -956,11 +956,21 @@ fn vs_sun_ground(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> 
 
 @fragment
 fn fs_sun_ground(in: GroundOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(vec3<f32>(sun_ground_shade(in)), 1.0);
+}
+
+// On a transparent background the shadow is black with the alpha the shade takes away.
+@fragment
+fn fs_sun_ground_clear(in: GroundOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - sun_ground_shade(in));
+}
+
+fn sun_ground_shade(in: GroundOut) -> f32 {
     let facing = lighting.sun.z;
     let lit = sun_lit(in.world, vec3<f32>(0.0, 0.0, 1.0), facing);
     let sunny = lighting.sun_levels.y + lighting.sun_levels.x * facing;
     let ratio = lighting.sun_levels.y / max(sunny, 1e-4);
     // A shadow fades out in the fog with what it falls on.
     let shade = mix(ratio, 1.0, lit);
-    return vec4<f32>(vec3<f32>(mix(shade, 1.0, fog_amount(eye_distance(in.world)))), 1.0);
+    return mix(shade, 1.0, fog_amount(eye_distance(in.world)));
 }

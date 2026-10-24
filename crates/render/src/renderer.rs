@@ -676,6 +676,7 @@ pub struct Renderer {
     canvas_pipeline: wgpu::RenderPipeline,
     /// The ground's sun shadows, multiplied over the background.
     sun_ground_pipeline: wgpu::RenderPipeline,
+    sun_ground_clear_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
     /// The fill of closed cuts, flat, nearer than the faces it lies on.
     cut_fill_pipeline: wgpu::RenderPipeline,
@@ -1122,7 +1123,16 @@ impl Renderer {
                 write: false,
                 compare: wgpu::CompareFunction::Greater,
             },
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            // Alpha accumulates as coverage (source over), so see-through faces on a
+            // transparent background get the alpha they show, not its square.
+            Some(wgpu::BlendState {
+                color: wgpu::BlendState::ALPHA_BLENDING.color,
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
         );
         let edge_pipeline = pipeline(
             "edges",
@@ -1228,6 +1238,19 @@ impl Renderer {
                     operation: wgpu::BlendOperation::Add,
                 },
             }),
+        );
+        // The same on a transparent background: black with the alpha the shadow gives.
+        let sun_ground_clear_pipeline = pipeline(
+            "sun ground clear",
+            "vs_sun_ground",
+            "fs_sun_ground_clear",
+            &lines_only,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Always,
+            },
+            Some(wgpu::BlendState::ALPHA_BLENDING),
         );
         let guide_pipeline = pipeline(
             "guides",
@@ -1411,6 +1434,7 @@ impl Renderer {
             endpoint_pipeline,
             canvas_pipeline,
             sun_ground_pipeline,
+            sun_ground_clear_pipeline,
             guide_pipeline,
             cut_fill_pipeline,
             cut_edge_pipeline,
@@ -1969,6 +1993,12 @@ impl Renderer {
         self.print = on;
     }
 
+    /// Frees the render targets (they are made again at the next frame): for after an
+    /// unusually large capture.
+    pub fn release_targets(&mut self) {
+        self.targets = None;
+    }
+
     /// Draws the frames from now on on a transparent background (or, off, on the style's): the
     /// target is cleared to alpha 0 and the canvas gradient, the ground grid and the axes stay
     /// out, so what is drawn (faces, edges, guides, the sun's shadow on the ground) is all that
@@ -2263,7 +2293,12 @@ impl Renderer {
                 // print) so they darken with the ground, and under the vertical axis.
                 let sun_ground = |pass: &mut wgpu::RenderPass| {
                     if let (Some(count), Some((ground, _))) = (ground_shadows, &self.sun_ground) {
-                        bind(pass, &self.sun_ground_pipeline, ground);
+                        let pipeline = if self.transparent {
+                            &self.sun_ground_clear_pipeline
+                        } else {
+                            &self.sun_ground_pipeline
+                        };
+                        bind(pass, pipeline, ground);
                         pass.draw(0..count, 0..1);
                     }
                 };

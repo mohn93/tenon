@@ -315,3 +315,82 @@ fn transparent_background_leaves_undrawn_pixels_clear() {
     let bad = refused(&mut h, json!({"background": "red"}));
     assert_eq!(bad["error"]["code"], codes::INVALID_PARAMS, "{bad}");
 }
+
+#[test]
+fn see_through_faces_keep_their_alpha_on_a_transparent_background() {
+    let mut h = HeadlessHost::new();
+    cube(&mut h);
+    let glass = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_material", "name": "Glass", "color": [40, 40, 240], "opacity": 0.5}),
+    );
+    let material = glass["result"]["changes"]["materials"][0].clone();
+    assert!(material.is_string(), "{glass}");
+    // A panel over half the cube and half the empty ground beside it, seen from above.
+    let panel = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_rectangle", "corner": [0, -1, 3], "opposite": [3, 1, 3]}),
+    );
+    let face = panel["result"]["changes"]["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|id| id.as_str().unwrap().starts_with('f'))
+        .unwrap()
+        .clone();
+    let painted = call(
+        &mut h,
+        "execute",
+        json!({"type": "paint", "ids": [face], "material": material, "side": "both"}),
+    );
+    assert!(painted.get("error").is_none(), "{painted}");
+    let top = json!({"eye": [0, 0, 10], "target": [0, 0, 0], "up": [0, 1, 0],
+                     "projection": "parallel"});
+    let Some(image) = render(
+        &mut h,
+        json!({"camera": top, "background": "transparent", "width": 128, "height": 96}),
+    ) else {
+        return;
+    };
+    let count = |range: std::ops::RangeInclusive<u8>| {
+        image
+            .rgba
+            .chunks(4)
+            .filter(|p| range.contains(&p[3]))
+            .count()
+    };
+    assert!(
+        count(255..=255) > 200,
+        "the box stays opaque under the panel"
+    );
+    assert!(count(124..=132) > 400, "the panel alone shows half alpha");
+    // The square of the opacity (alpha 64) is what the old blend left there.
+    assert!(count(60..=68) < 100, "squared alpha: {}", count(60..=68));
+}
+
+#[test]
+fn the_ground_shadow_has_partial_alpha_on_a_transparent_background() {
+    let mut h = HeadlessHost::new();
+    cube(&mut h);
+    let top = json!({"eye": [0, 0, 12], "target": [0, 0, 0], "up": [0, 1, 0],
+                     "projection": "parallel"});
+    let mut shown = |shadows: bool| {
+        render(
+            &mut h,
+            json!({"camera": top, "background": "transparent", "shadows": shadows}),
+        )
+    };
+    let Some(off) = shown(false) else {
+        return;
+    };
+    let on = shown(true).unwrap();
+    let partial = |i: &Image| i.rgba.chunks(4).filter(|p| p[3] > 0 && p[3] < 255).count();
+    assert!(
+        partial(&on) > partial(&off) + 100,
+        "{} with shadows, {} without",
+        partial(&on),
+        partial(&off)
+    );
+}

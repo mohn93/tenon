@@ -19,7 +19,10 @@ const H: u32 = 120;
 fn spheres() -> Document {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("finish");
     std::fs::create_dir_all(&dir).expect("create folder");
-    let path = dir.join(format!("spheres_{}.obj", std::process::id()));
+    // One file per call: the tests run in parallel and each imports and deletes its own.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("spheres_{}_{n}.obj", std::process::id()));
     std::fs::write(&path, two_spheres_obj()).expect("write spheres");
     let mut d = doc();
     run(

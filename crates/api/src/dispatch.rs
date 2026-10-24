@@ -651,7 +651,7 @@ pub fn describe() -> Value {
                 "result_schema": query_result_schema(),
             },
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\"}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\"}",
                 "result": "{width, height, png_base64}",
                 "notes": "does not move the document camera or change its lighting",
                 "params_schema": schema::<RenderParams>(),
