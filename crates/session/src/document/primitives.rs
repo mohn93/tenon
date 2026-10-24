@@ -1,4 +1,5 @@
-//! Solid primitives: `add_box`, `add_cylinder`, `add_tube`, `add_cone` and `add_prism`.
+//! Solid primitives: `add_box`, `add_cylinder`, `add_tube`, `add_cone`, `add_prism`, `add_sphere` and
+//! `add_torus`.
 
 use std::collections::BTreeSet;
 
@@ -141,6 +142,35 @@ impl Document {
         )
         .map_err(refusal)?;
         self.place_solid("Prism", &solid, at, options)
+    }
+
+    pub(super) fn add_sphere_changes(
+        &mut self,
+        center: Base,
+        (radius, segments): (f64, Option<u32>),
+        options: Placement<'_>,
+    ) -> Result<SceneChange, CommandError> {
+        let (at, _) = frame(center)?;
+        let solid =
+            Solid::sphere(radius, segments.unwrap_or(kernel::DEFAULT_SEGMENTS)).map_err(refusal)?;
+        self.place_solid("Sphere", &solid, at, options)
+    }
+
+    pub(super) fn add_torus_changes(
+        &mut self,
+        center: Base,
+        (radius, tube_radius, segments, tube_segments): (f64, f64, Option<u32>, Option<u32>),
+        options: Placement<'_>,
+    ) -> Result<SceneChange, CommandError> {
+        let (at, _) = frame(center)?;
+        let solid = Solid::torus(
+            radius,
+            tube_radius,
+            segments.unwrap_or(kernel::DEFAULT_SEGMENTS),
+            tube_segments.unwrap_or(kernel::DEFAULT_TUBE_SEGMENTS),
+        )
+        .map_err(refusal)?;
+        self.place_solid("Torus", &solid, at, options)
     }
 
     /// Puts `solid` (in its own frame) at `at` in the open context: as a new group or

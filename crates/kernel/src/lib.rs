@@ -72,7 +72,8 @@ pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op
 pub use orient::OrientReport;
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView, SHADOW_YEARS, Shadows};
 pub use primitives::{
-    DEFAULT_SEGMENTS, DEFAULT_SIDES, MAX_SEGMENTS, MIN_LENGTH, MIN_SEGMENTS, PrimitiveError, Solid,
+    DEFAULT_SEGMENTS, DEFAULT_SIDES, DEFAULT_TUBE_SEGMENTS, MAX_SEGMENTS, MIN_LENGTH, MIN_SEGMENTS,
+    PrimitiveError, Solid,
 };
 pub use scene::{Definition, DefinitionKind, MeshId, Parts, Scene, SceneChange, Step};
 pub use section::SectionPlane;

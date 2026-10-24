@@ -796,6 +796,8 @@ impl Document {
             | Command::AddTube { .. }
             | Command::AddCone { .. }
             | Command::AddPrism { .. }
+            | Command::AddSphere { .. }
+            | Command::AddTorus { .. }
             | Command::PurgeDefinitions {}
             | Command::AddMaterial { .. }
             | Command::ChangeMaterial { .. }
@@ -1068,6 +1070,34 @@ impl Document {
             } => self.add_prism_changes(
                 (*base, *axis),
                 (*radius, *height, *sides, *direction),
+                placement_of(*placement, name, *material),
+            ),
+            Command::AddSphere {
+                center,
+                axis,
+                radius,
+                segments,
+                placement,
+                name,
+                material,
+            } => self.add_sphere_changes(
+                (*center, *axis),
+                (*radius, *segments),
+                placement_of(*placement, name, *material),
+            ),
+            Command::AddTorus {
+                center,
+                axis,
+                radius,
+                tube_radius,
+                segments,
+                tube_segments,
+                placement,
+                name,
+                material,
+            } => self.add_torus_changes(
+                (*center, *axis),
+                (*radius, *tube_radius, *segments, *tube_segments),
                 placement_of(*placement, name, *material),
             ),
             Command::PurgeDefinitions {} => {

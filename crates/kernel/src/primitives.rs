@@ -21,6 +21,8 @@ use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
 pub const MIN_LENGTH: f64 = 10.0 * LENGTH_TOL;
 /// Sides or segments a primitive gets when none are asked for.
 pub const DEFAULT_SEGMENTS: u32 = 24;
+/// Segments around the tube a torus gets when none are asked for.
+pub const DEFAULT_TUBE_SEGMENTS: u32 = 12;
 /// Sides a prism gets when none are asked for.
 pub const DEFAULT_SIDES: u32 = 6;
 /// Longest a dimension may be: the session's coordinate limit, so a too large length is
@@ -384,6 +386,108 @@ impl Solid {
         s.ring(bottom, false);
         Ok(s)
     }
+
+    /// A UV sphere centred at the origin with its poles on +Z and -Z: `segments` around and
+    /// `max(2, segments / 2)` rings, triangles at the poles and planar quads between; every
+    /// edge is soft.
+    pub fn sphere(radius: f64, segments: u32) -> Result<Solid, PrimitiveError> {
+        check_segments("segments", segments)?;
+        check_radius("radius", radius, segments)?;
+        let rings = (segments / 2).max(2) as usize;
+        // The shortest edges lie next to the poles.
+        let step = PI / rings as f64;
+        if 2.0 * radius * (step / 2.0).sin() < MIN_LENGTH
+            || 2.0 * radius * step.sin() * (PI / segments as f64).sin() < MIN_LENGTH
+        {
+            return invalid("radius is too small for that many segments");
+        }
+        let n = segments as usize;
+        let mut s = Solid::default();
+        let north = s.point(DVec3::new(0.0, 0.0, radius));
+        let mut latitudes: Vec<Vec<usize>> = Vec::new();
+        for k in 1..rings {
+            let theta = step * k as f64;
+            let z = if 2 * k == rings {
+                0.0
+            } else {
+                radius * theta.cos()
+            };
+            latitudes.push(
+                ring_points(radius * theta.sin(), z, segments, 0.0)
+                    .into_iter()
+                    .map(|p| s.point(p))
+                    .collect(),
+            );
+        }
+        let south = s.point(DVec3::new(0.0, 0.0, -radius));
+        for j in 0..n {
+            let (a, b) = (j, (j + 1) % n);
+            s.face(vec![north, latitudes[0][a], latitudes[0][b]]);
+        }
+        for pair in latitudes.windows(2) {
+            s.walls(&pair[1], &pair[0], false, false);
+        }
+        let last = &latitudes[latitudes.len() - 1];
+        for j in 0..n {
+            s.face(vec![south, last[(j + 1) % n], last[j]]);
+        }
+        s.soften_all();
+        Ok(s)
+    }
+
+    /// A torus about +Z centred at the origin: the tube's circle of `tube_radius` swept around
+    /// a circle of `radius`, `segments` around the axis and `tube_segments` around the tube;
+    /// planar quads, every edge soft.
+    pub fn torus(
+        radius: f64,
+        tube_radius: f64,
+        segments: u32,
+        tube_segments: u32,
+    ) -> Result<Solid, PrimitiveError> {
+        check_segments("segments", segments)?;
+        check_segments("tube_segments", tube_segments)?;
+        check_length("radius", radius)?;
+        check_radius("tube_radius", tube_radius, tube_segments)?;
+        if radius - tube_radius < MIN_LENGTH {
+            return invalid("tube_radius must be smaller than radius");
+        }
+        // The inner equator is the tightest ring.
+        if 2.0 * (radius - tube_radius) * (PI / segments as f64).sin() < MIN_LENGTH {
+            return invalid("radius is too small for that many segments");
+        }
+        let mut s = Solid::default();
+        let rings: Vec<Vec<usize>> = (0..tube_segments)
+            .map(|j| {
+                let b = TAU * j as f64 / tube_segments as f64;
+                ring_points(
+                    radius + tube_radius * b.cos(),
+                    tube_radius * b.sin(),
+                    segments,
+                    0.0,
+                )
+                .into_iter()
+                .map(|p| s.point(p))
+                .collect()
+            })
+            .collect();
+        let k = rings.len();
+        for j in 0..k {
+            s.walls(&rings[j], &rings[(j + 1) % k], false, false);
+        }
+        s.soften_all();
+        Ok(s)
+    }
+
+    /// Makes every edge of every face soft.
+    fn soften_all(&mut self) {
+        for f in &self.faces {
+            for l in std::iter::once(&f.outer).chain(&f.holes) {
+                for i in 0..l.len() {
+                    self.soft.insert(pair(l[i], l[(i + 1) % l.len()]));
+                }
+            }
+        }
+    }
 }
 
 impl Model {
@@ -636,5 +740,82 @@ mod tests {
         assert!(msg(Solid::cone(1.0, 1e-9, 1.0, 24)).contains("top_radius"));
         assert!(msg(Solid::prism(1.0, 1.0, 2, 0.0)).contains("sides"));
         assert!(msg(Solid::prism(1.0, 1.0, 361, 0.0)).contains("sides"));
+    }
+
+    #[test]
+    fn sphere_volume_soft_edges_and_planar_quads() {
+        let area = |n: u32, rho: f64| 0.5 * n as f64 * rho * rho * (TAU / n as f64).sin();
+        for (n, rings) in [(24u32, 12u32), (7, 3), (3, 2), (360, 180)] {
+            let r = 1.5;
+            let m = Solid::sphere(r, n).unwrap().to_model();
+            // Planar quads and valid faces.
+            m.validate().unwrap();
+            let rings = rings as usize;
+            assert_eq!(m.faces().count(), n as usize * rings);
+            assert_eq!(soft_count(&m), n as usize * (2 * rings - 1));
+            assert_eq!(m.edges().count(), n as usize * (2 * rings - 1));
+            // Exact volume of the faceted sphere: the bands are frustums of n-gons.
+            let mut exact = 0.0;
+            for k in 0..rings {
+                let th = |k: usize| PI * k as f64 / rings as f64;
+                let (z1, z2) = (r * th(k).cos(), r * th(k + 1).cos());
+                let (a1, a2) = (area(n, r * th(k).sin()), area(n, r * th(k + 1).sin()));
+                exact += (z1 - z2) / 3.0 * (a1 + a2 + (a1 * a2).sqrt());
+            }
+            let v = closed_volume(&m);
+            assert!((v - exact).abs() < 1e-9 * exact, "{n}: {v} vs {exact}");
+            let smooth = 4.0 / 3.0 * PI * r.powi(3);
+            assert!(v < smooth);
+        }
+        let m = Solid::sphere(1.0, 48).unwrap().to_model();
+        let smooth = 4.0 / 3.0 * PI;
+        assert!(closed_volume(&m) > 0.99 * smooth);
+        // Poles lie on the +Z axis.
+        let zs: Vec<f64> = m.vertices().map(|(_, v)| v.pos.z).collect();
+        assert!(zs.iter().any(|z| (z - 1.0).abs() < 1e-12));
+        assert!(zs.iter().any(|z| (z + 1.0).abs() < 1e-12));
+    }
+
+    #[test]
+    fn torus_volume_soft_edges_and_planar_quads() {
+        for (n, k) in [(24u32, 12u32), (3, 3), (36, 7), (360, 360)] {
+            let (big, small) = (3.0, 1.0);
+            let m = Solid::torus(big, small, n, k).unwrap().to_model();
+            m.validate().unwrap();
+            assert_eq!(m.faces().count(), (n * k) as usize);
+            assert_eq!(soft_count(&m), 2 * (n * k) as usize);
+            assert_eq!(m.edges().count(), 2 * (n * k) as usize);
+            let section = 0.5 * k as f64 * small * small * (TAU / k as f64).sin();
+            let exact = n as f64 * (TAU / n as f64).sin() * section * big;
+            let v = closed_volume(&m);
+            assert!((v - exact).abs() < 1e-9 * exact, "{n},{k}: {v} vs {exact}");
+            assert!(v < 2.0 * PI * PI * big * small * small);
+        }
+        let m = Solid::torus(3.0, 1.0, 48, 24).unwrap().to_model();
+        assert!(closed_volume(&m) > 0.98 * 2.0 * PI * PI * 3.0);
+    }
+
+    #[test]
+    fn sphere_and_torus_refuse_bad_dimensions() {
+        let msg = |r: Result<Solid, PrimitiveError>| r.unwrap_err().0;
+        assert!(msg(Solid::sphere(0.0, 24)).contains("radius"));
+        assert!(msg(Solid::sphere(f64::NAN, 24)).contains("radius"));
+        assert!(msg(Solid::sphere(2e6, 24)).contains("radius"));
+        assert!(msg(Solid::sphere(1.0, 2)).contains("segments"));
+        assert!(msg(Solid::sphere(1.0, 361)).contains("segments"));
+        assert!(msg(Solid::sphere(1e-5, 360)).contains("radius"));
+        assert!(msg(Solid::torus(1.0, 1.0, 24, 12)).contains("tube_radius"));
+        assert!(msg(Solid::torus(1.0, 2.0, 24, 12)).contains("tube_radius"));
+        assert!(msg(Solid::torus(1.0, 0.0, 24, 12)).contains("tube_radius"));
+        assert!(msg(Solid::torus(0.0, 0.5, 24, 12)).contains("radius"));
+        assert!(msg(Solid::torus(2e6, 0.5, 24, 12)).contains("radius"));
+        assert!(msg(Solid::torus(1.0, 0.5, 2, 12)).contains("segments"));
+        assert!(msg(Solid::torus(1.0, 0.5, 24, 2)).contains("tube_segments"));
+        assert!(msg(Solid::torus(1.0, 0.5, 24, 361)).contains("tube_segments"));
+        assert!(msg(Solid::torus(1e-4, 0.5e-4, 360, 12)).contains("segments"));
+        for n in [3, 4, 360] {
+            closed_volume(&Solid::sphere(1.0, n).unwrap().to_model());
+            closed_volume(&Solid::torus(1.0, 0.5, n, n).unwrap().to_model());
+        }
     }
 }

@@ -558,6 +558,46 @@ pub enum Command {
         #[serde(default)]
         material: Option<MaterialId>,
     },
+    /// Add a closed UV sphere centered at `center`: `segments` around (default 24, 3 to 360)
+    /// and half as many rings (at least 2), triangles at the poles, which lie along `axis`
+    /// (default +Z). Every edge is soft. Frame and options as `add_cylinder`.
+    AddSphere {
+        #[schemars(with = "ModelPoint")]
+        center: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
+    /// Add a closed torus centered at `center` about `axis` (default +Z): a tube of
+    /// `tube_radius` swept around a circle of `radius` (`0 < tube_radius < radius`),
+    /// `segments` around the axis and `tube_segments` around the tube (each default 24 and
+    /// 12, 3 to 360). Every edge is soft. Frame and options as `add_cylinder`.
+    AddTorus {
+        #[schemars(with = "ModelPoint")]
+        center: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        tube_radius: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+        #[serde(default)]
+        tube_segments: Option<u32>,
+        #[serde(default, rename = "as")]
+        placement: PrimitiveAs,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        material: Option<MaterialId>,
+    },
     /// Remove every definition that no instance places (components left after their last
     /// instance was erased or exploded), and what only they placed.
     PurgeDefinitions {},

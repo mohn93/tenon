@@ -117,6 +117,20 @@ fn cylinder_volume(r: f64, h: f64, n: f64) -> f64 {
     0.5 * n * r * r * (std::f64::consts::TAU / n).sin() * h
 }
 
+/// Volume of the faceted UV sphere: frustums of n-gons between the rings.
+fn sphere_volume(r: f64, n: u32) -> f64 {
+    use std::f64::consts::PI;
+    let rings = (n / 2).max(2);
+    let area = |rho: f64| 0.5 * n as f64 * rho * rho * (2.0 * PI / n as f64).sin();
+    (0..rings)
+        .map(|k| {
+            let t = |k: u32| PI * k as f64 / rings as f64;
+            let (a1, a2) = (area(r * t(k).sin()), area(r * t(k + 1).sin()));
+            (t(k).cos() - t(k + 1).cos()) * r / 3.0 * (a1 + a2 + (a1 * a2).sqrt())
+        })
+        .sum()
+}
+
 #[test]
 fn each_shape_is_a_closed_outward_group() {
     let n = 32.0;
@@ -153,6 +167,20 @@ fn each_shape_is_a_closed_outward_group() {
             json!({"type": "add_prism", "base": [0, 0, 0], "radius": 1, "sides": 6, "height": 2}),
             1.5 * 3f64.sqrt() * 2.0,
             0,
+        ),
+        (
+            json!({"type": "add_sphere", "center": [1, 2, 3], "radius": 2, "segments": 32}),
+            sphere_volume(2.0, 32),
+            31 * 32,
+        ),
+        (
+            json!({"type": "add_torus", "center": [0, 0, 0], "axis": [1, 1, 0], "radius": 3, "tube_radius": 1, "segments": 32, "tube_segments": 10}),
+            32.0 * (std::f64::consts::TAU / 32.0).sin()
+                * 0.5
+                * 10.0
+                * (std::f64::consts::TAU / 10.0).sin()
+                * 3.0,
+            2 * 32 * 10,
         ),
     ];
     for (command, volume, soft) in cases {
@@ -538,6 +566,38 @@ fn invalid_dimensions_are_refused_without_a_step() {
             json!({"type": "add_cone", "base": [0, 0, 0], "radius": 1e-9, "height": 1}),
             "radius",
         ),
+        (
+            json!({"type": "add_sphere", "center": [0, 0, 0], "radius": 0}),
+            "radius",
+        ),
+        (
+            json!({"type": "add_sphere", "center": [0, 0, 0], "radius": 1, "segments": 2}),
+            "segments",
+        ),
+        (
+            json!({"type": "add_sphere", "center": [0, 0, 0], "radius": 1, "axis": [0, 0, 0]}),
+            "axis",
+        ),
+        (
+            json!({"type": "add_sphere", "center": [9.9e5, 0, 0], "radius": 2e4}),
+            "coordinates",
+        ),
+        (
+            json!({"type": "add_torus", "center": [0, 0, 0], "radius": 1, "tube_radius": 1}),
+            "tube_radius",
+        ),
+        (
+            json!({"type": "add_torus", "center": [0, 0, 0], "radius": 1, "tube_radius": 0.5, "tube_segments": 2}),
+            "tube_segments",
+        ),
+        (
+            json!({"type": "add_torus", "center": [0, 0, 0], "radius": 1, "tube_radius": 0.5, "segments": 361}),
+            "segments",
+        ),
+        (
+            json!({"type": "add_torus", "center": [0, 0, 0], "radius": 2e6, "tube_radius": 0.5}),
+            "radius",
+        ),
     ];
     let mut d = doc();
     for (command, field) in bad {
@@ -600,6 +660,35 @@ fn non_finite_numbers_never_panic() {
             name: None,
             material: None,
         },
+        Command::AddSphere {
+            center: [nan, 0.0, 0.0],
+            axis: None,
+            radius: 1.0,
+            segments: None,
+            placement: Default::default(),
+            name: None,
+            material: None,
+        },
+        Command::AddSphere {
+            center: [0.0, 0.0, 0.0],
+            axis: Some([0.0, nan, 1.0]),
+            radius: nan,
+            segments: None,
+            placement: Default::default(),
+            name: None,
+            material: None,
+        },
+        Command::AddTorus {
+            center: [0.0, 0.0, 0.0],
+            axis: None,
+            radius: 1.0,
+            tube_radius: nan,
+            segments: None,
+            tube_segments: None,
+            placement: Default::default(),
+            name: None,
+            material: None,
+        },
     ] {
         let e = d.execute(command).unwrap_err();
         assert_eq!(e.kind, ErrorKind::InvalidInput);
@@ -628,6 +717,8 @@ fn primitive_definitions_survive_save_and_open() {
         json!({"type": "add_tube", "base": [5, 0, 0], "radius": 1, "inner_radius": 0.5, "height": 1, "segments": 12}),
         json!({"type": "add_cone", "base": [10, 0, 0], "radius": 1, "height": 1, "segments": 12, "as": "component"}),
         json!({"type": "add_prism", "base": [15, 0, 0], "radius": 1, "height": 1, "sides": 5}),
+        json!({"type": "add_sphere", "center": [20, 0, 0], "radius": 1, "segments": 12}),
+        json!({"type": "add_torus", "center": [25, 0, 0], "radius": 2, "tube_radius": 0.5, "segments": 12, "tube_segments": 6, "as": "component"}),
     ] {
         run(&mut d, c).unwrap();
     }
@@ -651,6 +742,8 @@ fn primitive_definitions_survive_save_and_open() {
     let before = open_all(&mut d);
     assert_eq!(before[0], (14, 36, 12, 24, 24));
     assert!(before.iter().all(|c| c.2 > 0 || c == &before[3]));
+    assert_eq!(before[4].2, 11 * 12);
+    assert_eq!(before[5].2, 2 * 12 * 6);
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("session-primitives-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -686,4 +779,40 @@ fn stacked_geometry_boxes_share_their_face() {
     // Two boxes share the one face between them: 12 faces, minus the second copy of it.
     let (faces, edges, ..) = counts(&d);
     assert_eq!((faces, edges), (11, 20));
+}
+
+#[test]
+fn sphere_and_torus_frames_and_options() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        json!({"type": "add_sphere", "center": [1, 2, 3], "radius": 1, "axis": [0, 0, 1], "name": "Ball"}),
+    )
+    .unwrap();
+    let i = instance(&d, &out["placed"][0]);
+    let m = i["transform"].as_array().unwrap();
+    // Origin at the centre, local +z on the axis.
+    assert_eq!(point(&json!(m[9..12])), DVec3::new(1.0, 2.0, 3.0));
+    assert!((point(&json!(m[6..9])) - DVec3::Z).length() < 1e-12);
+    let out = run(
+        &mut d,
+        json!({"type": "add_torus", "center": [0, 0, 0], "axis": [1, 0, 0], "radius": 2, "tube_radius": 0.5, "as": "component"}),
+    )
+    .unwrap();
+    let i = instance(&d, &out["placed"][0]);
+    let m = i["transform"].as_array().unwrap();
+    assert!((point(&json!(m[6..9])) - DVec3::X).length() < 1e-12);
+    assert_eq!(i["name"], "Torus");
+    // Defaults: sphere 24 segments, torus 24 by 12.
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_sphere", "center": [0, 0, 0], "radius": 1, "as": "geometry"}),
+    )
+    .unwrap();
+    assert_eq!(entities(&d)["faces"].as_array().unwrap().len(), 24 * 12);
+    let mut d = doc();
+    run(&mut d, json!({"type": "add_torus", "center": [0, 0, 0], "radius": 2, "tube_radius": 0.5, "as": "geometry"})).unwrap();
+    assert_eq!(entities(&d)["faces"].as_array().unwrap().len(), 24 * 12);
+    d.model().validate().unwrap();
 }

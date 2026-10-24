@@ -233,6 +233,8 @@ fn describe_lists_methods_and_schemas() {
         "add_tube",
         "add_cone",
         "add_prism",
+        "add_sphere",
+        "add_torus",
         "purge_definitions",
         "add_material",
         "change_material",
