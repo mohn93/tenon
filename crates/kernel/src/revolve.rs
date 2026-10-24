@@ -3,12 +3,12 @@
 //! triangles (or to nothing when it lies along the axis), and a side square to the axis sweeps
 //! one flat face (a disk or a ring) instead of a fan of coplanar pieces.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use glam::{DAffine3, DQuat, DVec2, DVec3};
 
-use crate::geom::{LENGTH_TOL, Plane, point_in_polygon};
+use crate::geom::{LENGTH_TOL, Plane, point_in_polygon, vector_area};
 use crate::ids::{CurveId, EntityId, FaceId, MaterialId, TagId};
 use crate::model::{ChangeSet, Model};
 use crate::primitives::{MIN_LENGTH, Solid};
@@ -62,6 +62,40 @@ impl Revolve {
 /// The steps a turn of `angle` degrees is cut into when a full turn has `segments`.
 pub fn steps_for(angle: f64, segments: u32) -> u32 {
     ((f64::from(segments) * angle / 360.0 - 1e-9).ceil() as u32).max(1)
+}
+
+/// True when the points lie in one plane within `tol`.
+fn planar(points: &[DVec3], tol: f64) -> bool {
+    let normal = vector_area(points).normalize_or_zero();
+    let centre = points.iter().sum::<DVec3>() / points.len() as f64;
+    points.iter().all(|p| (*p - centre).dot(normal).abs() < tol)
+}
+
+/// True when every face of `solid` is flat within `LENGTH_TOL` and every side of every loop is
+/// shared by exactly two loops.
+fn solid_is_closed_and_flat(solid: &Solid) -> bool {
+    let mut sides: BTreeMap<(usize, usize), u32> = BTreeMap::new();
+    for f in &solid.faces {
+        let loops = std::iter::once(&f.outer).chain(&f.holes);
+        let mut all: Vec<DVec3> = Vec::new();
+        for l in loops {
+            for i in 0..l.len() {
+                let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                *sides.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+            all.extend(l.iter().map(|i| solid.points()[*i]));
+        }
+        let outer: Vec<DVec3> = f.outer.iter().map(|i| solid.points()[*i]).collect();
+        let normal = vector_area(&outer).normalize_or_zero();
+        if normal == DVec3::ZERO
+            || !all
+                .iter()
+                .all(|p| (*p - outer[0]).dot(normal).abs() < LENGTH_TOL)
+        {
+            return false;
+        }
+    }
+    sides.values().all(|n| *n == 2)
 }
 
 /// `idx` without consecutive repeats, also across the end.
@@ -241,7 +275,17 @@ impl Model {
                 }
                 for k in 0..n {
                     let k1 = (k + 1) % sections;
-                    solid.face(dedup(vec![p[k], q[k], q[k1], p[k1]]));
+                    let quad = dedup(vec![p[k], q[k], q[k1], p[k1]]);
+                    let pts: Vec<DVec3> = quad.iter().map(|i| solid.points()[*i]).collect();
+                    if quad.len() == 4 && !planar(&pts, 0.1 * LENGTH_TOL) {
+                        // A side skewed to the axis sweeps a twisted quad: two triangles
+                        // along a soft diagonal, which reads as one surface.
+                        solid.face(vec![quad[0], quad[1], quad[2]]);
+                        solid.face(vec![quad[0], quad[2], quad[3]]);
+                        solid.soften(quad[0], quad[2]);
+                    } else {
+                        solid.face(quad);
+                    }
                     if full || k > 0 {
                         solid.soften(p[k], q[k]);
                     }
@@ -290,6 +334,9 @@ impl Model {
             return invalid("revolving the face makes no solid");
         }
         solid.face_outward();
+        if !solid_is_closed_and_flat(&solid) {
+            return invalid("revolving the face does not make a closed solid");
+        }
         if !full {
             let last = solid.faces.len() - 1;
             start_out = solid.face_normal(last);
@@ -314,7 +361,7 @@ impl Model {
     /// Draws a revolve worked out by `plan_revolve`, as one ChangeSet, with the rules of
     /// `add_edge` (it merges with what it touches). A full turn removes the face and what is
     /// left of its edges along the axis; a partial turn keeps the face as the start cap and
-    /// closes the end with a copy of it (its materials, tag and visibility). Faces point out of
+    /// closes the end with a copy of it (its materials, tag and visibility, not its texture placement). Faces point out of
     /// the solid. Edges between consecutive faces swept by one side are soft, and so are those
     /// at a corner between two sides on one curve that is not a polygon.
     pub fn revolve(&mut self, plan: &Revolve) -> ChangeSet {
@@ -329,6 +376,8 @@ impl Model {
             // The start cap faces out of the solid, away from the turn.
             if self.face(plan.face).is_some() {
                 self.orient(plan.face, plan.start_out);
+                // Turning it over swapped its sides' materials: front is the outside again.
+                self.set_paint(plan.face, plan.paint);
             }
             let plane = Plane::through(plan.end[0][0], plan.end_normal);
             let flat: Vec<Vec<DVec2>> = plan

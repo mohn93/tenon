@@ -78,7 +78,37 @@ fn soft_edges(m: &Model) -> usize {
 
 /// Every edge bounds exactly two faces.
 fn closed_solid(m: &Model) -> bool {
+    m.validate().unwrap();
+    for (id, f) in m.faces() {
+        let o = m.position(f.outer[0]).unwrap();
+        for v in f.outer.iter().chain(f.holes.iter().flatten()) {
+            assert!(
+                (m.position(*v).unwrap() - o).dot(f.normal).abs() < 1e-6,
+                "face {id:?} is not flat"
+            );
+        }
+    }
     m.edges().all(|(e, _)| m.faces_beside(e).is_some())
+}
+
+/// Every directed side is used once each way.
+fn sides_pair_up(m: &Model) -> bool {
+    let mut used = std::collections::BTreeMap::new();
+    for (_, f) in m.faces() {
+        for l in std::iter::once(&f.outer).chain(&f.holes) {
+            for i in 0..l.len() {
+                *used.entry((l[i], l[(i + 1) % l.len()])).or_insert(0) += 1;
+            }
+        }
+    }
+    used.iter()
+        .all(|((a, b), n)| *n == 1 && used.get(&(*b, *a)) == Some(&1))
+}
+
+/// The volume of the faceted solid of revolution about z, of a profile with `n` steps, from
+/// the volume the model's own faces enclose (a tilted profile has no simple formula).
+fn faceted(m: &Model) -> f64 {
+    volume(m)
 }
 
 /// The volume the faces enclose, by the divergence theorem: positive when they face out.
@@ -191,30 +221,37 @@ fn a_quarter_turn_keeps_the_face_and_caps_the_end() {
 
 #[test]
 fn a_partial_turn_with_a_painted_face_paints_both_caps() {
-    let mut d = doc();
-    let mat = run(
-        &mut d,
-        json!({"type": "add_material", "color": [200, 0, 0]}),
-    )
-    .unwrap();
-    let mat = mat["changes"]["materials"][0].clone();
-    let face = rectangle(&mut d, [1.0, 0.0, 0.0], [2.0, 0.0, 1.0], [0.0, 1.0, 0.0]);
-    run(
-        &mut d,
-        json!({"type": "paint", "ids": [face], "material": mat}),
-    )
-    .unwrap();
-    let mut cmd = revolve(&face);
-    cmd["angle"] = json!(180);
-    run(&mut d, cmd).unwrap();
-    let m = d.model();
-    assert!(closed_solid(m));
-    let painted = m
-        .faces()
-        .filter(|(_, f)| f.paint().iter().any(|p| p.is_some()))
-        .count();
-    assert_eq!(painted, 2);
-    assert!(volume(m) > 0.0);
+    for normal in [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]] {
+        let mut d = doc();
+        let mat = run(
+            &mut d,
+            json!({"type": "add_material", "color": [200, 0, 0]}),
+        )
+        .unwrap();
+        let mat = mat["changes"]["materials"][0].clone();
+        let face = rectangle(&mut d, [1.0, 0.0, 0.0], [2.0, 0.0, 1.0], normal);
+        run(
+            &mut d,
+            json!({"type": "paint", "ids": [face], "material": mat}),
+        )
+        .unwrap();
+        let mut cmd = revolve(&face);
+        cmd["angle"] = json!(180);
+        run(&mut d, cmd).unwrap();
+        let m = d.model();
+        assert!(closed_solid(m));
+        let painted: Vec<_> = m
+            .faces()
+            .filter(|(_, f)| f.paint().iter().any(|p| p.is_some()))
+            .collect();
+        assert_eq!(painted.len(), 2);
+        assert!(
+            painted
+                .iter()
+                .all(|(_, f)| f.front.is_some() && f.back.is_none())
+        );
+        assert!(volume(m) > 0.0);
+    }
 }
 
 #[test]
@@ -368,4 +405,38 @@ fn a_circle_beside_the_axis_makes_a_smooth_torus() {
     assert!(volume(m) > 0.0);
     // The profile is one smooth curve, and so is each ring: every edge is soft.
     assert_eq!(soft_edges(m), m.edges().count());
+}
+
+#[test]
+fn a_profile_whose_plane_does_not_hold_the_axis_still_closes() {
+    let cases: [&[[f64; 3]]; 2] = [
+        &[[0.5, 3.0, 0.0], [1.5, 3.0, 0.0], [1.5, 3.0, 1.0]],
+        &[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 1.0, 1.0]],
+    ];
+    for points in cases {
+        let mut d = doc();
+        let face = polygon(&mut d, points);
+        run(&mut d, revolve(&face)).unwrap();
+        d.scene().validate().unwrap();
+        let m = d.model();
+        assert!(closed_solid(m), "{points:?}");
+        assert!(sides_pair_up(m), "{points:?}");
+        let v = faceted(m);
+        assert!(v > 0.0, "{points:?}");
+        // Every triangle's tetrahedron about the centre sums to the same volume.
+        let tri: f64 = m
+            .faces()
+            .map(|(_, f)| {
+                let p: Vec<DVec3> = f.outer.iter().map(|v| m.position(*v).unwrap()).collect();
+                (1..p.len() - 1)
+                    .map(|i| p[0].dot(p[i].cross(p[i + 1])) / 6.0)
+                    .sum::<f64>()
+            })
+            .sum();
+        assert!((tri - v).abs() < 1e-9, "{points:?} {tri} {v}");
+        // Faces are never left loose: every edge bounds two faces.
+        assert!(m.edges().all(|(e, _)| m.faces_beside(e).is_some()));
+        // The twisted quads' diagonals are soft.
+        assert!(soft_edges(m) > 0);
+    }
 }
