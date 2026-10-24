@@ -21,6 +21,7 @@ mod import;
 mod import_tree;
 mod index;
 pub mod intersect;
+mod joint;
 mod location;
 pub mod mass;
 mod material;
@@ -40,6 +41,7 @@ mod section_loops;
 mod smooth;
 mod soften;
 pub mod solid;
+mod solver;
 mod style;
 pub mod sweep;
 mod tag;
@@ -57,14 +59,14 @@ pub use clip::Inserted;
 pub use curves::{Curve, CurveCircle, CurveKind};
 pub use data::{
     AnchorData, AxesData, CircleData, DefinitionData, DimensionData, EdgeData, FaceData, GuideData,
-    InstanceData, LocationData, MAX_ID, MIN_DETERMINANT, MaterialData, MeshData, NoteData,
-    PageData, PagePosition, RadialAnchorData, SceneData, SectionData, StyleData, TagData,
-    TextureData, TransitionData, VertexData,
+    InstanceData, JointData, JointFrameData, LocationData, MAX_ID, MIN_DETERMINANT, MaterialData,
+    MeshData, NoteData, PageData, PagePosition, RadialAnchorData, SceneData, SectionData,
+    StyleData, TagData, TextureData, TransitionData, VertexData,
 };
 pub use edit::KernelError;
 pub use ids::{
-    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, SectionId, StyleId, TagId, VertexId,
+    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId,
+    MaterialId, NoteId, PageId, SectionId, StyleId, TagId, VertexId,
 };
 pub use import::{MAX_IMPORT_FACES, MeshPolygon, MeshReport};
 pub use import_tree::{
@@ -73,6 +75,9 @@ pub use import_tree::{
     MAX_IMPORT_PLACEMENTS, TreeReport,
 };
 pub use index::{Index, Shape, ray_hits_triangle};
+pub use joint::{
+    JOINT_NAME_BASE, Joint, JointFrame, JointKind, MAX_JOINT_NAME, measure_joint, perpendicular,
+};
 pub use location::Location;
 pub use material::{
     DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_DENSITY, MAX_EMISSION, MAX_MATERIAL_NAME,
@@ -90,6 +95,7 @@ pub use section::SectionPlane;
 pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
+pub use solver::DRIVE_TOLERANCE;
 pub use style::{
     AO_RADIUS, AO_STRENGTH, AmbientOcclusion, ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog,
     FogColor, Ground, MAX_STYLE_NAME, PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER,

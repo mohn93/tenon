@@ -43,6 +43,7 @@ mod hide;
 mod import;
 mod instances;
 mod intersect;
+mod joints;
 mod library;
 mod materials;
 mod orient;
@@ -849,6 +850,10 @@ impl Document {
             | Command::AddStyle { .. }
             | Command::ChangeStyle { .. }
             | Command::DeleteStyle { .. }
+            | Command::AddJoint { .. }
+            | Command::ChangeJoint { .. }
+            | Command::DeleteJoint { .. }
+            | Command::Drive { .. }
             | Command::Hide { .. }
             | Command::Unhide { .. }
             | Command::UnhideLast {}
@@ -1298,6 +1303,36 @@ impl Document {
                 settings,
             } => self.change_style_changes(*style, name.as_deref(), settings.as_ref()),
             Command::DeleteStyle { style } => self.delete_style_changes(*style),
+            Command::AddJoint {
+                kind,
+                a,
+                b,
+                point,
+                axis,
+                reference,
+                name,
+                limits,
+            } => self.add_joint_changes(joints::NewJoint {
+                kind: *kind,
+                a: *a,
+                b: *b,
+                point: *point,
+                axis: *axis,
+                reference: *reference,
+                name: name.as_deref(),
+                limits: *limits,
+            }),
+            Command::ChangeJoint {
+                joint,
+                name,
+                limits,
+            } => self.change_joint_changes(*joint, name.as_deref(), *limits),
+            Command::DeleteJoint { joint } => self.delete_joint_changes(*joint),
+            Command::Drive {
+                joint,
+                value,
+                slide,
+            } => self.drive_changes(*joint, *value, *slide),
             Command::Hide { ids } => self.hide_changes(ids),
             Command::SetSectionCut { ids, cut } => self.set_section_cut_changes(ids, *cut),
             Command::Unhide { ids } => self.unhide_changes(ids),
@@ -2848,6 +2883,11 @@ impl Document {
                 revision: self.revision,
             },
             Query::Scene { scene } => self.scene_detail(*scene)?,
+            Query::Joints {} => QueryResult::Joints {
+                joints: self.joint_infos(),
+                revision: self.revision,
+            },
+            Query::Joint { id } => QueryResult::Joint(self.joint_info_of(*id)?),
             Query::Styles {} => QueryResult::Styles {
                 styles: self.style_infos(),
                 revision: self.revision,

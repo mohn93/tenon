@@ -2,8 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 
 use kernel::{
-    ChangeSummary, DefinitionId, EdgeColorMode, EntityId, Fog, Ground, MaterialId, PageId, Side,
-    Sketchy, SoftenReport, StyleId, TagId,
+    ChangeSummary, DefinitionId, EdgeColorMode, EntityId, Fog, Ground, JointId, JointKind,
+    MaterialId, PageId, Side, Sketchy, SoftenReport, StyleId, TagId,
 };
 
 use schemars::JsonSchema;
@@ -936,6 +936,70 @@ pub enum Command {
     SetStyle {
         #[serde(default)]
         style: Option<StyleId>,
+    },
+    /// Add a joint between two parts, as one undo step. `a` and `b` are instances of the root
+    /// (the root must be the open context); `a` null or absent is the ground, the fixed world.
+    /// `kind`: `revolute` (rotation about the axis), `prismatic` (sliding along it),
+    /// `cylindrical` (both), `fixed` (no motion) or `ball` (rotation about the point).
+    /// `point` and `axis` (a direction, any length) are in the root's coordinates; `reference`
+    /// (optional) is a direction that measures the angle, projected perpendicular to the axis
+    /// (default: the horizontal direction across the axis, as `add_circle` takes, or +X when
+    /// the axis is vertical). The joint holds the parts as they are now: its value starts at
+    /// 0. `limits` (optional) is `[min, max]` in degrees for revolute and cylindrical joints
+    /// and meters for prismatic ones, min below max and 0 within; a fixed or ball joint has
+    /// none. Without `name` it is called "Joint 1" (the lowest number no joint has); names
+    /// are trimmed, not blank, at most 100 characters and distinct. The same part twice, a
+    /// part that is not an instance of the root, a zero axis or a reference along the axis
+    /// is `invalid_input`. The new id is in the outcome's `changes.joints`.
+    AddJoint {
+        kind: JointKind,
+        #[serde(default)]
+        a: Option<EntityId>,
+        b: EntityId,
+        #[schemars(with = "ModelPoint")]
+        point: [f64; 3],
+        axis: [f64; 3],
+        #[serde(default)]
+        reference: Option<[f64; 3]>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        limits: Option<[f64; 2]>,
+    },
+    /// Rename a joint and/or change its limits, as one undo step (none when nothing changes).
+    /// At least one of `name` and `limits` is needed; `"limits": null` clears them, an array
+    /// sets them as in `add_joint` (the joint's current value must lie within).
+    ChangeJoint {
+        joint: JointId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "Option<[f64; 2]>")]
+        limits: Option<Option<[f64; 2]>>,
+    },
+    /// Remove a joint, as one undo step. Erasing a part removes its joints in the same step.
+    DeleteJoint { joint: JointId },
+    /// Set a joint's value and move the parts connected to it through joints so that every
+    /// joint between them holds, as one undo step. `value` is degrees for revolute and
+    /// cylindrical joints and meters for prismatic ones; `slide` (meters, cylindrical only)
+    /// sets the slide too, absent keeping it. The other joints' values are free and follow
+    /// the new pose. Parts joined to the ground keep it fixed; an assembly with no ground
+    /// holds the joint's part `a`. Large turns are taken in steps of at most 10 degrees (a
+    /// slide in tenths) so a closed loop keeps its branch. A fixed or ball joint, a value
+    /// outside the joint's limits, a pose where the joints cannot all be met (to 1e-9) or one
+    /// where another joint would pass its limits is `invalid_input` and changes nothing; the
+    /// joint's current value changes nothing (no undo step). The outcome's
+    /// `changes.modified` lists the moved instances and `changes.joints` the joints whose
+    /// values changed.
+    Drive {
+        joint: JointId,
+        value: f64,
+        #[serde(default)]
+        slide: Option<f64>,
     },
     /// Hide edges, faces, instances and guides of the open context, as one undo step (an
     /// entity already hidden is ignored; none to hide is a success with no undo step).

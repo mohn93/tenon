@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use kernel::{
-    ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, MaterialId,
-    PageId, StyleId, StyleSettings, TagId, TexturePlacement,
+    ChangeSummary, CurveKind, DefinitionId, DefinitionKind, EntityId, ImageFormat, JointId,
+    JointKind, MaterialId, PageId, StyleId, StyleSettings, TagId, TexturePlacement,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,12 @@ pub enum Query {
     /// The styles (see `add_style`): id, name and settings of each, in the order they were
     /// made. `set_style` chooses one; the `camera` query tells which is chosen.
     Styles {},
+    /// Every joint, in the order they were made (see `add_joint`).
+    Joints {},
+    /// One joint.
+    Joint {
+        id: JointId,
+    },
     /// One scene: the view and the hidden tags it stores.
     Scene {
         scene: PageId,
@@ -763,6 +769,26 @@ pub struct StyleInfo {
     pub settings: StyleSettings,
 }
 
+/// A joint in the `joints` list. `value` and `limits` are degrees for revolute and cylindrical
+/// joints and meters otherwise (0 for fixed and ball joints); `slide` (meters) only for a
+/// cylindrical one. `a` is null for the ground. `point` and `axis` are the joint's frame on
+/// part A (the ground's, in the root's coordinates), in the root's coordinates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct JointInfo {
+    pub id: JointId,
+    pub name: String,
+    pub kind: JointKind,
+    pub a: Option<EntityId>,
+    pub b: EntityId,
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slide: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<[f64; 2]>,
+    pub point: [f64; 3],
+    pub axis: [f64; 3],
+}
+
 /// A material's texture: the size one copy covers on the model, in meters, and the image's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TextureInfo {
@@ -892,6 +918,12 @@ pub enum QueryResult {
         styles: Vec<StyleInfo>,
         revision: u64,
     },
+    /// The joints, in the order they were made.
+    Joints {
+        joints: Vec<JointInfo>,
+        revision: u64,
+    },
+    Joint(JointInfo),
     Scenes {
         scenes: Vec<SceneInfo>,
         revision: u64,

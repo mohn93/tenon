@@ -146,7 +146,9 @@ fn a_density_is_saved_as_the_new_schema_and_read_back_only_when_used() {
     .unwrap();
     run(&mut d, json!({"type": "save"})).unwrap();
     let document = stored(&path);
-    assert!(document["schema_version"].as_u64().unwrap() < 25);
+    assert!(
+        document["schema_version"].as_u64().unwrap() < session::file::DENSITY_SCHEMA_VERSION as u64
+    );
     assert!(document["model"]["materials"][0].get("density").is_none());
 }
 

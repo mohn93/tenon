@@ -62,6 +62,12 @@ pub enum KernelError {
     /// A page name is blank, too long or taken, its view is invalid, or a move index is out
     /// of range; the text says which.
     Page(String),
+    /// A joint id names no joint in the scene.
+    JointNotFound,
+    /// A joint is invalid: a blank, long or taken name, parts that are not distinct instances
+    /// of the root, a frame that is not a unit axis with a perpendicular reference, or limits
+    /// that are out of order or leave the value out; the text says which.
+    Joint(String),
     /// A style id names no style in the scene.
     StyleNotFound,
     /// A style name is blank, too long or taken, or its settings are out of range; the text
@@ -116,6 +122,7 @@ impl fmt::Display for KernelError {
             KernelError::TagNotFound => write!(f, "no such tag"),
             KernelError::PageNotFound => write!(f, "no such scene"),
             KernelError::StyleNotFound => write!(f, "no such style"),
+            KernelError::JointNotFound => write!(f, "no such joint"),
             KernelError::MaterialName(why)
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
@@ -126,6 +133,7 @@ impl fmt::Display for KernelError {
             | KernelError::TagName(why)
             | KernelError::Page(why)
             | KernelError::Style(why)
+            | KernelError::Joint(why)
             | KernelError::InvalidImport(why)
             | KernelError::Annotation(why)
             | KernelError::Section(why) => {

@@ -64,8 +64,8 @@ pub use library::{LibraryContent, LibraryItem, LibraryKind, LibraryListing, Libr
 pub use polygon::{DEFAULT_POLYGON_SIDES, polygon_points};
 pub use query::{
     AnchorInfo, Bounds, ChangeEvent, CurveInfo, DefinitionInfo, DimensionInfo, DimensionKind,
-    EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind, InstanceInfo, MaterialInfo, NoteInfo,
-    NoteKind, OutlinerNode, OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo,
+    EdgeInfo, EntityKind, FaceInfo, GuideInfo, GuideKind, InstanceInfo, JointInfo, MaterialInfo,
+    NoteInfo, NoteKind, OutlinerNode, OutlinerRow, OutlinerTable, Query, QueryResult, SceneInfo,
     SceneTransitionInfo, SceneView, SectionPlaneInfo, TagInfo, TextureInfo, VertexInfo,
 };
 pub use rectangle::{rectangle_axes, rectangle_axes_in, rectangle_corners};

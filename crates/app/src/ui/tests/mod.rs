@@ -6,6 +6,7 @@ mod axes;
 mod context;
 mod dock;
 mod entity;
+mod joints;
 mod layout;
 mod library;
 mod materials;
@@ -81,6 +82,7 @@ pub(super) struct Fixture {
     pub location: kernel::Location,
     pub viewport_menu: Option<ViewportMenu>,
     pub scenes: Vec<SceneRow>,
+    pub joints: Vec<super::JointRow>,
     /// How many times the document was replaced.
     pub documents: u64,
     pub selection_tag: Option<SelectionTag>,
@@ -201,6 +203,7 @@ impl Default for Fixture {
             location: kernel::Location::DEFAULT,
             viewport_menu: None,
             scenes: Vec::new(),
+            joints: Vec::new(),
             documents: 0,
             selection_tag: None,
             outliner: OutlinerTable {
@@ -298,6 +301,7 @@ impl Fixture {
             location: self.location,
             viewport_menu: self.viewport_menu,
             scenes: &self.scenes,
+            joints: &self.joints,
             documents: self.documents,
             selection_tag: self.selection_tag,
             outliner: &self.outliner,

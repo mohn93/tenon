@@ -333,6 +333,57 @@ impl TryFrom<String> for PageId {
     }
 }
 
+/// A joint between two parts (or a part and the ground). Serialized as "j<n>". Joint ids
+/// come from the same counter as entity ids, so they never repeat one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct JointId(pub u64);
+
+impl fmt::Display for JointId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "j{}", self.0)
+    }
+}
+
+impl FromStr for JointId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match parse_prefixed(s) {
+            Some(('j', n)) => Ok(JointId(n)),
+            _ => Err(format!("invalid joint id {s:?}")),
+        }
+    }
+}
+
+impl schemars::JsonSchema for JointId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "JointId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": "^j(0|[1-9][0-9]*)$",
+            "description": "Joint id: j<n>"
+        })
+    }
+}
+
+impl From<JointId> for String {
+    fn from(id: JointId) -> String {
+        id.to_string()
+    }
+}
+
+impl TryFrom<String> for JointId {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 /// A style: named edge, background and fog settings a view may choose. Serialized as
 /// "y<n>". Style ids come from the same counter as entity ids, so they never repeat one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -427,6 +478,11 @@ mod tests {
         assert_eq!(PageId(5).to_string(), "p5");
         for s in ["", "p", "t5", "p05", "p+5"] {
             assert!(s.parse::<PageId>().is_err(), "{s:?} parsed");
+        }
+        assert_eq!("j5".parse::<JointId>(), Ok(JointId(5)));
+        assert_eq!(JointId(5).to_string(), "j5");
+        for s in ["", "j", "p5", "j05", "j+5"] {
+            assert!(s.parse::<JointId>().is_err(), "{s:?} parsed");
         }
         assert_eq!("y5".parse::<StyleId>(), Ok(StyleId(5)));
         assert_eq!(StyleId(5).to_string(), "y5");

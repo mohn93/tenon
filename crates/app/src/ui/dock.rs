@@ -7,8 +7,8 @@ use egui::{Id, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    UiAction, View, library, materials, outliner, right, scenes, shadows, styles, tags, theme,
-    widgets,
+    UiAction, View, joints, library, materials, outliner, right, scenes, shadows, styles, tags,
+    theme, widgets,
 };
 
 /// The tab shown in the dock's top area.
@@ -20,6 +20,7 @@ pub enum DockTab {
     Materials,
     Tags,
     Scenes,
+    Joints,
     Shadows,
     Styles,
     Library,
@@ -32,6 +33,7 @@ impl DockTab {
             DockTab::Materials => "Materials",
             DockTab::Tags => "Tags",
             DockTab::Scenes => "Scenes",
+            DockTab::Joints => "Joints",
             DockTab::Shadows => "Shadows",
             DockTab::Styles => "Styles",
             DockTab::Library => "Library",
@@ -180,6 +182,7 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
             DockTab::Materials => materials::materials(ui, view, actions),
             DockTab::Tags => tags::tags(ui, view, actions),
             DockTab::Scenes => scenes::scenes(ui, view, actions),
+            DockTab::Joints => joints::joints(ui, view, actions),
             DockTab::Shadows => shadows::shadows(ui, view, actions),
             DockTab::Styles => styles::styles(ui, view, actions),
             DockTab::Library => library::library(ui, view, actions),
@@ -191,11 +194,12 @@ pub(super) fn dock(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> Doc
 }
 
 /// The tabs, in order.
-const TABS: [DockTab; 7] = [
+const TABS: [DockTab; 8] = [
     DockTab::EntityInfo,
     DockTab::Materials,
     DockTab::Tags,
     DockTab::Scenes,
+    DockTab::Joints,
     DockTab::Shadows,
     DockTab::Styles,
     DockTab::Library,

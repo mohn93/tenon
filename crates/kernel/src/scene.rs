@@ -9,9 +9,10 @@ use crate::annotation::Note;
 use crate::axes::Axes;
 use crate::edit::KernelError;
 use crate::ids::{
-    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId,
-    NoteId, PageId, SectionId, StyleId, TagId,
+    CurveId, DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId,
+    MaterialId, NoteId, PageId, SectionId, StyleId, TagId,
 };
+use crate::joint::Joint;
 use crate::location::Location;
 use crate::material::Material;
 use crate::model::{ChangeSet, ChangeSummary, Instance, Model};
@@ -108,6 +109,12 @@ pub enum Step {
     RemoveStyle(StyleId, Style),
     /// A style's name or settings changed from the first to the second.
     ChangeStyle(StyleId, Style, Style),
+    /// A joint added.
+    AddJoint(JointId, Joint),
+    /// A joint removed.
+    RemoveJoint(JointId, Joint),
+    /// A joint's name, frames, value, slide or limits changed from the first to the second.
+    ChangeJoint(JointId, Joint, Joint),
     /// The model axes changed from the first to the second.
     SetAxes(Axes, Axes),
     /// The model's location changed from the first to the second.
@@ -136,6 +143,9 @@ impl Step {
             Step::AddStyle(id, s) => Step::RemoveStyle(id, s),
             Step::RemoveStyle(id, s) => Step::AddStyle(id, s),
             Step::ChangeStyle(id, from, to) => Step::ChangeStyle(id, to, from),
+            Step::AddJoint(id, j) => Step::RemoveJoint(id, j),
+            Step::RemoveJoint(id, j) => Step::AddJoint(id, j),
+            Step::ChangeJoint(id, from, to) => Step::ChangeJoint(id, to, from),
             Step::SetAxes(from, to) => Step::SetAxes(to, from),
             Step::SetLocation(from, to) => Step::SetLocation(to, from),
             Step::SetTransition(from, to) => Step::SetTransition(to, from),
@@ -246,6 +256,22 @@ impl SceneChange {
             .filter(|(_, (before, after))| *before || *after)
             .map(|(id, _)| id)
             .collect();
+        // joint -> (existed before, exists after)
+        let mut joints: BTreeMap<JointId, (bool, bool)> = BTreeMap::new();
+        for step in &self.steps {
+            let (id, before, after) = match step {
+                Step::AddJoint(id, _) => (*id, false, true),
+                Step::RemoveJoint(id, _) => (*id, true, false),
+                Step::ChangeJoint(id, _, _) => (*id, true, true),
+                _ => continue,
+            };
+            joints.entry(id).or_insert((before, after)).1 = after;
+        }
+        summary.joints = joints
+            .into_iter()
+            .filter(|(_, (before, after))| *before || *after)
+            .map(|(id, _)| id)
+            .collect();
         summary
     }
 }
@@ -269,6 +295,8 @@ pub struct Scene {
     pub(crate) pages: Vec<(PageId, Page)>,
     /// The styles views may choose, by id.
     pub(crate) styles: BTreeMap<StyleId, Style>,
+    /// The joints between root instances, by id.
+    pub(crate) joints: BTreeMap<JointId, Joint>,
     /// The model axes (see [`Axes`]).
     pub(crate) axes: Axes,
     /// Where the model stands (see [`Location`]).
@@ -292,6 +320,7 @@ impl PartialEq for Scene {
             && self.tags == other.tags
             && self.pages == other.pages
             && self.styles == other.styles
+            && self.joints == other.joints
             && self.axes == other.axes
             && self.location == other.location
             && self.transition == other.transition
@@ -313,6 +342,7 @@ impl Scene {
             tags: BTreeMap::new(),
             pages: Vec::new(),
             styles: BTreeMap::new(),
+            joints: BTreeMap::new(),
             axes: Axes::WORLD,
             location: Location::DEFAULT,
             transition: SceneTransition::DEFAULT,
@@ -348,6 +378,7 @@ impl Scene {
             tags,
             pages,
             styles,
+            joints: BTreeMap::new(),
             axes: Axes::WORLD,
             location: Location::DEFAULT,
             transition: SceneTransition::DEFAULT,
@@ -421,6 +452,13 @@ impl Scene {
     /// A page id for a new page, taken from the entity id counter.
     pub(crate) fn alloc_page(&mut self) -> PageId {
         let id = PageId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// A joint id for a new joint, taken from the entity id counter.
+    pub(crate) fn alloc_joint(&mut self) -> JointId {
+        let id = JointId(self.next_id);
         self.next_id += 1;
         id
     }
@@ -704,6 +742,18 @@ impl Scene {
                     *s = to.clone();
                 }
             }
+            Step::AddJoint(id, j) => {
+                self.next_id = self.next_id.max(id.0.saturating_add(1));
+                self.joints.insert(*id, j.clone());
+            }
+            Step::RemoveJoint(id, _) => {
+                self.joints.remove(id);
+            }
+            Step::ChangeJoint(id, _, to) => {
+                if let Some(j) = self.joints.get_mut(id) {
+                    *j = to.clone();
+                }
+            }
             Step::SetAxes(_, to) => self.axes = *to,
             Step::SetLocation(_, to) => self.location = *to,
             Step::SetTransition(_, to) => self.transition = *to,
@@ -784,6 +834,14 @@ impl Scene {
                 }
             }
         }
+        let mut joint_names = BTreeSet::new();
+        for (id, j) in &self.joints {
+            self.joint_problem(j)
+                .map_err(|e| format!("joint {id}: {e}"))?;
+            if j.name != j.name.trim() || !joint_names.insert(j.name.as_str()) {
+                return Err(format!("joint {id}: two joints are named the same"));
+            }
+        }
         let mut style_names = BTreeSet::new();
         for (id, s) in &self.styles {
             crate::style::check_name(&s.name).map_err(|e| format!("style {id}: {e}"))?;
@@ -802,7 +860,7 @@ impl Scene {
         let missing = |m: &Option<MaterialId>| m.is_some_and(|m| !self.materials.contains_key(&m));
         let missing_tag = |t: Option<TagId>| t.is_some_and(|t| !self.tags.contains_key(&t));
         // Each id with the prefix of what holds it ("v", "e", "f", "i", "g", "r", "n", "s", "c",
-        // "d", "m", "t", "p").
+        // "d", "m", "t", "p", "y", "j").
         let mut owner: BTreeMap<u64, char> = BTreeMap::new();
         let mut claim = |id: u64, prefix: char| match owner.insert(id, prefix) {
             None => Ok(()),
@@ -823,6 +881,9 @@ impl Scene {
         }
         for id in self.styles.keys() {
             claim(id.0, 'y')?;
+        }
+        for id in self.joints.keys() {
+            claim(id.0, 'j')?;
         }
         for (mesh, m) in self.meshes() {
             m.validate().map_err(|e| format!("{mesh:?}: {e}"))?;

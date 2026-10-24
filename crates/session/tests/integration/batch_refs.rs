@@ -247,7 +247,7 @@ fn reference_keys_cover_every_id_field() {
                     ("path", "open_path" | "follow_me" | "copy_along_path")
                         | ("target" | "tools", "solid_subtract" | "solid_trim")
                         | ("instance" | "edges", "chamfer_edges" | "fillet_edges")
-                        | ("a" | "b", "add_dimension" | "solid_split")
+                        | ("a" | "b", "add_dimension" | "solid_split" | "add_joint")
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")
                         | ("target", "add_label")
