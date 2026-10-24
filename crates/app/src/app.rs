@@ -2652,7 +2652,11 @@ impl State {
         let dark_canvas =
             self.editor.doc().lighting == Lighting::Night || self.gui.theme() == egui::Theme::Dark;
         let navigating = self.editor.navigating();
-        let hud = self.editor.hud(dark_canvas);
+        // While a transition runs the labels follow the drawn camera and instances.
+        let hud = match &motion {
+            Some(frame) => self.editor.transition_hud(dark_canvas, frame),
+            None => self.editor.hud(dark_canvas),
+        };
         // Whether the rest's end would show a chip: none to show, or one hidden while
         // navigating or under a window, is no reason to wake (Select over empty space, an
         // orbit drag).
@@ -2859,8 +2863,10 @@ impl State {
         }
 
         let doc = self.editor.doc();
-        // The frames of a transition rebuild the model, and the first one after it does too.
-        let update = if animating {
+        // The frames of a transition that moves instances rebuild the model, and the first one
+        // after it does too; a camera-only transition keeps it.
+        let moving = motion.as_ref().is_some_and(|m| m.scene.is_some());
+        let update = if moving {
             SceneUpdate::Model
         } else {
             scene_update(
@@ -2881,7 +2887,10 @@ impl State {
             hidden_geometry: doc.hidden_geometry && !self.features.read_only,
         }) || recolored;
         if update == SceneUpdate::Model || recolored {
-            let scene = motion.as_ref().map_or(doc.scene(), |m| &m.scene);
+            let scene = motion
+                .as_ref()
+                .and_then(|m| m.scene.as_ref())
+                .unwrap_or(doc.scene());
             self.renderer.set_model(scene, doc.context());
         }
         if update != SceneUpdate::Keep || recolored {
@@ -2891,7 +2900,7 @@ impl State {
                 doc.selection().clone(),
                 doc.context().to_vec(),
             ));
-            if animating {
+            if moving {
                 self.drawn = None;
             }
         }
@@ -2901,9 +2910,11 @@ impl State {
         let tool = self.editor.tool_kind();
         let ui_theme = self.gui.theme();
         let sampling = self.editor.sampling();
+        // No hover while a transition draws: it is of the document's view.
         self.renderer.set_hover(
             self.editor
                 .hovered()
+                .filter(|_| !animating)
                 .map(|id| (id, theme::hover_look(ui_theme, tool, id, paint, sampling))),
         );
         self.renderer.set_preview(&self.editor.solid_preview());

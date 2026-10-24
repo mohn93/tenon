@@ -17,7 +17,7 @@ use kernel::{
 };
 use serde_json::Value;
 
-use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome};
+use crate::command::{AnchorInput, Command, CommandError, ErrorKind, Outcome, ScenePositions};
 use crate::library::LibraryRef;
 
 /// What a batch needs to know about the open context to resolve references.
@@ -333,6 +333,10 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("note", Some("change_note"))
                 | ("style", Some("change_style" | "delete_style" | "set_style"))
                 | ("from", Some("add_style"))
+                | (
+                    "positions",
+                    Some("add_scene" | "update_scene" | "change_scene")
+                )
                 | (
                     "plane",
                     Some("flip_section_plane" | "activate_section_plane")
@@ -711,6 +715,13 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             }
         }
         Command::OpenPath { path } => f(Slot::Path(path)),
+        Command::AddScene { positions, .. }
+        | Command::UpdateScene { positions, .. }
+        | Command::ChangeScene { positions, .. } => {
+            if let Some(ScenePositions::Ids(ids)) = positions {
+                f(Slot::List(ids));
+            }
+        }
         Command::SaveToLibrary { item, .. } => {
             if let Some(item) = item {
                 f(Slot::Item(item));
@@ -827,9 +838,6 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddTag { .. }
         | Command::ChangeTag { .. }
         | Command::DeleteTag { .. }
-        | Command::AddScene { .. }
-        | Command::UpdateScene { .. }
-        | Command::ChangeScene { .. }
         | Command::MoveScene { .. }
         | Command::DeleteScene { .. }
         | Command::GoToScene { .. }

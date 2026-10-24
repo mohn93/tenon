@@ -62,7 +62,7 @@ fn description(tool: &str) -> &'static str {
             "Reports what a drawing tool's click at a view pixel or a model point (meters, Z up) would snap to; call describe for the schemas."
         }
         "render_view" => {
-            "Renders the model to a PNG image (960 x 600 pixels unless given) from the document camera or a camera whose eye and target are in meters with Z up, without moving the document camera; call describe for the schemas."
+            "Renders the model to a PNG image (960 x 600 pixels unless given) from the document camera, a camera whose eye and target are in meters with Z up, or a frame of going to a scene (scene, t, from), without moving the document camera or changing the document; call describe for the schemas."
         }
         "tool_input" => {
             "Drives the active drawing tool with mouse and keyboard events as a person would (model points in meters, Z up) and reports the commands it ran; call describe for the schemas."

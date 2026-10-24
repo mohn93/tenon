@@ -318,7 +318,7 @@ impl Host for AppHost<'_> {
         let (width, height) = options.drawn();
         let mut seen = camera.clone();
         seen.viewport = glam::DVec2::new(f64::from(width.max(1)), f64::from(height.max(1)));
-        let labels = self.editor.image_labels(&seen);
+        let labels = self.editor.image_labels(&seen, frame);
         // Text keeps its size in the averaged-down image.
         let label_scale =
             crate::image_labels::pixels_per_point(options.width) * options.supersample as f32;
@@ -1342,6 +1342,12 @@ mod tests {
 
     /// The image `render_view` makes of `e`'s model from its own camera, None without a GPU.
     fn image(e: &mut Editor) -> Option<Vec<u8>> {
+        image_of(e, 400, 300, 1)
+    }
+
+    /// `image` at `width` x `height`, drawn `supersample` times larger and averaged down as
+    /// `render_view` does.
+    fn image_of(e: &mut Editor, width: u32, height: u32, supersample: u32) -> Option<Vec<u8>> {
         let (mut offscreen, mut quit) = (Offscreen::headless(), false);
         let mut host = AppHost {
             editor: e,
@@ -1352,9 +1358,30 @@ mod tests {
             session: None,
         };
         let camera = host.editor.doc().camera.clone();
-        let mut options = RenderOptions::of(host.editor.doc(), 400, 300);
+        let mut options = RenderOptions::of(host.editor.doc(), width, height);
         options.lighting = Lighting::Day;
-        host.render_view(&camera, &options, None)
+        options.supersample = supersample;
+        let rgba = host.render_view(&camera, &options, None)?;
+        Some(if supersample > 1 {
+            render::snapshot::box_downsample(&rgba, width, height, supersample)
+        } else {
+            rgba
+        })
+    }
+
+    /// The height in pixels of the rows where `width`-wide images `a` and `b` differ.
+    fn differing_rows(a: &[u8], b: &[u8], width: usize) -> usize {
+        let rows: Vec<usize> = a
+            .chunks(width * 4)
+            .zip(b.chunks(width * 4))
+            .enumerate()
+            .filter(|(_, (ra, rb))| ra != rb)
+            .map(|(y, _)| y)
+            .collect();
+        match (rows.first(), rows.last()) {
+            (Some(lo), Some(hi)) => hi - lo + 1,
+            _ => 0,
+        }
     }
 
     /// How many pixels of 400 x 300 images `a` and `b` differ in, within `r` pixels of `at`.
@@ -1465,9 +1492,50 @@ mod tests {
     }
 
     #[test]
-    fn an_image_without_annotations_is_unchanged_by_the_label_pass() {
+    fn the_label_pass_changes_only_the_pixels_near_its_labels() {
         let mut e = annotated_editor();
-        let Some(first) = image(&mut e) else { return };
-        assert_eq!(image(&mut e).unwrap(), first);
+        let Some(bare) = image(&mut e) else { return };
+        created(
+            &mut e,
+            Command::AddScreenNote {
+                at: [0.25, 0.5],
+                text: "Plan".into(),
+            },
+        );
+        // A real label pass (not skipped for want of labels).
+        let shown = image(&mut e).unwrap();
+        let at = glam::DVec2::new(115.0, 160.0);
+        let near = differing_near(&bare, &shown, at, 60.0);
+        assert!(near > 30, "the label is drawn");
+        let everywhere = differing_near(&bare, &shown, at, 1000.0);
+        assert_eq!(everywhere, near, "nothing else in the image changed");
+    }
+
+    #[test]
+    fn label_text_scales_above_2000_pixels_wide_and_keeps_its_size_when_supersampled() {
+        let mut e = annotated_editor();
+        e.execute(Command::AddScreenNote {
+            at: [0.1, 0.3],
+            text: "Plan".into(),
+        })
+        .unwrap();
+        let mut bare = annotated_editor();
+        let rows = |e: &mut Editor, b: &mut Editor, w: u32, h: u32, k: u32| {
+            let shown = image_of(e, w, h, k)?;
+            let plain = image_of(b, w, h, k)?;
+            Some(differing_rows(&plain, &shown, w as usize))
+        };
+        let Some(small) = rows(&mut e, &mut bare, 400, 100, 1) else {
+            return;
+        };
+        assert!(small > 5, "the label is drawn: {small} rows");
+        // 2400 wide: 2.4 pixels per point.
+        let large = rows(&mut e, &mut bare, 2400, 100, 1).unwrap();
+        let ratio = large as f64 / small as f64;
+        assert!((2.0..2.9).contains(&ratio), "{large} vs {small} rows");
+        // Supersampled twice: drawn at twice the size, the same size once averaged down.
+        let sampled = rows(&mut e, &mut bare, 400, 100, 2).unwrap();
+        let ratio = sampled as f64 / small as f64;
+        assert!((0.8..1.25).contains(&ratio), "{sampled} vs {small} rows");
     }
 }

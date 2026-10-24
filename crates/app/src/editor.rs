@@ -2040,6 +2040,17 @@ impl Editor {
             .collect()
     }
 
+    /// The HUD while a scene transition draws `frame`: only the labels, placed for the
+    /// frame's camera and of its scene (instances where the transition has them), nothing
+    /// hovered. The marker, lines and chip wait for the document's view.
+    pub fn transition_hud(&self, dark_canvas: bool, frame: &scenes::TransitionFrame) -> Hud {
+        Hud {
+            dark_canvas,
+            labels: self.labels_seen_by(&frame.camera, None, frame.scene.as_ref()),
+            ..Hud::default()
+        }
+    }
+
     /// The marker, preview lines and chip contents as of the last `refresh_hover`, in view
     /// pixels (the chip shown regardless of the rest; `Timing::dress` decides), and the labels
     /// of the dimensions and notes in view. Preview lines and halos take the colors of a dark

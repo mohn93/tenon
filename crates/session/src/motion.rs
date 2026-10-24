@@ -2,7 +2,7 @@
 //! scene transition draws it and `render_view` renders a frame of it. Drawing only: nothing
 //! here changes a document.
 
-use glam::{DAffine3, DMat3, DQuat};
+use glam::{DAffine3, DMat3, DQuat, DVec3};
 use kernel::{InstanceId, MeshId, Scene};
 
 use crate::camera::Camera;
@@ -13,9 +13,12 @@ pub fn smoothstep(t: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// The camera `t` of the way from `a` to `b`: eye, target, up and field of view interpolated
-/// (`up` by direction), the viewport of `a`; the projection switches at the end. `t` 0 is `a`
-/// and 1 is `b`, exactly.
+/// The camera `t` of the way from `a` to `b`: the target, up and field of view interpolated
+/// (`up` by direction), and the eye swung around the target: the direction from the target to
+/// the eye turned by spherical interpolation (exactly opposite directions turn about `up`, so
+/// going from the front to the back circles the model rather than passing through it) and the
+/// distance interpolated geometrically, so it never reaches 0. The viewport is `a`'s; the
+/// projection switches at the end. `t` 0 is `a` and 1 is `b`, exactly.
 pub fn lerp_camera(a: &Camera, b: &Camera, t: f64) -> Camera {
     if t <= 0.0 || t.is_nan() {
         return a.clone();
@@ -24,9 +27,38 @@ pub fn lerp_camera(a: &Camera, b: &Camera, t: f64) -> Camera {
         return b.clone();
     }
     let up = a.up.lerp(b.up, t);
+    let target = a.target.lerp(b.target, t);
+    let (da, db) = (a.eye - a.target, b.eye - b.target);
+    let (la, lb) = (da.length(), db.length());
+    let eye = if la > 1e-12 && lb > 1e-12 && la.is_finite() && lb.is_finite() {
+        let (ua, ub) = (da / la, db / lb);
+        let cos = ua.dot(ub).clamp(-1.0, 1.0);
+        let axis = ua.cross(ub);
+        let axis = if axis.length() > 1e-9 {
+            axis.normalize()
+        } else if cos > 0.0 {
+            // The same direction: no turn.
+            DVec3::ZERO
+        } else {
+            // Exactly opposite: turn about up (its part across the direction), or any axis
+            // across it when up lies along it.
+            (a.up - ua * a.up.dot(ua))
+                .try_normalize()
+                .unwrap_or_else(|| ua.any_orthonormal_vector())
+        };
+        let direction = if axis == DVec3::ZERO {
+            ua
+        } else {
+            DQuat::from_axis_angle(axis, cos.acos() * t) * ua
+        };
+        target + direction * (la * (lb / la).powf(t))
+    } else {
+        // An eye at its target has no direction: move it straight.
+        a.eye.lerp(b.eye, t)
+    };
     Camera {
-        eye: a.eye.lerp(b.eye, t),
-        target: a.target.lerp(b.target, t),
+        eye,
+        target,
         // Opposite ups have no between: the later one.
         up: up.try_normalize().unwrap_or(b.up),
         fov_y: a.fov_y + (b.fov_y - a.fov_y) * t,
@@ -44,15 +76,26 @@ fn polar(t: &DAffine3) -> Option<(DQuat, DMat3)> {
     if !det.is_finite() || det.abs() < 1e-12 {
         return None;
     }
-    // Newton iteration to the orthogonal factor, which keeps the sign of the determinant.
+    // Newton iteration to the orthogonal factor, which keeps the sign of the determinant,
+    // scaled by the Frobenius norms so that badly conditioned transforms converge quickly too.
+    let frobenius = |a: &DMat3| a.to_cols_array().iter().map(|v| v * v).sum::<f64>().sqrt();
     let mut q = m;
-    for _ in 0..50 {
-        let next = (q + q.inverse().transpose()) * 0.5;
+    for _ in 0..100 {
+        let inverse = q.inverse().transpose();
+        let gamma = (frobenius(&inverse) / frobenius(&q)).sqrt();
+        if !gamma.is_finite() || gamma <= 0.0 {
+            return None;
+        }
+        let next = (q * gamma + inverse * (1.0 / gamma)) * 0.5;
         let done = (next - q).abs_diff_eq(DMat3::ZERO, 1e-14);
         q = next;
         if done {
             break;
         }
+    }
+    // Not converged to a rotation (a near-singular transform): no decomposition.
+    if !(q.transpose() * q).abs_diff_eq(DMat3::IDENTITY, 1e-9) {
+        return None;
     }
     let rotation = if det < 0.0 { -q } else { q };
     let stretch = rotation.transpose() * m;
@@ -125,7 +168,6 @@ impl Motion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::DVec3;
     use std::f64::consts::FRAC_PI_2;
 
     fn rotation_angle(t: &DAffine3) -> Option<f64> {
@@ -221,6 +263,27 @@ mod tests {
     }
 
     #[test]
+    fn a_near_singular_transform_gives_a_true_rotation_or_none() {
+        for squash in [1e-3, 1e-6, 1e-9, 1e-11] {
+            let m = DAffine3::from_scale_rotation_translation(
+                DVec3::new(1e4, 1.0, squash),
+                DQuat::from_rotation_x(0.7) * DQuat::from_rotation_z(0.4),
+                DVec3::ZERO,
+            ) * DAffine3::from_rotation_y(1.3);
+            if let Some((r, _)) = polar(&m) {
+                let r = DMat3::from_quat(r);
+                assert!(
+                    (r.transpose() * r).abs_diff_eq(DMat3::IDENTITY, 1e-9),
+                    "squash {squash}"
+                );
+                assert!((r.determinant() - 1.0).abs() < 1e-9);
+            }
+            let mid = lerp_transform(&m, &DAffine3::IDENTITY, 0.5);
+            assert!(mid.is_finite());
+        }
+    }
+
+    #[test]
     fn a_singular_transform_does_not_break_it() {
         let a = DAffine3::from_scale(DVec3::new(1.0, 1.0, 0.0));
         let b = DAffine3::IDENTITY;
@@ -238,8 +301,10 @@ mod tests {
         b.fov_y = a.fov_y + 0.2;
         b.projection = Projection::Parallel;
         let m = lerp_camera(&a, &b, 0.5);
-        assert!((m.eye - a.eye.lerp(b.eye, 0.5)).length() < 1e-12);
         assert!((m.target - a.target.lerp(b.target, 0.5)).length() < 1e-12);
+        let (la, lb) = ((a.eye - a.target).length(), (b.eye - b.target).length());
+        let lm = (m.eye - m.target).length();
+        assert!((lm - (la * lb).sqrt()).abs() < 1e-9, "{lm} vs {la} {lb}");
         assert!((m.fov_y - (a.fov_y + 0.1)).abs() < 1e-12);
         assert_eq!(m.projection, Projection::Perspective);
         assert!((m.up.length() - 1.0).abs() < 1e-12);
@@ -248,5 +313,56 @@ mod tests {
             Projection::Perspective
         );
         assert_eq!(lerp_camera(&a, &b, 1.0).projection, Projection::Parallel);
+    }
+
+    /// A camera at `eye` looking at the origin, Z up.
+    fn looking_from(eye: DVec3) -> Camera {
+        let mut c = Camera::new(glam::DVec2::new(100.0, 50.0));
+        c.eye = eye;
+        c.target = DVec3::ZERO;
+        c.up = DVec3::Z;
+        c
+    }
+
+    #[test]
+    fn front_to_back_circles_the_target_instead_of_passing_through_it() {
+        let front = looking_from(DVec3::new(0.0, -10.0, 2.0));
+        let back = looking_from(DVec3::new(0.0, 10.0, -2.0));
+        let distance = front.eye.length();
+        for k in 1..10 {
+            let m = lerp_camera(&front, &back, f64::from(k) / 10.0);
+            assert!(m.eye.is_finite() && m.up.is_finite());
+            assert!(
+                ((m.eye - m.target).length() - distance).abs() < 1e-9,
+                "distance kept at {k}"
+            );
+        }
+        // Exactly opposite: halfway is off to the side (about the up axis), not at the target.
+        let mid = lerp_camera(&front, &back, 0.5);
+        assert!(mid.eye.x.abs() > 9.0, "{:?}", mid.eye);
+        // The parallel view height follows the distance, so it stays as it was.
+        let mut pa = front.clone();
+        pa.projection = crate::camera::Projection::Parallel;
+        let mut pb = back.clone();
+        pb.projection = crate::camera::Projection::Parallel;
+        let pm = lerp_camera(&pa, &pb, 0.5);
+        assert!(((pm.eye - pm.target).length() - distance).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_quarter_turn_keeps_the_distance() {
+        let a = looking_from(DVec3::new(0.0, -10.0, 0.0));
+        let b = looking_from(DVec3::new(10.0, 0.0, 0.0));
+        let m = lerp_camera(&a, &b, 0.5);
+        let s = std::f64::consts::FRAC_1_SQRT_2 * 10.0;
+        assert!(
+            (m.eye - DVec3::new(s, -s, 0.0)).length() < 1e-9,
+            "{:?}",
+            m.eye
+        );
+        // Different distances meet geometrically.
+        let far = looking_from(DVec3::new(40.0, 0.0, 0.0));
+        let m = lerp_camera(&a, &far, 0.5);
+        assert!(((m.eye - m.target).length() - 20.0).abs() < 1e-9);
     }
 }

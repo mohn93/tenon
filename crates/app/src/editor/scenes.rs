@@ -14,11 +14,11 @@ pub(super) struct Transition {
     seconds: f64,
 }
 
-/// What the window draws while a transition runs: the camera and the scene with the instances
-/// where the transition has them.
+/// What the window draws while a transition runs: the camera and, when instances move, the
+/// scene with them where the transition has them (None: the document's scene, unchanged).
 pub struct TransitionFrame {
     pub camera: Camera,
-    pub scene: kernel::Scene,
+    pub scene: Option<kernel::Scene>,
 }
 
 impl Editor {
@@ -60,9 +60,11 @@ impl Editor {
         let eased = smoothstep(x);
         let mut camera = t.motion.camera_at(eased);
         camera.viewport = self.doc.camera.viewport;
+        // A camera-only transition draws the document's scene: no copy, no model rebuild.
+        let moves = t.motion.moves.iter().any(|(_, a, b)| a != b);
         Some(TransitionFrame {
             camera,
-            scene: t.motion.scene_at(self.doc.scene(), eased),
+            scene: moves.then(|| t.motion.scene_at(self.doc.scene(), eased)),
         })
     }
 
@@ -491,15 +493,18 @@ mod tests {
         let at = |ms| t0 + Duration::from_millis(ms);
         let f0 = e.transition_frame(at(0)).expect("a frame");
         assert_eq!(f0.camera, start_camera);
-        assert_eq!(x_of(&f0.scene, first), 4.0);
+        assert_eq!(x_of(f0.scene.as_ref().unwrap(), first), 4.0);
         let f1 = e.transition_frame(at(500)).expect("a frame");
-        assert_eq!(x_of(&f1.scene, first), 2.0);
+        assert_eq!(x_of(f1.scene.as_ref().unwrap(), first), 2.0);
         let end = e.doc().camera.clone();
-        let want = start_camera.eye.lerp(end.eye, 0.5);
+        let want = session::motion::lerp_camera(&start_camera, &end, 0.5).eye;
         assert!((f1.camera.eye - want).length() < 1e-9);
         // Smoothstep: a quarter of the time is less than a quarter of the way.
         let f2 = e.transition_frame(at(250)).expect("a frame");
-        assert!(x_of(&f2.scene, first) > 4.0 * (1.0 - 0.25), "slow start");
+        assert!(
+            x_of(f2.scene.as_ref().unwrap(), first) > 4.0 * (1.0 - 0.25),
+            "slow start"
+        );
         // The model itself never moved in the frames.
         assert_eq!(x_of(e.doc().scene(), first), 0.0);
         assert!(e.transition_frame(at(1000)).is_none(), "the time is up");
@@ -564,5 +569,60 @@ mod tests {
         e.finish_transition();
         e.go_to_scene_at(scene, t0);
         assert!(!e.transitioning(), "already there");
+    }
+
+    #[test]
+    fn a_camera_only_transition_draws_the_documents_scene() {
+        use std::time::Duration;
+        let mut e = editor();
+        e.standard_view(StandardView::Front);
+        assert!(e.add_scene());
+        let scene = ids(&e)[0];
+        e.standard_view(StandardView::Top);
+        let t0 = web_time::Instant::now();
+        assert!(e.go_to_scene_at(scene, t0));
+        let frame = e
+            .transition_frame(t0 + Duration::from_millis(300))
+            .expect("a frame");
+        assert!(frame.scene.is_none(), "no instance moves: no scene copy");
+        assert_ne!(frame.camera, e.doc().camera);
+    }
+
+    #[test]
+    fn labels_during_a_transition_follow_the_drawn_camera_and_instances() {
+        use std::time::Duration;
+        let mut e = editor();
+        let (scene, first) = moved_since_a_scene(&mut e);
+        // A note inside the first group, which the transition moves.
+        let group = kernel::EntityId::Instance(first);
+        e.execute(Command::OpenInstance { id: group }).unwrap();
+        e.execute(Command::AddNote {
+            anchor: session::AnchorInput::Point([0.5, 0.5, 0.0]),
+            position: [0.5, 0.5, 1.0],
+            text: Some("A".into()),
+        })
+        .unwrap();
+        e.execute(Command::CloseInstance {}).unwrap();
+        let t0 = web_time::Instant::now();
+        assert!(e.go_to_scene_at(scene, t0));
+        let frame = e
+            .transition_frame(t0 + Duration::from_millis(500))
+            .expect("a frame");
+        let moved = frame.scene.as_ref().expect("an instance moves");
+        let place = moved.root().instance(first).unwrap().transform;
+        let want = frame
+            .camera
+            .project(place.transform_point3(glam::DVec3::new(0.5, 0.5, 1.0)))
+            .unwrap();
+        let drawn = e.transition_hud(false, &frame).labels;
+        assert_eq!(drawn.len(), 1);
+        assert!(
+            (drawn[0].at - want).length() < 1e-6,
+            "{:?} vs {want}",
+            drawn[0].at
+        );
+        // The document's view puts it elsewhere.
+        let end = e.hud(false).labels;
+        assert!((end[0].at - want).length() > 1.0);
     }
 }

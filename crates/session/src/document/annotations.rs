@@ -573,7 +573,7 @@ fn point_of(m: &Model, v: VertexId) -> DVec3 {
 }
 
 /// The point inside a triangulated face nearest its area centroid: the centroid when a
-/// triangle holds it, else the nearest triangle's closest point nudged toward that triangle's
+/// triangle holds it off the face's edges, else the nearest triangle's closest point nudged toward that triangle's
 /// center, so it lies inside the face and never in a hole.
 fn interior_point_near_centroid(tris: &[[DVec3; 3]]) -> Option<DVec3> {
     let mut area = 0.0;
@@ -594,14 +594,38 @@ fn interior_point_near_centroid(tris: &[[DVec3; 3]]) -> Option<DVec3> {
         if d < best_d {
             let center = (t[0] + t[1] + t[2]) / 3.0;
             best_d = d;
-            best = Some(if d < 1e-9 {
-                centroid
-            } else {
-                q + (center - q) * 0.1
-            });
+            best = Some((q, q + (center - q) * 0.1));
         }
     }
-    best
+    let (q, nudged) = best?;
+    // On a side shared by two triangles the centroid is inside the face; on the face's own
+    // edge (around a hole) it is nudged strictly inside too.
+    Some(
+        if q.distance(centroid) < 1e-9 && !on_face_edge(centroid, tris) {
+            centroid
+        } else {
+            nudged
+        },
+    )
+}
+
+/// Whether `p` lies on a side of `tris` that no other triangle shares: an edge of the face.
+fn on_face_edge(p: DVec3, tris: &[[DVec3; 3]]) -> bool {
+    let same = |a: DVec3, b: DVec3| a.distance_squared(b) < 1e-24;
+    let shared = |u: DVec3, v: DVec3, skip: usize| {
+        tris.iter().enumerate().any(|(j, t)| {
+            j != skip && t.iter().any(|&a| same(a, u)) && t.iter().any(|&a| same(a, v))
+        })
+    };
+    tris.iter().enumerate().any(|(i, t)| {
+        [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]
+            .into_iter()
+            .any(|(u, v)| {
+                let along = (p - u).dot(v - u) / (v - u).length_squared().max(f64::MIN_POSITIVE);
+                let foot = u + (v - u) * along.clamp(0.0, 1.0);
+                foot.distance(p) < 1e-9 && !shared(u, v, i)
+            })
+    })
 }
 
 /// The point of triangle `t` nearest `p`.
@@ -635,4 +659,45 @@ fn closest_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
     }
     let denom = 1.0 / (va + vb + vc);
     a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whether `p` (in the plane of triangle `t`) lies inside it and off its sides.
+    fn strictly_inside(p: DVec3, [a, b, c]: [DVec3; 3]) -> bool {
+        let n = (b - a).cross(c - a);
+        let area = n.length_squared();
+        if area <= 0.0 {
+            return false;
+        }
+        let tolerance = 1e-9 * area;
+        [(a, b), (b, c), (c, a)]
+            .iter()
+            .all(|&(u, v)| (v - u).cross(p - u).dot(n) > tolerance)
+    }
+
+    #[test]
+    fn a_centroid_on_the_faces_edge_is_nudged_strictly_inside() {
+        // Two triangles meeting at a corner: the centroid is that corner, on both sides.
+        let t1 = [DVec3::ZERO, DVec3::X, DVec3::Y];
+        let t2 = [DVec3::ZERO, -DVec3::X, -DVec3::Y];
+        let p = interior_point_near_centroid(&[t1, t2]).unwrap();
+        assert!(p != DVec3::ZERO);
+        assert!(strictly_inside(p, t1) || strictly_inside(p, t2), "{p:?}");
+        // On the diagonal two triangles share: inside the face, kept.
+        let (a, b, c, d) = (
+            DVec3::ZERO,
+            DVec3::X * 2.0,
+            DVec3::new(2.0, 1.0, 0.0),
+            DVec3::Y,
+        );
+        let p = interior_point_near_centroid(&[[a, b, c], [a, c, d]]).unwrap();
+        assert!((p - DVec3::new(1.0, 0.5, 0.0)).length() < 1e-12, "{p:?}");
+        // A centroid well inside is kept.
+        let big = [DVec3::ZERO, DVec3::X * 3.0, DVec3::Y * 3.0];
+        let p = interior_point_near_centroid(&[big]).unwrap();
+        assert!((p - DVec3::new(1.0, 1.0, 0.0)).length() < 1e-12);
+    }
 }

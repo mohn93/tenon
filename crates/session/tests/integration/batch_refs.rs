@@ -238,7 +238,9 @@ fn reference_keys_cover_every_id_field() {
             // An annotation's anchor may be a vertex id.
             let has_ids = text.contains("#/$defs/EntityId")
                 || text.contains("#/$defs/MaterialId")
-                || text.contains("#/$defs/AnchorInput");
+                || text.contains("#/$defs/AnchorInput")
+                // A scene's stored positions may be a list of instance ids.
+                || text.contains("#/$defs/ScenePositions");
             let reference_key = matches!(key.as_str(), "ids" | "face" | "id" | "material")
                 || matches!(
                     (key.as_str(), name),
@@ -251,6 +253,7 @@ fn reference_keys_cover_every_id_field() {
                         | ("target", "add_label")
                         | ("note", "change_note")
                         | ("plane", "flip_section_plane" | "activate_section_plane")
+                        | ("positions", "add_scene" | "update_scene" | "change_scene")
                 );
             // Tag ids are not references (a reference has no `t` kind), so a field holding
             // them must not be a reference key: "$0:t0" there is refused as a tag id.
@@ -290,6 +293,49 @@ fn reference_keys_cover_every_id_field() {
         scene_fields, 5,
         "update_scene, change_scene, move_scene, delete_scene and go_to_scene .scene"
     );
+}
+
+#[test]
+fn scene_positions_take_references() {
+    let mut d = doc();
+    let id = |v: kernel::EntityId| serde_json::to_value(v).unwrap();
+    let outcomes = d
+        .execute_batch(
+            batch(vec![
+                rectangle(),
+                json!({"type": "make_group", "ids": ["$0:*"]}),
+                json!({"type": "add_scene", "name": "A", "positions": ["$1:i0"]}),
+            ]),
+            true,
+        )
+        .unwrap();
+    let first = outcomes[1].placed.as_ref().unwrap()[0];
+    let scenes = ask(&d, json!({"type": "scenes"}));
+    assert_eq!(
+        scenes["scenes"][0]["positions"],
+        json!([id(first)]),
+        "{scenes}"
+    );
+    let scene = scenes["scenes"][0]["id"].clone();
+    for (n, command) in ["update_scene", "change_scene"].into_iter().enumerate() {
+        let outcomes = d
+            .execute_batch(
+                batch(vec![
+                    json!({"type": "add_rectangle", "corner": [5 + 5 * n, 0, 0], "opposite": [6 + 5 * n, 1, 0]}),
+                    json!({"type": "make_group", "ids": ["$0:*"]}),
+                    json!({"type": command, "scene": scene, "positions": ["$1:i0"]}),
+                ]),
+                true,
+            )
+            .unwrap();
+        let made = outcomes[1].placed.as_ref().unwrap()[0];
+        let scenes = ask(&d, json!({"type": "scenes"}));
+        assert_eq!(
+            scenes["scenes"][0]["positions"],
+            json!([id(made)]),
+            "{command}: {scenes}"
+        );
+    }
 }
 
 #[test]

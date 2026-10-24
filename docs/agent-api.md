@@ -106,7 +106,7 @@ Queries:
 | `{"type": "tags"}` | every tag: `id`, `name`, `color`, `visible`, and `count`, how many edges, faces, instances, guides, dimensions, notes and section planes in the whole model are on it; see Tags below |
 | `{"type": "scenes"}` | every scene, in order: `id`, `name`, whether it stores a view (`camera`) and tag visibility (`tags`), `positions` (the instance ids whose positions it stores; absent when none), and whether it is `selected`; plus `revision`; see Scenes below |
 | `{"type": "styles"}` | every style, in the order they were made: `id`, `name` and `settings`; plus `revision`; see Styles below |
-| `{"type": "scene", "scene": "p40"}` | one scene: `id`, `name`, the `view` it stores (null when none) and the tags it hides (`hidden_tags`, null when it does not store tag visibility); see Scenes below |
+| `{"type": "scene", "scene": "p40"}` | one scene: `id`, `name`, the `view` it stores (null when none), the tags it hides (`hidden_tags`, null when it does not store tag visibility) and `positions` (the instance ids whose positions it stores, null when none); see Scenes below |
 | `{"type": "context"}` | the open context: `path` (open instances from the root, empty at the root) and the `definition` being edited |
 | `{"type": "outliner"}` | the tree of placed groups and components in the whole model, plus `revision`; optional `depth` limits it; see Groups and components below |
 | `{"type": "file"}` | `path` of the file last opened or saved (`null` if never), `modified` since then, `revision`, and `api_roots`: the folders `--api-root` limits files to, resolved (`null` without it) |
@@ -1066,16 +1066,18 @@ undone, or it deleted) is not selected while it does not exist, and is selected 
 comes back (by redo or undo).
 
 Scene transitions: in the window, going to a scene (the Scenes tab, a scene tab, Page Up and
-Down) animates the camera (eye, target, up and field of view interpolated; the projection
-switches at the end) and the stored positions over `seconds` with smoothstep easing, when the
+Down) animates the camera (target, up and field of view interpolated, the eye swung around
+the target: its direction from the target turned by spherical interpolation, about the up axis
+for exactly opposite views, and its distance interpolated geometrically, so going from the
+front to the back circles the model; the projection switches at the end) and the stored positions over `seconds` with smoothstep easing, when the
 `set_scene_transition` setting is on and `seconds` is above 0; Settings, Model tab has both.
 A position moves as a translation lerp, a spherical interpolation of the rotation (of the
 polar decomposition of its linear part) and a scale lerp; a pair where only one mirrors, or one
 is singular, keeps the first's linear part until halfway. The document is at the end at once
 (the undo step is made at the start); the animation only changes what is drawn, and any press,
 scroll or gesture, and any command, finishes it at once. Agents' `go_to_scene` is never
-animated. Dimensions and notes are placed for the camera but not the moving instances during
-it.
+animated. During it the labels of dimensions and notes follow the drawn camera and the moving
+instances, and nothing is hovered; a `render_view` frame (`scene`, `t`) labels them the same way.
 
 A view a scene stores is the camera in model (root) coordinates, as `set_camera` takes it,
 whatever instance is open; `go_to_scene` leaves the open instance open.
@@ -1083,8 +1085,9 @@ whatever instance is open; `go_to_scene` leaves the open instance open.
 `{"type": "scenes"}` gives, for example,
 `{"scenes": [{"id": "p40", "name": "Front", "camera": true, "tags": true, "selected": true}], "revision": 12}` (plus `"positions": ["i3"]` for a scene that stores positions). Erasing, grouping or exploding an instance drops it from the scenes that store it, in the same undo step; undo puts it back.
 `{"type": "scene", "scene": "p40"}` gives the stored view in the `camera` query's terms (without
-`view_height`) and the hidden tag ids:
-`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false, "shadows": {"on": false, "date": "2026-11-08", "time": "13:30", "light": 80, "dark": 45, "on_ground": true}}, "hidden_tags": ["t31"], "revision": 12}`.
+`view_height`), the hidden tag ids and the instances whose positions it stores (`positions`,
+null when none):
+`{"id": "p40", "name": "Front", "view": {"eye": [-8, -12, 7], "target": [0, 0, 0], "up": [0, 0, 1], "fov_y_deg": 35, "projection": "perspective", "lighting": "day", "color_by_tag": false, "x_ray": false, "hidden_geometry": false, "shadows": {"on": false, "date": "2026-11-08", "time": "13:30", "light": 80, "dark": 45, "on_ground": true}}, "hidden_tags": ["t31"], "positions": null, "revision": 12}`.
 
 ### Styles
 
