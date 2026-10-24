@@ -12,6 +12,7 @@ pub mod drawing;
 pub mod export;
 pub mod file;
 pub mod fspath;
+mod helix;
 mod import;
 pub mod library;
 pub mod pdf;

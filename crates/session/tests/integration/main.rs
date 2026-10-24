@@ -18,6 +18,7 @@ mod files;
 mod follow_me;
 mod groups;
 mod guides;
+mod helix;
 mod hide;
 mod history_origin;
 mod import;

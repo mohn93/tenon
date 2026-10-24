@@ -323,7 +323,7 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
             (key, command_type),
             ("item", Some("save_to_library"))
                 | ("definition", Some("rename_definition" | "place_instance"))
-                | ("path", Some("open_path" | "follow_me"))
+                | ("path", Some("open_path" | "follow_me" | "copy_along_path"))
                 | ("a" | "b", Some("add_dimension"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
@@ -726,6 +726,10 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::One(plane))
         }
         Command::Revolve { face, .. } => f(Slot::One(face)),
+        Command::CopyAlongPath { ids, path, .. } => {
+            f(Slot::List(ids));
+            f(Slot::List(path));
+        }
         Command::FollowMe { face, path } => {
             f(Slot::One(face));
             f(Slot::List(path));
@@ -769,6 +773,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::AddPolygon { .. }
         | Command::AddArc { .. }
         | Command::AddCurve { .. }
+        | Command::AddHelix { .. }
         | Command::AddRotatedRectangle { .. }
         | Command::AddGuideLine { .. }
         | Command::AddGuidePoint { .. }

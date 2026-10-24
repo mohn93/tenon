@@ -32,6 +32,7 @@ mod annotations;
 mod axes;
 mod camera;
 mod clip;
+mod copy_along_path;
 mod elsewhere;
 mod files;
 mod flip;
@@ -757,6 +758,7 @@ impl Document {
             | Command::AddPolygon { .. }
             | Command::AddArc { .. }
             | Command::AddCurve { .. }
+            | Command::AddHelix { .. }
             | Command::AddRotatedRectangle { .. }
             | Command::AddGuideLine { .. }
             | Command::AddGuidePoint { .. }
@@ -777,6 +779,7 @@ impl Document {
             | Command::Erase { .. }
             | Command::Move { .. }
             | Command::Copy { .. }
+            | Command::CopyAlongPath { .. }
             | Command::Rotate { .. }
             | Command::Scale { .. }
             | Command::Offset { .. }
@@ -893,6 +896,29 @@ impl Document {
                 closed,
                 curve,
             } => self.add_curve_changes(points, *closed, curve.unwrap_or(true)),
+            Command::AddHelix {
+                center,
+                axis,
+                radius,
+                pitch,
+                turns,
+                segments,
+                start_direction,
+                left_handed,
+            } => crate::helix::helix_points(crate::helix::Helix {
+                center: DVec3::from(*center),
+                axis: axis.map(DVec3::from),
+                radius: *radius,
+                pitch: *pitch,
+                turns: *turns,
+                segments: segments.unwrap_or(crate::helix::DEFAULT_HELIX_SEGMENTS),
+                start_direction: start_direction.map(DVec3::from),
+                left_handed: *left_handed,
+            })
+            .and_then(|points| {
+                let points: Vec<[f64; 3]> = points.iter().map(|p| p.to_array()).collect();
+                self.add_curve_changes(&points, false, true)
+            }),
             Command::AddRotatedRectangle {
                 corner,
                 edge_end,
@@ -965,6 +991,13 @@ impl Document {
             Command::Copy { ids, offset, count } => {
                 self.copy_changes(ids, *offset, count.unwrap_or(1))
             }
+            Command::CopyAlongPath {
+                ids,
+                path,
+                count,
+                spacing,
+                align,
+            } => self.copy_along_path_changes(ids, path, (*count, *spacing), align.unwrap_or(true)),
             Command::Rotate {
                 ids,
                 center,

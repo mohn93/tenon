@@ -242,7 +242,7 @@ fn reference_keys_cover_every_id_field() {
             let reference_key = matches!(key.as_str(), "ids" | "face" | "id" | "material")
                 || matches!(
                     (key.as_str(), name),
-                    ("path", "open_path" | "follow_me")
+                    ("path", "open_path" | "follow_me" | "copy_along_path")
                         | ("a" | "b", "add_dimension")
                         | ("edge", "add_edge_dimension" | "add_radial_dimension")
                         | ("anchor", "add_note")

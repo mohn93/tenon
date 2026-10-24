@@ -136,6 +136,30 @@ pub enum Command {
         #[serde(default)]
         curve: Option<bool>,
     },
+    /// Draw a helix as one polyline on one curve (not a polygon), as one undo step, with the
+    /// rules of `add_curve`: it starts at `center` plus `radius` along `start_direction` (any
+    /// length, projected into the plane square to `axis`; default the plane's u axis, as for
+    /// `add_circle`) and rises `pitch` per turn along `axis` (default Z; any length), turning
+    /// counter-clockwise looking down the axis (clockwise with `left_handed`). `turns` is
+    /// above 0 and at most 1000 (fractions allowed), `segments` (3 to 360, default 24) the
+    /// edges per turn; a part turn gets as many edges as it needs, rounded up, and the last
+    /// point lies at the exact end angle. At most 10,000 points. Outcome `created` (edges).
+    /// Sweep a small circle along it with `follow_me` for a spring.
+    AddHelix {
+        #[schemars(with = "ModelPoint")]
+        center: [f64; 3],
+        #[serde(default)]
+        axis: Option<[f64; 3]>,
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+        #[serde(default)]
+        start_direction: Option<[f64; 3]>,
+        #[serde(default)]
+        left_handed: bool,
+    },
     /// Draw a rectangle at any angle, as one undo step: its first side runs from `corner` to
     /// `edge_end`, its width is the distance from `width_point` to the line of that side, and
     /// it lies in the plane through the side and `width_point`, on the side of `width_point`.
@@ -316,6 +340,30 @@ pub enum Command {
         offset: [f64; 3],
         #[serde(default)]
         count: Option<u32>,
+    },
+    /// Copy edges, faces, instances, guides, dimensions, notes and section planes along a
+    /// path (a chain of edges as for `follow_me`: connected, unbranched, open or closed), as
+    /// one undo step, under the rules of `Copy`. Exactly one of `count` (at least 1) or
+    /// `spacing` (above 0). Positions are measured by arc length from the path's start: the
+    /// end of an open path nearest the centre of the box around `ids` (the path vertex
+    /// nearest it for a closed one). With `count` N on an open path, N positions evenly from
+    /// start to end inclusive (1: the start); on a closed path N evenly around. With `spacing`
+    /// s, 0, s, 2s, ... up to the length (an open path's end included; a closed path's start
+    /// is not repeated). Copy k is the originals moved by the path point's offset from the
+    /// start and, with `align` (default true), turned about that point by the smallest
+    /// rotation taking the path direction at the start to the direction there (at a vertex
+    /// the edge leaving it, at the end of an open path the edge arriving). The start makes no
+    /// copy; when no position is left nothing changes (an empty outcome, no undo step). At
+    /// most 10,000 copies. `placed` lists the instances made.
+    CopyAlongPath {
+        ids: Vec<EntityId>,
+        path: Vec<EntityId>,
+        #[serde(default)]
+        count: Option<u32>,
+        #[serde(default)]
+        spacing: Option<f64>,
+        #[serde(default)]
+        align: Option<bool>,
     },
     /// Rotate vertices, edges, faces (their vertices), instances, guides, annotations and section
     /// planes (as `move` moves them) by `angle` degrees
