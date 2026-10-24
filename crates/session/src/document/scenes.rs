@@ -314,6 +314,10 @@ impl Document {
                 );
             }
         }
+        if page.positions.is_some() {
+            // The joints' values follow the stored pose (measured, not solved).
+            changes.push(self.scene.update_joint_values());
+        }
         if let Some((camera, v)) = view {
             let v = &v;
             self.camera = camera;

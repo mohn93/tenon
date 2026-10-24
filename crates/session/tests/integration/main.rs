@@ -29,6 +29,7 @@ mod import;
 mod interference;
 mod intersect;
 mod isolate;
+mod joints;
 mod library;
 mod lights;
 mod materials;

@@ -53,6 +53,10 @@ pub struct SceneData {
     /// there are none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub styles: Vec<StyleData>,
+    /// The joints between root instances. Absent in files written before joints existed (and
+    /// when there are none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joints: Vec<JointData>,
     /// The model axes. Absent in files written before axes existed (and when they are the
     /// world axes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +69,39 @@ pub struct SceneData {
     /// is the default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<TransitionData>,
+}
+
+/// A joint: see [`crate::Joint`]. `a` is absent for the ground; angles are radians.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JointData {
+    pub id: u64,
+    pub name: String,
+    pub kind: crate::JointKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a: Option<u64>,
+    pub b: u64,
+    pub frame_a: JointFrameData,
+    pub frame_b: JointFrameData,
+    pub value: f64,
+    /// Absent when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub slide: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<[f64; 2]>,
+}
+
+fn is_zero(x: &f64) -> bool {
+    *x == 0.0
+}
+
+/// A joint frame: see [`crate::JointFrame`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JointFrameData {
+    pub origin: [f64; 3],
+    pub axis: [f64; 3],
+    pub reference: [f64; 3],
 }
 
 /// How going to a scene animates: see [`crate::SceneTransition`].
@@ -527,6 +564,28 @@ impl Scene {
                     settings: s.settings,
                 })
                 .collect(),
+            joints: self
+                .joints()
+                .map(|(id, j)| {
+                    let frame = |f: &crate::JointFrame| JointFrameData {
+                        origin: f.origin.to_array(),
+                        axis: f.axis.to_array(),
+                        reference: f.reference.to_array(),
+                    };
+                    JointData {
+                        id: id.0,
+                        name: j.name.clone(),
+                        kind: j.kind,
+                        a: j.a.map(|i| i.0),
+                        b: j.b.0,
+                        frame_a: frame(&j.frame_a),
+                        frame_b: frame(&j.frame_b),
+                        value: j.value,
+                        slide: j.slide,
+                        limits: j.limits.map(|(lo, hi)| [lo, hi]),
+                    }
+                })
+                .collect(),
             location: (!self.location().is_default()).then(|| {
                 let l = self.location();
                 LocationData {
@@ -654,6 +713,34 @@ impl Scene {
                 return Err(format!("style y{} appears twice", s.id));
             }
         }
+        let mut joints = BTreeMap::new();
+        for j in &data.joints {
+            check_id("joint j", j.id)?;
+            let frame = |f: &JointFrameData| crate::JointFrame {
+                origin: f.origin.into(),
+                axis: f.axis.into(),
+                reference: f.reference.into(),
+            };
+            let joint = crate::Joint {
+                name: j.name.clone(),
+                kind: j.kind,
+                a: j.a.map(InstanceId),
+                b: InstanceId(j.b),
+                frame_a: frame(&j.frame_a),
+                frame_b: frame(&j.frame_b),
+                value: j.value,
+                slide: j.slide,
+                limits: j.limits.map(|[lo, hi]| (lo, hi)),
+            };
+            if joints.insert(crate::JointId(j.id), joint).is_some() {
+                return Err(format!("joint j{} appears twice", j.id));
+            }
+        }
+        let next_after_joints = joints
+            .keys()
+            .map(|id: &crate::JointId| id.0.saturating_add(1))
+            .max()
+            .unwrap_or(0);
         let mut scene = Scene::from_meshes(
             root,
             definitions,
@@ -661,8 +748,9 @@ impl Scene {
             tags,
             pages,
             styles,
-            data.next_id,
+            data.next_id.max(next_after_joints),
         );
+        scene.joints = joints;
         if let Some(a) = &data.axes {
             scene.axes = Axes::from_parts(a.origin.into(), a.x.into(), a.y.into(), a.z.into())
                 .map_err(|e| e.to_string())?;

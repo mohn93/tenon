@@ -257,6 +257,10 @@ fn describe_lists_methods_and_schemas() {
         "change_style",
         "delete_style",
         "set_style",
+        "add_joint",
+        "change_joint",
+        "delete_joint",
+        "drive",
         "position_texture",
         "soften_edges",
         "soften_by_angle",
@@ -292,6 +296,8 @@ fn describe_lists_methods_and_schemas() {
         "tags",
         "scenes",
         "styles",
+        "joints",
+        "\"joint\"",
         "\"scene\"",
         "outliner",
         "annotations",
@@ -1283,7 +1289,7 @@ fn describe_batch_schema_accepts_references() {
     assert_eq!(definition[1], json!({"$ref": "#/$defs/BatchRef"}));
     assert_eq!(
         defs["BatchRef"]["pattern"],
-        r"^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1-9][0-9]*|\*)|\*)$"
+        r"^\$(0|[1-9][0-9]*):(([vefigrnsmdyj])(0|[1-9][0-9]*|\*)|\*)$"
     );
     let style = defs["StyleId"]["anyOf"].as_array().unwrap();
     assert_eq!(style[1], json!({"$ref": "#/$defs/BatchRef"}));
