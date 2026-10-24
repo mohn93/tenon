@@ -125,7 +125,7 @@ Commands: `add_edge`, `add_rectangle`, `add_circle`, `add_polygon`, `add_arc`, `
 `add_edge_dimension`, `add_radial_dimension`, `add_note`, `add_screen_note`, `change_note`,
 `add_3d_text`, `set_units`, `add_section_plane`, `flip_section_plane`, `activate_section_plane`,
 `deactivate_section`, `set_section_display`, `set_section_cut`, `add_material`,
-`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`, `outer_shell`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
+`change_material`, `delete_material`, `paint`, `add_tag`, `change_tag`, `delete_tag`, `set_tag`, `add_scene`, `update_scene`, `change_scene`, `move_scene`, `delete_scene`, `go_to_scene`, `add_style`, `change_style`, `delete_style`, `position_texture`, `soften_edges`, `soften_by_angle`, `hide`, `unhide`, `unhide_last`, `unhide_all`, `reverse_faces`, `orient_faces`, `intersect_faces`, `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`, `outer_shell`, `chamfer_edges`, `fillet_edges`, `paste`, `save_to_library`, `insert_library_item`, `select`, `undo`,
 `redo`, `set_camera`, `orbit`, `pan`, `zoom`, `zoom_extents`, `standard_view`, `set_projection`, `look_around`, `position_camera`,
 `set_lighting`, `set_color_by_tag`, `set_x_ray`, `set_hidden_geometry`, `set_shadows`, `set_style`, `set_location`, `new`, `open`, `save`, `export`, `import`.
 Units are meters, Z is up, angles in degrees, coordinates within +/-1,000,000 m.
@@ -533,6 +533,76 @@ refused the same way: leave a small clearance (0.1 mm is plenty). A pass whose s
 than 200,000 face pairs or 100,000 crossing segments (the limits of `intersect_faces`) is
 `invalid_input` ("too many faces cross to combine at once") and changes nothing. A batch can refer
 to `ids`, `target`, `tools`, and `a` and `b` of `solid_split`.
+
+### Chamfer
+
+| Command | Effect |
+|---|---|
+| `{"type": "chamfer_edges", "edges": ["e12", "e15"], "distance": 0.005}` | Bevels edges of the open context's own solid, as one undo step labelled `chamfer_edges`: open the group first (`open_instance`). |
+| `{"type": "chamfer_edges", "instance": "i4", "edges": ["e12"], "distance": 0.005}` | The same on edges of the definition of `instance` (a group or component of the open context); the definition is edited, so a component's other instances change too. |
+
+Each edge becomes a flat face set back `distance` (more than 0.000001 m, in the edited mesh's own
+coordinates, before any instance scaling) on both faces beside it. A convex edge (the solid's angle
+there under 180 degrees) loses material; a concave edge (the inside corner of an L) gains it.
+Chamfers of convex edges meeting at an outside corner (a box's) overlap and close the corner; at
+any other end (shared with no other chosen edge, with a concave one, or at an inside corner such
+as where an L's slab meets its tower) the chamfer stops in the plane of the face there, so that
+face is trimmed and nothing else is notched. An end face narrower than the distance does not stop
+the cut: the chamfer runs on past it (the result is still a closed solid). A chamfer never removes
+what a concave chamfer beside it adds; a concave chamfer whose two faces are both chamfered away
+at an end (the inside corner of an L with the edges around it chamfered too) starts `distance` in
+from that end. The new face takes the front and back materials of the first face beside the edge
+(the outer and inner sides).
+
+The geometry chamfered (the open context's faces, nested groups and components aside, or the
+instance's definition, which must have no nested ones) must be a solid (see the `solid` query);
+otherwise `invalid_input` ("the open context is not a solid: edge e12 bounds 1 face", "i4 is not a
+solid: ..."). Each edge must be straight (an edge of a curve such as a circle is refused; a
+polygon's side is fine), not be soft (a seam within a curved surface such as a cylinder's side),
+lie between two flat faces at least 1 degree apart (a seam between coplanar faces is refused), and
+the setback line must stay inside both faces along the whole edge ("distance too large for edge
+e12"); otherwise `invalid_input` naming the edge. A flat face that already has a soft edge (next
+to an earlier fillet) is fine. Two chosen edges of one face that face each other across it (their
+directions into the face more than 90 degrees apart, with no shared end) must not have
+overlapping setback strips, or the cuts would meet within the face: `invalid_input` "distance too
+large for edges e12 and e15" naming both. Empty `edges`, an id named twice,
+an id that is not an edge, or more than 1,000 edges are `invalid_input`; unknown ids are
+`not_found`. Failures of the boolean are reported as for Solid Tools. On any error nothing
+changes.
+
+The outcome's `changes` lists the faces and edges removed and made; faces and edges the chamfer
+did not touch keep their ids, so a later command can still name them. A batch can refer to
+`instance` and `edges`; with `instance`, references in `edges` may name edges inside its
+definition, e.g. `{"type": "chamfer_edges", "instance": "$0:i0", "edges": ["$0:e*"], "distance":
+0.01}` after an `add_box` chamfers all twelve edges of the new box.
+
+### Fillet
+
+| Command | Effect |
+|---|---|
+| `{"type": "fillet_edges", "edges": ["e12", "e15"], "radius": 0.005}` | Rounds edges of the open context's own solid, as one undo step labelled `fillet_edges`: open the group first (`open_instance`). |
+| `{"type": "fillet_edges", "instance": "i4", "edges": ["e12"], "radius": 0.005, "segments": 4}` | The same on edges of the definition of `instance`, as for `chamfer_edges`. |
+
+Each edge becomes a round of `radius` (more than 0.000001 m, in the edited mesh's own coordinates)
+tangent to both faces beside it: an arc whose corners lie on the true circle, made of `segments`
+faces per quarter turn (default 8, 1 to 90), in proportion for other angles (the faces of a box
+edge turn 90 degrees, so 8 faces; an edge whose faces meet at 60 degrees inside turns 120 degrees,
+so 11), at least 1. `segments: 1` gives a single face for a quarter turn, still soft at both
+sides: a low-poly round shaded smooth, not a chamfer. The round touches each face `radius / tan(angle / 2)` from the edge, `angle`
+being the angle between the faces inside the solid (outside it for a concave edge): `radius` for a
+box edge. The edges between the round's faces and the two where it meets the flat faces are soft,
+so it is shaded as one smooth surface; the round's faces are listed in `created` and take the
+first face's materials. A convex edge loses material; a concave edge gains a cove.
+
+Ends, corners and validation are as for `chamfer_edges`, with the setback above in place of
+`distance` ("radius too large for edge e12" when the round would not stay inside both faces).
+Rounds of convex edges meeting at an outside corner overlap and close it: a box with all twelve
+edges rounded has corners where the three rounds cross, not spherical patches. The flat faces
+beside a round can still be bevelled later: round a box's four upright edges, then the loop
+around its top (the straight sides and the rounds' top edges) in a second command, with another
+radius if wanted, or chamfer an edge next to a round. Edges facing each other across a face whose
+rounds would overlap are "radius too large for edges e12 and e15". `segments` outside 1 to 90 is
+`invalid_input`. A batch can refer to `instance` and `edges` as for `chamfer_edges`.
 
 ### Guides
 

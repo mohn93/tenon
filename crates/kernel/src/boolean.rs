@@ -375,7 +375,7 @@ fn subset(m: &Model, faces: &[FaceId]) -> Model {
 }
 
 /// The meshes gathered, in order, into meshes of several whose bounding boxes do not meet.
-fn apart(meshes: Vec<Model>) -> Vec<Model> {
+pub(crate) fn apart(meshes: Vec<Model>) -> Vec<Model> {
     let pad = DVec3::splat(10.0 * LENGTH_TOL);
     let mut groups: Vec<Vec<(Model, (DVec3, DVec3))>> = Vec::new();
     for m in meshes {

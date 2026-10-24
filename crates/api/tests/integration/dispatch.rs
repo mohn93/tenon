@@ -267,6 +267,8 @@ fn describe_lists_methods_and_schemas() {
         "solid_trim",
         "solid_split",
         "outer_shell",
+        "chamfer_edges",
+        "fillet_edges",
         "paste",
         "new",
         "open",

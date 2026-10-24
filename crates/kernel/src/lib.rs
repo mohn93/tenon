@@ -11,6 +11,7 @@ mod data;
 mod edit;
 mod erase;
 mod faces;
+pub mod fillet;
 pub mod geom;
 mod group;
 mod guides;
