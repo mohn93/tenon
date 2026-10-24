@@ -279,6 +279,7 @@ fn describe_lists_methods_and_schemas() {
         "context",
         "file",
         "curve",
+        "\"solid\"",
         "materials",
         "tags",
         "scenes",
@@ -295,6 +296,23 @@ fn describe_lists_methods_and_schemas() {
             "Query schema lacks {variant}"
         );
     }
+}
+
+#[test]
+fn solid_query_reports_volume_over_rpc() {
+    let mut h = HeadlessHost::new();
+    let r = call(
+        &mut h,
+        "execute",
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [2, 3, 4], "as": "group"}),
+    );
+    let id = r["result"]["placed"][0].clone();
+    let r = call(&mut h, "query", json!({"type": "solid", "id": id}));
+    assert_eq!(r["result"]["type"], "solid");
+    assert_eq!(r["result"]["solid"], true);
+    assert!((r["result"]["volume"].as_f64().unwrap() - 24.0).abs() < 1e-9);
+    let r = call(&mut h, "query", json!({"type": "solid", "id": "f1"}));
+    assert_eq!(r["error"]["code"], codes::COMMAND_FAILED);
 }
 
 #[test]

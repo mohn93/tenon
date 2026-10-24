@@ -128,6 +128,18 @@ fn selection_info(doc: &Document, units: &Units) -> Vec<String> {
             }
             _ => vec!["1 group".into()],
         };
+        if let (Some(d), Some(i)) = (d, instance)
+            && let Ok(volume) = kernel::solid::instance_volume(doc.scene(), i)
+        {
+            lines.push(
+                match d.kind {
+                    DefinitionKind::Group => "Solid group",
+                    DefinitionKind::Component => "Solid component",
+                }
+                .into(),
+            );
+            lines.push(format!("Volume: {} m³", number(volume)));
+        }
         lines.extend(instance.map_or_else(Vec::new, |i| placement(i.transform, units)));
         if let Some(material) = instance.and_then(|i| i.material) {
             lines.push(format!("Material: {}", material_name(doc, Some(material))));
@@ -587,6 +599,37 @@ mod tests {
         );
         select(&mut d, &["g9", "g10", "e2"]);
         assert_eq!(entity_info(&d), ["1 edge, 2 guides"]);
+    }
+
+    #[test]
+    fn a_closed_group_or_component_shows_solid_and_volume() {
+        for (as_, line) in [("group", "Solid group"), ("component", "Solid component")] {
+            let mut d = Document::new(DVec2::new(800.0, 600.0));
+            let out = d
+                .execute(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "add_box", "corner": [0, 0, 0], "size": [2, 3, 4], "as": as_
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            d.execute(Command::Select {
+                ids: out.placed.clone().unwrap(),
+                mode: SelectMode::Replace,
+                all: false,
+            })
+            .unwrap();
+            let lines = entity_info(&d);
+            assert!(lines.contains(&line.to_string()), "{lines:?}");
+            assert!(lines.contains(&"Volume: 24 m³".to_string()), "{lines:?}");
+        }
+        // A plain group of loose geometry is not a solid.
+        let mut d = doc_with_square();
+        let ids = ["e2", "e4", "e6", "e7", "f8"]
+            .map(|s| s.parse().unwrap())
+            .to_vec();
+        d.execute(Command::MakeGroup { ids, name: None }).unwrap();
+        assert_eq!(entity_info(&d), ["1 group"]);
     }
 
     #[test]

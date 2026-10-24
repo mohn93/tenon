@@ -37,6 +37,13 @@ pub enum Query {
     Curve {
         id: EntityId,
     },
+    /// Whether a group or component is a solid: its own geometry is closed (every edge bounds
+    /// two faces, consistently oriented, outward) and it holds no nested groups or components.
+    /// Gives its volume in cubic meters of the open context (after the placement's scale),
+    /// or why it is not one.
+    Solid {
+        id: EntityId,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -599,6 +606,15 @@ pub enum QueryResult {
     Note(NoteInfo),
     SectionPlane(SectionPlaneInfo),
     Curve(CurveInfo),
+    /// The `solid` query: `volume` is present exactly when `solid` is true; `reason` says why
+    /// not otherwise (e.g. "edge e12 bounds 1 face").
+    Solid {
+        solid: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        volume: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the
     /// whole view's height); `lighting` is `day` or `night`; `color_by_tag` is whether faces

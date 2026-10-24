@@ -2470,6 +2470,30 @@ impl Document {
                 }
             }
             Query::Curve { id } => QueryResult::Curve(self.curve_info(*id)?),
+            Query::Solid { id } => {
+                let EntityId::Instance(i) = *id else {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        format!("{id} is not a group or component"),
+                    )
+                    .with_ids(vec![*id]));
+                };
+                let Some(instance) = m.instance(i) else {
+                    return Err(self.missing_error(vec![*id], format!("no entity {id}")));
+                };
+                match kernel::solid::instance_volume(&self.scene, instance) {
+                    Ok(volume) => QueryResult::Solid {
+                        solid: true,
+                        volume: Some(volume),
+                        reason: None,
+                    },
+                    Err(reason) => QueryResult::Solid {
+                        solid: false,
+                        volume: None,
+                        reason: Some(reason),
+                    },
+                }
+            }
             Query::Camera {} => QueryResult::Camera {
                 eye: self.camera.eye.to_array(),
                 target: self.camera.target.to_array(),

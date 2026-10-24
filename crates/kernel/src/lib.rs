@@ -35,6 +35,7 @@ mod section;
 mod section_loops;
 mod smooth;
 mod soften;
+pub mod solid;
 mod style;
 pub mod sweep;
 mod tag;

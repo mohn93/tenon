@@ -50,6 +50,7 @@ mod skp;
 mod skp_export;
 mod small_tools;
 mod soften;
+mod solid;
 mod styles;
 mod sun;
 mod tags;
