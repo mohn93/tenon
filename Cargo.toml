@@ -47,6 +47,13 @@ egui-winit = { path = "vendor/egui-winit" }
 # Dependencies are built optimized and without debug info in dev and test builds: tests that
 # inflate, parse JSON or draw with wgpu run several times faster, the build output stays small
 # enough to link on CI runners, and the workspace crates stay unoptimized so they rebuild quickly.
+# No debug info for the workspace crates either. On macOS each build otherwise leaves its object
+# files in target/debug/deps under new names (the debug map points at them), and a folder of
+# hundreds of thousands of files made every GPU test wait ~25 s: Metal reads the folder of the
+# test program at start-up. Panics still name the file and line; backtraces show functions only.
+[profile.dev]
+debug = false
+
 [profile.dev.package."*"]
 opt-level = 2
 debug = false

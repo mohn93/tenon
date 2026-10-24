@@ -22,6 +22,28 @@ build for the browser: `cargo check --target wasm32-unknown-unknown -p kernel -p
 -p render -p api -p app --lib -p web` (needs `rustup target add wasm32-unknown-unknown`); `scripts/build-web.sh`
 builds the page (docs/web.md).
 
+## Keeping test runs fast
+
+A full `cargo test --workspace --lib --bins --tests` runs in about 80 s on an M1 Max once built
+(an incremental test build after a change in `session` is about 15 s). Two things kept it near
+five minutes before 2026-10-24:
+
+- On macOS, Metal reads the folder of the program that starts it (`target/debug/deps` for a test
+  binary) before the first GPU device exists. Cargo never deletes old artifacts, and with debug
+  info each build left hundreds of new object files there; at 700,000 files every GPU test
+  binary waited about 25 s before its first render. The workspace crates now build without debug
+  info (`[profile.dev] debug = false`), which leaves no object files behind, and
+  `python3 scripts/prune-target.py` removes stale artifacts while keeping what the current build
+  uses. If GPU tests are slow again, count the files in `target/debug/deps` first.
+- Tests that build very large meshes (a 360 by 360 torus, 10,000-point curves) take seconds in an
+  unoptimized test build. Test the largest accepted sizes by building the description or checking
+  the limit, and keep full model builds and validation to moderate sizes; put timing checks of
+  big models in the ignored `perf` modules.
+
+While working on one crate, run its tests (`cargo test -p session --test integration`,
+`cargo test -p kernel --lib`) and clippy for the crates you touched; run the full gate once before
+committing a task.
+
 ## Golden images
 
 `crates/render/tests/integration/golden.rs` renders a few canonical scenes headless at 160 x 120 and compares

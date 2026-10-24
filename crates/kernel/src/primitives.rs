@@ -789,7 +789,9 @@ mod tests {
     #[test]
     fn sphere_volume_soft_edges_and_planar_quads() {
         let area = |n: u32, rho: f64| 0.5 * n as f64 * rho * rho * (TAU / n as f64).sin();
-        for (n, rings) in [(24u32, 12u32), (7, 3), (3, 2), (360, 180)] {
+        // The largest count (360 by 180) builds in sphere_and_torus_refuse_bad_dimensions; a
+        // model that size takes seconds in a debug test build.
+        for (n, rings) in [(24u32, 12u32), (7, 3), (3, 2), (96, 48)] {
             let r = 1.5;
             let m = Solid::sphere(r, n).unwrap().to_model();
             // Planar quads and valid faces.
@@ -822,7 +824,7 @@ mod tests {
 
     #[test]
     fn torus_volume_soft_edges_and_planar_quads() {
-        for (n, k) in [(24u32, 12u32), (3, 3), (36, 7), (360, 360)] {
+        for (n, k) in [(24u32, 12u32), (3, 3), (36, 7), (360, 3), (3, 360)] {
             let (big, small) = (3.0, 1.0);
             let m = Solid::torus(big, small, n, k).unwrap().to_model();
             m.validate().unwrap();
@@ -857,9 +859,13 @@ mod tests {
         assert!(msg(Solid::torus(1.0, 0.5, 24, 2)).contains("tube_segments"));
         assert!(msg(Solid::torus(1.0, 0.5, 24, 361)).contains("tube_segments"));
         assert!(msg(Solid::torus(1e-4, 0.5e-4, 360, 12)).contains("segments"));
-        for n in [3, 4, 360] {
+        for n in [3, 4] {
             closed_volume(&Solid::sphere(1.0, n).unwrap().to_model());
             closed_volume(&Solid::torus(1.0, 0.5, n, n).unwrap().to_model());
         }
+        // The largest counts are accepted (built as solids, not as models: a 360 by 360 torus
+        // model takes seconds in a debug test build).
+        assert!(Solid::sphere(1.0, 360).is_ok());
+        assert!(Solid::torus(1.0, 0.5, 360, 360).is_ok());
     }
 }
