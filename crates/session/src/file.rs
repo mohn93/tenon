@@ -32,12 +32,15 @@ pub const FORMAT: &str = "sketchup-alt";
 /// version 14 hidden entities and the x-ray and hidden geometry view flags, version 15 the
 /// model axes, version 16 the location and sun shadow settings, version 17 decimal feet
 /// and the length and angle snapping settings of the display units, and version 18 styles
-/// and the style a view chooses, and version 19 material metalness and roughness, and version 20 studio lighting; older
+/// and the style a view chooses, and version 19 material metalness and roughness, and version 20 studio lighting, and version 21 ambient occlusion in a style; older
 /// files still open
 /// (untagged before version 10, without scenes before version 11, without annotations and in
 /// the default units before version 12, without section planes and with the default section
 /// display before version 13).
-pub const SCHEMA_VERSION: u32 = 20;
+pub const SCHEMA_VERSION: u32 = 21;
+/// The version written when a style has ambient occlusion on or with other than the default
+/// radius or strength.
+pub const AMBIENT_OCCLUSION_SCHEMA_VERSION: u32 = 21;
 /// The version written when the view or a scene's view is lit by the studio lights.
 pub const STUDIO_SCHEMA_VERSION: u32 = 20;
 /// The version written when a material has a metalness above 0 or a roughness below 1.
@@ -312,6 +315,10 @@ pub(crate) fn write_bytes(
         model.materials.iter().any(|m| m.emission > 0.0) || lighting == Lighting::Night;
     let studio = lighting == Lighting::Studio
         || model.pages.iter().any(|p| p.view.is_some_and(|v| v.studio));
+    let occluded = model
+        .styles
+        .iter()
+        .any(|s| !s.settings.ambient_occlusion.is_default());
     let finished = model
         .materials
         .iter()
@@ -330,7 +337,9 @@ pub(crate) fn write_bytes(
     images.dedup_by(|a, b| a.0 == b.0);
     let stored = Stored {
         format: FORMAT.into(),
-        schema_version: if studio {
+        schema_version: if occluded {
+            AMBIENT_OCCLUSION_SCHEMA_VERSION
+        } else if studio {
             STUDIO_SCHEMA_VERSION
         } else if finished {
             FINISH_SCHEMA_VERSION

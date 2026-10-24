@@ -1322,6 +1322,22 @@ pub struct StylePatch {
     )]
     #[schemars(with = "Option<Fog>")]
     pub fog: Option<Option<Fog>>,
+    #[serde(default)]
+    pub ambient_occlusion: Option<AmbientOcclusionPatch>,
+}
+
+/// The parts of a style's ambient occlusion settings `change_style` sets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AmbientOcclusionPatch {
+    #[serde(default)]
+    pub on: Option<bool>,
+    /// Meters, 0.001 to 100.
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// 0 to 2.
+    #[serde(default)]
+    pub strength: Option<f32>,
 }
 
 /// The parts of a style's edge settings `change_style` sets.

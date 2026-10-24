@@ -18,6 +18,7 @@ use crate::scene::{
 use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
+use crate::ssao::{self, Ssao};
 use crate::style::ViewStyle;
 use crate::sun_shadow::{SUN_MAP_SIZE, SunFit, SunLight, SunMap, depth_texture, fit};
 use crate::texture::TextureArray;
@@ -92,6 +93,14 @@ pub fn supports_shadows(adapter: &wgpu::Adapter) -> bool {
         .get_downlevel_capabilities()
         .flags
         .contains(wgpu::DownlevelFlags::CUBE_ARRAY_TEXTURES)
+}
+
+/// True when the adapter can draw ambient occlusion (the style's `ambient_occlusion`). The
+/// passes need depth and normal buffers at half resolution and a depth texture read by the
+/// shader; a browser's WebGL2 (GL) adapter is not trusted with them, so there a renderer built
+/// for one is told with [`Renderer::disable_ambient_occlusion`].
+pub fn supports_ambient_occlusion(adapter: &wgpu::Adapter) -> bool {
+    cfg!(not(target_arch = "wasm32")) || adapter.get_info().backend != wgpu::Backend::Gl
 }
 
 /// The scene shader with shadow lookups and how many lights may cast shadows, or None when the
@@ -255,6 +264,8 @@ struct LightingUniforms {
     /// (0 outside the studio).
     studio_fill: [f32; 4],
     studio_rim: [f32; 4],
+    /// x: 1 when the ambient occlusion buffer holds this frame's occlusion.
+    ao: [f32; 4],
     /// World to the sun map's clip space.
     sun_view_proj: [f32; 16],
     lights: [LightUniform; MAX_LIGHTS],
@@ -298,6 +309,7 @@ impl LightingUniforms {
             studio: [0.0; 4],
             studio_fill: [0.0; 4],
             studio_rim: [0.0; 4],
+            ao: [0.0; 4],
             sun_view_proj: Mat4::IDENTITY.to_cols_array(),
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
@@ -673,6 +685,14 @@ pub struct Renderer {
     overlay_pipeline: wgpu::RenderPipeline,
     /// A tool's translucent preview solid.
     preview_pipeline: wgpu::RenderPipeline,
+    /// The opaque faces' world normals at half resolution, for the ambient occlusion.
+    ao_normal_pipeline: wgpu::RenderPipeline,
+    /// The ambient occlusion passes, made when a style first asks for it.
+    ssao: Option<Ssao>,
+    /// Bound as the ambient occlusion while there is none.
+    ao_placeholder: wgpu::TextureView,
+    /// False where the device cannot draw ambient occlusion (see `disable_ambient_occlusion`).
+    ao_available: bool,
     uniforms: wgpu::Buffer,
     /// The lighting uniforms, rewritten every frame (see `LightingUniforms`).
     lighting_uniforms: wgpu::Buffer,
@@ -891,10 +911,27 @@ impl Renderer {
                 count: None,
             },
         ];
+        // The ambient occlusion, read with `textureLoad`.
+        let ao_entries = [wgpu::BindGroupLayoutEntry {
+            binding: 8,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }];
         let entries = if max_shadows.is_some() {
-            [&scene_entries[..], &shadow_entries[..], &sun_entries[..]].concat()
+            [
+                &scene_entries[..],
+                &shadow_entries[..],
+                &sun_entries[..],
+                &ao_entries[..],
+            ]
+            .concat()
         } else {
-            [&scene_entries[..], &sun_entries[..]].concat()
+            [&scene_entries[..], &sun_entries[..], &ao_entries[..]].concat()
         };
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera and textures"),
@@ -1335,6 +1372,7 @@ impl Renderer {
         let sun_placeholder = depth_texture(device, "no sun map", 1, false);
         let textures = TextureArray::new(device, queue, &Scene::default());
         let shadow_maps = max_shadows.map(|max| ShadowMaps::new(device, max));
+        let ao_placeholder = ssao::placeholder(device, queue);
         let bind_group = bind_group(
             device,
             &bind_layout,
@@ -1342,8 +1380,40 @@ impl Renderer {
             &textures,
             &sampler,
             shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
-            (&sun_placeholder, &sun_sampler),
+            (&sun_placeholder, &sun_sampler, &ao_placeholder),
         );
+        // The opaque faces' normals for the ambient occlusion, at one sample per pixel.
+        let ao_normal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ao normals"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_face"),
+                compilation_options: Default::default(),
+                buffers: &flagged_faces,
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Greater),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_ao_normal"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: ssao::NORMAL_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let (flat_ground, vertical_axis, flat_axes) = ground_meshes(
             device,
@@ -1376,6 +1446,10 @@ impl Renderer {
             wide_cut_edge_pipeline,
             overlay_pipeline,
             preview_pipeline,
+            ao_normal_pipeline,
+            ssao: None,
+            ao_placeholder,
+            ao_available: true,
             uniforms,
             lighting_uniforms,
             bind_layout,
@@ -1583,8 +1657,33 @@ impl Renderer {
                     .as_ref()
                     .map_or(&self.sun_placeholder, |m| &m.view),
                 &self.sun_sampler,
+                self.ssao
+                    .as_ref()
+                    .and_then(|s| s.targets())
+                    .map_or(&self.ao_placeholder, |t| &t.ao),
             ),
         );
+    }
+
+    /// Switches ambient occlusion off for good, as on a browser's WebGL2: a style that asks for
+    /// it draws as without.
+    pub fn disable_ambient_occlusion(&mut self) {
+        self.ao_available = false;
+        if self.ssao.take().is_some() {
+            self.rebind();
+        }
+    }
+
+    /// Whether this renderer can draw ambient occlusion.
+    pub fn ambient_occlusion_available(&self) -> bool {
+        self.ao_available
+    }
+
+    /// The model style's ambient occlusion when it is on and available.
+    fn ambient_occlusion(&self) -> Option<kernel::AmbientOcclusion> {
+        self.model_style
+            .map(|s| s.ambient_occlusion)
+            .filter(|ao| ao.on && self.ao_available)
     }
 
     /// Whether lights cast shadows on this device.
@@ -1683,7 +1782,7 @@ impl Renderer {
     }
 
     /// How many times the sun's shadow map has been drawn since the renderer was made: once per
-    /// change of the sun or the casters, not per frame.
+    /// change of the sun or the casters or, in the studio, the camera, not per frame.
     pub fn sun_maps_drawn(&self) -> u64 {
         self.sun_map.as_ref().map_or(0, |m| m.drawn)
     }
@@ -2030,6 +2129,8 @@ impl Renderer {
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
+        let occlusion = self.ambient_occlusion();
+        self.prepare_ao(occlusion.is_some(), size);
 
         let uniforms = Uniforms::new(camera);
         self.queue
@@ -2053,6 +2154,9 @@ impl Renderer {
             (viewport.width, viewport.height),
         );
         lighting.set_camera(camera);
+        if occlusion.is_some() {
+            lighting.ao[0] = 1.0;
+        }
         if let Some(sun) = &sun {
             lighting.set_sun(sun);
         }
@@ -2104,6 +2208,18 @@ impl Renderer {
         } else {
             background(self.lighting, &self.style, canvas_style.as_ref()).map(f64::from)
         };
+        // Clamp the viewport to the target; an empty one leaves just the cleared background.
+        let (x, y) = (viewport.x.min(size.0), viewport.y.min(size.1));
+        let (w, h) = (
+            viewport.width.min(size.0 - x),
+            viewport.height.min(size.1 - y),
+        );
+        if let Some(occlusion) = occlusion
+            && w > 0
+            && h > 0
+        {
+            self.encode_ao(&mut encoder, camera, [x, y, w, h], occlusion);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -2126,12 +2242,6 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
-            // Clamp the viewport to the target; an empty one leaves just the cleared background.
-            let (x, y) = (viewport.x.min(size.0), viewport.y.min(size.1));
-            let (w, h) = (
-                viewport.width.min(size.0 - x),
-                viewport.height.min(size.1 - y),
-            );
             if w > 0 && h > 0 {
                 pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, w, h);
@@ -2275,6 +2385,98 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
+    /// Makes (`on`) or drops the ambient occlusion buffers for a target `size` pixels across, and
+    /// binds them to the face shader.
+    fn prepare_ao(&mut self, on: bool, size: (u32, u32)) {
+        let changed = if on {
+            let device = &self.device;
+            self.ssao
+                .get_or_insert_with(|| Ssao::new(device))
+                .resize(size)
+        } else {
+            self.ssao.as_mut().is_some_and(Ssao::release)
+        };
+        if changed {
+            self.rebind();
+        }
+    }
+
+    /// Draws the opaque faces' depth and normals at half resolution into the occlusion buffers
+    /// and works the occlusion out from them, for the view `rect` (`x, y, width, height`, in
+    /// target pixels) seen by `camera`.
+    fn encode_ao(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        camera: &Camera,
+        rect: [u32; 4],
+        occlusion: kernel::AmbientOcclusion,
+    ) {
+        let Some(ssao) = &self.ssao else { return };
+        let Some(t) = ssao.targets() else { return };
+        let [x, y, w, h] = rect.map(|v| v as f32);
+        ssao.write_params(
+            &self.queue,
+            camera,
+            [x, y, w, h],
+            occlusion.radius,
+            occlusion.strength,
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ao normals"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.normals,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.5,
+                            g: 0.5,
+                            b: 1.0,
+                            a: 0.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &t.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_viewport(x * 0.5, y * 0.5, w * 0.5, h * 0.5, 0.0, 1.0);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            if let Some(faces) = &self.faces {
+                pass.set_pipeline(&self.ao_normal_pipeline);
+                pass.set_vertex_buffer(0, faces.buffer.slice(..));
+                if let Some(flags) = &faces.flags {
+                    pass.set_vertex_buffer(1, flags.slice(..));
+                }
+                if let Some(hover) = &faces.hover {
+                    pass.set_vertex_buffer(2, hover.slice(..));
+                }
+                match &self.glass {
+                    // The see-through sides are left out (the shader discards them from the
+                    // sides that have both).
+                    Some(glass) => {
+                        if glass.solid_count > 0 {
+                            pass.set_index_buffer(glass.solid.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.solid_count, 0, 0..1);
+                        }
+                        pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..glass.count(), 0, 0..1);
+                    }
+                    None => pass.draw(0..faces.count, 0..1),
+                }
+            }
+        }
+        ssao.encode(encoder);
+    }
+
     fn make_targets(&self, size: (u32, u32)) -> Targets {
         let texture = |label, format| {
             self.device
@@ -2312,7 +2514,7 @@ fn bind_group(
     textures: &TextureArray,
     sampler: &wgpu::Sampler,
     shadows: Option<(&wgpu::TextureView, &wgpu::Sampler)>,
-    (sun_map, sun_sampler): (&wgpu::TextureView, &wgpu::Sampler),
+    (sun_map, sun_sampler, ao): (&wgpu::TextureView, &wgpu::Sampler, &wgpu::TextureView),
 ) -> wgpu::BindGroup {
     let mut entries = vec![
         wgpu::BindGroupEntry {
@@ -2349,6 +2551,10 @@ fn bind_group(
     entries.push(wgpu::BindGroupEntry {
         binding: 7,
         resource: wgpu::BindingResource::Sampler(sun_sampler),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 8,
+        resource: wgpu::BindingResource::TextureView(ao),
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera and textures"),

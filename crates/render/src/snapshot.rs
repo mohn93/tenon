@@ -60,6 +60,12 @@ impl Snapshotter {
         }
     }
 
+    /// Draws no ambient occlusion in the captures from now on, whatever the style says (for a
+    /// device that cannot, see [`Renderer::disable_ambient_occlusion`]).
+    pub fn disable_ambient_occlusion(&mut self) {
+        self.renderer.disable_ambient_occlusion();
+    }
+
     /// Colors faces by tag (or by material, the default) in the captures from now on.
     pub fn set_color_by_tag(&mut self, on: bool) {
         self.renderer.set_color_by_tag(on);

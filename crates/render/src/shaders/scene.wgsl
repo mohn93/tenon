@@ -13,6 +13,9 @@ struct Uniforms {
 // The sun's shadow map, with a sampler comparing a depth with it (see sun_shadow.rs).
 @group(0) @binding(6) var sun_map: texture_depth_2d;
 @group(0) @binding(7) var sun_sampler: sampler_comparison;
+// The ambient occlusion at half resolution (see ssao.rs); a 1 x 1 placeholder while no style asks
+// for it.
+@group(0) @binding(8) var ao_map: texture_2d<f32>;
 
 // A point light from glowing faces (see lights.rs).
 struct Light {
@@ -85,6 +88,8 @@ struct Lighting {
     // (0 outside the studio). The key light is the sun's slot (`sun`, `sun_levels`).
     studio_fill: vec4<f32>,
     studio_rim: vec4<f32>,
+    // x: 1 when `ao_map` holds this frame's ambient occlusion.
+    ao: vec4<f32>,
     // World to the sun map's clip space.
     sun_view_proj: mat4x4<f32>,
     lights: array<Light, MAX_LIGHTS>,
@@ -728,9 +733,20 @@ fn sun_highlight(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, shininess: f32) -> f3
     return highlight(n, v, lighting.sun.xyz, shininess, lighting.sun_levels.x * lit);
 }
 
+// The ambient occlusion at the pixel `frag` (a fragment position): 1 where nothing shades it,
+// less in creases; 1 without ambient occlusion.
+fn ao_factor(frag: vec4<f32>) -> f32 {
+    if lighting.ao.x < 0.5 {
+        return 1.0;
+    }
+    let last = textureDimensions(ao_map) - vec2<u32>(1u);
+    let at = min(vec2<u32>(frag.xy * 0.5), last);
+    return textureLoad(ao_map, at, 0).r;
+}
+
 // The color of a surface that is not matte: `shown` its base color, `shade` the matte shading
 // at the point, `finish` its metalness (x) and roughness (y). The diffuse part is scaled by
-// 1 - metalness. The headlight (the sun when it shades) adds a highlight of strength
+// 1 - metalness, and by `ao` (the ambient occlusion, 1 for none) with the ambient light. The headlight (the sun when it shades) adds a highlight of strength
 // (1 - roughness)^2 tinted by the base color as far as the surface is metallic, and the
 // environment, seen in the reflected view direction, is added weighted by 1 - roughness and
 // the Fresnel reflectance (0.04 for a non-metal, the base color for a metal, 1 at grazing
@@ -742,12 +758,13 @@ fn finished_color(
     p: vec3<f32>,
     shade: f32,
     finish: vec2<f32>,
+    ao: f32,
 ) -> vec3<f32> {
     let metalness = finish.x;
     let gloss = 1.0 - finish.y;
     // A rough metal keeps some of its color as diffuse light (a blurry reflection).
     let diffuse_part = (1.0 - metalness) + metalness * finish.y * 0.75;
-    let diffuse = shown * diffuse_part * (vec3<f32>(shade) + lamp_light(p, n));
+    let diffuse = shown * diffuse_part * ((vec3<f32>(shade) + lamp_light(p, n)) * ao);
     let tint = mix(vec3<f32>(1.0), shown, metalness);
     let shininess = exp2(mix(3.0, 10.0, gloss));
     var light = highlight(n, to_eye, to_eye, shininess, lighting.mode.z);
@@ -775,8 +792,10 @@ fn finished_color(
 // unshaded. Selected faces are tinted toward the style's color; unselected ones skip the mix so
 // their arithmetic stays exactly as before the tint came from a uniform. A hovered face is
 // mixed toward the hover color from its own color, so the hover wins over the selection.
+// The ambient and diffuse light (the glowing faces' too) is multiplied by `ao`, the ambient
+// occlusion, 1 for none; emission, highlights and reflections are not.
 // Call it before any discard: the texture lookup needs every pixel of its quad.
-fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
+fn face_color(in: FaceOut, front: bool, ao: f32) -> vec3<f32> {
     let n = normalize(in.normal) * select(-1.0, 1.0, front);
     let to_eye = normalize(u.eye.xyz - in.world * u.eye.w);
     let layer = select(in.layer.y, in.layer.x, front);
@@ -801,7 +820,7 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
     if finish.x > 0.0 || finish.y < 1.0 {
         // Shaded from the side's own color; the selection and hover tints come after, so a
         // selected or hovered face of a metal shows them.
-        let finished = finished_color(color, n, to_eye, in.world, shade, finish);
+        let finished = finished_color(color, n, to_eye, in.world, shade, finish, ao);
         let selected = mix(finished, lighting.selected_face.rgb, lighting.selected_face.w * in.selected);
         return select(
             selected,
@@ -809,7 +828,7 @@ fn face_color(in: FaceOut, front: bool) -> vec3<f32> {
             in.hovered > 0.5,
         );
     }
-    return shown * (vec3<f32>(shade) + lamp_light(in.world, n));
+    return shown * ((vec3<f32>(shade) + lamp_light(in.world, n)) * ao);
 }
 
 // A face's color in the fog; selected and hovered faces stay as they are.
@@ -823,14 +842,14 @@ fn face_fog(in: FaceOut, color: vec3<f32>) -> vec3<f32> {
 // Opaque faces.
 @fragment
 fn fs_face(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(face_fog(in, face_color(in, front)), 1.0);
+    return vec4<f32>(face_fog(in, face_color(in, front, ao_factor(in.pos))), 1.0);
 }
 
 // The opaque side of a face whose other side is see-through: drawn with the opaque faces, the
 // see-through side left to `fs_glass`.
 @fragment
 fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let color = face_color(in, front);
+    let color = face_color(in, front, ao_factor(in.pos));
     if select(in.alpha.y, in.alpha.x, front) < 1.0 {
         discard;
     }
@@ -841,12 +860,23 @@ fn fs_face_solid_side(in: FaceOut, @builtin(front_facing) front: bool) -> @locat
 // A selected one is made more opaque so its tint shows even when it is nearly invisible.
 @fragment
 fn fs_glass(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let color = face_color(in, front);
+    let color = face_color(in, front, 1.0);
     let alpha = select(in.alpha.y, in.alpha.x, front);
     if alpha >= 1.0 {
         discard;
     }
     return vec4<f32>(face_fog(in, color), mix(alpha, 1.0, 0.4 * in.selected));
+}
+
+// The ambient occlusion pass's picture of the opaque faces: the world normal turned toward the
+// viewer (see ssao.rs), nothing of a see-through side.
+@fragment
+fn fs_ao_normal(in: FaceOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if select(in.alpha.y, in.alpha.x, front) < 1.0 {
+        discard;
+    }
+    let n = normalize(in.normal) * select(-1.0, 1.0, front);
+    return vec4<f32>(n * 0.5 + 0.5, 1.0);
 }
 
 struct PreviewOut {

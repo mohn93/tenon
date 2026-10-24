@@ -18,7 +18,7 @@ use crate::model::{Edge, Face, Guide, Instance, Model, Vertex};
 use crate::page::{Page, PageView};
 use crate::scene::{Definition, DefinitionKind, Scene};
 use crate::section::SectionPlane;
-use crate::style::{Style, StyleSettings};
+use crate::style::{AmbientOcclusion, Style, StyleSettings};
 use crate::tag::Tag;
 use crate::texture::{Texture, TextureImage, TexturePlacement};
 
@@ -101,7 +101,46 @@ pub struct PageData {
 pub struct StyleData {
     pub id: u64,
     pub name: String,
+    #[serde(serialize_with = "serialize_settings")]
     pub settings: StyleSettings,
+}
+
+/// A style's settings as saved: the same fields as `StyleSettings`, but without the ambient
+/// occlusion while it is the default, so a file that does not need it is as it was before it
+/// existed (and older versions read it).
+#[derive(Serialize)]
+struct SettingsOut<'a> {
+    edges: &'a crate::style::EdgeStyle,
+    background: [u8; 3],
+    sky: Option<[u8; 3]>,
+    ground: &'a Option<crate::style::Ground>,
+    fog: &'a Option<crate::style::Fog>,
+    #[serde(skip_serializing_if = "AmbientOcclusion::is_default")]
+    ambient_occlusion: AmbientOcclusion,
+}
+
+fn serialize_settings<S: serde::Serializer>(
+    settings: &StyleSettings,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // Naming every field makes a new setting a compile error here, not a missing save.
+    let StyleSettings {
+        edges,
+        background,
+        sky,
+        ground,
+        fog,
+        ambient_occlusion,
+    } = settings;
+    SettingsOut {
+        edges,
+        background: *background,
+        sky: *sky,
+        ground,
+        fog,
+        ambient_occlusion: *ambient_occlusion,
+    }
+    .serialize(serializer)
 }
 
 /// A tag: `color` is sRGB red, green and blue.

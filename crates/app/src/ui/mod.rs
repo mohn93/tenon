@@ -550,6 +550,9 @@ pub struct View<'a> {
     pub color_by_tag: bool,
     /// Every style, in the order they were made.
     pub styles: &'a [StyleRow],
+    /// Whether the renderer can draw ambient occlusion (not in a browser's WebGL2): the Styles
+    /// tab says so where it cannot.
+    pub ambient_occlusion: bool,
     /// The style the view draws with (None: the default look).
     pub style: Option<StyleId>,
     /// Whether section planes are drawn, cut and filled (checked in the View menu).

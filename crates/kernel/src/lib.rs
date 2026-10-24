@@ -85,9 +85,9 @@ pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
 pub use style::{
-    ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog, FogColor, Ground, MAX_STYLE_NAME,
-    PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER, STYLE_NAME_BASE, Sketchy, Style,
-    StyleSettings,
+    AO_RADIUS, AO_STRENGTH, AmbientOcclusion, ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog,
+    FogColor, Ground, MAX_STYLE_NAME, PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER,
+    STYLE_NAME_BASE, Sketchy, Style, StyleSettings,
 };
 pub use tag::{MAX_TAG_NAME, TAG_COLORS, Tag, TagEdit, UNTAGGED, tag_shown_among};
 pub use texture::{

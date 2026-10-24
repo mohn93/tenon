@@ -6,8 +6,8 @@ use render::grid::{BACKGROUND, LineVertex};
 use render::{Renderer, ViewStyle, Viewport};
 use session::{Camera, Lighting};
 
-const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
-const H: u32 = 256;
+pub(crate) const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
+pub(crate) const H: u32 = 256;
 
 pub(crate) fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
@@ -136,7 +136,7 @@ impl Offscreen {
     }
 
     /// Draws a frame with `renderer` and returns tightly packed RGBA8 pixels.
-    fn draw(
+    pub(crate) fn draw(
         &self,
         renderer: &mut Renderer,
         camera: &Camera,
