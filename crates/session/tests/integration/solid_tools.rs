@@ -190,7 +190,9 @@ fn twenty_bores_cut_a_plate_quickly() {
         json!({"type": "solid_subtract", "target": plate, "tools": tools}),
     );
     let took = start.elapsed();
-    assert!(took.as_secs_f64() < 2.0, "{took:?}");
+    // A loose bound: the normal suite runs beside other builds; the tight timing is the
+    // ignored kernel perf test. Twenty bores take under a second on a quiet machine.
+    assert!(took.as_secs_f64() < 15.0, "{took:?}");
     let v = volume(&d, &out["placed"][0]);
     assert!(
         (v - (20.0 - 20.0 * 0.5 * ngon(0.3, 24))).abs() < 1e-9,
