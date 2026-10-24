@@ -480,6 +480,14 @@ fn invalid_dimensions_are_refused_without_a_step() {
         ),
         (
             json!({"type": "add_box", "corner": [0, 0, 0], "size": [2e6, 1, 1]}),
+            "size",
+        ),
+        (
+            json!({"type": "add_cylinder", "base": [0, 0, 0], "radius": 1, "height": 2e6}),
+            "height",
+        ),
+        (
+            json!({"type": "add_box", "corner": [9e5, 0, 0], "size": [2e5, 1, 1]}),
             "coordinates",
         ),
         (
@@ -597,4 +605,85 @@ fn non_finite_numbers_never_panic() {
         assert_eq!(e.kind, ErrorKind::InvalidInput);
     }
     assert_eq!(depth(&d), 0);
+}
+
+/// (faces, edges, soft edges, curve edges, vertices) of the open context.
+fn counts(d: &Document) -> (usize, usize, usize, usize, usize) {
+    let e = entities(d);
+    let edges = e["edges"].as_array().unwrap();
+    (
+        e["faces"].as_array().unwrap().len(),
+        edges.len(),
+        edges.iter().filter(|x| x["soft"] == true).count(),
+        edges.iter().filter(|x| x.get("curve").is_some()).count(),
+        e["vertices"].as_array().unwrap().len(),
+    )
+}
+
+#[test]
+fn primitive_definitions_survive_save_and_open() {
+    let mut d = doc();
+    for c in [
+        json!({"type": "add_cylinder", "base": [0, 0, 0], "radius": 1, "height": 1, "segments": 12}),
+        json!({"type": "add_tube", "base": [5, 0, 0], "radius": 1, "inner_radius": 0.5, "height": 1, "segments": 12}),
+        json!({"type": "add_cone", "base": [10, 0, 0], "radius": 1, "height": 1, "segments": 12, "as": "component"}),
+        json!({"type": "add_prism", "base": [15, 0, 0], "radius": 1, "height": 1, "sides": 5}),
+    ] {
+        run(&mut d, c).unwrap();
+    }
+    let open_all = |d: &mut Document| -> Vec<(usize, usize, usize, usize, usize)> {
+        let ids: Vec<Value> = entities(d)["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].clone())
+            .collect();
+        ids.iter()
+            .map(|id| {
+                run(d, json!({"type": "open_instance", "id": id})).unwrap();
+                let c = counts(d);
+                d.model().validate().unwrap();
+                run(d, json!({"type": "close_instance"})).unwrap();
+                c
+            })
+            .collect()
+    };
+    let before = open_all(&mut d);
+    assert_eq!(before[0], (14, 36, 12, 24, 24));
+    assert!(before.iter().all(|c| c.2 > 0 || c == &before[3]));
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("session-primitives-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("solids.skr");
+    run(
+        &mut d,
+        json!({"type": "save", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let mut e = doc();
+    run(
+        &mut e,
+        json!({"type": "open", "path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    assert_eq!(open_all(&mut e), before);
+}
+
+#[test]
+fn stacked_geometry_boxes_share_their_face() {
+    let mut d = doc();
+    run(
+        &mut d,
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [2, 2, 2], "as": "geometry"}),
+    )
+    .unwrap();
+    run(
+        &mut d,
+        json!({"type": "add_box", "corner": [0, 0, 2], "size": [2, 2, 1], "as": "geometry"}),
+    )
+    .unwrap();
+    d.model().validate().unwrap();
+    // Two boxes share the one face between them: 12 faces, minus the second copy of it.
+    let (faces, edges, ..) = counts(&d);
+    assert_eq!((faces, edges), (11, 20));
 }

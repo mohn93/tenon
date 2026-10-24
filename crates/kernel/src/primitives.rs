@@ -23,6 +23,9 @@ pub const MIN_LENGTH: f64 = 10.0 * LENGTH_TOL;
 pub const DEFAULT_SEGMENTS: u32 = 24;
 /// Sides a prism gets when none are asked for.
 pub const DEFAULT_SIDES: u32 = 6;
+/// Longest a dimension may be: the session's coordinate limit, so a too large length is
+/// refused naming its field (positions are still checked after placement).
+pub const MAX_LENGTH: f64 = 1e6;
 /// Fewest and most segments or sides around.
 pub const MIN_SEGMENTS: u32 = 3;
 pub const MAX_SEGMENTS: u32 = 360;
@@ -193,11 +196,11 @@ fn check_segments(name: &str, n: u32) -> Result<(), PrimitiveError> {
 }
 
 fn check_length(name: &str, v: f64) -> Result<(), PrimitiveError> {
-    if v.is_finite() && v >= MIN_LENGTH {
+    if v.is_finite() && (MIN_LENGTH..=MAX_LENGTH).contains(&v) {
         Ok(())
     } else {
         invalid(format!(
-            "{name} must be a finite number of at least {MIN_LENGTH} m"
+            "{name} must be a finite number between 1e-5 and 1e6 m"
         ))
     }
 }
@@ -429,19 +432,32 @@ impl Scene {
             return Err(KernelError::DefinitionNotFound);
         }
         let (definition, added) = self.add_definition(name, kind);
+        let added = SceneChange::from(added);
         let filled = self.edit(MeshId::Definition(definition), |m| {
             solid.insert(m);
             Ok(m.take_changes())
-        })?;
+        });
         let mut placed = None;
-        let left = self.edit(parent, |m| {
-            let mut instance = Instance::new(definition, place);
-            instance.material = material;
-            placed = Some(m.insert_instance(instance));
-            Ok(m.take_changes())
-        })?;
-        let change = SceneChange::join([SceneChange::from(added), filled, left]);
-        Ok((placed.expect("instance placed"), change))
+        let result = filled.and_then(|filled| {
+            let left = self.edit(parent, |m| {
+                let mut instance = Instance::new(definition, place);
+                instance.material = material;
+                placed = Some(m.insert_instance(instance));
+                Ok(m.take_changes())
+            })?;
+            Ok((filled, left))
+        });
+        match result {
+            Ok((filled, left)) => Ok((
+                placed.expect("instance placed"),
+                SceneChange::join([added, filled, left]),
+            )),
+            Err(e) => {
+                // Never leave an empty definition behind.
+                self.apply(&added.inverse());
+                Err(e)
+            }
+        }
     }
 
     /// Draws `solid` placed by `place` into mesh `parent` with the usual merge rules, its
@@ -605,6 +621,9 @@ mod tests {
         assert!(msg(Solid::cuboid(DVec3::new(1.0, 0.0, 1.0))).contains("size[1]"));
         assert!(msg(Solid::cuboid(DVec3::new(1.0, 1.0, nan))).contains("size[2]"));
         assert!(msg(Solid::cylinder(0.0, 1.0, 24)).contains("radius"));
+        assert!(msg(Solid::cylinder(1.0, 2e6, 24)).contains("height"));
+        assert!(msg(Solid::cuboid(DVec3::new(2e6, 1.0, 1.0))).contains("size[0]"));
+        assert!(msg(Solid::tube(2e6, 1.0, 1.0, 24)).contains("radius"));
         assert!(msg(Solid::cylinder(1.0, -1.0, 24)).contains("height"));
         assert!(msg(Solid::cylinder(1.0, 1.0, 2)).contains("segments"));
         assert!(msg(Solid::cylinder(1.0, 1.0, 361)).contains("segments"));
