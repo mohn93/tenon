@@ -669,7 +669,7 @@ fn copies_closer_than_the_merge_tolerance_are_refused() {
     let m = marker(&mut d, [-1.0, -1.0, 0.0]);
     let before = depth(&d);
     for extra in [json!({"spacing": 1e-7}), json!({"count": 9000000})] {
-        let (kind, _) = run(&mut d, copy_along(&[m.clone()], &path, extra)).unwrap_err();
+        let (kind, _) = run(&mut d, copy_along(std::slice::from_ref(&m), &path, extra)).unwrap_err();
         assert_eq!(kind, ErrorKind::InvalidInput);
     }
     assert_eq!(depth(&d), before);
