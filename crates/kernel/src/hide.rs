@@ -21,6 +21,26 @@ impl Model {
         (self.take_changes(), changed)
     }
 
+    /// Sets whether section planes outside each instance of `ids` cut it, as one ChangeSet,
+    /// with the ids whose flag changed in id order. Other kinds, unknown ids and instances
+    /// already as asked are skipped.
+    pub fn set_section_cut_entities(
+        &mut self,
+        ids: &[EntityId],
+        cut: bool,
+    ) -> (ChangeSet, Vec<EntityId>) {
+        let mut changed = Vec::new();
+        for &id in ids.iter().collect::<BTreeSet<_>>() {
+            if let EntityId::Instance(i) = id
+                && self.section_cut_of(i).is_some_and(|now| now != cut)
+            {
+                self.set_section_cut(i, cut);
+                changed.push(id);
+            }
+        }
+        (self.take_changes(), changed)
+    }
+
     /// Whether this mesh has a hidden edge, face, instance or guide (stops at the first).
     pub fn any_hidden(&self) -> bool {
         self.edges().any(|(_, e)| e.hidden)

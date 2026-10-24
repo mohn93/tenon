@@ -68,6 +68,16 @@ pub(super) fn entity_info(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>)
             actions.push(UiAction::SetHidden(checked));
         }
     }
+    if let Some(cut) = view.selection_section_cut {
+        let mut checked = cut;
+        if ui
+            .checkbox(&mut checked, "Cut by section planes")
+            .on_hover_text("Off leaves it whole under section planes outside it")
+            .changed()
+        {
+            actions.push(UiAction::SetSectionCut(checked));
+        }
+    }
     match &view.texture_position {
         Some(t) => texture_position(ui, t, actions),
         None => end_texture_position_edit(ui, actions),

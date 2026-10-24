@@ -317,11 +317,7 @@ impl Document {
         if let Some((camera, v)) = view {
             let v = &v;
             self.camera = camera;
-            self.lighting = if v.night {
-                Lighting::Night
-            } else {
-                Lighting::Day
-            };
+            self.lighting = lighting_of(*v);
             self.color_by_tag = v.color_by_tag;
             self.x_ray = v.x_ray;
             self.hidden_geometry = v.hidden_geometry;
@@ -371,11 +367,7 @@ impl Document {
                 } else {
                     Projection::Perspective
                 },
-                lighting: if v.night {
-                    Lighting::Night
-                } else {
-                    Lighting::Day
-                },
+                lighting: lighting_of(v),
                 color_by_tag: v.color_by_tag,
                 x_ray: v.x_ray,
                 hidden_geometry: v.hidden_geometry,
@@ -399,6 +391,17 @@ impl Document {
 }
 
 /// A kernel refusal as a command error; a missing scene or tag is `not_found`.
+/// The lighting a stored view asks for.
+fn lighting_of(v: PageView) -> Lighting {
+    if v.studio {
+        Lighting::Studio
+    } else if v.night {
+        Lighting::Night
+    } else {
+        Lighting::Day
+    }
+}
+
 fn scene_error(e: KernelError, id: Option<PageId>) -> CommandError {
     match (e, id) {
         (KernelError::PageNotFound, Some(id)) => {

@@ -15,6 +15,7 @@ fn the_view_menu_toggles_the_section_display() {
         planes: true,
         cuts: false,
         fill: false,
+        ..Default::default()
     };
     let mut h = harness(Fixture {
         section_display: off,

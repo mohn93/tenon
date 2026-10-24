@@ -243,6 +243,7 @@ fn faces_that_give_no_triangles_are_counted_once_per_placement() {
         material: None,
         tag: None,
         hidden: false,
+        section_cut: true,
     };
     root.instances = vec![place(0, 0.0), place(1, 3.0)];
     let data = kernel::SceneData {

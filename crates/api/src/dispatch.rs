@@ -1,7 +1,7 @@
 //! Method dispatch: maps JSON-RPC methods onto session commands, queries and rendering.
 
 use base64::Engine;
-use kernel::{ChangeSummary, PageId, Scene};
+use kernel::{ChangeSummary, PageId, Scene, StyleId, StyleSettings};
 use render::print::Printed;
 use schemars::{JsonSchema, schema_for};
 use serde::de::DeserializeOwned;
@@ -10,7 +10,8 @@ use serde_json::{Map, Value, json};
 use session::print::{DEFAULT_DPI, Paper, PrintSpec};
 use session::{
     BatchCommand, BatchError, Camera, ChangeEvent, Command, CommandError, Document, ErrorKind,
-    Lighting, Outcome, Query, QueryResult, check_references,
+    Lighting, Outcome, Projection, Query, QueryResult, SectionDisplay, SectionFillColor,
+    check_references,
 };
 
 use crate::editor::{EDITOR_COMMANDS, EditorCommand, EditorState, PdfReport};
@@ -26,6 +27,9 @@ use crate::schema::{any_of_root, batch_ref_schema, hoist, object_root, with_batc
 
 /// Largest image side `render_view` accepts, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 4096;
+
+/// Largest `supersample` `render_view` accepts.
+pub const MAX_SUPERSAMPLE: u32 = 4;
 
 /// The reply to `execute`: the outcome and the document revision after it.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -72,6 +76,7 @@ struct RenderParams {
     height: u32,
     /// Not allowed with `scene`.
     camera: Option<View>,
+    /// Day, night or studio for this image (default: the document's).
     lighting: Option<Lighting>,
     /// Render the frame `t` of the way from `from` (default: the current view and positions)
     /// to this scene's camera and stored positions, without changing the document.
@@ -80,6 +85,87 @@ struct RenderParams {
     t: Option<f64>,
     /// The scene to start from; only with `scene`.
     from: Option<PageId>,
+    /// A style to draw with for this image (default: the document's chosen style).
+    #[schemars(with = "Option<String>")]
+    style: Option<StyleId>,
+    /// Perspective or parallel for this image, over the camera's own.
+    projection: Option<Projection>,
+    /// What to show of the section planes for this image: each part left out follows the
+    /// document's section display.
+    section: Option<SectionOverride>,
+    /// Sun shadows on or off for this image (default: the document's).
+    shadows: Option<bool>,
+    /// 1 to 4 (default 1): renders at that many times the size and averages down to
+    /// width x height for smoother edges. Width and height times it are at most twice the
+    /// largest side (8192).
+    supersample: Option<u32>,
+    /// `style` (default): the style's background. `transparent`: pixels with nothing drawn on
+    /// them (no faces, edges or guides; no ground grid or axes either) are clear, alpha 0.
+    background: Option<Background>,
+}
+
+/// The parts of the section display a render overrides; each left out follows the document's.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SectionOverride {
+    planes: Option<bool>,
+    cuts: Option<bool>,
+    fill: Option<bool>,
+    fill_color: Option<SectionFillColor>,
+}
+
+/// What a render shows behind the model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum Background {
+    #[default]
+    Style,
+    Transparent,
+}
+
+/// How `Host::render_view` draws one image. Everything is resolved: the overrides of the call
+/// are applied over the document's settings, which the host must leave as they are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderOptions {
+    /// The size of the image to return, in pixels. With `supersample` above 1 the host draws
+    /// this many times larger on each side (its own `width` and `height` are those larger
+    /// sizes: see `RenderOptions::drawn`).
+    pub width: u32,
+    pub height: u32,
+    /// Times the size the image is drawn at before it is averaged down (1 to 4).
+    pub supersample: u32,
+    pub lighting: Lighting,
+    /// The style to draw with (None: the plain look).
+    pub style: Option<StyleSettings>,
+    pub section: SectionDisplay,
+    /// Whether the sun's shadows are drawn.
+    pub shadows: bool,
+    /// Clear (alpha 0) where nothing is drawn; the pixels then come premultiplied by alpha.
+    pub transparent: bool,
+}
+
+impl RenderOptions {
+    /// The size the host draws at: the image size times `supersample`.
+    pub fn drawn(&self) -> (u32, u32) {
+        (
+            self.width * self.supersample,
+            self.height * self.supersample,
+        )
+    }
+
+    /// The options that draw the document as it is, `width` by `height`.
+    pub fn of(doc: &Document, width: u32, height: u32) -> Self {
+        RenderOptions {
+            width,
+            height,
+            supersample: 1,
+            lighting: doc.lighting,
+            style: doc.chosen_style().copied(),
+            section: doc.section_display,
+            shadows: doc.shadows.on,
+            transparent: false,
+        }
+    }
 }
 
 /// What the API needs from the program it runs in (the window app or headless mode).
@@ -92,16 +178,15 @@ pub trait Host {
         commands: Vec<BatchCommand>,
         atomic: bool,
     ) -> Result<Vec<Outcome>, BatchError>;
-    /// Renders the current model from `camera`, lit by `lighting`, to tightly packed RGBA8
-    /// pixels, or None when no GPU is available.
-    /// With `frame`, draws that scene (the document's with some instances moved) instead of the
-    /// document's, with the document's open context and selection.
+    /// Renders the current model from `camera` as `options` say, to tightly packed RGBA8
+    /// pixels of `options.drawn()` size, or None when no GPU is available. Changes nothing of
+    /// the document or of how later renders look. With `frame`, draws that scene (the
+    /// document's with some instances moved) instead of the document's, with the document's
+    /// open context and selection.
     fn render_view(
         &mut self,
         camera: &Camera,
-        lighting: Lighting,
-        width: u32,
-        height: u32,
+        options: &RenderOptions,
         frame: Option<&Scene>,
     ) -> Option<Vec<u8>>;
     /// The editor's state, or None for a program without an editor (a bare document).
@@ -478,19 +563,19 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
             format!("width and height must be between 1 and {MAX_IMAGE_SIDE}"),
         ));
     }
-    let invalid = |why: &str| Err(RpcError::new(codes::INVALID_PARAMS, why));
+    let bad_params = |why: &str| Err(RpcError::new(codes::INVALID_PARAMS, why));
     if p.scene.is_some() && p.camera.is_some() {
-        return invalid("camera is not allowed with scene");
+        return bad_params("camera is not allowed with scene");
     }
     if p.scene.is_none() && (p.t.is_some() || p.from.is_some()) {
-        return invalid("t and from need scene");
+        return bad_params("t and from need scene");
     }
     let t = p.t.unwrap_or(1.0);
     if !(0.0..=1.0).contains(&t) {
-        return invalid("t must be from 0 to 1");
+        return bad_params("t must be from 0 to 1");
     }
     let doc = host.document();
-    let (camera, frame) = match (p.scene, p.camera) {
+    let (mut camera, frame) = match (p.scene, p.camera) {
         (Some(scene), _) => {
             let motion = doc.motion_between(p.from, scene).map_err(command_failed)?;
             (motion.camera_at(t), Some(motion.scene_at(doc.scene(), t)))
@@ -498,12 +583,54 @@ fn render_view(host: &mut dyn Host, params: Value) -> Result<Value, RpcError> {
         (None, Some(v)) => (v.camera(doc).map_err(command_failed)?, None),
         (None, None) => (doc.camera.clone(), None),
     };
-    let lighting = p.lighting.unwrap_or(doc.lighting);
-    let rgba = host
-        .render_view(&camera, lighting, p.width, p.height, frame.as_ref())
+    let invalid = |why: String| command_failed(CommandError::new(ErrorKind::InvalidInput, why));
+    if let Some(projection) = p.projection {
+        camera.projection = projection;
+    }
+    let mut options = RenderOptions::of(doc, p.width, p.height);
+    if let Some(lighting) = p.lighting {
+        options.lighting = lighting;
+    }
+    if let Some(id) = p.style {
+        let style = doc
+            .scene()
+            .style(id)
+            .ok_or_else(|| invalid(format!("no style {id}")))?;
+        options.style = Some(style.settings);
+    }
+    if let Some(o) = p.section {
+        let s = &mut options.section;
+        s.planes = o.planes.unwrap_or(s.planes);
+        s.cuts = o.cuts.unwrap_or(s.cuts);
+        s.fill = o.fill.unwrap_or(s.fill);
+        s.fill_color = o.fill_color.unwrap_or(s.fill_color);
+    }
+    options.shadows = p.shadows.unwrap_or(options.shadows);
+    options.transparent = p.background == Some(Background::Transparent);
+    let k = p.supersample.unwrap_or(1);
+    if !(1..=MAX_SUPERSAMPLE).contains(&k) {
+        return Err(invalid(format!(
+            "supersample must be between 1 and {MAX_SUPERSAMPLE}"
+        )));
+    }
+    if p.width * k > 2 * MAX_IMAGE_SIDE || p.height * k > 2 * MAX_IMAGE_SIDE {
+        return Err(invalid(format!(
+            "width and height times supersample must be at most {}",
+            2 * MAX_IMAGE_SIDE
+        )));
+    }
+    options.supersample = k;
+    let mut rgba = host
+        .render_view(&camera, &options, frame.as_ref())
         .ok_or_else(|| {
             RpcError::new(codes::RENDER_UNAVAILABLE, "no GPU available for rendering")
         })?;
+    if k > 1 {
+        rgba = render::snapshot::box_downsample(&rgba, p.width, p.height, k);
+    }
+    if options.transparent {
+        render::snapshot::unpremultiply(&mut rgba);
+    }
     let png = encode_png(&rgba, p.width, p.height);
     Ok(json!({
         "width": p.width,
@@ -556,9 +683,9 @@ pub fn describe() -> Value {
                 "result_schema": query_result_schema(),
             },
             "render_view": {
-                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\", scene?: PageId, t?: 0 to 1 (default 1), from?: PageId}",
+                "params": "{width, height, camera?: {eye, target, fov_y_deg?, up?, projection?}, lighting?: \"day\" | \"night\" | \"studio\", style?: StyleId, projection?: \"perspective\" | \"parallel\", section?: {planes?, cuts?, fill?, fill_color?: \"dark\" | \"material\"}, shadows?: bool, supersample?: 1..4 (width and height times it at most 8192), background?: \"style\" | \"transparent\", scene?: PageId, t?: 0 to 1 (default 1), from?: PageId}",
                 "result": "{width, height, png_base64}",
-                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); the document's tags, lighting and style are kept",
+                "notes": "does not move the document camera or change its lighting; with scene it renders the frame t of the way (linear) from `from` (default the current view and positions) to the scene's camera and stored positions, without changing the document (not with camera; t and from need scene); the document's tags, lighting and style are kept unless lighting or style override them, and projection overrides the frame camera's projection",
                 "params_schema": schema::<RenderParams>(),
                 "result_schema": {
                     "type": "object",

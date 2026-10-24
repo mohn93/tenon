@@ -45,6 +45,9 @@ pub enum KernelError {
     /// A material emission is not a finite number from 0 to `MAX_EMISSION`; the text says
     /// which.
     MaterialEmission(String),
+    /// A material metalness or roughness is not a finite number from 0 to 1; the text says
+    /// which.
+    MaterialFinish(String),
     /// A texture placement's offset, rotation or scale is out of range; the text says which.
     TexturePlacement(String),
     /// A tag id names no tag in the scene.
@@ -115,6 +118,7 @@ impl fmt::Display for KernelError {
             | KernelError::MaterialOpacity(why)
             | KernelError::MaterialTexture(why)
             | KernelError::MaterialEmission(why)
+            | KernelError::MaterialFinish(why)
             | KernelError::TexturePlacement(why)
             | KernelError::TagName(why)
             | KernelError::Page(why)

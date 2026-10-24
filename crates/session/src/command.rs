@@ -310,8 +310,11 @@ pub enum Command {
     DeactivateSection {},
     /// Set how section planes are shown; absent fields stay as they are: `planes` draws the
     /// plane entities, `cuts` applies the active planes' cuts, `fill` fills closed cuts. All
-    /// default to true. A view setting like `set_lighting`: saved with the model, but not an
-    /// undo step and not a change to the revision.
+    /// default to true; `fill_color` is `dark` (default, #3a3a3a) or `material` (the color of
+    /// the material most of the cut faces' area shows on their front, else the nearest painted
+    /// instance's material, else the default face color, darkened by 20%). A view setting
+    /// like `set_lighting`: saved with the model, but not an undo step and not a change to the
+    /// revision.
     SetSectionDisplay {
         #[serde(default)]
         planes: Option<bool>,
@@ -319,7 +322,16 @@ pub enum Command {
         cuts: Option<bool>,
         #[serde(default)]
         fill: Option<bool>,
+        #[serde(default)]
+        fill_color: Option<crate::document::SectionFillColor>,
     },
+    /// Set whether section planes of the contexts outside each instance in `ids` cut it
+    /// (default true for every instance), as one undo step. An instance with `cut` false
+    /// stays whole under planes outside it; planes inside its own definition still cut its
+    /// contents. Entities that are not instances are `invalid_input`; instances already as
+    /// asked are skipped (no change, no undo step when none differs). The outcome's `changed`
+    /// lists the instances that changed.
+    SetSectionCut { ids: Vec<EntityId>, cut: bool },
     /// Set the model's display units, which lengths and angles are written and typed in and
     /// the tools snap to, as one undo step; absent fields stay as they are. `precision` is
     /// the decimals kept (0 to 6), or for `feet_inches` the finest fraction of an inch,
@@ -714,10 +726,15 @@ pub enum Command {
     /// painted with it are see-through. `texture` reads a PNG or JPEG image for its faces
     /// (`path` required); `color` may then be left out and is the image's average color.
     /// `emission` (default 0) from 0 to 10 makes its faces glow and light their surroundings.
+    /// `metalness` (default 0) and `roughness` (default 1), each from 0 to 1, set its finish:
+    /// a rough non-metal is matte, a smooth one has highlights and reflections, a metal tints
+    /// them with its color.
     /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
     /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
-    /// material unchanged (no undo step), `update` gives it the color, opacity, texture and
-    /// emission passed, as `change_material` would (one undo step), and returns it.
+    /// material unchanged (no undo step), `update` gives it the color, opacity, texture,
+    /// emission, metalness and roughness passed, as `change_material` would (one undo step),
+    /// and returns it. `reuse` checks only the ranges of the opacity, emission, metalness and
+    /// roughness given.
     /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]
@@ -731,10 +748,15 @@ pub enum Command {
         #[serde(default)]
         emission: Option<f32>,
         #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        roughness: Option<f32>,
+        #[serde(default)]
         existing: ExistingMaterial,
     },
-    /// Rename, recolor, change the opacity (0 to 1), the texture and/or the emission (0 to 10)
-    /// of a material; absent fields stay as they are. `texture`: null removes it; an object
+    /// Rename, recolor, change the opacity (0 to 1), the texture, the emission (0 to 10), the
+    /// metalness and/or the roughness (each 0 to 1) of a material; absent fields stay as they
+    /// are. `texture`: null removes it; an object
     /// sets it, reading `path` (the color becomes the image's average unless `color` is
     /// given), or without `path` keeps the image and changes its size.
     ChangeMaterial {
@@ -754,6 +776,10 @@ pub enum Command {
         texture: Option<Option<TextureSource>>,
         #[serde(default)]
         emission: Option<f32>,
+        #[serde(default)]
+        metalness: Option<f32>,
+        #[serde(default)]
+        roughness: Option<f32>,
     },
     /// Remove a material. Faces and instances painted with it, anywhere in the model, go back
     /// to the default material.
@@ -995,6 +1021,43 @@ pub enum Command {
     /// them) are dropped. A single solid with a void inside becomes the solid without it.
     /// Placed and erased as `solid_union`.
     OuterShell { ids: Vec<EntityId> },
+    /// Chamfer straight edges of a solid, as one undo step: each edge in `edges` becomes a
+    /// flat face set back `distance` meters (more than 0.000001, measured in the edited mesh's
+    /// own coordinates) on both faces beside it. A convex edge loses material, a concave one
+    /// gains it. Without `instance`, `edges` are edges of the open context, whose own faces
+    /// (nested groups and components aside) must be a solid: open the group first. With
+    /// `instance` (a group or component of the open context, a solid), `edges` are edges of
+    /// its definition, which is edited (a component's other instances change too). Each edge
+    /// must be straight (not part of a curve), not soft, lie between two flat faces at least 1
+    /// degree apart, and the setback line must stay inside both faces along the whole edge;
+    /// two chosen edges facing each other across a face must not have overlapping setbacks.
+    /// Chamfers of convex edges meeting at an outside corner overlap and close it; at any
+    /// other end (no other chosen edge, next to a concave edge, or an inside corner) the cut
+    /// stops in the plane of the face there. A concave edge whose two faces are both cut away
+    /// at an end starts `distance` back from that end. Faces and edges the cut does not touch
+    /// keep their ids.
+    ChamferEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        distance: f64,
+    },
+    /// Round straight edges of a solid, as one undo step: each edge in `edges` becomes an arc
+    /// of `radius` meters (more than 0.000001, in the edited mesh's own coordinates) tangent to
+    /// both faces beside it, made of `segments` faces per quarter turn (default 8, 1 to 90; in
+    /// proportion for other angles, at least 1) whose edges, and the edges where the round
+    /// meets the flat faces, are soft. The round touches each face `radius / tan(angle / 2)`
+    /// from the edge, `angle` the angle between the faces inside the solid (for a concave
+    /// edge, outside it). Everything else is as `chamfer_edges`, with that setback in place of
+    /// the distance.
+    FilletEdges {
+        #[serde(default)]
+        instance: Option<EntityId>,
+        edges: Vec<EntityId>,
+        radius: f64,
+        #[serde(default)]
+        segments: Option<u32>,
+    },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's
@@ -1063,7 +1126,8 @@ pub enum Command {
     /// are always made, materials and tags are matched by name (missing ones are added),
     /// the minimum corner of its bounding box lands at `at`, or at the open context's origin
     /// without it, and what it made becomes the selection. A material: added to the model;
-    /// one with the same name and the same color, opacity, emission and texture is reused,
+    /// one with the same name and the same color, opacity, emission, metalness, roughness and
+    /// texture is reused,
     /// otherwise the new one is named "<name> 2", "<name> 3"... (the lowest free). The
     /// outcome's `material` is the material's id.
     InsertLibraryItem {
@@ -1257,7 +1321,8 @@ pub enum Command {
         look_at: Option<[f64; 3]>,
     },
     /// Light the view by `day` (a headlight and ambient light, glowing faces adding theirs) or
-    /// by `night` (both dimmed, a dark background: glowing faces light the scene). A view
+    /// by `night` (both dimmed, a dark background: glowing faces light the scene), or by
+    /// `studio` (no headlight: key, fill and rim lights that follow the camera). A view
     /// setting like the camera's: saved with the model, but not an undo step and not a change
     /// to the revision.
     SetLighting { mode: Lighting },
@@ -1402,6 +1467,22 @@ pub struct StylePatch {
     )]
     #[schemars(with = "Option<Fog>")]
     pub fog: Option<Option<Fog>>,
+    #[serde(default)]
+    pub ambient_occlusion: Option<AmbientOcclusionPatch>,
+}
+
+/// The parts of a style's ambient occlusion settings `change_style` sets.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AmbientOcclusionPatch {
+    #[serde(default)]
+    pub on: Option<bool>,
+    /// Meters, 0.001 to 100.
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// 0 to 2.
+    #[serde(default)]
+    pub strength: Option<f32>,
 }
 
 /// The parts of a style's edge settings `change_style` sets.

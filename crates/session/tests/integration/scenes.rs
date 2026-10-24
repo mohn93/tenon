@@ -992,7 +992,10 @@ fn scene_positions_are_saved_and_older_files_open() {
         json!({"type": "save", "path": old.to_str().unwrap()}),
     )
     .unwrap();
-    assert!(stored(&old)["schema_version"].as_u64().unwrap() < 19);
+    assert!(
+        stored(&old)["schema_version"].as_u64().unwrap()
+            < session::file::SCENE_POSITIONS_SCHEMA_VERSION as u64
+    );
     assert!(stored(&old)["model"]["pages"][0].get("positions").is_none());
 }
 
@@ -1044,7 +1047,10 @@ fn the_scene_transition_is_saved_and_the_schema_is_20_only_when_it_is_not_the_de
         json!({"type": "save", "path": plain.to_str().unwrap()}),
     )
     .unwrap();
-    assert!(stored(&plain)["schema_version"].as_u64().unwrap() < 19);
+    assert!(
+        stored(&plain)["schema_version"].as_u64().unwrap()
+            < session::file::SCENE_POSITIONS_SCHEMA_VERSION as u64
+    );
     assert!(stored(&plain)["model"].get("transition").is_none());
 
     run(
@@ -1062,8 +1068,8 @@ fn the_scene_transition_is_saved_and_the_schema_is_20_only_when_it_is_not_the_de
         stored(&path)["schema_version"],
         session::file::TRANSITION_SCHEMA_VERSION
     );
-    assert_eq!(session::file::TRANSITION_SCHEMA_VERSION, 20);
-    assert_eq!(session::file::SCHEMA_VERSION, 20);
+    assert_eq!(session::file::TRANSITION_SCHEMA_VERSION, 24);
+    assert_eq!(session::file::SCHEMA_VERSION, 24);
     let mut e = doc();
     run(
         &mut e,

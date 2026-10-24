@@ -29,8 +29,10 @@ pub struct ImageLabels {
 
 impl ImageLabels {
     /// Paints `labels` onto `target` (an image of `camera`'s viewport size, in `format`) on
-    /// `device`, over what is there. Day images get the light theme's colors, night ones the
-    /// dark theme's.
+    /// `device`, over what is there, at `ppp` pixels per point (`pixels_per_point` of the
+    /// final image's width, times the supersampling). Day and studio images get the light
+    /// theme's colors, night ones the dark theme's. Over a clear (transparent) image the
+    /// labels compose premultiplied, as the image is.
     #[allow(clippy::too_many_arguments)]
     pub fn paint(
         &mut self,
@@ -40,6 +42,7 @@ impl ImageLabels {
         format: wgpu::TextureFormat,
         camera: &Camera,
         lighting: Lighting,
+        ppp: f32,
         labels: &[HudLabel],
     ) {
         if labels.is_empty() {
@@ -49,7 +52,6 @@ impl ImageLabels {
             camera.viewport.x.max(1.0) as u32,
             camera.viewport.y.max(1.0) as u32,
         ];
-        let ppp = pixels_per_point(size[0]);
         let renderer = self.renderer.get_or_insert_with(|| {
             egui_wgpu::Renderer::new(device, format, RendererOptions::default())
         });
@@ -65,7 +67,7 @@ impl ImageLabels {
         theme::set_choice(
             ctx,
             match lighting {
-                Lighting::Day => theme::ThemeChoice::Light,
+                Lighting::Day | Lighting::Studio => theme::ThemeChoice::Light,
                 Lighting::Night => theme::ThemeChoice::Dark,
             },
         );

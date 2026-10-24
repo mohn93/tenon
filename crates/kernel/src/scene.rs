@@ -722,14 +722,18 @@ impl Scene {
     /// mesh, curves, definitions, materials, tags and pages all take ids from one counter), that
     /// every material painted and every tag used or hidden by a page exists, that material, tag
     /// and page names are valid and distinct, that page views are valid, that material
-    /// opacities are from 0 to 1 and emissions from 0 to `MAX_EMISSION`, that textures are
-    /// valid and at most `MAX_TEXTURES`, and that face texture placements are in range.
+    /// opacities are from 0 to 1 and emissions from 0 to `MAX_EMISSION`, that metalness and
+    /// roughness are from 0 to 1, that textures are valid and at most `MAX_TEXTURES`, and that face texture placements are in range.
     pub fn validate(&self) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for (id, m) in &self.materials {
             crate::material::check_name(&m.name).map_err(|e| format!("material {id}: {e}"))?;
             crate::material::check_opacity(m.opacity).map_err(|e| format!("material {id}: {e}"))?;
             crate::material::check_emission(m.emission)
+                .map_err(|e| format!("material {id}: {e}"))?;
+            crate::material::check_unit("metalness", m.metalness)
+                .map_err(|e| format!("material {id}: {e}"))?;
+            crate::material::check_unit("roughness", m.roughness)
                 .map_err(|e| format!("material {id}: {e}"))?;
             if let Some(t) = &m.texture {
                 crate::texture::check_texture(t).map_err(|e| format!("material {id}: {e}"))?;

@@ -86,7 +86,14 @@ fn the_materials_list_chooses_adds_renames_recolors_and_deletes() {
         material: None,
         ..two_materials()
     });
-    for label in ["Material name", first.as_str(), "Opacity", "Glow"] {
+    for label in [
+        "Material name",
+        first.as_str(),
+        "Opacity",
+        "Glow",
+        "Metalness",
+        "Roughness",
+    ] {
         assert!(h.query_by_label(label).is_none(), "{label}");
     }
     assert_eq!(click(&mut h, "Delete"), []);

@@ -993,6 +993,8 @@ fn add_materials(
             opacity,
             texture,
             emission: 0.0,
+            metalness: kernel::DEFAULT_METALNESS,
+            roughness: kernel::DEFAULT_ROUGHNESS,
         };
         let had_texture = texture.is_some();
         let result = match document.scene_mut().add_material_from(material(texture)) {
@@ -1254,6 +1256,7 @@ fn page_view(
         fov_y: camera.fov_y,
         parallel: !def.perspective,
         night: false,
+        studio: false,
         color_by_tag: false,
         x_ray: false,
         hidden_geometry: false,

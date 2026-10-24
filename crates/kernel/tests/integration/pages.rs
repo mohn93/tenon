@@ -13,6 +13,7 @@ fn view(x: f64) -> PageView {
         fov_y: 35f64.to_radians(),
         parallel: false,
         night: false,
+        studio: false,
         color_by_tag: false,
         x_ray: false,
         hidden_geometry: false,
@@ -198,6 +199,9 @@ fn pages_are_kept_in_files() {
     night.parallel = true;
     night.night = true;
     night.color_by_tag = true;
+    let mut studio = view(4.0);
+    studio.studio = true;
+    add(&mut s, page("Studio", Some(studio), None));
     add(&mut s, page("Z first", Some(night), Some(&[walls])));
     add(&mut s, page("A second", None, Some(&[])));
     add(&mut s, page("Camera only", Some(view(3.0)), None));
@@ -206,12 +210,20 @@ fn pages_are_kept_in_files() {
     let read: SceneData = serde_json::from_str(&json).unwrap();
     let back = Scene::from_data(&read).unwrap();
     assert!(back == s);
-    assert_eq!(names(&back), ["Z first", "A second", "Camera only"]);
+    assert_eq!(
+        names(&back),
+        ["Studio", "Z first", "A second", "Camera only"]
+    );
     // A page storing tags with none hidden differs from one not storing tags.
     let pages: Vec<_> = back.pages().map(|(_, p)| p.tags.clone()).collect();
     assert_eq!(
         pages,
-        [Some(BTreeSet::from([walls])), Some(BTreeSet::new()), None]
+        [
+            None,
+            Some(BTreeSet::from([walls])),
+            Some(BTreeSet::new()),
+            None
+        ]
     );
     // New ids continue after the pages'.
     let mut back = back;

@@ -6,8 +6,8 @@ use render::grid::{BACKGROUND, LineVertex};
 use render::{Renderer, ViewStyle, Viewport};
 use session::{Camera, Lighting};
 
-const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
-const H: u32 = 256;
+pub(crate) const W: u32 = 256; // W * 4 bytes must be a multiple of 256 for texture readback
+pub(crate) const H: u32 = 256;
 
 pub(crate) fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
@@ -136,7 +136,7 @@ impl Offscreen {
     }
 
     /// Draws a frame with `renderer` and returns tightly packed RGBA8 pixels.
-    fn draw(
+    pub(crate) fn draw(
         &self,
         renderer: &mut Renderer,
         camera: &Camera,
@@ -869,6 +869,8 @@ fn lamp_and_wall(wall_x: f64, lamp_x: f64) -> Scene {
             opacity: 1.0,
             texture: None,
             emission: 6.0,
+            metalness: 0.0,
+            roughness: 1.0,
         })
         .unwrap();
     s.paint(MeshId::Root, &[lamp], &[], Side::Front, Some(glow))
@@ -974,6 +976,8 @@ fn wall_lamp(gap: f64) -> Scene {
             opacity: 1.0,
             texture: None,
             emission: 6.0,
+            metalness: 0.0,
+            roughness: 1.0,
         })
         .unwrap();
     for side in [Side::Front, Side::Back] {

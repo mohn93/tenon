@@ -437,6 +437,16 @@ fn a_slider_value_box_steps_on_increment_and_decrement() {
             Action::Decrement,
             UiAction::SetMaterialEmission(id, 19),
         ),
+        (
+            "Metalness value",
+            Action::Increment,
+            UiAction::SetMaterialMetalness(id, 1),
+        ),
+        (
+            "Roughness value",
+            Action::Decrement,
+            UiAction::SetMaterialRoughness(id, 99),
+        ),
     ] {
         let mut h = harness(fixture());
         assert_eq!(

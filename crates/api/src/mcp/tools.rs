@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use session::{Command, Lighting, Query};
 
 use super::Backend;
-use crate::dispatch::{EditorQuery, MAX_IMAGE_SIDE};
+use crate::dispatch::{EditorQuery, MAX_IMAGE_SIDE, MAX_SUPERSAMPLE};
 use crate::editor::EditorCommand;
 use crate::input::ToolInputParams;
 use crate::probe::{InferQuery, PickQuery, ScreenCommand, View};
@@ -148,6 +148,39 @@ fn input_schema(tool: &str) -> Value {
                     "height": side(DEFAULT_HEIGHT),
                     "camera": camera,
                     "lighting": lighting,
+                    "style": {
+                        "type": "string",
+                        "description": "A style id (y<n>) to draw this image with instead of the document's chosen style."
+                    },
+                    "projection": {
+                        "enum": ["perspective", "parallel"],
+                        "description": "Overrides the camera's projection for this image."
+                    },
+                    "section": {
+                        "type": "object",
+                        "properties": {
+                            "planes": {"type": "boolean"},
+                            "cuts": {"type": "boolean"},
+                            "fill": {"type": "boolean"},
+                            "fill_color": {"enum": ["dark", "material"]}
+                        },
+                        "additionalProperties": false,
+                        "description": "Overrides parts of the section display for this image; parts left out follow the document's."
+                    },
+                    "shadows": {
+                        "type": "boolean",
+                        "description": "Sun shadows on or off for this image."
+                    },
+                    "supersample": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_SUPERSAMPLE,
+                        "description": "Default 1. Renders at this many times the size and averages down to width x height for smoother edges; width and height times it are at most twice the largest side."
+                    },
+                    "background": {
+                        "enum": ["style", "transparent"],
+                        "description": "style (default) or transparent: pixels with nothing drawn (no faces, edges, guides, ground grid or axes) get alpha 0."
+                    },
                     "scene": {"description": "Render a frame of going to this scene (its camera and stored instance positions) instead of the document camera; not with camera.", "allOf": [scene.clone()]},
                     "t": {"type": "number", "minimum": 0, "maximum": 1, "description": "With scene: how far along, 0 (the current view, or from) to 1 (the scene; default), linear."},
                     "from": {"description": "With scene: the scene to start from (default the current view and positions).", "allOf": [scene]}

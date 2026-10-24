@@ -4,11 +4,9 @@ use glam::DVec2;
 use render::Snapshotter;
 use render::print::{Printed, render_pdf};
 use session::print::PrintSpec;
-use session::{
-    BatchCommand, BatchError, Camera, Command, CommandError, Document, Lighting, Origin, Outcome,
-};
+use session::{BatchCommand, BatchError, Camera, Command, CommandError, Document, Origin, Outcome};
 
-use crate::dispatch::{Host, no_gpu_for_printing};
+use crate::dispatch::{Host, RenderOptions, no_gpu_for_printing};
 use crate::roots::ApiRoots;
 
 pub struct HeadlessHost {
@@ -86,9 +84,7 @@ impl Host for HeadlessHost {
     fn render_view(
         &mut self,
         camera: &Camera,
-        lighting: Lighting,
-        width: u32,
-        height: u32,
+        options: &RenderOptions,
         frame: Option<&kernel::Scene>,
     ) -> Option<Vec<u8>> {
         self.check_gpu();
@@ -99,18 +95,24 @@ impl Host for HeadlessHost {
                 x_ray: doc.x_ray,
                 hidden_geometry: doc.hidden_geometry,
             });
-            s.set_section_display(doc.section_display);
-            s.set_sun(render::SunLight::of(doc));
-            s.set_model_style(doc.chosen_style());
-            s.capture(
+            s.set_section_display(options.section);
+            s.set_sun(render::SunLight::with_shadows(doc, options.shadows));
+            s.set_model_style(options.style.as_ref());
+            s.set_transparent_background(options.transparent);
+            s.set_pixels_per_point(options.supersample as f32);
+            let (width, height) = options.drawn();
+            let pixels = s.capture(
                 frame.unwrap_or_else(|| doc.scene()),
                 doc.context(),
                 doc.selection(),
                 camera,
-                lighting,
+                options.lighting,
                 width,
                 height,
-            )
+            );
+            s.set_transparent_background(false);
+            s.set_pixels_per_point(1.0);
+            pixels
         })
     }
 }

@@ -14,6 +14,7 @@ fn view(style: Option<StyleId>) -> PageView {
         fov_y: 35f64.to_radians(),
         parallel: false,
         night: false,
+        studio: false,
         color_by_tag: false,
         x_ray: false,
         hidden_geometry: false,

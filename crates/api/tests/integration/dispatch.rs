@@ -267,6 +267,8 @@ fn describe_lists_methods_and_schemas() {
         "solid_trim",
         "solid_split",
         "outer_shell",
+        "chamfer_edges",
+        "fillet_edges",
         "paste",
         "new",
         "open",
@@ -576,6 +578,37 @@ fn first_pixel(reply: &Value) -> [u8; 3] {
     let mut buf = vec![0; reader.output_buffer_size().unwrap()];
     reader.next_frame(&mut buf).unwrap();
     [buf[0], buf[1], buf[2]]
+}
+
+#[test]
+fn render_view_takes_studio_lighting_without_changing_the_documents() {
+    let mut h = HeadlessHost::new();
+    let level = json!({"eye": [0, -6, 1.5], "target": [0, 0, 1.5]});
+    let studio = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level, "lighting": "studio"}),
+    );
+    assert_eq!(h.doc.lighting, session::Lighting::Day);
+    if studio["error"]["code"] == codes::RENDER_UNAVAILABLE {
+        eprintln!("no GPU adapter, skipping");
+        return;
+    }
+    // The backdrop is the day's background; the pixels are the same where nothing is drawn.
+    let day = call(
+        &mut h,
+        "render_view",
+        json!({"width": 16, "height": 16, "camera": level}),
+    );
+    assert_eq!(first_pixel(&studio), first_pixel(&day));
+    // The document's own studio lighting is what a render without `lighting` follows.
+    let set = call(
+        &mut h,
+        "execute",
+        json!({"type": "set_lighting", "mode": "studio"}),
+    );
+    assert!(set.get("error").is_none(), "{set}");
+    assert_eq!(h.doc.lighting, session::Lighting::Studio);
 }
 
 #[test]

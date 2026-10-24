@@ -11,6 +11,7 @@ mod data;
 mod edit;
 mod erase;
 mod faces;
+pub mod fillet;
 pub mod geom;
 mod group;
 mod guides;
@@ -71,7 +72,10 @@ pub use import_tree::{
 };
 pub use index::{Index, Shape, ray_hits_triangle};
 pub use location::Location;
-pub use material::{MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit, Side};
+pub use material::{
+    DEFAULT_METALNESS, DEFAULT_ROUGHNESS, MAX_EMISSION, MAX_MATERIAL_NAME, Material, MaterialEdit,
+    Side,
+};
 pub use model::{ChangeSet, ChangeSummary, Edge, Face, Guide, Instance, Model, Op, Vertex};
 pub use orient::OrientReport;
 pub use page::{MAX_PAGE_NAME, PAGE_NAME_BASE, Page, PageView, SHADOW_YEARS, Shadows};
@@ -85,9 +89,9 @@ pub use section_loops::{SectionLoops, section_loops, triangulate_section};
 pub use smooth::{ShadedTriangle, SmoothNormals};
 pub use soften::SoftenReport;
 pub use style::{
-    ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog, FogColor, Ground, MAX_STYLE_NAME,
-    PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER, STYLE_NAME_BASE, Sketchy, Style,
-    StyleSettings,
+    AO_RADIUS, AO_STRENGTH, AmbientOcclusion, ENDPOINT_LENGTH, EdgeColorMode, EdgeStyle, Fog,
+    FogColor, Ground, MAX_STYLE_NAME, PROFILE_WIDTH, SKETCHY_EXTENSION, SKETCHY_JITTER,
+    STYLE_NAME_BASE, Sketchy, Style, StyleSettings,
 };
 pub use tag::{MAX_TAG_NAME, TAG_COLORS, Tag, TagEdit, UNTAGGED, tag_shown_among};
 pub use texture::{

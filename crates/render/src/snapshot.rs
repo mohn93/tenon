@@ -17,6 +17,9 @@ pub struct Snapshotter {
     software: bool,
 }
 
+/// Captures of more pixels than this free their render targets when they are done.
+const LARGE_CAPTURE_PIXELS: u64 = 4096 * 4096;
+
 /// The format captures are rendered in.
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -66,6 +69,12 @@ impl Snapshotter {
         }
     }
 
+    /// Draws no ambient occlusion in the captures from now on, whatever the style says (for a
+    /// device that cannot, see [`Renderer::disable_ambient_occlusion`]).
+    pub fn disable_ambient_occlusion(&mut self) {
+        self.renderer.disable_ambient_occlusion();
+    }
+
     /// Colors faces by tag (or by material, the default) in the captures from now on.
     pub fn set_color_by_tag(&mut self, on: bool) {
         self.renderer.set_color_by_tag(on);
@@ -89,6 +98,19 @@ impl Snapshotter {
     /// ground grid and axes.
     pub fn set_print_mode(&mut self, on: bool) {
         self.renderer.set_print_mode(on);
+    }
+
+    /// Captures from now on on a transparent background (see
+    /// `Renderer::set_transparent_background`): the pixels come back premultiplied by their
+    /// alpha, see [`unpremultiply`].
+    pub fn set_transparent_background(&mut self, on: bool) {
+        self.renderer.set_transparent_background(on);
+    }
+
+    /// Captures from now on for a display of `scale` physical pixels per point (widths in
+    /// points follow); the default is 1.
+    pub fn set_pixels_per_point(&mut self, scale: f32) {
+        self.renderer.set_pixels_per_point(scale);
     }
 
     /// Lights the day captures from now on with `sun` (see `SunLight::of`); None, the default,
@@ -210,6 +232,10 @@ impl Snapshotter {
         if let Some(overlay) = overlay {
             overlay(&self.device, &self.queue, &view, &camera);
         }
+        // A supersampled capture's targets (several hundred MB) are not kept for the next one.
+        if u64::from(width) * u64::from(height) > LARGE_CAPTURE_PIXELS {
+            self.renderer.release_targets();
+        }
 
         // Texture-to-buffer copies need rows padded to a multiple of 256 bytes.
         let row = width * 4;
@@ -273,4 +299,44 @@ impl Snapshotter {
         }
         Some(pixels)
     }
+}
+
+/// Turns premultiplied RGBA8 pixels into straight ones, in place: each color divided by its
+/// alpha (a pixel with no alpha becomes all zero).
+pub fn unpremultiply(rgba: &mut [u8]) {
+    for p in rgba.as_chunks_mut::<4>().0 {
+        let a = u32::from(p[3]);
+        if a == 0 {
+            p.fill(0);
+        } else if a < 255 {
+            for c in &mut p[..3] {
+                *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+}
+
+/// Averages `rgba`, `width * factor` by `height * factor` pixels, down to `width` by `height`
+/// in `factor` by `factor` blocks (a box filter), channel by channel.
+pub fn box_downsample(rgba: &[u8], width: u32, height: u32, factor: u32) -> Vec<u8> {
+    let (w, h, k) = (width as usize, height as usize, factor as usize);
+    let row = w * k * 4;
+    assert_eq!(rgba.len(), row * h * k, "pixels of the enlarged size");
+    let mut out = Vec::with_capacity(w * h * 4);
+    let n = (k * k) as u32;
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u32; 4];
+            for dy in 0..k {
+                for dx in 0..k {
+                    let i = (y * k + dy) * row + (x * k + dx) * 4;
+                    for (s, v) in sum.iter_mut().zip(&rgba[i..i + 4]) {
+                        *s += u32::from(*v);
+                    }
+                }
+            }
+            out.extend(sum.map(|s| ((s + n / 2) / n) as u8));
+        }
+    }
+    out
 }

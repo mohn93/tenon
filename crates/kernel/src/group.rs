@@ -199,6 +199,7 @@ impl Scene {
                 material: i.material.or(placed.material),
                 tag: i.tag.or(placed.tag),
                 hidden: i.hidden || placed.hidden,
+                section_cut: i.section_cut && placed.section_cut,
             });
         }
         let exploded = self.edit(parent, |m| {
@@ -278,6 +279,7 @@ impl Scene {
                     material: original.material,
                     tag: original.tag,
                     hidden: original.hidden,
+                    section_cut: original.section_cut,
                 });
             }
         }
@@ -375,6 +377,7 @@ impl Scene {
                 material: child.material,
                 tag: child.tag,
                 hidden: child.hidden,
+                section_cut: child.section_cut,
             });
         }
         let (copy, added) = self.add_definition(&name, kind);

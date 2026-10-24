@@ -19,7 +19,7 @@ use kernel::{
     MaterialId, MeshId, Model, NoteId, Scene, SectionId, SectionPlane, TagId, TextureImage,
     VertexId, back_texture_position,
 };
-use session::{AnnotationShape, SectionDisplay, SectionShape};
+use session::{AnnotationShape, SectionDisplay, SectionFillColor, SectionShape};
 
 use crate::annotations::{ANNOTATION_COLOR, AnnotationLook, FADED_ANNOTATION_COLOR};
 use crate::grid::{AXIS_X, AXIS_Y, AXIS_Z, LineVertex};
@@ -27,7 +27,7 @@ use crate::guides::{FADED_GUIDE_COLOR, GUIDE_COLOR, GuideShape};
 use crate::lights::{Glow, Light, connected};
 use crate::sections::{
     ACTIVE_SECTION_COLOR, CUT_FILL_COLOR, Cut, FADED_ACTIVE_SECTION_COLOR, SectionLook,
-    clip_segment, clip_triangle, cut_surface,
+    clip_segment, clip_triangle, crosses_plane, cut_surface, material_fill_color,
 };
 use crate::sun_shadow::SUN_CASTER_OPACITY;
 use crate::texture::layers;
@@ -51,6 +51,8 @@ pub struct FaceVertex {
     pub layer: [f32; 2],
     /// 1 on a side whose material glows, 0 otherwise (see `BaseFaceVertex`).
     pub glow: [f32; 2],
+    /// The finish of the front and back sides (see `BaseFaceVertex`).
+    pub finish: [f32; 4],
 }
 
 /// A face corner as the renderer uploads it; whether it is selected comes from a separate flag
@@ -78,6 +80,10 @@ pub struct BaseFaceVertex {
     /// 1 on a side whose material glows, 0 otherwise: such a side is drawn unshaded at its
     /// color (or texture).
     pub glow: [f32; 2],
+    /// The finish of the front side's material (metalness, roughness) and then the back
+    /// side's: `[0.0, 1.0, 0.0, 1.0]` is matte, shaded as faces were before materials had a
+    /// finish. Faces without a material, and faces colored by tag, are matte.
+    pub finish: [f32; 4],
 }
 
 impl BaseFaceVertex {
@@ -100,6 +106,9 @@ struct Look {
     alpha: f32,
     texture: Option<(u32, DVec2)>,
     emission: f32,
+    /// The material's metalness and roughness (0 and 1: matte).
+    metalness: f32,
+    roughness: f32,
     /// The material the side is painted with, for edges colored by material.
     material: Option<MaterialId>,
 }
@@ -119,6 +128,8 @@ fn side_look(
         alpha: 1.0,
         texture: None,
         emission: 0.0,
+        metalness: 0.0,
+        roughness: 1.0,
         material: None,
     };
     let Some((id, m)) = material.and_then(|id| Some((id, scene.material(id)?))) else {
@@ -133,6 +144,8 @@ fn side_look(
             .zip(layers.get(&id))
             .map(|(t, &layer)| (layer, DVec2::new(t.width, t.height))),
         emission: m.emission,
+        metalness: m.metalness,
+        roughness: m.roughness,
         material: Some(id),
     }
 }
@@ -146,6 +159,8 @@ fn tag_colored(scene: &Scene, tag: Option<TagId>, material: Look) -> Look {
             alpha: 1.0,
             texture: None,
             emission: 0.0,
+            metalness: 0.0,
+            roughness: 1.0,
             material: None,
         },
         None => Look {
@@ -159,6 +174,16 @@ impl Look {
     /// The texture array layer, or -1 without a texture.
     fn layer(&self) -> f32 {
         self.texture.map_or(-1.0, |(layer, _)| layer as f32)
+    }
+
+    /// The finish as a vertex carries it for two sides (see `BaseFaceVertex::finish`).
+    fn finish_of(front: &Look, back: &Look) -> [f32; 4] {
+        [
+            front.metalness,
+            front.roughness,
+            back.metalness,
+            back.roughness,
+        ]
     }
 
     /// 1 when the side glows, else 0.
@@ -478,6 +503,7 @@ impl SceneBase {
                 uv: v.uv,
                 layer: v.layer,
                 glow: v.glow,
+                finish: v.finish,
             })
             .collect();
         let edges = self
@@ -1094,12 +1120,12 @@ fn drawn_count(
     (faces, edges)
 }
 
-/// Adds a placement's cut to the base: the fill, and the cut edges in `color`.
-fn push_cut(base: &mut SceneBase, cut: &Cut, color: [f32; 4]) {
+/// Adds a placement's cut to the base: the fill in `fill`, and the cut edges in `color`.
+fn push_cut(base: &mut SceneBase, cut: &Cut, color: [f32; 4], fill: [f32; 4]) {
     base.cut_fill
         .extend(cut.fill.iter().flatten().map(|p| LineVertex {
             pos: p.as_vec3().to_array(),
-            color: CUT_FILL_COLOR,
+            color: fill,
         }));
     base.cut_edges
         .extend(cut.edges.iter().flatten().map(|p| LineVertex {
@@ -1217,6 +1243,9 @@ impl Walk<'_> {
             (self.glowing && (!self.glows.contains_key(&glow_key) || cutting)).then(Vec::new);
         // The placement's own surface in root coordinates, before any cut, for the cut outlines.
         let mut surface: Vec<[DVec3; 3]> = Vec::new();
+        // With the material fill, the area of the cut triangles each front color has.
+        let by_material = display.fill && display.fill_color == SectionFillColor::Material;
+        let mut votes: Vec<([f32; 3], f64)> = Vec::new();
         let base = &mut self.base;
         let first_caster = base.casters.len();
         for face in &parts.faces {
@@ -1254,6 +1283,12 @@ impl Walk<'_> {
                 uv,
                 layer: [drawn_front.layer(), drawn_back.layer()],
                 glow: [drawn_front.glow(), drawn_back.glow()],
+                // Ghosted and X-ray faces are matte.
+                finish: if ghost || x_ray {
+                    [0.0, 1.0, 0.0, 1.0]
+                } else {
+                    Look::finish_of(&drawn_front, &drawn_back)
+                },
             };
             let range = face.corners.clone();
             let (tris, _) = parts.corners[range.clone()].as_chunks::<3>();
@@ -1292,6 +1327,14 @@ impl Walk<'_> {
                         surface.push([a, b, c]);
                     } else if !ghost && cache_key.is_none() {
                         surface.push(tri.map(|c| c.0));
+                    }
+                    if by_material && !ghost && crosses_plane(&tri.map(|c| c.0), &planes) {
+                        let [p, q, r] = tri.map(|c| c.0);
+                        let area = 0.5 * (q - p).cross(r - p).length();
+                        match votes.iter_mut().find(|(c, _)| *c == front.color) {
+                            Some((_, n)) => *n += area,
+                            None => votes.push((front.color, area)),
+                        }
                     }
                     let attributes = tri.map(|(p, n, uv)| (p, (n, uv)));
                     for piece in clip_triangle(attributes, &planes, &mix_corner) {
@@ -1461,6 +1504,19 @@ impl Walk<'_> {
                 base.spans.edges.push((*eid, start..base.edges.len()));
             }
         }
+        // The fill: the material most of the cut area shows, else the look the placement gives
+        // faces without one (the nearest painted instance's, or the default).
+        let fill_color = if by_material {
+            let winner = votes
+                .iter()
+                .fold(None, |best: Option<&([f32; 3], f64)>, v| {
+                    best.filter(|b| b.1 >= v.1).or(Some(v))
+                })
+                .map_or(front.color, |v| v.0);
+            material_fill_color(winner)
+        } else {
+            CUT_FILL_COLOR
+        };
         if let (Some(key), Some(plane)) = (cache_key, own_plane) {
             if collect_local && !surface.is_empty() {
                 self.cuts
@@ -1478,11 +1534,11 @@ impl Walk<'_> {
                     .iter()
                     .map(|e| e.map(|p| t.transform_point3(p)))
                     .collect();
-                push_cut(base, &Cut { fill, edges }, color);
+                push_cut(base, &Cut { fill, edges }, color, fill_color);
             }
         } else if cutting && !surface.is_empty() {
             let cut = cut_surface(&surface, &planes, display.fill);
-            push_cut(base, &cut, color);
+            push_cut(base, &cut, color, fill_color);
         }
         let color = if inside {
             GUIDE_COLOR
@@ -1597,6 +1653,8 @@ impl Walk<'_> {
                 self.base.annotations.len(),
                 self.base.sections.len(),
             );
+            // An instance left whole is cut by none of the planes outside it.
+            let outside = (!instance.section_cut).then(|| std::mem::take(&mut self.planes));
             self.path.push(iid);
             self.mesh(
                 MeshId::Definition(instance.definition),
@@ -1605,6 +1663,9 @@ impl Walk<'_> {
                 instance.tag.or(inherited_tag),
             );
             self.path.pop();
+            if let Some(planes) = outside {
+                self.planes = planes;
+            }
             self.ghost = was_ghost;
             if open {
                 let placed = Ranges {
@@ -1871,6 +1932,8 @@ mod tests {
             opacity: 1.0,
             texture: None,
             emission,
+            metalness: 0.0,
+            roughness: 1.0,
         })
         .unwrap()
         .0
@@ -1898,6 +1961,47 @@ mod tests {
         let base = scene_base(&s, &[]);
         assert!(base.lights.is_empty());
         assert!(base.faces.iter().all(|v| v.glow == [0.0, 0.0]));
+    }
+
+    #[test]
+    fn faces_carry_the_finish_of_their_materials_and_unpainted_ones_are_matte() {
+        let (mut s, first, _) = two_squares();
+        let (steel, _) = s.add_material("Steel", [200, 200, 210]).unwrap();
+        s.change_material_with(
+            steel,
+            kernel::MaterialEdit {
+                metalness: Some(1.0),
+                roughness: Some(0.25),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        paint_tile(&mut s, first, steel);
+        let base = scene_base(&s, &[]);
+        assert!(!base.faces.is_empty());
+        // Both tiles place the painted component: the front is finished, the back matte.
+        let finishes: std::collections::BTreeSet<[u32; 4]> = base
+            .faces
+            .iter()
+            .map(|v| v.finish.map(f32::to_bits))
+            .collect();
+        let steel_front = [1.0f32, 0.25, 0.0, 1.0].map(f32::to_bits);
+        assert_eq!(finishes, [steel_front].into());
+        // Without a material every face is matte.
+        let (plain, _, _) = two_squares();
+        assert!(
+            scene_base(&plain, &[])
+                .faces
+                .iter()
+                .all(|v| v.finish == [0.0, 1.0, 0.0, 1.0])
+        );
+        // scene_geometry carries it too.
+        assert!(
+            scene_geometry(&s, &[], &BTreeSet::new())
+                .faces
+                .iter()
+                .any(|v| v.finish == [1.0, 0.25, 0.0, 1.0])
+        );
     }
 
     #[test]
@@ -2611,6 +2715,7 @@ mod tests {
                                 uv,
                                 layer: [front.layer(), back.layer()],
                                 glow: [front.glow(), back.glow()],
+                                finish: Look::finish_of(&front, &back),
                             });
                         }
                     }

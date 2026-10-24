@@ -34,6 +34,9 @@ pub struct PageView {
     /// Lit by night rather than by day.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub night: bool,
+    /// Lit by the studio lights (key, fill and rim); wins over `night` if both are set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub studio: bool,
     /// Faces drawn in their tags' colors.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub color_by_tag: bool,

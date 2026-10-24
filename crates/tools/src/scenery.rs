@@ -1140,6 +1140,8 @@ fn collect<'a>(
         // An instance hidden by its own flag is kept as a ghost: seen only when revealed.
         let was_ghost = trail.ghost;
         trail.ghost |= instance.hidden && !on_context;
+        // An instance left whole is cut by none of the planes outside it.
+        let outside = (!instance.section_cut).then(|| std::mem::take(&mut trail.cuts));
         collect(
             scene,
             hidden,
@@ -1149,6 +1151,9 @@ fn collect<'a>(
             trail,
             found,
         );
+        if let Some(cuts) = outside {
+            trail.cuts = cuts;
+        }
         trail.ghost = was_ghost;
         trail.path.pop();
     }

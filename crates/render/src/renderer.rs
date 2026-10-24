@@ -18,6 +18,7 @@ use crate::scene::{
 use crate::sections::{SectionLook, section_lines};
 use crate::shadow_maps::{Casters, ShadowMaps};
 use crate::shadows::{MAX_SHADOWS, ShadowKey};
+use crate::ssao::{self, Ssao};
 use crate::style::ViewStyle;
 use crate::sun_shadow::{SUN_MAP_SIZE, SunFit, SunLight, SunMap, depth_texture, fit};
 use crate::texture::TextureArray;
@@ -27,9 +28,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const LINE_ATTRIBS: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-const FACE_ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
+const FACE_ATTRIBS: [wgpu::VertexAttribute; 9] = wgpu::vertex_attr_array![
     0 => Float32x3, 1 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32x2,
-    6 => Float32x4, 7 => Float32x2, 8 => Float32x2
+    6 => Float32x4, 7 => Float32x2, 8 => Float32x2, 10 => Float32x4
 ];
 /// The selection flag of a face or edge vertex, from a second vertex buffer (see
 /// `scene::Flags`).
@@ -94,6 +95,14 @@ pub fn supports_shadows(adapter: &wgpu::Adapter) -> bool {
         .contains(wgpu::DownlevelFlags::CUBE_ARRAY_TEXTURES)
 }
 
+/// True when the adapter can draw ambient occlusion (the style's `ambient_occlusion`). The
+/// passes need depth and normal buffers at half resolution and a depth texture read by the
+/// shader; a browser's WebGL2 (GL) adapter is not trusted with them, so there a renderer built
+/// for one is told with [`Renderer::disable_ambient_occlusion`].
+pub fn supports_ambient_occlusion(adapter: &wgpu::Adapter) -> bool {
+    cfg!(not(target_arch = "wasm32")) || adapter.get_info().backend != wgpu::Backend::Gl
+}
+
 /// The scene shader with shadow lookups and how many lights may cast shadows, or None when the
 /// device cannot have them: it allows no cube-map array or rejects the shader (devices without
 /// cube-map arrays do). On wasm the shader is not validated here (that would block): callers
@@ -154,6 +163,30 @@ impl Uniforms {
 const DAY: [f32; 2] = [0.6, 0.4];
 /// The same at night, dimmed so glowing faces light the scene.
 const NIGHT: [f32; 2] = [0.08, 0.12];
+/// The studio's ambient light, and what its key light adds to a face square-on to it: together
+/// 1, so a face square-on to the key is lit as fully as one square-on to the day headlight.
+const STUDIO_AMBIENT: f32 = 0.25;
+const STUDIO_KEY: f32 = 0.75;
+/// The studio's fill and rim lights' strengths.
+const STUDIO_FILL: f32 = 0.35;
+const STUDIO_RIM: f32 = 0.5;
+/// The studio lights' directions toward them in camera space: x right, y up, z toward the
+/// viewer (not yet normalized).
+const STUDIO_KEY_DIRECTION: [f32; 3] = [-0.5, 0.6, 0.6];
+const STUDIO_FILL_DIRECTION: [f32; 3] = [0.6, 0.1, 0.5];
+const STUDIO_RIM_DIRECTION: [f32; 3] = [0.0, 0.5, -0.8];
+
+/// The unit vector toward the studio light at `direction` in camera space, in the world.
+fn studio_direction(camera: &Camera, direction: [f32; 3]) -> Vec3 {
+    let [x, y, z] = direction;
+    let (right, up, forward) = (
+        camera.right().as_vec3(),
+        camera.up().as_vec3(),
+        camera.forward().as_vec3(),
+    );
+    (right * x + up * y - forward * z).normalize_or_zero()
+}
+
 /// How far unselected edges, the grid and the axes fade toward the background at night, so they
 /// stay quiet outlines rather than bright lines on the dark.
 const NIGHT_LINE_FADE: f32 = 0.8;
@@ -225,6 +258,14 @@ struct LightingUniforms {
     /// x: where the fog starts; y: where it is complete; z: 1 when there is fog.
     fog: [f32; 4],
     fog_color: [f32; 4],
+    /// x: 1 in studio lighting, else 0.
+    studio: [f32; 4],
+    /// xyz: the unit vector toward the studio fill light and the rim light; w: its strength
+    /// (0 outside the studio).
+    studio_fill: [f32; 4],
+    studio_rim: [f32; 4],
+    /// x: 1 when the ambient occlusion buffer holds this frame's occlusion.
+    ao: [f32; 4],
     /// World to the sun map's clip space.
     sun_view_proj: [f32; 16],
     lights: [LightUniform; MAX_LIGHTS],
@@ -265,6 +306,10 @@ impl LightingUniforms {
             ground: [0.0; 4],
             fog: [0.0; 4],
             fog_color: [0.0; 4],
+            studio: [0.0; 4],
+            studio_fill: [0.0; 4],
+            studio_rim: [0.0; 4],
+            ao: [0.0; 4],
             sun_view_proj: Mat4::IDENTITY.to_cols_array(),
             lights: [LightUniform::default(); MAX_LIGHTS],
         };
@@ -277,7 +322,10 @@ impl LightingUniforms {
         let ([ambient, headlight], night) = match mode {
             Lighting::Day => (DAY, 0.0),
             Lighting::Night => (NIGHT, 1.0),
+            // No headlight: the key light shades like the sun (see `sun_frame`).
+            Lighting::Studio => ([STUDIO_AMBIENT, 0.0], 0.0),
         };
+        uniforms.studio[0] = if mode == Lighting::Studio { 1.0 } else { 0.0 };
         uniforms.mode = [used.len() as f32, ambient, headlight, night];
         let night = mode == Lighting::Night;
         let [r, g, b] = style.selected_face;
@@ -301,21 +349,23 @@ impl LightingUniforms {
         uniforms
     }
 
-    /// The model style's sky, ground and fog. By night the style's background, sky and ground
+    /// The model style's sky, ground and fog. The studio has no ground. By night the style's background, sky and ground
     /// are ignored (the night background and no canvas of the style's), but fog still falls,
     /// toward the night background or its own color.
     fn set_model_style(&mut self, model: &StyleSettings, mode: Lighting) {
-        if mode == Lighting::Day {
+        if mode != Lighting::Night {
             self.canvas[0] = 1.0;
             if let Some(sky) = model.sky {
                 let [r, g, b, _] = rgb(sky);
                 self.sky = [r, g, b, 1.0];
             }
-            if let Some(ground) = &model.ground {
-                let [r, g, b, _] = rgb(ground.color);
-                self.ground = [r, g, b, ground.opacity];
-                self.canvas[2] = if ground.from_below { 1.0 } else { 0.0 };
-            }
+        }
+        if mode == Lighting::Day
+            && let Some(ground) = &model.ground
+        {
+            let [r, g, b, _] = rgb(ground.color);
+            self.ground = [r, g, b, ground.opacity];
+            self.canvas[2] = if ground.from_below { 1.0 } else { 0.0 };
         }
         if let Some(fog) = &model.fog {
             let color = match fog.color {
@@ -347,6 +397,14 @@ impl LightingUniforms {
         let (right, up) = (right.as_vec3(), up.as_vec3());
         self.cam_right = [right.x, right.y, right.z, 0.0];
         self.cam_up = [up.x, up.y, up.z, 0.0];
+        if self.studio[0] > 0.5 {
+            let dir = |d, strength| {
+                let v = studio_direction(camera, d);
+                [v.x, v.y, v.z, strength]
+            };
+            self.studio_fill = dir(STUDIO_FILL_DIRECTION, STUDIO_FILL);
+            self.studio_rim = dir(STUDIO_RIM_DIRECTION, STUDIO_RIM);
+        }
         self.canvas[1] = if !camera.is_parallel() && camera.eye.z < 0.0 {
             1.0
         } else {
@@ -364,6 +422,9 @@ fn rgb([r, g, b]: [u8; 3]) -> [f32; 4] {
 struct SunFrame {
     light: SunLight,
     fit: Option<SunFit>,
+    /// The studio's key light, which shades from any side (the sun below the horizon only
+    /// leaves its dark level).
+    key: bool,
 }
 
 impl LightingUniforms {
@@ -378,7 +439,11 @@ impl LightingUniforms {
         } = sun.light;
         let mode = if sun.fit.is_some() { 2.0 } else { 1.0 };
         self.sun = [direction.x, direction.y, direction.z, mode];
-        let direct = if sun.light.is_up() { light } else { 0.0 };
+        let direct = if sun.key || sun.light.is_up() {
+            light
+        } else {
+            0.0
+        };
         let (texel, range, view_proj) = sun.fit.map_or((0.0, 1.0, Mat4::IDENTITY), |f| {
             (f.texel, f.depth_range, f.view_proj)
         });
@@ -391,7 +456,9 @@ impl LightingUniforms {
 /// the theme's; by night the night background.
 fn background(mode: Lighting, style: &ViewStyle, model: Option<&StyleSettings>) -> [f32; 4] {
     match mode {
-        Lighting::Day => model.map_or_else(|| style.day_background(), |m| rgb(m.background)),
+        Lighting::Day | Lighting::Studio => {
+            model.map_or_else(|| style.day_background(), |m| rgb(m.background))
+        }
         Lighting::Night => NIGHT_BACKGROUND,
     }
 }
@@ -609,6 +676,7 @@ pub struct Renderer {
     canvas_pipeline: wgpu::RenderPipeline,
     /// The ground's sun shadows, multiplied over the background.
     sun_ground_pipeline: wgpu::RenderPipeline,
+    sun_ground_clear_pipeline: wgpu::RenderPipeline,
     guide_pipeline: wgpu::RenderPipeline,
     /// The fill of closed cuts, flat, nearer than the faces it lies on.
     cut_fill_pipeline: wgpu::RenderPipeline,
@@ -618,6 +686,15 @@ pub struct Renderer {
     overlay_pipeline: wgpu::RenderPipeline,
     /// A tool's translucent preview solid.
     preview_pipeline: wgpu::RenderPipeline,
+    /// What the ambient occlusion's normal pipeline is made from, when it is needed.
+    scene_shader: wgpu::ShaderModule,
+    scene_layout: wgpu::PipelineLayout,
+    /// The ambient occlusion passes, made when a style first asks for it.
+    ssao: Option<Ssao>,
+    /// Bound as the ambient occlusion while there is none.
+    ao_placeholder: wgpu::TextureView,
+    /// False where the device cannot draw ambient occlusion (see `disable_ambient_occlusion`).
+    ao_available: bool,
     uniforms: wgpu::Buffer,
     /// The lighting uniforms, rewritten every frame (see `LightingUniforms`).
     lighting_uniforms: wgpu::Buffer,
@@ -662,7 +739,7 @@ pub struct Renderer {
     sun_generation: u64,
     /// The ground quad the sun's shadows are drawn on, and the rectangle it was made for.
     sun_ground: Option<(Mesh, [[f32; 2]; 2])>,
-    /// Day or night, as of the last `set_lighting`.
+    /// Day, night or studio, as of the last `set_lighting`.
     lighting: Lighting,
     /// Faces drawn in their tags' colors, as of the last `set_color_by_tag` (see
     /// `scene::scene_base_with`).
@@ -678,6 +755,9 @@ pub struct Renderer {
     model_style: Option<StyleSettings>,
     /// Printing: white paper, no canvas gradient, ground grid or axes.
     print: bool,
+    /// Cleared to alpha 0 with no canvas, ground grid or axes: see
+    /// `set_transparent_background`.
+    transparent: bool,
     /// The scene's lights, as of the last `set_model`.
     lights: Vec<Light>,
     /// The grid and the axes in the style's colors (see `set_style`) along the drawing axes
@@ -836,10 +916,27 @@ impl Renderer {
                 count: None,
             },
         ];
+        // The ambient occlusion, read with `textureLoad`.
+        let ao_entries = [wgpu::BindGroupLayoutEntry {
+            binding: 8,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }];
         let entries = if max_shadows.is_some() {
-            [&scene_entries[..], &shadow_entries[..], &sun_entries[..]].concat()
+            [
+                &scene_entries[..],
+                &shadow_entries[..],
+                &sun_entries[..],
+                &ao_entries[..],
+            ]
+            .concat()
         } else {
-            [&scene_entries[..], &sun_entries[..]].concat()
+            [&scene_entries[..], &sun_entries[..], &ao_entries[..]].concat()
         };
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera and textures"),
@@ -1026,7 +1123,16 @@ impl Renderer {
                 write: false,
                 compare: wgpu::CompareFunction::Greater,
             },
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            // Alpha accumulates as coverage (source over), so see-through faces on a
+            // transparent background get the alpha they show, not its square.
+            Some(wgpu::BlendState {
+                color: wgpu::BlendState::ALPHA_BLENDING.color,
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
         );
         let edge_pipeline = pipeline(
             "edges",
@@ -1132,6 +1238,19 @@ impl Renderer {
                     operation: wgpu::BlendOperation::Add,
                 },
             }),
+        );
+        // The same on a transparent background: black with the alpha the shadow gives.
+        let sun_ground_clear_pipeline = pipeline(
+            "sun ground clear",
+            "vs_sun_ground",
+            "fs_sun_ground_clear",
+            &lines_only,
+            wgpu::PrimitiveTopology::TriangleList,
+            DepthUse {
+                write: false,
+                compare: wgpu::CompareFunction::Always,
+            },
+            Some(wgpu::BlendState::ALPHA_BLENDING),
         );
         let guide_pipeline = pipeline(
             "guides",
@@ -1280,6 +1399,7 @@ impl Renderer {
         let sun_placeholder = depth_texture(device, "no sun map", 1, false);
         let textures = TextureArray::new(device, queue, &Scene::default());
         let shadow_maps = max_shadows.map(|max| ShadowMaps::new(device, max));
+        let ao_placeholder = ssao::placeholder(device, queue);
         let bind_group = bind_group(
             device,
             &bind_layout,
@@ -1287,9 +1407,8 @@ impl Renderer {
             &textures,
             &sampler,
             shadow_maps.as_ref().map(|m| (&m.cubes, &shadow_sampler)),
-            (&sun_placeholder, &sun_sampler),
+            (&sun_placeholder, &sun_sampler, &ao_placeholder),
         );
-
         let (flat_ground, vertical_axis, flat_axes) = ground_meshes(
             device,
             &ViewStyle::CLASSIC,
@@ -1315,12 +1434,18 @@ impl Renderer {
             endpoint_pipeline,
             canvas_pipeline,
             sun_ground_pipeline,
+            sun_ground_clear_pipeline,
             guide_pipeline,
             cut_fill_pipeline,
             cut_edge_pipeline,
             wide_cut_edge_pipeline,
             overlay_pipeline,
             preview_pipeline,
+            scene_shader: shader,
+            scene_layout: layout,
+            ssao: None,
+            ao_placeholder,
+            ao_available: true,
             uniforms,
             lighting_uniforms,
             bind_layout,
@@ -1352,6 +1477,7 @@ impl Renderer {
             style: ViewStyle::CLASSIC,
             model_style: None,
             print: false,
+            transparent: false,
             lights: Vec::new(),
             flat_ground,
             vertical_axis,
@@ -1528,8 +1654,33 @@ impl Renderer {
                     .as_ref()
                     .map_or(&self.sun_placeholder, |m| &m.view),
                 &self.sun_sampler,
+                self.ssao
+                    .as_ref()
+                    .and_then(|s| s.targets())
+                    .map_or(&self.ao_placeholder, |t| &t.ao),
             ),
         );
+    }
+
+    /// Switches ambient occlusion off for good, as on a browser's WebGL2: a style that asks for
+    /// it draws as without.
+    pub fn disable_ambient_occlusion(&mut self) {
+        self.ao_available = false;
+        if self.ssao.take().is_some() {
+            self.rebind();
+        }
+    }
+
+    /// Whether this renderer can draw ambient occlusion.
+    pub fn ambient_occlusion_available(&self) -> bool {
+        self.ao_available
+    }
+
+    /// The model style's ambient occlusion when it is on and available.
+    fn ambient_occlusion(&self) -> Option<kernel::AmbientOcclusion> {
+        self.model_style
+            .map(|s| s.ambient_occlusion)
+            .filter(|ao| ao.on && self.ao_available)
     }
 
     /// Whether lights cast shadows on this device.
@@ -1628,16 +1779,38 @@ impl Renderer {
     }
 
     /// How many times the sun's shadow map has been drawn since the renderer was made: once per
-    /// change of the sun or the casters, not per frame.
+    /// change of the sun or the casters or, in the studio, the camera, not per frame.
     pub fn sun_maps_drawn(&self) -> u64 {
         self.sun_map.as_ref().map_or(0, |m| m.drawn)
     }
 
-    /// The sun for a frame, with its map drawn (or kept) if it has one. None by night or
-    /// without sun shading.
-    fn sun_frame(&mut self, encoder: &mut wgpu::CommandEncoder) -> Option<SunFrame> {
-        let light = self.sun.filter(|_| self.lighting == Lighting::Day)?;
-        let bounds = self.sun_bounds.filter(|_| light.is_up());
+    /// The light that shades a frame like the sun, with its map drawn (or kept) if it has one:
+    /// the sun by day, the studio's key light (from the camera's upper left front) in the studio
+    /// (with a map when shadows are on). None by night or without sun shading.
+    fn sun_frame(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        camera: &Camera,
+    ) -> Option<SunFrame> {
+        let (light, key) = match self.lighting {
+            Lighting::Day => (self.sun?, false),
+            Lighting::Night => return None,
+            Lighting::Studio => {
+                let direction = studio_direction(camera, STUDIO_KEY_DIRECTION);
+                let light = SunLight {
+                    direction,
+                    light: STUDIO_KEY,
+                    dark: STUDIO_AMBIENT,
+                    on_ground: self.sun.is_some_and(|s| s.on_ground) && direction.z > 0.0,
+                };
+                (light, true)
+            }
+        };
+        // The studio's shadows follow the shadow setting: the sun being on.
+        let shadows = self.sun.is_some();
+        let bounds = self
+            .sun_bounds
+            .filter(|_| shadows && (key || light.is_up()));
         let fit = bounds.map(|(lo, hi)| fit(light.direction, lo, hi, SUN_MAP_SIZE));
         if let Some(fit) = &fit {
             if self.sun_map.is_none() {
@@ -1655,7 +1828,7 @@ impl Renderer {
                 );
             }
         }
-        Some(SunFrame { light, fit })
+        Some(SunFrame { light, fit, key })
     }
 
     /// The ground quad for `ground`, kept while it stays the same.
@@ -1680,7 +1853,7 @@ impl Renderer {
         self.sun_ground.as_ref().map(|(m, _)| m)
     }
 
-    /// Lights the frames drawn from now on by day or by night.
+    /// Lights the frames drawn from now on by day, by night or in the studio.
     pub fn set_lighting(&mut self, lighting: Lighting) {
         self.lighting = lighting;
     }
@@ -1820,6 +1993,21 @@ impl Renderer {
         self.print = on;
     }
 
+    /// Frees the render targets (they are made again at the next frame): for after an
+    /// unusually large capture.
+    pub fn release_targets(&mut self) {
+        self.targets = None;
+    }
+
+    /// Draws the frames from now on on a transparent background (or, off, on the style's): the
+    /// target is cleared to alpha 0 and the canvas gradient, the ground grid and the axes stay
+    /// out, so what is drawn (faces, edges, guides, the sun's shadow on the ground) is all that
+    /// has alpha. Antialiased edges come out with premultiplied color: the color already
+    /// multiplied by the coverage in alpha.
+    pub fn set_transparent_background(&mut self, on: bool) {
+        self.transparent = on;
+    }
+
     /// Draws the frames from now on in `style`: the window sets its theme's; render_view and
     /// headless keep `ViewStyle::CLASSIC`. Recolors selected guides without a rebuild; the grid
     /// and axes are rebuilt only when their colors change.
@@ -1953,6 +2141,8 @@ impl Renderer {
         if self.targets.as_ref().map(|t| t.size) != Some(size) {
             self.targets = Some(self.make_targets(size));
         }
+        let occlusion = self.ambient_occlusion();
+        self.prepare_ao(occlusion.is_some(), size);
 
         let uniforms = Uniforms::new(camera);
         self.queue
@@ -1964,7 +2154,7 @@ impl Renderer {
             });
         let used = strongest(&self.lights, camera.eye, MAX_LIGHTS);
         let shadow_slots = self.shadow_slots(&used, camera.eye, &mut encoder);
-        let sun = self.sun_frame(&mut encoder);
+        let sun = self.sun_frame(&mut encoder, camera);
         // A print is white paper: the style's background, sky, ground and fog stay out of it.
         let canvas_style = self.model_style.filter(|_| !self.print);
         let mut lighting = LightingUniforms::new(
@@ -1976,6 +2166,9 @@ impl Renderer {
             (viewport.width, viewport.height),
         );
         lighting.set_camera(camera);
+        if occlusion.is_some() {
+            lighting.ao[0] = 1.0;
+        }
         if let Some(sun) = &sun {
             lighting.set_sun(sun);
         }
@@ -2024,9 +2217,23 @@ impl Renderer {
 
         let [r, g, b, a] = if self.print {
             [1.0; 4]
+        } else if self.transparent {
+            [0.0; 4]
         } else {
             background(self.lighting, &self.style, canvas_style.as_ref()).map(f64::from)
         };
+        // Clamp the viewport to the target; an empty one leaves just the cleared background.
+        let (x, y) = (viewport.x.min(size.0), viewport.y.min(size.1));
+        let (w, h) = (
+            viewport.width.min(size.0 - x),
+            viewport.height.min(size.1 - y),
+        );
+        if let Some(occlusion) = occlusion
+            && w > 0
+            && h > 0
+        {
+            self.encode_ao(&mut encoder, camera, [x, y, w, h], occlusion);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -2049,21 +2256,17 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
-            // Clamp the viewport to the target; an empty one leaves just the cleared background.
-            let (x, y) = (viewport.x.min(size.0), viewport.y.min(size.1));
-            let (w, h) = (
-                viewport.width.min(size.0 - x),
-                viewport.height.min(size.1 - y),
-            );
             if w > 0 && h > 0 {
                 pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.set_scissor_rect(x, y, w, h);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 let canvas = match &canvas_style {
-                    Some(m) => m.sky.is_some() || m.ground.is_some(),
+                    Some(m) => {
+                        m.sky.is_some() || (m.ground.is_some() && self.lighting == Lighting::Day)
+                    }
                     None => self.style.has_gradient(),
                 };
-                if !self.print && self.lighting == Lighting::Day && canvas {
+                if !self.print && !self.transparent && self.lighting != Lighting::Night && canvas {
                     pass.set_pipeline(&self.canvas_pipeline);
                     pass.draw(0..3, 0..1);
                 }
@@ -2090,11 +2293,16 @@ impl Renderer {
                 // print) so they darken with the ground, and under the vertical axis.
                 let sun_ground = |pass: &mut wgpu::RenderPass| {
                     if let (Some(count), Some((ground, _))) = (ground_shadows, &self.sun_ground) {
-                        bind(pass, &self.sun_ground_pipeline, ground);
+                        let pipeline = if self.transparent {
+                            &self.sun_ground_clear_pipeline
+                        } else {
+                            &self.sun_ground_pipeline
+                        };
+                        bind(pass, pipeline, ground);
                         pass.draw(0..count, 0..1);
                     }
                 };
-                if self.print {
+                if self.print || self.transparent {
                     sun_ground(&mut pass);
                 } else {
                     draw(
@@ -2196,6 +2404,100 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
+    /// Makes (`on`) or drops the ambient occlusion buffers for a target `size` pixels across, and
+    /// binds them to the face shader.
+    fn prepare_ao(&mut self, on: bool, size: (u32, u32)) {
+        let changed = if on {
+            let (device, shader, layout) = (&self.device, &self.scene_shader, &self.scene_layout);
+            self.ssao
+                .get_or_insert_with(|| {
+                    Ssao::new(device, ao_normal_pipeline(device, shader, layout))
+                })
+                .resize(size)
+        } else {
+            self.ssao.as_mut().is_some_and(Ssao::release)
+        };
+        if changed {
+            self.rebind();
+        }
+    }
+
+    /// Draws the opaque faces' depth and normals at half resolution into the occlusion buffers
+    /// and works the occlusion out from them, for the view `rect` (`x, y, width, height`, in
+    /// target pixels) seen by `camera`.
+    fn encode_ao(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        camera: &Camera,
+        rect: [u32; 4],
+        occlusion: kernel::AmbientOcclusion,
+    ) {
+        let Some(ssao) = &self.ssao else { return };
+        let Some(t) = ssao.targets() else { return };
+        let [x, y, w, h] = rect.map(|v| v as f32);
+        ssao.write_params(
+            &self.queue,
+            camera,
+            [x, y, w, h],
+            occlusion.radius,
+            occlusion.strength,
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ao normals"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.normals,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.5,
+                            g: 0.5,
+                            b: 1.0,
+                            a: 0.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &t.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_viewport(x * 0.5, y * 0.5, w * 0.5, h * 0.5, 0.0, 1.0);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            if let Some(faces) = &self.faces {
+                pass.set_pipeline(ssao.normal_pipeline());
+                pass.set_vertex_buffer(0, faces.buffer.slice(..));
+                if let Some(flags) = &faces.flags {
+                    pass.set_vertex_buffer(1, flags.slice(..));
+                }
+                if let Some(hover) = &faces.hover {
+                    pass.set_vertex_buffer(2, hover.slice(..));
+                }
+                match &self.glass {
+                    // The see-through sides are left out (the shader discards them from the
+                    // sides that have both).
+                    Some(glass) => {
+                        if glass.solid_count > 0 {
+                            pass.set_index_buffer(glass.solid.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(0..glass.solid_count, 0, 0..1);
+                        }
+                        pass.set_index_buffer(glass.order.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..glass.count(), 0, 0..1);
+                    }
+                    None => pass.draw(0..faces.count, 0..1),
+                }
+            }
+        }
+        ssao.encode(encoder);
+    }
+
     fn make_targets(&self, size: (u32, u32)) -> Targets {
         let texture = |label, format| {
             self.device
@@ -2223,6 +2525,60 @@ impl Renderer {
     }
 }
 
+/// The opaque faces' normals for the ambient occlusion, at one sample per pixel; made with the
+/// occlusion passes, when a style first asks for them.
+fn ao_normal_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+) -> wgpu::RenderPipeline {
+    let vector = |stride, attributes| wgpu::VertexBufferLayout {
+        array_stride: stride,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes,
+    };
+    let float = std::mem::size_of::<f32>() as u64;
+    let buffers = [
+        Some(vector(
+            std::mem::size_of::<BaseFaceVertex>() as u64,
+            &FACE_ATTRIBS,
+        )),
+        Some(vector(float, &FLAG_ATTRIBS)),
+        Some(vector(float, &FACE_HOVER_ATTRIBS)),
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("ao normals"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_face"),
+            compilation_options: Default::default(),
+            buffers: &buffers,
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_ao_normal"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: ssao::NORMAL_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 /// The bind group every pipeline uses: the camera uniforms, the material textures and their
 /// sampler, the lighting uniforms and, when there are any, the shadow maps and their sampler,
 /// and the sun's shadow map with its sampler.
@@ -2233,7 +2589,7 @@ fn bind_group(
     textures: &TextureArray,
     sampler: &wgpu::Sampler,
     shadows: Option<(&wgpu::TextureView, &wgpu::Sampler)>,
-    (sun_map, sun_sampler): (&wgpu::TextureView, &wgpu::Sampler),
+    (sun_map, sun_sampler, ao): (&wgpu::TextureView, &wgpu::Sampler, &wgpu::TextureView),
 ) -> wgpu::BindGroup {
     let mut entries = vec![
         wgpu::BindGroupEntry {
@@ -2270,6 +2626,10 @@ fn bind_group(
     entries.push(wgpu::BindGroupEntry {
         binding: 7,
         resource: wgpu::BindingResource::Sampler(sun_sampler),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 8,
+        resource: wgpu::BindingResource::TextureView(ao),
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera and textures"),
