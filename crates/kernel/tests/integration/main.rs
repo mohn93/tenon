@@ -18,6 +18,7 @@ mod hide;
 mod import_tree;
 mod index;
 mod intersect;
+mod joints;
 mod location;
 mod materials;
 mod mesh;

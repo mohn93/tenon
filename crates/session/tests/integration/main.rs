@@ -28,6 +28,7 @@ mod history_origin;
 mod import;
 mod intersect;
 mod isolate;
+mod joints;
 mod library;
 mod lights;
 mod materials;

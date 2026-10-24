@@ -269,7 +269,8 @@ impl Scene {
 
     /// The steps that drop from every page the stored positions of instances that are no longer
     /// instances of the root (erased, grouped or exploded), applied. A page left with none
-    /// stores no positions.
+    /// stores no positions. Joints naming such instances go too (see
+    /// [`Scene::drop_stale_joints`]), so every place that removes root instances drops both.
     pub(crate) fn drop_stale_positions(&mut self) -> SceneChange {
         let stale: Vec<(PageId, Page)> = self
             .pages()
@@ -293,6 +294,8 @@ impl Scene {
             self.apply_step(&step);
             steps.push(step);
         }
+        let joints = self.drop_stale_joints();
+        steps.extend(joints.steps);
         SceneChange { steps }
     }
 

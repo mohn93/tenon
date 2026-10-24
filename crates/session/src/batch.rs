@@ -2,7 +2,7 @@
 //!
 //! In a batch, an id field may hold a reference instead of an id: `"$N:KI"` is the I-th id of
 //! kind K (`v e f i g r n s` from `changes.created`, `m` from `changes.materials`, `y` from
-//! `changes.styles`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
+//! `changes.styles`, `j` from `changes.joints`, `d` from the outcome's `definitions`) in command N's outcome, `"$N:K*"` all of that kind and `"$N:*"` every edge, face, instance, guide,
 //! dimension, note and section plane command N created (not vertices: `"$N:v*"` names
 //! those). `*` references expand in place in id lists only.
 //!
@@ -12,8 +12,8 @@
 use std::fmt;
 
 use kernel::{
-    DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, MaterialId, NoteId,
-    SectionId, StyleId, VertexId,
+    DefinitionId, DimensionId, EdgeId, EntityId, FaceId, GuideId, InstanceId, JointId, MaterialId,
+    NoteId, SectionId, StyleId, VertexId,
 };
 use serde_json::Value;
 
@@ -61,6 +61,7 @@ pub enum RefKind {
     Material,
     Definition,
     Style,
+    Joint,
 }
 
 impl RefKind {
@@ -77,6 +78,7 @@ impl RefKind {
             'm' => RefKind::Material,
             'd' => RefKind::Definition,
             'y' => RefKind::Style,
+            'j' => RefKind::Joint,
             _ => return None,
         })
     }
@@ -94,6 +96,7 @@ impl RefKind {
             RefKind::Material => 'm',
             RefKind::Definition => 'd',
             RefKind::Style => 'y',
+            RefKind::Joint => 'j',
         }
     }
 
@@ -122,6 +125,8 @@ impl RefKind {
             RefKind::Definition => "definitions",
             RefKind::Style if one => "style",
             RefKind::Style => "styles",
+            RefKind::Joint if one => "joint",
+            RefKind::Joint => "joints",
         }
     }
 
@@ -164,7 +169,7 @@ impl fmt::Display for BatchRef {
 }
 
 impl BatchRef {
-    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdy])(0|[1-9][0-9]*|\*)|\*)$`.
+    /// Reads `^\$(0|[1-9][0-9]*):(([vefigrnsmdyj])(0|[1-9][0-9]*|\*)|\*)$`.
     fn parse(text: &str) -> Option<BatchRef> {
         let (command, rest) = text.strip_prefix('$')?.split_once(':')?;
         let command = canonical_number(command)?;
@@ -282,6 +287,12 @@ impl BatchRef {
         Ok(self.pick(styles, RefKind::Style)?[0])
     }
 
+    /// The joint this reference stands for.
+    fn joint(&self, done: &[Outcome]) -> Result<JointId, CommandError> {
+        let joints = &self.outcome(done)?.changes.joints;
+        Ok(self.pick(joints, RefKind::Joint)?[0])
+    }
+
     /// The material this reference stands for.
     fn material(&self, done: &[Outcome]) -> Result<MaterialId, CommandError> {
         let materials = &self.outcome(done)?.changes.materials;
@@ -326,7 +337,11 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
                 | ("path", Some("open_path" | "follow_me" | "copy_along_path"))
                 | ("target" | "tools", Some("solid_subtract" | "solid_trim"))
                 | ("instance" | "edges", Some("chamfer_edges" | "fillet_edges"))
-                | ("a" | "b", Some("add_dimension" | "solid_split"))
+                | (
+                    "a" | "b",
+                    Some("add_dimension" | "solid_split" | "add_joint")
+                )
+                | ("joint", Some("change_joint" | "delete_joint"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("target", Some("add_label"))
@@ -365,6 +380,8 @@ impl BatchCommand {
                     Want::Definition
                 } else if key == "style" || key == "from" {
                     Want::Style
+                } else if key == "joint" {
+                    Want::Joint
                 } else if key == "item" {
                     Want::Either
                 } else {
@@ -420,6 +437,7 @@ impl BatchCommand {
                 Slot::Material(m) => usize::from(m.0 >= STAND_IN_BASE),
                 Slot::Definition(d) => usize::from(d.0 >= STAND_IN_BASE),
                 Slot::Style(s) => usize::from(s.0 >= STAND_IN_BASE),
+                Slot::Joint(j) => usize::from(j.0 >= STAND_IN_BASE),
                 Slot::Item(r) => usize::from(is_stand_in_ref(r)),
             }
         });
@@ -469,6 +487,7 @@ impl BatchCommand {
                 Slot::Material(m) => self.resolve_material(m, done),
                 Slot::Definition(d) => self.resolve_definition(d, done),
                 Slot::Style(s) => self.resolve_style(s, done),
+                Slot::Joint(j) => self.resolve_joint(j, done),
                 Slot::Item(r) => self.resolve_item(r, done, context),
             };
             if let Err(e) = result {
@@ -546,6 +565,13 @@ impl BatchCommand {
         Ok(())
     }
 
+    fn resolve_joint(&self, j: &mut JointId, done: &[Outcome]) -> Result<(), CommandError> {
+        if j.0 >= STAND_IN_BASE {
+            *j = self.reference(j.0).joint(done)?;
+        }
+        Ok(())
+    }
+
     fn resolve_material(&self, m: &mut MaterialId, done: &[Outcome]) -> Result<(), CommandError> {
         if m.0 >= STAND_IN_BASE {
             *m = self.reference(m.0).material(done)?;
@@ -561,6 +587,7 @@ enum Want {
     Material,
     Definition,
     Style,
+    Joint,
     Either,
 }
 
@@ -579,6 +606,7 @@ fn replace(
             Want::Material => text.parse::<MaterialId>().map(|m| m.0).ok(),
             Want::Definition => text.parse::<DefinitionId>().map(|d| d.0).ok(),
             Want::Style => text.parse::<StyleId>().map(|s| s.0).ok(),
+            Want::Joint => text.parse::<JointId>().map(|j| j.0).ok(),
             Want::Entity => text.parse::<EntityId>().map(|id| number(&id)).ok(),
             Want::Either => text.parse::<LibraryRef>().ok().map(|r| match r {
                 LibraryRef::Entity(id) => number(&id),
@@ -601,6 +629,13 @@ fn replace(
     if want != Want::Style && is_style {
         return Err(format!("{text:?} is a style, not an id of that kind"));
     }
+    let is_joint = r.kind == Some(RefKind::Joint);
+    if want == Want::Joint && !is_joint {
+        return Err(format!("{text:?} is not a joint"));
+    }
+    if want != Want::Joint && is_joint {
+        return Err(format!("{text:?} is a joint, not an id of that kind"));
+    }
     let is_material = r.kind == Some(RefKind::Material);
     let is_definition = r.kind == Some(RefKind::Definition);
     if want == Want::Material && !is_material {
@@ -615,13 +650,15 @@ fn replace(
     if want != Want::Definition && is_definition {
         return Err(format!("{text:?} is a definition, not an entity"));
     }
-    if r.index.is_none() && (is_material || is_definition || is_style) {
+    if r.index.is_none() && (is_material || is_definition || is_style || is_joint) {
         return Err(format!(
             "{text:?} must name one {}",
             if is_material {
                 "material"
             } else if is_style {
                 "style"
+            } else if is_joint {
+                "joint"
             } else {
                 "definition"
             }
@@ -669,6 +706,7 @@ enum Slot<'a> {
     Material(&'a mut MaterialId),
     Definition(&'a mut DefinitionId),
     Style(&'a mut StyleId),
+    Joint(&'a mut JointId),
     /// An instance or a material (`save_to_library`'s `item`).
     Item(&'a mut LibraryRef),
 }
@@ -799,6 +837,15 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             if let Some(style) = style {
                 f(Slot::Style(style));
             }
+        }
+        Command::AddJoint { a, b, .. } => {
+            if let Some(a) = a {
+                f(Slot::One(a));
+            }
+            f(Slot::One(b));
+        }
+        Command::ChangeJoint { joint, .. } | Command::DeleteJoint { joint } => {
+            f(Slot::Joint(joint))
         }
         Command::AddBox { material, .. }
         | Command::AddCylinder { material, .. }
