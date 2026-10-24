@@ -2390,6 +2390,15 @@ impl State {
             UiAction::SolidTool(op) => {
                 self.editor.solid_tool(op);
             }
+            UiAction::CheckInterference => {
+                self.editor.check_interference();
+            }
+            UiAction::InterferencePair(index) => {
+                self.editor.select_interference_pair(index);
+            }
+            UiAction::CloseInterference => {
+                self.editor.close_interference();
+            }
             UiAction::Harden => {
                 self.editor.harden_selection();
             }
@@ -2804,6 +2813,7 @@ impl State {
             context: &context,
             selection: self.editor.doc().selection(),
             soften: self.editor.soften_window(),
+            interference: self.editor.interference_window(),
             edges_soft: self.editor.selection_soft(),
             selection_hidden: self.editor.selection_hidden(),
             selection_section_cut: self.editor.selection_section_cut(),

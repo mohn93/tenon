@@ -479,6 +479,148 @@ fn a_drive_to_the_current_value_changes_nothing() {
     assert!(s.drive_joint(j0, 0.0, None).unwrap().is_empty());
     s.drive_joint(j0, 0.3, None).unwrap();
     assert!(s.drive_joint(j0, 0.3, None).unwrap().is_empty());
+    // Within a hair of it (a value read back in degrees) is the same value.
+    assert!(s.drive_joint(j0, 0.3 + 1e-13, None).unwrap().is_empty());
+    assert_eq!(value(&s, j0), 0.3);
+}
+
+#[test]
+fn another_joint_passing_its_limits_midway_is_refused() {
+    // The bore runs from 0 down to -2R and back over a turn: limits of [-R, 0] hold at both
+    // ends of the turn but not halfway round.
+    let (mut s, [crank, ..], [j0, _, _, j3]) = slider_crank(DAffine3::IDENTITY);
+    let mut limited = s.joint(j3).unwrap().clone();
+    limited.limits = Some((-R, 0.0));
+    s.change_joint(j3, limited).unwrap();
+    let before = transform(&s, crank);
+    let e = s.drive_joint(j0, TAU, None).unwrap_err();
+    assert!(e.to_string().contains("would pass its limits"), "{e}");
+    assert_eq!(transform(&s, crank), before);
+    // A small turn that stays inside is fine, and the bore at its limit 0 counts as within.
+    s.drive_joint(j0, 0.2, None).unwrap();
+    s.drive_joint(j0, 0.0, None).unwrap();
+    assert!(value(&s, j3) <= 0.0 && value(&s, j3) > -1e-9);
+}
+
+/// The world axis and reference of joint `j`'s frame on its part `b`.
+fn frame_b(s: &Scene, j: JointId) -> JointFrame {
+    let joint = s.joint(j).unwrap();
+    joint.frame_b.world(&transform(s, joint.b))
+}
+
+/// A part turned about `about` (through the origin) by `angle` after its joint was made: a
+/// drive either turns it back so the joint holds facing the right way, or is refused.
+fn drive_turned(kind: JointKind, axis: DVec3, reference: DVec3, about: DVec3, angle: f64) {
+    let (mut s, ids) = parts(1);
+    let j = join(&mut s, kind, None, ids[0], DVec3::ZERO, axis, reference);
+    let turn = DAffine3::from_axis_angle(about, angle);
+    s.set_instance_transform(MeshId::Root, ids[0], turn * transform(&s, ids[0]))
+        .unwrap();
+    let target = if kind.is_angular() { 0.5 } else { 0.05 };
+    match s.drive_joint(j, target, None) {
+        Ok(_) => {
+            let b = frame_b(&s, j);
+            assert!((b.axis - axis).length() < 1e-9, "{kind:?}: axis {}", b.axis);
+            if kind == JointKind::Prismatic {
+                assert!((b.reference - reference).length() < 1e-9, "{}", b.reference);
+            }
+        }
+        Err(e) => assert!(e.to_string().contains("cannot all be met"), "{e}"),
+    }
+}
+
+#[test]
+fn a_part_turned_half_a_turn_does_not_meet_its_joint() {
+    drive_turned(JointKind::Revolute, DVec3::Z, DVec3::X, DVec3::X, PI);
+    drive_turned(JointKind::Prismatic, DVec3::X, DVec3::Y, DVec3::X, PI);
+    drive_turned(JointKind::Cylindrical, DVec3::Z, DVec3::X, DVec3::Y, PI);
+}
+
+#[test]
+fn a_part_turned_most_of_the_way_over_is_turned_back() {
+    // With residuals blind to direction the nearest pose would be the flipped one.
+    let (mut s, ids) = parts(1);
+    let j = join(
+        &mut s,
+        JointKind::Revolute,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::Z,
+        DVec3::X,
+    );
+    s.set_instance_transform(MeshId::Root, ids[0], DAffine3::from_rotation_x(2.6))
+        .unwrap();
+    s.drive_joint(j, 0.5, None).unwrap();
+    let b = frame_b(&s, j);
+    assert!((b.axis - DVec3::Z).length() < 1e-9, "{}", b.axis);
+    assert!((value(&s, j) - 0.5).abs() < 1e-12);
+    let (mut s, ids) = parts(1);
+    let j = join(
+        &mut s,
+        JointKind::Prismatic,
+        None,
+        ids[0],
+        DVec3::ZERO,
+        DVec3::X,
+        DVec3::Y,
+    );
+    s.set_instance_transform(MeshId::Root, ids[0], DAffine3::from_rotation_x(2.6))
+        .unwrap();
+    s.drive_joint(j, 0.05, None).unwrap();
+    let b = frame_b(&s, j);
+    assert!((b.reference - DVec3::Y).length() < 1e-9, "{}", b.reference);
+}
+
+#[test]
+fn a_parallelogram_four_bar_stays_a_parallelogram_through_its_flat_point() {
+    // Crank and rocker 0.1, coupler and ground 0.3: at 180 degrees the four bars lie on one
+    // line, where the linkage could fold into a crossed (antiparallelogram) shape.
+    let (a, d) = (0.1, 0.3);
+    let pa = p(0.0, a, 0.0);
+    let pb = p(d, a, 0.0);
+    let o4 = p(d, 0.0, 0.0);
+    for drive in [120.0f64, 125.0, 200.0] {
+        let (mut s, ids) = parts(3);
+        let [crank, coupler, rocker] = [ids[0], ids[1], ids[2]];
+        let z = DVec3::Z;
+        let j0 = join(&mut s, JointKind::Revolute, None, crank, DVec3::ZERO, z, pa);
+        join(
+            &mut s,
+            JointKind::Revolute,
+            Some(crank),
+            coupler,
+            pa,
+            z,
+            DVec3::X,
+        );
+        join(
+            &mut s,
+            JointKind::Revolute,
+            Some(coupler),
+            rocker,
+            pb,
+            z,
+            DVec3::X,
+        );
+        let j3 = join(&mut s, JointKind::Revolute, None, rocker, o4, z, pa);
+        let t = drive.to_radians();
+        s.drive_joint(j0, t, None).unwrap();
+        assert!(
+            (value(&s, j3) - t).abs() < 1e-9,
+            "{drive}: the rocker turned {} degrees",
+            value(&s, j3).to_degrees()
+        );
+        let tip = transform(&s, crank).transform_point3(pa);
+        let rocker_tip = transform(&s, rocker).transform_point3(pb);
+        assert!(
+            (rocker_tip - tip - p(d, 0.0, 0.0)).length() < 1e-9,
+            "{drive}"
+        );
+        // The coupler only moved, never turned.
+        let m = transform(&s, coupler).matrix3;
+        assert!(m.abs_diff_eq(glam::DMat3::IDENTITY, 1e-9), "{drive}");
+    }
 }
 
 #[test]

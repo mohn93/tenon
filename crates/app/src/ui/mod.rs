@@ -325,6 +325,13 @@ pub enum UiAction {
     IntersectFaces(IntersectScope),
     /// Tools > Solid Tools: combine or cut the selected solid groups and components.
     SolidTool(crate::editor::SolidOp),
+    /// Tools > Check Interference: check the selected parts (all when none is) against each
+    /// other, select the colliding ones and list the pairs.
+    CheckInterference,
+    /// Select both parts of a row of the Check Interference window and zoom to them.
+    InterferencePair(usize),
+    /// Close the Check Interference window.
+    CloseInterference,
     /// Make the selected edges soft or hard (Entity Info's Soft checkbox).
     SetSoft(bool),
     /// Set the texture offset of the faces (those selected when the field was edited), in
@@ -626,6 +633,8 @@ pub struct View<'a> {
     pub selection: &'a BTreeSet<EntityId>,
     /// The Soften Edges window's angle in degrees while it is open.
     pub soften: Option<u8>,
+    /// The Check Interference window's report while it is open.
+    pub interference: Option<&'a crate::editor::InterferenceReport>,
     /// Whether the selected edges are all soft, when only edges are selected.
     pub edges_soft: Option<bool>,
     /// Whether everything selected that can be hidden is, None when nothing selected can be.
@@ -867,6 +876,9 @@ pub fn draw(ui: &mut Ui, view: &View, actions: &mut Vec<UiAction>) -> egui::Rect
     }
     if let Some(angle) = view.soften {
         dialogs::soften_window(ui, angle, actions);
+    }
+    if let Some(report) = view.interference {
+        dialogs::interference_window(ui, report, actions);
     }
     if let Some(menu) = view.viewport_menu {
         dialogs::viewport_menu(ui, menu, actions);

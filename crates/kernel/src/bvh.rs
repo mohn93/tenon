@@ -1,0 +1,543 @@
+//! A bounding-volume hierarchy over the triangles of one mesh, in the mesh's own coordinates,
+//! and the minimum distance between two of them placed anywhere.
+//!
+//! A tree is built once per definition and placed by a transform at query time, so the same
+//! tree serves every instance of the definition in every pose (a crank turning through a
+//! sweep moves its instances, not its geometry).
+
+use glam::{DAffine3, DVec3};
+
+/// Triangles per leaf at most.
+const LEAF: usize = 4;
+
+/// The triangles of a mesh in a binary tree of axis-aligned boxes.
+#[derive(Clone, Debug, Default)]
+pub struct Bvh {
+    tris: Vec<[DVec3; 3]>,
+    nodes: Vec<Node>,
+}
+
+/// A box with either two children (`count == 0`: the left one follows it, the right one is at
+/// `first`) or the triangles `first..first + count`.
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    lo: DVec3,
+    hi: DVec3,
+    first: u32,
+    count: u32,
+}
+
+/// The two nearest points of two surfaces and how far apart they are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Closest {
+    pub distance: f64,
+    /// On the first surface.
+    pub a: DVec3,
+    /// On the second surface.
+    pub b: DVec3,
+}
+
+impl Bvh {
+    /// A tree over `tris` (degenerate ones included; they still bound the surface).
+    pub fn new(mut tris: Vec<[DVec3; 3]>) -> Bvh {
+        let mut nodes = Vec::with_capacity(2 * tris.len() / LEAF + 1);
+        if !tris.is_empty() {
+            build(&mut tris, 0, &mut nodes);
+        }
+        Bvh { tris, nodes }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tris.is_empty()
+    }
+
+    pub fn triangles(&self) -> &[[DVec3; 3]] {
+        &self.tris
+    }
+
+    /// The box around every triangle, in the mesh's coordinates; None when empty.
+    pub fn bounds(&self) -> Option<(DVec3, DVec3)> {
+        self.nodes.first().map(|n| (n.lo, n.hi))
+    }
+
+    /// The box around every triangle once placed by `place`; None when empty.
+    pub fn placed_bounds(&self, place: &DAffine3) -> Option<(DVec3, DVec3)> {
+        self.nodes.first().map(|n| placed_box(n, place))
+    }
+
+    /// The nearest points of this tree placed by `pa` and `other` placed by `pb`, when they
+    /// come nearer than `bound`. The search stops as soon as a pair within `stop` is found
+    /// (0 for the exact minimum; a tolerance to ask only whether they meet). Surfaces that
+    /// cross are 0 apart.
+    pub fn distance(
+        &self,
+        pa: &DAffine3,
+        other: &Bvh,
+        pb: &DAffine3,
+        bound: f64,
+        stop: f64,
+    ) -> Option<Closest> {
+        if self.is_empty() || other.is_empty() {
+            return None;
+        }
+        let mut search = Search {
+            a: self,
+            b: other,
+            pa,
+            pb,
+            best: None,
+            bound,
+            stop,
+        };
+        search.pair(0, 0);
+        search.best
+    }
+
+    /// Whether this tree placed by `pa` and `other` placed by `pb` cross: an edge of a
+    /// triangle of one passes through a triangle of the other (its boundary included) with
+    /// its ends more than `tol` to either side. Surfaces that only touch (faces lying on each
+    /// other, edges along faces) do not cross; a crossing shallower than `tol` may be missed.
+    pub fn crosses(&self, pa: &DAffine3, other: &Bvh, pb: &DAffine3, tol: f64) -> bool {
+        !self.is_empty() && !other.is_empty() && crossing_pair(self, pa, other, pb, 0, 0, tol)
+    }
+}
+
+fn build(tris: &mut [[DVec3; 3]], offset: usize, nodes: &mut Vec<Node>) -> usize {
+    let (lo, hi) = tris.iter().flatten().fold(
+        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    );
+    let at = nodes.len();
+    nodes.push(Node {
+        lo,
+        hi,
+        first: offset as u32,
+        count: tris.len() as u32,
+    });
+    if tris.len() <= LEAF {
+        return at;
+    }
+    let centre = |t: &[DVec3; 3]| t[0] + t[1] + t[2];
+    let (clo, chi) = tris.iter().map(centre).fold(
+        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(p), hi.max(p)),
+    );
+    let extent = chi - clo;
+    let axis = if extent.x >= extent.y && extent.x >= extent.z {
+        0
+    } else if extent.y >= extent.z {
+        1
+    } else {
+        2
+    };
+    let mid = tris.len() / 2;
+    tris.select_nth_unstable_by(mid, |a, b| centre(a)[axis].total_cmp(&centre(b)[axis]));
+    let (left, right) = tris.split_at_mut(mid);
+    build(left, offset, nodes);
+    let r = build(right, offset + mid, nodes);
+    nodes[at].first = r as u32;
+    nodes[at].count = 0;
+    at
+}
+
+/// The axis-aligned box around node box `n` moved by `place`.
+fn placed_box(n: &Node, place: &DAffine3) -> (DVec3, DVec3) {
+    let centre = place.transform_point3((n.lo + n.hi) * 0.5);
+    let half = (n.hi - n.lo) * 0.5;
+    let m = place.matrix3;
+    let extent = m.x_axis.abs() * half.x + m.y_axis.abs() * half.y + m.z_axis.abs() * half.z;
+    (centre - extent, centre + extent)
+}
+
+/// How far apart two axis-aligned boxes are (0 when they meet).
+fn box_distance((alo, ahi): (DVec3, DVec3), (blo, bhi): (DVec3, DVec3)) -> f64 {
+    let gap = (blo - ahi).max(alo - bhi).max(DVec3::ZERO);
+    gap.length()
+}
+
+struct Search<'a> {
+    a: &'a Bvh,
+    b: &'a Bvh,
+    pa: &'a DAffine3,
+    pb: &'a DAffine3,
+    best: Option<Closest>,
+    bound: f64,
+    stop: f64,
+}
+
+impl Search<'_> {
+    fn limit(&self) -> f64 {
+        self.best.map_or(self.bound, |c| c.distance)
+    }
+
+    fn done(&self) -> bool {
+        self.best.is_some_and(|c| c.distance <= self.stop)
+    }
+
+    fn pair(&mut self, i: usize, j: usize) {
+        if self.done() {
+            return;
+        }
+        let (na, nb) = (self.a.nodes[i], self.b.nodes[j]);
+        let (ba, bb) = (placed_box(&na, self.pa), placed_box(&nb, self.pb));
+        if box_distance(ba, bb) >= self.limit() {
+            return;
+        }
+        match (na.count > 0, nb.count > 0) {
+            (true, true) => self.leaves(&na, &nb),
+            (a_leaf, b_leaf) => {
+                // Open the larger box (or the one that is not a leaf), nearer child first.
+                let open_a =
+                    b_leaf || (!a_leaf && (ba.1 - ba.0).length() >= (bb.1 - bb.0).length());
+                let kids = |n: usize, node: &Node| [n + 1, node.first as usize];
+                let pairs: [(usize, usize); 2] = if open_a {
+                    kids(i, &na).map(|k| (k, j))
+                } else {
+                    kids(j, &nb).map(|k| (i, k))
+                };
+                let d = pairs.map(|(x, y)| {
+                    box_distance(
+                        placed_box(&self.a.nodes[x], self.pa),
+                        placed_box(&self.b.nodes[y], self.pb),
+                    )
+                });
+                let order = if d[0] <= d[1] { [0, 1] } else { [1, 0] };
+                for k in order {
+                    if d[k] < self.limit() {
+                        self.pair(pairs[k].0, pairs[k].1);
+                    }
+                }
+            }
+        }
+    }
+
+    fn leaves(&mut self, na: &Node, nb: &Node) {
+        let tb: Vec<[DVec3; 3]> = self.b.tris[nb.first as usize..(nb.first + nb.count) as usize]
+            .iter()
+            .map(|t| t.map(|p| self.pb.transform_point3(p)))
+            .collect();
+        for t in &self.a.tris[na.first as usize..(na.first + na.count) as usize] {
+            let ta = t.map(|p| self.pa.transform_point3(p));
+            for u in &tb {
+                let c = triangle_distance(ta, *u);
+                if c.distance < self.limit() {
+                    self.best = Some(c);
+                    if self.done() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn crossing_pair(
+    a: &Bvh,
+    pa: &DAffine3,
+    b: &Bvh,
+    pb: &DAffine3,
+    i: usize,
+    j: usize,
+    tol: f64,
+) -> bool {
+    let (na, nb) = (a.nodes[i], b.nodes[j]);
+    let (ba, bb) = (placed_box(&na, pa), placed_box(&nb, pb));
+    if box_distance(ba, bb) > tol {
+        return false;
+    }
+    match (na.count > 0, nb.count > 0) {
+        (true, true) => {
+            let ta: Vec<[DVec3; 3]> = a.tris[na.first as usize..(na.first + na.count) as usize]
+                .iter()
+                .map(|t| t.map(|p| pa.transform_point3(p)))
+                .collect();
+            let tb: Vec<[DVec3; 3]> = b.tris[nb.first as usize..(nb.first + nb.count) as usize]
+                .iter()
+                .map(|t| t.map(|p| pb.transform_point3(p)))
+                .collect();
+            ta.iter().any(|p| {
+                tb.iter()
+                    .any(|q| edges_pierce(p, q, tol) || edges_pierce(q, p, tol))
+            })
+        }
+        (a_leaf, b_leaf) => {
+            let open_a = b_leaf || (!a_leaf && (ba.1 - ba.0).length() >= (bb.1 - bb.0).length());
+            if open_a {
+                crossing_pair(a, pa, b, pb, i + 1, j, tol)
+                    || crossing_pair(a, pa, b, pb, na.first as usize, j, tol)
+            } else {
+                crossing_pair(a, pa, b, pb, i, j + 1, tol)
+                    || crossing_pair(a, pa, b, pb, i, nb.first as usize, tol)
+            }
+        }
+    }
+}
+
+/// Whether an edge of triangle `p` passes through triangle `q` (its boundary within `tol`
+/// included) with its ends more than `tol` to either side of `q`'s plane.
+fn edges_pierce(p: &[DVec3; 3], q: &[DVec3; 3], tol: f64) -> bool {
+    let n = (q[1] - q[0]).cross(q[2] - q[0]);
+    let len = n.length();
+    if len == 0.0 || !len.is_finite() {
+        return false;
+    }
+    let n = n / len;
+    let side: [f64; 3] = p.map(|v| (v - q[0]).dot(n));
+    (0..3).any(|k| {
+        let (d0, d1) = (side[k], side[(k + 1) % 3]);
+        if !((d0 > tol && d1 < -tol) || (d0 < -tol && d1 > tol)) {
+            return false;
+        }
+        let (e0, e1) = (p[k], p[(k + 1) % 3]);
+        let x = e0 + (e1 - e0) * (d0 / (d0 - d1));
+        (0..3).all(|m| {
+            let (u, v) = (q[m], q[(m + 1) % 3]);
+            let edge = v - u;
+            let el = edge.length();
+            el == 0.0 || edge.cross(x - u).dot(n) >= -tol * el
+        })
+    })
+}
+
+/// The nearest points of two triangles (0 apart where they cross or touch).
+pub fn triangle_distance(p: [DVec3; 3], q: [DVec3; 3]) -> Closest {
+    for k in 0..3 {
+        if let Some(x) = segment_crosses(p[k], p[(k + 1) % 3], q) {
+            return Closest {
+                distance: 0.0,
+                a: x,
+                b: x,
+            };
+        }
+        if let Some(x) = segment_crosses(q[k], q[(k + 1) % 3], p) {
+            return Closest {
+                distance: 0.0,
+                a: x,
+                b: x,
+            };
+        }
+    }
+    let mut best = Closest {
+        distance: f64::INFINITY,
+        a: p[0],
+        b: q[0],
+    };
+    let mut take = |a: DVec3, b: DVec3| {
+        let d = a.distance(b);
+        if d < best.distance {
+            best = Closest { distance: d, a, b };
+        }
+    };
+    for i in 0..3 {
+        for j in 0..3 {
+            let (a, b) = segment_segment(p[i], p[(i + 1) % 3], q[j], q[(j + 1) % 3]);
+            take(a, b);
+        }
+        take(p[i], closest_on_triangle(p[i], q));
+        let on_p = closest_on_triangle(q[i], p);
+        take(on_p, q[i]);
+    }
+    best
+}
+
+/// Where the segment `a`-`b` passes through triangle `t` (not lying in its plane), if it does.
+fn segment_crosses(a: DVec3, b: DVec3, [p, q, r]: [DVec3; 3]) -> Option<DVec3> {
+    let d = b - a;
+    let (e1, e2) = (q - p, r - p);
+    let h = d.cross(e2);
+    let det = e1.dot(h);
+    let scale = d.length() * e1.length() * e2.length();
+    if det.abs() <= 1e-12 * scale || scale == 0.0 {
+        return None;
+    }
+    let s = a - p;
+    let u = s.dot(h) / det;
+    let qv = s.cross(e1);
+    let v = d.dot(qv) / det;
+    let t = e2.dot(qv) / det;
+    (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && (0.0..=1.0).contains(&t)).then(|| a + d * t)
+}
+
+/// The nearest points of segments `p1`-`q1` and `p2`-`q2` (Ericson, Real-Time Collision
+/// Detection 5.1.9), degenerate segments included.
+fn segment_segment(p1: DVec3, q1: DVec3, p2: DVec3, q2: DVec3) -> (DVec3, DVec3) {
+    let (d1, d2, r) = (q1 - p1, q2 - p2, p1 - p2);
+    let (a, e, f) = (d1.length_squared(), d2.length_squared(), d2.dot(r));
+    const EPS: f64 = 1e-30;
+    let (s, t);
+    if a <= EPS && e <= EPS {
+        return (p1, p2);
+    }
+    if a <= EPS {
+        s = 0.0;
+        t = (f / e).clamp(0.0, 1.0);
+    } else {
+        let c = d1.dot(r);
+        if e <= EPS {
+            t = 0.0;
+            s = (-c / a).clamp(0.0, 1.0);
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            let mut s0 = if denom > EPS {
+                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut t0 = (b * s0 + f) / e;
+            if t0 < 0.0 {
+                t0 = 0.0;
+                s0 = (-c / a).clamp(0.0, 1.0);
+            } else if t0 > 1.0 {
+                t0 = 1.0;
+                s0 = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            s = s0;
+            t = t0;
+        }
+    }
+    (p1 + d1 * s, p2 + d2 * t)
+}
+
+/// The point of triangle `t` nearest `p` (Ericson 5.1.5); a degenerate triangle gives the
+/// nearest point of its sides.
+fn closest_on_triangle(p: DVec3, [a, b, c]: [DVec3; 3]) -> DVec3 {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    if ab.cross(ac).length_squared() <= 1e-30 {
+        let candidates = [
+            segment_segment(p, p, a, b).1,
+            segment_segment(p, p, b, c).1,
+            segment_segment(p, p, c, a).1,
+        ];
+        return candidates
+            .into_iter()
+            .min_by(|x, y| x.distance_squared(p).total_cmp(&y.distance_squared(p)))
+            .expect("three");
+    }
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let denom = 1.0 / (va + vb + vc);
+    a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tri(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [DVec3; 3] {
+        [a.into(), b.into(), c.into()]
+    }
+
+    #[test]
+    fn parallel_triangles_are_their_gap_apart() {
+        let p = tri([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let q = tri([0.0, 0.0, 0.5], [1.0, 0.0, 0.5], [0.0, 1.0, 0.5]);
+        assert!((triangle_distance(p, q).distance - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn crossing_triangles_are_zero_apart() {
+        let p = tri([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]);
+        let q = tri([0.5, 0.5, -1.0], [0.5, 0.5, 1.0], [0.6, -1.0, 0.0]);
+        assert_eq!(triangle_distance(p, q).distance, 0.0);
+    }
+
+    #[test]
+    fn skew_edges_give_the_edge_distance() {
+        let p = tri([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+        let q = tri([0.0, -1.0, 0.3], [0.0, 1.0, 0.3], [0.0, 0.0, 1.0]);
+        let c = triangle_distance(p, q);
+        assert!((c.distance - 0.3).abs() < 1e-12);
+        assert!(c.a.distance(DVec3::ZERO) < 1e-12);
+    }
+
+    #[test]
+    fn coplanar_overlapping_triangles_are_zero_apart() {
+        let p = tri([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]);
+        let q = tri([0.2, 0.2, 0.0], [0.5, 0.2, 0.0], [0.2, 0.5, 0.0]);
+        assert!(triangle_distance(p, q).distance < 1e-12);
+    }
+
+    #[test]
+    fn crossing_needs_an_edge_through_a_triangle_beyond_the_tolerance() {
+        let p = tri([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]);
+        let through = tri([0.5, 0.5, -1.0], [0.5, 0.5, 1.0], [0.6, -1.0, 0.0]);
+        assert!(edges_pierce(&through, &p, 1e-6) || edges_pierce(&p, &through, 1e-6));
+        // Lying on it, or standing on it with one end in its plane, is touching.
+        let flat = tri([0.2, 0.2, 0.0], [0.5, 0.2, 0.0], [0.2, 0.5, 0.0]);
+        assert!(!edges_pierce(&flat, &p, 1e-6) && !edges_pierce(&p, &flat, 1e-6));
+        let standing = tri([0.5, 0.5, 0.0], [0.6, 0.5, 1.0], [0.5, 0.6, 1.0]);
+        assert!(!edges_pierce(&standing, &p, 1e-6) && !edges_pierce(&p, &standing, 1e-6));
+        // Through it by less than the tolerance does not count.
+        let shallow = tri([0.5, 0.5, -1e-7], [0.6, 0.5, 1.0], [0.5, 0.6, 1.0]);
+        assert!(!edges_pierce(&shallow, &p, 1e-6));
+        // Through its boundary does.
+        let edge = tri([1.0, 0.0, -1.0], [1.0, 0.0, 1.0], [1.0, -1.0, 0.0]);
+        assert!(edges_pierce(&edge, &p, 1e-6));
+    }
+
+    fn grid(n: usize, z: f64) -> Vec<[DVec3; 3]> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let (x, y) = (i as f64, j as f64);
+                out.push(tri([x, y, z], [x + 1.0, y, z], [x, y + 1.0, z]));
+                out.push(tri([x + 1.0, y, z], [x + 1.0, y + 1.0, z], [x, y + 1.0, z]));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_tree_finds_the_brute_force_minimum() {
+        let a = Bvh::new(grid(8, 0.0));
+        let b = Bvh::new(grid(8, 0.0));
+        let pa = DAffine3::IDENTITY;
+        let pb =
+            DAffine3::from_rotation_x(0.3) * DAffine3::from_translation(DVec3::new(3.3, 2.1, 1.7));
+        let tree = a.distance(&pa, &b, &pb, f64::INFINITY, 0.0).unwrap();
+        let mut brute = f64::INFINITY;
+        for t in a.triangles() {
+            for u in b.triangles() {
+                let ta = t.map(|p| pa.transform_point3(p));
+                let ub = u.map(|p| pb.transform_point3(p));
+                brute = brute.min(triangle_distance(ta, ub).distance);
+            }
+        }
+        assert!((tree.distance - brute).abs() < 1e-12, "{tree:?} vs {brute}");
+        assert!((tree.a.distance(tree.b) - tree.distance).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_bound_below_the_distance_finds_nothing() {
+        let a = Bvh::new(grid(2, 0.0));
+        let b = Bvh::new(grid(2, 1.0));
+        let p = DAffine3::IDENTITY;
+        assert!(a.distance(&p, &b, &p, 0.5, 0.0).is_none());
+        assert!((a.distance(&p, &b, &p, 2.0, 0.0).unwrap().distance - 1.0).abs() < 1e-12);
+    }
+}

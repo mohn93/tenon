@@ -6,6 +6,7 @@ mod axes;
 mod context;
 mod dock;
 mod entity;
+mod interference;
 mod joints;
 mod layout;
 mod library;
@@ -93,6 +94,7 @@ pub(super) struct Fixture {
     pub log: Option<Vec<String>>,
     pub recovered: Vec<PathBuf>,
     pub soften: Option<u8>,
+    pub interference: Option<crate::editor::InterferenceReport>,
     pub edges_soft: Option<bool>,
     pub selection_hidden: Option<bool>,
     pub selection_section_cut: Option<bool>,
@@ -216,6 +218,7 @@ impl Default for Fixture {
             log: None,
             recovered: Vec::new(),
             soften: None,
+            interference: None,
             edges_soft: None,
             selection_hidden: None,
             selection_section_cut: None,
@@ -308,6 +311,7 @@ impl Fixture {
             context: &self.context,
             selection: &self.selection,
             soften: self.soften,
+            interference: self.interference.as_ref(),
             edges_soft: self.edges_soft,
             selection_hidden: self.selection_hidden,
             selection_section_cut: self.selection_section_cut,

@@ -1365,3 +1365,28 @@ fn solid_tools_items_carry_the_tooltip_reason_and_stable_native_ids() {
     assert_eq!(item_id(&UiAction::MakeGroup), "MakeGroup");
     assert_eq!(item_id(&UiAction::Tool(ToolKind::Select)), "Tool(Select)");
 }
+
+#[test]
+fn tools_check_interference_is_enabled_runs_and_keeps_a_stable_native_id() {
+    let mut h = harness(Fixture::default());
+    assert_eq!(
+        click_menu(&mut h, &["Tools", "Check Interference"]),
+        [UiAction::CheckInterference]
+    );
+    let bar = crate::menus::menu_bar(&Fixture::default().view(), true);
+    let tools = &bar.iter().find(|m| m.title == "Tools").unwrap().entries;
+    let item = tools
+        .iter()
+        .find_map(|e| match e {
+            crate::menus::Entry::Item(i) if i.label == "Check Interference" => Some(i),
+            _ => None,
+        })
+        .expect("Check Interference item");
+    assert!(item.enabled);
+    assert_eq!(crate::menus::item_key(item), "CheckInterference");
+    // The ids of items that were already there did not change.
+    assert_eq!(
+        crate::menus::item_id(&UiAction::SolidTool(crate::editor::SolidOp::Union)),
+        "SolidTool(Union)"
+    );
+}

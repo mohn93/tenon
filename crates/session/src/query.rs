@@ -78,6 +78,45 @@ pub enum Query {
         #[serde(default)]
         round: Option<MeasureRef>,
     },
+    /// Which solid parts of the open context overlap: `ids` are its groups and components
+    /// (every one when empty), each a part with all it places at any depth. Pairs sharing a
+    /// volume, largest first; with `touching`, also pairs whose surfaces meet with no volume
+    /// in common. Parts that are not solid are skipped with why. Never changes the model.
+    Interference {
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        touching: bool,
+    },
+    /// How near parts come: the minimum distance between the surfaces of `a` and `b`, or of
+    /// every pair among `ids` (2 to `MAX_CLEARANCE_IDS`), with the nearest points; 0 when
+    /// they touch or overlap. Never changes the model.
+    Clearance {
+        #[serde(default)]
+        a: Option<EntityId>,
+        #[serde(default)]
+        b: Option<EntityId>,
+        #[serde(default)]
+        ids: Vec<EntityId>,
+    },
+    /// Turns joint `joint` through a range on a copy of the model and checks the root's solid
+    /// parts at each step: `steps` (2 to `MAX_SWEEP_STEPS`) evenly spaced values from `from`
+    /// to `to` (degrees or meters, as `drive`), `slide` held for a cylindrical joint. `ids`
+    /// limits the parts (root groups and components; every one when empty). Reports each pair
+    /// that comes within `report_within` meters (default 0.005) at some step. Never changes
+    /// the model.
+    SweepCheck {
+        joint: JointId,
+        from: f64,
+        to: f64,
+        steps: u32,
+        #[serde(default)]
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        slide: Option<f64>,
+        #[serde(default)]
+        report_within: Option<f64>,
+    },
     Camera {},
     /// Where the model stands (see `set_location`).
     Location {},
@@ -140,6 +179,86 @@ pub enum Query {
     Library {
         folder: String,
     },
+}
+
+/// Most parts a `clearance` query compares pairwise.
+pub const MAX_CLEARANCE_IDS: usize = 200;
+
+/// Two overlapping parts: the volume they share in cubic meters of the open context and a
+/// point inside it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InterferencePair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub volume: f64,
+    pub point: [f64; 3],
+}
+
+/// Two parts whose surfaces meet (at `point`) with no volume in common.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TouchingPair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub point: [f64; 3],
+}
+
+/// A pair whose overlap could not be measured, and why.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FailedPair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub reason: String,
+}
+
+/// A part left out because it is not a solid part, and why.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SkippedPart {
+    pub id: EntityId,
+    pub reason: String,
+}
+
+/// The minimum distance between two parts' surfaces and the nearest point on each; 0 when
+/// they touch or overlap (`overlap` says they share a volume).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ClearancePair {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub distance: f64,
+    pub point_a: [f64; 3],
+    pub point_b: [f64; 3],
+    pub overlap: bool,
+}
+
+/// Most steps a `sweep_check` takes.
+pub const MAX_SWEEP_STEPS: u32 = 10_000;
+
+/// One pair of parts over a sweep, joint values in degrees or meters: the first and last
+/// values where they overlap (absent when they never do), the largest volume they share (0
+/// when none) and where, the smallest clearance (0 when they touch or overlap) and the first
+/// value where it occurs, and the first value where their overlap could not be measured.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SweepPair {
+    pub a: EntityId,
+    pub b: EntityId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<f64>,
+    pub volume: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_at: Option<f64>,
+    pub clearance: f64,
+    pub clearance_at: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<SweepStop>,
+}
+
+/// A joint value (degrees or meters) and why the sweep stopped there, or why a pair's overlap
+/// could not be measured there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SweepStop {
+    pub value: f64,
+    pub reason: String,
 }
 
 /// An axis-aligned box, bounds included.
@@ -844,6 +963,33 @@ pub enum QueryResult {
         angle: Option<AngleInfo>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         round: Option<RoundInfo>,
+    },
+    /// The `interference` query: overlapping pairs, largest volume first; `touching` only
+    /// when asked; `failed` only when a pair's overlap could not be measured.
+    Interference {
+        pairs: Vec<InterferencePair>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        touching: Option<Vec<TouchingPair>>,
+        skipped: Vec<SkippedPart>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        failed: Vec<FailedPair>,
+        revision: u64,
+    },
+    /// The `clearance` query: one entry per pair of solid parts, in the order asked.
+    Clearance {
+        pairs: Vec<ClearancePair>,
+        skipped: Vec<SkippedPart>,
+        revision: u64,
+    },
+    /// The `sweep_check` query: pairs in order of ids; `steps` checked; `stopped` only when a
+    /// value the solver could not meet ended the sweep.
+    SweepCheck {
+        pairs: Vec<SweepPair>,
+        skipped: Vec<SkippedPart>,
+        steps: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stopped: Option<SweepStop>,
+        revision: u64,
     },
     /// The view: `up` is the screen's up direction (+Z, except in a view straight down or
     /// up); `view_height` is the height the view spans at the target (in a parallel view, the

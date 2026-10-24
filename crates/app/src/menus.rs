@@ -288,6 +288,9 @@ pub fn menu_bar(view: &View, native: bool) -> Vec<Menu> {
                 })
                 .into(),
         },
+        Item::new("Check Interference", UiAction::CheckInterference)
+            .tooltip("Find selected parts that overlap (all parts when none is selected)")
+            .entry(),
     ])
     .collect();
 

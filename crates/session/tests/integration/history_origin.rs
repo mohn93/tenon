@@ -120,3 +120,49 @@ fn new_and_open_keep_the_current_origin() {
     doc.execute(Command::New { discard: true }).unwrap();
     assert_eq!(doc.origin(), Origin::Agent);
 }
+
+fn undo_depth(d: &Document) -> usize {
+    match d.query(&Query::History {}).unwrap() {
+        QueryResult::History { undo, .. } => undo.len(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn joining_and_dropping_steps_takes_only_the_expected_ones() {
+    let user_edge = ExpectedStep {
+        label: "add_edge".into(),
+        origin: Some(Origin::User),
+    };
+    let mut doc = doc();
+    doc.set_origin(Origin::Agent);
+    doc.execute(edge([0., 0., 0.], [1., 0., 0.])).unwrap();
+    doc.set_origin(Origin::User);
+    doc.execute(edge([0., 0., 0.], [0., 1., 0.])).unwrap();
+    doc.execute(edge([0., 0., 0.], [0., 0., 1.])).unwrap();
+    // The agent's step is not the user's: nothing changes.
+    assert!(!doc.join_last_steps(3, &user_edge));
+    assert!(!doc.drop_last_steps(3, &user_edge));
+    assert!(!doc.join_last_steps(0, &user_edge));
+    assert_eq!(undo_depth(&doc), 3);
+    let before = revision(&doc);
+    assert!(doc.join_last_steps(2, &user_edge));
+    assert_eq!(undo_depth(&doc), 2);
+    assert_eq!(revision(&doc), before, "the model did not change");
+    doc.execute(Command::Undo {
+        count: None,
+        expect: None,
+    })
+    .unwrap();
+    assert_eq!(
+        doc.scene().root().edges().count(),
+        1,
+        "one undo, both edges"
+    );
+    doc.execute(Command::Redo { count: None }).unwrap();
+    assert_eq!(doc.scene().root().edges().count(), 3);
+    assert!(doc.drop_last_steps(1, &user_edge));
+    assert_eq!(doc.scene().root().edges().count(), 1);
+    assert_eq!(undo_depth(&doc), 1);
+    assert_eq!(doc.redo_label(), None, "a dropped step cannot be redone");
+}

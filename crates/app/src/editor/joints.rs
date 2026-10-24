@@ -1,11 +1,15 @@
 //! The Joints tab: selecting a joint's parts, deleting it, and driving it with a slider. Each
-//! change is the command an agent would send; a drag is the exception: its frames drive the
-//! joint without leaving undo steps (they are undone when it ends) and the end makes one.
+//! change is the command an agent would send; a drag is the exception: each frame drives the
+//! joint from the pose the last one left as an undo step, and the end joins them into one.
 
 use kernel::{EntityId, JointId};
-use session::{Command, Query, QueryResult, SelectMode};
+use session::{Command, ExpectedStep, Origin, Query, QueryResult, SelectMode};
 
 use super::Editor;
+
+/// How near (degrees or meters) a drag's last value must be to its first to count as back
+/// where it began.
+const SAME_VALUE: f64 = 1e-9;
 
 /// A slider drag in progress: each frame's drive is an undo step until the drag ends.
 pub(super) struct JointDrag {
@@ -15,8 +19,27 @@ pub(super) struct JointDrag {
     /// The document's revision after the last of them: anything else since means the history
     /// is no longer only these steps.
     revision: u64,
+    /// The joint's value and slide when the drag began.
+    start: (f64, Option<f64>),
     /// The last value and slide the joint was driven to.
     good: (f64, Option<f64>),
+}
+
+/// The undo step each frame of a drag makes.
+fn drive_step() -> ExpectedStep {
+    ExpectedStep {
+        label: "drive".into(),
+        origin: Some(Origin::User),
+    }
+}
+
+fn same(a: (f64, Option<f64>), b: (f64, Option<f64>)) -> bool {
+    let near = |x: f64, y: f64| (x - y).abs() < SAME_VALUE;
+    near(a.0, b.0)
+        && match (a.1, b.1) {
+            (Some(x), Some(y)) => near(x, y),
+            (x, y) => x.is_none() && y.is_none(),
+        }
 }
 
 impl Editor {
@@ -57,26 +80,36 @@ impl Editor {
     }
 
     /// Drives a joint to `value` (degrees or meters) and `slide`. With `done` false this is a
-    /// frame of a drag: the pose follows with no undo step kept (a refusal leaves the last
-    /// pose and says why in the status). With `done` true the drag ends (or a value was
-    /// entered): the frames are undone and the joint is driven to the last pose that was met
-    /// in one undo step.
+    /// frame of a drag: the pose follows from the last frame's (a refusal leaves the last pose
+    /// and says why in the status). With `done` true the drag ends (or a value was entered):
+    /// its frames become one undo step, ending at the last pose that was met, or none when it
+    /// ended where it began. Anything else changing the model during a drag (an agent's
+    /// command, an undo) ends the drag's joining there: the frames before it stay steps of
+    /// their own.
     pub fn drive_joint(&mut self, joint: JointId, value: f64, slide: Option<f64>, done: bool) {
         if self.joint_drag.as_ref().is_some_and(|d| d.joint != joint) {
             self.end_joint_drag();
         }
+        if self
+            .joint_drag
+            .as_ref()
+            .is_some_and(|d| d.revision != self.doc.revision())
+        {
+            self.joint_drag = None;
+        }
         self.message = None;
-        let current = self
-            .joint_infos()
-            .into_iter()
-            .find(|j| j.id == joint)
-            .map(|j| (j.value, j.slide));
         if self.joint_drag.is_none() {
+            let current = self
+                .joint_infos()
+                .into_iter()
+                .find(|j| j.id == joint)
+                .map_or((value, slide), |j| (j.value, j.slide));
             self.joint_drag = Some(JointDrag {
                 joint,
                 steps: 0,
                 revision: self.doc.revision(),
-                good: current.unwrap_or((value, slide)),
+                start: current,
+                good: current,
             });
         }
         let before = self.doc.revision();
@@ -101,7 +134,7 @@ impl Editor {
         }
     }
 
-    /// Ends the drag: its frames become one undo step.
+    /// Ends the drag: its frames become one undo step (none when it is back where it began).
     fn end_joint_drag(&mut self) {
         let Some(drag) = self.joint_drag.take() else {
             return;
@@ -109,22 +142,10 @@ impl Editor {
         if drag.steps == 0 || self.doc.revision() != drag.revision {
             return;
         }
-        let shown = self.message.take();
-        let undone = self.run(Command::Undo {
-            count: u32::try_from(drag.steps).ok(),
-            expect: None,
-        });
-        if undone.is_some() {
-            let (value, slide) = drag.good;
-            self.run(Command::Drive {
-                joint: drag.joint,
-                value,
-                slide,
-            });
-        }
-        // The refusal that was shown stays until something else is said.
-        if self.message.is_none() {
-            self.message = shown;
+        if same(drag.good, drag.start) {
+            self.doc.drop_last_steps(drag.steps, &drive_step());
+        } else {
+            self.doc.join_last_steps(drag.steps, &drive_step());
         }
     }
 }
@@ -205,10 +226,7 @@ mod tests {
         let live = moved(&e, b);
         e.drive_joint(j, 50.0, None, true);
         assert!((value(&e) - 50.0).abs() < 1e-6);
-        assert!(
-            (moved(&e, b) - live).length() < 1e-6,
-            "the end changes no pose"
-        );
+        assert_eq!(moved(&e, b), live, "the end keeps the pose that was shown");
         assert_eq!(e.doc().undo_label(), Some("drive"));
         assert!(e.undo());
         assert_eq!(e.doc().undo_label(), Some("add_joint"), "one step");
@@ -216,6 +234,52 @@ mod tests {
         assert!((moved(&e, b) - start).length() < 1e-6);
         assert!(e.redo());
         assert!((value(&e) - 50.0).abs() < 1e-6);
+        assert_eq!(moved(&e, b), live);
+    }
+
+    #[test]
+    fn a_command_during_a_drag_keeps_its_own_step_and_the_frames_before_it() {
+        let (mut e, j, ..) = hinged(None);
+        e.drive_joint(j, 10.0, None, false);
+        e.execute(cmd(serde_json::json!({
+            "type": "add_box", "corner": [20.0, 0.0, 0.0], "size": [1.0, 1.0, 1.0]
+        })))
+        .unwrap();
+        e.drive_joint(j, 20.0, None, false);
+        e.drive_joint(j, 30.0, None, true);
+        assert!((value(&e) - 30.0).abs() < 1e-6);
+        let boxes = e.doc().scene().root().instances().count();
+        assert_eq!(boxes, 3, "the box stays");
+        assert_eq!(e.doc().undo_label(), Some("drive"));
+        assert!(e.undo());
+        assert!(
+            (value(&e) - 10.0).abs() < 1e-6,
+            "the later frames are one step"
+        );
+        assert_eq!(e.doc().undo_label(), Some("add_box"));
+        assert!(e.undo());
+        assert_eq!(e.doc().undo_label(), Some("drive"), "the frame before it");
+        assert!(e.undo());
+        assert_eq!(e.doc().undo_label(), Some("add_joint"));
+        assert!(value(&e).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_undo_during_a_drag_is_not_undone_again_when_it_ends() {
+        let (mut e, j, ..) = hinged(None);
+        e.drive_joint(j, 10.0, None, false);
+        e.drive_joint(j, 20.0, None, false);
+        assert!(e.undo());
+        assert!((value(&e) - 10.0).abs() < 1e-6);
+        e.drive_joint(j, 30.0, None, false);
+        e.drive_joint(j, 30.0, None, true);
+        assert!((value(&e) - 30.0).abs() < 1e-6);
+        assert!(e.undo());
+        assert!((value(&e) - 10.0).abs() < 1e-6);
+        assert_eq!(e.doc().undo_label(), Some("drive"));
+        assert!(e.undo());
+        assert_eq!(e.doc().undo_label(), Some("add_joint"), "the joint stays");
+        assert_eq!(e.joint_infos().len(), 1);
     }
 
     #[test]
@@ -224,6 +288,7 @@ mod tests {
         e.drive_joint(j, 40.0, None, false);
         e.drive_joint(j, 0.0, None, true);
         assert_eq!(e.doc().undo_label(), Some("add_joint"));
+        assert_eq!(e.doc().redo_label(), None, "nor a frame to redo");
         assert!(value(&e).abs() < 1e-6);
     }
 

@@ -6,8 +6,9 @@
 //! part keeps its scale and mirror. Each joint gives residuals from its two world frames (see
 //! [`rows`]), the driven joint one more per driven quantity. Damped least squares
 //! (Levenberg-Marquardt) with a central-difference Jacobian, built joint by joint, solves
-//! them; a large drive is taken in small steps from the current value, so a closed loop keeps
-//! its branch (a piston stays on its side of the crank).
+//! them; a large drive is taken in small steps from the current value, each starting from the
+//! last step's motion taken again, so a closed loop keeps its branch (a piston stays on its
+//! side of the crank, a parallelogram stays one through its flat point).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -24,6 +25,10 @@ use crate::scene::{Scene, SceneChange, Step};
 
 /// The greatest residual (meters or radians, as a vector length) of a solved pose.
 pub const DRIVE_TOLERANCE: f64 = 1e-9;
+
+/// How far past its limits (radians or meters) another joint may be measured and still be
+/// taken as at them: its value is then set to the limit.
+const LIMIT_TOLERANCE: f64 = 1e-9;
 
 /// The largest turn of one drive step (10 degrees).
 const MAX_ANGLE_STEP: f64 = 10.0 * std::f64::consts::PI / 180.0;
@@ -79,78 +84,61 @@ struct Target {
     slide: f64,
 }
 
-/// At most 8 residuals per joint: 6 for fixed, 2 for a driven cylindrical.
-type Rows = ([f64; 8], usize);
+/// At most 10 residuals per joint: 9 for fixed, 9 for a driven prismatic.
+type Rows = ([f64; 10], usize);
 
 /// The residuals of a joint of `kind` whose frames stand at `a` and `b`: zero when it holds.
-/// With `u`, `v` across `a`'s axis: revolute 5 (`b`'s origin off `a`'s along u, v and the
-/// axis; `b`'s axis along u and v), cylindrical 4 (as revolute, sliding free), prismatic 5
-/// (cylindrical's, and `b`'s reference along v), fixed 6 (the origins' offset, `b`'s axis along
-/// u and v, its reference along v), ball 3 (the origins' offset). With `drive`, also the
-/// driven value (and slide, for cylindrical) less the target.
+/// Directions are compared as differences (`b`'s axis less `a`'s, in world X, Y and Z), not
+/// as perpendicular components, so a part turned half a turn does not meet its joint. With
+/// `u`, `v` across `a`'s axis: revolute 6 (the origins' offset; the axes' difference),
+/// cylindrical 5 (`b`'s origin off `a`'s along u and v, sliding free; the axes' difference),
+/// prismatic 8 (cylindrical's, and the references' difference), fixed 9 (the origins'
+/// offset, the axes' and the references' differences), ball 3 (the origins' offset). With
+/// `drive`, also the driven value (and slide, for cylindrical) less the target.
 fn rows(kind: JointKind, a: &JointFrame, b: &JointFrame, drive: Option<Target>) -> Rows {
     let u = a.reference;
     let v = a.axis.cross(u);
     let d = b.origin - a.origin;
-    let mut out = [0.0; 8];
+    let axes = b.axis - a.axis;
+    let references = b.reference - a.reference;
+    let mut out = [0.0; 10];
     let mut n = 0;
-    let mut push = |x: f64| {
-        out[n] = x;
-        n += 1;
+    let mut push = |xs: &[f64]| {
+        for x in xs {
+            out[n] = *x;
+            n += 1;
+        }
     };
     match kind {
         JointKind::Revolute => {
-            for x in [
-                d.dot(u),
-                d.dot(v),
-                d.dot(a.axis),
-                b.axis.dot(u),
-                b.axis.dot(v),
-            ] {
-                push(x);
-            }
+            push(&[d.x, d.y, d.z]);
+            push(&axes.to_array());
         }
         JointKind::Cylindrical => {
-            for x in [d.dot(u), d.dot(v), b.axis.dot(u), b.axis.dot(v)] {
-                push(x);
-            }
+            push(&[d.dot(u), d.dot(v)]);
+            push(&axes.to_array());
         }
         JointKind::Prismatic => {
-            for x in [
-                d.dot(u),
-                d.dot(v),
-                b.axis.dot(u),
-                b.axis.dot(v),
-                b.reference.dot(v),
-            ] {
-                push(x);
-            }
+            push(&[d.dot(u), d.dot(v)]);
+            push(&axes.to_array());
+            push(&references.to_array());
         }
         JointKind::Fixed => {
-            for x in [
-                d.x,
-                d.y,
-                d.z,
-                b.axis.dot(u),
-                b.axis.dot(v),
-                b.reference.dot(v),
-            ] {
-                push(x);
-            }
+            push(&[d.x, d.y, d.z]);
+            push(&axes.to_array());
+            push(&references.to_array());
         }
-        JointKind::Ball => {
-            for x in [d.x, d.y, d.z] {
-                push(x);
-            }
-        }
+        JointKind::Ball => push(&[d.x, d.y, d.z]),
     }
     if let Some(t) = drive {
         match kind {
-            JointKind::Revolute => push(wrap_angle(frame_angle(a, b) - t.value)),
-            JointKind::Prismatic => push(frame_distance(a, b) - t.value),
+            JointKind::Revolute => push(&[wrap_angle(frame_angle(a, b) - t.value)]),
+            JointKind::Prismatic => push(&[frame_distance(a, b) - t.value]),
             JointKind::Cylindrical => {
-                push(wrap_angle(frame_angle(a, b) - t.value));
-                push(frame_distance(a, b) - t.slide);
+                push(&[
+                    wrap_angle(frame_angle(a, b) - t.value),
+                    frame_distance(a, b) - t.slide,
+                ]);
             }
             JointKind::Fixed | JointKind::Ball => {}
         }
@@ -215,7 +203,7 @@ impl System {
             let (ta, tb) = (self.pose(link.a), self.pose(link.b));
             let (r0, m) = self.link_rows(link, &ta, &tb, target);
             // The columns of this joint: (unknown index, derivative of its rows).
-            let mut cols: Vec<(usize, [f64; 8])> = Vec::with_capacity(12);
+            let mut cols: Vec<(usize, [f64; 10])> = Vec::with_capacity(12);
             for (side, body) in [(0, link.a), (1, link.b)] {
                 let Body::Part(i) = body else { continue };
                 for k in 0..6 {
@@ -226,7 +214,7 @@ impl System {
                         self.link_rows(link, &ta, &tb, target).0
                     };
                     let (plus, minus) = (at(NUDGE), at(-NUDGE));
-                    let mut d = [0.0; 8];
+                    let mut d = [0.0; 10];
                     for r in 0..m {
                         d[r] = (plus[r] - minus[r]) / (2.0 * NUDGE);
                     }
@@ -371,8 +359,9 @@ impl Scene {
     /// keep the ground fixed; an assembly with no ground holds the joint's part `a` in place.
     /// The moved parts' transforms and every changed joint value are the steps, applied. A
     /// value outside the joint's limits, a pose where the joints cannot all be met, or one
-    /// where another joint passes its limits is refused and changes nothing; the current
-    /// value changes nothing.
+    /// where another joint passes its limits (checked after every step, so a joint cannot pass
+    /// a limit and come back) is refused and changes nothing; the current value (within
+    /// 1e-12) changes nothing.
     pub fn drive_joint(
         &mut self,
         id: JointId,
@@ -400,7 +389,9 @@ impl Scene {
                 shown(driven.kind, hi)
             )));
         }
-        if value == driven.value && slide == driven.slide {
+        if (value - driven.value).abs() < VALUE_TOLERANCE
+            && (slide - driven.slide).abs() < VALUE_TOLERANCE
+        {
             return Ok(SceneChange::default());
         }
         let mut system = self.assembly(id, &driven);
@@ -419,6 +410,10 @@ impl Scene {
                 shown(driven.kind, value)
             ))
         };
+        // The poses before the last step: its motion, taken again, is the next step's first
+        // guess, so a linkage passing a change point (a parallelogram going flat) keeps on
+        // through it on its branch.
+        let mut previous: Option<Vec<DAffine3>> = None;
         for s in 1..=steps {
             let f = s as f64 / steps as f64;
             let target = if s == steps {
@@ -429,11 +424,42 @@ impl Scene {
                     slide: driven.slide + (slide - driven.slide) * f,
                 }
             };
-            let cost = system.solve(target);
-            if cost.is_nan() || cost.sqrt() > DRIVE_TOLERANCE {
+            let from = system.poses.clone();
+            let met = |cost: f64| !cost.is_nan() && cost.sqrt() <= DRIVE_TOLERANCE;
+            let mut cost = f64::NAN;
+            if let Some(before) = &previous {
+                system.poses = from
+                    .iter()
+                    .zip(before)
+                    .map(|(now, was)| (*now * was.inverse()) * *now)
+                    .collect();
+                cost = system.solve(target);
+            }
+            if !met(cost) {
+                system.poses.clone_from(&from);
+                cost = system.solve(target);
+            }
+            if !met(cost) {
                 return Err(unmet());
             }
+            previous = Some(from);
             system.measure(&mut values, target);
+            for (link, v) in system.links.iter().zip(values.iter_mut()) {
+                let Some((lo, hi)) = self.joints[&link.id].limits else {
+                    continue;
+                };
+                if link.driven {
+                    continue;
+                }
+                if v.0 < lo - LIMIT_TOLERANCE || v.0 > hi + LIMIT_TOLERANCE {
+                    return Err(refuse(format!(
+                        "the joints cannot all be met at {}: joint {:?} would pass its limits",
+                        shown(driven.kind, value),
+                        self.joints[&link.id].name
+                    )));
+                }
+                v.0 = v.0.clamp(lo, hi);
+            }
         }
         let mut joint_steps = Vec::new();
         for (link, (v, sl)) in system.links.iter().zip(&values) {
@@ -442,13 +468,6 @@ impl Scene {
                 && (sl - from.slide).abs() < VALUE_TOLERANCE;
             if same && !link.driven {
                 continue;
-            }
-            if !link.driven && from.limits.is_some_and(|(lo, hi)| *v < lo || *v > hi) {
-                return Err(refuse(format!(
-                    "the joints cannot all be met at {}: joint {:?} would pass its limits",
-                    shown(driven.kind, value),
-                    from.name
-                )));
             }
             let mut to = from.clone();
             to.value = *v;
