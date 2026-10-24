@@ -591,6 +591,50 @@ impl Model {
         true
     }
 
+    /// Runs `draw` (an edit that draws a shape through `point` in the plane with normal
+    /// `normal`) and turns every face it newly makes in that plane to face along `normal`,
+    /// keeping materials on their sides, as one ChangeSet. When the drawing changed a face
+    /// already in that plane (it split it), nothing is turned: the pieces keep that face's
+    /// orientation.
+    pub fn draw_facing(
+        &mut self,
+        point: DVec3,
+        normal: DVec3,
+        draw: impl FnOnce(&mut Model) -> Result<ChangeSet, KernelError>,
+    ) -> Result<ChangeSet, KernelError> {
+        let plane = Plane::through(point, normal);
+        let in_plane = |m: &Model, f: &Face| {
+            f.outer
+                .first()
+                .is_some_and(|v| Plane::through(m.pos(*v), f.normal).same_as(&plane))
+        };
+        let before: BTreeSet<FaceId> = self
+            .faces()
+            .filter(|(_, f)| in_plane(self, f))
+            .map(|(id, _)| id)
+            .collect();
+        let mut changes = draw(self)?;
+        let summary = changes.summary();
+        let touched = summary
+            .deleted
+            .iter()
+            .chain(&summary.modified)
+            .any(|e| matches!(e, EntityId::Face(f) if before.contains(f)));
+        if touched {
+            return Ok(changes);
+        }
+        for e in &summary.created {
+            if let EntityId::Face(id) = e
+                && let Some(f) = self.face(*id)
+                && in_plane(self, f)
+            {
+                self.orient(*id, normal);
+            }
+        }
+        changes.ops.extend(self.take_changes().ops);
+        Ok(changes)
+    }
+
     /// Flips face `id` if its normal points away from `want`. Its materials stay on the sides
     /// they were on.
     pub(crate) fn orient(&mut self, id: FaceId, want: DVec3) {

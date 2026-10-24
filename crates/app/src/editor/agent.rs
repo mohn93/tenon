@@ -159,7 +159,12 @@ mod tests {
                     .map(|(id, _)| kernel::EntityId::Face(id)),
             )
             .collect();
-        let out = e.execute(Command::MakeGroup { ids: all }).unwrap();
+        let out = e
+            .execute(Command::MakeGroup {
+                ids: all,
+                name: None,
+            })
+            .unwrap();
         let group = out
             .changes
             .created
@@ -199,6 +204,7 @@ mod tests {
                 color: Some([200, 80, 60]),
                 opacity: None,
                 emission: None,
+                existing: Default::default(),
                 texture: None,
             })
             .unwrap();

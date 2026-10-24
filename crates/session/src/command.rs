@@ -348,8 +348,13 @@ pub enum Command {
     /// into a group:
     /// they move into a new definition, placed by one new instance where they were. Guides,
     /// annotations and section planes alone cannot be grouped; screen notes stay in the root. The instance
-    /// becomes the selection.
-    MakeGroup { ids: Vec<EntityId> },
+    /// becomes the selection. `name` (optional, not blank, as for components) names the group's
+    /// definition, which the Outliner and the `entities` query show.
+    MakeGroup {
+        ids: Vec<EntityId>,
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// Like `MakeGroup`, but the definition is a named component: copies of its instances
     /// share it, so editing one edits them all.
     MakeComponent { ids: Vec<EntityId>, name: String },
@@ -426,7 +431,11 @@ pub enum Command {
     /// painted with it are see-through. `texture` reads a PNG or JPEG image for its faces
     /// (`path` required); `color` may then be left out and is the image's average color.
     /// `emission` (default 0) from 0 to 10 makes its faces glow and light their surroundings.
-    /// The new id is in the outcome's `changes.materials`.
+    /// The new id is in the outcome's `changes.materials`. `existing` says what happens when
+    /// `name` is already taken: `fail` (default) is an error, `reuse` returns the existing
+    /// material unchanged (no undo step), `update` gives it the color, opacity, texture and
+    /// emission passed, as `change_material` would (one undo step), and returns it.
+    /// `existing` other than `fail` needs a `name`.
     AddMaterial {
         #[serde(default)]
         name: Option<String>,
@@ -438,6 +447,8 @@ pub enum Command {
         texture: Option<TextureSource>,
         #[serde(default)]
         emission: Option<f32>,
+        #[serde(default)]
+        existing: ExistingMaterial,
     },
     /// Rename, recolor, change the opacity (0 to 1), the texture and/or the emission (0 to 10)
     /// of a material; absent fields stay as they are. `texture`: null removes it; an object
@@ -1153,6 +1164,19 @@ pub enum FlipFrame {
     Axes,
     /// The one selected instance's own axes.
     Own,
+}
+
+/// What `Command::AddMaterial` does when the name is taken.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExistingMaterial {
+    /// An error.
+    #[default]
+    Fail,
+    /// The existing material is returned as it is.
+    Reuse,
+    /// The existing material takes the given fields and is returned.
+    Update,
 }
 
 /// How `Command::Select` combines `ids` with the current selection.

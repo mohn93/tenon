@@ -259,6 +259,7 @@ pub(crate) fn add_material(doc: &mut Document, name: &str, color: [u8; 3]) -> Ma
             opacity: None,
             texture: None,
             emission: None,
+            existing: Default::default(),
         },
     );
     outcome.changes.materials[0]
@@ -409,6 +410,7 @@ fn golden_glass_pane_in_front_of_a_box() {
             opacity: Some(0.35),
             texture: None,
             emission: None,
+            existing: Default::default(),
         },
     )
     .changes
@@ -693,7 +695,13 @@ fn golden_open_group_fades_the_rest() {
     let mut d = doc();
     add_box(&mut d, [0.0, 0.0]);
     let faces = all_faces(&d);
-    let group = run(&mut d, Command::MakeGroup { ids: faces });
+    let group = run(
+        &mut d,
+        Command::MakeGroup {
+            ids: faces,
+            name: None,
+        },
+    );
     let instance = *group
         .changes
         .created
@@ -728,7 +736,13 @@ fn golden_section_plane_in_a_group_cuts_only_the_group() {
     let mut d = doc();
     add_box(&mut d, [0.0, 0.0]);
     let faces = all_faces(&d);
-    let group = run(&mut d, Command::MakeGroup { ids: faces });
+    let group = run(
+        &mut d,
+        Command::MakeGroup {
+            ids: faces,
+            name: None,
+        },
+    );
     let instance = *group
         .changes
         .created
@@ -799,6 +813,7 @@ fn golden_textured_box_and_ground() {
                 height: Some(1.0),
             }),
             emission: None,
+            existing: Default::default(),
         },
     )
     .changes
@@ -870,6 +885,7 @@ fn golden_positioned_textures() {
                 height: Some(1.0),
             }),
             emission: None,
+            existing: Default::default(),
         },
     )
     .changes
@@ -923,6 +939,7 @@ pub(crate) fn add_lamp_material(
             opacity: None,
             texture: None,
             emission: Some(emission),
+            existing: Default::default(),
         },
     );
     outcome.changes.materials[0]
@@ -968,7 +985,13 @@ fn golden_night_lit_by_two_lamps() {
         },
     );
     let lamp = created_instance(&d, &made);
-    let grouped = run(&mut d, Command::MakeGroup { ids: vec![lamp] });
+    let grouped = run(
+        &mut d,
+        Command::MakeGroup {
+            ids: vec![lamp],
+            name: None,
+        },
+    );
     let fixture = created_instance(&d, &grouped);
     // A copy right of the box.
     let copied = run(

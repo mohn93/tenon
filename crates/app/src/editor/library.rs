@@ -224,7 +224,11 @@ mod tests {
         })
         .unwrap();
         let all = e.doc().selection().iter().copied().collect();
-        e.execute(Command::MakeGroup { ids: all }).unwrap();
+        e.execute(Command::MakeGroup {
+            ids: all,
+            name: None,
+        })
+        .unwrap();
         let group = e.doc().selection().first().copied().unwrap();
         e.execute(Command::Rotate {
             ids: vec![group],

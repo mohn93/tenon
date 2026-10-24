@@ -179,7 +179,7 @@ fn group_cut() -> Document {
         .map(|(id, _)| EntityId::Face(id))
         .chain(d.model().edges().map(|(id, _)| EntityId::Edge(id)))
         .collect();
-    let out = run(&mut d, Command::MakeGroup { ids });
+    let out = run(&mut d, Command::MakeGroup { ids, name: None });
     let group = *out
         .changes
         .created
@@ -353,7 +353,7 @@ fn group_with_plane(point: [f64; 3], normal: [f64; 3]) -> (Document, EntityId) {
         .map(|(id, _)| EntityId::Face(id))
         .chain(d.model().edges().map(|(id, _)| EntityId::Edge(id)))
         .collect();
-    let out = run(&mut d, Command::MakeGroup { ids });
+    let out = run(&mut d, Command::MakeGroup { ids, name: None });
     let group = *out
         .changes
         .created

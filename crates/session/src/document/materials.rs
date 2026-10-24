@@ -10,7 +10,7 @@ use kernel::{
 
 use super::Document;
 use super::import::read_limited;
-use crate::command::{CommandError, ErrorKind, TextureSource};
+use crate::command::{CommandError, ErrorKind, ExistingMaterial, TextureSource};
 use crate::query::{MaterialInfo, TextureInfo};
 use crate::texture::{
     MAX_TEXTURE_BYTES, average_color, check_total_pixels, dimensions, texture_from_bytes,
@@ -28,7 +28,39 @@ impl Document {
         opacity: Option<f32>,
         texture: Option<&TextureSource>,
         emission: Option<f32>,
+        existing: ExistingMaterial,
     ) -> Result<SceneChange, CommandError> {
+        self.existing_material = None;
+        if existing != ExistingMaterial::Fail {
+            let Some(name) = name else {
+                return Err(CommandError::new(
+                    ErrorKind::InvalidInput,
+                    "existing: reuse and update need a name",
+                ));
+            };
+            let found = self
+                .scene
+                .materials()
+                .find(|(_, m)| m.name == name)
+                .map(|(id, _)| id);
+            if let Some(id) = found {
+                self.existing_material = Some(id);
+                if existing == ExistingMaterial::Reuse {
+                    return Ok(SceneChange::default());
+                }
+                return self.change_material_changes(
+                    id,
+                    MaterialEdit {
+                        name: None,
+                        color,
+                        opacity,
+                        texture: None,
+                        emission,
+                    },
+                    texture.map(Some),
+                );
+            }
+        }
         if texture.is_some_and(|t| t.path.is_none()) {
             return Err(CommandError::new(
                 ErrorKind::InvalidInput,

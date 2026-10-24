@@ -417,6 +417,7 @@ mod tests {
                 opacity: None,
                 texture: None,
                 emission: None,
+                existing: Default::default(),
             })
             .unwrap();
         let brick = added.changes.materials[0];
@@ -431,6 +432,7 @@ mod tests {
         assert_eq!(lines[3..], ["Front: Default", "Back: Brick"]);
         d.execute(Command::MakeGroup {
             ids: vec!["f8".parse().unwrap()],
+            name: None,
         })
         .unwrap();
         let group = *d.selection().iter().next().unwrap();
@@ -593,7 +595,7 @@ mod tests {
         let ids = ["e2", "e4", "e6", "e7", "f8"]
             .map(|s| s.parse().unwrap())
             .to_vec();
-        d.execute(Command::MakeGroup { ids }).unwrap();
+        d.execute(Command::MakeGroup { ids, name: None }).unwrap();
         assert_eq!(entity_info(&d), ["1 group"]);
         let group = *d.selection().first().unwrap();
         d.execute(Command::MakeComponent {
@@ -651,7 +653,7 @@ mod tests {
         let ids = ["e2", "e4", "e6", "e7", "f8"]
             .map(|s| s.parse().unwrap())
             .to_vec();
-        d.execute(Command::MakeGroup { ids }).unwrap();
+        d.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let group = *d.selection().first().unwrap();
         let turn = |d: &mut Document, angle: f64| {
             d.execute(Command::Rotate {
@@ -683,7 +685,7 @@ mod tests {
                 .map(|(f, _)| EntityId::Face(f))
                 .chain(d.model().edges().map(|(e, _)| EntityId::Edge(e)))
                 .collect();
-            d.execute(Command::MakeGroup { ids }).unwrap();
+            d.execute(Command::MakeGroup { ids, name: None }).unwrap();
             *d.selection().first().unwrap()
         };
         let scale = |d: &mut Document, id: EntityId, factors: [f64; 3]| {
@@ -736,7 +738,7 @@ mod tests {
             ["Editing component Table", "Nothing selected"]
         );
         let ids = d.model().faces().map(|(f, _)| EntityId::Face(f)).collect();
-        d.execute(Command::MakeGroup { ids }).unwrap();
+        d.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let group = *d.selection().first().unwrap();
         d.execute(Command::OpenInstance { id: group }).unwrap();
         assert_eq!(entity_info(&d), ["Editing group", "Nothing selected"]);

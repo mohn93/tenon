@@ -127,7 +127,13 @@ fn edges_by_axis_see_the_placement_of_a_component() {
         .edges()
         .map(|(id, _)| kernel::EntityId::Edge(id))
         .collect::<Vec<_>>();
-    run(&mut d, Command::MakeGroup { ids: edge });
+    run(
+        &mut d,
+        Command::MakeGroup {
+            ids: edge,
+            name: None,
+        },
+    );
     let group = d
         .model()
         .instances()
@@ -221,6 +227,7 @@ fn edges_by_material_use_a_texture_average() {
                 height: Some(1.0),
             }),
             emission: None,
+            existing: Default::default(),
         },
     )
     .changes
@@ -255,7 +262,13 @@ fn edges_outside_the_open_context_stay_faded() {
         },
     );
     let all = all_faces(&d);
-    run(&mut d, Command::MakeGroup { ids: all });
+    run(
+        &mut d,
+        Command::MakeGroup {
+            ids: all,
+            name: None,
+        },
+    );
     let group = d
         .model()
         .instances()

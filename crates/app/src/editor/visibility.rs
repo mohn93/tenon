@@ -505,7 +505,7 @@ mod tests {
         add_box(&mut e);
         select_all(&mut e);
         let ids = e.doc().selection().iter().copied().collect();
-        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let out = e.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let group = out
             .changes
             .created
@@ -600,7 +600,7 @@ mod tests {
         add_box(&mut e);
         select_all(&mut e);
         let ids = e.doc().selection().iter().copied().collect();
-        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let out = e.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let outer = out
             .changes
             .created
@@ -612,7 +612,7 @@ mod tests {
         add_box_at(&mut e, 5.0);
         select_all(&mut e);
         let ids = e.doc().selection().iter().copied().collect();
-        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let out = e.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let inner = out
             .changes
             .created
@@ -637,7 +637,7 @@ mod tests {
         add_box(&mut e);
         select_all(&mut e);
         let ids = e.doc().selection().iter().copied().collect();
-        let out = e.execute(Command::MakeGroup { ids }).unwrap();
+        let out = e.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let group = out
             .changes
             .created

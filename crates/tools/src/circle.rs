@@ -253,6 +253,7 @@ mod tests {
                 .into_iter()
                 .filter(|id| !matches!(id, kernel::EntityId::Vertex(_)))
                 .collect(),
+            name: None,
         })
         .unwrap();
         let group = *d.selection().iter().next().unwrap();

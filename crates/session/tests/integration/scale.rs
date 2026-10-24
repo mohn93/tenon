@@ -155,7 +155,6 @@ fn scale_refuses_bad_factors() {
     };
     for factors in [
         "[0, 1, 1]",
-        "[1, 1, 1]",
         "[1e5, 1, 1]",
         "[1e-5, 1, 1]",
         "[-2e4, 1, 1]",

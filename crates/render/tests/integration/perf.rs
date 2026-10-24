@@ -100,6 +100,7 @@ fn scene() -> Document {
             opacity: None,
             texture: None,
             emission: Some(3.0),
+            existing: Default::default(),
         },
     )
     .changes

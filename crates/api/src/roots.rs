@@ -525,6 +525,7 @@ mod tests {
                 opacity: None,
                 texture: Some(texture()),
                 emission: None,
+                existing: Default::default(),
             },
             Command::ChangeMaterial {
                 material: MaterialId(1),

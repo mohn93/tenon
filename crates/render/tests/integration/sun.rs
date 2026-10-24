@@ -265,6 +265,7 @@ fn paint_all(d: &mut Document, opacity: f32) {
             opacity: Some(opacity),
             texture: None,
             emission: None,
+            existing: Default::default(),
         },
     );
     let material = made.changes.materials[0];

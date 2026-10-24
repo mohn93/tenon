@@ -196,6 +196,9 @@ pub struct Document {
     text_report: Option<Text3dReport>,
     /// The material an `insert_library_item` of a material added or reused, for its outcome.
     library_material: Option<MaterialId>,
+    /// The material `add_material` found by name (`existing: reuse` or `update`), listed in
+    /// the outcome's `changes.materials` even when nothing changed.
+    existing_material: Option<MaterialId>,
     /// Names this document since it was created, opened or imported as a new model (see
     /// `token`); not saved.
     token: String,
@@ -244,6 +247,7 @@ impl Document {
             made_definitions: None,
             text_report: None,
             library_material: None,
+            existing_material: None,
             token: clip::new_token(),
             pasted: BTreeMap::new(),
             read_only: false,
@@ -489,6 +493,11 @@ impl Document {
             outcome.definitions = self.made_definitions.take();
             outcome.text_3d = self.text_report.take();
             outcome.material = self.library_material.take();
+            if let Some(m) = self.existing_material.take()
+                && !outcome.changes.materials.contains(&m)
+            {
+                outcome.changes.materials.push(m);
+            }
             return Ok(outcome);
         }
         match command {
@@ -956,8 +965,8 @@ impl Document {
                 toward,
             } => self.offset_changes(ids, *distance, *toward),
             Command::FollowMe { face, path } => self.follow_me_changes(*face, path),
-            Command::MakeGroup { ids } => self.group_changes(ids, None),
-            Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name)),
+            Command::MakeGroup { ids, name } => self.group_changes(ids, None, name.as_deref()),
+            Command::MakeComponent { ids, name } => self.group_changes(ids, Some(name), None),
             Command::Explode { ids } => self.explode_changes(ids),
             Command::SetAxes {
                 origin,
@@ -988,12 +997,14 @@ impl Document {
                 opacity,
                 texture,
                 emission,
+                existing,
             } => self.add_material_changes(
                 name.as_deref(),
                 *color,
                 *opacity,
                 texture.as_ref(),
                 *emission,
+                *existing,
             ),
             Command::ChangeMaterial {
                 material,
@@ -1216,7 +1227,12 @@ impl Document {
                 Err(error) => Err(error),
                 Ok(command) => match self.edit(&command) {
                     Some(changes) => changes.map(|c| {
-                        let summary = c.summary();
+                        let mut summary = c.summary();
+                        if let Some(m) = self.existing_material.take()
+                            && !summary.materials.contains(&m)
+                        {
+                            summary.materials.push(m);
+                        }
                         applied.push(c);
                         names.push(command.name());
                         Outcome {
@@ -1341,8 +1357,21 @@ impl Document {
             segments.unwrap_or(DEFAULT_CIRCLE_SEGMENTS),
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
-        self.edit_mesh(|m| m.add_curve(&points, true, false))
+        self.draw_shape(points[0], normal, |m| m.add_curve(&points, true, false))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+    }
+
+    /// Draws a shape through `point`; with an explicit `normal` its new faces face along it.
+    fn draw_shape(
+        &mut self,
+        point: DVec3,
+        normal: Option<[f64; 3]>,
+        draw: impl FnOnce(&mut Model) -> Result<ChangeSet, KernelError>,
+    ) -> Result<SceneChange, KernelError> {
+        match normal.and_then(|n| unit_vector(DVec3::from(n))) {
+            Some(n) => self.edit_mesh(|m| m.draw_facing(point, n, draw)),
+            None => self.edit_mesh(draw),
+        }
     }
 
     fn add_polygon_changes(
@@ -1364,7 +1393,7 @@ impl Document {
             direction.map(DVec3::from),
         )?;
         check_coordinates(&points.iter().map(|p| p.to_array()).collect::<Vec<_>>())?;
-        self.edit_mesh(|m| m.add_curve(&points, true, true))
+        self.draw_shape(points[0], normal, |m| m.add_curve(&points, true, true))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
@@ -1402,7 +1431,7 @@ impl Document {
             normal.map(DVec3::from),
         )?;
         check_coordinates(&corners.map(|c| c.to_array()))?;
-        self.edit_mesh(|m| m.add_polygon(&corners))
+        self.draw_shape(corners[0], normal, |m| m.add_polygon(&corners))
             .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
@@ -1489,8 +1518,11 @@ impl Document {
         }
         let corners = [a, b, b + across, a + across];
         check_coordinates(&corners.map(|c| c.to_array()))?;
-        self.edit_mesh(|m| m.add_polygon(&corners))
-            .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
+        let normal = side.cross(across).normalize();
+        self.draw_shape(corners[0], Some(normal.to_array()), |m| {
+            m.add_polygon(&corners)
+        })
+        .map_err(|e| CommandError::new(ErrorKind::InvalidInput, e.to_string()))
     }
 
     fn push_pull_changes(
@@ -1574,6 +1606,15 @@ impl Document {
         .map_err(|e| self.kernel_error(e, ids))
     }
 
+    fn require_existing(&self, ids: &[EntityId]) -> Result<(), CommandError> {
+        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing))
+        }
+    }
+
     fn rotate_changes(
         &mut self,
         ids: &[EntityId],
@@ -1597,8 +1638,14 @@ impl Document {
         }
         // Whole turns are dropped first, so copies k * angle stay finite and exact.
         let angle = angle % 360.0;
-        if angle.abs() < 1e-9 || 360.0 - angle.abs() < 1e-9 {
-            return Err(invalid("angle must not be a whole number of turns"));
+        let whole_turn = angle.abs() < 1e-9 || 360.0 - angle.abs() < 1e-9;
+        if whole_turn && copies.is_none() {
+            // Turning by whole turns changes nothing; the ids must still exist.
+            self.require_existing(ids)?;
+            return Ok(SceneChange::default());
+        }
+        if whole_turn {
+            return Err(invalid("copies of a whole number of turns would coincide"));
         }
         let center = DVec3::from(center);
         if let Some(count) = copies {
@@ -1654,14 +1701,9 @@ impl Document {
                 "scale factors must be finite and between 1e-4 and 1e4 in size",
             ));
         }
+        self.require_existing(ids)?;
         if factors == [1.0; 3] {
-            return Err(invalid("nothing to scale: every factor is 1"));
-        }
-        let missing: Vec<EntityId> = ids.iter().copied().filter(|id| !self.exists(*id)).collect();
-        if !missing.is_empty() {
-            return Err(
-                CommandError::new(ErrorKind::NotFound, "no such entities").with_ids(missing)
-            );
+            return Ok(SceneChange::default());
         }
         let origin = DVec3::from(origin);
         let scale = DAffine3::from_translation(origin)

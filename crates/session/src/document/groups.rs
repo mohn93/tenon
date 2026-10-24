@@ -9,11 +9,13 @@ use crate::command::{CommandError, ErrorKind};
 use crate::query::{Bounds, InstanceInfo, OutlinerNode, OutlinerRow, OutlinerTable};
 
 impl Document {
-    /// Makes a group (`name` None) or a named component from `ids` and selects its instance.
+    /// Makes a group (`component` None, named `group_name` if given) or a component named
+    /// `component` from `ids` and selects its instance.
     pub(super) fn group_changes(
         &mut self,
         ids: &[EntityId],
-        name: Option<&String>,
+        component: Option<&String>,
+        group_name: Option<&str>,
     ) -> Result<SceneChange, CommandError> {
         if ids.is_empty() {
             return Err(CommandError::new(
@@ -21,8 +23,17 @@ impl Document {
                 "ids must list at least one edge, face or instance",
             ));
         }
-        let (kind, name) = match name {
-            None => (DefinitionKind::Group, ""),
+        let (kind, name) = match component {
+            None => match group_name {
+                Some(n) if n.trim().is_empty() => {
+                    return Err(CommandError::new(
+                        ErrorKind::InvalidInput,
+                        "a group name must not be blank",
+                    ));
+                }
+                Some(n) => (DefinitionKind::Group, n),
+                None => (DefinitionKind::Group, ""),
+            },
             Some(n) if n.trim().is_empty() => {
                 return Err(CommandError::new(
                     ErrorKind::InvalidInput,

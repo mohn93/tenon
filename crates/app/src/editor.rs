@@ -643,6 +643,7 @@ impl Editor {
             opacity: None,
             texture: None,
             emission: None,
+            existing: Default::default(),
         }) else {
             return true;
         };
@@ -1248,7 +1249,7 @@ impl Editor {
             self.message = Some(Message::error("Select geometry to make a group"));
             return true;
         }
-        self.run_selection_command(Command::MakeGroup { ids })
+        self.run_selection_command(Command::MakeGroup { ids, name: None })
     }
 
     /// Makes a component of the selection, named "Component N" with the first free N. With
@@ -4105,7 +4106,7 @@ mod tests {
             .map(|(id, _)| EntityId::Edge(id))
             .chain(m.faces().map(|(id, _)| EntityId::Face(id)))
             .collect();
-        e.execute(Command::MakeGroup { ids }).unwrap();
+        e.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let group = *e.doc().selection().first().unwrap();
         e.execute(Command::Move {
             ids: vec![group],
@@ -4549,7 +4550,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_retyped_angle_keeps_the_selection() {
+    fn a_whole_turn_retyped_angle_keeps_the_selection() {
         let mut e = editor();
         e.select_tool(ToolKind::Line);
         square(&mut e);
@@ -4564,15 +4565,16 @@ mod tests {
         click_at(&mut e, DVec3::new(2.0, 2.0, 0.0));
         type_text(&mut e, "30");
         type_text(&mut e, "360");
+        // A whole turn is a no-op now, not a refusal.
         assert!(
-            e.status().contains("whole number of turns"),
+            !e.status().contains("whole number of turns"),
             "{}",
             e.status()
         );
         assert_eq!(
             e.doc().selection().iter().copied().collect::<Vec<_>>(),
             vec![face],
-            "the selection survives the refused angle"
+            "the selection survives the whole-turn angle"
         );
     }
 
@@ -4591,7 +4593,7 @@ mod tests {
         let outer = turned_group(&mut e);
         e.execute(Command::OpenInstance { id: outer }).unwrap();
         let ids = context_contents(&e);
-        e.execute(Command::MakeGroup { ids }).unwrap();
+        e.execute(Command::MakeGroup { ids, name: None }).unwrap();
         let inner = *e.doc().selection().first().unwrap();
         // The inner group's (x, y) go to (2 - y, x) in the outer one, and so to (12 - y, -z, x)
         // in the world.
@@ -6253,6 +6255,7 @@ mod tests {
         let outcome = e
             .execute(Command::MakeGroup {
                 ids: vec![EntityId::Face(face)],
+                name: None,
             })
             .unwrap();
         let group = outcome
@@ -6457,6 +6460,7 @@ mod tests {
         let made = e
             .execute(Command::MakeGroup {
                 ids: vec![EntityId::Face(face)],
+                name: None,
             })
             .unwrap();
         let group = made

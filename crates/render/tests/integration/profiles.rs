@@ -653,7 +653,13 @@ fn edges_are_the_same_in_a_stretched_turned_group_and_loose() {
         add_box(&mut d, [2.0, 1.0]);
         let mut ids = super::golden::all_faces(&d);
         if grouped {
-            let made = run(&mut d, Command::MakeGroup { ids: ids.clone() });
+            let made = run(
+                &mut d,
+                Command::MakeGroup {
+                    ids: ids.clone(),
+                    name: None,
+                },
+            );
             ids = vec![
                 *made
                     .changes

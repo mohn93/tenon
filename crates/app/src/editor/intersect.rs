@@ -171,7 +171,12 @@ mod tests {
         let mut e = editor();
         add_box(&mut e, 0.0);
         select_all(&mut e);
-        let out = e.execute(Command::MakeGroup { ids: selected(&e) }).unwrap();
+        let out = e
+            .execute(Command::MakeGroup {
+                ids: selected(&e),
+                name: None,
+            })
+            .unwrap();
         let group = out
             .changes
             .created
@@ -220,7 +225,11 @@ mod tests {
         })
         .unwrap();
         select_all(&mut e);
-        e.execute(Command::MakeGroup { ids: selected(&e) }).unwrap();
+        e.execute(Command::MakeGroup {
+            ids: selected(&e),
+            name: None,
+        })
+        .unwrap();
         e.execute(Command::AddRectangle {
             corner: [0.0, 0.0, 0.0],
             opposite: [6.0, 6.0, 0.0],
@@ -261,7 +270,11 @@ mod tests {
         })
         .unwrap();
         select_all(&mut e);
-        e.execute(Command::MakeGroup { ids: selected(&e) }).unwrap();
+        e.execute(Command::MakeGroup {
+            ids: selected(&e),
+            name: None,
+        })
+        .unwrap();
         for (c, o) in [([0.0, 0.0], [6.0, 6.0]), ([1.0, 1.0], [2.0, 2.0])] {
             e.execute(Command::AddRectangle {
                 corner: [c[0], c[1], 0.0],

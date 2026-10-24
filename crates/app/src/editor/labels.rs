@@ -225,7 +225,12 @@ mod tests {
     fn a_groups_labels_light_with_it_and_fade_outside_the_open_group() {
         let mut e = editor();
         let d = dimension(&mut e);
-        let out = e.execute(Command::MakeGroup { ids: vec![d] }).err();
+        let out = e
+            .execute(Command::MakeGroup {
+                ids: vec![d],
+                name: None,
+            })
+            .err();
         assert!(out.is_some(), "annotations alone are not grouped");
         e.execute(Command::AddRectangle {
             corner: [0.0, 0.0, 0.0],
@@ -241,7 +246,7 @@ mod tests {
         .unwrap();
         let ids: Vec<EntityId> = e.doc().selection().iter().copied().collect();
         let group = e
-            .execute(Command::MakeGroup { ids })
+            .execute(Command::MakeGroup { ids, name: None })
             .unwrap()
             .changes
             .created
@@ -341,7 +346,7 @@ mod tests {
         .unwrap();
         let ids: Vec<EntityId> = e.doc().selection().iter().copied().collect();
         let group = e
-            .execute(Command::MakeGroup { ids })
+            .execute(Command::MakeGroup { ids, name: None })
             .unwrap()
             .changes
             .created
