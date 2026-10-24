@@ -316,7 +316,7 @@ impl From<Command> for BatchCommand {
 }
 
 /// The top-level fields where references are recognised; `path` only in `open_path`,
-/// `follow_me` and `copy_along_path`, `target` and `tools` only in `solid_subtract`, and the anchors, edges and notes of the annotation commands only there.
+/// `follow_me` and `copy_along_path`, `target` and `tools` only in `solid_subtract` and `solid_trim`, `a` and `b` also in `solid_split`, and the anchors, edges and notes of the annotation commands only there.
 fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
     matches!(key, "ids" | "face" | "id" | "material")
         || matches!(
@@ -324,8 +324,8 @@ fn is_reference_key(key: &str, command_type: Option<&str>) -> bool {
             ("item", Some("save_to_library"))
                 | ("definition", Some("rename_definition" | "place_instance"))
                 | ("path", Some("open_path" | "follow_me" | "copy_along_path"))
-                | ("target" | "tools", Some("solid_subtract"))
-                | ("a" | "b", Some("add_dimension"))
+                | ("target" | "tools", Some("solid_subtract" | "solid_trim"))
+                | ("a" | "b", Some("add_dimension" | "solid_split"))
                 | ("edge", Some("add_edge_dimension" | "add_radial_dimension"))
                 | ("anchor", Some("add_note"))
                 | ("note", Some("change_note"))
@@ -695,6 +695,7 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
         | Command::IntersectFaces { ids, .. }
         | Command::SolidUnion { ids }
         | Command::SolidIntersect { ids }
+        | Command::OuterShell { ids }
         | Command::PositionTexture { ids, .. }
         | Command::SetTag { ids, .. }
         | Command::Select { ids, .. } => f(Slot::List(ids)),
@@ -729,9 +730,13 @@ fn id_slots(command: &mut Command, f: &mut dyn FnMut(Slot<'_>)) {
             f(Slot::One(plane))
         }
         Command::Revolve { face, .. } => f(Slot::One(face)),
-        Command::SolidSubtract { target, tools } => {
+        Command::SolidSubtract { target, tools } | Command::SolidTrim { target, tools } => {
             f(Slot::One(target));
             f(Slot::List(tools));
+        }
+        Command::SolidSplit { a, b } => {
+            f(Slot::One(a));
+            f(Slot::One(b));
         }
         Command::CopyAlongPath { ids, path, .. } => {
             f(Slot::List(ids));

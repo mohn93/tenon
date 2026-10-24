@@ -1,4 +1,5 @@
-//! Solid Tools: `solid_union`, `solid_subtract` and `solid_intersect`.
+//! Solid Tools: `solid_union`, `solid_subtract`, `solid_intersect`, `solid_trim`, `solid_split`
+//! and `outer_shell`.
 
 use std::f64::consts::TAU;
 
@@ -330,6 +331,46 @@ fn refusals_change_nothing() {
             ErrorKind::NotFound,
             "",
         ),
+        (
+            json!({"type": "solid_trim", "target": a, "tools": []}),
+            ErrorKind::InvalidInput,
+            "at least 1",
+        ),
+        (
+            json!({"type": "solid_trim", "target": a, "tools": [b, a]}),
+            ErrorKind::InvalidInput,
+            "cannot also be a tool",
+        ),
+        (
+            json!({"type": "solid_trim", "target": a, "tools": [open]}),
+            ErrorKind::InvalidInput,
+            "is not a solid",
+        ),
+        (
+            json!({"type": "solid_split", "a": a, "b": a}),
+            ErrorKind::InvalidInput,
+            "named twice",
+        ),
+        (
+            json!({"type": "solid_split", "a": a, "b": open}),
+            ErrorKind::InvalidInput,
+            "is not a solid",
+        ),
+        (
+            json!({"type": "outer_shell", "ids": []}),
+            ErrorKind::InvalidInput,
+            "at least 1",
+        ),
+        (
+            json!({"type": "outer_shell", "ids": [open]}),
+            ErrorKind::InvalidInput,
+            "is not a solid",
+        ),
+        (
+            json!({"type": "outer_shell", "ids": [a, b]}),
+            ErrorKind::InvalidInput,
+            "the result would not be a solid",
+        ),
     ];
     for (command, kind, text) in cases {
         let e = try_run(&mut d, command.clone()).unwrap_err();
@@ -359,4 +400,140 @@ fn a_batch_refers_to_target_and_tools() {
     assert_eq!(placed.len(), 1);
     let id = serde_json::to_value(placed[0]).unwrap();
     assert!((volume(&d, &id) - (4.0 - ngon(0.5, 24))).abs() < 1e-9);
+}
+
+fn ids_of(out: &Value) -> Vec<Value> {
+    out["placed"].as_array().unwrap().clone()
+}
+
+#[test]
+fn trim_keeps_the_tools() {
+    let mut d = doc();
+    let block = add_box(&mut d, [0.0; 3], [4.0, 4.0, 2.0]);
+    let tool = add_box(&mut d, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]);
+    let before = d.model().clone();
+    let out = run(
+        &mut d,
+        json!({"type": "solid_trim", "target": block, "tools": [tool]}),
+    );
+    let placed = ids_of(&out);
+    assert_eq!(placed.len(), 1, "{out}");
+    let deleted = out["changes"]["deleted"].as_array().unwrap();
+    assert!(
+        deleted.contains(&block) && !deleted.contains(&tool),
+        "{out}"
+    );
+    assert_eq!(instances(&d).len(), 2);
+    assert!((volume(&d, &placed[0]) - 28.0).abs() < 1e-9);
+    // The tool is as it was, still a solid of its own volume.
+    assert!((volume(&d, &tool) - 8.0).abs() < 1e-9);
+    let history = ask(&d, json!({"type": "history"}));
+    assert_eq!(history["undo"][0], "solid_trim", "{history}");
+    run(&mut d, json!({"type": "undo"}));
+    assert_eq!(*d.model(), before);
+    d.scene().validate().unwrap();
+
+    // A tool that removes everything leaves the tool and erases the target.
+    let big = add_box(&mut d, [-1.0; 3], [6.0, 6.0, 4.0]);
+    let out = run(
+        &mut d,
+        json!({"type": "solid_trim", "target": block, "tools": [big]}),
+    );
+    assert_eq!(out["empty"], true, "{out}");
+    assert_eq!(instances(&d).len(), 2);
+}
+
+#[test]
+fn split_makes_three_pieces_in_order() {
+    let mut d = doc();
+    let a = add_box(&mut d, [0.0; 3], [2.0, 2.0, 2.0]);
+    let b = add_box(&mut d, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]);
+    let before = d.model().clone();
+    let out = run(&mut d, json!({"type": "solid_split", "a": a, "b": b}));
+    let placed = ids_of(&out);
+    assert_eq!(placed.len(), 3, "{out}");
+    let volumes: Vec<f64> = placed.iter().map(|p| volume(&d, p)).collect();
+    assert!((volumes[0] - 7.0).abs() < 1e-9, "{volumes:?}");
+    assert!((volumes[1] - 1.0).abs() < 1e-9, "{volumes:?}");
+    assert!((volumes[2] - 7.0).abs() < 1e-9, "{volumes:?}");
+    let deleted = out["changes"]["deleted"].as_array().unwrap();
+    assert!(deleted.contains(&a) && deleted.contains(&b), "{out}");
+    assert_eq!(instances(&d).len(), 3);
+    let selection = ask(&d, json!({"type": "selection"}));
+    assert_eq!(selection["ids"].as_array().unwrap().len(), 3, "{selection}");
+    // They add up to the union.
+    let union = run(&mut d, json!({"type": "solid_union", "ids": placed}));
+    assert!((volume(&d, &union["placed"][0]) - 15.0).abs() < 1e-9);
+    run(&mut d, json!({"type": "undo"}));
+    run(&mut d, json!({"type": "undo"}));
+    assert_eq!(*d.model(), before);
+    d.scene().validate().unwrap();
+}
+
+#[test]
+fn split_without_overlap_makes_two_pieces() {
+    let mut d = doc();
+    let a = add_box(&mut d, [0.0; 3], [1.0, 1.0, 1.0]);
+    let b = add_box(&mut d, [5.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
+    let out = run(&mut d, json!({"type": "solid_split", "a": a, "b": b}));
+    let placed = ids_of(&out);
+    assert_eq!(placed.len(), 2, "{out}");
+    assert!((volume(&d, &placed[0]) - 1.0).abs() < 1e-9);
+    assert!((volume(&d, &placed[1]) - 2.0).abs() < 1e-9);
+    assert!(out.get("empty").is_none());
+}
+
+#[test]
+fn outer_shell_of_overlapping_boxes_is_their_union() {
+    let mut d = doc();
+    let a = add_box(&mut d, [0.0; 3], [2.0, 2.0, 2.0]);
+    let b = add_box(&mut d, [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]);
+    let out = run(&mut d, json!({"type": "outer_shell", "ids": [a, b]}));
+    let placed = ids_of(&out);
+    assert_eq!(placed.len(), 1);
+    assert!((volume(&d, &placed[0]) - 15.0).abs() < 1e-9);
+    assert_eq!(instances(&d).len(), 1);
+    let history = ask(&d, json!({"type": "history"}));
+    assert_eq!(history["undo"][0], "outer_shell", "{history}");
+}
+
+#[test]
+fn outer_shell_removes_an_internal_void() {
+    let mut d = doc();
+    let block = add_box(&mut d, [0.0; 3], [4.0, 4.0, 4.0]);
+    let core = add_box(&mut d, [1.5, 1.5, 1.5], [1.0, 1.0, 1.0]);
+    let hollow = run(
+        &mut d,
+        json!({"type": "solid_subtract", "target": block, "tools": [core]}),
+    )["placed"][0]
+        .clone();
+    assert!((volume(&d, &hollow) - 63.0).abs() < 1e-9);
+    assert_eq!(mesh(&d, &hollow).faces().count(), 12);
+    let before = d.model().clone();
+    let out = run(&mut d, json!({"type": "outer_shell", "ids": [hollow]}));
+    let solid = ids_of(&out)[0].clone();
+    assert!((volume(&d, &solid) - 64.0).abs() < 1e-9);
+    assert_eq!(mesh(&d, &solid).faces().count(), 6);
+    run(&mut d, json!({"type": "undo"}));
+    assert_eq!(*d.model(), before);
+}
+
+#[test]
+fn a_batch_refers_to_trim_split_and_shell_operands() {
+    let mut d = doc();
+    let commands: Vec<BatchCommand> = [
+        json!({"type": "add_box", "corner": [0, 0, 0], "size": [2, 2, 2]}),
+        json!({"type": "add_box", "corner": [1, 1, 1], "size": [2, 2, 2]}),
+        json!({"type": "solid_trim", "target": "$0:i0", "tools": ["$1:i0"]}),
+        json!({"type": "solid_split", "a": "$2:i0", "b": "$1:i0"}),
+        json!({"type": "outer_shell", "ids": ["$3:i0"]}),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, v)| BatchCommand::parse(v, i).unwrap())
+    .collect();
+    let outcomes = d.execute_batch(commands, true).unwrap();
+    assert_eq!(outcomes[2].placed.clone().unwrap().len(), 1);
+    assert_eq!(outcomes[3].placed.clone().unwrap().len(), 2);
+    assert_eq!(outcomes[4].placed.clone().unwrap().len(), 1);
 }

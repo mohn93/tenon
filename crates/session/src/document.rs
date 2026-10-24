@@ -841,6 +841,9 @@ impl Document {
             | Command::SolidUnion { .. }
             | Command::SolidSubtract { .. }
             | Command::SolidIntersect { .. }
+            | Command::SolidTrim { .. }
+            | Command::SolidSplit { .. }
+            | Command::OuterShell { .. }
             | Command::PositionTexture { .. }
             | Command::Import { .. }
             | Command::Paste { .. }
@@ -1254,6 +1257,9 @@ impl Document {
                 self.solid_all_changes(kernel::boolean::BooleanOp::Union, ids)
             }
             Command::SolidSubtract { target, tools } => self.solid_subtract_changes(*target, tools),
+            Command::SolidTrim { target, tools } => self.solid_trim_changes(*target, tools),
+            Command::SolidSplit { a, b } => self.solid_split_changes(*a, *b),
+            Command::OuterShell { ids } => self.outer_shell_changes(ids),
             Command::SolidIntersect { ids } => {
                 self.solid_all_changes(kernel::boolean::BooleanOp::Intersect, ids)
             }

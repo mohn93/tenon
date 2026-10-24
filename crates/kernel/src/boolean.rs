@@ -84,6 +84,65 @@ impl Scene {
         op: BooleanOp,
         ids: &[InstanceId],
     ) -> Result<(Option<InstanceId>, SceneChange), BooleanError> {
+        self.boolean_of(parent, op, ids, ids, false)
+    }
+
+    /// As `solid_boolean` with `Subtract`, but the `tools` stay: only `target` is erased.
+    pub fn solid_trim(
+        &mut self,
+        parent: MeshId,
+        target: InstanceId,
+        tools: &[InstanceId],
+    ) -> Result<(Option<InstanceId>, SceneChange), BooleanError> {
+        let ids: Vec<InstanceId> = std::iter::once(target)
+            .chain(tools.iter().copied())
+            .collect();
+        self.boolean_of(parent, BooleanOp::Subtract, &ids, &[target], false)
+    }
+
+    /// The union of `ids` (one or more solids) without internal faces: shells of the result
+    /// that lie inside another shell (voids, and solids floating in them) are dropped. Placed
+    /// and erased as `solid_boolean`.
+    pub fn outer_shell(
+        &mut self,
+        parent: MeshId,
+        ids: &[InstanceId],
+    ) -> Result<(Option<InstanceId>, SceneChange), BooleanError> {
+        self.boolean_of(parent, BooleanOp::Union, ids, ids, true)
+    }
+
+    /// Splits solids `a` and `b` into `a - b`, what they share and `b - a`, three new groups
+    /// placed in that order (a piece with nothing in it is not made), all with the transform,
+    /// material, tag and hidden flag of `a`; `a` and `b` are erased. On an error nothing
+    /// changes.
+    pub fn solid_split(
+        &mut self,
+        parent: MeshId,
+        a: InstanceId,
+        b: InstanceId,
+    ) -> Result<(Vec<InstanceId>, SceneChange), BooleanError> {
+        let ids = [a, b];
+        let operands = self.solid_operands(parent, &ids)?;
+        let first = &operands[0];
+        let (ma, mb) = self.operand_models(&operands);
+        let pieces = split(&ma[0], &mb[0])?;
+        let mut parts = Vec::new();
+        let mut placed = Vec::new();
+        for piece in pieces.iter().flatten() {
+            let (id, change) = self.place_group(parent, first, piece);
+            placed.push(id);
+            parts.push(change);
+        }
+        parts.push(self.erase_instances(parent, &ids));
+        Ok((placed, SceneChange::join(parts)))
+    }
+
+    /// The instances `ids` of `parent`, each checked to be a solid.
+    fn solid_operands(
+        &self,
+        parent: MeshId,
+        ids: &[InstanceId],
+    ) -> Result<Vec<Instance>, BooleanError> {
         let mesh = self
             .mesh(parent)
             .ok_or_else(|| BooleanError::Missing(ids.first().copied().unwrap_or(InstanceId(0))))?;
@@ -93,13 +152,17 @@ impl Scene {
             instance_volume(self, instance).map_err(|why| BooleanError::NotSolid(*id, why))?;
             operands.push(instance.clone());
         }
-        let Some(first) = operands.first() else {
-            return Ok((None, SceneChange::default()));
-        };
+        Ok(operands)
+    }
+
+    /// The first operand's mesh as it is and the others copied into its frame, outward. Both
+    /// are returned as lists (the first of one, the rest of the others).
+    fn operand_models(&self, operands: &[Instance]) -> (Vec<Model>, Vec<Model>) {
         let definition = |i: &Instance| &self.definition(i.definition).expect("checked").mesh;
+        let first = &operands[0];
         let back = first.transform.inverse();
-        let mut result = Some(placed_copy(definition(first), DAffine3::IDENTITY, None));
-        let others: Vec<Model> = operands[1..]
+        let head = vec![placed_copy(definition(first), DAffine3::IDENTITY, None)];
+        let others = operands[1..]
             .iter()
             .map(|other| {
                 // A face side without a material shows the instance's; keep showing it.
@@ -107,6 +170,25 @@ impl Scene {
                 placed_copy(definition(other), back * other.transform, fill)
             })
             .collect();
+        (head, others)
+    }
+
+    /// Combines `ids` by `op` (see `solid_boolean`), erasing `erase`; with `shell` the
+    /// result keeps only its outer shells.
+    fn boolean_of(
+        &mut self,
+        parent: MeshId,
+        op: BooleanOp,
+        ids: &[InstanceId],
+        erase: &[InstanceId],
+        shell: bool,
+    ) -> Result<(Option<InstanceId>, SceneChange), BooleanError> {
+        let operands = self.solid_operands(parent, ids)?;
+        let Some(first) = operands.first() else {
+            return Ok((None, SceneChange::default()));
+        };
+        let (head, others) = self.operand_models(&operands);
+        let mut result = head.into_iter().next();
         // Adding or taking away solids that lie apart is adding or taking away them together,
         // in one pass (twenty bores in a plate cut at once).
         let others = if op == BooleanOp::Intersect {
@@ -118,39 +200,175 @@ impl Scene {
             let Some(acc) = &result else { break };
             result = combine(acc, b, op)?;
         }
+        if shell && let Some(m) = &result {
+            result = Some(outer_shells(m)?);
+        }
 
-        let erase: Vec<InstanceId> = ids.to_vec();
         let Some(result) = result else {
-            return Ok((None, self.erase_instances(parent, &erase)));
+            return Ok((None, self.erase_instances(parent, erase)));
         };
+        let (placed, made) = self.place_group(parent, first, &result);
+        let erased = self.erase_instances(parent, erase);
+        Ok((Some(placed), SceneChange::join([made, erased])))
+    }
+
+    /// A new group holding `mesh`, placed in `parent` with the transform, material, tag and
+    /// hidden flag of `like`, its definition named as `like`'s.
+    fn place_group(
+        &mut self,
+        parent: MeshId,
+        like: &Instance,
+        mesh: &Model,
+    ) -> (InstanceId, SceneChange) {
         let name = self
-            .definition(first.definition)
+            .definition(like.definition)
             .map(|d| d.name.clone())
             .unwrap_or_default();
         let (definition, added) = self.add_definition(&name, DefinitionKind::Group);
         let filled = self
             .edit(MeshId::Definition(definition), |m| {
-                copy_into(&result, m);
+                copy_into(mesh, m);
                 Ok(m.take_changes())
             })
             .expect("filling a new definition cannot fail");
         let mut placed = None;
         let left = self
             .edit(parent, |m| {
-                let mut instance = Instance::new(definition, first.transform);
-                instance.material = first.material;
-                instance.tag = first.tag;
-                instance.hidden = first.hidden;
+                let mut instance = Instance::new(definition, like.transform);
+                instance.material = like.material;
+                instance.tag = like.tag;
+                instance.hidden = like.hidden;
                 placed = Some(m.insert_instance(instance));
                 Ok(m.take_changes())
             })
             .expect("placing an instance cannot fail");
-        let erased = self.erase_instances(parent, &erase);
-        Ok((
-            placed,
-            SceneChange::join([SceneChange::from(added), filled, left, erased]),
-        ))
+        (
+            placed.expect("placed"),
+            SceneChange::join([SceneChange::from(added), filled, left]),
+        )
     }
+}
+
+/// `m` (closed) with only its outer shells: a shell (a set of faces joined across edges) that
+/// lies inside another shell is dropped, so voids and what floats in them go.
+fn outer_shells(m: &Model) -> Result<Model, BooleanError> {
+    let shells = shells_of(m);
+    if shells.len() < 2 {
+        return Ok(m.clone());
+    }
+    let parts: Vec<Model> = shells.iter().map(|faces| subset(m, faces)).collect();
+    let mut keep: Vec<usize> = Vec::new();
+    for (i, faces) in shells.iter().enumerate() {
+        let p = faces
+            .iter()
+            .find_map(|f| interior_point(m, *f).map(|p| (p, m.face(*f).expect("face").normal)))
+            .ok_or(BooleanError::NotClosed)?;
+        let mut enclosed = false;
+        for (j, other) in parts.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            match classify(p.0, p.1, other).ok_or(BooleanError::NotClosed)? {
+                Class::Inside => enclosed = true,
+                Class::Outside => {}
+                // Shells never share a face.
+                Class::Same | Class::Opposite => return Err(BooleanError::NotClosed),
+            }
+        }
+        if !enclosed {
+            keep.push(i);
+        }
+    }
+    if keep.len() == shells.len() {
+        return Ok(m.clone());
+    }
+    let faces: Vec<FaceId> = keep.iter().flat_map(|i| shells[*i].clone()).collect();
+    Ok(subset(m, &faces))
+}
+
+/// The faces of `m` grouped into shells: faces joined across the edges of their loops.
+fn shells_of(m: &Model) -> Vec<Vec<FaceId>> {
+    let ids: Vec<FaceId> = m.faces().map(|(id, _)| id).collect();
+    let at: HashMap<FaceId, usize> = ids.iter().enumerate().map(|(i, f)| (*f, i)).collect();
+    let mut parent: Vec<usize> = (0..ids.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for (i, id) in ids.iter().enumerate() {
+        let f = m.face(*id).expect("face");
+        for l in std::iter::once(&f.outer).chain(&f.holes) {
+            for k in 0..l.len() {
+                for g in m.faces_on_side(l[k], l[(k + 1) % l.len()]) {
+                    let (a, b) = (root(&mut parent, i), root(&mut parent, at[&g]));
+                    parent[a] = b;
+                }
+            }
+        }
+    }
+    let mut groups: Vec<Vec<FaceId>> = Vec::new();
+    let mut index: HashMap<usize, usize> = HashMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        let r = root(&mut parent, i);
+        let g = *index.entry(r).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[g].push(*id);
+    }
+    groups
+}
+
+/// A copy of `m` holding only `faces` and their edges and vertices.
+fn subset(m: &Model, faces: &[FaceId]) -> Model {
+    let mut out = Model::new();
+    let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
+    let mut curves: HashMap<CurveId, CurveId> = HashMap::new();
+    for id in faces {
+        let f = m.face(*id).expect("face");
+        for v in f.outer.iter().chain(f.holes.iter().flatten()) {
+            vertices
+                .entry(*v)
+                .or_insert_with(|| out.insert_vertex(m.pos(*v)));
+        }
+    }
+    let mut done: HashSet<(VertexId, VertexId)> = HashSet::new();
+    let mut made = Vec::new();
+    for id in faces {
+        let f = m.face(*id).expect("face");
+        let loops: Vec<Vec<VertexId>> = std::iter::once(&f.outer)
+            .chain(&f.holes)
+            .map(|l| l.iter().map(|v| vertices[v]).collect())
+            .collect();
+        for l in std::iter::once(&f.outer).chain(&f.holes) {
+            for k in 0..l.len() {
+                let (a, b) = (l[k], l[(k + 1) % l.len()]);
+                if done.insert((a.min(b), a.max(b)))
+                    && let Some(e) = m.edge_between(a, b).and_then(|e| m.edge(e))
+                {
+                    let mut like = e.clone();
+                    like.curve = e
+                        .curve
+                        .map(|c| *curves.entry(c).or_insert_with(|| out.new_curve()));
+                    out.insert_edge_like(vertices[&a], vertices[&b], &like);
+                }
+            }
+        }
+        made.push((loops, f));
+    }
+    for (mut loops, f) in made {
+        let outer = loops.remove(0);
+        out.insert_face(Face {
+            outer,
+            holes: loops,
+            ..f.clone()
+        });
+    }
+    out.take_changes();
+    out
 }
 
 /// The meshes gathered, in order, into meshes of several whose bounding boxes do not meet.
@@ -273,52 +491,131 @@ enum Class {
     Opposite,
 }
 
+/// How the kept faces of the two cut solids are chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Union,
+    /// `a - b`.
+    Subtract,
+    Intersect,
+    /// `b - a`.
+    Reverse,
+}
+
+impl From<BooleanOp> for Mode {
+    fn from(op: BooleanOp) -> Mode {
+        match op {
+            BooleanOp::Union => Mode::Union,
+            BooleanOp::Subtract => Mode::Subtract,
+            BooleanOp::Intersect => Mode::Intersect,
+        }
+    }
+}
+
+impl Mode {
+    fn keep_a(self, c: Class) -> bool {
+        match self {
+            Mode::Union => matches!(c, Class::Outside | Class::Same),
+            Mode::Intersect => matches!(c, Class::Inside | Class::Same),
+            Mode::Subtract => matches!(c, Class::Outside | Class::Opposite),
+            Mode::Reverse => c == Class::Inside,
+        }
+    }
+
+    fn keep_b(self, c: Class) -> bool {
+        match self {
+            Mode::Union => c == Class::Outside,
+            Mode::Intersect | Mode::Subtract => c == Class::Inside,
+            Mode::Reverse => matches!(c, Class::Outside | Class::Opposite),
+        }
+    }
+}
+
 /// `a` combined with `b` by `op` (`a - b` for `Subtract`); both closed, outward and in one
 /// space. None when nothing is left.
 pub(crate) fn combine(a: &Model, b: &Model, op: BooleanOp) -> Result<Option<Model>, BooleanError> {
-    let segments = crossings(a, b)?;
-    let (mut wa, mut wb) = (a.clone(), b.clone());
-    if !segments.is_empty() {
-        wa.draw_segments(&segments);
-        wa.take_changes();
-        wb.draw_segments(&segments);
-        wb.take_changes();
+    Cut::new(a, b)?.make(op.into())
+}
+
+/// `a - b`, `a` and `b` common, and `b - a` (in that order; None where nothing is left),
+/// from one cutting and classifying pass.
+pub(crate) fn split(a: &Model, b: &Model) -> Result<[Option<Model>; 3], BooleanError> {
+    let cut = Cut::new(a, b)?;
+    Ok([
+        cut.make(Mode::Subtract)?,
+        cut.make(Mode::Intersect)?,
+        cut.make(Mode::Reverse)?,
+    ])
+}
+
+/// Two solids with each one's faces cut along the other's surface and every face classified
+/// against the other solid.
+struct Cut<'a> {
+    a: &'a Model,
+    b: &'a Model,
+    wa: Model,
+    wb: Model,
+    class_a: Vec<(FaceId, Class)>,
+    class_b: Vec<(FaceId, Class)>,
+}
+
+impl<'a> Cut<'a> {
+    fn new(a: &'a Model, b: &'a Model) -> Result<Cut<'a>, BooleanError> {
+        let segments = crossings(a, b)?;
+        let (mut wa, mut wb) = (a.clone(), b.clone());
+        if !segments.is_empty() {
+            wa.draw_segments(&segments);
+            wa.take_changes();
+            wb.draw_segments(&segments);
+            wb.take_changes();
+        }
+        let class_a = classes(&wa, a, b)?;
+        let class_b = classes(&wb, b, a)?;
+        Ok(Cut {
+            a,
+            b,
+            wa,
+            wb,
+            class_a,
+            class_b,
+        })
     }
-    let keep_a = |c: Class| match op {
-        BooleanOp::Union => matches!(c, Class::Outside | Class::Same),
-        BooleanOp::Intersect => matches!(c, Class::Inside | Class::Same),
-        BooleanOp::Subtract => matches!(c, Class::Outside | Class::Opposite),
-    };
-    let keep_b = |c: Class| match op {
-        BooleanOp::Union => c == Class::Outside,
-        BooleanOp::Intersect | BooleanOp::Subtract => c == Class::Inside,
-    };
-    let kept_a = kept(&wa, a, b, keep_a)?;
-    let kept_b = kept(&wb, b, a, keep_b)?;
-    if kept_a.is_empty() && kept_b.is_empty() {
-        return Ok(None);
+
+    /// The solid `mode` keeps, welded and verified closed; None when nothing is left.
+    fn make(&self, mode: Mode) -> Result<Option<Model>, BooleanError> {
+        let pick = |classes: &[(FaceId, Class)], keep: &dyn Fn(Class) -> bool| -> Vec<FaceId> {
+            classes
+                .iter()
+                .filter(|(_, c)| keep(*c))
+                .map(|(f, _)| *f)
+                .collect()
+        };
+        let kept_a = pick(&self.class_a, &|c| mode.keep_a(c));
+        let kept_b = pick(&self.class_b, &|c| mode.keep_b(c));
+        if kept_a.is_empty() && kept_b.is_empty() {
+            return Ok(None);
+        }
+        let mut merge = Merge::default();
+        merge.add(&self.wa, &kept_a, mode == Mode::Reverse, 0);
+        merge.add(&self.wb, &kept_b, mode == Mode::Subtract, 1);
+        let welded = merge.finish();
+        if open_reason(&welded.model).is_some() {
+            return Err(BooleanError::NotClosed);
+        }
+        // Seams between coplanar pieces that need not be there are cleaned away; should that
+        // ever open the mesh, the seams stay.
+        let mut clean = welded.model.clone();
+        clean_seams(&mut clean, &welded, [self.a, self.b]);
+        let result = if open_reason(&clean).is_none() {
+            clean
+        } else {
+            welded.model
+        };
+        if signed_volume(&result) <= 0.0 {
+            return Err(BooleanError::NotClosed);
+        }
+        Ok(Some(result))
     }
-    let flip_b = op == BooleanOp::Subtract;
-    let mut merge = Merge::default();
-    merge.add(&wa, &kept_a, false, 0);
-    merge.add(&wb, &kept_b, flip_b, 1);
-    let welded = merge.finish();
-    if open_reason(&welded.model).is_some() {
-        return Err(BooleanError::NotClosed);
-    }
-    // Seams between coplanar pieces that need not be there are cleaned away; should that
-    // ever open the mesh, the seams stay.
-    let mut clean = welded.model.clone();
-    clean_seams(&mut clean, &welded, [a, b]);
-    let result = if open_reason(&clean).is_none() {
-        clean
-    } else {
-        welded.model
-    };
-    if signed_volume(&result) <= 0.0 {
-        return Err(BooleanError::NotClosed);
-    }
-    Ok(Some(result))
 }
 
 /// The segments along which the faces of `a` meet the faces of `b`, each once, each at least
@@ -366,15 +663,10 @@ fn crossings_within(
     Ok(out)
 }
 
-/// The faces of `m` (the solid `own` with its faces cut) whose class against the solid `other`
-/// passes `keep`, in id order. Faces the cutting made off the surface of `own` (a cut loop that
-/// closed a region of its own) are left out.
-fn kept(
-    m: &Model,
-    own: &Model,
-    other: &Model,
-    keep: impl Fn(Class) -> bool,
-) -> Result<Vec<FaceId>, BooleanError> {
+/// The class against the solid `other` of each face of `m` (the solid `own` with its faces
+/// cut), in id order. Faces the cutting made off the surface of `own` (a cut loop that closed
+/// a region of its own) are left out.
+fn classes(m: &Model, own: &Model, other: &Model) -> Result<Vec<(FaceId, Class)>, BooleanError> {
     let (lo, hi) = bounds(other.vertices().map(|(_, v)| v.pos));
     let pad = DVec3::splat(10.0 * LENGTH_TOL);
     let mut out = Vec::new();
@@ -389,9 +681,7 @@ fn kept(
             }
             classify(p, f.normal, other).ok_or(BooleanError::NotClosed)?
         };
-        if keep(class) {
-            out.push(id);
-        }
+        out.push((id, class));
     }
     Ok(out)
 }
@@ -1099,6 +1389,58 @@ mod tests {
                 .filter(|f| f.front != Some(MaterialId(3)))
                 .all(|f| f.paint() == [Some(MaterialId(1)), Some(MaterialId(2))])
         );
+    }
+
+    #[test]
+    fn a_split_makes_three_pieces_that_add_up() {
+        let a = cuboid([2.0, 2.0, 2.0], [0.0; 3]);
+        let b = cuboid([2.0, 2.0, 2.0], [1.0, 1.0, 1.0]);
+        let [only_a, both, only_b] = split(&a, &b).unwrap();
+        let volumes: Vec<f64> = [only_a, both, only_b]
+            .iter()
+            .map(|p| {
+                let p = p.as_ref().unwrap();
+                closed(p);
+                signed_volume(p)
+            })
+            .collect();
+        assert!((volumes[0] - 7.0).abs() < 1e-9, "{volumes:?}");
+        assert!((volumes[1] - 1.0).abs() < 1e-9, "{volumes:?}");
+        assert!((volumes[2] - 7.0).abs() < 1e-9, "{volumes:?}");
+        let union = combine(&a, &b, BooleanOp::Union).unwrap().unwrap();
+        assert!((volumes.iter().sum::<f64>() - signed_volume(&union)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_split_without_overlap_keeps_both_whole() {
+        let a = cuboid([1.0, 1.0, 1.0], [0.0; 3]);
+        let b = cuboid([1.0, 1.0, 1.0], [5.0, 0.0, 0.0]);
+        let [only_a, both, only_b] = split(&a, &b).unwrap();
+        assert!(both.is_none());
+        assert!((signed_volume(&only_a.unwrap()) - 1.0).abs() < 1e-9);
+        assert!((signed_volume(&only_b.unwrap()) - 1.0).abs() < 1e-9);
+        // Equal solids: only the common part.
+        let [x, y, z] = split(&a, &a.clone()).unwrap();
+        assert!(x.is_none() && z.is_none());
+        assert!((signed_volume(&y.unwrap()) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_outer_shell_drops_a_void() {
+        let a = cuboid([4.0, 4.0, 4.0], [0.0; 3]);
+        let b = cuboid([1.0, 1.0, 1.0], [1.5, 1.5, 1.5]);
+        let hollow = combine(&a, &b, BooleanOp::Subtract).unwrap().unwrap();
+        closed(&hollow);
+        assert!((signed_volume(&hollow) - 63.0).abs() < 1e-9);
+        assert_eq!(hollow.faces().count(), 12);
+        let shell = outer_shells(&hollow).unwrap();
+        closed(&shell);
+        assert_eq!(shell.faces().count(), 6);
+        assert!((signed_volume(&shell) - 64.0).abs() < 1e-9);
+        // A solid with no void is as it was; so are solids apart.
+        let far = cuboid([1.0, 1.0, 1.0], [9.0, 0.0, 0.0]);
+        let both = combine(&shell, &far, BooleanOp::Union).unwrap().unwrap();
+        assert_eq!(outer_shells(&both).unwrap().faces().count(), 12);
     }
 
     #[test]

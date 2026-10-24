@@ -930,6 +930,23 @@ pub enum Command {
     /// more), under the rules of `solid_union`. When the solids share no volume, no group is
     /// made and the operands are still erased: the outcome has `empty: true`.
     SolidIntersect { ids: Vec<EntityId> },
+    /// Solid Tools Trim, as one undo step: as `solid_subtract`, but the `tools` stay where
+    /// they are; only `target` is erased and replaced by the new group. When nothing is left
+    /// of the target, no group is made and the outcome has `empty: true`.
+    SolidTrim {
+        target: EntityId,
+        tools: Vec<EntityId>,
+    },
+    /// Solid Tools Split, as one undo step: `a` and `b` (solids) become up to three groups,
+    /// in this order: `a` minus `b`, what both share, `b` minus `a`; a piece with nothing in
+    /// it is not made. The groups take the transform, material, tag and hidden flag of `a`;
+    /// `a` and `b` are erased. `placed` holds the groups.
+    SolidSplit { a: EntityId, b: EntityId },
+    /// Solid Tools Outer Shell, as one undo step: the union of `ids` (1 or more) with its
+    /// internal faces removed: shells inside another shell (voids, and solids floating in
+    /// them) are dropped. A single solid with a void inside becomes the solid without it.
+    /// Placed and erased as `solid_union`.
+    OuterShell { ids: Vec<EntityId> },
     /// Move, turn and scale the texture on faces of the open context, as one undo step: on
     /// top of the projection, `offset` [u, v] in meters, `rotation_deg` counter-clockwise
     /// seen from the face's front (or `rotate_by`: that many degrees more than each face's
@@ -1543,7 +1560,7 @@ pub struct Outcome {
     /// commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<MaterialId>,
-    /// True when a `solid_subtract` or `solid_intersect` left nothing (no group was made; the
+    /// True when a `solid_subtract`, `solid_intersect`, `solid_trim` or `outer_shell` left nothing (no group was made; the
     /// operands were still erased); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty: Option<bool>,
