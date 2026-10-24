@@ -515,8 +515,12 @@ Curves split by a cut stay curves where their pieces still form chains.
 
 The result must be closed. If numerical trouble would leave it open (solids touching only along
 an edge, which would leave an edge bounding four faces; nearly tangent faces; very thin slivers), the command is `invalid_input` ("the
-result would not be a solid") and changes nothing. A batch can refer to `ids`, `target` and
-`tools`.
+result would not be a solid") and changes nothing. A curved tool tangent to a face (a bore
+whose circle touches a side of the plate) meets it only along a line, as edge contact does, and is
+refused the same way: leave a small clearance (0.1 mm is plenty). A pass whose solids cross in more
+than 200,000 face pairs or 100,000 crossing segments (the limits of `intersect_faces`) is
+`invalid_input` ("too many faces cross to combine at once") and changes nothing. A batch can refer
+to `ids`, `target` and `tools`.
 
 ### Guides
 

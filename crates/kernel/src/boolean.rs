@@ -15,11 +15,11 @@ use glam::{DAffine3, DVec3};
 use crate::geom::{LENGTH_TOL, Plane, point_in_polygon};
 use crate::ids::{CurveId, FaceId, InstanceId, MaterialId, VertexId};
 use crate::index::{Index, Shape};
-use crate::intersect::{FaceShape, face_segments, face_shape};
+use crate::intersect::{FaceShape, face_segments, face_segments_cost, face_shape};
 use crate::model::{Edge, Face, Instance, Model};
 use crate::scene::{DefinitionKind, MeshId, Scene, SceneChange};
 use crate::solid::{instance_volume, open_reason, signed_volume};
-use crate::texture::TexturePlacement;
+use crate::texture::{TexturePlacement, is_level};
 
 /// What a boolean keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +41,18 @@ pub enum BooleanError {
     NotSolid(InstanceId, String),
     /// Numerical trouble would leave the result open.
     NotClosed,
+    /// More face pairs, segments or work than `MAX_PAIRS`, `MAX_SEGMENTS` or `MAX_WORK`.
+    TooMuch,
 }
+
+/// Most face pairs whose boxes meet, per combining pass (as Intersect Faces).
+pub const MAX_PAIRS: usize = 200_000;
+/// Most crossing segments per combining pass (as Intersect Faces).
+pub const MAX_SEGMENTS: usize = 100_000;
+/// Most edge visits of the crossing tests per pass (see `face_segments_cost`).
+pub const MAX_WORK: u64 = 100_000_000;
+/// The text of [`BooleanError::TooMuch`].
+pub const TOO_MUCH: &str = "too many faces cross to combine at once";
 
 /// The text of [`BooleanError::NotClosed`].
 pub const NOT_CLOSED: &str = "the result would not be a solid";
@@ -52,6 +63,7 @@ impl fmt::Display for BooleanError {
             BooleanError::Missing(id) => write!(f, "no instance i{}", id.0),
             BooleanError::NotSolid(id, why) => write!(f, "i{} is not a solid: {why}", id.0),
             BooleanError::NotClosed => f.write_str(NOT_CLOSED),
+            BooleanError::TooMuch => f.write_str(TOO_MUCH),
         }
     }
 }
@@ -264,7 +276,7 @@ enum Class {
 /// `a` combined with `b` by `op` (`a - b` for `Subtract`); both closed, outward and in one
 /// space. None when nothing is left.
 pub(crate) fn combine(a: &Model, b: &Model, op: BooleanOp) -> Result<Option<Model>, BooleanError> {
-    let segments = crossings(a, b);
+    let segments = crossings(a, b)?;
     let (mut wa, mut wb) = (a.clone(), b.clone());
     if !segments.is_empty() {
         wa.draw_segments(&segments);
@@ -311,8 +323,18 @@ pub(crate) fn combine(a: &Model, b: &Model, op: BooleanOp) -> Result<Option<Mode
 
 /// The segments along which the faces of `a` meet the faces of `b`, each once, each at least
 /// `LENGTH_TOL` long. Face pairs come from bounding-box overlap.
-fn crossings(a: &Model, b: &Model) -> Vec<(DVec3, DVec3)> {
+fn crossings(a: &Model, b: &Model) -> Result<Vec<(DVec3, DVec3)>, BooleanError> {
+    crossings_within(a, b, (MAX_PAIRS, MAX_SEGMENTS, MAX_WORK))
+}
+
+/// `crossings` refused past `(pairs, segments, work)`.
+fn crossings_within(
+    a: &Model,
+    b: &Model,
+    (max_pairs, max_segments, max_work): (usize, usize, u64),
+) -> Result<Vec<(DVec3, DVec3)>, BooleanError> {
     let pad = DVec3::splat(LENGTH_TOL);
+    let (mut pairs, mut work) = (0usize, 0u64);
     let mut shapes: HashMap<FaceId, Option<FaceShape>> = HashMap::new();
     let mut out = Vec::new();
     let mut seen: HashSet<[i64; 6]> = HashSet::new();
@@ -326,14 +348,22 @@ fn crossings(a: &Model, b: &Model) -> Vec<(DVec3, DVec3)> {
                 .entry(fb)
                 .or_insert_with(|| face_shape(b, fb, DAffine3::IDENTITY));
             let Some(sb) = sb else { continue };
+            pairs += 1;
+            work = work.saturating_add(face_segments_cost(&sa, sb));
+            if pairs > max_pairs || work > max_work {
+                return Err(BooleanError::TooMuch);
+            }
             for s in face_segments(&sa, sb) {
                 if s.0.distance(s.1) >= LENGTH_TOL && seen.insert(segment_key(s)) {
                     out.push(s);
+                    if out.len() > max_segments {
+                        return Err(BooleanError::TooMuch);
+                    }
                 }
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// The faces of `m` (the solid `own` with its faces cut) whose class against the solid `other`
@@ -511,6 +541,8 @@ impl Merge {
                 // front material shows on the cut.
                 loops.iter_mut().for_each(|l| l.reverse());
                 face.normal = -face.normal;
+                // The texture shows on the front as it did, as `Face::reversed` keeps it.
+                face.texture = face.texture.map(|t| t.turned_over(is_level(f.normal)));
             }
             let sides = loops
                 .iter()
@@ -683,11 +715,12 @@ fn clean_seams(m: &mut Model, welded: &Welded, operands: [&Model; 2]) {
         let Some(e) = m.edge_between(a, b) else {
             continue;
         };
-        let [f, g] = m.faces_on_side(a, b)[..] else {
-            continue;
-        };
-        if mergeable(m, f, g) {
-            m.erase_pending(&[e], &[]);
+        match m.faces_on_side(a, b)[..] {
+            [f, g] if mergeable(m, f, g) => m.erase_pending(&[e], &[]),
+            // An earlier merge (of a closed or U-shaped seam) took both faces: the rest of
+            // the seam is left bounding nothing.
+            [] => m.erase_pending(&[e], &[]),
+            _ => {}
         }
     }
     m.take_changes();
@@ -944,6 +977,97 @@ mod tests {
         assert_eq!(combine(&a, &b, BooleanOp::Intersect).unwrap(), None);
         let r = combine(&a, &b, BooleanOp::Subtract).unwrap().unwrap();
         assert!((signed_volume(&r) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn seams_from_a_touching_tool_are_cleaned_away() {
+        let unit = || cuboid([1.0, 1.0, 1.0], [0.0; 3]);
+        // A tool outside touching the middle of a face: a closed seam loop.
+        let touch = cuboid([1.0, 0.5, 0.5], [1.0, 0.25, 0.25]);
+        let r = combine(&unit(), &touch, BooleanOp::Subtract)
+            .unwrap()
+            .unwrap();
+        closed(&r);
+        assert_eq!((r.faces().count(), r.edges().count()), (6, 12));
+        assert!((signed_volume(&r) - 1.0).abs() < 1e-9);
+        // Reaching the face's edge: a U-shaped seam.
+        let edge = cuboid([1.0, 0.5, 0.5], [1.0, 0.25, 0.5]);
+        let r = combine(&unit(), &edge, BooleanOp::Subtract)
+            .unwrap()
+            .unwrap();
+        closed(&r);
+        assert_eq!((r.faces().count(), r.edges().count()), (6, 12));
+        // A box flush inside, top faces coplanar: the union is the outer box.
+        let inner = cuboid([0.5, 0.5, 0.5], [0.25, 0.25, 0.5]);
+        let r = combine(&unit(), &inner, BooleanOp::Union).unwrap().unwrap();
+        closed(&r);
+        assert_eq!((r.faces().count(), r.edges().count()), (6, 12));
+        assert!((signed_volume(&r) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn too_many_crossings_are_refused() {
+        let a = cuboid([2.0, 2.0, 1.0], [0.0; 3]);
+        let b = solid(
+            Solid::cylinder(0.5, 3.0, 24).unwrap(),
+            DVec3::new(1.0, 1.0, -1.0),
+        );
+        for limits in [
+            (3, MAX_SEGMENTS, MAX_WORK),
+            (MAX_PAIRS, 3, MAX_WORK),
+            (MAX_PAIRS, MAX_SEGMENTS, 3),
+        ] {
+            assert_eq!(crossings_within(&a, &b, limits), Err(BooleanError::TooMuch));
+        }
+        assert!(crossings_within(&a, &b, (MAX_PAIRS, MAX_SEGMENTS, MAX_WORK)).is_ok());
+    }
+
+    #[test]
+    fn a_flipped_tool_face_keeps_its_texture_look() {
+        let a = cuboid([4.0, 4.0, 2.0], [0.0; 3]);
+        let mut tool = Solid::cuboid(DVec3::splat(2.0)).unwrap().to_model();
+        let placement = TexturePlacement {
+            offset: [0.25, 0.5],
+            rotation_deg: 30.0,
+            scale: [2.0, 1.0],
+        };
+        for f in face_ids(&tool) {
+            tool.set_paint(f, [Some(MaterialId(3)), None]);
+            tool.set_texture(f, Some(placement));
+        }
+        tool.take_changes();
+        let b = placed_copy(
+            &tool,
+            DAffine3::from_translation(DVec3::new(1.0, 1.0, 1.0)),
+            None,
+        );
+        let moved: HashMap<[i64; 3], Face> = b
+            .faces()
+            .map(|(_, f)| {
+                (
+                    (f.normal * 10.0).round().to_array().map(|c| c as i64),
+                    f.clone(),
+                )
+            })
+            .collect();
+        let r = combine(&a, &b, BooleanOp::Subtract).unwrap().unwrap();
+        let cut: Vec<&Face> = r
+            .faces()
+            .map(|(_, f)| f)
+            .filter(|f| f.front == Some(MaterialId(3)))
+            .collect();
+        assert_eq!(cut.len(), 5);
+        for f in cut {
+            let key = (-f.normal * 10.0).round().to_array().map(|c| c as i64);
+            let tool_face = &moved[&key];
+            assert!(tool_face.texture.is_some());
+            assert_eq!(
+                f.texture,
+                tool_face
+                    .texture
+                    .map(|t| t.turned_over(is_level(tool_face.normal)))
+            );
+        }
     }
 
     #[test]

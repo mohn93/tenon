@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use kernel::boolean::{BooleanError, BooleanOp, NOT_CLOSED};
+use kernel::boolean::{BooleanError, BooleanOp, NOT_CLOSED, TOO_MUCH};
 use kernel::{EntityId, InstanceId, SceneChange};
 
 use super::Document;
@@ -81,6 +81,7 @@ impl Document {
                             .with_ids(vec![EntityId::Instance(i)])
                     }
                     BooleanError::NotClosed => invalid(NOT_CLOSED).with_ids(ids.to_vec()),
+                    BooleanError::TooMuch => invalid(TOO_MUCH),
                 })?;
         match placed {
             Some(p) => self.selection = BTreeSet::from([EntityId::Instance(p)]),
